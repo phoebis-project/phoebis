@@ -158,6 +158,61 @@ test('a read that succeeds after a failing streak reports its routes recovered o
   assert.deepEqual([load.calls, recovered], [5, ['/admin/dashboard']], 'a later success reports nothing');
 });
 
+/** A load whose every call waits on a promise of its own, which the test settles in any order. */
+const held = () => {
+  const calls = [];
+  const load = () =>
+    new Promise((resolve, reject) => {
+      calls.push({ reject, resolve });
+    });
+  return { calls, load };
+};
+
+test('of two overlapping refreshes the one started last keeps the screen, with its fetchedAt', async () => {
+  const clock = frozen();
+  const reads = held();
+  const p = await probe(reads.load);
+  reads.calls[0].resolve('first');
+  await settled();
+  act(() => clock.tick(30_000));
+  act(() => clock.tick(30_000));
+  assert.equal(reads.calls.length, 3, 'the second refresh starts while the first is still out');
+  reads.calls[2].resolve('third');
+  await settled();
+  act(() => clock.tick(1_000));
+  reads.calls[1].resolve('second');
+  await settled();
+  assert.deepEqual([p.last().data, p.last().fetchedAt, p.last().error], ['third', at(60_000), null], 'the older answer, landing last, changes nothing');
+});
+
+test('a failure of an older read that settles after a newer success sets no error', async () => {
+  const clock = frozen();
+  const reads = held();
+  const p = await probe(reads.load);
+  reads.calls[0].resolve('first');
+  await settled();
+  act(() => clock.tick(30_000));
+  act(() => clock.tick(30_000));
+  reads.calls[2].resolve('third');
+  await settled();
+  reads.calls[1].reject(new Error('ledger locked'));
+  await settled();
+  assert.deepEqual([p.last().data, p.last().error, p.last().stale], ['third', null, false]);
+});
+
+test("a refresh that outruns the first load ends the loading, and the load's late answer is dropped", async () => {
+  const clock = frozen();
+  const reads = held();
+  const p = await probe(reads.load);
+  act(() => clock.tick(30_000));
+  reads.calls[1].resolve('refresh');
+  await settled();
+  const early = { data: p.last().data, loading: p.last().loading };
+  reads.calls[0].resolve('load');
+  await settled();
+  assert.deepEqual([early, p.last().data, p.last().loading], [{ data: 'refresh', loading: false }, 'refresh', false]);
+});
+
 function KeyedProbe({ id, load, seen }) {
   const r = useAsync(() => load(id), [id], { refreshMs: 30_000 });
   seen.push(r);

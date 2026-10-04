@@ -6207,6 +6207,21 @@ m.unmount();
   const labels = [...(spendCard?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
   results.push({ name: precisionCheck, ok: labels.length > 1 && new Set(labels).size === labels.length, missing: labels });
   lone.unmount();
+
+  // Opened on Traffic at 14:05 and switched to Burn at 14:30, inside the same hour, with the page's range clock still
+  // at the mount. The read's own instant rates the running hour over its 30 minutes, 600 a minute, half its width and
+  // so enough to set the axis over the full 13:00 hour's 200; the legend reads the 30,000 tokens over the 90 minutes
+  // the two buckets cover, 333 a minute.
+  const instantCheck = "/analytics a burn read opened on a later tab rates the running hour up to the read's own instant";
+  api.getAnalyticsBurn = burnAt([12_000, 18_000]);
+  const opened = await mount('/analytics', { now: at13 + 3_600_000 + 5 * 60_000 });
+  tick(25 * 60_000);
+  await opened.settle();
+  await tab(opened, 'Burn');
+  const legend = tokensCard(opened)?.querySelector('.legend li .legend__value')?.textContent?.trim() ?? 'no legend';
+  const axis = [...(tokensCard(opened)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => valueOf(t.textContent?.trim() ?? ''));
+  results.push({ name: instantCheck, ok: legend === '333' && axis.length > 1 && Math.max(...axis) >= 600, missing: [`legend ${legend}`, `axis ${axis.join(', ')}`] });
+  opened.unmount();
   delete api.getAnalyticsBurn;
   window.HTMLElement.prototype.getBoundingClientRect = measure;
 }

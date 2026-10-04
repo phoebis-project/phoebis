@@ -287,7 +287,13 @@ export function AnalyticsPage() {
   );
   const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation]);
   // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.
-  const burn = useAsync(() => (tab === 'burn' ? readBurn(api, { from: fromIso, to: toIso }, burnGroup).then((read) => ({ ...read, endMs: span.toMs, readAt: now })) : Promise.resolve(null)), [fromIso, toIso, burnGroup, tab, generation]);
+  // The instant is the read's own: the range clock stands still while another tab is open, and a read made later in
+  // the same hour has seen more of it.
+  const burn = useAsync(() => {
+    if (tab !== 'burn') return Promise.resolve(null);
+    const readAt = clock.now();
+    return readBurn(api, { from: fromIso, to: toIso }, burnGroup).then((read) => ({ ...read, endMs: span.toMs, readAt }));
+  }, [fromIso, toIso, burnGroup, tab, generation]);
   // The plan chart's line category reads each account's stored tier against the cost table's tiers.
   const burnSettings = useAsync(() => (tab === 'burn' ? api.getSettings() : Promise.resolve(null)), [tab]);
   const sized = useMemo(() => (burn.data && burnSettings.data ? sizedAccounts(burn.data.accounts, burnSettings.data.planTables.cost.tiers) : null), [burn.data, burnSettings.data]);
