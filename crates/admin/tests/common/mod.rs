@@ -782,6 +782,7 @@ async fn build_app(
         body_budget_bytes: 512 << 20,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
         body_read_timeout: Duration::from_secs(60),
+        connect_timeout: Duration::from_secs(10),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),

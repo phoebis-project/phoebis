@@ -31,6 +31,10 @@ pub struct BodyFacts {
     pub chains: Option<Chains>,
     /// The largest `cache_control.ttl` at the API's marker positions, `None` without a marker there.
     pub markers_ttl_ms: Option<i64>,
+    /// `system` is an array: what the billing-line restoration needs to know before it reads the raw span.
+    pub system_is_array: bool,
+    /// The body references no account-scoped state (`container`, `file_id`, a server-tool result).
+    pub portable: bool,
 }
 
 /// The gateway hint headers, each optional, read the way `identify` reads an identifier: bounded and
@@ -47,14 +51,23 @@ pub struct ClientHints {
     pub request_class: Option<String>,
 }
 
+/// The strict parse, else a parse of a reading copy with every lone surrogate escape mapped to U+FFFD: the
+/// client cuts a string mid-pair and sends it, so a body no strict decoder reads still carries the facts the
+/// router needs. The copy is the router's own reading; the bytes toward the upstream are never rewritten.
+pub(crate) fn tolerant_value(body: &[u8]) -> Option<Value> {
+    serde_json::from_slice(body).ok().or_else(|| {
+        let copy = phoebis_cch::lone_surrogates_mapped(body)?;
+        serde_json::from_slice(&copy).ok()
+    })
+}
+
 impl BodyFacts {
     pub fn read(body: &[u8]) -> BodyFacts {
-        // Counted over decoded keys on the walk the cut runs on, not read from the parse below: a body a strict
-        // decoder refuses (a lone surrogate escape in a string value) still has its member cut under an off
-        // setting, and the request row has to say so.
+        // Counted over decoded keys on the walk the cut runs on rather than read from the parse below, so the
+        // request row says what the cut acts on under an off setting whatever the parse makes of the body.
         let safeguards =
             phoebis_cch::top_level_member_count(body, "safeguards").is_ok_and(|n| n >= 1);
-        let Ok(root) = serde_json::from_slice::<Value>(body) else {
+        let Some(root) = tolerant_value(body) else {
             return BodyFacts {
                 fresh_user_turn: false,
                 prompt_units: [b'0' as u16; 3],
@@ -68,6 +81,10 @@ impl BodyFacts {
                 top_level_effort: None,
                 chains: None,
                 markers_ttl_ms: None,
+                system_is_array: false,
+                // Fails open as `is_portable` does: a body no reader parses carries no reference the router could
+                // prove, and the upstream refuses it anyway.
+                portable: true,
             };
         };
         let messages = root.get("messages").and_then(Value::as_array);
@@ -150,6 +167,8 @@ impl BodyFacts {
             top_level_effort,
             chains,
             markers_ttl_ms,
+            system_is_array: matches!(root.get("system"), Some(Value::Array(_))),
+            portable: crate::portability::portable_of(&root),
         }
     }
 }
@@ -681,6 +700,55 @@ mod tests {
             BodyFacts::read(escaped).shape.safeguards,
             "a key spelled with an escape is the member all the same"
         );
+    }
+
+    #[test]
+    fn a_body_cut_mid_pair_still_reads_its_line_its_turn_its_chain_and_its_markers() {
+        // The client sends a string cut between the two halves of a character as a lone surrogate escape, which a
+        // strict decoder refuses.
+        let body = br#"{"model":"m","system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=cli; cc_prompt_id=11111111-1111-4111-8111-111111111111;"}],"messages":[{"role":"user","content":[{"type":"text","text":"cut \ud83d","cache_control":{"type":"ephemeral","ttl":"1h"}}]}]}"#;
+        assert!(serde_json::from_slice::<Value>(body).is_err());
+        let facts = BodyFacts::read(body);
+        assert!(facts.carries_line);
+        assert_eq!(
+            facts.prompt_id.as_deref(),
+            Some("11111111-1111-4111-8111-111111111111")
+        );
+        assert!(facts.fresh_user_turn);
+        assert!(facts.chains.is_some());
+        assert_eq!(facts.markers_ttl_ms, Some(3_600_000));
+        assert_eq!(facts.shape.message_count, 1);
+    }
+
+    #[test]
+    fn whether_system_is_an_array_is_read_off_the_one_parse() {
+        assert!(BodyFacts::read(br#"{"system":[],"messages":[]}"#).system_is_array);
+        assert!(!BodyFacts::read(br#"{"system":"be brief","messages":[]}"#).system_is_array);
+        assert!(!BodyFacts::read(br#"{"messages":[]}"#).system_is_array);
+        // The parse reads the last spelling of a repeated key, so the flag says array while the billing line's
+        // scanner reads the first spelling, a string, and finds no line to fill. Admission refuses a repeated
+        // `system` before either reads it.
+        assert!(
+            BodyFacts::read(br#"{"model":"m","system":"be helpful","messages":[],"system":[]}"#)
+                .system_is_array
+        );
+    }
+
+    #[test]
+    fn portability_is_read_off_the_one_parse_and_a_body_no_reader_parses_fails_open() {
+        assert!(
+            BodyFacts::read(br#"{"model":"m","messages":[{"role":"user","content":"hi"}]}"#)
+                .portable
+        );
+        assert!(
+            !BodyFacts::read(
+                br#"{"model":"m","container":"c","messages":[{"role":"user","content":"cut \ud83d"}]}"#
+            )
+            .portable
+        );
+        let unread = BodyFacts::read(b"not json");
+        assert!(unread.portable);
+        assert!(!unread.system_is_array);
     }
 
     #[test]

@@ -84,7 +84,8 @@ pub enum BodyMember {
     MetadataUserId,
     Model,
     /// A member the caller's body carries more than once, raw or escaped: one of the top-level members admission
-    /// and the body edit act on, or `BILLING_LINE_PATH`, whose first spelling alone the drift check reads.
+    /// and the body edit act on, `metadata.user_id`, whose first raw spelling the account splice writes, or
+    /// `BILLING_LINE_PATH`, whose first spelling alone the drift check reads.
     Repeated(&'static str),
     /// A `safeguards` member the decoded top-level key count finds and the raw walk cannot reach.
     Safeguards,
@@ -113,8 +114,8 @@ impl BodyMember {
             BodyMember::CacheControl => {
                 "request body carries a cache_control marker the router cannot place".into()
             }
-            BodyMember::Repeated(BILLING_LINE_PATH) => {
-                format!("request body carries the member \"{BILLING_LINE_PATH}\" more than once")
+            BodyMember::Repeated(name) if name.contains('.') => {
+                format!("request body carries the member \"{name}\" more than once")
             }
             BodyMember::Repeated(name) => {
                 format!("request body carries the top-level member \"{name}\" more than once")

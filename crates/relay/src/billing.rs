@@ -25,6 +25,8 @@ pub struct Restore<'a> {
     /// Items the account has refused on a previous attempt; each is left out of the line even when the field
     /// it names is otherwise absent and restorable.
     pub skip: Vec<Injected>,
+    /// `system` is an array, as the request's one parse read it.
+    pub system_is_array: bool,
 }
 
 /// Fills every absent field the restoration names on the attribution line at `system[0]`. A body whose first
@@ -35,13 +37,7 @@ pub fn restore_billing_line(
     body: &mut Vec<u8>,
     restore: &Restore<'_>,
 ) -> Result<Vec<Injected>, RelayError> {
-    let system_is_array = matches!(
-        serde_json::from_slice::<serde_json::Value>(body)
-            .ok()
-            .and_then(|v| v.get("system").cloned()),
-        Some(serde_json::Value::Array(_))
-    );
-    if !system_is_array {
+    if !restore.system_is_array {
         return Ok(Vec::new());
     }
     match phoebis_cch::string_member_span(body, &["system", "0", "text"]) {
@@ -404,6 +400,7 @@ mod tests {
             prev_req: Some("req_1"),
             restore_cch: true,
             skip: Vec::new(),
+            system_is_array: true,
         };
         let injected = restore_billing_line(&mut body, &restore).unwrap();
         assert_eq!(
@@ -428,6 +425,7 @@ mod tests {
             prev_req: Some("req_other"),
             restore_cch: false,
             skip: Vec::new(),
+            system_is_array: true,
         };
         restore_billing_line(&mut body, &restore).unwrap();
         assert_eq!(
@@ -441,10 +439,8 @@ mod tests {
         let mut body = br#"{"model":"m","system":"be helpful","messages":[]}"#.to_vec();
         let before = body.clone();
         let restore = Restore {
-            prompt_id: Some("11111111-1111-4111-8111-111111111111"),
-            prev_req: None,
-            restore_cch: true,
-            skip: Vec::new(),
+            system_is_array: false,
+            ..full_restore()
         };
         let injected = restore_billing_line(&mut body, &restore).unwrap();
         assert!(injected.is_empty());
@@ -457,6 +453,7 @@ mod tests {
             prev_req: None,
             restore_cch: true,
             skip: Vec::new(),
+            system_is_array: true,
         }
     }
 
@@ -487,9 +484,9 @@ mod tests {
         let plain_first_block =
             br#"{"model":"m","system":[{"type":"text","text":"be helpful"}],"messages":[]}"#
                 .to_vec();
-        // serde_json reads the object as the last "system" (the array), so system_is_array passes;
-        // the depth-aware scanner reads the object as the first (the string) and cannot descend into
-        // it as an array, so every lookup that would locate a field returns nothing rather than a guess.
+        // With the flag set, as the facts read this body: the scanner reads the first `system`, the string, and
+        // cannot descend into it as an array, so every lookup that would locate a field returns nothing rather
+        // than a guess.
         let duplicate_keys =
             br#"{"model":"m","system":"be helpful","messages":[],"system":[]}"#.to_vec();
         for body in [empty, plain_first_block, duplicate_keys] {
@@ -531,6 +528,7 @@ mod tests {
             prev_req: Some("req_1"),
             restore_cch: false,
             skip: Vec::new(),
+            system_is_array: true,
         };
         let injected = restore_billing_line(&mut body, &restore).unwrap();
         assert_eq!(injected, vec![Injected::PrevReq]);

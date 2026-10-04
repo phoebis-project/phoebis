@@ -1280,3 +1280,118 @@ async fn a_failover_leg_reads_the_saved_record_back_before_it_builds() {
     );
     up.shutdown().await;
 }
+
+/// The first-party 9b244 body with a system reminder cut mid-pair, stamped again as the client stamps what it
+/// sends: a strict decoder refuses it and the drift check admits it.
+fn cut_first_party_body(container: bool) -> Vec<u8> {
+    let fixture = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec()).unwrap();
+    let mut native = fixture.replacen(
+        "Today's date is 2026-09-13.",
+        "Today's date is 2026-09-13. \\ud83d",
+        1,
+    );
+    assert!(native.contains("\\ud83d"), "the cut landed");
+    if container {
+        native = native.replacen(r#"{"model""#, r#"{"container":"cont_1","model""#, 1);
+    }
+    let signed = phoebis_cch::sign(native.as_bytes()).unwrap();
+    assert!(
+        serde_json::from_slice::<serde_json::Value>(&signed).is_err(),
+        "a strict decoder refuses the cut body"
+    );
+    signed
+}
+
+fn cut_request(native: &[u8]) -> Request<Body> {
+    request_from_fixture(inference_head(FixtureKind::OauthFirstParty), native, KEY)
+}
+
+/// What the guard's first-party fixtures get on their way: the account's uuid spliced into `metadata.user_id`
+/// and the stamp signed again over the result.
+fn as_relayed(native: &[u8]) -> Vec<u8> {
+    let spliced = String::from_utf8(native.to_vec()).unwrap().replacen(
+        r#"\"account_uuid\":\"\""#,
+        &format!(r#"\"account_uuid\":\"{ACCOUNT_UUID}\""#),
+        1,
+    );
+    phoebis_cch::sign(spliced.as_bytes()).unwrap()
+}
+
+#[tokio::test]
+async fn a_stamped_body_with_a_lone_surrogate_keeps_its_restoration_its_session_and_a_containers_non_portability(
+) {
+    const A: &str = "sk-ant-oat01-CUTPAIRA";
+    const B: &str = "sk-ant-oat01-CUTPAIRB";
+    let up = FakeUpstream::start(vec![ok_with_request_id("req_up_0001")]).await;
+    let bus = phoebis_bus::Bus::new();
+    let mut sub = bus.subscribe("test", phoebis_bus::Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[
+            TestAccount {
+                uuid: Some(ACCOUNT_UUID),
+                ..oauth("a", A, 0)
+            },
+            oauth("b", B, 1),
+        ],
+        PoolSpec::default(),
+        bus,
+    )
+    .await;
+    let native = cut_first_party_body(false);
+
+    let resp = h.app.clone().oneshot(cut_request(&native)).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await;
+    drain_until_complete(&mut sub).await;
+    // A pins read rides the router's own queue, so the first turn's report is in the map once it answers.
+    let _ = h.router.pins().await;
+    assert_eq!(
+        up.requests()[0].body,
+        as_relayed(&native),
+        "the cut escape travels as the client sent it"
+    );
+
+    let resp = h.app.clone().oneshot(cut_request(&native)).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await;
+    drain_until_complete(&mut sub).await;
+    let line = billing_line(&up.requests()[1].body);
+    assert_eq!(field(&line, "cc_prev_req"), Some("req_up_0001"));
+    let restored = String::from_utf8(native.clone()).unwrap().replacen(
+        "cc_prompt_id=",
+        "cc_prev_req=req_up_0001; cc_prompt_id=",
+        1,
+    );
+    assert_eq!(
+        up.requests()[1].body,
+        as_relayed(restored.as_bytes()),
+        "the restoration is the one edit beyond the guard's"
+    );
+
+    // The container lives on the account that served the conversation, so its rejection is the answer.
+    up.add_credential_rule(A, "/v1/messages", json_429_unified(4_600, "five_hour"));
+    let resp = h
+        .app
+        .clone()
+        .oneshot(cut_request(&cut_first_party_body(true)))
+        .await
+        .unwrap();
+    assert_eq!(
+        resp.status(),
+        429,
+        "the upstream's own rejection comes back"
+    );
+    assert_eq!(
+        resp.headers()
+            .get("anthropic-ratelimit-unified-status")
+            .unwrap(),
+        "rejected"
+    );
+    assert_eq!(
+        credentials_seen(&up),
+        [A, A, A],
+        "no request reached the second account"
+    );
+    up.shutdown().await;
+}

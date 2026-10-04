@@ -154,6 +154,8 @@ const REPEATED_BILLING_LINE: &str =
     "the request body carries the member \"system[0].text\" more than once";
 const REPEATED_METADATA: &str =
     "the request body carries the top-level member \"metadata\" more than once";
+const REPEATED_METADATA_USER_ID: &str =
+    "the request body carries the member \"metadata.user_id\" more than once";
 const REPEATED_MODEL: &str =
     "the request body carries the top-level member \"model\" more than once";
 const REPEATED_SAFEGUARDS: &str =
@@ -207,12 +209,13 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
                 BodyMember::Repeated(name) => match *name {
                     crate::body::BILLING_LINE_PATH => REPEATED_BILLING_LINE,
                     "metadata" => REPEATED_METADATA,
+                    "metadata.user_id" => REPEATED_METADATA_USER_ID,
                     "model" => REPEATED_MODEL,
                     "safeguards" => REPEATED_SAFEGUARDS,
                     "stream" => REPEATED_STREAM,
                     "system" => REPEATED_SYSTEM,
                     _ => unreachable!(
-                        "BodyMember::Repeated only ever names metadata, model, safeguards, stream, system or the billing line"
+                        "BodyMember::Repeated only ever names metadata, metadata.user_id, model, safeguards, stream, system or the billing line"
                     ),
                 },
                 BodyMember::Safeguards => {
@@ -407,6 +410,7 @@ mod tests {
             BodyMember::MetadataUserId,
             BodyMember::Model,
             BodyMember::Repeated("metadata"),
+            BodyMember::Repeated("metadata.user_id"),
             BodyMember::Repeated("model"),
             BodyMember::Repeated("safeguards"),
             BodyMember::Repeated("stream"),

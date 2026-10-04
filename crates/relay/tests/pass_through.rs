@@ -96,6 +96,40 @@ async fn a_custom_caller_header_reaches_the_upstream_verbatim_and_in_its_own_slo
 }
 
 #[tokio::test]
+async fn a_callers_expect_line_stays_behind_and_the_body_follows_the_head() {
+    let up = upstream().await;
+    let app = relay_with(AccountKind::ApiKey, &up).await;
+    let raw = lines(
+        &[
+            "Accept: application/json",
+            "x-api-key: sk-ant-api03-PLACEHOLDER",
+            "Expect: 100-continue",
+            "anthropic-version: 2023-06-01",
+        ],
+        BODY,
+    );
+    let resp = app
+        .oneshot(request_from_fixture(&raw, BODY, KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let got = &up.requests()[0];
+    assert_eq!(
+        names(got),
+        [
+            "Accept",
+            "x-api-key",
+            "anthropic-version",
+            "Content-Length",
+            "Host"
+        ],
+        "the upstream is never asked to wait for a continue the relay does not send"
+    );
+    assert_eq!(got.body, BODY);
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_caller_that_omits_the_measured_headers_has_nothing_invented_for_it() {
     let up = upstream().await;
     let app = relay_with(AccountKind::ApiKey, &up).await;

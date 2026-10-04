@@ -223,6 +223,7 @@ async fn a_stream_that_never_commits_is_relayed_as_received_after_the_hold_timeo
         body_budget_bytes: 512 << 20,
         body_capture_max_hours: 72,
         body_read_timeout: Duration::from_secs(60),
+        connect_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_millis(200),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),

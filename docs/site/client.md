@@ -238,8 +238,10 @@ server-side auto mode is off (carried twice, or spelled with an escape), whose `
 TTL policy cannot reach (a key on the marker's path spelled with an escape), or whose billing stamp the router can
 neither check nor restamp (a key on its path, the billing line's header name or its `cch=` spelled with an escape),
 whether or not the request needs an edit, is refused before anything reaches the upstream: `400` with the error code
-`body_shape` and a message naming the member. A body whose top-level object nests deeper than the relay reads is refused
-`400` with the error code `invalid_body`.
+`body_shape` and a message naming the member. A `metadata` object that names `user_id` twice, raw or escaped, is refused
+the same way, since the router splices the account into one spelling and a last-wins parser upstream would read the
+other. A body whose top-level object nests deeper than the relay reads is refused `400` with the error code
+`invalid_body`.
 
 A request body that does not finish arriving within `proxy.body_read_seconds` (60 by default) after authentication is
 refused `408` with the error code `request_timeout` and the message `the request body did not arrive in time`.
@@ -273,9 +275,11 @@ accepting requests right now` and `Retry-After: 5`.
 
 A conversation is identified by the `x-claude-code-session-id` header.
 Every one of these hints is optional: a client that sends none of them is still relayed.
-A client that forks a session under a new id, whose messages continue
-an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is recorded beside
-it, visible in the console, without moving the new session off the account its own history names.
+A body the strict JSON reader refuses because a string was cut between
+two halves of a character is still read for its facts; the bytes sent on are the client's own. A client that forks a
+session under a new id, whose messages continue an earlier conversation of the same key, keeps the new id as that
+session's own identity; the fork is recorded beside it, visible in the console, without moving the new session off the
+account its own history names.
 
 ### The per-turn effort form
 
@@ -332,7 +336,9 @@ Request headers travel as the client sent them, in the client's own order and sp
 and forwarding headers, puts the account's credential where the client put the key, and adjusts `anthropic-beta` to what
 the account may claim. It owns `Host` and `Content-Length`, and adds nothing for a header the client left out beyond the
 restored `x-client-request-id` and an `anthropic-beta` line for a beta the router injects, so any Claude Code version
-relays on its own measured shape rather than a guessed one.
+relays on its own measured shape rather than a guessed one. A client's `Expect: 100-continue` is dropped as well: the
+router writes the body right behind the head, so the upstream would otherwise wait for a continue the router never
+sends.
 
 Remote Control is unavailable behind the router. The client reports that `ANTHROPIC_BASE_URL` does not point at
 `api.anthropic.com`, and states that the override does not apply to Remote Control.

@@ -3,12 +3,14 @@
 
 use serde_json::Value;
 
+/// The keepalive's reading; the relay takes `BodyFacts::portable` off the parse it already ran.
 pub fn is_portable(body: &[u8]) -> bool {
     // Fails open: an unparseable body is refused by the upstream anyway, and a request the scanner cannot
     // read carries no account-bound reference it could prove.
-    let Ok(root) = serde_json::from_slice::<Value>(body) else {
-        return true;
-    };
+    crate::facts::tolerant_value(body).is_none_or(|root| portable_of(&root))
+}
+
+pub(crate) fn portable_of(root: &Value) -> bool {
     let Some(object) = root.as_object() else {
         return true;
     };
@@ -57,5 +59,21 @@ mod tests {
         assert!(!is_portable(br#"{"model":"m","messages":[{"role":"user","content":[{"type":"code_execution_tool_result","tool_use_id":"x","content":{}}]}]}"#));
         assert!(is_portable(br#"{"model":"m","messages":[{"role":"user","content":[{"type":"tool_result","tool_use_id":"x","content":"ok"}]}]}"#), "a client tool result is portable");
         assert!(is_portable(br#"{"model":"m","messages":[{"role":"user","content":"the word file_id in text"}]}"#), "a string mentioning the key is not a reference");
+    }
+
+    #[test]
+    fn a_body_cut_mid_pair_is_read_for_its_references_and_one_no_reader_parses_fails_open() {
+        // A lone surrogate escape, which the client sends for a string cut mid-pair: a strict decoder refuses the
+        // body, and the container it names binds it all the same.
+        let cut = br#"{"model":"m","container":"cont_1","messages":[{"role":"user","content":"cut \ud83d"}]}"#;
+        assert!(serde_json::from_slice::<serde_json::Value>(cut).is_err());
+        assert!(!is_portable(cut));
+        assert!(is_portable(
+            br#"{"model":"m","messages":[{"role":"user","content":"cut \ud83d"}]}"#
+        ));
+        assert!(
+            is_portable(b"not json"),
+            "a body no reader parses fails open"
+        );
     }
 }

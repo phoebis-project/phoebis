@@ -916,6 +916,7 @@ pub fn default_limits() -> Limits {
         // The configuration's own default, so a test that wants the cap to bite asks for it.
         body_capture_max_hours: 72,
         body_read_timeout: Duration::from_secs(60),
+        connect_timeout: Duration::from_secs(10),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),

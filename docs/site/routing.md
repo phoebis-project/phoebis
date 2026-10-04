@@ -611,7 +611,9 @@ since every failover row (a credit-balance 400, a 401, a 403, a model 404, a 429
 visit costs no tokens; the same-account retries keep their bounds: one transport retry after a failure that happened
 before the request was fully written, one refresh replay, one strip retry when an upstream answers 400 naming a beta or
 field the router itself added (the router strips it and retries once on the same account, correcting its own edit), and
-one retry in place for a short throttle.
+one retry in place for a short throttle. The connect and the TLS handshake toward the upstream have their own bound of
+10 seconds; a handshake that stalls is retried once on a fresh connection and then answered `502 upstream_unreachable`,
+so a stalled upstream costs at most 20 seconds before the client hears.
 
 The Accounts view shows what an account is cooling under in a cooling-down block: one line per scope, the whole
 account or one model, with the reason, the deadline, and a clear button; the Models view lists the same rows grouped

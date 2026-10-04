@@ -67,16 +67,25 @@ pub(crate) async fn attempt(
     // the write leaves the request in the socket for an upstream that may already be acting on it.
     let sending = AtomicBool::new(false);
     let once = async {
-        let conn = if fresh {
-            checkout_fresh(&relay.pool, key, host, addr).await?
-        } else {
-            relay
-                .pool
-                .checkout(key.clone(), host, addr)
-                .await
-                .map(|(conn, _)| conn)
-                .map_err(unsent)?
+        let checkout = async {
+            if fresh {
+                checkout_fresh(&relay.pool, key, host, addr).await
+            } else {
+                relay
+                    .pool
+                    .checkout(key.clone(), host, addr)
+                    .await
+                    .map(|(conn, _)| conn)
+                    .map_err(unsent)
+            }
         };
+        // The connect and the handshake have their own bound: a stalled handshake would otherwise wait out the
+        // whole head timeout, ten minutes, before the one retry on a fresh connection.
+        let conn = tokio::time::timeout(relay.limits.connect_timeout, checkout)
+            .await
+            .map_err(|_| {
+                AttemptFailure::Unsent("timed out before a connection was ready".into())
+            })??;
         send_and_read(conn, request, &sending, &relay.clock).await
     };
     bounded(relay, cancel, &sending, once).await
@@ -164,4 +173,69 @@ async fn checkout_fresh(
 
 fn unsent(error: TransportError) -> AttemptFailure {
     AttemptFailure::Unsent(error.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use std::io;
+    use std::pin::Pin;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use std::sync::Arc;
+    use std::task::{Context, Poll};
+
+    use bytes::Bytes;
+    use phoebis_oauth::Clock;
+    use phoebis_transport::request::RawRequest;
+    use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+
+    use super::{send_and_read, AttemptFailure};
+
+    /// A connection that takes every byte of the request and then fails the flush.
+    struct FlushFails;
+
+    impl AsyncRead for FlushFails {
+        fn poll_read(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            _: &mut ReadBuf<'_>,
+        ) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    impl AsyncWrite for FlushFails {
+        fn poll_write(
+            self: Pin<&mut Self>,
+            _: &mut Context<'_>,
+            buf: &[u8],
+        ) -> Poll<io::Result<usize>> {
+            Poll::Ready(Ok(buf.len()))
+        }
+
+        fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Err(io::ErrorKind::BrokenPipe.into()))
+        }
+
+        fn poll_shutdown(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<io::Result<()>> {
+            Poll::Ready(Ok(()))
+        }
+    }
+
+    #[tokio::test]
+    async fn a_flush_that_fails_after_the_whole_request_was_taken_is_lost_rather_than_unsent() {
+        let request = RawRequest {
+            method: "POST",
+            target: "/v1/messages".into(),
+            headers: vec![("Content-Length".into(), "2".into())],
+            body: Bytes::from_static(b"{}"),
+        };
+        let clock: Clock = Arc::new(|| 0);
+        let sending = AtomicBool::new(false);
+        let failure = send_and_read(FlushFails, &request, &sending, &clock)
+            .await
+            .err()
+            .expect("a failed flush fails the attempt");
+        assert!(matches!(failure, AttemptFailure::Lost(_)), "{failure}");
+        assert!(sending.load(Ordering::SeqCst));
+    }
 }

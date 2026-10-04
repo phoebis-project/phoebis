@@ -25,6 +25,9 @@ const OAUTH_BETA: &str = "oauth-2025-04-20";
 /// values rather than dropping them; see the match below.
 const NEVER_COPIED: &[&str] = &[
     "cookie",
+    // A caller's `Expect: 100-continue` would make the upstream wait for a continue the relay never sends, since
+    // the body is written at once.
+    "expect",
     "forwarded",
     "keep-alive",
     "proxy-authenticate",
@@ -370,6 +373,7 @@ mod tests {
             ("Authorization", "Bearer phoebis-testkey"),
             ("X-Custom", "kept"),
             ("Cookie", "session=1"),
+            ("Expect", "100-continue"),
             ("X-Keepalive-Owner-Id", "owner-1"),
             ("X-Real-IP", "203.0.113.9"),
             ("Connection", "close"),

@@ -193,6 +193,13 @@ impl FakeUpstream {
         Self::spawn(rules, Wire::Plain, String::new()).await
     }
 
+    /// A listener the relay dials as a TLS host (its CA trusted as `start`'s is) that accepts and never answers the
+    /// ClientHello, reading nothing, so the handshake is what the connect bound times out.
+    pub async fn start_silent() -> FakeUpstream {
+        let tls = generate_tls(&["api.anthropic.com", "platform.claude.com"]);
+        Self::spawn(Vec::new(), Wire::Silent, tls.ca_pem).await
+    }
+
     async fn spawn(rules: Vec<Rule>, wire: Wire, ca_pem: String) -> FakeUpstream {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -210,11 +217,17 @@ impl FakeUpstream {
         let wire = Arc::new(wire);
         let accept_shared = shared.clone();
         let task = tokio::spawn(async move {
+            // Held by this task, so a silent listener's sockets stay open until `shutdown` aborts it.
+            let mut silent = Vec::new();
             loop {
                 let Ok((sock, _)) = listener.accept().await else {
                     break;
                 };
                 let conn_id = accept_shared.accept_connection();
+                if matches!(*wire, Wire::Silent) {
+                    silent.push(sock);
+                    continue;
+                }
                 // Decided before any byte is read: the only information a `CloseImmediately` connection ever
                 // gets to act on is its own ordinal among accepted connections.
                 if accept_shared.should_close_immediately() {
@@ -427,6 +440,8 @@ impl FakeUpstream {
 enum Wire {
     Tls(SslAcceptor),
     Plain,
+    /// Accepts and reads nothing.
+    Silent,
 }
 
 struct Shared {
@@ -645,6 +660,7 @@ async fn handle_connection(shared: Arc<Shared>, sock: TcpStream, conn_id: u64, w
             }
         }
         Wire::Plain => serve(shared, sock, conn_id).await,
+        Wire::Silent => unreachable!("the accept task keeps a silent listener's sockets"),
     }
 }
 

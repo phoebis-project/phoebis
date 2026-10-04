@@ -196,6 +196,41 @@ pub fn repeated_top_level_member(
     Ok(repeated)
 }
 
+/// The first of `names` whose decoded key appears more than once among the members of the top-level object
+/// `parent`, answered as the bare key; `Ok(None)` when `parent` is absent or not an object. Only the parent's own
+/// members are compared: a repeat deeper in the body, a tool input's included, is the client's data.
+pub fn repeated_member_within(
+    body: &[u8],
+    parent: &str,
+    names: &[&'static str],
+) -> Result<Option<&'static str>, CchError> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    let mut repeated = None;
+    s.ws();
+    each_decoded_member(&mut s, |s, key| {
+        if key != parent.as_bytes() || s.body.get(s.pos) != Some(&b'{') {
+            return s.value(false);
+        }
+        let mut seen: Vec<&'static str> = Vec::new();
+        each_decoded_member(s, |s, key| {
+            if let Some(name) = names.iter().copied().find(|n| n.as_bytes() == key) {
+                if seen.contains(&name) {
+                    repeated.get_or_insert(name);
+                } else {
+                    seen.push(name);
+                }
+            }
+            s.value(false)
+        })
+    })?;
+    Ok(repeated)
+}
+
 /// How many of the top-level object's members carry `name` once their keys are decoded.
 pub fn top_level_member_count(body: &[u8], name: &str) -> Result<usize, CchError> {
     let mut count = 0;
@@ -731,6 +766,113 @@ fn reads_as_a_stamp(token: &[u8]) -> bool {
     match serde_json::from_slice::<String>(token) {
         Ok(line) => line.starts_with(PREFIX) && line.contains("cch="),
         Err(_) => token[1..].starts_with(PREFIX.as_bytes()) && find(token, b"cch=").is_some(),
+    }
+}
+
+/// A reading copy of `body` in which every lone surrogate escape inside a string token, a `\uD800` to `\uDFFF`
+/// without its other half beside it, reads as U+FFFD; `None` when the body carries none, or when the scanner
+/// cannot walk it to its end. The client cuts a string between the two halves of a character and sends one half
+/// alone, which a strict decoder refuses: the copy is what the router reads such a body through, and never what
+/// it sends. The two escapes are the same length, so every offset in the copy is the body's own.
+pub fn lone_surrogates_mapped(body: &[u8]) -> Option<Vec<u8>> {
+    let mut s = Scanner {
+        body,
+        pos: 0,
+        depth: 0,
+        edits: Vec::new(),
+    };
+    let mut lone = Vec::new();
+    each_string_token(&mut s, &mut |start, end| {
+        lone_surrogate_escapes(&body[start..end], start, &mut lone)
+    })
+    .ok()?;
+    s.ws();
+    if s.pos != body.len() || lone.is_empty() {
+        return None;
+    }
+    let mut copy = body.to_vec();
+    for at in lone {
+        copy[at + 2..at + 6].copy_from_slice(b"FFFD");
+    }
+    Some(copy)
+}
+
+/// Hands `visit` the span of every string token of the value at `s`, keys included, walking containers as
+/// `Scanner::value` walks them and under the same depth bound.
+fn each_string_token(
+    s: &mut Scanner<'_>,
+    visit: &mut impl FnMut(usize, usize),
+) -> Result<(), CchError> {
+    s.ws();
+    let close = match s.body.get(s.pos) {
+        Some(b'"') => {
+            let (start, end) = s.string()?;
+            visit(start, end);
+            return Ok(());
+        }
+        Some(b'{') => b'}',
+        Some(b'[') => b']',
+        _ => return s.value(false),
+    };
+    if s.depth >= MAX_DEPTH {
+        return Err(CchError::TooDeep(s.pos));
+    }
+    s.depth += 1;
+    s.pos += 1;
+    s.ws();
+    if !s.eat(close) {
+        loop {
+            if close == b'}' {
+                s.ws();
+                let (start, end) = s.string()?;
+                visit(start, end);
+                s.ws();
+                if !s.eat(b':') {
+                    return Err(CchError::Json(s.pos));
+                }
+            }
+            each_string_token(s, visit)?;
+            s.ws();
+            if s.eat(b',') {
+                continue;
+            }
+            if !s.eat(close) {
+                return Err(CchError::Json(s.pos));
+            }
+            break;
+        }
+    }
+    s.depth -= 1;
+    Ok(())
+}
+
+/// Pushes the offset, `offset` plus its place in `token`, of each `\u` escape in the string token that names a
+/// surrogate half without its other half beside it.
+fn lone_surrogate_escapes(token: &[u8], offset: usize, out: &mut Vec<usize>) {
+    let unit = |at: usize| -> Option<u16> {
+        let escape = token.get(at..at + 6)?;
+        if !escape.starts_with(b"\\u") {
+            return None;
+        }
+        escape[2..].iter().try_fold(0u16, |unit, &digit| {
+            Some(unit << 4 | (digit as char).to_digit(16)? as u16)
+        })
+    };
+    let mut at = 1;
+    while at + 1 < token.len() {
+        if token[at] != b'\\' {
+            at += 1;
+            continue;
+        }
+        match unit(at) {
+            Some(0xD800..=0xDBFF) if matches!(unit(at + 6), Some(0xDC00..=0xDFFF)) => at += 12,
+            Some(0xD800..=0xDFFF) => {
+                out.push(offset + at);
+                at += 6;
+            }
+            Some(_) => at += 6,
+            None => at += 2,
+        }
     }
 }
 
@@ -1413,6 +1555,85 @@ mod tests {
         assert_eq!(
             repeated_top_level_member(body, &["metadata", "model", "stream"]).unwrap(),
             None
+        );
+    }
+
+    #[test]
+    fn a_repeated_member_of_the_parent_object_is_found_raw_or_escaped() {
+        for body in [
+            br#"{"model":"a","metadata":{"user_id":"a","user_id":"b"},"messages":[]}"#.as_slice(),
+            br#"{"model":"a","metadata":{"user_id":"a","\u0075ser_id":"b"},"messages":[]}"#,
+            br#"{"model":"a","metadata":{"\u0075ser_id":"a","user_id":"b"},"messages":[]}"#,
+        ] {
+            assert_eq!(
+                repeated_member_within(body, "metadata", &["user_id"]).unwrap(),
+                Some("user_id"),
+                "{}",
+                String::from_utf8_lossy(body)
+            );
+        }
+        assert_eq!(
+            repeated_member_within(
+                br#"{"metadata":{"user_id":"a","model":"x","model":"y"}}"#,
+                "metadata",
+                &["user_id"]
+            )
+            .unwrap(),
+            None,
+            "a member not named is not looked at"
+        );
+    }
+
+    #[test]
+    fn a_repeat_below_the_parents_own_members_is_not_found() {
+        let deeper = br#"{"metadata":{"user_id":"a","extra":{"user_id":"b","user_id":"c"}},"messages":[{"role":"user","content":[{"type":"tool_use","input":{"metadata":{"user_id":"d","user_id":"e"}}}]}]}"#;
+        assert_eq!(
+            repeated_member_within(deeper, "metadata", &["user_id"]).unwrap(),
+            None
+        );
+        for absent_or_not_an_object in [
+            br#"{"model":"a"}"#.as_slice(),
+            br#"{"metadata":"user_id"}"#,
+            br#"{"metadata":["user_id","user_id"]}"#,
+        ] {
+            assert_eq!(
+                repeated_member_within(absent_or_not_an_object, "metadata", &["user_id"]).unwrap(),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn a_lone_surrogate_escape_reads_as_the_replacement_character_in_the_copy_alone() {
+        let body = br#"{"a":"cut \ud83d","b":"\udc00 low","c":"pair \ud83d\ude00","d":"\\ud83d","e":"\uD83D\uD83D","\ud800":1}"#;
+        assert!(serde_json::from_slice::<serde_json::Value>(body).is_err());
+        let copy = lone_surrogates_mapped(body).expect("the body carries lone escapes");
+        assert_eq!(copy.len(), body.len(), "the copy keeps every offset");
+        let read: serde_json::Value = serde_json::from_slice(&copy).unwrap();
+        assert_eq!(read["a"], "cut \u{fffd}");
+        assert_eq!(read["b"], "\u{fffd} low");
+        assert_eq!(read["c"], "pair \u{1f600}", "a pair is left whole");
+        assert_eq!(
+            read["d"], "\\ud83d",
+            "an escaped backslash starts no escape"
+        );
+        assert_eq!(
+            read["e"], "\u{fffd}\u{fffd}",
+            "two high halves pair with nothing"
+        );
+        assert_eq!(read["\u{fffd}"], 1, "a key is a string token too");
+    }
+
+    #[test]
+    fn a_body_with_no_lone_surrogate_or_one_the_scanner_cannot_walk_has_no_copy() {
+        assert_eq!(
+            lone_surrogates_mapped(br#"{"a":"pair \ud83d\ude00","b":"\n"}"#),
+            None
+        );
+        assert_eq!(
+            lone_surrogates_mapped(br#"{"a":"cut \ud83d""#),
+            None,
+            "an unterminated object"
         );
     }
 
