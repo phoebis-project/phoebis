@@ -111,7 +111,8 @@ pub struct RequestFilter {
     pub client: Option<String>,
     pub agent_types: Vec<String>,
     pub turn_origins: Vec<String>,
-    /// `fast`, `standard`: the serving attempt's `speed`, NULL read as `standard`.
+    /// `fast`, `standard`: the serving attempt's `speed`, else `fast` for a request that asked for it and
+    /// `standard` otherwise.
     pub speeds: Vec<String>,
     /// Keep the requests that waited for a slot (`held` on the request row).
     pub held: bool,
@@ -297,9 +298,10 @@ pub fn list_requests(
                 format!("?{}", args.len())
             })
             .collect();
-        // The serving attempt is the last: an earlier 429 carries no speed and must not read as standard.
+        // The serving attempt is the last: an earlier 429 carries no speed and must not read as standard. A
+        // request with no served speed reads as the rollups fold it.
         clauses.push(format!(
-            "COALESCE((SELECT a.speed FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), 'standard') IN ({})",
+            "COALESCE((SELECT a.speed FROM attempts a WHERE a.request_id = requests.id ORDER BY a.attempt DESC LIMIT 1), CASE WHEN requests.requested_speed = 'fast' THEN 'fast' ELSE 'standard' END) IN ({})",
             marks.join(", ")
         ));
     }

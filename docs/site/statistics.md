@@ -331,39 +331,39 @@ Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1
 characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the client filter
 takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the values the
 client's hint headers and attribution line carry, the speed filter picks `fast` or `standard` by the speed the answer
-reported, the status filter offers the codes the router and Anthropic answer and any other code the page holds, the
-outcome filter picks how the request ended (`canceled`, `exhausted`, `failed`, `incomplete`, `rejected`, or
-`succeeded`), and the held toggle keeps the requests that waited for a slot. The search and the two pattern fields apply
-400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and the page
-size live in the page's address, so a reload or a shared link keeps them. A filter whose list did not load is disabled
-and says why. Selecting a row opens a drawer with the request's detail, which shows the outcome beneath the status,
-the user agent, the model as the client spelled it and, when it differs,
-the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on setting; carried
-the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or not requested), and
-the client hints: the agent type, the compaction and context-compacted markers, the turn origin, and the tool time
-before the turn; the trail names an account the model was rejected on and the one that served it, and each attempt names
-the upstream's request id under its head and, on the answer that served, the message id a Claude Code transcript's
-assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a per-turn control
-entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends with such an entry
-still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the moment you opened
-it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved during the request,
-the drawer says from which account to which and why: rate limited, wound down, account marked, over its plan, back to
-plan, load shed, or window spent. When its pin was released without a move, the drawer says from which account and every
-reason the router found, among: already tried this request, the account at its spend budget, the creating request's own
-client error, an account cooldown, the account deleted, disconnected, idle past the affinity window, funding required,
-in overage, paused, needing reauthorization, released outright, window spent, the subscription ended, never paired, or
-no longer serving the model. The drawer also shows the strategy the selection used, the tier it drew from, whether the
-pin continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache answered the request and
-by how many of its input tokens, and every candidate the selection passed over with the obstacle in its way: already
-tried, above the ceiling, at its in-flight cap, at its spend budget, an account cooldown, at the pace floor, an operator
-hold, in overage, ranked behind another candidate, its subscription ended, its window spent, or winding down. A
-placement names where it landed: by its messages or by its static prefix at the depth that matched, or with the main
-conversation. A request held while every account was at its cap names the account it was held on: its cohort's, or else
-the last one it waited on, and how long it waited. The cache line reads a placement as a hit or a miss against the
-prefix it was promised: a placement by its messages is a hit when the response read at least that prefix, one by its
-static prefix when it read anything, and one with the main conversation keeps the plain cache line. The drawer shows the
-captured request and response bodies, each with Copy, which copies the text as shown; a body past 256 KiB shows compact
-until Pretty-print is pressed.
+reported, else by whether the request asked for `fast`, the status filter offers the codes the router and Anthropic
+answer and any other code the page holds, the outcome filter picks how the request ended (`canceled`, `exhausted`,
+`failed`, `incomplete`, `rejected`, or `succeeded`), and the held toggle keeps the requests that waited for a slot. The
+search and the two pattern fields apply 400 milliseconds after the last keystroke, on Enter, or when the field loses
+focus. Every filter, the range and the page size live in the page's address, so a reload or a shared link keeps them. A
+filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's detail, which
+shows the outcome beneath the status, the user agent, the model as
+the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing (asked for a
+server-side check under an on setting; carried the safeguards member under an off setting, which the dispatch drops;
+refused for its body shape; or not requested), and the client hints: the agent type, the compaction and
+context-compacted markers, the turn origin, and the tool time before the turn; the trail names an account the model was
+rejected on and the one that served it, and each attempt names the upstream's request id under its head and, on the
+answer that served, the message id a Claude Code transcript's assistant entry carries. The drawer's effort is the level
+the upstream applies: when the client sends a per-turn control entry, the last entry's level, else the request's
+top-level `output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its
+own prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
+Refresh brings it up to now. When the session moved during the request, the drawer says from which account to which and
+why: rate limited, wound down, account marked, over its plan, back to plan, load shed, or window spent. When its pin was
+released without a move, the drawer says from which account and every reason the router found, among: already tried this
+request, the account at its spend budget, the creating request's own client error, an account cooldown, the account
+deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing reauthorization,
+released outright, window spent, the subscription ended, never paired, or no longer serving the model. The drawer also
+shows the strategy the selection used, the tier it drew from, whether the pin continued and was renewed, moved (naming
+the rule), or was placed afresh, whether the cache answered the request and by how many of its input tokens, and every
+candidate the selection passed over with the obstacle in its way: already tried, above the ceiling, at its in-flight
+cap, at its spend budget, an account cooldown, at the pace floor, an operator hold, in overage, ranked behind another
+candidate, its subscription ended, its window spent, or winding down. A placement names where it landed: by its messages
+or by its static prefix at the depth that matched, or with the main conversation. A request held while every account was
+at its cap names the account it was held on: its cohort's, or else the last one it waited on, and how long it waited.
+The cache line reads a placement as a hit or a miss against the prefix it was promised: a placement by its messages is a
+hit when the response read at least that prefix, one by its static prefix when it read anything, and one with the main
+conversation keeps the plain cache line. The drawer shows the captured request and response bodies, each with Copy,
+which copies the text as shown; a body past 256 KiB shows compact until Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
@@ -379,14 +379,15 @@ bytes; the user agent is the header's first product token (`name/version`), cut 
 row keeps the raw values, so the drawer shows what the client sent. The request class shown by this grouping is the
 value the client sent on its class header, so a class a client adds later shows up under its own name; a classless
 request folds under the reserved value alongside a keepalive credit, and a request that sent no user agent under the
-reserved id. The speed grouping reads the speed the answer reported, `standard` for one that named none. A key deleted
-and created again under the same id appears twice under the key grouping, since its figures stay with the key that spent
-them. The earlier holder is labelled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date and time it was created at
-minute precision, or `<id> (deleted)` when the ledger holds no creation time for it. The client and user agent filters
-take the request log's pattern grammar; the analytics agent filter matches the folded token while the request log's
-matches the raw header, so a pattern over the part after the token (`*sdk-cli*`) selects nothing here. Under the user
-agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups, every other
-agent under `other`.
+reserved id. The speed grouping reads the speed the answer reported, else `fast` when the request asked for it,
+`standard` otherwise; the Requests by speed chart therefore counts a fast request the router refused before any attempt
+as fast. A key deleted and created again under the same id appears twice under the key grouping, since its figures stay
+with the key that spent them. The earlier holder is labelled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date
+and time it was created at minute precision, or `<id> (deleted)` when the ledger holds no creation time for it. The
+client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the folded
+token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`) selects
+nothing here. Under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*`
+as two groups, every other agent under `other`.
 
 Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
 per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside

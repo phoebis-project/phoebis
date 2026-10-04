@@ -59,7 +59,7 @@ export interface HourlyRollup {
   savings: { grossUsd: number; probeCostUsd: number };
   /** The fixture rolls up per session, which keeps its lanes as fine as the ledger's; no route groups on one. */
   sessionId: string;
-  /** The speed the hour's answers reported; the rollups file an answer that named none as `standard`. */
+  /** The speed the hour's answers reported, else `fast` where its requests asked for it, else `standard`. */
   speed: 'fast' | 'standard';
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;

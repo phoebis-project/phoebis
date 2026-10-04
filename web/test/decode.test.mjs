@@ -909,7 +909,7 @@ test('a session fold groups on the client each row named', () => {
   assert.equal(captured.userAgent, 'claude-cli/2.1.269 (external, cli)', 'the row carries the agent the route answers');
   const rows = [captured, { ...failed, userAgent: 'phoebis-batch/0.9 (external, ci)' }, { ...failed, id: 'r-none', userAgent: null }];
   const groups = d.foldGroups(rows, 'user_agent');
-  assert.deepEqual(groups.map((g) => g.key).sort(), ['-', 'claude-cli/2.1.269 (external, cli)', 'phoebis-batch/0.9 (external, ci)'], 'a row that named no client falls under the marker the rollups file it as');
+  assert.deepEqual(groups.map((g) => g.key).sort(), ['-', 'claude-cli/2.1.269', 'phoebis-batch/0.9'], 'a row that named no client falls under the marker the rollups file it as');
   assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'which every route answers as unattributed');
   assert.deepEqual(groups.map((g) => g.requests), [1, 1, 1]);
   const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.*', 'phoebis-batch/*'] });

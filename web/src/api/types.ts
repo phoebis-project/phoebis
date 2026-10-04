@@ -705,7 +705,7 @@ export interface RequestQuery {
   outcomes?: RequestOutcome[];
   poolIds?: string[];
   search?: string;
-  /** `fast`, `standard`: the serving attempt's speed. */
+  /** `fast`, `standard`: the serving attempt's speed, else `fast` for a request that asked for it. */
   speeds?: string[];
   statuses?: number[];
   to?: string;

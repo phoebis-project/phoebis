@@ -43,6 +43,17 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
  */
 const emptyFolded = (key: string, label = key): AnalyticsGroup => ({ ...empty(key, label), cost: { cacheRead: null, cacheWrite: null, input: 0, output: 0 }, fromRequests: true, keptWarm: null, savings: null });
 
+/**
+ * The header's first product token (`name/version`, up to the first space) cut to 64 bytes, else `other`, as the
+ * ledger keys a user agent in its hourly rollups: the build of a client is in the token, and the comment after it
+ * is free text.
+ */
+export function foldUserAgent(raw: string): string {
+  const token = raw.split(' ')[0];
+  const parts = token.split('/');
+  return parts.length === 2 && parts.every((part) => /^[A-Za-z0-9.:_-]+$/.test(part)) ? token.slice(0, 64) : 'other';
+}
+
 const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): string => {
   if (by === 'account') return r.accountId ?? '-';
   if (by === 'client') return r.client ?? '-';
@@ -53,12 +64,15 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
   if (by === 'model') return r.model;
   if (by === 'pool') return r.poolId ?? '-';
   if (by === 'request_class') return r.requestClass ?? '-';
-  if (by === 'speed') return r.attempts[r.attempts.length - 1]?.response.speed ?? 'standard';
+  // A fast request refused before any attempt served still asked for fast, and the rollups file it so.
+  if (by === 'speed') return r.attempts[r.attempts.length - 1]?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
   if (by === 'user_agent') {
-    // The rollups file a row that named no client under '-', which every route answers as unattributed; under
-    // a pattern list it falls with every other unmatched client under 'other', as the breakdown route does.
-    if (agentGroups.length === 0) return r.userAgent ?? '-';
-    return agentGroups.find((p) => matchesPattern(p, r.userAgent ?? '-')) ?? 'other';
+    // The rollups key an agent by its token and file a row that named no client under '-', which every route
+    // answers as unattributed; under a pattern list the token falls with every other unmatched client under
+    // 'other', as the breakdown route does.
+    const agent = r.userAgent === null ? '-' : foldUserAgent(r.userAgent);
+    if (agentGroups.length === 0) return agent;
+    return agentGroups.find((p) => matchesPattern(p, agent)) ?? 'other';
   }
   return 'all';
 };

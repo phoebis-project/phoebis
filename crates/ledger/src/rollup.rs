@@ -26,7 +26,8 @@ pub const NO_EFFORT: &str = "none";
 /// The value a request with no `x-claude-code-request-class` header files under, and a keepalive delta's own.
 pub const NO_CLASS: &str = "-";
 
-/// The value a request the answer named no `usage.speed` for files under; `fast` is the other value.
+/// The value a request files under when its answer named no `usage.speed` and it did not ask for `fast`; `fast`
+/// is the other value.
 pub const STANDARD_SPEED: &str = "standard";
 
 /// The funding of an attempt the plan paid for: neither served fast nor reported in overage.
@@ -64,6 +65,16 @@ pub fn fold_user_agent(raw: &str) -> String {
             token[..end].to_string()
         }
         _ => OTHER_DIMENSION.into(),
+    }
+}
+
+/// `fast` for a request that asked for it, else `STANDARD_SPEED`: the request row keeps the body's `speed` text as
+/// sent, and any other value would key a row of its own.
+fn fold_speed(raw: Option<&str>) -> &'static str {
+    if raw == Some("fast") {
+        "fast"
+    } else {
+        STANDARD_SPEED
     }
 }
 
@@ -149,7 +160,8 @@ pub struct RollupRow {
     /// The class the client named, `NO_CLASS` for a classless request and for a keepalive credit; a dimension,
     /// so it sits in the key.
     pub request_class: String,
-    /// The speed the answer reported, `STANDARD_SPEED` when it reported none; a dimension, so it sits in the key.
+    /// The speed the last attempt's answer reported, else `fast` when the request asked for it, else
+    /// `STANDARD_SPEED`; a dimension, so it sits in the key.
     pub speed: String,
     /// Who paid for the attempt: `fast` when it was served fast, whose answer draws usage credits in dollars
     /// whatever the overage flag; else `overage` when the head's unified headers said overage was in use; else
@@ -409,8 +421,11 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
             .request_class
             .as_deref()
             .map_or_else(|| NO_CLASS.into(), fold_identifier),
+        // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
+        // refusal) still asked for fast: it files under that speed, while its funding reads the served answer,
+        // which spent nothing.
         last.and_then(|a| a.speed.as_deref())
-            .unwrap_or(STANDARD_SPEED),
+            .unwrap_or_else(|| fold_speed(request.requested_speed.as_deref())),
         // A fast answer draws usage credits in dollars whatever the overage flag, so it is metered on a plan
         // account too.
         match last {
@@ -1750,6 +1765,39 @@ mod tests {
             ),
             (UNATTRIBUTED, UNATTRIBUTED, NO_EFFORT, NO_CLASS),
             "an absent value keeps the reserved id it always filed under"
+        );
+    }
+
+    /// A fast request refused before any attempt served files under the speed it asked for, and its funding under
+    /// `plan`, since nothing was spent; any other text the caller sent as its speed files under `standard`, and
+    /// an answer's own speed outranks the one asked for.
+    #[test]
+    fn a_request_with_no_served_speed_files_under_fast_only_when_it_asked_for_fast() {
+        let refused = RequestRecord {
+            requested_speed: Some("fast".into()),
+            ..request("exhausted", Some(429), Some("k"))
+        };
+        let d = delta_of(&refused, &[]);
+        assert_eq!(
+            (d.speed.as_str(), d.funding.as_str()),
+            ("fast", PLAN_FUNDING),
+            "the refused fast request files under fast and spent nothing"
+        );
+        let caller_text = RequestRecord {
+            requested_speed: Some("s".repeat(300)),
+            ..refused.clone()
+        };
+        assert_eq!(
+            delta_of(&caller_text, &[]).speed,
+            STANDARD_SPEED,
+            "the caller's text never keys a row"
+        );
+        let mut served = attempt(1, "a", None, None, Some(5), None);
+        served.speed = Some(STANDARD_SPEED.into());
+        assert_eq!(
+            delta_of(&refused, &[served]).speed,
+            STANDARD_SPEED,
+            "the speed the answer reported outranks the one the request asked for"
         );
     }
 

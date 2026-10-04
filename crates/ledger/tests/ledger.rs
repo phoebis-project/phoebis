@@ -1498,6 +1498,46 @@ fn a_page_with_one_row_beyond_it_answers_a_cursor_whose_next_page_holds_that_row
     assert_eq!(next, None);
 }
 
+/// A fast request the router refused before any attempt served lists under the speed it asked for, and one that
+/// sent any other text as its speed under `standard`, as the rollups file them.
+#[test]
+fn a_fast_request_refused_before_any_attempt_is_listed_under_the_fast_speed_filter() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let refused = |id: &str, received_at: i64, speed: String| RequestRecord {
+        id: id.into(),
+        received_at,
+        canonical_model: "claude-opus-5".into(),
+        model: "claude-opus-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(429),
+        outcome: "exhausted".into(),
+        error_code: Some("fast_lane_exhausted".into()),
+        requested_speed: Some(speed),
+        ..Default::default()
+    };
+    db.insert_request(&refused("asked-fast", 1, "fast".into()), &[], None)
+        .unwrap();
+    db.insert_request(&refused("asked-other", 2, "x".repeat(300)), &[], None)
+        .unwrap();
+    let listed = |speed: &str| {
+        let filter = RequestFilter {
+            speeds: vec![speed.into()],
+            ..Default::default()
+        };
+        let (rows, _) = db
+            .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .unwrap();
+        rows.into_iter().map(|(r, _)| r.id).collect::<Vec<_>>()
+    };
+    assert_eq!(listed("fast"), ["asked-fast"]);
+    assert_eq!(
+        listed("standard"),
+        ["asked-other"],
+        "the fast request is not standard, and the other text lists under standard alone"
+    );
+}
+
 /// Held on a slow `land`, `CHANNEL_DEPTH + 8` requests offered through `record_request` all wait for room
 /// rather than dropping.
 #[tokio::test]

@@ -4784,7 +4784,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   agentType?.querySelector('.mselect__trigger')?.click();
   await m.settle(700);
 
-  const speedCheck = '/requests the speed filter keeps the requests whose serving attempt answered fast';
+  const speedCheck = '/requests the speed filter keeps the requests whose serving attempt answered fast or that asked for fast and made no attempt';
   const speed = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Speed'));
   if (!speed) controlMissing(speedCheck, 'Speed');
   speed?.querySelector('.mselect__trigger')?.click();
@@ -4795,13 +4795,16 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await m.settle(700);
   speed?.querySelector('.mselect__trigger')?.click();
   await m.settle(150);
-  // Each row opens its drawer in turn, so the check reads the serving attempt's own line rather than the story's rule.
+  // Each row opens its drawer in turn, so the check reads the serving attempt's own line rather than the story's rule;
+  // a request refused before any attempt shows none and files under the speed its shape asked for.
   const servedAs = [];
   for (const tr of [...m.container.querySelectorAll('.requests__table tbody tr')]) {
     tr.click();
     await m.settle(300);
     const lines = [...m.container.querySelectorAll('.drawer .attempt .attempt__response')];
-    servedAs.push([...(lines.at(-1)?.children ?? [])].map((span) => span.textContent?.trim()).includes('fast') ? 'fast' : (lines.at(-1)?.textContent ?? 'no response line'));
+    const asked = [...m.container.querySelectorAll('.drawer .kv__row')].find((row) => row.querySelector('dt')?.textContent?.trim() === 'Speed, service tier')?.querySelector('dd')?.textContent?.trim() ?? '';
+    const attempted = m.container.querySelectorAll('.drawer .attempt').length > 0;
+    servedAs.push([...(lines.at(-1)?.children ?? [])].map((span) => span.textContent?.trim()).includes('fast') ? 'fast' : !attempted && asked.startsWith('fast,') ? 'fast' : (lines.at(-1)?.textContent ?? `no response line, asked ${asked}`));
   }
   const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
   results.push({ name: speedCheck, ok: servedAs.length > 0 && servedAs.length === fastDay && servedAs.every((s) => s === 'fast'), missing: [`${servedAs.length} rows against ${fastDay}`, ...new Set(servedAs)] });

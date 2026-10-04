@@ -823,8 +823,9 @@ function rollups(): HourlyRollup[] {
       model,
       requestClass: isProbe ? '-' : classOfRows(list),
       sessionId,
-      // A lane's rows share its key, model and kind, which is what decides fast mode in this story.
-      speed: list[0].attempts[list[0].attempts.length - 1]?.response.speed === 'fast' ? 'fast' : 'standard',
+      // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
+      // before any attempt files under the speed it asked for, as the ledger files it.
+      speed: (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard',
       requests: {
         // A stream that ended short committed its 200 and still is no success, so it counts on its own.
         incomplete: list.filter((r) => r.outcome === 'incomplete').length,

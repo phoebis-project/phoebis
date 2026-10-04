@@ -306,8 +306,9 @@ function matchesQuery(r: RequestLog, q: RequestQuery, live: Map<string, number>)
   if (q.client && !matchesPattern(q.client, r.client ?? '-')) return false;
   if (q.agentTypes?.length && !q.agentTypes.includes(r.agentType ?? '')) return false;
   if (q.turnOrigins?.length && !q.turnOrigins.includes(r.turnOrigin ?? '')) return false;
-  // The serving attempt is the last; an answer that named no speed reads as standard, as the route reads it.
-  if (q.speeds?.length && !q.speeds.includes(r.attempts[r.attempts.length - 1]?.response.speed ?? 'standard')) return false;
+  // The serving attempt is the last; a request no answer named a speed for reads as fast when it asked for fast and
+  // as standard otherwise, as the route reads it.
+  if (q.speeds?.length && !q.speeds.includes(r.attempts[r.attempts.length - 1]?.response.speed ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard'))) return false;
   if (q.held && r.held === null) return false;
   return true;
 }
