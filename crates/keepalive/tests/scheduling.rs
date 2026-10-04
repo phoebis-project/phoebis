@@ -780,7 +780,9 @@ async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers(
     with_budget_member(&r).await;
     // Waits out the writer's own spend refresh, whose standing report would otherwise land after the one below.
     plant_spend(&r, "under-budget", 1.0).await;
-    r.h.router.report(Report::Accounting { degraded: true });
+    r.h.router
+        .report(Report::Accounting { degraded: true })
+        .await;
     settled(&r, |r| async move {
         r.h.router.accounting_degraded().await.unwrap()
     })
@@ -798,7 +800,9 @@ async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers(
         1,
         "the refused probe reached no upstream"
     );
-    r.h.router.report(Report::Accounting { degraded: false });
+    r.h.router
+        .report(Report::Accounting { degraded: false })
+        .await;
     settled(&r, |r| async move {
         !r.h.router.accounting_degraded().await.unwrap()
     })
