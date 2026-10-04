@@ -133,6 +133,17 @@ enum Armed {
     Uncertain,
 }
 
+/// Where an acquisition takes the store reads a cache miss costs.
+#[derive(Clone, Copy)]
+enum Read {
+    /// On a blocking thread: a leg's worker serves other requests rather than wait on the store's connection.
+    Blocking,
+    /// On the caller's task: the usage poll, off the request path, keeps an attempt's reads and its request inside
+    /// the scheduler's turn that drew it, which its suite asserts by stepping a paused clock; a hop to a blocking
+    /// thread finishes in real time while that clock stands still, so the request would leave a step late.
+    Inline,
+}
+
 /// A bundle the manager read or committed, with the lineage it belongs to: the holder's incarnation and lifecycle
 /// generation beside the bundle's own generation, since a recreated id and a reconnected slot both restart the
 /// generation at 1 and a figure read alone would match the old holder's bundle.
@@ -215,13 +226,27 @@ impl CredentialManager {
         account: &AccountRow,
         expected_generation: Option<u64>,
     ) -> Result<AccessToken, AcquireError> {
+        self.acquire_with(account, expected_generation, Read::Blocking)
+            .await
+    }
+
+    /// `acquire_for`'s body, the store read of a miss taken where `read` says.
+    async fn acquire_with(
+        &self,
+        account: &AccountRow,
+        expected_generation: Option<u64>,
+        read: Read,
+    ) -> Result<AccessToken, AcquireError> {
         match account.state {
             AccountState::Disconnected => return Err(AcquireError::Disconnected),
             AccountState::ReauthRequired => return Err(AcquireError::ReauthRequired),
             AccountState::Unpaired => return Err(AcquireError::Unpaired),
             _ => {}
         }
-        let bundle = self.inner.bundle(account, expected_generation).await?;
+        let bundle = self
+            .inner
+            .bundle(account, expected_generation, read)
+            .await?;
         let account_id = account.id.as_str();
         let now = (self.inner.clock)();
         if bundle.expires_at - now > refresh_margin(&bundle) {
@@ -264,18 +289,12 @@ impl CredentialManager {
     }
 
     /// `acquire_for` over the row read from the store, for a caller that holds an id alone (the usage service).
+    /// Its reads run inline on the caller's task, as `Read::Inline` says why.
     pub async fn acquire(&self, account_id: &str) -> Result<AccessToken, AcquireError> {
-        let store = self.inner.store.clone();
-        let id = account_id.to_string();
-        let account = tokio::task::spawn_blocking(move || store.account(&id))
-            .await
-            .map_err(|error| {
-                AcquireError::Unavailable(format!("the account read failed: {error}"))
-            })??
-            .ok_or_else(|| {
-                AcquireError::Store(StoreError::AccountNotFound(account_id.to_string()))
-            })?;
-        self.acquire_for(&account, None).await
+        let account = self.inner.store.account(account_id)?.ok_or_else(|| {
+            AcquireError::Store(StoreError::AccountNotFound(account_id.to_string()))
+        })?;
+        self.acquire_with(&account, None, Read::Inline).await
     }
 
     /// Drops the account's cached bundle: a credential committed from outside the manager (a pairing, a
@@ -466,11 +485,12 @@ impl CredentialManager {
 
 impl Inner {
     /// The account's bundle: the cached one while its lineage is the row's and its generation is at or above
-    /// `expected`, else one store read on a blocking thread, which replaces the entry.
+    /// `expected`, else one store read where `read` says, which replaces the entry.
     async fn bundle(
         &self,
         account: &AccountRow,
         expected: Option<u64>,
+        read: Read,
     ) -> Result<Arc<CredentialBundle>, AcquireError> {
         let cached = self
             .bundles
@@ -486,14 +506,19 @@ impl Inner {
         if let Some(bundle) = cached {
             return Ok(bundle);
         }
-        let store = self.store.clone();
-        let id = account.id.clone();
-        let bundle = tokio::task::spawn_blocking(move || store.credentials(&id))
-            .await
-            .map_err(|error| {
-                AcquireError::Unavailable(format!("the credential read failed: {error}"))
-            })??
-            .ok_or(AcquireError::Unpaired)?;
+        let stored = match read {
+            Read::Blocking => {
+                let store = self.store.clone();
+                let id = account.id.clone();
+                tokio::task::spawn_blocking(move || store.credentials(&id))
+                    .await
+                    .map_err(|error| {
+                        AcquireError::Unavailable(format!("the credential read failed: {error}"))
+                    })??
+            }
+            Read::Inline => self.store.credentials(&account.id)?,
+        };
+        let bundle = stored.ok_or(AcquireError::Unpaired)?;
         let bundle = Arc::new(bundle);
         self.remember(account, bundle.clone());
         Ok(bundle)
