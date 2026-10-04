@@ -1070,7 +1070,7 @@ function ReasonBars({ totals }: { totals: AnalyticsGroup }) {
 }
 
 const WASTED_PROBE_BLURB =
-  "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.";
+  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.";
 
 function WastedProbes({ savings, probes }: { probes: number; savings: NonNullable<AnalyticsGroup['savings']> }) {
   const ink = useChartInk();

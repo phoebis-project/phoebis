@@ -257,9 +257,9 @@ impl Engine {
             "probe",
             record.fast,
         );
-        match record.outcome {
-            ProbeOutcome::Migrated => d.probe_migrated = 1,
-            _ => d.probe_cost_usd = record.cost_usd,
+        d.probe_cost_usd = record.cost_usd;
+        if record.outcome == ProbeOutcome::Migrated {
+            d.probe_migrated = 1;
         }
         self.parts.ledger.record(Record::Keepalive(d));
     }

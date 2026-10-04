@@ -823,8 +823,8 @@ export interface LatencyHistograms {
   ttftMs: number[];
 }
 
-/** Why a recipe stopped while probes it had already paid for were still in the air. */
-export type WastedProbeReason = 'idle_limit' | 'released' | 'replaced' | 'session_ended';
+/** Why probes a recipe had already paid for went unanswered: the stop that left them, or a request after them that read no cache. */
+export type WastedProbeReason = 'cold_return' | 'evicted' | 'expired' | 'idle_limit' | 'released' | 'replaced' | 'session_ended';
 
 export interface AccountRollup {
   accountId: string;
@@ -941,6 +941,8 @@ export type RecipeReason =
   | 'cap_reached'
   | 'cold_probes'
   | 'cooled'
+  | 'evicted'
+  | 'expired'
   | 'idle_limit'
   | 'net_negative'
   | 'overage'

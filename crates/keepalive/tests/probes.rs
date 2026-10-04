@@ -532,11 +532,17 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
                 (
                     status.account_id.as_deref(),
                     status.next_probe_at,
-                    status.unanswered,
-                    status.net_usd
+                    status.unanswered
                 ),
-                (Some("a"), None, 0, 0.0),
+                (Some("a"), None, 0),
                 "{action}: the late result touched no recipe state: {status:?}"
+            );
+            // The upstream served it and the day carries it, so the record it outlived carries it too.
+            let charged = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
+            assert!(charged > 0.0, "{action}");
+            assert!(
+                (status.net_usd + charged).abs() < 1e-12,
+                "{action}: the net moved by the probe's cost: {status:?} against {charged}"
             );
             assert!(
                 !status.in_flight,
@@ -563,6 +569,54 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
             );
         }
     }
+}
+
+/// A probe whose record a replacement registration of the same agent superseded while it was in flight was still
+/// served and charged to the day, so the record that survives it carries its cost in the net.
+#[tokio::test]
+async fn an_orphaned_probe_whose_agent_survives_debits_its_net() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Gated(Box::new(probe_answer(2_000, 0))),
+    );
+    r.advance_attended(270_000);
+    r.engine.step().await;
+    wait_for(std::time::Duration::from_secs(5), || {
+        (r.up.requests().len() == 2).then_some(())
+    })
+    .await;
+    // The companion releases the agent and registers it again: the same record under a new generation.
+    r.state("main", "released");
+    let generation = r.agent("main").request_generation;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some(MAIN_AGENT.into()),
+        request_generation: Some(generation),
+        ..Default::default()
+    })
+    .unwrap();
+    r.up.release();
+    r.engine.wait_idle().await;
+    r.pump(None).await;
+    let charged = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
+    assert!(charged > 0.0, "the day carries the probe");
+    let status = r.status("main");
+    assert_eq!(
+        (status.in_flight, status.next_probe_at, status.unanswered),
+        (false, None, 0),
+        "{status:?}"
+    );
+    assert!(
+        (status.net_usd + charged).abs() < 1e-12,
+        "the surviving record's net carries the probe's cost: {status:?} against {charged}"
+    );
 }
 
 #[tokio::test]
@@ -765,8 +819,11 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
 async fn a_migration_does_not_accumulate_a_cold_streak() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
+        // Every probe here is priced, the migrated one included; the net stop would hold the fourth, and this case
+        // is about the cold streak alone.
         policy: KeepalivePolicy {
             cold_probe_limit: 3,
+            stop_when_net_negative: false,
             ..RigSpec::default().policy
         },
         ..RigSpec::default()
@@ -1026,6 +1083,10 @@ async fn a_probe_that_read_its_clock_before_midnight_does_not_roll_the_day_back(
     let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
     r.clock
         .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
+    // The entry the first probe kept expired long before midnight, so a request re-arms the recipe for the day's
+    // next probe.
+    r.observe("main").await;
+    r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 2, "the next day's own charge");
     let after_the_roll = r.engine.spent_today();
@@ -1044,8 +1105,11 @@ async fn a_probe_that_read_its_clock_before_midnight_does_not_roll_the_day_back(
 #[tokio::test]
 async fn retries_back_off_with_the_pools_settings_and_stop_at_the_limit() {
     let mut r = rig(RigSpec {
+        // A lead of two minutes leaves room for both retries before the entry expires at 300 s, past which none
+        // would be sent.
         policy: KeepalivePolicy {
             cold_probe_limit: 3,
+            lead_seconds_5m: 120,
             retry_seconds: 30,
             retry_max_seconds: 45,
             ..RigSpec::default().policy
@@ -1061,7 +1125,7 @@ async fn retries_back_off_with_the_pools_settings_and_stop_at_the_limit() {
         )
     };
     r.up.push_credential_rule(A, "/v1/messages", server_error());
-    r.advance(270_000);
+    r.advance(180_000);
     r.step().await;
     assert_eq!(
         (r.status("main").failures, r.status("main").next_probe_at),

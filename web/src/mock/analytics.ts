@@ -63,7 +63,7 @@ export interface HourlyRollup {
   speed: 'fast' | 'standard';
   tokens: { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; output: number; thinking: number; uncachedInput: number; webFetch: number; webSearch: number };
   uncached: number;
-  /** Probes no real request ever followed, settled when the recipe stopped. */
+  /** Probes no real request came back for, settled when the recipe stopped or the request after them read no cache. */
   wastedProbes: number;
   wastedProbeReasons: Record<WastedProbeReason, number>;
   wastedProbeUsd: number;

@@ -134,6 +134,13 @@ pub enum PolicyError {
     AffinityTooShort,
     #[error("keepalive.probe_cost_cap_usd_per_day must be null or a positive number")]
     CapNotPositive,
+    #[error(
+        "keepalive.{lead} plus keepalive.{jitter} must stay under the cache TTL they apply to"
+    )]
+    LeadPlusJitter {
+        lead: &'static str,
+        jitter: &'static str,
+    },
     #[error("keepalive.{field} must be between {min} and {max}, not {value}")]
     OutOfRange {
         field: &'static str,
@@ -166,14 +173,19 @@ impl KeepalivePolicy {
         Ok(policy)
     }
 
-    /// What a stored row reads as. A row written before the policy was typed may hold anything, and a value
-    /// outside its bounds could only have got there the same way; either reads as probing off rather than as an
-    /// error every reader would have to handle.
+    /// What a stored row reads as. A row written before the policy was typed may hold anything, and one written
+    /// before a bound it now fails was added holds a value the admin API no longer accepts; either reads as
+    /// probing off rather than as an error every reader would have to handle. `read` names the refusal.
     pub fn from_json(raw: &str) -> KeepalivePolicy {
-        serde_json::from_str::<KeepalivePolicy>(raw)
-            .ok()
-            .filter(|policy| policy.validate_fields().is_ok())
-            .unwrap_or_default()
+        KeepalivePolicy::read(raw).unwrap_or_default()
+    }
+
+    /// A stored row with the refusal that turns it off, for the one place that reports it.
+    pub fn read(raw: &str) -> Result<KeepalivePolicy, PolicyError> {
+        let policy = serde_json::from_str::<KeepalivePolicy>(raw)
+            .map_err(|e| PolicyError::Shape(e.to_string()))?;
+        policy.validate_fields()?;
+        Ok(policy)
     }
 
     pub fn validate_fields(&self) -> Result<(), PolicyError> {
@@ -209,12 +221,24 @@ impl KeepalivePolicy {
             range,
         )?;
         bound("max_idle_ticks", self.max_idle_ticks, 0, 1_000_000, range)?;
-        // A lead or a jitter at or past the TTL it applies to would put the due time before the cache was even
-        // written.
+        // A lead and its jitter together at or past the TTL they apply to would put the due time before the cache
+        // was even written; each alone is bounded first, so the sums cannot overflow.
         bound("lead_seconds_5m", self.lead_seconds_5m, 0, 299, range)?;
         bound("lead_seconds_1h", self.lead_seconds_1h, 0, 3_599, range)?;
         bound("jitter_seconds_5m", self.jitter_seconds_5m, 0, 299, range)?;
         bound("jitter_seconds_1h", self.jitter_seconds_1h, 0, 3_599, range)?;
+        if self.lead_seconds_5m + self.jitter_seconds_5m >= 300 {
+            return Err(PolicyError::LeadPlusJitter {
+                lead: "lead_seconds_5m",
+                jitter: "jitter_seconds_5m",
+            });
+        }
+        if self.lead_seconds_1h + self.jitter_seconds_1h >= 3_600 {
+            return Err(PolicyError::LeadPlusJitter {
+                lead: "lead_seconds_1h",
+                jitter: "jitter_seconds_1h",
+            });
+        }
         bound(
             "net_negative_grace_probes",
             u64::from(self.net_negative_grace_probes),

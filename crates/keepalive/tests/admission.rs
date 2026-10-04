@@ -8,6 +8,7 @@ use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage}
 use phoebis_keepalive::{
     AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState,
 };
+use phoebis_ledger::{hour_of, read_rollups};
 
 /// The ledger row for a request, once the writer has landed it.
 async fn landed(r: &Rig, id: &str) {
@@ -511,7 +512,62 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     assert_eq!(
         r2.status("main").reason,
         Reason::AwaitingSelection,
-        "at the bound the newest recipe is refused and the one already held stays"
+        "a busy agent's recipe is never evicted, so at the bound the newest one is refused"
+    );
+    // Room for two recipes: the third evicts the oldest idle one, whose unanswered probe settles under the
+    // eviction, and keeps the active agent's.
+    let one = {
+        let mut sized = rig(RigSpec::default()).await;
+        sized.observe("main").await;
+        sized.engine.stats().retained_bytes
+    };
+    let mut r3 = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_retained_bytes: one * 5 / 2,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    for agent in ["active", "newest"] {
+        r3.event(Event {
+            event: "agent_start".into(),
+            agent_id: Some(agent.into()),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    r3.observe("main").await;
+    r3.state("main", "idle");
+    r3.advance_attended(270_000);
+    r3.step().await;
+    assert_eq!(
+        r3.status("main").unanswered,
+        1,
+        "one probe nobody came back for"
+    );
+    r3.observe("active").await;
+    r3.observe("newest").await;
+    assert_eq!(r3.status("main").reason, Reason::Evicted);
+    assert_eq!(r3.status("newest").reason, Reason::Scheduled);
+    let mut kept = r3.engine.recipes_for("desktop", "session");
+    kept.sort();
+    assert_eq!(kept, ["active", "newest"]);
+    let evicted = fake_upstream::wait_for(Duration::from_secs(5), || {
+        let rows = r3
+            .db
+            .read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+            .unwrap();
+        let evicted: u64 = rows
+            .iter()
+            .filter_map(|row| row.wasted_probe_reasons.get("evicted"))
+            .sum();
+        (evicted > 0).then_some(evicted)
+    })
+    .await;
+    assert_eq!(
+        evicted, 1,
+        "the evicted recipe's probe is wasted under the eviction"
     );
 }
 

@@ -80,11 +80,12 @@ fn hold(planted: &[String], name: &str, route: &str, body: Value) {
 const UNPARSED: &str = "body must be a JSON object";
 const POOL_ROUTE: &str = "PATCH /admin/pools/{id}";
 
-/// The route's answer to every bound the console holds and to one past it: the keepalive policy's, the pool
-/// engine's with its in-flight cap, and the model rule count's. The burn window and the source dwell have no ceiling
-/// at the route, so the form's open maximum on each has no answer to mirror and only their floors are probed. An
-/// admitted probe is written back at once from the list read taken before the probes, so each probe meets the seeded
-/// pool, as the captures after these do.
+/// The route's answer to every bound the console holds and to one past it: the keepalive policy's, with a lead and
+/// its jitter that together reach their TTL, the pool engine's with its in-flight cap, and the model rule count's.
+/// The burn window and the source dwell have no ceiling at the route, so the form's open maximum on each has no
+/// answer to mirror and only their floors are probed. A probe that sends another field beside the probed one names
+/// it under `with`, so a replay sends the same body. An admitted probe is written back at once from the list read
+/// taken before the probes, so each probe meets the seeded pool, as the captures after these do.
 async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
     let pools = json(get(app, "/admin/pools", Some(cookie)).await).await;
     let pool = pools["pools"]
@@ -95,8 +96,18 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         .expect("the seeded pool is listed")
         .clone();
 
-    // Each row: the path, the route, the field as the route names it, the value, the body and its restore.
-    let mut table: Vec<(&str, &str, String, u64, Value, Value)> = Vec::new();
+    // Each row: the path, the route, the field as the route names it, the value, the body, its restore, and the
+    // other fields the body sends.
+    type Row = (
+        &'static str,
+        &'static str,
+        String,
+        u64,
+        Value,
+        Value,
+        Option<Value>,
+    );
+    let mut table: Vec<Row> = Vec::new();
     for (field, min, max) in [
         ("cold_probe_limit", 1, 20),
         ("jitter_seconds_1h", 0, 3_599),
@@ -109,9 +120,14 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         ("retry_max_seconds", 1, 604_800),
         ("retry_seconds", 1, 3_600),
     ] {
-        // The policy refuses a retry ceiling under its base, which would mask either bound's own answer, so each
-        // of the pair is probed against the other's widest setting.
+        // The policy refuses a retry ceiling under its base, and a lead and its jitter that together reach their
+        // TTL, either of which would mask a bound's own answer, so each of a pair is probed against the other at
+        // the setting that leaves it alone.
         let companion = match field {
+            "jitter_seconds_1h" => Some(("lead_seconds_1h", 0)),
+            "jitter_seconds_5m" => Some(("lead_seconds_5m", 0)),
+            "lead_seconds_1h" => Some(("jitter_seconds_1h", 0)),
+            "lead_seconds_5m" => Some(("jitter_seconds_5m", 0)),
             "retry_max_seconds" => Some(("retry_seconds", 1)),
             "retry_seconds" => Some(("retry_max_seconds", 604_800)),
             _ => None,
@@ -124,9 +140,11 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         for value in values {
             let mut set = j!({ field: value });
             let mut stored = j!({ field: pool["keepalive"][field] });
-            if let Some((other, widest)) = companion {
-                set[other] = j!(widest);
+            let mut with = None;
+            if let Some((other, setting)) = companion {
+                set[other] = j!(setting);
                 stored[other] = pool["keepalive"][other].clone();
+                with = Some(j!({ format!("keepalive.{other}"): setting }));
             }
             table.push((
                 "/admin/pools/main",
@@ -135,8 +153,24 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
                 value,
                 j!({ "keepalive": set }),
                 j!({ "keepalive": stored }),
+                with,
             ));
         }
+    }
+    for (lead, jitter, ttl) in [
+        ("lead_seconds_1h", "jitter_seconds_1h", 3_600),
+        ("lead_seconds_5m", "jitter_seconds_5m", 300),
+    ] {
+        let value = ttl / 2;
+        table.push((
+            "/admin/pools/main",
+            POOL_ROUTE,
+            format!("keepalive.{lead}"),
+            value,
+            j!({ "keepalive": { lead: value, jitter: ttl - value } }),
+            j!({ "keepalive": { lead: pool["keepalive"][lead], jitter: pool["keepalive"][jitter] } }),
+            Some(j!({ format!("keepalive.{jitter}"): ttl - value })),
+        ));
     }
     for (field, values) in [
         ("burn_window_seconds", &[60, 59][..]),
@@ -154,6 +188,7 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
                 value,
                 j!({ field: value }),
                 j!({ field: pool[field] }),
+                None,
             ));
         }
     }
@@ -166,16 +201,20 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
             count,
             j!({ "model_rules": vec![rule; count as usize] }),
             j!({ "model_rules": pool["model_rules"] }),
+            None,
         ));
     }
 
     let mut probes = Vec::new();
-    for (path, route, field, value, body, restore) in table {
+    for (path, route, field, value, body, restore, with) in table {
         let response = patch(app, path, &body.to_string(), Some(cookie)).await;
         let status = response.status();
         let answer = json(response).await;
         let mut probe =
             j!({ "route": route, "field": field, "value": value, "status": status.as_u16() });
+        if let Some(with) = with {
+            probe["with"] = with;
+        }
         if status.is_success() {
             let restored = patch(app, path, &restore.to_string(), Some(cookie)).await;
             assert_eq!(

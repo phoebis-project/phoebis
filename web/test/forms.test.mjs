@@ -67,9 +67,18 @@ test('a pool input refuses every keepalive bound the policy check refuses', () =
     retryMaxSeconds: [1, 604_800],
     retrySeconds: [1, 3_600],
   };
+  // The retry ceiling sits at or above its base, and a lead and its jitter stay under their TTL together, so each of
+  // a pair is read against the other at the setting that leaves it alone.
+  const pairs = {
+    jitterSeconds1h: { leadSeconds1h: 0 },
+    jitterSeconds5m: { leadSeconds5m: 0 },
+    leadSeconds1h: { jitterSeconds1h: 0 },
+    leadSeconds5m: { jitterSeconds5m: 0 },
+    retryMaxSeconds: { retrySeconds: 1 },
+    retrySeconds: { retryMaxSeconds: 604_800 },
+  };
   for (const [key, [min, max]] of Object.entries(bounds)) {
-    // The ceiling sits at or above the base, so each is read against the other's widest setting.
-    const other = key === 'retrySeconds' ? { retryMaxSeconds: 604_800 } : key === 'retryMaxSeconds' ? { retrySeconds: 1 } : {};
+    const other = pairs[key] ?? {};
     assert.equal(d.validatePoolInput(tuned({ ...other, [key]: min }), accounts), true, `${key} ${min} is inside`);
     assert.equal(d.validatePoolInput(tuned({ ...other, [key]: max }), accounts), true, `${key} ${max} is inside`);
     assert.equal(d.validatePoolInput(tuned({ ...other, [key]: min - 1 }), accounts), false, `${key} ${min - 1} is below the floor`);
@@ -78,6 +87,9 @@ test('a pool input refuses every keepalive bound the policy check refuses', () =
   assert.equal(d.validatePoolInput(tuned({ coldProbeLimit: 2.5 }), accounts), false, 'counts are whole');
   assert.equal(d.validatePoolInput(tuned({ retryMaxSeconds: 20, retrySeconds: 30 }), accounts), false, 'the ceiling sits at or above the base');
   assert.equal(d.validatePoolInput(tuned({ retryMaxSeconds: 30, retrySeconds: 30 }), accounts), true);
+  assert.equal(d.validatePoolInput(tuned({ jitterSeconds5m: 100, leadSeconds5m: 200 }), accounts), false, 'a lead and its jitter stay under the TTL together');
+  assert.equal(d.validatePoolInput(tuned({ jitterSeconds1h: 600, leadSeconds1h: 3_000 }), accounts), false);
+  assert.equal(d.validatePoolInput(tuned({ jitterSeconds5m: 100, jitterSeconds1h: 600, leadSeconds5m: 199, leadSeconds1h: 2_999 }), accounts), true);
   assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: 0 }), accounts), false, 'a cap is positive or absent');
   assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: -1 }), accounts), false);
   assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: null }), accounts), true);
@@ -432,20 +444,20 @@ test("the key dialog maps the server-side auto mode override to inherit, on, or 
   assert.deepEqual([sent('inherit'), sent('on'), sent('off')], [null, true, false]);
 });
 
-// The route refuses a retry ceiling under its base, which would mask either bound's own answer, so the capture sends
-// each of the pair with the other at its widest setting, and the replay does the same.
-const RETRY_PAIR = { 'keepalive.retry_max_seconds': { retrySeconds: 1 }, 'keepalive.retry_seconds': { retryMaxSeconds: 604_800 } };
 const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+// A probe sends some fields beside the probed one, a retry ceiling at its base or a lead beside its jitter, which the
+// capture names under `with` and the replay sends the same way.
+const keepaliveWith = (fields = {}) => Object.fromEntries(Object.entries(fields).map(([field, value]) => [camel(field.slice('keepalive.'.length)), value]));
 
 test('the form admits and refuses the values the routes do', () => {
   const { probes } = fixture('bound_refusals');
   assert.ok(probes.length > 0);
-  for (const { field, route, status, value } of probes) {
+  for (const { field, route, status, value, with: fields } of probes) {
     let admitted;
     if (field.startsWith('keepalive.')) {
       const key = camel(field.slice('keepalive.'.length));
       assert.ok(key in d.KEEPALIVE_BOUNDS, `${field} is a field the form bounds`);
-      admitted = d.validatePoolInput(tuned({ ...RETRY_PAIR[field], [key]: value }), accounts);
+      admitted = d.validatePoolInput(tuned({ ...keepaliveWith(fields), [key]: value }), accounts);
     } else if (field === 'model_rules') {
       admitted = d.validatePoolInput({ ...input, modelRules: Array.from({ length: value }, () => ({ not: true, pattern: 'claude-haiku-*' })) }, accounts);
     } else {

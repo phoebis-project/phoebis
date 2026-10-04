@@ -56,7 +56,7 @@ Every field, in the order the request body takes them:
 | `enabled` | `true` | none |
 | `strategy` | `pace` | `pace`, `priority`, or `round_robin` |
 | `prefer_subscription` | `true` | see below |
-| `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60` |
+| `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60`; see below |
 | `affinity_mode` | `always` | `always` or `when_cached`; see below |
 | `subagent_placement` | `by_cohort` | `by_cohort`, `by_strategy`, or `with_main`; see Selection |
 | `session_placement` | `by_strategy` | `by_strategy` or `by_warm_prefix`; see Selection |
@@ -311,7 +311,8 @@ A pin is held per agent of a conversation, where a conversation is the session i
 or the conversation's own messages. It lasts `affinity_ttl_seconds` from its last
 use: while it is live and its account is still eligible, the request returns to that account, and stickiness wins over
 priority even across a later priority change. A pool with affinity off (`affinity_ttl_seconds` at `0`) keeps no pins
-at all.
+at all. A keepalive probe holds while `affinity_ttl_seconds` is shorter than its recipe's due time, the cache TTL less
+the lead (see [Keepalive](keepalive.md#recipe-states)).
 
 Narrowing then trims what is left. A model-specific window (a canonical id containing `fable`) at or above 1 drops the
 account outright, and an account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every

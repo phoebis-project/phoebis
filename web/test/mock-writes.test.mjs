@@ -317,10 +317,12 @@ test('the mock answers each captured bound probe with the route\'s status and se
   const base = await storyPool(api);
   const probes = fixture('bound_refusals').probes.filter((p) => p.field !== 'model_rules');
   const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
-  // The capture sends each of the retry pair with the other at its widest setting, as the route's pair rule asks.
-  const pair = { 'keepalive.retry_max_seconds': { retrySeconds: 1 }, 'keepalive.retry_seconds': { retryMaxSeconds: 604_800 } };
-  const replay = ({ field, value }) => {
-    if (field.startsWith('keepalive.')) return api.updatePool('all', { ...base, keepalive: { ...base.keepalive, ...pair[field], [camel(field.slice('keepalive.'.length))]: value } });
+  const keepalive = (field) => camel(field.slice('keepalive.'.length));
+  // The capture names under `with` what it sent beside the probed field, a retry ceiling at its base or a lead beside
+  // its jitter, and the replay sends the same.
+  const replay = ({ field, value, with: fields = {} }) => {
+    const beside = Object.fromEntries(Object.entries(fields).map(([other, setting]) => [keepalive(other), setting]));
+    if (field.startsWith('keepalive.')) return api.updatePool('all', { ...base, keepalive: { ...base.keepalive, ...beside, [keepalive(field)]: value } });
     return api.updatePool('all', { ...base, [camel(field)]: value });
   };
   // Every write waits out the mock's latency, so the probes run side by side; each sends a whole input, so none

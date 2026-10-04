@@ -210,6 +210,9 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('keepalive', 'Keep prompt caches warm', !k.enabled || affinity >= 300 ? null : 'Keep prompt caches warm needs Session affinity of at least 5m.');
 
   for (const key of PROBE_TUNING_KEYS) keepalive('probeTuning', key);
+  // A lead and its jitter together at the cache TTL would put the probe's due time before the entry was written.
+  refuse('probeTuning', KEEPALIVE_FIELD_LABELS.jitterSeconds5m, k.leadSeconds5m + k.jitterSeconds5m < 300 ? null : 'Lead time, 5m cache (s) plus Jitter, 5m cache (s) is under 300.');
+  refuse('probeTuning', KEEPALIVE_FIELD_LABELS.jitterSeconds1h, k.leadSeconds1h + k.jitterSeconds1h < 3_600 ? null : 'Lead time, 1h cache (s) plus Jitter, 1h cache (s) is under 3,600.');
   refuse('probeTuning', KEEPALIVE_FIELD_LABELS.retryMaxSeconds, k.retryMaxSeconds >= k.retrySeconds ? null : 'Retry backoff max (s) is at or above Retry backoff base (s).');
 
   refuse('bodyCapture', 'Capture retention in hours', checks.capture?.on && !whole(Number(checks.capture.typed), 1, checks.capture.maxHours) ? `Retention is a whole number of hours from 1 to ${checks.capture.maxHours}.` : null);

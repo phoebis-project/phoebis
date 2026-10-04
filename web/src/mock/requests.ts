@@ -750,7 +750,10 @@ function histogramsOf(rows: RequestLog[]): LatencyHistograms {
  * purpose: that is the share the analytics panel tells the operator to act on.
  */
 const WASTE_SPLIT: { reason: WastedProbeReason; weight: number }[] = [
-  { reason: 'idle_limit', weight: 11 },
+  { reason: 'cold_return', weight: 1 },
+  { reason: 'evicted', weight: 0.5 },
+  { reason: 'expired', weight: 0.5 },
+  { reason: 'idle_limit', weight: 13 },
   { reason: 'released', weight: 1 },
   { reason: 'replaced', weight: 2 },
   { reason: 'session_ended', weight: 4 },

@@ -6236,7 +6236,7 @@ expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share',
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
 await tab(m, 'Accounts');
 expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
@@ -6526,7 +6526,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard()?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache') === null, missing: [wasteCard()?.closest('.analytics-section')?.id ?? 'no card', `cache mounted ${m.container.querySelector('#cache') !== null}`] });
   {
     const reasonRows = [...(wasteCard()?.querySelectorAll('.hbars--reasons li') ?? [])];
-    results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 4 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
+    results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 7 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
   }
   {
     const group = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
@@ -6706,14 +6706,29 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // claims to be.
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
     results.push({ name: '/analytics the week the wasted-probe checks read is reachable', ok: range('7d') !== undefined, missing: [...m.container.querySelectorAll('.segmented button')].map((b) => b.textContent?.trim() ?? '') });
+    // The mock's own answer for the week, read as the page reads it, is what the cold return row has to show.
+    const { getAnalyticsBreakdown } = api;
+    let weekGroups = [];
+    api.getAnalyticsBreakdown = async (query) => {
+      const groups = await getAnalyticsBreakdown(query);
+      weekGroups = groups;
+      return groups;
+    };
     range('7d')?.click();
     await m.settle(700);
+    api.getAnalyticsBreakdown = getAnalyticsBreakdown;
     const weekCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes');
     const wasteBars = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
-    const labels = ['Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended'];
-    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 4 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
+    const labels = ['Entry expired', 'Evicted at the byte cap', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Returned cold', 'Session ended'];
+    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 7 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
     const wasteCounts = [...(weekCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
-    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 4 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
+    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 7 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
+    {
+      const coldRow = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Returned cold');
+      const drawn = Number(coldRow?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? -1);
+      const mocked = weekGroups.reduce((n, g) => n + (g.savings?.wastedProbeReasons.cold_return ?? 0), 0);
+      results.push({ name: "/analytics wasted probes draws the cold return row with the mock's count", ok: coldRow !== undefined && weekGroups.length > 0 && drawn === mocked, missing: [`drawn ${drawn}`, `mock ${mocked}`, `groups ${weekGroups.length}`] });
+    }
     const idleShare = Number([...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Idle limit ran out')?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? 0);
     results.push({ name: '/analytics idle limit dominates the wasted probes', ok: wasteBars[0] === 'Idle limit ran out' && idleShare > wasteCounts.reduce((n, v) => n + v, 0) / 2, missing: [String(idleShare), String(wasteCounts.reduce((n, v) => n + v, 0))] });
     const tiles = [...(weekCard?.querySelectorAll('.stat--compact .stat__label') ?? [])].map((l) => l.textContent?.trim());
@@ -7262,6 +7277,28 @@ m.unmount();
     name: '/sessions the bus gaps tile reads the overview\'s count and warns once the keepalive engine missed events',
     ok: overview.busGaps === 0 && quiet.value === '0' && !quiet.warn && quiet.note === 'times the keepalive engine missed bus events' && gapped.value === '2' && gapped.warn,
     missing: [`mock ${overview.busGaps}`, JSON.stringify(quiet), JSON.stringify(gapped)],
+  });
+}
+{
+  // A recipe that lapsed or was evicted leaves the route's list, so the mock holds none under either reason; the
+  // stub hands the page one held under `expired` for its label and hint to be read.
+  const { listKeepaliveRecipes } = api;
+  api.listKeepaliveRecipes = async () => {
+    const [first, ...rest] = await listKeepaliveRecipes();
+    return [{ ...first, reason: 'expired', state: 'held' }, ...rest];
+  };
+  const page = await mount('/sessions');
+  await page.settle();
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
+  await page.settle(250);
+  const expired = [...page.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'entry expired');
+  const hint = expired?.getAttribute('title') ?? null;
+  page.unmount();
+  api.listKeepaliveRecipes = listKeepaliveRecipes;
+  results.push({
+    name: '/sessions a recipe held under expired reads entry expired with its hint',
+    ok: hint === 'The cache entry expired before its probe was due, so no probe was sent; the next real request starts a new recipe.',
+    missing: [hint ?? 'no entry expired badge'],
   });
 }
 {

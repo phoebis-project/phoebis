@@ -112,6 +112,11 @@ const poolRefusal = (input: PoolInput): string | null => {
     const value = k[key];
     if (value < min || value > max) return `keepalive.${field} must be between ${min} and ${max}, not ${value}`;
     if (key === 'retryMaxSeconds' && k.retryMaxSeconds < k.retrySeconds) return 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds';
+    // The route reads the two sums once every lead and jitter has passed its own bound.
+    if (key === 'jitterSeconds1h') {
+      if (k.leadSeconds5m + k.jitterSeconds5m >= 300) return 'keepalive.lead_seconds_5m plus keepalive.jitter_seconds_5m must stay under the cache TTL they apply to';
+      if (k.leadSeconds1h + k.jitterSeconds1h >= 3_600) return 'keepalive.lead_seconds_1h plus keepalive.jitter_seconds_1h must stay under the cache TTL they apply to';
+    }
   }
   if (k.costCapUsdPerDay !== null && !(k.costCapUsdPerDay > 0 && Number.isFinite(k.costCapUsdPerDay))) return 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number';
   if (k.capWindowSharePerDay !== null && !(k.capWindowSharePerDay >= 0 && k.capWindowSharePerDay <= 1)) return 'keepalive.probe_cap_window_share_per_day must be null or between 0 and 1';
