@@ -216,7 +216,7 @@ attributed, the same reserved id a request row with no account reads under.
 `phoebis_pins_active` are the four routing gauges; each is computed fresh from the router's own snapshot on every
 scrape rather than accumulated between them.
 `phoebis_ledger_queued` reads the records waiting in the ledger's writer channel at the scrape, and
-`phoebis_ledger_behind_refusals_total` counts the requests refused while that channel was at least half full
+`phoebis_ledger_behind_refusals_total` counts the requests answered `ledger_behind` while it was at least half full
 ([run the container](installation.md#run-the-container)).
 
 ## The live feed

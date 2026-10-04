@@ -64,11 +64,11 @@ pub struct LedgerStats {
     pub write_failures: AtomicU64,
     pub gaps: AtomicU64,
     pub last_gap_at: AtomicI64,
-    /// Requests refused at admission while the writer was behind.
+    /// Requests answered `ledger_behind` at admission.
     pub behind_refusals: AtomicU64,
 }
 
-/// What the relay reads at admission: counted here, since every `behind` reading is one refusal.
+/// What the relay's ledger check reads: counted here, since every `behind` answer is one `ledger_behind` refusal.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Admission {
     pub behind: bool,
@@ -124,8 +124,8 @@ impl Ledger {
         self.queued() >= LEDGER_BEHIND_DEPTH
     }
 
-    /// `behind` for the relay's admission, which reads it at most once per request: every `behind` answer is one
-    /// refusal and counts in `behind_refusals`.
+    /// `behind` for the relay's ledger check, which reads it once per request: every `behind` answer is one
+    /// `ledger_behind` refusal and counts in `behind_refusals`. A refusal of another kind reads `behind` instead.
     pub fn admission(&self) -> Admission {
         let behind = self.behind();
         if behind {

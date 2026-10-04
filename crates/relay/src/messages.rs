@@ -250,8 +250,9 @@ pub struct Accounting {
 }
 
 /// What admission reads the ledger's standing through: a closure, as `ReadinessSource` is, so the relay needs no
-/// dependency on the ledger crate.
-pub type AccountingSource = Arc<dyn Fn() -> Accounting + Send + Sync>;
+/// dependency on the ledger crate. The argument is true for the reading that decides a `ledger_behind` answer, which
+/// the ledger counts, and false for one taken at a refusal of another kind.
+pub type AccountingSource = Arc<dyn Fn(bool) -> Accounting + Send + Sync>;
 
 impl Relay {
     #[allow(clippy::too_many_arguments)]
@@ -927,7 +928,7 @@ impl Relay {
                 Ok(key) if key.created_at != probe.key_generation => {
                     let refusal = KeyRefusal::Replaced;
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    self.ledger_standing(&trace);
+                    self.ledger_standing(&trace, false);
                     trace
                         .observed(
                             None,
@@ -954,7 +955,7 @@ impl Relay {
                 Ok(key) => (key.clone(), Presented::Live),
                 Err(refusal) => {
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
-                    self.ledger_standing(&trace);
+                    self.ledger_standing(&trace, false);
                     trace
                         .observed(
                             None,
@@ -982,7 +983,7 @@ impl Relay {
                 let presented = match presented_key(&parts.headers) {
                     Ok(presented) => presented,
                     Err(error) => {
-                        self.ledger_standing(&trace);
+                        self.ledger_standing(&trace, false);
                         trace
                             .observed(
                                 None,
@@ -1010,7 +1011,7 @@ impl Relay {
                     Ok((key, presented)) => (key.clone(), presented),
                     Err(refusal) => {
                         tracing::debug!(%refusal, "a presented key was refused");
-                        self.ledger_standing(&trace);
+                        self.ledger_standing(&trace, false);
                         trace
                             .observed(
                                 None,
@@ -1242,7 +1243,7 @@ impl Relay {
         let behind = matches!(
             trace.kind,
             Kind::Inference | Kind::CountTokens | Kind::Probe
-        ) && self.ledger_standing(&trace);
+        ) && self.ledger_standing(&trace, true);
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
         // the wire untouched and a last-wins parser upstream would act on it instead. The billing line's path
         // counts as well: the drift check and its placeholder exemption read the first `system` and the first
@@ -3060,15 +3061,16 @@ impl Relay {
         }
     }
 
-    /// Reads the ledger's standing for a request refused or admitted before any dial, once per request, since a
-    /// `behind` reading counts a refusal. Behind, the request's own facts go best-effort: a writer that stopped
-    /// draining fills the bus queue behind its channel, and a refusal that waited there would hold its connection.
-    /// A request admitted past the reading publishes durably, so a priced record never takes that path.
-    fn ledger_standing(&self, trace: &Trace) -> bool {
+    /// Reads the ledger's standing for a request refused or admitted before any dial, once per request. `counts`
+    /// is true at the ledger check alone, where a `behind` reading is a `ledger_behind` answer the ledger counts; a
+    /// refusal of another kind reads without counting. Behind, the request's own facts go best-effort: a writer that
+    /// stopped draining fills the bus queue behind its channel, and a refusal that waited there would hold its
+    /// connection. A request admitted past the reading publishes durably, so a priced record never takes that path.
+    fn ledger_standing(&self, trace: &Trace, counts: bool) -> bool {
         let behind = self
             .accounting
             .as_ref()
-            .is_some_and(|source| source().behind);
+            .is_some_and(|source| source(counts).behind);
         if behind {
             trace.facts_best_effort();
         }
@@ -3088,7 +3090,7 @@ impl Relay {
         failure: Failure,
         client_version: Option<&str>,
     ) -> Response {
-        self.ledger_standing(trace);
+        self.ledger_standing(trace, false);
         trace
             .observed(
                 Some(key),

@@ -450,7 +450,7 @@ pub struct RoutingGauges {
     pub dropped_reports: Vec<(&'static str, u64)>,
     /// Records waiting in the ledger writer channel at scrape, from `Ledger::queued`.
     pub ledger_queued: u64,
-    /// Requests refused at admission while the ledger writer was behind, from `LedgerStats::behind_refusals`.
+    /// Requests answered `ledger_behind` at admission, from `LedgerStats::behind_refusals`.
     pub ledger_behind_refusals: u64,
 }
 

@@ -1020,8 +1020,9 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(recipe.netFiveHourShare, 0, 'no probe has settled into the recipe yet');
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
   assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'costToday', 'expiredBetweenTurns24h', 'netSaved7dUsd', 'probes24h'], 'the overview carries the tiles alone; the page counts its sessions over its rows');
-  assert.equal(ov.busGaps, fixture('keepalive_overview').bus_gaps, 'the engine\'s gap count reads off the route');
-  assert.equal(ov.busGaps, 0);
+  assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
+  // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
+  assert.equal(d.decodeKeepaliveOverview({ ...fixture('keepalive_overview'), bus_gaps: 3 }).busGaps, 3, 'the engine\'s gap count reads off the route');
   assert.equal(ov.costToday[0].capUsd, 4);
 });
 

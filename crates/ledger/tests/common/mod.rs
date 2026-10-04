@@ -338,8 +338,12 @@ pub async fn harness_on(
         .with_bus(bus.clone())
         .with_accounting({
             let ledger = ledger.clone();
-            Arc::new(move || Accounting {
-                behind: ledger.admission().behind,
+            Arc::new(move |counts: bool| Accounting {
+                behind: if counts {
+                    ledger.admission().behind
+                } else {
+                    ledger.behind()
+                },
             })
         }),
     );

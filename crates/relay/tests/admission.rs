@@ -71,7 +71,7 @@ fn probe_of(h: &Harness) -> Probe {
 
 fn reading(behind: &Arc<AtomicBool>) -> AccountingSource {
     let behind = behind.clone();
-    Arc::new(move || Accounting {
+    Arc::new(move |_| Accounting {
         behind: behind.load(Ordering::SeqCst),
     })
 }

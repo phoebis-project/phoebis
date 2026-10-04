@@ -265,8 +265,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         })
         .with_accounting({
             let ledger = ledger.clone();
-            Arc::new(move || Accounting {
-                behind: ledger.admission().behind,
+            Arc::new(move |counts: bool| Accounting {
+                behind: if counts {
+                    ledger.admission().behind
+                } else {
+                    ledger.behind()
+                },
             })
         })
         .with_signed_placeholder(config.proxy.sign_cch_placeholder)

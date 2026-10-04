@@ -1485,16 +1485,11 @@ async fn a_request_record_waits_for_the_writer_rather_than_dropping() {
     up.shutdown().await;
 }
 
-/// Held at a blocked `land`, the writer channel fills past its mark: the next inference is refused with the router's
-/// own 503 before any account is chosen and counted, and once the writer drains the same caller is served.
-#[tokio::test]
-async fn an_inference_is_refused_with_ledger_behind_while_the_writer_channel_is_past_its_mark() {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json_200(),
-    }])
-    .await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+/// Holds the writer at a blocked `land` and queues request records until the channel is past its mark; sending on
+/// the answered sender and joining the thread releases it.
+async fn hold_the_writer_past_its_mark(
+    h: &Harness,
+) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
     let db = h.db.clone();
     let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
     let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
@@ -1527,6 +1522,20 @@ async fn an_inference_is_refused_with_ledger_behind_while_the_writer_channel_is_
         h.ledger.queued()
     );
     assert!(h.ledger.behind());
+    (hold_tx, holder)
+}
+
+/// Held at a blocked `land`, the writer channel fills past its mark: the next inference is refused with the router's
+/// own 503 before any account is chosen and counted, and once the writer drains the same caller is served.
+#[tokio::test]
+async fn an_inference_is_refused_with_ledger_behind_while_the_writer_channel_is_past_its_mark() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let (hold_tx, holder) = hold_the_writer_past_its_mark(&h).await;
     let response = h
         .app
         .clone()
@@ -1569,6 +1578,41 @@ async fn an_inference_is_refused_with_ledger_behind_while_the_writer_channel_is_
         .await
         .unwrap();
     assert_eq!(response.status(), 200);
+    up.shutdown().await;
+}
+
+/// A request refused for another reason while the writer is behind is no `ledger_behind` answer, so the refusal
+/// count moves for the 503 alone.
+#[tokio::test]
+async fn a_request_refused_for_another_reason_while_the_ledger_is_behind_leaves_the_refusal_count_alone(
+) {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let (hold_tx, holder) = hold_the_writer_past_its_mark(&h).await;
+    let refusals = || h.ledger.stats().behind_refusals.load(Ordering::SeqCst);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_for("phoebis-not-a-key", "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 401);
+    assert_eq!(refusals(), 0, "an unknown key is no ledger_behind answer");
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(response.headers()["x-phoebis-error-code"], "ledger_behind");
+    assert_eq!(refusals(), 1, "the ledger_behind answer is counted");
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    hold_tx.send(()).unwrap();
+    holder.join().unwrap();
     up.shutdown().await;
 }
 
