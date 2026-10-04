@@ -2149,50 +2149,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
     const util = card('Utilization thresholds');
     results.push({
-      name: '/pools migrate on enables its percent field',
-      ok: migrateSwitch?.getAttribute('aria-checked') === 'true' && migratePercent()?.disabled === false && (util?.textContent ?? '').includes('A member at or above this line on its 5-hour or 7-day window starts a shedding round; a sibling counts as cool below the line minus 5%.'),
-      missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled)],
+      name: '/pools migrate on enables its percent field, empty until a margin is typed',
+      ok:
+        migrateSwitch?.getAttribute('aria-checked') === 'true' &&
+        migratePercent()?.disabled === false &&
+        migratePercent()?.value === '' &&
+        (util?.textContent ?? '').includes('A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.'),
+      missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled), JSON.stringify(migratePercent()?.value)],
     });
-    const handle = () => util?.querySelector('[role="slider"][aria-label="Migrate threshold"]');
     const percent = migratePercent();
-    const before = [handle()?.getAttribute('aria-valuenow'), percent?.value];
-    handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
-    await m.settle(120);
-    const after = [handle()?.getAttribute('aria-valuenow'), percent?.value];
-    handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    if (percent) setter.call(percent, '50');
+    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
     const ticks = [...(util?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
     results.push({
-      name: '/pools the bar draws each member reading and the migrate handle, which the arrow keys step and the percent field follows',
-      ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('.ubar__band') !== null,
-      missing: [JSON.stringify(before), JSON.stringify(after), ...ticks],
+      name: '/pools the bar draws each member reading with no migrate handle, and the percent field holds the typed margin',
+      ok: percent?.value === '50' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('[role="slider"][aria-label="Migrate threshold"]') === null && util?.querySelector('.ubar__band') === null,
+      missing: [String(percent?.value), ...ticks],
     });
+    // At the mock's clock personal's 5-hour window leads its pace by about 0.71 and mail's 7-day window by about 0.61,
+    // both over the typed 50 %; business leads by under 0.1 and is the cool destination.
     expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the table cannot price stay.']);
-
-    // Select-below inside the band under the migrate threshold holds the save and says why.
-    const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
-    const selectSwitch = dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]');
-    selectSwitch?.click();
-    await m.settle(120);
-    const selectPercent = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
-    if (selectPercent) setter.call(selectPercent, '88');
-    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    const inBand = [util?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled, util?.querySelector('[role="slider"][aria-label="Select-below threshold"]')?.getAttribute('aria-valuenow'), selectPercent?.getAttribute('aria-invalid')];
-    if (selectPercent) setter.call(selectPercent, '85');
-    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    const atEdge = [util?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled];
-    results.push({
-      name: '/pools select-below inside the band holds the save and names the band',
-      ok: inBand[0] === 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.' && inBand[1] === true && inBand[2] === '88' && inBand[3] === 'true' && atEdge[0] === '' && atEdge[1] === false,
-      missing: [...inBand.map(String), ...atEdge.map(String)],
-    });
-    if (selectPercent) setter.call(selectPercent, '80');
-    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    selectSwitch?.click();
-    await m.settle(120);
   }
   migrateSwitch?.click();
   await m.settle(120);
@@ -2216,10 +2193,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         percent()?.disabled === false &&
         percent()?.getAttribute('min') === '0' &&
         percent()?.getAttribute('max') === '100' &&
-        (util?.textContent ?? '').includes('A fresh pick passes over members at or above this 5-hour utilization, unless every member is. With both lines on, it sits at least 5% under the migrate line.'),
+        (util?.textContent ?? '').includes('A fresh pick passes over members at or above this 5-hour utilization, unless every member is.') &&
+        !(util?.textContent ?? '').includes('migrate line'),
       missing: [percent()?.value ?? 'absent', String(percent()?.disabled), percent()?.getAttribute('min') ?? '', percent()?.getAttribute('max') ?? ''],
     });
-    // The callout under the bar is the band's; a select-below out of its range reads in the footer and on the rail.
+    // A select-below out of its range reads in the footer and on the rail, with no callout under the bar.
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     const type = async (value) => {
       if (!percent()) return;
@@ -2232,7 +2210,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const outOfRange = [util?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
     await type('80');
     results.push({
-      name: '/pools a select-below out of range holds the save from the footer and leaves the band callout to the band',
+      name: '/pools a select-below out of range holds the save from the footer and the rail',
       ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Select below utilization is from 0 to 100.Go to Utilization thresholds' && outOfRange[2] === true,
       missing: outOfRange.map(String),
     });
@@ -3029,8 +3007,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await api.updatePool('studio', studio);
 }
 {
-  // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and the
-  // form's floor of 50 % binds a value typed in this dialog alone, so a stored 0.3 saves as the route took it.
+  // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and a
+  // margin over pace under 50 % saves whether stored or typed.
   const story = (await api.listPools()).find((p) => p.id === 'all');
   const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   const openAll = async () => {
@@ -3100,13 +3078,35 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
   }
   const typed = [footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? '', percent(dlg)?.getAttribute('aria-invalid')];
+  const typedSaved = await savedMigrate(dlg);
   results.push({
-    name: '/pools a stored migrate of 0.3 saves untouched and is refused once typed to 30',
-    ok: low === '30' && lowSaved === 0.3 && closed && typed[0] === true && typed[1] === 'Save is held: Migrate above utilization is from 50 to 100.Go to Utilization thresholds' && typed[2] === 'true',
-    missing: [String(low), String(lowSaved), closed ? 'closed' : 'open', ...typed.map(String)],
+    name: '/pools a stored migrate of 0.3 saves untouched and saves again once typed to 30',
+    ok: low === '30' && lowSaved === 0.3 && closed && typed[0] === false && typed[1] === 'Every group saves together.' && typed[2] !== 'true' && typedSaved === 0.3 && !m.container.querySelector('dialog[open]'),
+    missing: [String(low), String(lowSaved), closed ? 'closed' : 'open', ...typed.map(String), String(typedSaved)],
   });
-  footButton(dlg, 'Cancel')?.click();
-  await m.settle(200);
+
+  // A pool storing no margin opens with the field empty, holds the save until one is typed, and saves 20 % as 0.2.
+  await api.updatePool('all', written);
+  m.unmount();
+  m = await mount('/pools');
+  dlg = await openAll();
+  rail(dlg, 'utilization')?.click();
+  await m.settle(120);
+  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  await m.settle(120);
+  const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes(
+    'A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.',
+  );
+  const empty = [percent(dlg)?.value, footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
+  setter.call(percent(dlg), '20');
+  percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(120);
+  const fifth = await savedMigrate(dlg);
+  results.push({
+    name: '/pools a margin of 20 % saves as 0.2 once typed into a field that opened empty',
+    ok: hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Migrate above utilization needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
+    missing: [hint ? 'hint' : 'no hint', ...empty.map(String), String(fifth)],
+  });
   // The story's pool back, so the checks below read the pool the fixture holds.
   await api.updatePool('all', written);
 }
@@ -3238,7 +3238,7 @@ m.unmount();
   api.getSettings = getSettings;
   results.push({
     name: '/pools the preview says the cost table is loading while the settings read is held',
-    ok: loading === 'The cost table is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is above the threshold)/.test(landed),
+    ok: loading === 'The cost table is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
     missing: [loading, landed],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();

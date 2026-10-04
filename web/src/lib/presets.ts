@@ -1,6 +1,7 @@
 import type { Account, BurnUnit, MemberEligibility, Pool, Session } from '@/api/types';
 import { fmtPct } from './format';
 import { windowOf } from './quota';
+import { WINDOW_HOURS } from './windows';
 
 export type SheddingPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
@@ -22,6 +23,14 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
 
 /** The hysteresis band under the migrate threshold: a shed session lands only on a member below `threshold - MIGRATE_BAND`. */
 export const MIGRATE_BAND = 0.05;
+
+/** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
+export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number): number {
+  if (window.resetsAt === null) return window.utilization;
+  // Past its reset a window reads fully elapsed, where the router reads its own use since: an accepted approximation.
+  const elapsed = (lengthMs - (Date.parse(window.resetsAt) - now)) / lengthMs;
+  return window.utilization - Math.min(1, Math.max(0, elapsed));
+}
 
 // A share the store kept as a REAL can read back a rounding off the literal it was saved from.
 const near = (a: number, b: number) => Math.abs(a - b) < 1e-9;
@@ -85,7 +94,7 @@ export interface ShedPreview {
    * dwell, which the pool view does not carry.
    */
   cool: boolean;
-  /** Members at or above the migrate threshold on either window, each of which runs a round. */
+  /** Members whose 5-hour or 7-day window runs ahead of its pace by the migrate margin, each of which runs a round. */
   members: number;
   sessions: number;
   /** The unit every replayed member's burn is in; null when none has a pin or two members differ. */
@@ -97,7 +106,7 @@ export interface ShedPreview {
 
 /**
  * The shedding round's dry run: how many pins would be marked, how many of them warm, and their share of the burn.
- * Each member at or above the migrate threshold replays its round over its pins with each burn decayed to `now`,
+ * Each member ahead of its pace by the migrate margin replays its round over its pins with each burn decayed to `now`,
  * as the router's `burn_decayed` does: cold pins first by burn, then warm ones by burn over their last input size,
  * bounded by the warm-sessions mode. A member's pins share one unit, so its round needs no conversion; members in
  * different units cannot be summed, so their shares are averaged instead. A member without `eligible` counts as
@@ -114,19 +123,23 @@ export function shedPreview(
   if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const band = threshold - MIGRATE_BAND;
-  // The router's destination readings: a subscription account's two shared windows, an Anthropic-key account's worst
-  // live one; a window the row does not carry reads as under.
+  const lead = (a: Account, id: '5h' | '7d') => {
+    const w = windowOf(a, id);
+    return w === null ? null : aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now);
+  };
+  // The router's destination readings: a subscription account's two shared windows by their lead over pace, an
+  // Anthropic-key account's worst live one; a window the row does not carry reads as under.
   const under = (a: Account) =>
     a.kind === 'api_key'
       ? Math.max(0, ...a.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now).map((w) => w.utilization)) < band
-      : (['5h', '7d'] as const).every((id) => (windowOf(a, id)?.utilization ?? 0) < band);
+      : (['5h', '7d'] as const).every((id) => (lead(a, id) ?? Number.NEGATIVE_INFINITY) < band);
   const cool = pool.members.some((m) => {
     const account = byId.get(m.accountId);
     return account !== undefined && (m.eligible ?? 'eligible') === 'eligible' && under(account);
   });
   const hot = pool.members
     .map((m) => byId.get(m.accountId))
-    .filter((a): a is Account => a !== undefined && (['5h', '7d'] as const).some((id) => (windowOf(a, id)?.utilization ?? -1) >= threshold));
+    .filter((a): a is Account => a !== undefined && (['5h', '7d'] as const).some((id) => (lead(a, id) ?? Number.NEGATIVE_INFINITY) >= threshold));
   const windowMs = pool.burnWindowSeconds * 1_000;
   const rounds = hot.map((account) => {
     const pins = sessions
@@ -193,7 +206,7 @@ export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean, table:
   if (!migrateOn) return 'No round runs while migrate above utilization is off.';
   if (table === 'loading') return 'The cost table is loading; window-share pins are counted once it is read.';
   if (table === 'missing') return 'The cost table did not load, so window-share pins cannot be counted.';
-  if (preview.members === 0) return 'No member is above the threshold.';
+  if (preview.members === 0) return 'No member is ahead of pace by the margin.';
   const of = preview.averaged
     ? "of each account's burn on average"
     : preview.unit === 'window_share'

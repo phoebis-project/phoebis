@@ -4,7 +4,6 @@ import { slug } from '@/api/http';
 import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
-import { MIGRATE_BAND } from './presets';
 
 export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number ? K : never }[keyof PoolKeepalive];
 
@@ -55,18 +54,6 @@ export const ENGINE_BOUNDS: Record<Exclude<WholeEngineKey, 'paceFloor' | 'shedSh
 
 const whole = (v: number, min: number, max: number) => Number.isInteger(v) && v >= min && v <= max;
 const ratio = (v: number | null, min: number) => v === null || (v >= min && v <= 1);
-
-/**
- * Why the two thresholds cannot stand together, or null. A shed session lands only on a member under migrate
- * above minus the band, so a select-below inside the band would prefer members a shed could never reach. The
- * route checks each threshold alone; the band is the form's to hold.
- */
-export function bandRefusal(input: Pick<PoolInput, 'migrateAboveUtilization' | 'selectBelowUtilization'>): string | null {
-  const { migrateAboveUtilization: migrate, selectBelowUtilization: select } = input;
-  // The tolerance keeps a percent the form divided by 100 on the edge of the band rather than a rounding under it.
-  if (migrate === null || select === null || select <= migrate - MIGRATE_BAND + 1e-9) return null;
-  return `Select below must sit at or under migrate above minus ${Math.round(MIGRATE_BAND * 100)}%, the band a shed session lands under.`;
-}
 
 /** Why the member write would refuse a budget field as it stands, or null; empty is no budget. */
 export function budgetRefusal(value: string): string | null {
@@ -132,8 +119,6 @@ export interface PoolChecks {
   capture?: { maxHours: number; on: boolean; typed: string };
   /** On create the id derives from the name, so a taken one is held before the route's 409; a rename keeps its id. */
   identity?: { isNew: boolean; poolIds: ReadonlySet<string> };
-  /** Whether the operator wrote the migrate threshold in this dialog: the form's floor binds a typed value alone. */
-  migrateChanged?: boolean;
 }
 
 /**
@@ -184,10 +169,10 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('pinning', 'Session affinity in seconds', whole(affinity, 0, Number.MAX_SAFE_INTEGER) && (affinity === 0 || affinity >= 60) ? null : 'Session affinity is off or at least 60 whole seconds.');
   refuse('pinning', 'Pin sessions', AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) ? null : listed('Pin sessions'));
 
-  // The form's floor of 50 % sits above the route's 0; a stored value under it that nobody touched saves as stored.
-  refuse('utilization', 'Migrate above utilization (%)', ratio(input.migrateAboveUtilization, checks.migrateChanged ? 0.5 : 0) ? null : 'Migrate above utilization is from 50 to 100.');
+  // NaN is a switched-on field left empty, held here so a save never reads it as a margin of 0.
+  const migrate = input.migrateAboveUtilization;
+  refuse('utilization', 'Migrate above utilization (%)', Number.isNaN(migrate) ? 'Migrate above utilization needs a value from 0 to 100.' : ratio(migrate, 0) ? null : 'Migrate above utilization is from 0 to 100.');
   refuse('utilization', 'Select below utilization (%)', ratio(input.selectBelowUtilization, 0) ? null : 'Select below utilization is from 0 to 100.');
-  refuse('utilization', 'Select below utilization (%)', bandRefusal(input));
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
     refuse(group, ENGINE_FIELD_LABELS[key], whole(input[key], ENGINE_BOUNDS[key].min, ENGINE_BOUNDS[key].max) ? null : boundText(ENGINE_FIELD_LABELS[key], ENGINE_BOUNDS[key]));

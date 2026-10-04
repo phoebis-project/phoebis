@@ -772,8 +772,8 @@ async function poolSelectBelow(theme) {
 /**
  * The load groups in the expert view against the controls beside them, each measured while its group shows: a preset
  * pill against a session-affinity pill, the overage grace field against the migrate percent field, and a
- * warm-sessions choice against an overage choice. Then the utilization bar's migrate handle and the shedding preview
- * line.
+ * warm-sessions choice against an overage choice. Then the utilization bar's select-below handle and the shedding
+ * preview line.
  */
 async function poolRoutingCards(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -789,9 +789,11 @@ async function poolRoutingCards(theme) {
     await expertView(false).catch(() => {});
     return;
   }
-  const migrate = dialog.locator('button[role="switch"][aria-label="Migrate above utilization"]');
-  if ((await migrate.count()) !== 1) say('no Migrate above utilization switch');
-  else if ((await migrate.getAttribute('aria-checked')) !== 'true') await migrate.click();
+  for (const label of ['Migrate above utilization', 'Select below utilization']) {
+    const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
+    if ((await toggle.count()) !== 1) say(`no ${label} switch`);
+    else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
+  }
   await settle();
   const measure = () =>
     dialog.evaluate((el) => {
@@ -812,7 +814,7 @@ async function poolRoutingCards(theme) {
       // A pressed pill and a chosen radio are drawn in their own ink, so each side is read in its resting state.
       const idlePill = (group) => [...el.querySelectorAll(`[aria-label="${group}"] .pill`)].find((p) => p.getAttribute('aria-pressed') === 'false');
       const idleChoice = (group) => el.querySelector(`[aria-label="${group}"] .radio-list__item:not(.is-active)`);
-      const handle = shown(el.querySelector('[role="slider"][aria-label="Migrate threshold"]'));
+      const handle = shown(el.querySelector('[role="slider"][aria-label="Select-below threshold"]'));
       const track = el.querySelector('.ubar__track')?.getBoundingClientRect();
       const knob = handle?.getBoundingClientRect();
       const preview = shown(el.querySelector('.shed-preview'));
@@ -854,9 +856,9 @@ async function poolRoutingCards(theme) {
     const differs = keys.filter((key) => String(read[mine][key]) !== String(read[neighbour][key]));
     if (differs.length) say(`the ${mine}'s ${differs.join(', ')} differs from the ${neighbour}'s`);
   }
-  if (!read.handle) say('the utilization bar draws no migrate handle with migration on');
-  else if (!read.handle.inside || read.handle.value === null) say(`the migrate handle sits off its track (${JSON.stringify(read.handle)})`);
-  if (!read.preview || !/^(Would (move|mark)|No member is above the threshold)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
+  if (!read.handle) say('the utilization bar draws no select-below handle with select-below on');
+  else if (!read.handle.inside || read.handle.value === null) say(`the select-below handle sits off its track (${JSON.stringify(read.handle)})`);
+  if (!read.preview || !/^(Would (move|mark)|No member is ahead of pace by the margin)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
   await expertView(false).catch(() => {});

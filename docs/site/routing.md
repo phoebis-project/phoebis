@@ -63,7 +63,7 @@ Every field, in the order the request body takes them:
 | `min_shared_prefix_tokens` | `20000` | at least 0; see Selection |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
-| `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1`; starts shedding |
+| `migrate_above_utilization` | unset | 0 to 1: `migrate_above_utilization is between 0 and 1`; the lead that sheds |
 | `shed_share` | `0.5` | 0 to 1 |
 | `burn_window_seconds` | `600` | at least 60 |
 | `source_dwell_seconds` | `900` | at least 60 |
@@ -286,20 +286,20 @@ the upstream shares no cached prefix across those, so an entry of another lane i
 deepest static boundary places a subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the
 shared prefix, sized by the relay's estimate from the request's bytes, is at least `min_shared_prefix_tokens`, the
 request carries or receives a cache marker, and the account is not at its cap, at or above the ceiling
-(`select_below_utilization`), at or above the migrate threshold less its 0.05 band (`migrate_above_utilization`), under
-the Pace floor, or winding down. A cooling account never reaches either rung, since the eligible set excludes it; a
-spent account is in the eligible set, and both rungs refuse it through the allowance check. A subagent under `with_main`
-lands its first request on its parent agent's pin in place of the static walk, and one under `by_strategy` skips the
-static walk; every case that finds no live match lands by the strategy. A held request of a subagent cohort waits where
-its cohort already is rather than on the strategy's own pick; a session already on an account, under any of its agents,
-is never held while that account can still serve. A token count is never placed and never held: it is bound to no cap
-and occupies no slot, so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with
-a pin follows it past the cap and the move rules, and one without lands by the strategy and leaves the agent's next
-message to be placed under the cap. An entry's warmth lasts the marker's TTL on its tier; when every marker of the
-request carried one TTL and the response reports its cache writes at the other alone, the reported TTL is the lifetime
-of the message boundaries that response wrote, and of the static boundaries only when the response read nothing from
-the cache, since the usage names no tier; a static tier the response read from and a tier it only read keep their
-marker's lifetime, and a request with markers at both TTLs keeps each marker's.
+(`select_below_utilization`), at or above the migrate margin ahead of pace less its 0.05 band
+(`migrate_above_utilization`), under the Pace floor, or winding down. A cooling account never reaches either rung, since
+the eligible set excludes it; a spent account is in the eligible set, and both rungs refuse it through the allowance
+check. A subagent under `with_main` lands its first request on its parent agent's pin in place of the static walk, and
+one under `by_strategy` skips the static walk; every case that finds no live match lands by the strategy. A held request
+of a subagent cohort waits where its cohort already is rather than on the strategy's own pick; a session already on an
+account, under any of its agents, is never held while that account can still serve. A token count is never placed and
+never held: it is bound to no cap and occupies no slot, so its pin or the strategy decides it. It creates no pin, since
+it touches no cache: a count with a pin follows it past the cap and the move rules, and one without lands by the
+strategy and leaves the agent's next message to be placed under the cap. An entry's warmth lasts the marker's TTL on its
+tier; when every marker of the request carried one TTL and the response reports its cache writes at the other alone, the
+reported TTL is the lifetime of the message boundaries that response wrote, and of the static boundaries only when the
+response read nothing from the cache, since the usage names no tier; a static tier the response read from and a tier it
+only read keep their marker's lifetime, and a request with markers at both TTLs keeps each marker's.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is
@@ -378,23 +378,24 @@ them: the `subscription_ended` exclusion releases it, as a cooldown releases a c
 fast takes neither the spent nor the overage rule, since it draws usage credits and no plan window.
 
 With `migrate_above_utilization` set, every rule prefers a cool destination, so a moved session does not land where the
-next round would shed it again. A cool sibling reads below the threshold minus 0.05 (`MIGRATE_BAND`) on every reading it
-holds (the 5-hour and 7-day windows of a subscription account, the worst live rate-limit bucket of an Anthropic-key
-account; an unsampled account reads as under), has run no shedding round of its own within `source_dwell_seconds`, and
-has room under the pool's `in_flight_cap`. When no destination of a rule is cool, the rule still moves the pin to one of
-them, so a full cool sibling never keeps a free hot one from the session; only the shed rule insists on a cool one.
+next round would shed it again. A cool sibling reads under the margin minus 0.05 (`MIGRATE_BAND`) ahead of pace on every
+reading it holds (the 5-hour and 7-day windows of a subscription account, the worst live rate-limit bucket of an
+Anthropic-key account; an unsampled account reads as under), has run no shedding round of its own within
+`source_dwell_seconds`, and has room under the pool's `in_flight_cap`. When no destination of a rule is cool, the rule
+still moves the pin to one of them, so a full cool sibling never keeps a free hot one from the session; only the shed
+rule insists on a cool one.
 
 **Spent** The pinned account's allowance for the session's model is spent: the model's own week and both shared windows
 for a model with a week of its own, the shared plan windows otherwise (any of those readings at or above 1.0), while
 that reading stands (until its reset; a reading that names none stands until the next). With `migrate_when_spent` on
 (the default), the pin moves on this request to a sibling that holds allowance in those windows, without waiting for the
-upstream's 429. The shedding budget does not apply, and the band and the dwell only order the siblings: one reading over
-the threshold but under 1.0 still receives the session when no cool one can. The router has to know the sibling's
-allowance: an Anthropic-key account has no plan window to spend, and any other sibling needs a reading of each of those
-windows, from a head, the poll or the windows kept across restarts, carried forward as the windows passage says; a
-sibling with none stays out of the choice. Under `prefer_plan` a sibling in overage does not receive a spent pin, since
-the overage move would hand the session straight back. With the toggle off, or no sibling holding allowance, the session
-stays.
+upstream's 429. The shedding budget does not apply, and the band and the dwell only order the siblings: one running
+ahead of its pace by the margin but under 1.0 still receives the session when no cool one can. The router has to know
+the sibling's allowance: an Anthropic-key account has no plan window to spend, and any other sibling needs a reading of
+each of those windows, from a head, the poll or the windows kept across restarts, carried forward as the windows passage
+says; a sibling with none stays out of the choice. Under `prefer_plan` a sibling in overage does not receive a spent
+pin, since the overage move would hand the session straight back. With the toggle off, or no sibling holding allowance,
+the session stays.
 
 **Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
 moves to a subscription sibling that is not in overage, never to an Anthropic-key account. The sibling has to hold
@@ -409,20 +410,20 @@ An Anthropic key names no reset, so no grace applies.
 **Drain** A cold pin on an account winding down toward its subscription end moves to an eligible sibling that is
 not winding down. A warm one stays (see **Subscription end**, below).
 
-**Shed** With `migrate_above_utilization` set, a request pinned to an account that reads at or above the
-threshold on its 5-hour or 7-day window starts a shedding round there, at most once per `source_dwell_seconds`.
-The round orders every pin on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
-pin's last prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share`
-(default 0.5) of the account's burn over `burn_window_seconds` (default 600). It never marks the account's last
-unmarked pin, so an account with one session sheds nothing and no round takes all of an account's burn. A pin
-whose burn carries the total past the share stays marked, and the round stops there. A pin whose burn the table cannot
-price ranks after every priced pin of its group, counts nothing toward the share, and is never marked, so a session is
-never shed on a guess. `warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default)
-goes on to the warm ones, and `always` orders every pin by burn over rewrite cost, cold or warm. While the account runs
-on its plan, a pin whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage
-credits and no plan window, so the pin has no share to shed. In dollars, on an Anthropic-key account or one in overage,
-it stays in the round. A session that returns to standard requests brings its pin back with the plan burn it still
-carries.
+**Shed** With `migrate_above_utilization` set, a request pinned to an account whose 5-hour or 7-day window runs ahead of
+its pace by at least the margin (the prediction less the share of the window already elapsed; a 5-hour window past its
+reset reads the router's own use since) starts a shedding round there, at most once per `source_dwell_seconds`. The
+round orders every pin on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the pin's last
+prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share` (default 0.5) of the
+account's burn over `burn_window_seconds` (default 600). It never marks the account's last unmarked pin, so an account
+with one session sheds nothing and no round takes all of an account's burn. A pin whose burn carries the total past the
+share stays marked, and the round stops there. A pin whose burn the table cannot price ranks after every priced pin of
+its group, counts nothing toward the share, and is never marked, so a session is never shed on a guess. `warm_sessions`
+bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always`
+orders every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last
+refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the
+pin has no share to shed. In dollars, on an Anthropic-key account or one in overage, it stays in the round. A session
+that returns to standard requests brings its pin back with the plan burn it still carries.
 
 The console's Pools form offers, in its expert view, `shed_share`, `burn_window_seconds`, and `source_dwell_seconds`
 together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and

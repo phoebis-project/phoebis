@@ -118,22 +118,15 @@ test('a pool input refuses thresholds outside their range and an empty name', ()
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: -0.1 }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 0 }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.4 }, accounts), true, 'a stored threshold under 50 % the operator left alone saves as stored');
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.4 }, accounts, { migrateChanged: true }), false, 'a typed threshold migrates from 50 %');
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0 }, accounts), true, 'a margin over pace runs from 0 %');
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.2 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: -0.1 }, accounts), false);
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: Number.NaN }, accounts), false, 'a switched-on field left empty holds the save');
   assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 1.2 }, accounts), false, 'the route bounds every value to 0 to 1');
   assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.9 }, accounts), true);
 });
 
-test('a pool input with select-below inside the band is refused and every engine bound holds', () => {
-  const both = (migrate, select) => d.validatePoolInput({ ...input, migrateAboveUtilization: migrate, selectBelowUtilization: select }, accounts);
-  assert.equal(both(0.9, 0.85), true, 'the band\'s lower edge is still under it');
-  assert.equal(both(0.7, 0.65), true, 'the edge holds where the subtraction rounds under it');
-  assert.equal(both(0.9, 0.86), false, 'one point inside the band');
-  assert.equal(both(0.9, 0.9), false);
-  assert.equal(both(null, 0.95), true, 'with migration off there is no band');
-  assert.equal(both(0.5, null), true);
-  assert.equal(d.bandRefusal({ migrateAboveUtilization: 0.9, selectBelowUtilization: 0.86 }), 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.');
-  assert.equal(d.bandRefusal({ migrateAboveUtilization: 0.9, selectBelowUtilization: 0.85 }), null);
+test('a pool input holds every engine bound', () => {
   const whole = {
     burnWindowSeconds: [60, null],
     inFlightCap: [1, 4_294_967_295],
@@ -337,12 +330,9 @@ test('a pool refusal names the group its control sits in', () => {
       ],
     ],
     [{ affinityMode: 'sometimes' }, refused('Pin sessions', 'pinning', 'Pin sessions is one of its listed choices.')],
-    [{ migrateAboveUtilization: 0.4 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 50 to 100.'), { migrateChanged: true }],
+    [{ migrateAboveUtilization: 1.2 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 0 to 100.')],
+    [{ migrateAboveUtilization: Number.NaN }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization needs a value from 0 to 100.')],
     [{ selectBelowUtilization: 1.2 }, refused('Select below utilization (%)', 'utilization', 'Select below utilization is from 0 to 100.')],
-    [
-      { migrateAboveUtilization: 0.9, selectBelowUtilization: 0.86 },
-      refused('Select below utilization (%)', 'utilization', 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.'),
-    ],
     [{ shedShare: 1.2 }, refused('Share (%)', 'shedding', 'Share (%) is from 0 to 100.')],
     [{ burnWindowSeconds: 59 }, refused('Burn window (s)', 'shedding', 'Burn window (s) is a whole number of at least 60.')],
     [{ sourceDwellSeconds: 59 }, refused('Source dwell (s)', 'shedding', 'Source dwell (s) is a whole number of at least 60.')],
