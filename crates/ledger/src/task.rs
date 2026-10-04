@@ -13,7 +13,7 @@ use phoebis_store::{AccountKind, Store};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
-use crate::bodies::run_retention;
+use crate::bodies::{request_cutoff, run_retention};
 use crate::db::{begin_write, insert_event_in, insert_request_in, insert_samples_in};
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
@@ -50,8 +50,6 @@ pub const BATCH_RETRY_HOLD: Duration = Duration::from_secs(10);
 /// How often a wait on the ledger's clock reads it again: a clock a test steps is seen within a tick, and
 /// production time passes as it does.
 const CLOCK_TICK: Duration = Duration::from_millis(250);
-
-const DAY_MS: i64 = 86_400_000;
 
 /// How often the assembler ages out entries without a completion, unless the configuration says otherwise.
 const EXPIRE_INTERVAL: Duration = Duration::from_secs(60);
@@ -1130,9 +1128,7 @@ async fn run_purge(
     let purged = run_retention(db.clone(), config.clone(), now, budgeted).await;
     // The registry's settled refresh attempts and its change log follow the requests' cutoff, so a zero
     // `retention_days` keeps them as it keeps the requests.
-    let history = match (config.retention_days != 0)
-        .then(|| now - i64::from(config.retention_days) * DAY_MS)
-    {
+    let history = match request_cutoff(config, now) {
         None => None,
         Some(cutoff) => {
             let store = store.clone();
