@@ -546,8 +546,8 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 | Other 5xx | None | No; forwarded |
 | Transport failure before fully written | None | Yes, once, same account |
 | Transport failure after fully written, no head at all | None | No; 502 `upstream_unreachable`, client retries |
-| Transport failure after the head | None | No; 502 `upstream_cut`, the request reads `failed` with `stream_cut` |
-| Idle bound after the head | None | No; 502 `upstream_stalled`, the request reads `failed` with `stream_stalled` |
+| Transport failure after the head, before any byte reached the client | None | No; 502 `upstream_cut` |
+| Idle bound after the head, before any byte reached the client | None | No; 502 `upstream_stalled` |
 | 200 head, body ends before its end | None | No; the request reads `incomplete` |
 
 The router classifies a rejection whose body runs past 64 KiB from its first 64 KiB, a coded body decoded as far as it
@@ -557,7 +557,8 @@ verdict forwards reaches the client whole, the prefix first.
 The router answers a failure after the head with its own `502` while nothing of the upstream's answer has reached the
 client: `upstream_stalled` when a rejection body went silent past the idle bound, and `upstream_cut` for any other
 answer it cannot read, a connection cut while a rejection body or a held stream was being read, or a content coding or a
-payload it cannot decode. `upstream_unreachable` names a request that got no head at all.
+payload it cannot decode. The request reads `failed` with `stream_stalled` or `stream_cut`. `upstream_unreachable` names
+a request that got no head at all.
 
 An `incomplete` request's error code says how its body ended: `stream_cut` when the connection or the decoder failed
 mid-body, `stream_incomplete` when an event stream closed without its `message_stop`, and `stream_stalled` when the
