@@ -573,7 +573,9 @@ async function attentionLine(theme) {
   }
 }
 
-/** The sidebar's Expert view row stands above the version line in the status block, the two rows clear of each other. */
+/**
+ * The sidebar's Expert view row stands above the version line in the status block, the two rows clear of each other.
+ */
 async function expertRow(theme) {
   const read = await page.evaluate(() => {
     const status = document.querySelector('.sidebar__status');
@@ -2863,7 +2865,8 @@ async function keyDialogGeometry(theme) {
     }
   }
   await expertView(false).catch(() => {});
-  // The route refuses to re-enable a revoked key, so its dialog draws the switch disabled; a router with no revoked key says so.
+  // The route refuses to re-enable a revoked key, so its dialog draws the switch disabled; a router with no revoked key
+  // says so.
   const revoked = rows.filter({ has: page.locator('td:nth-child(7) .badge', { hasText: /^revoked$/ }) }).first();
   if ((await revoked.count()) === 0) {
     measurements.push(`${theme} /keys dialog revoked: no revoked key to open`);
@@ -3110,9 +3113,9 @@ async function sessionsTableFits(theme) {
 }
 
 /**
- * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right edge
- * it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, and each
- * item takes a pointer at its centre.
+ * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
+ * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, and
+ * each item takes a pointer at its centre.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);

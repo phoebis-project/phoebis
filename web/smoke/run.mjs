@@ -108,7 +108,9 @@ const liveCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.live-table thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr.children[i];
 };
-/** A Sessions row's cell under the header that reads `header`, so a check names its column whatever the control hides. */
+/**
+ * A Sessions row's cell under the header that reads `header`, so a check names its column whatever the control hides.
+ */
 const sessionCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.sessions-table thead th')].findIndex((th) => th.textContent?.trim() === header);
   return i < 0 ? undefined : tr?.children[i];
@@ -682,7 +684,8 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   // The mock registry holds seven, so the plural is what this can read; the singular is asserted by its absence.
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
   results.push({ name: '/quota gives the account count the noun that number takes', ok: count === '7 accounts', missing: [count] });
-  // The route answers from the account's hold or its cache inside either, so the button says when it reads the endpoint.
+  // The route answers from the account's hold or its cache inside either, so the button says when it reads the
+  // endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
   results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
   const personal = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'personal');
@@ -790,8 +793,8 @@ m.unmount();
   stale.unmount();
 }
 
-// A block's error can stand beside windows the ledger sampled, as before the poll's first read after a restart; the card
-// draws what it holds.
+// A block's error can stand beside windows the ledger sampled, as before the poll's first read after a restart; the
+// card draws what it holds.
 {
   const { listAccounts } = api;
   api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'team' ? { ...a, usage: { ...a.usage, error: 'the admin API timed out', poll: null, status: 'error' } } : a));
@@ -1755,7 +1758,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   proto.scrollIntoView = function (options) {
     scrolls.push([this.tagName, this.id, options?.behavior ?? null]);
   };
-  /** Mounts `path`, with `held` answered only after the mount when named, and reads where the page scrolled and focused. */
+  /**
+   * Mounts `path`, with `held` answered only after the mount when named, and reads where the page scrolled and focused.
+   */
   const arrive = async (path, held, target) => {
     scrolls.length = 0;
     const late = held ? deferNextCall(held) : null;
@@ -4329,8 +4334,8 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   foot(ci, 'Cancel')?.click();
   await m.settle(200);
   {
-    // Under Override the field is read as typed: an emptied one holds Save rather than sending 0, which the route stores
-    // as capture off while the radio still says Override.
+    // Under Override the field is read as typed: an emptied one holds Save rather than sending 0, which the route
+    // stores as capture off while the radio still says Override.
     const desktop = await editOf('desktop');
     rail(desktop, 'capture')?.click();
     await m.settle(100);
@@ -5778,7 +5783,8 @@ m.unmount();
     page.unmount();
   }
 
-  // The page's rows are matched back to the story by their short id, so the rule is read against each row's own outcome.
+  // The page's rows are matched back to the story by their short id, so the rule is read against each row's own
+  // outcome.
   const wordCheck = '/requests a row names its outcome beside the status only when it did not succeed';
   const listed = await mount('/requests');
   const read = [...listed.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
@@ -6582,7 +6588,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const efforts = trafficRows('effort').map((row) => row[0]);
     results.push({ name: '/analytics the effort grouping lists every effort the range holds', ok: JSON.stringify([...efforts].sort()) === JSON.stringify(['high', 'max', 'none']), missing: efforts });
     {
-      // The card reads its own effort breakdown whatever the grouping, a bar per level, the most asked first and none last.
+      // The card reads its own effort breakdown whatever the grouping, a bar per level, the most asked first and none
+      // last.
       const levels = [...(m.container.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Effort levels');
       const bars = [...(levels?.querySelectorAll('.hbars li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
       const month = await api.getAnalyticsBreakdown({ from: new Date(Date.now() - 30 * 24 * 3_600_000).toISOString(), groupBy: 'effort', to: new Date().toISOString() });
@@ -7347,7 +7354,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
   }
   {
-    // The Model cell reads the family and version, so the column gives its width to the fit; the id as sent is its title.
+    // The Model cell reads the family and version, so the column gives its width to the fit; the id as sent is its
+    // title.
     const models = rows().map((r) => cell(r, 'Model')).filter((c) => c !== undefined && c.textContent?.trim() !== '-');
     const wrong = models.filter((c) => {
       const shown = c.querySelector('.srow__pin')?.firstChild?.textContent ?? '';
@@ -7954,7 +7962,8 @@ m.unmount();
 {
   localStorage.setItem('phoebis.mockEmpty', '1');
   const zeroTiles = (c) => [...c.querySelectorAll('.stat-grid .stat__value')].map((v) => v.textContent);
-  // A closed dialog keeps its markup in the DOM and reaches nobody, so the pairing dialog's link placeholder is no wait.
+  // A closed dialog keeps its markup in the DOM and reaches nobody, so the pairing dialog's link placeholder is no
+  // wait.
   const skeletonIn = (c) => [...c.querySelectorAll('.skeleton')].some((s) => s.closest('dialog:not([open])') === null);
   const views = [
     ['/', (c, t) => t.includes('No subscription accounts') && t.includes('No requests'), 'No subscription accounts, No requests'],
@@ -8533,7 +8542,8 @@ m.unmount();
     missing: [JSON.stringify(atThree), JSON.stringify(atSix)],
   });
 
-  // The sidebar's version read and the page's own read the same route at mount, both first reads, so neither runs quiet.
+  // The sidebar's version read and the page's own read the same route at mount, both first reads, so neither runs
+  // quiet.
   outage = failCalls({ getSettings: '/admin/settings' }, 'ledger locked');
   page = await mount('/quota', { now: CLOCK_ORIGIN });
   const once = toasts(page);
@@ -8671,7 +8681,8 @@ m.unmount();
     rose(sessions, 'listSessions') && still(sessions, 'getOverview') &&
     rose(stripStep, 'listAccounts') && still(stripStep, 'getOverview') && still(stripStep, 'listSessions');
 
-  // A second outage proves a ring's accounts retry, and the sessions card reading both its reads again when both failed.
+  // A second outage proves a ring's accounts retry, and the sessions card reading both its reads again when both
+  // failed.
   outage = failCalls(READS, 'ledger locked');
   page = await mount('/', { now: CLOCK_ORIGIN });
   outage.recover();
@@ -8733,7 +8744,8 @@ m.unmount();
     const request = answered.get(idOf(tr.querySelector('a[href^="/requests/"]') ?? tr));
     const cell = tr.children[3];
     if (!request || !cell) return [];
-    // The column counts characters of the monospace face, so a shown id longer than its cap is the one the ellipsis cuts.
+    // The column counts characters of the monospace face, so a shown id longer than its cap is the one the ellipsis
+    // cuts.
     const capped = cell.querySelector('.dash__model');
     const cap = Number.parseFloat(capped?.style.maxWidth ?? '');
     const shown = shortModel(request.model);

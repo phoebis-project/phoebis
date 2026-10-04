@@ -281,7 +281,6 @@ export function foldBurn(
   return { lines, rows };
 }
 
-/** A placement rung as the request drawer words its placed phrase. */
 /**
  * A capped axis's top raised to the last tick recharts would draw over [0, top] with `ticks` ticks: handed [0, top] as
  * it stands, recharts closes the round ticks with `top` itself as one more, unround tick.
@@ -299,6 +298,7 @@ export function niceAxisTop(top: number, ticks = 5): number {
   return Number((step * (ticks - 1)).toPrecision(12));
 }
 
+/** A placement rung as the request drawer words its placed phrase. */
 export const PLACEMENT_RUNG_LABEL: Record<Placement['rung'], string> = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
 /** A rung the console has no label for reads as the router sent it. */
 export const placementRungLabel = (rung: string): string => (own(PLACEMENT_RUNG_LABEL, rung) ? PLACEMENT_RUNG_LABEL[rung as Placement['rung']] : rung);
