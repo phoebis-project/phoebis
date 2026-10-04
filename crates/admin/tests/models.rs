@@ -127,16 +127,22 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
         )
         .unwrap();
     let cookie = login(&parts.app, "admin-secret").await;
-    parts.router.report(report_cooldown(
-        "business",
-        &format!("model:{MODEL}"),
-        NOW + 1_800_000,
-    ));
-    parts.router.report(report_cooldown(
-        "business",
-        &format!("model:{OPUS_MODEL}"),
-        NOW + 1_800_000,
-    ));
+    parts
+        .router
+        .report(report_cooldown(
+            "business",
+            &format!("model:{MODEL}"),
+            NOW + 1_800_000,
+        ))
+        .await;
+    parts
+        .router
+        .report(report_cooldown(
+            "business",
+            &format!("model:{OPUS_MODEL}"),
+            NOW + 1_800_000,
+        ))
+        .await;
 
     let body = json(get(&parts.app, "/admin/keys/desktop/models", Some(&cookie)).await).await;
     assert_eq!(body["key_id"], "desktop");
@@ -189,13 +195,16 @@ async fn the_models_state_route_groups_live_cooldowns_by_model_and_lists_the_las
     let model_scope = format!("model:{MODEL}");
     parts
         .router
-        .report(report_cooldown("business", &model_scope, NOW + 1_800_000));
+        .report(report_cooldown("business", &model_scope, NOW + 1_800_000))
+        .await;
     parts
         .router
-        .report(report_cooldown("direct", &model_scope, NOW + 1_800_000));
+        .report(report_cooldown("direct", &model_scope, NOW + 1_800_000))
+        .await;
     parts
         .router
-        .report(report_cooldown("business", "account", NOW + 3_600_000));
+        .report(report_cooldown("business", "account", NOW + 3_600_000))
+        .await;
 
     parts
         .ledger

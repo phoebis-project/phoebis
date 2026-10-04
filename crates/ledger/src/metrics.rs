@@ -12,7 +12,7 @@ use axum::routing::get;
 use axum::Router;
 use phoebis_bus::{Bus, SubscriberStats};
 use phoebis_oauth::Clock;
-use phoebis_routing::RouterHandle;
+use phoebis_routing::{RouterHandle, WriterStatus};
 use phoebis_store::StoreError;
 
 use crate::histogram::{bucket_edges, bucket_index, top_edge, BUCKET_COUNT};
@@ -266,6 +266,18 @@ impl Metrics {
                         ));
                     }
                 }
+                "phoebis_router_writer_degraded" => {
+                    out.push_str(&format!(
+                        "phoebis_router_writer_degraded {}\n",
+                        u8::from(gauges.writer.degraded)
+                    ));
+                }
+                "phoebis_router_writer_depth" => {
+                    out.push_str(&format!(
+                        "phoebis_router_writer_depth {}\n",
+                        gauges.writer.depth
+                    ));
+                }
                 "phoebis_bus_subscriber_panics_total" => {
                     for (subscriber, stats) in bus {
                         out.push_str(&format!(
@@ -425,6 +437,8 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_pricing_unknown_model_total", "counter"),
     ("phoebis_requests_total", "counter"),
     ("phoebis_router_dropped_reports_total", "counter"),
+    ("phoebis_router_writer_degraded", "gauge"),
+    ("phoebis_router_writer_depth", "gauge"),
     ("phoebis_tokens_total", "counter"),
     ("phoebis_upstream_ttfb_seconds", "histogram"),
 ];
@@ -471,6 +485,8 @@ pub struct RoutingGauges {
     pub ledger_degraded: bool,
     /// Priced records parked since start, from `Ledger::parked_priced`.
     pub ledger_parked_priced: u64,
+    /// The routing state writer at scrape, from `RouterHandle::writer_status`.
+    pub writer: WriterStatus,
 }
 
 pub async fn gather(
@@ -495,6 +511,7 @@ pub async fn gather(
         }),
         ledger_degraded: ledger.is_some_and(Ledger::degraded),
         ledger_parked_priced: ledger.map_or(0, Ledger::parked_priced),
+        writer: router.writer_status(),
         ..RoutingGauges::default()
     };
     if let Ok(cooldowns) = router.cooldowns().await {

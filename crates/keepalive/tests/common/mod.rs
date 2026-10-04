@@ -615,37 +615,43 @@ impl Rig {
 
     /// Reports evidence that stands: the plan-side cap and the overage gate both read it through the router's
     /// view on the scheduling tick that follows.
-    pub fn enter_overage(&self, account: &str, reset_at: i64) {
+    pub async fn enter_overage(&self, account: &str, reset_at: i64) {
         let incarnation = self.h.store.account(account).unwrap().unwrap().incarnation;
-        self.h.router.report(phoebis_routing::Report::Overage {
-            account_id: account.into(),
-            evidence: phoebis_routing::OverageEvidence {
-                in_use: true,
-                since: Some(self.now()),
-                reset: Some(reset_at),
-                observed_at: self.now(),
-                source: phoebis_routing::EvidenceSource::Head,
+        self.h
+            .router
+            .report(phoebis_routing::Report::Overage {
+                account_id: account.into(),
+                evidence: phoebis_routing::OverageEvidence {
+                    in_use: true,
+                    since: Some(self.now()),
+                    reset: Some(reset_at),
+                    observed_at: self.now(),
+                    source: phoebis_routing::EvidenceSource::Head,
+                    incarnation,
+                },
                 incarnation,
-            },
-            incarnation,
-        });
+            })
+            .await;
     }
 
     /// Reports evidence whose reset has already passed, so `OverageEvidence::stands` reads it as ended without
     /// the fallback window ever coming into it.
-    pub fn leave_overage(&self, account: &str) {
+    pub async fn leave_overage(&self, account: &str) {
         let incarnation = self.h.store.account(account).unwrap().unwrap().incarnation;
-        self.h.router.report(phoebis_routing::Report::Overage {
-            account_id: account.into(),
-            evidence: phoebis_routing::OverageEvidence {
-                in_use: true,
-                since: None,
-                reset: Some(self.now() - 1),
-                observed_at: self.now(),
-                source: phoebis_routing::EvidenceSource::Head,
+        self.h
+            .router
+            .report(phoebis_routing::Report::Overage {
+                account_id: account.into(),
+                evidence: phoebis_routing::OverageEvidence {
+                    in_use: true,
+                    since: None,
+                    reset: Some(self.now() - 1),
+                    observed_at: self.now(),
+                    source: phoebis_routing::EvidenceSource::Head,
+                    incarnation,
+                },
                 incarnation,
-            },
-            incarnation,
-        });
+            })
+            .await;
     }
 }

@@ -177,6 +177,11 @@ and not its captured bodies, so the capture of a parked request is gone while it
 retry the ledger is degraded: the system page shows it, `phoebis_ledger_degraded` reads 1, and routing treats every
 budgeted member's spend as unknown until a batch lands and the spend is read again.
 
+The routing state writer is bounded the same way: a stalled registry file leaves its writes in memory, coalesced per
+row, and the system page's `router.writer` reads `degraded` until they drain. A batch the registry file as a whole
+refuses is tried once more at the writer's next wake and counted under `router.writer.failed_batches`; a second
+refusal drops it.
+
 ## Retention
 
 | Data | Kept for |
@@ -195,7 +200,7 @@ its cost is kept.
 ## Metrics
 
 `stats.metrics_listen` serves `/metrics` in Prometheus text format and nothing else; it speaks plain HTTP and
-asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-one families are
+asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-three families are
 rendered:
 
 | Metric | Type | Labels |
@@ -219,6 +224,8 @@ rendered:
 | `phoebis_pricing_unknown_model_total` | counter | none |
 | `phoebis_requests_total` | counter | `key`, `kind`, `outcome` |
 | `phoebis_router_dropped_reports_total` | counter | `kind` |
+| `phoebis_router_writer_degraded` | gauge | none |
+| `phoebis_router_writer_depth` | gauge | none |
 | `phoebis_tokens_total` | counter | `account`, `kind`, `model` |
 | `phoebis_upstream_ttfb_seconds` | histogram | `model` |
 
@@ -228,8 +235,11 @@ cannot grow the label set by naming models it likes.
 `phoebis_keepalive_probes_total`'s `account` label reads `-` for a probe cancelled before any account was
 attributed, the same reserved id a request row with no account reads under.
 `phoebis_account_cooldown_seconds`, `phoebis_account_overage_in_use`, `phoebis_keepalive_agents`, and
-`phoebis_pins_active` are the four routing gauges; each is computed fresh from the router's own snapshot on every
-scrape rather than accumulated between them.
+`phoebis_pins_active` are the four routing-state gauges; each is computed fresh from the router's own snapshot on every
+scrape rather than accumulated between them. Beside them, `phoebis_router_writer_depth` and
+`phoebis_router_writer_degraded` are read at the scrape from the router's writer status: the batches waiting in the
+routing state writer's channel, and 1 while writes past its bound wait in memory
+([the ledger writer](#the-ledger-writer)).
 `phoebis_ledger_queued` reads the records waiting in the ledger's writer channel at the scrape, and
 `phoebis_ledger_behind_refusals_total` counts the requests answered `ledger_behind` while it was at least half full
 ([run the container](installation.md#run-the-container)).

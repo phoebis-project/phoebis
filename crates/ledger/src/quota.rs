@@ -389,24 +389,30 @@ impl QuotaPoll {
                     // from selection; both halves go, as the selection's own pull sends them, so the first
                     // selection sees the overage state too.
                     let (sample, overage) = sample_from_usage(&snapshot, account.incarnation);
-                    router.report(Report::Sample {
-                        account_id: account.id.clone(),
-                        sample,
-                        incarnation: account.incarnation,
-                    });
-                    if let Some(evidence) = overage {
-                        router.report(Report::Overage {
+                    router
+                        .report(Report::Sample {
                             account_id: account.id.clone(),
-                            evidence,
+                            sample,
                             incarnation: account.incarnation,
-                        });
+                        })
+                        .await;
+                    if let Some(evidence) = overage {
+                        router
+                            .report(Report::Overage {
+                                account_id: account.id.clone(),
+                                evidence,
+                                incarnation: account.incarnation,
+                            })
+                            .await;
                     }
                     if let Some(state) = credits_from_usage(&snapshot, account.incarnation) {
-                        router.report(Report::Credits {
-                            account_id: account.id.clone(),
-                            state,
-                            incarnation: account.incarnation,
-                        });
+                        router
+                            .report(Report::Credits {
+                                account_id: account.id.clone(),
+                                state,
+                                incarnation: account.incarnation,
+                            })
+                            .await;
                     }
                 }
                 Some(snapshot)

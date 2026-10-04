@@ -246,6 +246,33 @@ fn the_routers_drop_counters_render_one_series_per_kind() {
 }
 
 #[test]
+fn the_routing_state_writers_depth_and_degraded_state_render_as_their_own_families() {
+    let gauges = RoutingGauges {
+        writer: phoebis_routing::WriterStatus {
+            depth: 3,
+            degraded: true,
+            ..phoebis_routing::WriterStatus::default()
+        },
+        ..RoutingGauges::default()
+    };
+    let text = Metrics::new().render(&gauges, &[], 0);
+    for line in [
+        "# TYPE phoebis_router_writer_degraded gauge",
+        "# TYPE phoebis_router_writer_depth gauge",
+        "phoebis_router_writer_degraded 1\n",
+        "phoebis_router_writer_depth 3\n",
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+    let clear = Metrics::new().render(&RoutingGauges::default(), &[], 0);
+    assert!(
+        clear.contains("phoebis_router_writer_degraded 0\n")
+            && clear.contains("phoebis_router_writer_depth 0\n"),
+        "a writer that keeps up reads 0 on both: {clear}"
+    );
+}
+
+#[test]
 fn the_ledger_writers_backlog_and_its_admission_refusals_render_as_their_own_families() {
     let gauges = RoutingGauges {
         ledger_queued: 2_048,
@@ -297,7 +324,9 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
     )
     .unwrap();
     router.shutdown().await.unwrap();
-    router.report(phoebis_routing::Report::MemberSpend(Vec::new()));
+    router
+        .report(phoebis_routing::Report::MemberSpend(Vec::new()))
+        .await;
     let gauges = phoebis_ledger::gather(
         &router,
         &PriceTable::shipped(),
@@ -419,16 +448,20 @@ async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_fla
         source: phoebis_routing::EvidenceSource::Head,
         incarnation: 1,
     };
-    router.report(phoebis_routing::Report::Overage {
-        account_id: "past".into(),
-        evidence: evidence(Some(1_500)),
-        incarnation: 1,
-    });
-    router.report(phoebis_routing::Report::Overage {
-        account_id: "ahead".into(),
-        evidence: evidence(Some(9_000)),
-        incarnation: 1,
-    });
+    router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "past".into(),
+            evidence: evidence(Some(1_500)),
+            incarnation: 1,
+        })
+        .await;
+    router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "ahead".into(),
+            evidence: evidence(Some(9_000)),
+            incarnation: 1,
+        })
+        .await;
     let gauges = phoebis_ledger::gather(
         &router,
         &PriceTable::shipped(),

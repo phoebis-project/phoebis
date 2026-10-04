@@ -477,23 +477,25 @@ async fn the_catalog_route_answers_the_effort_levels_a_row_lists_and_an_empty_li
 async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_account() {
     let (app, _up, store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
-    router.report(phoebis_routing::Report::Cooldown {
-        account_id: "direct".into(),
-        row: phoebis_store::CooldownRow {
+    router
+        .report(phoebis_routing::Report::Cooldown {
             account_id: "direct".into(),
-            scope: "model:claude-opus-5".into(),
-            until: common::NOW + 60_000,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "retry_after".into(),
-            source_request_id: None,
+            row: phoebis_store::CooldownRow {
+                account_id: "direct".into(),
+                scope: "model:claude-opus-5".into(),
+                until: common::NOW + 60_000,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "retry_after".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     // The task records the cooldown in its own state before it queues the write, so a row on disk means the
     // snapshot the admin route reads already has it.
     fake_upstream::wait_for(std::time::Duration::from_secs(2), || {
@@ -588,20 +590,24 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
             |sample, (window, r)| sample.with(window, *r),
         )
     };
-    router.report(phoebis_routing::Report::Sample {
-        account_id: "direct".into(),
-        sample: sample(&[
-            (FAST_INPUT, reading(0.42, 30_000)),
-            (FAST_OUTPUT, reading(0.08, 20_000)),
-        ]),
-        incarnation: 1,
-    });
+    router
+        .report(phoebis_routing::Report::Sample {
+            account_id: "direct".into(),
+            sample: sample(&[
+                (FAST_INPUT, reading(0.42, 30_000)),
+                (FAST_OUTPUT, reading(0.08, 20_000)),
+            ]),
+            incarnation: 1,
+        })
+        .await;
     // A plan window alone is no fast reading, so this account's row keeps its null.
-    router.report(phoebis_routing::Report::Sample {
-        account_id: "business".into(),
-        sample: sample(&[(FIVE_HOUR, reading(0.5, 60_000))]),
-        incarnation: 1,
-    });
+    router
+        .report(phoebis_routing::Report::Sample {
+            account_id: "business".into(),
+            sample: sample(&[(FIVE_HOUR, reading(0.5, 60_000))]),
+            incarnation: 1,
+        })
+        .await;
     fake_upstream::wait_for_async(std::time::Duration::from_secs(2), || {
         let router = router.clone();
         async move {

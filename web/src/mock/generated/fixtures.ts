@@ -8191,6 +8191,7 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "router": {
         "command_depth": 4096,
+        "queued": 0,
         "dropped_reports": {
           "account_state": 0,
           "accounting": 0,
@@ -8204,6 +8205,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "pin_renewed": 0,
           "sample": 0,
           "usage": 0
+        },
+        "writer": {
+          "depth": 0,
+          "deferred": 0,
+          "degraded": false,
+          "failed_batches": 0
         }
       },
       "bus": [

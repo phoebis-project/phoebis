@@ -406,33 +406,36 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // cohort's account, so `request.json` captures a placement and a hold as `select` serializes them on the
     // attempt the shape check reads. The boundaries stand for the conversation `s1` forked from.
     let boundaries: Vec<String> = vec!["b-fixture-1".into(), "b-fixture-2".into()];
-    parts.router.report(phoebis_routing::Report::Affinity(
-        phoebis_routing::AffinityReport {
-            account_id: "direct".into(),
-            incarnation: snapshot
-                .account("direct")
-                .expect("the direct account is in the snapshot")
-                .incarnation,
-            key_id: "desktop".into(),
-            key_generation,
-            canonical_model: "claude-sonnet-5-5".into(),
-            lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
-            root: Some("s0".into()),
-            static_boundaries: Vec::new(),
-            message_boundaries: boundaries.clone(),
-            static_sizes: Vec::new(),
-            message_id: None,
-            request_id: None,
-            static_ttl_ms: None,
-            message_ttl_ms: Some(300_000),
-            cache_touched: true,
-            prefix_tokens: 500,
-            now,
-            cache_write_5m_tokens: None,
-            cache_write_1h_tokens: None,
-            uniform_ttl_ms: None,
-        },
-    ));
+    parts
+        .router
+        .report(phoebis_routing::Report::Affinity(
+            phoebis_routing::AffinityReport {
+                account_id: "direct".into(),
+                incarnation: snapshot
+                    .account("direct")
+                    .expect("the direct account is in the snapshot")
+                    .incarnation,
+                key_id: "desktop".into(),
+                key_generation,
+                canonical_model: "claude-sonnet-5-5".into(),
+                lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
+                root: Some("s0".into()),
+                static_boundaries: Vec::new(),
+                message_boundaries: boundaries.clone(),
+                static_sizes: Vec::new(),
+                message_id: None,
+                request_id: None,
+                static_ttl_ms: None,
+                message_ttl_ms: Some(300_000),
+                cache_touched: true,
+                prefix_tokens: 500,
+                now,
+                cache_write_5m_tokens: None,
+                cache_write_1h_tokens: None,
+                uniform_ttl_ms: None,
+            },
+        ))
+        .await;
     let placed = parts
         .router
         .select(phoebis_routing::SelectRequest {
@@ -615,39 +618,45 @@ async fn every_route_is_captured_and_holds_its_shape() {
     }));
     // The pool's model_rules excludes claude-haiku-*, and the account this cools is one of its members, so the
     // key-models and models-state fixtures both carry it: the pool's rule with a live cooldown, and one group.
-    parts.router.report(phoebis_routing::Report::Cooldown {
-        account_id: "business".into(),
-        row: phoebis_store::CooldownRow {
+    parts
+        .router
+        .report(phoebis_routing::Report::Cooldown {
             account_id: "business".into(),
-            scope: "model:claude-haiku-4-5-20251001".into(),
-            until: now + 1_800_000,
-            set_at: 0,
-            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
-            window: "model_rejection".into(),
-            source_request_id: None,
+            row: phoebis_store::CooldownRow {
+                account_id: "business".into(),
+                scope: "model:claude-haiku-4-5-20251001".into(),
+                until: now + 1_800_000,
+                set_at: 0,
+                reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+                window: "model_rejection".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     // An answer to a fast request carried the fast lane's two buckets, so the account rows show the pair.
     let fast_reading = |utilization: f64| phoebis_routing::WindowReading {
         utilization,
         reset: Some(now + 30_000),
         observed_at: now - 5_000,
     };
-    parts.router.report(phoebis_routing::Report::Sample {
-        account_id: "business".into(),
-        sample: phoebis_routing::UtilizationSample {
-            observed_at: now - 5_000,
-            ..Default::default()
-        }
-        .with(phoebis_relay::FAST_INPUT, fast_reading(0.42))
-        .with(phoebis_relay::FAST_OUTPUT, fast_reading(0.08)),
-        incarnation: 1,
-    });
+    parts
+        .router
+        .report(phoebis_routing::Report::Sample {
+            account_id: "business".into(),
+            sample: phoebis_routing::UtilizationSample {
+                observed_at: now - 5_000,
+                ..Default::default()
+            }
+            .with(phoebis_relay::FAST_INPUT, fast_reading(0.42))
+            .with(phoebis_relay::FAST_OUTPUT, fast_reading(0.08)),
+            incarnation: 1,
+        })
+        .await;
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 300,
         kind: "model_rejected".into(),

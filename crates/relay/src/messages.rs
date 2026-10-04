@@ -72,8 +72,8 @@ use crate::observe::{answer_from_json, message_id_from_json, published_headers, 
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, relay_body, AffinityFacts, Checkin, Drained, PostCommit, Publish, Relayed,
-    Renewal, ReturnToPool, MAX_BUFFERED_BODY,
+    drain_bounded, relay_body, AffinityFacts, Checkin, Drained, OnError, PostCommit, Publish,
+    Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY,
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
@@ -1039,7 +1039,9 @@ impl Relay {
         };
         // A probe is the router's own traffic; "used" in the key list means a client presented the key.
         if probe.is_none() {
-            self.router.touch_key(&key.id, presented, key.rotated_at);
+            self.router
+                .touch_key(&key.id, presented, key.rotated_at)
+                .await;
         }
         let capture_hours = snapshot
             .body_capture_hours(&key)
@@ -2360,8 +2362,9 @@ impl Relay {
             ctx.cache_ttl_ms,
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
-        self.report_overage(ctx.account, &head, head_at);
-        self.report_head_sample(ctx.account, &head, &ctx.identity.canonical_model, head_at);
+        self.report_overage(ctx.account, &head, head_at).await;
+        self.report_head_sample(ctx.account, &head, &ctx.identity.canonical_model, head_at)
+            .await;
 
         // Heads the table reads a body for are drained within the bound; a body too large to read
         // commits. The reader survives only where the body was left alone, because a drained body has
@@ -2414,13 +2417,14 @@ impl Relay {
                         ctx.request_id,
                         generations,
                         (self.clock)(),
-                    );
+                    )
+                    .await;
                     if ctx.portable {
                         return Next::FailOver { auth_marked: false };
                     }
                     let release = self.release_on(&ctx, head.status);
                     return Next::Respond(
-                        self.authentication_exhausted(&ctx, &head, outcome, release)
+                        self.authentication_exhausted(&mut ctx, &head, outcome, release)
                             .await,
                     );
                 }
@@ -2729,7 +2733,7 @@ impl Relay {
                             status: head.status,
                             headers: head.headers.clone(),
                         };
-                        let on_error = Box::new(move |data: Bytes| {
+                        let on_error = Box::new(move |data: Bytes, waiting: &mut Waiting| {
                             // After commit nothing fails over. A rate-limit error records the cooldown
                             // and, on a portable request, invalidates the pin so the next request
                             // migrates; a non-portable request keeps its pin. The deadline is measured
@@ -2754,8 +2758,7 @@ impl Relay {
                                     fast,
                                 },
                             ) {
-                                report_failover(
-                                    &router,
+                                for report in failover_reports(
                                     &account_id,
                                     &canonical_model,
                                     cooldown,
@@ -2764,16 +2767,20 @@ impl Relay {
                                     &request_id,
                                     generations,
                                     now,
-                                );
+                                ) {
+                                    waiting.send(&router, report);
+                                }
                             }
-                        }) as Box<dyn FnOnce(Bytes) + Send>;
+                        }) as OnError;
                         (bytes, Some(PostCommit { inspect, on_error }))
                     }
                 };
                 let responded = match buffered {
                     Some(buffered) => {
+                        let guards = ctx.guards();
                         self.forward_buffered(
                             ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
+                            guards,
                         )
                         .await
                     }
@@ -2823,7 +2830,8 @@ impl Relay {
             ctx.request_id,
             generations,
             arrived,
-        );
+        )
+        .await;
         if let Some(delay) = retry_in_place {
             drop(reader);
             return Next::RetryInPlace(delay);
@@ -2877,43 +2885,69 @@ impl Relay {
                 .then(|| self.release_on(&ctx, head.status))
                 .flatten();
             return Next::Respond(
-                self.authentication_exhausted(&ctx, &head, outcome, release)
+                self.authentication_exhausted(&mut ctx, &head, outcome, release)
                     .await,
             );
         }
         Next::Respond(
-            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None, None)
-                .await,
+            self.forward_buffered(
+                ctx.trace,
+                &head,
+                buffered,
+                ctx.caller,
+                outcome,
+                None,
+                None,
+                Guards::default(),
+            )
+            .await,
         )
     }
 
     /// The router's own answer when an account's authentication failure is the request's last word: the
     /// untimed exhaustion body, so the client sees no account and no reason. `release` is the fresh pin this
-    /// request created, sent before the answer as the forwarded error would have sent it.
+    /// request created, sent before the answer as the forwarded error would have sent it while the router's
+    /// mailbox has room; on a full one it waits on a tracked task after the answer, holding the request's guards.
     async fn authentication_exhausted(
         &self,
-        ctx: &Responding<'_>,
+        ctx: &mut Responding<'_>,
         head: &ResponseHead,
         mut outcome: RelayOutcome,
         release: Option<Renewal>,
     ) -> Response {
+        let mut waiting = Waiting::default();
         if let Some(release) = release {
-            release.send((self.clock)(), head.status, None, false);
+            release.send((self.clock)(), head.status, None, false, &mut waiting);
         }
         outcome.error_code = Some("accounts_unavailable".to_string());
         // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
         if ctx.trace.kind == Kind::Probe && ctx.auth_marked {
             outcome.obstacle = Some(REAUTH_OBSTACLE);
         }
-        self.answer(
-            ctx.trace,
-            exhaustion_response(&Exhaustion::Untimed, (self.clock)(), ctx.request_id),
-            outcome,
-            None,
-            ResponseFacts::default(),
-            None,
-        )
-        .await
+        let response = self
+            .answer(
+                ctx.trace,
+                exhaustion_response(&Exhaustion::Untimed, (self.clock)(), ctx.request_id),
+                outcome,
+                None,
+                ResponseFacts::default(),
+                None,
+            )
+            .await;
+        self.after_answer(waiting, ctx.guards());
+        response
+    }
+
+    /// Runs the reports a full mailbox left waiting on a task the shutdown waits on, holding the request's guards
+    /// until they are queued: the client's answer never waits on the router, and the key permits still bound the
+    /// reports a parked loop can hold.
+    fn after_answer(&self, waiting: Waiting, guards: Guards) {
+        if !waiting.is_empty() {
+            self.bodies.spawn(async move {
+                waiting.land().await;
+                drop(guards);
+            });
+        }
     }
 
     /// The report a pinned answer sends at its end: a renewal, or the release of a pin this request created and
@@ -3318,7 +3352,7 @@ impl Relay {
 
     /// A head that answers none of the three header families (the api_key buckets, the fast lane's buckets, the
     /// unified windows) carries no sample and changes nothing.
-    fn report_head_sample(
+    async fn report_head_sample(
         &self,
         account: &AccountRow,
         head: &ResponseHead,
@@ -3329,15 +3363,17 @@ impl Relay {
         let Some(sample) = head_sample(head, account.kind, canonical_model, observed_at) else {
             return;
         };
-        self.router.report(Report::Sample {
-            account_id: account.id.clone(),
-            sample,
-            incarnation: account.incarnation,
-        });
+        self.router
+            .report(Report::Sample {
+                account_id: account.id.clone(),
+                sample,
+                incarnation: account.incarnation,
+            })
+            .await;
     }
 
     /// Only an OAuth head with the unified headers is evidence; everything else changes nothing.
-    fn report_overage(&self, account: &AccountRow, head: &ResponseHead, now: i64) {
+    async fn report_overage(&self, account: &AccountRow, head: &ResponseHead, now: i64) {
         if account.kind != AccountKind::Oauth {
             return;
         }
@@ -3363,18 +3399,20 @@ impl Relay {
             .filter_map(|(_, r)| r)
             .max()
         });
-        self.router.report(Report::Overage {
-            account_id: account.id.clone(),
-            evidence: OverageEvidence {
-                in_use,
-                since: in_use.then_some(observed_at),
-                reset,
-                observed_at,
-                source: EvidenceSource::Head,
+        self.router
+            .report(Report::Overage {
+                account_id: account.id.clone(),
+                evidence: OverageEvidence {
+                    in_use,
+                    since: in_use.then_some(observed_at),
+                    reset,
+                    observed_at,
+                    source: EvidenceSource::Head,
+                    incarnation: account.incarnation,
+                },
                 incarnation: account.incarnation,
-            },
-            incarnation: account.incarnation,
-        });
+            })
+            .await;
     }
 
     async fn stream<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
@@ -3479,7 +3517,8 @@ impl Relay {
         with_outcome(built(builder, body), outcome)
     }
 
-    /// `renewal` is sent once the answer's usage is read, beside the completion.
+    /// `renewal` is sent once the answer's usage is read, beside the completion. `guards` are the request's
+    /// counts, which a report the full mailbox makes wait holds on its task after the answer.
     #[allow(clippy::too_many_arguments)]
     async fn forward_buffered(
         &self,
@@ -3490,6 +3529,7 @@ impl Relay {
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
+        guards: Guards,
     ) -> Response {
         // A buffered answer is never an event stream, so its status alone says whether it is a rate limit.
         let (builder, decoder) = match forward_head(head, caller, false) {
@@ -3554,8 +3594,15 @@ impl Relay {
             None => (None, ResponseFacts::default()),
         };
         let fast = facts.speed.as_deref() == Some("fast");
+        let mut waiting = Waiting::default();
         if let Some(renewal) = renewal {
-            renewal.send((self.clock)(), head.status, usage.as_ref(), fast);
+            renewal.send(
+                (self.clock)(),
+                head.status,
+                usage.as_ref(),
+                fast,
+                &mut waiting,
+            );
         }
         if let Some(affinity) = affinity {
             affinity.send(
@@ -3564,6 +3611,7 @@ impl Relay {
                 message_id,
                 usage.as_ref(),
                 fast,
+                &mut waiting,
             );
         }
         let response = built(builder, Body::from(payload.clone()));
@@ -3584,6 +3632,7 @@ impl Relay {
                 (self.clock)(),
             )
             .await;
+        self.after_answer(waiting, guards);
         with_outcome(response, outcome)
     }
 }
@@ -3814,9 +3863,9 @@ enum Leg {
 
 /// `generations` is the attempt's (incarnation, lifecycle, credential) triple, which fences the mark: a
 /// verdict about a credential that was replaced, or a holder the id lost, while the request was in flight
-/// lands nowhere.
+/// lands nowhere. Awaited where it stands: between legs no client byte has gone out yet.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn report_failover(
+pub(crate) async fn report_failover(
     router: &RouterHandle,
     account_id: &str,
     canonical_model: &str,
@@ -3827,6 +3876,34 @@ pub(crate) fn report_failover(
     generations: (u64, u64, u64),
     set_at: i64,
 ) {
+    for report in failover_reports(
+        account_id,
+        canonical_model,
+        cooldown,
+        mark,
+        pin,
+        request_id,
+        generations,
+        set_at,
+    ) {
+        router.report(report).await;
+    }
+}
+
+/// What a failover verdict tells the router, in order: the cooldown, or without one the end of the pin, then the
+/// mark.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn failover_reports(
+    account_id: &str,
+    canonical_model: &str,
+    cooldown: Option<Cooldown>,
+    mark: Option<AccountState>,
+    pin: Option<PinRef>,
+    request_id: &str,
+    generations: (u64, u64, u64),
+    set_at: i64,
+) -> Vec<Report> {
+    let mut reports = Vec::new();
     if let Some(cooldown) = cooldown {
         let scope = match cooldown.scope {
             Scope::Account => "account".to_string(),
@@ -3844,7 +3921,7 @@ pub(crate) fn report_failover(
             source_request_id: Some(request_id.to_string()),
             incarnation: generations.0,
         };
-        router.report(Report::Cooldown {
+        reports.push(Report::Cooldown {
             account_id: account_id.to_string(),
             row,
             pin,
@@ -3854,7 +3931,7 @@ pub(crate) fn report_failover(
         });
     } else if let Some(pin) = pin {
         // A mark without a cooldown still ends the pin: the account cannot serve until an operator acts.
-        router.report(Report::PinInvalidated {
+        reports.push(Report::PinInvalidated {
             account_id: account_id.to_string(),
             pin,
             incarnation: generations.0,
@@ -3863,7 +3940,7 @@ pub(crate) fn report_failover(
         });
     }
     if let Some(state) = mark {
-        router.report(Report::AccountState {
+        reports.push(Report::AccountState {
             account_id: account_id.to_string(),
             state,
             incarnation: generations.0,
@@ -3871,6 +3948,7 @@ pub(crate) fn report_failover(
             credential_generation: generations.2,
         });
     }
+    reports
 }
 
 /// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.

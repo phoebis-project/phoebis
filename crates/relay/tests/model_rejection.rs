@@ -330,23 +330,25 @@ async fn the_suffix_is_folded_before_the_cooldown_lookup_and_absent_from_the_wir
         PoolSpec::default(),
     )
     .await;
-    h.router.report(phoebis_routing::Report::Cooldown {
-        account_id: "a".into(),
-        row: phoebis_store::CooldownRow {
+    h.router
+        .report(phoebis_routing::Report::Cooldown {
             account_id: "a".into(),
-            scope: "model:claude-sonnet-4-5".into(),
-            until: NOW + 3_600_000,
-            set_at: 0,
-            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
-            window: "model_rejection".into(),
-            source_request_id: None,
+            row: phoebis_store::CooldownRow {
+                account_id: "a".into(),
+                scope: "model:claude-sonnet-4-5".into(),
+                until: NOW + 3_600_000,
+                set_at: 0,
+                reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+                window: "model_rejection".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     let resp = h
         .app
         .clone()

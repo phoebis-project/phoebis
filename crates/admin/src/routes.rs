@@ -927,6 +927,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         }
     };
     let keepalive_stats = state.keepalive.stats();
+    let writer = state.router.writer_status();
     let dead = state.readiness.dead();
     let dropped = state
         .router
@@ -951,7 +952,10 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             "behind_refusals": load(&stats.behind_refusals),
             "degraded": state.ledger.degraded(), "retrying": load(&stats.retrying), "parked_priced": parked,
         },
-        "router": { "command_depth": phoebis_routing::COMMANDS, "dropped_reports": dropped },
+        "router": {
+            "command_depth": phoebis_routing::COMMANDS, "queued": state.router.queued(), "dropped_reports": dropped,
+            "writer": { "depth": writer.depth, "deferred": writer.deferred, "degraded": writer.degraded, "failed_batches": writer.failed_batches },
+        },
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
         "live": { "clients": state.live.clients(), "in_flight": state.live.in_flight() },
         "pricing_unknown_models": state.pricing.unknown_models(),

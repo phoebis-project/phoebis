@@ -768,23 +768,25 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
     );
 
     let now = h.clock.load(Ordering::SeqCst);
-    h.router.report(phoebis_routing::Report::Cooldown {
-        account_id: "a".into(),
-        row: phoebis_store::CooldownRow {
+    h.router
+        .report(phoebis_routing::Report::Cooldown {
             account_id: "a".into(),
-            scope: "model:claude-sonnet-4-5-20250929".into(),
-            until: now + 3_600_000,
-            set_at: now,
-            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
-            window: "model_rejection".into(),
-            source_request_id: None,
+            row: phoebis_store::CooldownRow {
+                account_id: "a".into(),
+                scope: "model:claude-sonnet-4-5-20250929".into(),
+                until: now + 3_600_000,
+                set_at: now,
+                reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+                window: "model_rejection".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     let before = up.requests().len();
     let resp = h
         .app
