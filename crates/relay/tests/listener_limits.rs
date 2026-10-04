@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
-use phoebis_bus::{Bus, Event};
+use phoebis_bus::{Bus, Delivery, Event};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The stop sender comes back with the address: `stopped()` reads a dropped sender as a stop, so a test holds
@@ -178,7 +178,7 @@ async fn a_body_task_cut_at_the_deadline_publishes_its_completion_before_the_dra
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],

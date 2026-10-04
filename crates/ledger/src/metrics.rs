@@ -19,6 +19,7 @@ use crate::histogram::{bucket_edges, bucket_index, top_edge, BUCKET_COUNT};
 use crate::pricing::{PriceTable, Pricing};
 use crate::record::{AttemptRecord, QuotaSampleRecord, RequestRecord};
 use crate::rollup::UNATTRIBUTED;
+use crate::task::Ledger;
 
 const LOCK_POISONED: &str = "metrics registry poisoned by a prior panic";
 
@@ -213,6 +214,15 @@ impl Metrics {
                         }
                     }
                 }
+                "phoebis_ledger_behind_refusals_total" => {
+                    out.push_str(&format!(
+                        "phoebis_ledger_behind_refusals_total {}\n",
+                        gauges.ledger_behind_refusals
+                    ));
+                }
+                "phoebis_ledger_queued" => {
+                    out.push_str(&format!("phoebis_ledger_queued {}\n", gauges.ledger_queued));
+                }
                 "phoebis_pricing_unknown_model_total" => {
                     out.push_str(&format!(
                         "phoebis_pricing_unknown_model_total {pricing_unknown}\n"
@@ -394,7 +404,9 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_keepalive_agents", "gauge"),
     ("phoebis_keepalive_probes_total", "counter"),
     ("phoebis_keepalive_saved_usd_total", "counter"),
+    ("phoebis_ledger_behind_refusals_total", "counter"),
     ("phoebis_ledger_dropped_total", "counter"),
+    ("phoebis_ledger_queued", "gauge"),
     ("phoebis_pins_active", "gauge"),
     ("phoebis_pricing_unknown_model_total", "counter"),
     ("phoebis_requests_total", "counter"),
@@ -436,6 +448,10 @@ pub struct RoutingGauges {
     pub live_accounts: BTreeSet<String>,
     /// The router's drop counters at scrape, per report kind, from `RouterHandle::dropped_reports`.
     pub dropped_reports: Vec<(&'static str, u64)>,
+    /// Records waiting in the ledger writer channel at scrape, from `Ledger::queued`.
+    pub ledger_queued: u64,
+    /// Requests refused at admission while the ledger writer was behind, from `LedgerStats::behind_refusals`.
+    pub ledger_behind_refusals: u64,
 }
 
 pub async fn gather(
@@ -445,12 +461,19 @@ pub async fn gather(
     fallback_ms: i64,
     keepalive: Option<&KeepaliveGaugeSource>,
     attention: AttentionGauges,
+    ledger: Option<&Ledger>,
 ) -> RoutingGauges {
     let snapshot = router.snapshot();
     let mut gauges = RoutingGauges {
         keepalive_agents: keepalive.map(|k| k()).unwrap_or_default(),
         attention,
         dropped_reports: router.dropped_reports(),
+        ledger_queued: ledger.map_or(0, |l| l.queued() as u64),
+        ledger_behind_refusals: ledger.map_or(0, |l| {
+            l.stats()
+                .behind_refusals
+                .load(std::sync::atomic::Ordering::Relaxed)
+        }),
         ..RoutingGauges::default()
     };
     if let Ok(cooldowns) = router.cooldowns().await {
@@ -509,13 +532,14 @@ pub fn metrics_router(
     cooldown_fallback: Duration,
     keepalive: Option<KeepaliveGaugeSource>,
     attention: Option<AttentionGaugeSource>,
+    ledger: Option<Ledger>,
 ) -> Router {
     let fallback_ms = cooldown_fallback.as_millis() as i64;
     Router::new()
         .route(
             "/metrics",
             get(move || {
-                let (metrics, router, pricing, bus, clock, keepalive, attention) = (
+                let (metrics, router, pricing, bus, clock, keepalive, attention, ledger) = (
                     metrics.clone(),
                     router.clone(),
                     pricing.clone(),
@@ -523,6 +547,7 @@ pub fn metrics_router(
                     clock.clone(),
                     keepalive.clone(),
                     attention.clone(),
+                    ledger.clone(),
                 );
                 async move {
                     // A scrape answered without the conditions would read 0 for a held one and clear the alarm a
@@ -544,6 +569,7 @@ pub fn metrics_router(
                         fallback_ms,
                         keepalive.as_ref(),
                         attention,
+                        ledger.as_ref(),
                     )
                     .await;
                     let text = metrics.render(&gauges, &bus.stats(), pricing.unknown_models());

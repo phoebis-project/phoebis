@@ -81,6 +81,21 @@ pub(crate) fn body_budget_exhausted() -> Failure {
     }
 }
 
+/// The error code of a request refused because the ledger's writer is behind.
+pub const LEDGER_BEHIND: &str = "ledger_behind";
+
+/// 503 `api_error`, the message `the router is not accepting requests right now`, `Retry-After: 5`: no account and
+/// no reason beyond the code, since the router's own standing is nothing the caller can act on but by waiting.
+pub(crate) fn ledger_behind() -> Failure {
+    Failure {
+        status: StatusCode::SERVICE_UNAVAILABLE,
+        error_type: "api_error",
+        code: LEDGER_BEHIND,
+        message: "the router is not accepting requests right now",
+        retry_after: Some(5),
+    }
+}
+
 /// The error code of a request refused because its key already has as many bodies arriving as it may.
 pub const KEY_BODY_READS: &str = "key_body_reads";
 
@@ -260,6 +275,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             message: "the request body's model is not a usable model name",
             retry_after: None,
         },
+        RelayError::LedgerBehind => ledger_behind(),
         RelayError::NoModel => Failure {
             status: StatusCode::BAD_REQUEST,
             error_type: "invalid_request_error",

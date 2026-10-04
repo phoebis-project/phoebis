@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
-use phoebis_bus::{AutoMode, Bus, Event, RequestObserved};
+use phoebis_bus::{AutoMode, Bus, Delivery, Event, RequestObserved};
 use phoebis_profile::fixtures::{
     body, inference_head, with_dangerous_tool_use_beta, with_safeguards, BodyFixture, FixtureKind,
 };
@@ -85,7 +85,7 @@ async fn observe(pool: PoolSpec, respond: Respond, head: &[u8], sent_body: &[u8]
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[account()], pool, bus).await;
     let resp = h
         .app

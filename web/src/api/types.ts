@@ -980,6 +980,8 @@ export interface KeepaliveRecipe {
 
 export interface KeepaliveOverview {
   agents: Record<KeepaliveState, number>;
+  /** Times the keepalive engine found it had missed bus events; each gap discarded every observation still open. */
+  busGaps: number;
   costToday: { capUsd: number | null; poolId: string; usd: number }[];
   /** Requests whose prefix expired between turns in the last 24 hours. */
   expiredBetweenTurns24h: number;

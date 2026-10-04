@@ -63,6 +63,7 @@ pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
     }
     Json(json!({
         "agents": state.keepalive.agent_counts(),
+        "bus_gaps": state.keepalive.stats().bus_gaps,
         "cost_today": cost_today,
         "expired_between_turns_24h": expired,
         "net_saved_7d_usd": net,

@@ -690,6 +690,11 @@ A model every account in the pool has rejected within the rejection window answe
 [cooldowns table](#cooldowns-and-failover) says how a rejection is recorded. A pool with no member answers
 `503 accounts_unavailable`, since only an operator can add one.
 
+While the ledger's writer channel is at least half full, a request, a keepalive probe included, is refused before any
+account is chosen with `503`, the error type `api_error`, the error code `ledger_behind`, the message `the router is not
+accepting requests right now` and `Retry-After: 5`, so the router never accepts a request the ledger cannot record
+([run the container](installation.md#run-the-container)).
+
 Claude Code 2.1.269 resumes a subscriber session on its own, after a usage-limit reset, only when the `429`
 carried all three of `anthropic-ratelimit-unified-status: rejected`, `anthropic-ratelimit-unified-reset` (Unix
 seconds), and `anthropic-ratelimit-unified-representative-claim` naming the window (`five_hour`, `seven_day`,

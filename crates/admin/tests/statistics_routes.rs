@@ -4,7 +4,9 @@ use std::time::Duration;
 
 use common::{delete, get, json, login, post, wait_json};
 use futures::StreamExt;
-use phoebis_bus::{Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk};
+use phoebis_bus::{
+    Delivery, Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk,
+};
 use phoebis_ledger::{AttemptRecord, EventRecord, Record, RequestRecord};
 
 const HOUR: i64 = 3_600_000;
@@ -169,6 +171,15 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (Some(27), Some(0), Some(4_096)),
         "the ledger schema is at the migration that indexes the bodies' expiry and adds the parked records"
     );
+    assert_eq!(
+        (
+            system["ledger"]["queued"].as_u64(),
+            system["ledger"]["behind"].as_bool(),
+            system["ledger"]["behind_refusals"].as_u64()
+        ),
+        (Some(0), Some(false), Some(0)),
+        "a writer that keeps up holds nothing back and has refused nothing: {system}"
+    );
     assert_eq!(system["router"]["command_depth"].as_u64(), Some(4_096));
     let dropped = system["router"]["dropped_reports"].as_object().unwrap();
     assert_eq!(
@@ -273,13 +284,13 @@ async fn readiness_reads_the_ledger_dead_when_its_bus_subscriber_is_absent_or_pa
         "the harness's own bus carries the ledger's live subscriber"
     );
     let bus = phoebis_bus::Bus::new();
-    let _live = bus.subscribe("live");
+    let _live = bus.subscribe("live", Delivery::Durable);
     assert_eq!(
         readiness(bus.clone()).dead(),
         vec!["ledger"],
         "a bus the ledger never subscribed to"
     );
-    let assembler = bus.subscribe("ledger");
+    let assembler = bus.subscribe("ledger", Delivery::Durable);
     assert_eq!(
         readiness(bus.clone()).dead(),
         Vec::<&str>::new(),

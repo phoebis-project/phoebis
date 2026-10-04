@@ -245,6 +245,24 @@ fn the_routers_drop_counters_render_one_series_per_kind() {
     );
 }
 
+#[test]
+fn the_ledger_writers_backlog_and_its_admission_refusals_render_as_their_own_families() {
+    let gauges = RoutingGauges {
+        ledger_queued: 2_048,
+        ledger_behind_refusals: 3,
+        ..RoutingGauges::default()
+    };
+    let text = Metrics::new().render(&gauges, &[], 0);
+    for line in [
+        "# TYPE phoebis_ledger_behind_refusals_total counter",
+        "# TYPE phoebis_ledger_queued gauge",
+        "phoebis_ledger_behind_refusals_total 3",
+        "phoebis_ledger_queued 2048",
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+}
+
 #[tokio::test]
 async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
     use phoebis_store::{StorageKey, Store};
@@ -264,6 +282,7 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
         60_000,
         None,
         AttentionGauges::default(),
+        None,
     )
     .await;
     assert_eq!(
@@ -328,6 +347,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
         60_000,
         None,
         AttentionGauges::default(),
+        None,
     )
     .await;
     assert_eq!(
@@ -393,6 +413,7 @@ async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_fla
         60_000,
         None,
         AttentionGauges::default(),
+        None,
     )
     .await;
     let text = Metrics::new().render(&gauges, &[], 0);
@@ -574,6 +595,7 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
             Duration::from_secs(60),
             None,
             Some(attention),
+            None,
         );
         async move {
             let resp = app

@@ -940,6 +940,8 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),
             "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
             "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
+            "queued": state.ledger.queued(), "behind": state.ledger.behind(),
+            "behind_refusals": load(&stats.behind_refusals),
         },
         "router": { "command_depth": phoebis_routing::COMMANDS, "dropped_reports": dropped },
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),

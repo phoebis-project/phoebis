@@ -182,7 +182,7 @@ poll's reading is kept for `stats.retention_days`, so an idle account adds 288 q
 ## Metrics
 
 `stats.metrics_listen` serves `/metrics` in Prometheus text format and nothing else; it speaks plain HTTP and
-asks for no credential, so it belongs behind a network only the scraper can reach. Seventeen families are
+asks for no credential, so it belongs behind a network only the scraper can reach. Nineteen families are
 rendered:
 
 | Metric | Type | Labels |
@@ -197,7 +197,9 @@ rendered:
 | `phoebis_keepalive_agents` | gauge | `state` |
 | `phoebis_keepalive_probes_total` | counter | `account`, `outcome` |
 | `phoebis_keepalive_saved_usd_total` | counter | `pool` |
+| `phoebis_ledger_behind_refusals_total` | counter | none |
 | `phoebis_ledger_dropped_total` | counter | `table` |
+| `phoebis_ledger_queued` | gauge | none |
 | `phoebis_pins_active` | gauge | `pool` |
 | `phoebis_pricing_unknown_model_total` | counter | none |
 | `phoebis_requests_total` | counter | `key`, `kind`, `outcome` |
@@ -213,6 +215,9 @@ attributed, the same reserved id a request row with no account reads under.
 `phoebis_account_cooldown_seconds`, `phoebis_account_overage_in_use`, `phoebis_keepalive_agents`, and
 `phoebis_pins_active` are the four routing gauges; each is computed fresh from the router's own snapshot on every
 scrape rather than accumulated between them.
+`phoebis_ledger_queued` reads the records waiting in the ledger's writer channel at the scrape, and
+`phoebis_ledger_behind_refusals_total` counts the requests refused while that channel was at least half full
+([run the container](installation.md#run-the-container)).
 
 ## The live feed
 

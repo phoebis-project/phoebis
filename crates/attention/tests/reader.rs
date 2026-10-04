@@ -847,6 +847,7 @@ async fn scrape(rig: &Rig, attention: &Arc<Attention>) -> (u16, String) {
         Duration::from_secs(60),
         None,
         Some(attention.gauge_source()),
+        None,
     );
     let response = app
         .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())

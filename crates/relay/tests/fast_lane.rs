@@ -10,7 +10,7 @@ use axum::body::Body;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_bus::Bus;
+use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_routing::{CreditsState, Report};
 use phoebis_store::CooldownRow;
@@ -72,7 +72,7 @@ async fn a_fast_429_on_the_first_account_walks_to_the_sibling_and_migrates_the_p
         json_429_fast_rate_limit(None, Some(("1060", "1090"))),
     );
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],

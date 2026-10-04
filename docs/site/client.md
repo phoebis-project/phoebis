@@ -265,6 +265,10 @@ error code `invalid_body` and the message `the request body is not valid gzip`. 
 its body is read with `415` `invalid_request_error`, the error code `unsupported_content_encoding` and the message
 `the request body's content-encoding is not supported; send gzip or identity`.
 
+While the router's ledger is behind, its writer channel at least half full, a request is refused after its body is read
+and before any account is chosen with `503` `api_error`, the error code `ledger_behind`, the message `the router is not
+accepting requests right now` and `Retry-After: 5`.
+
 ### How a request is identified
 
 A conversation is identified by the `x-claude-code-session-id` header.

@@ -12,7 +12,7 @@ use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_bus::{Bus, Event};
+use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_relay::{Limits, UpstreamGzip};
 use phoebis_store::AccountKind;
@@ -328,7 +328,7 @@ async fn concurrent_gzip_bodies_against_an_exhausted_budget_are_refused_before_a
     }))
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus_limits(
         &up,
         &[account()],
@@ -415,7 +415,7 @@ async fn a_body_that_inflates_past_the_bound_is_refused_413_with_no_upstream_att
 async fn an_unsupported_request_encoding_is_refused_415_before_its_body_is_read() {
     let up = FakeUpstream::start(messages(json_200())).await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus_limits(
         &up,
         &[account()],

@@ -55,8 +55,8 @@ pub use hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
 pub use identity::{identify, RequestIdentity};
 pub use memory::{MemoryKey, Previous};
 pub use messages::{
-    new_request_id, router, Limits, Probe, ReadinessSource, Relay, RelayOutcome, ServedUnder,
-    MEMORY_FLUSH_INTERVAL,
+    new_request_id, router, Accounting, AccountingSource, Limits, Probe, ReadinessSource, Relay,
+    RelayOutcome, ServedUnder, MEMORY_FLUSH_INTERVAL,
 };
 pub use portability::is_portable;
 pub use ratelimit::{
@@ -93,6 +93,8 @@ pub enum RelayError {
     ClientDrift { kind: &'static str },
     #[error("request body names a model the relay will not repeat")]
     InvalidModel,
+    #[error("the router is not accepting requests right now")]
+    LedgerBehind,
     #[error("request body has no model")]
     NoModel,
     #[error("request body is not a JSON object")]

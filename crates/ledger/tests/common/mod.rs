@@ -15,7 +15,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
-use phoebis_relay::{router, CatalogService, Limits, Relay, UpstreamGzip};
+use phoebis_relay::{router, Accounting, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
@@ -335,7 +335,13 @@ pub async fn harness_on(
             limits,
             catalog,
         )
-        .with_bus(bus.clone()),
+        .with_bus(bus.clone())
+        .with_accounting({
+            let ledger = ledger.clone();
+            Arc::new(move || Accounting {
+                behind: ledger.admission().behind,
+            })
+        }),
     );
     Harness {
         app: router(relay.clone()),

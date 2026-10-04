@@ -7,7 +7,7 @@ use axum::http::Request;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
-use phoebis_bus::{Bus, Event, Fork};
+use phoebis_bus::{Bus, Delivery, Event, Fork};
 use serde_json::{json, Value};
 use tower::ServiceExt;
 
@@ -78,7 +78,7 @@ fn a_400() -> Respond {
 /// without repeating the wiring.
 async fn setup(up: &FakeUpstream, accounts: &[TestAccount]) -> (Harness, phoebis_bus::Subscriber) {
     let bus = Bus::new();
-    let sub = bus.subscribe("test");
+    let sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(up, accounts, PoolSpec::default(), bus).await;
     (h, sub)
 }

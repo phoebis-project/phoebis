@@ -9,7 +9,7 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::{stays_for_async, FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_bus::{Bus, Event, Outcome};
+use phoebis_bus::{Bus, Delivery, Event, Outcome};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_routing::{
     lane_key, resolve, ClientClass, RouterEvent, SelectRequest, SelectResult, SelectionTrace,
@@ -594,7 +594,7 @@ async fn a_marked_accounts_pin_ends_at_the_failovers_selection_and_the_sibling_t
     up.add_credential_rule(KEYED_A, "/v1/messages", json(401, INVALID_KEY));
     up.add_credential_rule(KEYED_B, "/v1/messages", json_200());
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[api_key("a", KEYED_A, 0), api_key("b", KEYED_B, 1)],
@@ -866,7 +866,7 @@ async fn a_stale_keys_refusal_answers_admissions_401(recreated: bool) {
         Respond::Gated(Box::new(json_429_unified(4_600, "five_hour"))),
     );
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
@@ -984,7 +984,7 @@ async fn a_stale_model_refusal_after_an_attempt_still_reads_rejected() {
         Respond::Gated(Box::new(json_429_unified(4_600, "five_hour"))),
     );
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let app = h.app.clone();
     let pending =

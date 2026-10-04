@@ -113,10 +113,12 @@ container's own environment and then asks the proxy listener whether the router 
 it refuses, an unset secret variable, or a router loop, ledger consumer or store that died therefore reads as
 `unhealthy` rather than as a passing check, with the reason in `docker inspect`.
 
-A ledger writer that stops draining leaves every request that publishes a fact waiting for room in its queue,
-which over time fills the proxy listener's connection slots with requests that never finish. `phoebis health`
-connects to that same listener, so it queues behind them too, and the container reads `unhealthy`; a ledger consumer
-that stopped outright reads `unhealthy` through the readiness answer itself.
+A ledger writer that stops draining fills its queue. Once the queue is half full (2,048 of 4,096 records) the router
+refuses new inference, token-count and keepalive probe requests with its own 503 `ledger_behind` and `Retry-After: 5`
+rather than accepting requests it cannot record, so the proxy listener's connection slots stay free and
+`phoebis health` keeps answering; a ledger consumer that stopped outright reads `unhealthy` through the readiness
+answer itself. A request refused while the queue is that full has its row recorded only if the ledger's bus queue
+still has room; one it had none for counts under `phoebis_bus_dropped_total{subscriber="ledger"}`.
 
 The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone,
 so it is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
@@ -528,7 +530,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Header read timeout | 30 seconds for a connection to send its request head, on all three listeners. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
-| Ledger channel | 4,096 records; a request waits for room, an event or sample past it drops as a `ledger_gap`. |
+| Ledger channel | 4,096 records; `ledger_behind` at 2,048 queued; an event or sample past it drops as a `ledger_gap`. |
 | Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |

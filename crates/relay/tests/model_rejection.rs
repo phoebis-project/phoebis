@@ -6,7 +6,7 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_bus::{Bus, Event};
+use phoebis_bus::{Bus, Delivery, Event};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -100,7 +100,7 @@ async fn a_rejection_head_publishes_the_cooldown_reason_on_the_bus() {
     .await;
     up.add_credential_rule(A, "/v1/messages", json_404_model("claude-sonnet-4-5"));
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],

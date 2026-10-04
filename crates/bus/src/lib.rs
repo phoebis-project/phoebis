@@ -1,5 +1,6 @@
-//! The in-process observation bus: bounded per-subscriber queues the relay publishes into without ever
-//! waiting, so a slow consumer loses events rather than slowing a client stream.
+//! The in-process observation bus: bounded per-subscriber queues the relay publishes into, never waiting on a
+//! chunk and waiting on a fact for the durable subscriber alone, so a slow best-effort consumer loses events
+//! rather than slowing a client stream.
 
 mod event;
 
@@ -39,8 +40,19 @@ pub struct Subscriber {
 /// One subscriber's name beside the counters it shares with the bus.
 type NamedStats = (&'static str, Arc<SubscriberStats>);
 
+/// How a fact reaches a subscriber. The ledger is durable: a request's four facts wait for its queue, or the row
+/// for the request can never be written. Every other consumer is best-effort: a fact it has no room for is
+/// counted and dropped as a chunk is, and the next event of the same subject re-raises whatever it missed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Delivery {
+    BestEffort,
+    Durable,
+}
+
+#[derive(Clone)]
 struct Slot {
     name: &'static str,
+    delivery: Delivery,
     events: mpsc::Sender<Event>,
     stats: Arc<SubscriberStats>,
 }
@@ -58,7 +70,7 @@ impl Bus {
         Bus::default()
     }
 
-    pub fn subscribe(&self, name: &'static str) -> Subscriber {
+    pub fn subscribe(&self, name: &'static str, delivery: Delivery) -> Subscriber {
         let (events_tx, events) = mpsc::channel(QUEUE_DEPTH);
         let stats = Arc::new(SubscriberStats::default());
         self.counters
@@ -67,6 +79,7 @@ impl Bus {
             .push((name, stats.clone()));
         self.slots.lock().expect(LOCK_POISONED).push(Slot {
             name,
+            delivery,
             events: events_tx,
             stats: stats.clone(),
         });
@@ -97,21 +110,28 @@ impl Bus {
         self.counters.lock().expect(LOCK_POISONED).clone()
     }
 
-    /// Waits for capacity: the four facts a request is accounted by must all land, or the row for it can
-    /// never be written. A chunk keeps `publish`, since a stream may outrun a consumer and a lost chunk is
-    /// recorded as a truncated capture rather than a lost request.
+    /// Waits for capacity on a durable slot: the four facts a request is accounted by must all land there, or
+    /// the row for it can never be written. A best-effort slot takes the fact as `publish` takes a chunk, so
+    /// only a durable consumer can hold the relay at a fact. A chunk keeps `publish`, since a stream may
+    /// outrun a consumer and a lost chunk is recorded as a truncated capture rather than a lost request.
     pub async fn publish_fact(&self, event: Event) {
-        let senders: Vec<(&'static str, mpsc::Sender<Event>)> = self
-            .slots
-            .lock()
-            .expect(LOCK_POISONED)
-            .iter()
-            .map(|slot| (slot.name, slot.events.clone()))
-            .collect();
+        // Cloned out of the lock, so no await holds it.
+        let slots: Vec<Slot> = self.slots.lock().expect(LOCK_POISONED).clone();
         let mut closed = Vec::new();
-        for (name, sender) in senders {
-            if sender.send(event.clone()).await.is_err() {
-                closed.push(name);
+        for slot in slots {
+            let gone = match slot.delivery {
+                Delivery::Durable => slot.events.send(event.clone()).await.is_err(),
+                Delivery::BestEffort => match slot.events.try_send(event.clone()) {
+                    Ok(()) => false,
+                    Err(mpsc::error::TrySendError::Full(_)) => {
+                        slot.stats.dropped.fetch_add(1, Ordering::Relaxed);
+                        false
+                    }
+                    Err(mpsc::error::TrySendError::Closed(_)) => true,
+                },
+            };
+            if gone {
+                closed.push(slot.name);
             }
         }
         if !closed.is_empty() {
@@ -195,8 +215,8 @@ mod tests {
     #[tokio::test]
     async fn a_full_queue_drops_and_counts_without_holding_the_relay() {
         let bus = Bus::new();
-        let mut reader = bus.subscribe("reader");
-        let sleeper = bus.subscribe("sleeper");
+        let mut reader = bus.subscribe("reader", Delivery::Durable);
+        let sleeper = bus.subscribe("sleeper", Delivery::Durable);
         let started = std::time::Instant::now();
         for i in 0..QUEUE_DEPTH {
             bus.publish(observed(&format!("r{i}")));
@@ -231,7 +251,7 @@ mod tests {
     #[tokio::test]
     async fn a_fact_waits_for_a_full_queue_and_a_chunk_is_dropped_at_it() {
         let bus = Bus::new();
-        let mut reader = bus.subscribe("reader");
+        let mut reader = bus.subscribe("reader", Delivery::Durable);
         for i in 0..QUEUE_DEPTH {
             bus.publish(observed(&format!("r{i}")));
         }
@@ -258,10 +278,45 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_best_effort_subscriber_that_never_reads_loses_a_fact_while_the_durable_fact_waits() {
+        let bus = Bus::new();
+        let sleeper = bus.subscribe("sleeper", Delivery::BestEffort);
+        let mut durable = bus.subscribe("durable", Delivery::Durable);
+        for i in 0..QUEUE_DEPTH {
+            bus.publish_fact(observed(&format!("r{i}"))).await;
+        }
+        // The sleeper's queue is full: one more fact is counted against it and dropped, and the durable
+        // subscriber's copy waits until it reads.
+        let pending = tokio::spawn({
+            let bus = bus.clone();
+            async move { bus.publish_fact(observed("r_fact")).await }
+        });
+        // Slots are walked in subscribe order, so the sleeper's drop is counted before the durable send waits;
+        // the test yields until it reads, bounded, and sleeps nothing.
+        tokio::time::timeout(Duration::from_secs(1), async {
+            while sleeper.stats.dropped.load(Ordering::SeqCst) == 0 {
+                tokio::task::yield_now().await;
+            }
+        })
+        .await
+        .unwrap();
+        assert_eq!(sleeper.stats.dropped.load(Ordering::SeqCst), 1);
+        assert!(
+            !pending.is_finished(),
+            "the durable slot holds the publisher"
+        );
+        durable.events.recv().await.unwrap();
+        tokio::time::timeout(Duration::from_secs(1), pending)
+            .await
+            .unwrap()
+            .unwrap();
+    }
+
+    #[tokio::test]
     async fn a_subscriber_that_went_away_is_forgotten_and_a_panic_is_counted() {
         let bus = Bus::new();
-        let mut live = bus.subscribe("live");
-        let gone = bus.subscribe("gone");
+        let mut live = bus.subscribe("live", Delivery::Durable);
+        let gone = bus.subscribe("gone", Delivery::Durable);
         let stats = gone.stats.clone();
         drop(gone);
         bus.publish(observed("r1"));
@@ -288,7 +343,7 @@ mod tests {
         );
         assert_eq!(bus.stats().len(), 2);
 
-        let panicking = bus.subscribe("panicking");
+        let panicking = bus.subscribe("panicking", Delivery::Durable);
         let stats = panicking.stats.clone();
         let handle = spawn_subscriber(panicking, |mut s| async move {
             let _ = s.events.recv().await;
@@ -310,7 +365,7 @@ mod tests {
     #[tokio::test]
     async fn a_panicked_subscribers_counters_outlive_its_queue() {
         let bus = Bus::new();
-        let panicking = bus.subscribe("panicking");
+        let panicking = bus.subscribe("panicking", Delivery::Durable);
         let handle = spawn_subscriber(panicking, |mut s| async move {
             let _ = s.events.recv().await;
             panic!("subscriber bug");

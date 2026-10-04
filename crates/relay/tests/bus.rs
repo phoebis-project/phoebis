@@ -7,7 +7,7 @@ use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{
-    AttemptOutcome, Bus, ClientFacts, Event, Fork, Outcome, Phase, ResponseChunk,
+    AttemptOutcome, Bus, ClientFacts, Delivery, Event, Fork, Outcome, Phase, ResponseChunk,
     Subscriber,
 };
 use phoebis_relay::Limits;
@@ -101,7 +101,7 @@ async fn a_streamed_request_publishes_observed_selected_head_chunks_and_complete
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let resp = h.app.clone().oneshot(stream_request(KEY)).await.unwrap();
     assert_eq!(resp.status(), 200);
@@ -231,7 +231,7 @@ async fn a_capture_window_past_the_running_cap_is_published_at_the_cap() {
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus_limits(
         &up,
         &[oauth("a", A, 0)],
@@ -281,7 +281,7 @@ async fn a_failover_publishes_a_head_per_attempt_and_the_completion_names_the_se
     .await;
     up.add_credential_rule(A, "/v1/messages", json_429_unified(4_600, "five_hour"));
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
@@ -380,7 +380,7 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_on
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
     set_header(&mut req, "accept-encoding", "gzip");
@@ -445,7 +445,7 @@ async fn a_gzipped_json_200_the_caller_accepts_as_is_yields_usage_and_so_does_on
     // The same answer on a router whose request bound it outgrows: the client still gets every byte. The bound
     // sits above the 112 KiB fixture request, which a lower one would refuse before any answer.
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let bounded = harness_with_bus_limits(
         &up,
         &[oauth("a", A, 0)],
@@ -504,7 +504,7 @@ async fn after_the_head_an_sse_error_fails_a_lost_upstream_reads_incomplete_and_
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let resp = h.app.clone().oneshot(stream_request(KEY)).await.unwrap();
     assert_eq!(
@@ -597,7 +597,7 @@ async fn refused_and_exhausted_requests_publish_an_observed_event_and_their_comp
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0)],
@@ -692,7 +692,7 @@ async fn the_observed_event_carries_the_client_class_the_hint_headers_and_the_tu
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut with_line: serde_json::Value =
         serde_json::from_slice(fixture_body(BodyFixture::Oauth)).unwrap();
@@ -762,7 +762,7 @@ async fn the_observed_event_carries_no_fork_for_a_sessions_own_turn() {
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[api_key("a", A, 0)], PoolSpec::default(), bus).await;
     let plain_body =
         br#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}]}"#;
@@ -793,7 +793,7 @@ async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
     set_header(&mut req, "x-claude-code-request-class", "main");
@@ -914,7 +914,7 @@ async fn a_rejection_body_that_cannot_be_read_still_completes_the_request() {
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus_limits(
         &up,
         &[oauth("a", A, 0)],
@@ -986,7 +986,7 @@ async fn a_subscriber_that_never_reads_drops_chunks_but_the_completion_waits_for
     }])
     .await;
     let bus = Bus::new();
-    let mut sleeper = bus.subscribe("sleeper");
+    let mut sleeper = bus.subscribe("sleeper", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut request = tokio::spawn(async move {
         let resp = h.app.clone().oneshot(stream_request(KEY)).await.unwrap();
@@ -1059,7 +1059,7 @@ async fn a_buffered_body_the_bus_cannot_decode_publishes_no_chunk_and_no_usage()
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     // A non-portable request keeps its account, so the rejection is forwarded instead of failing over.
     let mut req = non_portable_request(KEY, "s1");
@@ -1120,7 +1120,7 @@ async fn a_stream_the_bus_cannot_decode_publishes_no_chunk_and_still_completes()
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut req = stream_request(KEY);
     set_header(&mut req, "accept-encoding", "gzip");
@@ -1184,7 +1184,7 @@ async fn a_pass_through_chunk_past_the_decoded_bound_reaches_the_caller_and_leav
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
     set_header(&mut req, "accept-encoding", "gzip");
@@ -1226,7 +1226,7 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     // No credential header at all: the engine holds the key's id, never its secret.
     let mut req = request_for(KEY, "claude-sonnet-4-5", "s1");
@@ -1440,7 +1440,7 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[

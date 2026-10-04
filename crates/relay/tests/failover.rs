@@ -4,7 +4,7 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_bus::Bus;
+use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_store::AccountState;
 use tower::ServiceExt;
@@ -329,7 +329,7 @@ async fn the_wire_submission_index_ends_the_request_at_255_with_the_exhaustion_a
         })
         .collect();
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &accounts, PoolSpec::default(), bus).await;
     let resp = h
         .app
@@ -487,7 +487,7 @@ async fn a_rejection_at_the_pools_end_records_a_rejected_request_and_an_upstream
     .await;
     up.add_credential_rule(A, "/v1/messages", json_404_model("claude-sonnet-4-5"));
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let resp = h
         .app
@@ -1242,7 +1242,7 @@ async fn a_refusal_that_rotated_nothing_is_retried_once_after_the_backoff_and_th
 async fn an_authentication_failure_as_the_last_word_reads_exhausted_with_auth_failed_attempts() {
     let up = an_expired_token_and_a_token_endpoint_down().await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
     step_to_backoff(&h, &up, "a").await;
@@ -1618,7 +1618,7 @@ async fn a_short_refusal_waited_out_on_one_account_leaves_the_floor_to_the_next(
 async fn a_hold_the_accounts_removal_cancels_keeps_one_head_and_completes_canceled() {
     let up = an_expired_token_and_a_token_endpoint_down().await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let inflight = spawned(&h, request_for(KEY, "claude-sonnet-4-5", "s1"));
     wait_for(Duration::from_secs(5), || h.manager.backoff_until("a")).await;
@@ -1670,7 +1670,7 @@ async fn a_403_authentication_error_reads_auth_failed_on_the_attempt_row() {
         },
     );
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[api_key("a", KEYED, 0)], PoolSpec::default(), bus).await;
     let resp = h
         .app
@@ -2169,7 +2169,7 @@ async fn a_drifted_stamp_is_refused_at_admission_before_any_account_is_selected(
         }])
         .await;
         let bus = Bus::new();
-        let mut sub = bus.subscribe("test");
+        let mut sub = bus.subscribe("test", Delivery::Durable);
         let h = harness_with_bus(
             &up,
             &[oauth("a", A, 0), oauth("b", B, 1)],

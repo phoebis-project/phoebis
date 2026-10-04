@@ -1,0 +1,276 @@
+//! What the relay refuses at admission on the router's own standing: the ledger behind its writer.
+
+mod common;
+
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+use std::time::Duration;
+
+use axum::body::Body;
+use axum::http::Request;
+use bytes::Bytes;
+use common::*;
+use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
+use phoebis_bus::{Bus, Delivery, Event, ResponseChunk, QUEUE_DEPTH};
+use phoebis_relay::{Accounting, AccountingSource, Limits, Probe};
+use tower::ServiceExt;
+
+const A: &str = "sk-ant-oat01-AAAA";
+
+/// A Claude Code caller's body, which an OAuth-only pool serves: the session rides in `metadata.user_id`.
+const BODY: &str = r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#;
+
+fn ok_rule() -> Rule {
+    Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"msg_1","type":"message","content":[],"usage":{"input_tokens":1,"output_tokens":1}}"#
+                .to_vec(),
+        },
+    }
+}
+
+/// Ahead of `ok_rule` in a test that serves both, since the count path matches that prefix too.
+fn count_rule() -> Rule {
+    Rule {
+        path_prefix: "/v1/messages/count_tokens".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"input_tokens":7}"#.to_vec(),
+        },
+    }
+}
+
+/// A JSON `POST` of `BODY` to `path` under the router key, from the Claude Code CLI's user agent, with its length
+/// declared as a socket would carry it.
+fn request_to(path: &str) -> Request<Body> {
+    Request::post(path)
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json")
+        .header("content-length", BODY.len())
+        .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .body(Body::from(BODY))
+        .unwrap()
+}
+
+async fn text_of(response: axum::response::Response) -> String {
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    String::from_utf8_lossy(&bytes).into_owned()
+}
+
+fn probe_of(h: &Harness) -> Probe {
+    Probe {
+        key_id: "desktop".into(),
+        key_generation: h.store.api_key("desktop").unwrap().unwrap().created_at,
+    }
+}
+
+fn reading(behind: &Arc<AtomicBool>) -> AccountingSource {
+    let behind = behind.clone();
+    Arc::new(move || Accounting {
+        behind: behind.load(Ordering::SeqCst),
+    })
+}
+
+#[tokio::test]
+async fn an_inference_a_count_and_a_probe_are_refused_with_ledger_behind_while_the_ledger_is_behind(
+) {
+    let up = FakeUpstream::start(vec![count_rule(), ok_rule()]).await;
+    let behind = Arc::new(AtomicBool::new(true));
+    let h = harness_with_accounting(&up, &[oauth("a", A, 0)], reading(&behind)).await;
+    for path in ["/v1/messages", "/v1/messages/count_tokens"] {
+        let response = h.app.clone().oneshot(request_to(path)).await.unwrap();
+        assert_eq!(response.status(), 503, "{path}");
+        assert_eq!(response.headers()["retry-after"], "5");
+        assert_eq!(response.headers()["x-phoebis-error-code"], "ledger_behind");
+        let text = text_of(response).await;
+        assert!(
+            text.contains("not accepting requests right now") && !text.contains("\"a\""),
+            "{text}"
+        );
+    }
+    let probed = h
+        .relay
+        .probe(probe_of(&h), request_to("/v1/messages"))
+        .await;
+    assert_eq!(
+        probed.status(),
+        503,
+        "a probe is never paid for while the ledger is behind"
+    );
+    assert_eq!(probed.headers()["x-phoebis-error-code"], "ledger_behind");
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    behind.store(false, Ordering::SeqCst);
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_to("/v1/messages"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "{}", text_of(response).await);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_relay_built_without_an_accounting_reading_admits_every_request() {
+    let up = FakeUpstream::start(vec![count_rule(), ok_rule()]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    for path in ["/v1/messages", "/v1/messages/count_tokens"] {
+        let response = h.app.clone().oneshot(request_to(path)).await.unwrap();
+        assert_eq!(
+            response.status(),
+            200,
+            "{path}: {}",
+            text_of(response).await
+        );
+    }
+    assert_eq!(up.requests().len(), 2);
+    up.shutdown().await;
+}
+
+/// Each refusal the relay answers before any dial, with the request that draws it and the status and code it
+/// answers.
+fn refusals() -> Vec<(&'static str, Request<Body>, u16, &'static str)> {
+    let with = |mut request: Request<Body>, name: &'static str, value: &str| {
+        request.headers_mut().insert(name, value.parse().unwrap());
+        request
+    };
+    let without = |mut request: Request<Body>, name: &'static str| {
+        request.headers_mut().remove(name);
+        request
+    };
+    vec![
+        (
+            "inference",
+            request_to("/v1/messages"),
+            503,
+            "ledger_behind",
+        ),
+        (
+            "count",
+            request_to("/v1/messages/count_tokens"),
+            503,
+            "ledger_behind",
+        ),
+        (
+            "unknown key",
+            with(
+                request_to("/v1/messages"),
+                "authorization",
+                "Bearer phoebis-not-a-key",
+            ),
+            401,
+            "auth_unknown",
+        ),
+        (
+            "missing key",
+            without(request_to("/v1/messages"), "authorization"),
+            401,
+            "auth_missing",
+        ),
+        (
+            "unsupported coding",
+            with(request_to("/v1/messages"), "content-encoding", "br"),
+            415,
+            "unsupported_content_encoding",
+        ),
+        (
+            "past the per-body bound",
+            with(request_to("/v1/messages"), "content-length", "40000000"),
+            413,
+            "request_too_large",
+        ),
+        (
+            "past the byte budget",
+            with(request_to("/v1/messages"), "content-length", "2000000"),
+            503,
+            "body_budget_exhausted",
+        ),
+        (
+            "repeated member",
+            {
+                let body = BODY.replacen(
+                    r#""max_tokens":8"#,
+                    r#""max_tokens":8,"model":"claude-opus-5""#,
+                    1,
+                );
+                Request::post("/v1/messages")
+                    .header("authorization", format!("Bearer {KEY}"))
+                    .header("content-type", "application/json")
+                    .header("content-length", body.len())
+                    .header("user-agent", CLAUDE_CLI_USER_AGENT)
+                    .body(Body::from(body))
+                    .unwrap()
+            },
+            503,
+            "ledger_behind",
+        ),
+    ]
+}
+
+/// A writer that stopped draining fills the bus queue behind its channel; every refusal answered before a dial
+/// publishes its own facts best-effort then, so none of them holds its connection on the full queue.
+#[tokio::test]
+async fn every_refusal_answers_within_the_deadline_while_the_writer_channel_and_the_bus_queue_are_full(
+) {
+    let up = FakeUpstream::start(vec![count_rule(), ok_rule()]).await;
+    let bus = Bus::new();
+    let sleeper = bus.subscribe("ledger", Delivery::Durable);
+    for index in 0..QUEUE_DEPTH {
+        bus.publish_fact(Event::ResponseChunk(ResponseChunk {
+            request_id: "filler".into(),
+            attempt: 1,
+            index: index as u32,
+            body: Bytes::from_static(b"x"),
+            phase: None,
+        }))
+        .await;
+    }
+    let behind = Arc::new(AtomicBool::new(true));
+    let h = harness_with_bus_and_accounting(
+        &up,
+        &[oauth("a", A, 0)],
+        bus,
+        Limits {
+            body_budget_bytes: 1 << 20,
+            ..default_limits()
+        },
+        reading(&behind),
+    )
+    .await;
+    const ROUNDS: usize = 50;
+    let mut answered = 0u64;
+    for _ in 0..ROUNDS {
+        for (name, request, status, code) in refusals() {
+            let response =
+                tokio::time::timeout(Duration::from_secs(1), h.app.clone().oneshot(request))
+                    .await
+                    .unwrap_or_else(|_| panic!("the {name} refusal waited on the full queue"))
+                    .unwrap();
+            assert_eq!(response.status(), status, "{name}");
+            assert_eq!(response.headers()["x-phoebis-error-code"], code, "{name}");
+            answered += 1;
+        }
+        let probed = tokio::time::timeout(
+            Duration::from_secs(1),
+            h.relay.probe(probe_of(&h), request_to("/v1/messages")),
+        )
+        .await
+        .expect("the probe's refusal waited on the full queue");
+        assert_eq!(probed.status(), 503);
+        assert_eq!(probed.headers()["x-phoebis-error-code"], "ledger_behind");
+        answered += 1;
+    }
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    // An observation and a completion per refusal, both refused by the full queue and counted.
+    assert!(
+        sleeper.stats.dropped.load(Ordering::SeqCst) >= 2 * answered,
+        "{} dropped for {answered} refusals",
+        sleeper.stats.dropped.load(Ordering::SeqCst)
+    );
+    up.shutdown().await;
+}

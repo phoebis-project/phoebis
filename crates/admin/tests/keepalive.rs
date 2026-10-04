@@ -473,6 +473,7 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             .collect::<Vec<_>>(),
         [
             "agents",
+            "bus_gaps",
             "cost_today",
             "expired_between_turns_24h",
             "net_saved_7d_usd",
@@ -482,10 +483,11 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
     assert_eq!(
         (
             overview["agents"]["busy"].as_u64(),
+            overview["bus_gaps"].as_u64(),
             overview["cost_today"][0]["pool_id"].as_str(),
             overview["cost_today"][0]["cap_usd"].is_null()
         ),
-        (Some(1), Some("main"), true)
+        (Some(1), Some(0), Some("main"), true)
     );
     // Release discards the recipes; with no pin the router releases nothing, and the route still answers 204.
     let released = post(

@@ -19,7 +19,8 @@ use phoebis_profile::{
     fixtures::{body, inference_head, BodyFixture, FixtureKind},
 };
 use phoebis_relay::{
-    router, CatalogService, Limits, OriginalHead, Relay, RelayOutcome, UpstreamGzip,
+    router, AccountingSource, CatalogService, Limits, OriginalHead, Relay, RelayOutcome,
+    UpstreamGzip,
 };
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
@@ -321,6 +322,7 @@ pub async fn harness_with_router_config(
         None,
         None,
         config,
+        None,
     )
     .await
 }
@@ -385,6 +387,7 @@ pub async fn harness_on(
         None,
         None,
         RouterConfig::default(),
+        None,
     )
     .await
 }
@@ -408,6 +411,7 @@ pub async fn harness_on_with_bus(
         None,
         None,
         RouterConfig::default(),
+        None,
     )
     .await
 }
@@ -432,6 +436,7 @@ pub async fn harness_with_memory_cap(
         Some(cap),
         None,
         RouterConfig::default(),
+        None,
     )
     .await
 }
@@ -455,6 +460,7 @@ pub async fn harness_with_signed_placeholder(
         None,
         None,
         RouterConfig::default(),
+        None,
     )
     .await
 }
@@ -489,6 +495,56 @@ pub async fn harness_with_bus_limits(
         None,
         None,
         RouterConfig::default(),
+        None,
+    )
+    .await
+}
+
+/// The default harness with the ledger's standing read through `source`, for the admission refusals.
+pub async fn harness_with_accounting(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    source: AccountingSource,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        PoolSpec::default(),
+        default_limits(),
+        None,
+        false,
+        None,
+        None,
+        RouterConfig::default(),
+        Some(source),
+    )
+    .await
+}
+
+/// `harness_with_bus_limits` with the ledger's standing read through `source`, for a case that reads what the
+/// admission refusals publish.
+pub async fn harness_with_bus_and_accounting(
+    up: &FakeUpstream,
+    accounts: &[TestAccount],
+    bus: Bus,
+    limits: Limits,
+    source: AccountingSource,
+) -> Harness {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    build(
+        store,
+        up,
+        accounts,
+        PoolSpec::default(),
+        limits,
+        Some(bus),
+        false,
+        None,
+        None,
+        RouterConfig::default(),
+        Some(source),
     )
     .await
 }
@@ -513,6 +569,7 @@ pub async fn harness_with_catalog(
         None,
         Some(catalog_up),
         RouterConfig::default(),
+        None,
     )
     .await
 }
@@ -539,6 +596,7 @@ pub async fn harness_with_bus_and_catalog(
         None,
         Some(catalog_up),
         RouterConfig::default(),
+        None,
     )
     .await
 }
@@ -563,6 +621,7 @@ pub async fn harness_with_store_and_catalog(
         None,
         Some(catalog_up),
         RouterConfig::default(),
+        None,
     )
     .await
 }
@@ -579,6 +638,7 @@ async fn build(
     memory_cap: Option<usize>,
     catalog_up: Option<FakeUpstream>,
     router_config: RouterConfig,
+    accounting: Option<AccountingSource>,
 ) -> Harness {
     let p = claude_code_2_1_269_linux_x64();
     if store.accounts().unwrap().is_empty() {
@@ -800,6 +860,10 @@ async fn build(
     let relay = relay.with_memory_store(store.clone(), Duration::from_secs(30 * 86_400));
     let relay = match bus {
         Some(bus) => relay.with_bus(bus),
+        None => relay,
+    };
+    let relay = match accounting {
+        Some(source) => relay.with_accounting(source),
         None => relay,
     };
     let relay = Arc::new(relay);

@@ -7219,7 +7219,7 @@ m.unmount();
     name: '/sessions a failed overview read draws dashes, could not load and one Try again',
     ok:
       page.container.querySelector('.stat-grid .skeleton') === null &&
-      fed.length === 5 &&
+      fed.length === 6 &&
       fed.every((t) => t.value === '-' && t.note === 'could not load' && t.title === 'ledger locked') &&
       sessionsTile?.value !== '-' &&
       companions > 0 &&
@@ -7238,6 +7238,31 @@ m.unmount();
     missing: [JSON.stringify(tiles())],
   });
   page.unmount();
+}
+{
+  // A gap discarded every observation the keepalive engine still had open, so any count warns.
+  const read = (page) => {
+    const tile = [...page.container.querySelectorAll('.stat-grid > .stat')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Bus gaps');
+    const value = tile?.querySelector('.stat__value');
+    return { note: tile?.querySelector(':scope > .stat__note')?.textContent?.trim() ?? '', value: value?.textContent?.trim() ?? 'absent', warn: value?.classList.contains('is-warning') === true };
+  };
+  const overview = await api.getKeepaliveOverview();
+  const quietPage = await mount('/sessions');
+  await quietPage.settle();
+  const quiet = read(quietPage);
+  quietPage.unmount();
+  const { getKeepaliveOverview } = api;
+  api.getKeepaliveOverview = async () => ({ ...overview, busGaps: 2 });
+  const gappedPage = await mount('/sessions');
+  await gappedPage.settle();
+  const gapped = read(gappedPage);
+  gappedPage.unmount();
+  api.getKeepaliveOverview = getKeepaliveOverview;
+  results.push({
+    name: '/sessions the bus gaps tile reads the overview\'s count and warns once the keepalive engine missed events',
+    ok: overview.busGaps === 0 && quiet.value === '0' && !quiet.warn && quiet.note === 'times the keepalive engine missed bus events' && gapped.value === '2' && gapped.warn,
+    missing: [`mock ${overview.busGaps}`, JSON.stringify(quiet), JSON.stringify(gapped)],
+  });
 }
 {
   // Without the pools a session's missing recipe has no cause the page can name but the read that failed.

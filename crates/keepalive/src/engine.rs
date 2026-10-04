@@ -8,8 +8,8 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use phoebis_bus::{
-    spawn_subscriber, AccountSelected, Bus, Event as BusEvent, LifecycleSender, Outcome, Phase,
-    RequestComplete, RequestObserved, ResponseChunk, ResponseHead, SessionLifecycle,
+    spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, LifecycleSender, Outcome,
+    Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead, SessionLifecycle,
 };
 use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
@@ -916,7 +916,11 @@ pub struct AgentStatus {
 /// counts it; a rise in that counter means events this task never saw, so every observation still open is
 /// discarded before the next event is applied.
 pub fn spawn_observer(engine: Arc<Engine>) -> tokio::task::JoinHandle<()> {
-    let subscriber = engine.parts.bus.subscribe("keepalive");
+    // Best-effort: a drop reads as a gap below, which discards the observations it could have misled.
+    let subscriber = engine
+        .parts
+        .bus
+        .subscribe("keepalive", Delivery::BestEffort);
     spawn_subscriber(subscriber, move |mut subscriber| async move {
         let mut seen_dropped = 0u64;
         while let Some(event) = subscriber.events.recv().await {

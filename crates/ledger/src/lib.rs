@@ -59,7 +59,10 @@ pub use rollup::{
     read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow, FAST_FUNDING,
     KEY_RANGE_PREDICATE, NO_CLASS, OVERAGE_FUNDING, PLAN_FUNDING, UNATTRIBUTED,
 };
-pub use task::{spawn, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH};
+pub use task::{
+    spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH,
+    LEDGER_BEHIND_DEPTH,
+};
 pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};
 
 #[derive(Debug, thiserror::Error)]

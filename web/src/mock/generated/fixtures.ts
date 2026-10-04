@@ -5099,6 +5099,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "idle": 0,
         "parked": 0
       },
+      "bus_gaps": 0,
       "cost_today": [
         {
           "cap_usd": 4,
@@ -8180,7 +8181,10 @@ export const FIXTURES: Record<string, Fixture> = {
         "write_failures": 0,
         "gaps": 0,
         "last_gap_at": 0,
-        "channel_depth": 4096
+        "channel_depth": 4096,
+        "queued": 0,
+        "behind": false,
+        "behind_refusals": 0
       },
       "router": {
         "command_depth": 4096,

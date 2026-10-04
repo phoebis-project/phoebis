@@ -5,7 +5,7 @@ mod reader;
 
 use std::sync::{Arc, Mutex};
 
-use phoebis_bus::{spawn_subscriber, Bus, Event};
+use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
 use phoebis_ledger::{AttentionGaugeSource, AttentionGauges};
 use phoebis_oauth::{Clock, UsageService};
 use phoebis_routing::RouterHandle;
@@ -98,7 +98,8 @@ impl AttentionHandles {
 /// The reader and its bus arm, which hands every event to `observe`. Nothing else runs: every other condition is read
 /// when a scrape or the admin route asks.
 pub fn spawn(parts: AttentionParts) -> (Arc<Attention>, AttentionHandles) {
-    let subscriber = parts.bus.subscribe("attention");
+    // Best-effort: every condition is level-triggered from the newest event, so the next one decides.
+    let subscriber = parts.bus.subscribe("attention", Delivery::BestEffort);
     let attention = Arc::new(Attention {
         clock: parts.clock,
         router: parts.router,

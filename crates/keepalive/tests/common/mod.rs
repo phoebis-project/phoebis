@@ -14,7 +14,7 @@ use axum::http::Request;
 use bytes::Bytes;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use phoebis_bus::{
-    AccountSelected, Bus, Event as BusEvent, Kind, LifecycleSender, Origin, Outcome,
+    AccountSelected, Bus, Delivery, Event as BusEvent, Kind, LifecycleSender, Origin, Outcome,
     RequestComplete, RequestObserved, RequestShape, ResponseChunk, ResponseFacts, Subscriber,
     Usage,
 };
@@ -131,7 +131,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         up.add_credential_rule(account.secret, "/v1/messages", probe_answer(2_000, 0));
     }
     let bus = Bus::new();
-    let sub = bus.subscribe("test");
+    let sub = bus.subscribe("test", Delivery::Durable);
     // Most of this suite is about a session's pin and account continuity, where a spelling resolving to a dated id
     // mid-test is not what it is testing; the cases that are about a resolution name the rules that answer one.
     let catalog_up = FakeUpstream::start(spec.catalog).await;

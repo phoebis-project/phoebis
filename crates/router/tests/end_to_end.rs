@@ -2012,9 +2012,12 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     assert_eq!(
         (
             system["ledger"]["dropped"].as_u64(),
-            system["ledger"]["written"].as_u64().map(|n| n >= 3)
+            system["ledger"]["written"].as_u64().map(|n| n >= 3),
+            system["ledger"]["queued"].as_u64().is_some(),
+            system["ledger"]["behind"].as_bool(),
+            system["ledger"]["behind_refusals"].as_u64()
         ),
-        (Some(0), Some(true))
+        (Some(0), Some(true), true, Some(false), Some(0))
     );
     let settings: serde_json::Value = client
         .get(admin("/settings"))

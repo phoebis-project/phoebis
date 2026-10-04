@@ -255,6 +255,13 @@ export function SessionsPage() {
           tone={o && o.expiredBetweenTurns24h > 0 && warmingSomewhere ? 'warning' : undefined}
           error={overviewError}
         />
+        <Tile
+          label="Bus gaps"
+          value={o ? fmtInt(o.busGaps) : null}
+          note="times the keepalive engine missed bus events"
+          tone={o && o.busGaps > 0 ? 'warning' : undefined}
+          error={overviewError}
+        />
         <Tile label="Net saved, 7d" value={o ? fmtUsd(o.netSaved7dUsd) : null} note="gross saved minus probe cost" tone={o && o.netSaved7dUsd < 0 ? 'critical' : undefined} error={overviewError} />
         <CostTile overview={o} error={overviewError} />
       </div>

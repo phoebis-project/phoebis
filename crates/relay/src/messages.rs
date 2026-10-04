@@ -212,6 +212,7 @@ pub struct Probe {
 }
 
 pub struct Relay {
+    accounting: Option<AccountingSource>,
     /// Every body task `relay_body` spawns runs under this, so a shutdown can wait for the completion a body
     /// task publishes after its connection was cut.
     bodies: TaskTracker,
@@ -242,6 +243,16 @@ pub struct Relay {
 /// the relay needs no dependency on the crate that composes them.
 pub type ReadinessSource = Arc<dyn Fn() -> Vec<&'static str> + Send + Sync>;
 
+/// The ledger's standing at admission, read on every inference, count-tokens and probe request.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Accounting {
+    pub behind: bool,
+}
+
+/// What admission reads the ledger's standing through: a closure, as `ReadinessSource` is, so the relay needs no
+/// dependency on the ledger crate.
+pub type AccountingSource = Arc<dyn Fn() -> Accounting + Send + Sync>;
+
 impl Relay {
     #[allow(clippy::too_many_arguments)]
     pub fn new(
@@ -255,6 +266,7 @@ impl Relay {
         catalog: Arc<CatalogService>,
     ) -> Relay {
         Relay {
+            accounting: None,
             bodies: TaskTracker::new(),
             body_budget: BodyBudget::new(limits.body_budget_bytes),
             body_reads: BodyReads::default(),
@@ -296,6 +308,15 @@ impl Relay {
     pub fn with_readiness(self, source: ReadinessSource) -> Relay {
         Relay {
             readiness: Some(source),
+            ..self
+        }
+    }
+
+    /// What admission reads the ledger's standing through; without it every request is admitted, which the
+    /// relay's own tests rely on.
+    pub fn with_accounting(self, source: AccountingSource) -> Relay {
+        Relay {
+            accounting: Some(source),
             ..self
         }
     }
@@ -408,6 +429,10 @@ pub(crate) struct Trace {
     /// after a hold carries it: a served attempt, a local answer on the leg, and an exhaustion that dispatched
     /// nothing, which no attempt row could record.
     held: Arc<Mutex<Option<CohortHold>>>,
+    /// Set for a request refused while the ledger is behind: its facts go out best-effort, since a writer that
+    /// stopped draining fills the bus queue behind its channel and a refusal that waited there would hold its
+    /// connection. Shared across the trace's clones, which the body task and the awaits each hold.
+    facts_best_effort: Arc<AtomicBool>,
 }
 
 impl Trace {
@@ -430,11 +455,20 @@ impl Trace {
     }
 
     /// Waits for the bus's capacity rather than dropping: a fact this request is accounted by must land, or
-    /// the row for it can never be written.
+    /// the row for it can never be written. A refusal's facts while the ledger is behind are the exception: no
+    /// money moved, so a lost one costs a row and is counted where the bus counts a drop.
     async fn publish_fact(&self, event: Event) {
         if let Some(bus) = &self.bus {
-            bus.publish_fact(event).await;
+            if self.facts_best_effort.load(Ordering::Relaxed) {
+                bus.publish(event);
+            } else {
+                bus.publish_fact(event).await;
+            }
         }
+    }
+
+    fn facts_best_effort(&self) {
+        self.facts_best_effort.store(true, Ordering::Relaxed);
     }
 
     pub(crate) fn publish_chunk(&self, chunk: ResponseChunk) {
@@ -878,6 +912,7 @@ impl Relay {
             },
             probe_generation: probe.as_ref().map(|p| p.key_generation),
             held: Arc::new(Mutex::new(None)),
+            facts_best_effort: Arc::new(AtomicBool::new(false)),
         };
         let (parts, body) = request.into_parts();
         let original = parts.extensions.get::<OriginalHead>();
@@ -892,6 +927,7 @@ impl Relay {
                 Ok(key) if key.created_at != probe.key_generation => {
                     let refusal = KeyRefusal::Replaced;
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
+                    self.ledger_standing(&trace);
                     trace
                         .observed(
                             None,
@@ -918,6 +954,7 @@ impl Relay {
                 Ok(key) => (key.clone(), Presented::Live),
                 Err(refusal) => {
                     tracing::debug!(%refusal, key = %probe.key_id, "a probe's key was refused");
+                    self.ledger_standing(&trace);
                     trace
                         .observed(
                             None,
@@ -945,6 +982,7 @@ impl Relay {
                 let presented = match presented_key(&parts.headers) {
                     Ok(presented) => presented,
                     Err(error) => {
+                        self.ledger_standing(&trace);
                         trace
                             .observed(
                                 None,
@@ -972,6 +1010,7 @@ impl Relay {
                     Ok((key, presented)) => (key.clone(), presented),
                     Err(refusal) => {
                         tracing::debug!(%refusal, "a presented key was refused");
+                        self.ledger_standing(&trace);
                         trace
                             .observed(
                                 None,
@@ -1196,6 +1235,14 @@ impl Relay {
             AutoMode::Stripped
         });
         let stream = wants_stream(&raw);
+        // Read after the body, so the refusal's row carries the request's shape, and before the first fact is
+        // published, so no probe is paid for and no request is accepted that the ledger cannot record while its
+        // writer is behind. The refusal's own facts go best-effort: the bus queue fills behind a writer that
+        // stopped draining, and a 503 that waited for it would hold the very client it is meant to release.
+        let behind = matches!(
+            trace.kind,
+            Kind::Inference | Kind::CountTokens | Kind::Probe
+        ) && self.ledger_standing(&trace);
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
         // the wire untouched and a last-wins parser upstream would act on it instead. The billing line's path
         // counts as well: the drift check and its placeholder exemption read the first `system` and the first
@@ -1211,11 +1258,15 @@ impl Relay {
             None => phoebis_cch::first_system_block_member_count(&raw, "text")
                 .map(|texts| (texts > 1).then_some(BILLING_LINE_PATH)),
         });
-        let refusal = match repeated {
-            Ok(None) => None,
-            Ok(Some(name)) => Some(RelayError::BodyShape(BodyMember::Repeated(name))),
-            Err(phoebis_cch::CchError::TooDeep(_)) => Some(RelayError::BodyTooDeep),
-            Err(error) => Some(RelayError::Cch(error)),
+        let refusal = if behind {
+            Some(RelayError::LedgerBehind)
+        } else {
+            match repeated {
+                Ok(None) => None,
+                Ok(Some(name)) => Some(RelayError::BodyShape(BodyMember::Repeated(name))),
+                Err(phoebis_cch::CchError::TooDeep(_)) => Some(RelayError::BodyTooDeep),
+                Err(error) => Some(RelayError::Cch(error)),
+            }
         };
         if let Some(error) = refusal {
             trace
@@ -3009,6 +3060,21 @@ impl Relay {
         }
     }
 
+    /// Reads the ledger's standing for a request refused or admitted before any dial, once per request, since a
+    /// `behind` reading counts a refusal. Behind, the request's own facts go best-effort: a writer that stopped
+    /// draining fills the bus queue behind its channel, and a refusal that waited there would hold its connection.
+    /// A request admitted past the reading publishes durably, so a priced record never takes that path.
+    fn ledger_standing(&self, trace: &Trace) -> bool {
+        let behind = self
+            .accounting
+            .as_ref()
+            .is_some_and(|source| source().behind);
+        if behind {
+            trace.facts_best_effort();
+        }
+        behind
+    }
+
     /// A refusal with no body to observe: decided on the head before the read, or on a read that ended without
     /// a whole body. The observation carries the client facts the head alone gives.
     #[allow(clippy::too_many_arguments)]
@@ -3022,6 +3088,7 @@ impl Relay {
         failure: Failure,
         client_version: Option<&str>,
     ) -> Response {
+        self.ledger_standing(trace);
         trace
             .observed(
                 Some(key),

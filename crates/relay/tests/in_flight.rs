@@ -11,7 +11,7 @@ use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
-use phoebis_bus::{Bus, Event};
+use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
 use phoebis_store::Failover;
 use tower::ServiceExt;
@@ -209,7 +209,7 @@ async fn a_third_request_on_an_account_at_a_cap_of_two_waits_for_a_slot_and_then
 async fn a_hold_followed_by_a_dispatch_names_the_hold_in_the_attempts_trace() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0)],
@@ -426,7 +426,7 @@ async fn completion_of(
 async fn a_hold_that_times_out_with_no_dispatch_names_its_wait_on_the_completion() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0)],
@@ -490,7 +490,7 @@ async fn a_hold_that_times_out_with_no_dispatch_names_its_wait_on_the_completion
 async fn a_request_whose_every_hold_ran_out_answers_at_cap_naming_both_waits_on_the_completion() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
@@ -964,7 +964,7 @@ async fn a_probe_takes_no_read_permit_and_no_budget() {
 async fn a_declared_body_past_the_budget_is_refused_503_before_a_byte_is_read() {
     let up = FakeUpstream::start(messages(json_200())).await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus_limits(
         &up,
         &[oauth("a", A, 0)],
@@ -1018,7 +1018,7 @@ async fn a_declared_body_past_the_budget_is_refused_503_before_a_byte_is_read() 
 async fn the_bodies_arriving_on_one_key_are_bounded_by_key_body_reads_with_retry_after_1() {
     let up = FakeUpstream::start(messages(json_200())).await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus_limits(
         &up,
         &[oauth("a", A, 0)],
@@ -1086,7 +1086,7 @@ async fn the_bodies_arriving_on_one_key_are_bounded_by_key_body_reads_with_retry
 async fn a_declared_length_past_the_per_body_bound_is_413_without_a_read() {
     let up = FakeUpstream::start(messages(json_200())).await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let (request, tx) = channel_request(Some((32 << 20) + 1));
     let refused = tokio::time::timeout(Duration::from_secs(5), h.app.clone().oneshot(request))

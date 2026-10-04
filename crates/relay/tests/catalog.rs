@@ -8,7 +8,7 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
-use phoebis_bus::{Bus, Event};
+use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_relay::{Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, NewBundle, RekeyWrite,
@@ -323,7 +323,7 @@ async fn a_spelling_is_named_by_its_dated_id_from_the_first_request_with_no_requ
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let resp = h
         .app
@@ -370,7 +370,7 @@ async fn a_dateless_id_the_listing_holds_and_a_spelling_it_lacks_both_resolve_to
     }])
     .await;
     let bus = Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     for model in ["claude-opus-5", "claude-nope"] {
         let resp = h

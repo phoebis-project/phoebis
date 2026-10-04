@@ -193,6 +193,7 @@ export const emptyStore = (): boolean => {
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
+  busGaps: 0,
   costToday: [],
   expiredBetweenTurns24h: 0,
   netSaved7dUsd: 0,

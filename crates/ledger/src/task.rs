@@ -5,7 +5,7 @@ use std::sync::atomic::{AtomicI64, AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
+use phoebis_bus::{spawn_subscriber, Bus, Delivery, Subscriber};
 use phoebis_oauth::Clock;
 use phoebis_routing::{RegistrySnapshot, Report, RouterHandle};
 use phoebis_store::{AccountKind, Store};
@@ -22,6 +22,10 @@ use crate::record::{AttemptRecord, EventRecord, QuotaSampleRecord, RequestRecord
 use crate::{LedgerDb, LedgerError};
 
 pub const CHANNEL_DEPTH: usize = 4_096;
+
+/// The writer channel's fill at which admission stops accepting money: half the channel, so the stall moves
+/// before the send while the relay's facts, which the bus queue holds apart, still land behind it.
+pub const LEDGER_BEHIND_DEPTH: usize = 2_048;
 
 /// Records landed per transaction: enough to amortise the fsync, few enough that a drain on shutdown is quick.
 const BATCH: usize = 64;
@@ -60,6 +64,14 @@ pub struct LedgerStats {
     pub write_failures: AtomicU64,
     pub gaps: AtomicU64,
     pub last_gap_at: AtomicI64,
+    /// Requests refused at admission while the writer was behind.
+    pub behind_refusals: AtomicU64,
+}
+
+/// What the relay reads at admission: counted here, since every `behind` reading is one refusal.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Admission {
+    pub behind: bool,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -98,6 +110,28 @@ impl Ledger {
     /// Whether the writer still takes records; false once it closed its receiver, at a shutdown or a panic.
     pub fn is_alive(&self) -> bool {
         !self.tx.is_closed()
+    }
+
+    /// Records waiting in the writer channel now. The batch the writer already took off the channel is not
+    /// among them.
+    pub fn queued(&self) -> usize {
+        self.tx.max_capacity() - self.tx.capacity()
+    }
+
+    /// Whether the writer channel holds `LEDGER_BEHIND_DEPTH` records or more. The mark counts the channel, not
+    /// the batch in the writer's hands, so a writer blocked on a write reads behind a batch later.
+    pub fn behind(&self) -> bool {
+        self.queued() >= LEDGER_BEHIND_DEPTH
+    }
+
+    /// `behind` for the relay's admission, which reads it at most once per request: every `behind` answer is one
+    /// refusal and counts in `behind_refusals`.
+    pub fn admission(&self) -> Admission {
+        let behind = self.behind();
+        if behind {
+            self.stats.behind_refusals.fetch_add(1, Ordering::Relaxed);
+        }
+        Admission { behind }
     }
 
     /// Registers a task the ledger owns beyond the writer, so `shutdown` aborts it before the channel closes:
@@ -183,7 +217,7 @@ pub fn spawn(
         config.event_poll,
     );
     ledger.tasks.lock().expect(TASKS_POISONED).push(mirror);
-    let subscriber = bus.subscribe("ledger");
+    let subscriber = bus.subscribe("ledger", Delivery::Durable);
     let assembling = ledger.clone();
     let assembler_stop = stopped.clone();
     let assembler_clock = clock.clone();

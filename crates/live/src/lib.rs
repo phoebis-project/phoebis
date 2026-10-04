@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use axum::extract::ws::WebSocket;
-use phoebis_bus::{spawn_subscriber, Bus, Subscriber};
+use phoebis_bus::{spawn_subscriber, Bus, Delivery, Subscriber};
 use phoebis_ledger::Pricing;
 use phoebis_oauth::Clock;
 use tokio::sync::{broadcast, OwnedSemaphorePermit, Semaphore};
@@ -81,7 +81,8 @@ impl LiveFeed {
             sockets: TaskTracker::new(),
             state: state.clone(),
         };
-        let subscriber = bus.subscribe("live");
+        // Best-effort: a request whose completion was dropped ages out of the table as `lost`.
+        let subscriber = bus.subscribe("live", Delivery::BestEffort);
         spawn_subscriber(subscriber, move |subscriber| {
             run(subscriber, state, deltas, config)
         });

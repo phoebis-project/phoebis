@@ -14,8 +14,9 @@ use phoebis_bus::{
     ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_ledger::{
-    list_requests, member_spends, Assembler, AttemptRecord, BudgetedMember, EventRecord,
-    LedgerConfig, LiveKeys, PriceTable, Record, RequestFilter, RequestRecord,
+    list_requests, member_spends, Assembler, AttemptRecord, AttentionGauges, BudgetedMember,
+    EventRecord, LedgerConfig, LiveKeys, PriceTable, Record, RequestFilter, RequestRecord,
+    LEDGER_BEHIND_DEPTH,
 };
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{BudgetPeriod, MemberWrite};
@@ -1481,6 +1482,93 @@ async fn a_request_record_waits_for_the_writer_rather_than_dropping() {
             "r{i} landed"
         );
     }
+    up.shutdown().await;
+}
+
+/// Held at a blocked `land`, the writer channel fills past its mark: the next inference is refused with the router's
+/// own 503 before any account is chosen and counted, and once the writer drains the same caller is served.
+#[tokio::test]
+async fn an_inference_is_refused_with_ledger_behind_while_the_writer_channel_is_past_its_mark() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let db = h.db.clone();
+    let (held_tx, held_rx) = tokio::sync::oneshot::channel::<()>();
+    let (hold_tx, hold_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn(move || {
+        db.write(|_| {
+            held_tx.send(()).unwrap();
+            hold_rx.recv().unwrap();
+            Ok(())
+        })
+        .unwrap()
+    });
+    held_rx.await.unwrap();
+    // The writer takes up to one batch (64) off the channel before it blocks behind the holder, so a batch more
+    // than the mark is queued and the mark is read against what the channel still holds.
+    for i in 0..LEDGER_BEHIND_DEPTH + 64 {
+        h.ledger
+            .record_request(Record::Request {
+                request: RequestRecord {
+                    id: format!("r{i}"),
+                    ..Default::default()
+                },
+                attempts: Vec::new(),
+                bodies: None,
+            })
+            .await;
+    }
+    assert!(
+        h.ledger.queued() >= LEDGER_BEHIND_DEPTH,
+        "{} queued",
+        h.ledger.queued()
+    );
+    assert!(h.ledger.behind());
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 503);
+    assert_eq!(response.headers()["x-phoebis-error-code"], "ledger_behind");
+    assert_eq!(response.headers()["retry-after"], "5");
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    let gauges = phoebis_ledger::gather(
+        &h.router,
+        &PriceTable::shipped(),
+        NOW,
+        60_000,
+        None,
+        AttentionGauges::default(),
+        Some(&h.ledger),
+    )
+    .await;
+    assert!(
+        gauges.ledger_queued >= LEDGER_BEHIND_DEPTH as u64,
+        "{} queued at the scrape",
+        gauges.ledger_queued
+    );
+    assert_eq!(
+        gauges.ledger_behind_refusals, 1,
+        "the one refusal is counted"
+    );
+    hold_tx.send(()).unwrap();
+    holder.join().unwrap();
+    wait_for(Duration::from_secs(10), || {
+        (!h.ledger.behind()).then_some(())
+    })
+    .await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200);
     up.shutdown().await;
 }
 

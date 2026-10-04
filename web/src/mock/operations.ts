@@ -292,6 +292,7 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
     idle: WARMED.filter((p) => p.keepalive.state === 'idle').reduce((n, p) => n + p.agents, 0),
     parked: WARMED.filter((p) => p.keepalive.state === 'parked').reduce((n, p) => n + p.agents, 0),
   },
+  busGaps: 0,
   expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS_24H,
   // Router-wide, so every probe counted here belongs to a pool that keeps caches
   // warm; `codex` has warming off and contributes none. Hand-set at a busier

@@ -15,7 +15,9 @@ use phoebis_ledger::{
 };
 use phoebis_live::{LiveConfig, LiveFeed};
 use phoebis_oauth::{Clock, CredentialManager, PairingSessions, UsageService};
-use phoebis_relay::{CatalogService, Limits, ListenLimits, Relay, UpstreamGzip, REFRESH_TICK};
+use phoebis_relay::{
+    Accounting, CatalogService, Limits, ListenLimits, Relay, UpstreamGzip, REFRESH_TICK,
+};
 use phoebis_store::{Secret, StorageKey, Store};
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::pool::Pool;
@@ -261,6 +263,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             let readiness = readiness.clone();
             Arc::new(move || readiness.dead())
         })
+        .with_accounting({
+            let ledger = ledger.clone();
+            Arc::new(move || Accounting {
+                behind: ledger.admission().behind,
+            })
+        })
         .with_signed_placeholder(config.proxy.sign_cch_placeholder)
         .with_profile_name(profile.name)
         .with_session_memory(
@@ -481,6 +489,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             Duration::from_secs(config.routing.cooldown_fallback_seconds),
             Some(keepalive_gauge_source),
             Some(attention.gauge_source()),
+            Some(ledger.clone()),
         ),
         stop_rx,
         ListenLimits {

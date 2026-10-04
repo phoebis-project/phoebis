@@ -6,6 +6,7 @@
       "idle": 0,
       "parked": 0
     },
+    "bus_gaps": 0,
     "cost_today": [
       {
         "cap_usd": 4.0,

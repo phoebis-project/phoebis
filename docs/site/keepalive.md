@@ -280,7 +280,9 @@ counted by the reason above; and `probes_skipped`, a due probe a gate withheld r
 the cost cap or a cooldown already held the recipe.
 
 `GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost),
-`probes_24h` (`ok`, `failed`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap.
+`probes_24h` (`ok`, `failed`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap. Its `bus_gaps`
+counts the times the engine found it had missed bus events; each gap discarded every observation still open, so those
+agents wait for their next request while an armed recipe keeps its schedule.
 
 ## In the console
 
@@ -290,17 +292,17 @@ session's fork badge](assets/sessions-light.png#only-light)
 session's fork badge](assets/sessions-dark.png#only-dark)
 
 The Sessions view opens with tiles for the session count, the cache-warming agents by state, cache probes in the last 24
-hours by outcome, sessions whose cache expired between turns, net savings over 7 days, and the day's probe cost in total
-and per pool against its cap; a tile whose read failed draws a dash with the reason on hover, and Try again under the
-tiles reads them again, as a line above the table does for a failed account read. Its table lists one row per session,
-led by the row's menu, and offers eleven columns, eight shown by default (last request, agents and next
-probe start hidden, and the Columns control turns any on): key, session, model, account, last used,
-requests, last request, agents, companion, cache warming, and next probe. The model column reads the family and version,
-with the whole id on hover, and the account cell names the account's kind on hover and to a screen reader. Opening a row
-expands into the recipe each of its agents carries. A session's menu offers Release, and, once it has ledgered traffic,
-"View in analytics" and "View in observe"; the analytics view opens on the requests of the key holder the row belongs
-to. The view reads its sessions again every 15 seconds, so a session that keeps sending requests stays on it, and its
-tiles once a minute.
+hours by outcome, sessions whose cache expired between turns, the keepalive engine's bus gaps, net savings over 7 days,
+and the day's probe cost in total and per pool against its cap; a tile whose read failed draws a dash with the reason on
+hover, and Try again under the tiles reads them again, as a line above the table does for a failed account read. Its
+table lists one row per session, led by the row's menu, and offers eleven columns, eight shown by default
+(last request, agents and next probe start hidden, and the Columns control turns any on): key, session,
+model, account, last used, requests, last request, agents, companion, cache warming, and next probe. The model
+column reads the family and version, with the whole id on hover, and the account cell names the account's kind on hover
+and to a screen reader. Opening a row expands into the recipe each of its agents carries. A session's menu offers
+Release, and, once it has ledgered traffic, "View in analytics" and "View in observe"; the analytics view opens on the
+requests of the key holder the row belongs to. The view reads its sessions again every 15 seconds, so a session that
+keeps sending requests stays on it, and its tiles once a minute.
 
 A session whose first request
 branched from another conversation carries a `fork at 3` badge beside its id, 3 being the depth where the two part;

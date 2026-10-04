@@ -243,7 +243,7 @@ async fn a_401_too_large_to_read_fails_over_without_a_refresh_and_ends_at_the_50
     }])
     .await;
     let bus = phoebis_bus::Bus::new();
-    let mut sub = bus.subscribe("test");
+    let mut sub = bus.subscribe("test", phoebis_bus::Delivery::Durable);
     let h = common::harness_with_bus(
         &up,
         &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
@@ -860,7 +860,7 @@ async fn bus_harness(
     limits: phoebis_relay::Limits,
 ) -> (common::Harness, phoebis_bus::Subscriber) {
     let bus = phoebis_bus::Bus::new();
-    let sub = bus.subscribe("test");
+    let sub = bus.subscribe("test", phoebis_bus::Delivery::Durable);
     let h = common::harness_with_bus_limits(
         up,
         &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
