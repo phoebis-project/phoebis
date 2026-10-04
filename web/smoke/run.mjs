@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -1347,6 +1347,8 @@ await emailLines('/accounts/console the head draws no line under the name of an 
 }
 await m.navigate('/accounts/spare');
 {
+  const pair = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pair');
+  results.push({ name: '/accounts/spare Pair is primary on an unpaired account', ok: pair?.classList.contains('btn--primary') === true, missing: [pair?.className ?? 'no Pair'] });
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   results.push({
@@ -1400,7 +1402,13 @@ m.unmount();
   await editLabel();
   await typeInto(labelInput(), 'business 2');
   failNextCall('renameAccount', '/admin/accounts/business', 'that label is taken');
+  // Held in front of the refusal: the release runs the refusal, which puts the mock's method back, so neither hold here
+  // is restored.
+  const renaming = deferNextCall('renameAccount');
   titleButton('Save')?.click();
+  await page.settle(100);
+  const whileRenaming = { cancel: titleButton('Cancel')?.disabled ?? null, input: labelInput()?.disabled ?? null };
+  renaming.release();
   await page.settle(600);
   const typed = labelInput()?.value ?? null;
   const renamed = await reports();
@@ -1440,7 +1448,11 @@ m.unmount();
   await page.settle(100);
   await typeInto(field(), '2027-03-01T10:00');
   failNextCall('updateAccount', '/admin/accounts/business', 'the store is unavailable');
+  const ending = deferNextCall('updateAccount');
   identityButton('Save')?.click();
+  await page.settle(100);
+  const whileEnding = { box: box()?.disabled ?? null, cancel: identityButton('Cancel')?.disabled ?? null, ends: field()?.disabled ?? null };
+  ending.release();
   await page.settle(600);
   const kept = { checked: box()?.checked ?? null, ends: field()?.value ?? null };
   const ended = await reports();
@@ -1449,6 +1461,11 @@ m.unmount();
     name: '/accounts a refused end edit keeps the form with the typed date',
     ok: kept.checked === true && kept.ends === '2027-03-01T10:00' && ended.shell === '/admin/accounts/business failed: the store is unavailable' && ended.own === 'the store is unavailable' && stored?.cancelled === false,
     missing: [kept.checked === null ? 'the form closed' : `ticked ${kept.checked}, ends ${kept.ends}`, ended.shell || 'no route failure', ended.own || 'no page report', `stored cancelled ${stored?.cancelled}`],
+  });
+  results.push({
+    name: '/accounts the label and end editors take no typing and no Cancel while their save runs',
+    ok: Object.values(whileRenaming).every((v) => v === true) && Object.values(whileEnding).every((v) => v === true),
+    missing: [`label ${JSON.stringify(whileRenaming)}`, `end ${JSON.stringify(whileEnding)}`],
   });
   identityButton('Cancel')?.click();
   await page.settle(100);
@@ -1483,6 +1500,8 @@ m.unmount();
   };
   const r0 = session ? Date.parse(session.expiresAt) - CLOCK_ORIGIN : 0;
   const k = Math.floor(r0 / 60_000);
+  // The ticking line and the region disagree mid-minute, so only the region reaches a screen reader.
+  const lineHidden = dlg?.querySelector('.row .num')?.getAttribute('aria-hidden') ?? null;
   const reads = [await step((r0 % 60_000) + 30_000), await step(10_000), await step(60_000)];
   // The dialog's one-second clock reads the last whole second a step passed, and under a minute the line rounds to the
   // second, so this step lands on the whole second that reads 45s.
@@ -1498,8 +1517,8 @@ m.unmount();
   ];
   results.push({
     name: '/accounts the pairing countdown announces whole minutes only',
-    ok: session !== null && k > 2 && JSON.stringify(reads) === JSON.stringify(expected),
-    missing: [session ? `r0 ${r0}` : 'no pairing started', ...reads.map((r) => `${r.line} | ${r.region}`)],
+    ok: session !== null && k > 2 && lineHidden === 'true' && JSON.stringify(reads) === JSON.stringify(expected),
+    missing: [session ? `r0 ${r0}` : 'no pairing started', `line aria-hidden ${lineHidden}`, ...reads.map((r) => `${r.line} | ${r.region}`)],
   });
   [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await page.settle(200);
@@ -2300,9 +2319,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const kName = keyDlg?.querySelector('input[placeholder="workstation"]');
   if (kName) {
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const status = (dialog) => dialog?.querySelector('.dialog__status')?.textContent ?? '';
+    // The pool dialog hands its key dialog the listed keys' ids, so a story key's name is held here as on Keys.
+    setter.call(kName, 'Laptop');
+    kName.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(100);
+    const storyTaken = status(keyDlg);
+    results.push({ name: "/pools a key created from the pool dialog is held on a story key's id", ok: storyTaken === 'Save is held: Another key already has the id laptop.Go to Key', missing: [storyTaken] });
     setter.call(kName, 'from-pool');
     kName.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(100);
+    // Held so the page's reload of its keys cannot answer before the second dialog reads the new key's id.
+    const reload = deferNextCall('listKeys');
     const create = [...(keyDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create');
     create?.click();
     await m.settle(700);
@@ -2312,6 +2340,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     done?.click();
     await m.settle(200);
     results.push({ name: '/pools new key listed in pool dialog', ok: (dlg?.textContent ?? '').includes('from-pool'), missing: [] });
+    [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Create key')?.click();
+    await m.settle(300);
+    const again = [...m.container.querySelectorAll('dialog[open]')].pop();
+    const againName = again?.querySelector('input[placeholder="workstation"]');
+    if (againName) setter.call(againName, 'from-pool');
+    againName?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(100);
+    const localTaken = status(again);
+    [...(again?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await m.settle(200);
+    const heldReloads = reload.calls.length;
+    reload.release();
+    reload.restore();
+    await m.settle(300);
+    results.push({
+      name: '/pools a key created from the pool dialog takes its id before the page reloads its keys',
+      ok: heldReloads > 0 && localTaken === 'Save is held: Another key already has the id from-pool.Go to Key',
+      missing: [`${heldReloads} held reloads`, localTaken],
+    });
   }
 
   // Every hint is a block element, so Firefox cannot run it into its label.
@@ -2343,11 +2390,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // A refused move answers inside the Move dialog, which sits in the top layer over the pool dialog, so a toast behind
   // it would go unseen. It runs before the move below, which takes laptop out of this pool.
   {
-    const laptopRow = () => keyRows().find((tr) => tr.children[0]?.textContent?.trim() === 'laptop');
-    const openMove = async () => {
-      laptopRow()?.querySelector('.menu__trigger')?.click();
+    const keyRow = (name) => keyRows().find((tr) => tr.children[0]?.textContent?.trim() === name);
+    const laptopRow = () => keyRow('laptop');
+    const openMove = async (name = 'laptop') => {
+      keyRow(name)?.querySelector('.menu__trigger')?.click();
       await m.settle(120);
-      [...(laptopRow()?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Move to…')?.click();
+      [...(keyRow(name)?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Move to…')?.click();
       await m.settle(200);
       return [...m.container.querySelectorAll('dialog[open]')].pop();
     };
@@ -2365,8 +2413,24 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     footButton(moveDlg, 'Move key')?.click();
     await m.settle(100);
     const inFlight = footButton(moveDlg, 'Move key')?.disabled;
+    // Every close path while the move is out. A dialog that closed anyway is opened on the next key, the one the late
+    // answer would then write into.
+    const cancelHeld = footButton(moveDlg, 'Cancel')?.disabled;
+    footButton(moveDlg, 'Cancel')?.click();
+    moveDlg?.dispatchEvent(new window.Event('cancel', { cancelable: true }));
+    moveDlg?.querySelector('.dialog__close')?.click();
+    moveDlg?.click();
+    await m.settle(100);
+    const keptOpen = moveDlg?.hasAttribute('open') === true;
+    const answeredIn = keptOpen ? moveDlg : await openMove('from-pool');
     release();
     await m.settle(600);
+    const landed = { alert: answeredIn?.querySelector('[role="alert"]')?.textContent ?? null, title: answeredIn?.querySelector('.dialog__title')?.textContent ?? '' };
+    results.push({
+      name: "/pools a move in flight holds the Move dialog's close paths, so its answer lands in its own key's dialog",
+      ok: keptOpen && cancelHeld === true && landed.title === 'Move key laptop' && landed.alert === 'the pool is disabled',
+      missing: [`kept open ${keptOpen}`, `Cancel disabled ${cancelHeld}`, `answer in ${JSON.stringify(landed)}`],
+    });
     const alert = moveDlg?.querySelector('[role="alert"]');
     const rejections = problems.slice(before).filter((p) => p.startsWith('[unhandledRejection]'));
     results.push({ name: '/pools Move key is disabled while the move is in flight', ok: inFlight === true, missing: [String(inFlight)] });
@@ -2586,7 +2650,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   {
     const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    failNextCall('updatePool', '/admin/pools/all', 'body_capture_hours exceeds stats.body_capture_max_hours');
+    failNextCall('updatePool', '/admin/pools/all', 'body_capture_hours exceeds stats.body_capture_max_hours', { status: 400 });
     [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
     await m.settle(600);
     const open = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -2963,6 +3027,20 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     name: '/pools a stored migrate of 0.875 reopens as 87.5 and saves unchanged after another edit',
     ok: fine === '87.5' && fineSaved === 0.875 && !m.container.querySelector('dialog[open]'),
     missing: [String(fine), String(fineSaved), m.container.querySelector('dialog[open] .dialog__status')?.textContent ?? 'closed'],
+  });
+
+  // Four decimals, which the two-decimal percent divided by 100 would send back one ulp off.
+  await api.updatePool('all', { ...written, migrateAboveUtilization: 0.8333 });
+  m.unmount();
+  m = await mount('/pools');
+  dlg = await openAll();
+  const finer = percent(dlg)?.value;
+  await disable(dlg);
+  const finerSaved = await savedMigrate(dlg);
+  results.push({
+    name: '/pools a stored migrate of 0.8333 reopens as 83.33 and saves as stored after another edit',
+    ok: finer === '83.33' && finerSaved === 0.8333 && !m.container.querySelector('dialog[open]'),
+    missing: [String(finer), String(finerSaved), m.container.querySelector('dialog[open] .dialog__status')?.textContent ?? 'closed'],
   });
 
   await api.updatePool('all', { ...written, migrateAboveUtilization: 0.3 });
@@ -3980,15 +4058,21 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const name = [...(group(dlg, 'Key')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Name');
   const input = name?.querySelector('input');
-  if (input) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Laptop');
-  input?.dispatchEvent(new window.Event('input', { bubbles: true }));
-  await m.settle(150);
+  const typeName = async (value) => {
+    if (input) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, value);
+    input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(150);
+  };
+  // The hint reads the name as the create sends it, trimmed: a name of spaces gives no id to show.
+  await typeName('   ');
+  const spacesHint = name?.querySelector('.field__hint')?.textContent ?? null;
+  await typeName('  Laptop  ');
   const create = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create');
   const read = [name?.querySelector('.field__hint')?.textContent ?? '', dlg?.querySelector('.dialog__status')?.textContent ?? '', create?.disabled, input?.getAttribute('aria-invalid')];
   results.push({
-    name: '/keys typing Laptop beside the story key laptop holds Save and shows the id under Name',
-    ok: read[0] === 'Id: laptop' && read[1] === 'Save is held: Another key already has the id laptop.Go to Key' && read[2] === true && read[3] === 'true',
-    missing: read.map(String),
+    name: '/keys typing Laptop beside the story key laptop holds Save and shows the id under Name, and spaces show none',
+    ok: spacesHint === null && read[0] === 'Id: laptop' && read[1] === 'Save is held: Another key already has the id laptop.Go to Key' && read[2] === true && read[3] === 'true',
+    missing: [`spaces hint ${JSON.stringify(spacesHint)}`, ...read.map(String)],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
@@ -4981,6 +5065,7 @@ await m.navigate(`/requests/${laptopRow.id}`);
   }
 
   // The frozen clock lets one tick fire the page's 15-second clock, which redraws the drawer around the same answer.
+  const firstCheck = '/requests the first draw serializes each captured body once';
   const tickCheck = '/requests a clock tick does not serialize the bodies again';
   const original = api.getCapturedBodies;
   const answered = [];
@@ -4989,23 +5074,33 @@ await m.navigate(`/requests/${laptopRow.id}`);
     answered.push(answer);
     return answer;
   };
-  const frozen = await mount(`/requests/${laptopRow.id}`, { now: CLOCK_ORIGIN });
-  api.getCapturedBodies = original;
-  const bodies = answered.at(-1);
   const stringify = JSON.stringify;
-  let serialized = 0;
+  const serialized = { request: 0, response: 0 };
   JSON.stringify = function (value, ...rest) {
-    if (bodies && (value === bodies.request || value === bodies.response)) serialized += 1;
+    const answer = answered.at(-1);
+    if (answer && value === answer.request) serialized.request += 1;
+    if (answer && value === answer.response) serialized.response += 1;
     return stringify.call(this, value, ...rest);
   };
+  let frozen;
+  let first = { ...serialized };
   try {
+    frozen = await mount(`/requests/${laptopRow.id}`, { now: CLOCK_ORIGIN });
+    api.getCapturedBodies = original;
+    first = { ...serialized };
+    serialized.request = 0;
+    serialized.response = 0;
     tick(15_000);
     await frozen.settle();
   } finally {
     JSON.stringify = stringify;
+    api.getCapturedBodies = original;
   }
+  const bodies = answered.at(-1);
   const drawn = frozen.container.querySelectorAll('.drawer .body-block__pre').length;
-  results.push({ name: tickCheck, ok: bodies !== undefined && drawn === 2 && serialized === 0, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `${serialized} serializations after the tick`] });
+  results.push({ name: firstCheck, ok: bodies !== undefined && drawn === 2 && first.request === 1 && first.response === 1, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `request ${first.request}, response ${first.response} serializations on the first draw`] });
+  const after = serialized.request + serialized.response;
+  results.push({ name: tickCheck, ok: bodies !== undefined && drawn === 2 && after === 0, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `${after} serializations after the tick`] });
   frozen.unmount();
 }
 {
@@ -6087,6 +6182,25 @@ m.unmount();
   const valueOf = (label) => Number.parseFloat(label) * (label.endsWith('K') ? 1_000 : 1);
   results.push({ name: floorCheck, ok: ticks.length > 1 && Math.max(...ticks.map(valueOf)) <= 1_000, missing: ticks });
   early.unmount();
+
+  // 61,380 tokens over the full hour are 1,023 a minute, a top no tick step of five reaches evenly.
+  const evenCheck = '/analytics a capped burn axis ends on a round tick and steps evenly to it';
+  api.getAnalyticsBurn = burnAt([61_380, 1_000]);
+  const capped = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
+  const cappedTicks = [...(tokensCard(capped)?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => valueOf(t.textContent?.trim() ?? '')).sort((a, b) => a - b);
+  const steps = cappedTicks.slice(1).map((v, i) => v - cappedTicks[i]);
+  results.push({ name: evenCheck, ok: cappedTicks.length === 5 && cappedTicks[4] >= 1_023 && steps.every((s) => s === steps[0]), missing: cappedTicks.map(String) });
+  capped.unmount();
+
+  // A lone bucket 20 seconds old sets no scale, so recharts spans its $0.004 a minute alone, and the labels have to
+  // read at that precision rather than all as $0.00.
+  const precisionCheck = "/analytics a spend axis recharts spans on its own labels its ticks at the drawn rows' precision";
+  api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [{ at: new Date(at13 + 3_600_000).toISOString(), cachedTokens: 0, fiveHourShare: null, group: 'console', sevenDayShare: null, tokens: 600, uncachedTokens: 600, unit: 'usd', usd: 0.004 / 3 }] });
+  const lone = await mount('/analytics#burn', { now: at13 + 3_600_000 + 20_000 });
+  const spendCard = [...lone.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Spend per minute');
+  const labels = [...(spendCard?.querySelectorAll('.recharts-yAxis .recharts-cartesian-axis-tick text') ?? [])].map((t) => t.textContent?.trim() ?? '');
+  results.push({ name: precisionCheck, ok: labels.length > 1 && new Set(labels).size === labels.length, missing: labels });
+  lone.unmount();
   delete api.getAnalyticsBurn;
   window.HTMLElement.prototype.getBoundingClientRect = measure;
 }
@@ -7076,13 +7190,18 @@ m.unmount();
   const fed = tiles().filter((t) => t.label !== 'Sessions');
   const retries = [...page.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Try again');
   const line = page.container.querySelector('.stat-grid + .sessions__notice');
+  // The Sessions tile reads the rows, which the overview does not feed, so its count and note stand.
+  const companions = [...page.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(page, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
+  const sessionsTile = tiles().find((t) => t.label === 'Sessions');
   results.push({
     name: '/sessions a failed overview read draws dashes, could not load and one Try again',
     ok:
       page.container.querySelector('.stat-grid .skeleton') === null &&
       fed.length === 5 &&
       fed.every((t) => t.value === '-' && t.note === 'could not load' && t.title === 'ledger locked') &&
-      tiles().find((t) => t.label === 'Sessions')?.value !== '-' &&
+      sessionsTile?.value !== '-' &&
+      companions > 0 &&
+      sessionsTile?.note === `${companions} with a companion, 10 with a recipe` &&
       retries.length === 1 &&
       line !== null &&
       line.contains(retries[0]) &&
@@ -7165,7 +7284,10 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions expired-between-turns warns while a pool keeps caches warm', ok: expired?.warn === true, missing: [String(expired?.warn)] });
   {
     const tile = [...m.container.querySelectorAll('.stat--compact')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Sessions');
-    results.push({ name: '/sessions the tile counts sessions with a companion', ok: /\d+ with a companion/.test(tile?.textContent ?? ''), missing: [tile?.textContent ?? 'absent'] });
+    // Counted off the table, so a tile that counts anything but the rows whose companion reports or went silent fails.
+    const companions = [...m.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(m, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
+    const note = tile?.querySelector('.stat__note')?.textContent?.trim() ?? '';
+    results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with a companion,`), missing: [`${companions} rows`, note || 'no note'] });
     // Ten of the story's seventeen rows hold a recipe; the overview's own count is every session row.
     results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 10 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
   }
@@ -7208,14 +7330,20 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions ci sessions read no recipe, not scheduled', ok: ciCells.every(([k, n]) => k === 'no recipe' && n === 'not scheduled'), missing: ciCells.flat() });
   results.push({ name: '/sessions rows start collapsed', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
   {
-    // The kind badge gave its width to the fit, so the cell's title names the account's kind.
+    // The kind badge gave its width to the fit, so the cell's title names the account's kind and its description
+    // carries the same words to a reader that never hovers.
     const KINDS = { 'Anthropic key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
-    const kinds = rows().map((r) => KINDS[cell(r, 'Account')?.getAttribute('title') ?? '']).filter(Boolean);
+    const titled = rows().map((r) => cell(r, 'Account')).filter((c) => KINDS[c?.getAttribute('title') ?? ''] !== undefined);
+    const kinds = titled.map((c) => KINDS[c.getAttribute('title')]);
+    const undescribed = titled.filter((c) => {
+      const entry = document.getElementById(c.getAttribute('aria-describedby') ?? '');
+      return entry === null || entry.closest('[data-descriptions]') === null || entry.textContent !== c.getAttribute('title');
+    });
     const badges = [...m.container.querySelectorAll('.srow__account .badge')].map((b) => b.textContent?.trim() ?? '');
     results.push({
-      name: '/sessions account cells carry the account kind on their title rather than a badge',
-      ok: kinds.length === 16 && kinds.includes('oauth') && kinds.includes('api_key') && badges.every((b) => /^\+\d+$/.test(b)),
-      missing: [...new Set(kinds), ...badges],
+      name: '/sessions account cells carry the account kind on their title and description rather than a badge',
+      ok: kinds.length === 16 && kinds.includes('oauth') && kinds.includes('api_key') && undescribed.length === 0 && badges.every((b) => /^\+\d+$/.test(b)),
+      missing: [...new Set(kinds), ...badges, ...undescribed.map((c) => `${c.getAttribute('aria-describedby') ?? 'no aria-describedby'} for ${c.getAttribute('title')}`)],
     });
   }
   {
@@ -8437,6 +8565,50 @@ m.unmount();
     ok: raised.some((t) => t.startsWith('/admin/dashboard failed')) && !recovered.some((t) => t.includes('/admin/dashboard')),
     missing: [JSON.stringify(raised), JSON.stringify(recovered)],
   });
+
+  // On the live clock, well inside a failure's 6-second dwell: the login screen unmounts the shell, so a toast still
+  // queued would show again after the next login.
+  const setValue = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const logIn = async (p) => {
+    const input = p.container.querySelector('.login__card input[type="password"]');
+    if (input) {
+      setValue.call(input, 'admin');
+      input.dispatchEvent(new window.Event('input', { bubbles: true }));
+    }
+    [...p.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Log in')?.click();
+    await p.settle(500);
+  };
+  failNextCall('listKeys', '/admin/keys', 'ledger locked');
+  page = await mount('/keys');
+  const beforeLogout = toasts(page);
+  [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Log out')?.click();
+  await page.settle(400);
+  await logIn(page);
+  const afterLogout = { keys: page.container.querySelector('.card--table') !== null, toasts: toasts(page) };
+  page.unmount();
+  failNextCall('listKeys', '/admin/keys', 'ledger locked');
+  page = await mount('/keys');
+  const beforeExpiry = toasts(page);
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = async () => new Response(JSON.stringify({ error: 'no admin session' }), { status: 401 });
+  try {
+    await call('GET', '/admin/keys').catch(() => undefined);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+  await page.settle(100);
+  const ended = page.text().includes('Your session ended; log in again.');
+  await logIn(page);
+  const afterExpiry = { keys: page.container.querySelector('.card--table') !== null, toasts: toasts(page) };
+  page.unmount();
+  // The form's login holds the mock's session past a cleared mark, which the signed-out checks at the end rely on.
+  await api.logout();
+  localStorage.setItem('phoebis.mockSession', 'admin');
+  results.push({
+    name: 'a toast queued before Log out or a 401 does not show after the next login',
+    ok: beforeLogout.length === 1 && beforeExpiry.length === 1 && ended && afterLogout.keys && afterExpiry.keys && afterLogout.toasts.length === 0 && afterExpiry.toasts.length === 0,
+    missing: [`before Log out ${JSON.stringify(beforeLogout)}, after ${JSON.stringify(afterLogout)}`, `before the 401 ${JSON.stringify(beforeExpiry)}, ended ${ended}, after ${JSON.stringify(afterExpiry)}`],
+  });
 }
 
 {
@@ -8678,7 +8850,9 @@ m.unmount();
   const sweep = (where) => {
     const badges = [...page.container.querySelectorAll('.badge[title]:not(.srow__fork)')];
     for (const badge of badges) if (!describes(badge)) loose.push(`${where}: ${why(badge)}`);
-    counts.push({ onPage: badges.filter((b) => !b.closest('.topbar')).length, seen: badges.length, where });
+    // The drawer's route draws the list under it too, whose badges would meet the count for a drawer that drew none.
+    const own = where === `/requests/${laptopRow.id}` ? badges.filter((b) => b.closest('.drawer')) : badges.filter((b) => !b.closest('.topbar'));
+    counts.push({ onPage: own.length, seen: badges.length, where });
   };
   for (const path of ['/', '/accounts', '/analytics', '/keys', '/models', '/observe', '/pools', '/quota', '/requests', `/requests/${laptopRow.id}`, '/sessions', '/settings']) {
     await page.navigate(path);
@@ -8687,7 +8861,7 @@ m.unmount();
   }
   // A navigation that drew nothing would pass the sweep empty, so every page that draws titled badges of its own in the
   // story has to show one.
-  const thin = counts.filter((c) => ['/', '/accounts', '/observe', '/pools', '/requests', `/requests/${laptopRow.id}`, '/sessions'].includes(c.where) && c.onPage === 0);
+  const thin = counts.filter((c) => ['/', '/accounts', '/keys', '/observe', '/pools', '/requests', `/requests/${laptopRow.id}`, '/sessions'].includes(c.where) && c.onPage === 0);
   await page.navigate('/keys');
   [...page.container.querySelectorAll('.card--table tbody tr')].find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === 'laptop')?.querySelector('.menu__trigger')?.click();
   await page.settle(120);

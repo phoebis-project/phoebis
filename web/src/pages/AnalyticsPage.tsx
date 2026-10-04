@@ -13,7 +13,7 @@ import { PatternInput } from '@/components/ui/PatternInput';
 import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
 import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Tabs, Toggle } from '@/components/ui/primitives';
-import { CONVERSATION_CLASSES, MAX_BURN_LINES, foldBurn, isolatedSlots, moveLabel, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
+import { CONVERSATION_CLASSES, MAX_BURN_LINES, foldBurn, isolatedSlots, moveLabel, niceAxisTop, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
@@ -1442,10 +1442,13 @@ function BurnCharts({
   const scaled = rows.filter((r) => r.setsScale);
   const scaleTo = (values: number[]) => {
     const top = Math.max(0, ...values);
-    return scaled.length > 0 && scaled.length < rows.length && top > 0 ? { allowDataOverflow: true, domain: [0, top] as [number, number] } : {};
+    return scaled.length > 0 && scaled.length < rows.length && top > 0 ? { allowDataOverflow: true, domain: [0, niceAxisTop(top)] as [number, number] } : {};
   };
   const sum = (values: number[]) => values.reduce((n, v) => n + v, 0);
   const spentValues = scaled.flatMap((r) => spent.map(({ i }) => r.usd[i]));
+  const spentScale = scaleTo(spentValues);
+  // Without a capped domain recharts spans every row, so the labels' precision reads every row too.
+  const spentAxis = usdAxis('domain' in spentScale ? spentValues : rows.flatMap((r) => spent.map(({ i }) => r.usd[i])));
   return (
     <div className="grid-2">
       <ChartCard
@@ -1489,7 +1492,7 @@ function BurnCharts({
         <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
           <CartesianGrid vertical={false} stroke={ink.grid} />
           <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
-          <YAxis {...usdAxis(spentValues)} tickLine={false} axisLine={false} {...scaleTo(spentValues)} />
+          <YAxis {...spentAxis} tickLine={false} axisLine={false} {...spentScale} />
           <Tooltip cursor={{ stroke: ink.axis }} content={timeTip<BurnRow>((r) => spent.map(({ i, l }) => ({ color: colorOf(l), label: spendNameOf(l), title: titleOf(l), value: fmtUsd(r.usd[i]) })))} />
           {spent.map(({ i, l }) => (
             <Line key={i} type="monotone" dataKey={(r: BurnRow) => r.usd[i]} stroke={colorOf(l)} strokeWidth={2} dot={false} isAnimationActive={false} />

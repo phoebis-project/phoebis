@@ -158,6 +158,37 @@ test('a read that succeeds after a failing streak reports its routes recovered o
   assert.deepEqual([load.calls, recovered], [5, ['/admin/dashboard']], 'a later success reports nothing');
 });
 
+function KeyedProbe({ id, load, seen }) {
+  const r = useAsync(() => load(id), [id], { refreshMs: 30_000 });
+  seen.push(r);
+  return null;
+}
+
+test("a read for other deps never reports the old deps' failed route recovered, and a reload of the same deps does", async () => {
+  const recovered = [];
+  setHooks({ onFailure: () => undefined, onForbidden: () => undefined, onRecovered: (path) => recovered.push(path), onUnauthorized: () => undefined });
+  frozen();
+  const down = new Set(['a', 'c']);
+  const load = (id) => (down.has(id) ? Promise.reject(new ApiError(503, 'ledger locked', null, `/admin/models/${id}`)) : Promise.resolve(id));
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  const seen = [];
+  const show = async (id) => {
+    act(() => root.render(h(KeyedProbe, { id, load, seen })));
+    await settled();
+  };
+  await show('a');
+  await show('b');
+  assert.deepEqual([seen.at(-1).data, recovered], ['b', []], "key b's answer says nothing of key a's route");
+  await show('c');
+  down.delete('c');
+  act(() => seen.at(-1).reload());
+  await settled();
+  assert.deepEqual([seen.at(-1).data, recovered], ['c', ['/admin/models/c']], 'Try again on the same deps reports its route recovered');
+});
+
 const toast = (id, message, dwellMs, path = null) => ({ dwellMs, id, message, path });
 
 test('a confirmation replaces a showing one, and a failure on screen keeps its turn', () => {

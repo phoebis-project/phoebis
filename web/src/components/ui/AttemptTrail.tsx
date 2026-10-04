@@ -42,7 +42,7 @@ export function AttemptTrail({ attempts }: { attempts: TrailAttempt[] }) {
         ))}
       </span>
       {described?.sibling && (
-        <span id={described.id} className="sr-only">
+        <span id={described.id} className="sr-only" data-descriptions="">
           {title}
         </span>
       )}

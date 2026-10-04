@@ -7,7 +7,7 @@ import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton, useDescription } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd, shortId, shortModel, undatedModel } from '@/lib/format';
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -413,6 +413,8 @@ function SessionRows({
   visible: ReadonlySet<SessionColumnId>;
 }) {
   const { account, agents, session } = row;
+  // The kind gave its badge's width to the fit; the description keeps it within reach of a reader that never hovers.
+  const kind = useDescription(visible.has('account') && account ? KIND_HINT[account.kind] : undefined);
   const summary = stateSummary(agents);
   const otherModels = agents.filter((a) => a.model !== session.model);
   const otherAccounts = agents.filter((a) => a.accountId !== session.accountId);
@@ -489,7 +491,7 @@ function SessionRows({
           </td>
         )}
         {visible.has('account') && (
-          <td title={account ? KIND_HINT[account.kind] : undefined}>
+          <td title={account ? KIND_HINT[account.kind] : undefined} aria-describedby={kind && !kind.sibling ? kind.id : undefined}>
             <span className="srow__account">
               {session.accountId === null ? (
                 <span className="muted">-</span>

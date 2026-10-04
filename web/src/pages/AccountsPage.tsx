@@ -211,14 +211,17 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope)) ?? null;
   const extra = account.extraUsage;
   const overage = account.overage;
-  const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string)) => {
+  /** True once the router took the change. */
+  const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string)): Promise<boolean> => {
     setBusy(true);
     try {
       const result = await action();
       onToast(typeof done === 'string' ? done : done(result));
       onChanged();
+      return true;
     } catch (e) {
       onToast(e instanceof Error ? e.message : String(e));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -226,30 +229,10 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const act = (title: string, body: string, label: string, action: () => Promise<unknown>, done: string, danger = false) => setConfirm({ title, body, label, danger, onConfirm: () => void run(action, done) });
   // The editors close only once the router took the change, so a refusal leaves what was typed in front of the operator.
   const save = async () => {
-    setBusy(true);
-    try {
-      await api.renameAccount(account.id, draft.trim());
-      onToast('Label saved');
-      onChanged();
-      setEditing(false);
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    if (await run(() => api.renameAccount(account.id, draft.trim()), 'Label saved')) setEditing(false);
   };
   const saveEnd = async (form: SubscriptionEndForm) => {
-    setBusy(true);
-    try {
-      await api.updateAccount(account.id, accountPatchOf(form));
-      onToast('Subscription end saved');
-      onChanged();
-      setEndForm(null);
-    } catch (e) {
-      onToast(e instanceof Error ? e.message : String(e));
-    } finally {
-      setBusy(false);
-    }
+    if (await run(() => api.updateAccount(account.id, accountPatchOf(form)), 'Subscription end saved')) setEndForm(null);
   };
 
   return (
@@ -259,11 +242,12 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           <h2 className="detail__title">
             {editing ? (
               <span className="row">
-                <Input value={draft} onChange={(e) => setDraft(e.target.value)} style={{ width: 200 }} autoFocus />
+                {/* Held while a save runs: its answer closes the editor, which would drop anything typed meanwhile. */}
+                <Input value={draft} onChange={(e) => setDraft(e.target.value)} style={{ width: 200 }} autoFocus disabled={busy} />
                 <Button size="sm" variant="primary" disabled={busy || draft.trim() === ''} onClick={() => void save()}>
                   Save
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => setEditing(false)}>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>
                   Cancel
                 </Button>
               </span>
@@ -452,11 +436,11 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           {endForm && (
             <div className="capture" style={{ marginTop: 12 }}>
               <label className="row">
-                <input type="checkbox" checked={endForm.cancelled} onChange={(e) => setEndForm(tickCancelled(endForm, e.target.checked, account.subscription?.derivedEndsAt ?? null))} />
+                <input type="checkbox" checked={endForm.cancelled} disabled={busy} onChange={(e) => setEndForm(tickCancelled(endForm, e.target.checked, account.subscription?.derivedEndsAt ?? null))} />
                 <span className="field__label">Cancelled</span>
               </label>
               <Field label="Ends" hint={END_HINT}>
-                <Input type="datetime-local" value={endForm.endsAt} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label="Ends" />
+                <Input type="datetime-local" value={endForm.endsAt} disabled={busy} onChange={(e) => setEndForm({ ...endForm, endsAt: e.target.value })} style={{ width: 220 }} aria-label="Ends" />
               </Field>
               {endRefusal && (
                 <div className="callout callout--critical" role="alert">
@@ -468,7 +452,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                 <Button size="sm" variant="primary" disabled={busy || endRefusal !== null} onClick={() => void saveEnd(endForm)}>
                   Save
                 </Button>
-                <Button size="sm" variant="ghost" onClick={() => setEndForm(null)}>
+                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEndForm(null)}>
                   Cancel
                 </Button>
               </span>
@@ -912,11 +896,18 @@ function PairingDialog({ open, accountId, label, repair, onClose, onPaired }: { 
 
 function PairingExpiry({ remaining, expired, ready }: { expired: boolean; ready: boolean; remaining: number }) {
   if (!ready) return <span className="muted">Preparing the login link…</span>;
-  // The visible line ticks every second under a minute; a screen reader hears the time in whole minutes alone.
+  // The visible line ticks every second under a minute; a screen reader hears the time in whole minutes alone, from the
+  // region, so the line is hidden from it rather than read beside a region it disagrees with mid-minute.
   const minutes = Math.ceil(remaining / 60_000);
   return (
     <>
-      {expired ? <span className="pairing__expired">This link has expired. Close the dialog and start again.</span> : <span className="muted num">Link expires in {fmtDuration(remaining)}</span>}
+      {expired ? (
+        <span className="pairing__expired">This link has expired. Close the dialog and start again.</span>
+      ) : (
+        <span className="muted num" aria-hidden="true">
+          Link expires in {fmtDuration(remaining)}
+        </span>
+      )}
       <span className="sr-only" aria-live="polite">
         {expired ? 'This link has expired.' : `Link expires in ${minutes} ${minutes === 1 ? 'minute' : 'minutes'}`}
       </span>

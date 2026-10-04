@@ -79,7 +79,9 @@ export function SessionProvider({ children }: { children: ReactNode }) {
       // The server's own wording: the origin check is what answers this status, and its message names the cause.
       onForbidden: (message) => push(message, FAILURE_MS, null),
       onRecovered: dismiss,
+      // The queue belongs to the session that ended, so the next login starts with none of its toasts.
       onUnauthorized: () => {
+        setQueue([]);
         setNotice('Your session ended; log in again.');
         setProbe('none');
       },
@@ -91,6 +93,7 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     try {
       await api.logout();
     } finally {
+      setQueue([]);
       setNotice(null);
       setProbe('none');
     }

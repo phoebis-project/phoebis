@@ -906,7 +906,7 @@ export function KeyValue({ rows, className = '' }: { className?: string; rows: {
             {r.value}
           </dd>
           {r.title && (
-            <span id={`${base}-${i}`} className="sr-only">
+            <span id={`${base}-${i}`} className="sr-only" data-descriptions="">
               {r.title}
             </span>
           )}

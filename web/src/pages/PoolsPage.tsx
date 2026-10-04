@@ -2,8 +2,8 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode }
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
-import { slug } from '@/api/http';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
+import { slug } from '@/api/http';
 import type {
   Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, Session, SessionPlacement,
   SubagentPlacement, TtlRules, WarmSessions,
@@ -960,6 +960,7 @@ export function PoolDialog({
     setForm(next);
     setMemberOrder(orderedAccountIds(accounts, next.members));
     setLocalKeys([]);
+    setMoveError(null);
     setMoved(new Set());
     setRevoked(new Set());
     setBusy(false);
@@ -1027,7 +1028,9 @@ export function PoolDialog({
       const usd = (typed: string) => (typed.trim() === '' ? null : Number(typed));
       return { accountId, budgetDailyUsd: usd(budget.daily), budgetMonthlyUsd: usd(budget.monthly), priority };
     }),
-    migrateAboveUtilization: form.migrateOn ? form.migrate / 100 : null,
+    // Through whole hundredths of a percent, so a stored four-decimal threshold saves back as stored: the two-decimal
+    // percent divided by 100 lands an ulp off for about a quarter of them.
+    migrateAboveUtilization: form.migrateOn ? Math.round(form.migrate * 100) / 10_000 : null,
     // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
     minSharedPrefixTokens: prefixEnabled
       ? form.prefixTokens.trim() === '' ? Number.NaN : Number(form.prefixTokens)
@@ -2043,7 +2046,7 @@ export function PoolDialog({
         open={keyOpen}
         onClose={() => setKeyOpen(false)}
         pools={keyDialogPools}
-        existingIds={new Set(keys.map((k) => k.id))}
+        existingIds={new Set([...keys, ...localKeys].map((k) => k.id))}
         initialPoolId={pool ? pool.id : draftPoolId}
         lockPool
         onCreated={(c) => {
@@ -2055,13 +2058,16 @@ export function PoolDialog({
       />
       <Dialog
         open={moving !== null}
-        onClose={() => setMoving(null)}
+        // Held while the move is out: its answer writes into whichever key's dialog is open when it lands.
+        onClose={() => {
+          if (!moveBusy) setMoving(null);
+        }}
         title={moving ? `Move key ${moving.name}` : 'Move key'}
         subtitle="A key reaches only its own pool's members, so moving it ends its current session pins."
         width={440}
         footer={
           <>
-            <Button variant="ghost" onClick={() => setMoving(null)}>
+            <Button variant="ghost" disabled={moveBusy} onClick={() => setMoving(null)}>
               Cancel
             </Button>
             <Button variant="primary" disabled={!moveTo || moveBusy} onClick={moveKey}>

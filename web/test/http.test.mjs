@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
-import { ApiError, HttpApi, SessionNotKept, call, setHooks, slug } from './dist/api.js';
+import { ApiError, HttpApi, SessionNotKept, call, quietly, setHooks, slug } from './dist/api.js';
 
 const answer = (status, body, headers = {}) => ({ headers: { get: (k) => headers[k.toLowerCase()] ?? null }, ok: status >= 200 && status < 300, status, text: async () => (body === undefined ? '' : JSON.stringify(body)), json: async () => body });
 const stub = (handler) => { const calls = []; globalThis.fetch = async (url, init = {}) => { calls.push({ init, url }); return handler(url, init); }; return calls; };
@@ -235,6 +235,19 @@ test('a failed call names its route on the error, whether the router answered or
   stub(() => Promise.reject(new TypeError('fetch failed')));
   await assert.rejects(call('GET', '/admin/sessions'), (e) => e instanceof ApiError && e.status === 0 && e.path === '/admin/sessions');
   assert.equal(new ApiError(409, 'taken', null).path, null, 'an error raised outside the transport names no route');
+});
+
+test('a call started inside quietly reports no failure, and one started after it does', async () => {
+  const failures = [];
+  setHooks({ onFailure: (f) => failures.push(f), onForbidden: () => undefined, onRecovered: () => undefined, onUnauthorized: () => undefined });
+  stub(() => answer(503, { error: 'ledger locked' }));
+  await assert.rejects(quietly(() => call('GET', '/admin/dashboard')), (e) => e instanceof ApiError && e.status === 503);
+  stub(() => Promise.reject(new TypeError('fetch failed')));
+  await assert.rejects(quietly(() => call('GET', '/admin/sessions')), (e) => e instanceof ApiError && e.status === 0);
+  assert.deepEqual(failures, [], 'neither the refusal nor the missing answer reached the toast');
+  stub(() => answer(503, { error: 'ledger locked' }));
+  await assert.rejects(call('GET', '/admin/dashboard'));
+  assert.deepEqual(failures.map((f) => [f.path, f.status]), [['/admin/dashboard', 503]], 'the window closed with the call it wrapped');
 });
 
 test('the live feed reconnects behind a live session and stops once it is gone', async () => {

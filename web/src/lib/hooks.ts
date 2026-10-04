@@ -52,6 +52,8 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   // The routes the streak failed on, each reported recovered once by the read that ends it, which takes down the
   // failure notice the streak raised.
   const failedPaths = useRef(new Set<string>());
+  // The deps the streak's routes failed for.
+  const failedFor = useRef(deps);
 
   const landed = (value: T, answered: readonly unknown[]) => {
     const at = stamp();
@@ -71,6 +73,12 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   };
 
   useEffect(() => {
+    // A read for other deps answers other routes, so its success must not report the old streak's routes recovered; a
+    // reload of the same deps keeps them, so its success still takes the streak's notice down.
+    if (!sameDeps(failedFor.current, deps)) {
+      failedPaths.current.clear();
+      failedFor.current = deps;
+    }
     const current = { alive: true };
     run.current = current;
     setLoading(true);

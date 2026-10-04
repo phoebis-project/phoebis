@@ -3,7 +3,7 @@ import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { api } from '@/api';
 import { decodeSettings } from '@/api/decode';
-import { ApiError, reportFailure, SessionNotKept } from '@/api/http';
+import { ApiError, call, reportFailure, SessionNotKept } from '@/api/http';
 import type { LiveEvent } from '@/api/types';
 import { routes } from '@/app/App';
 import { SessionProvider } from '@/app/session';
@@ -15,6 +15,8 @@ import { SETTINGS_SAMPLE } from '@/mock/samples';
 import { fakeClock } from './clock';
 
 export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, SessionNotKept, SETTINGS_WIRE };
+// The transport itself, for the check that needs its 401 path, which no mock call takes.
+export { call };
 export { AttentionRows } from '@/components/AttentionRows';
 export { ATTENTION_REFRESH_MS } from '@/lib/attention';
 export { default as React } from 'react';
@@ -74,7 +76,8 @@ export const emitLive = (event: LiveEvent) => {
  * and the route reaches the shell's toast, which the mock would otherwise never report because it never goes
  * through `call`. The override puts the original method back as it fires, so a retry reads the mock again.
  * `network` fails it as a router that never answered, with status 0; otherwise the refusal carries `status`, 503
- * unless one is given.
+ * unless one is given. Every status reaches the toast as a route failure, where the transport takes three apart: a
+ * 401 returns to the login, a 403 shows the router's own sentence, and a 404 reports nothing.
  */
 export const failNextCall = (name: string, path: string, message: string, options: { network?: boolean; status?: number } = {}) => {
   const mock = api as unknown as Record<string, () => unknown>;

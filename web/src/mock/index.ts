@@ -120,7 +120,7 @@ const poolRefusal = (input: PoolInput): string | null => {
   if (k.enabled && affinity < 300) {
     return 'keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed';
   }
-  return memberRefusal(input.members);
+  return null;
 };
 
 // The registered redirect is a loopback port on the machine running Claude Code,
@@ -482,6 +482,8 @@ export class MockApi implements Api {
     const refusal = poolRefusal(input);
     if (refusal) throw new ApiError(400, refusal, null);
     if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) throw new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null);
+    const members = memberRefusal(input.members);
+    if (members) throw new ApiError(400, members, null);
     const pool: Omit<Pool, 'keys'> = {
       ...POOL_SAMPLE,
       ...input,
@@ -853,9 +855,12 @@ export class MockApi implements Api {
     if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) {
       return Promise.reject(new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null));
     }
-    // The route checks every member against the registry before it stores anything.
+    // The route checks every member against the registry before it stores anything, and before the member write's own
+    // refusals.
     const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
     if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
+    const members = memberRefusal(input.members);
+    if (members) return Promise.reject(new ApiError(400, members, null));
     const current = this.pools[idx];
     const reason = this.memberWriteFailure;
     if (reason !== null) {

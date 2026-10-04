@@ -122,6 +122,13 @@ test('a running bucket sets the peak and the axis only once it covers a tenth of
   assert.equal(later.lines[0].fiveHourPeak, later.rows[1].fiveHour[0], 'seven minutes in, the running hour sets the peak');
 });
 
+test('a capped axis top rises to the last of the five ticks recharts would draw over it', () => {
+  // The expected tops are recharts-scale's last value of getNiceTickValues([0, top], 5) for each top.
+  const tops = [[1_023, 1_200], [1_000, 1_000], [61.5, 80], [9.2, 12], [0.004, 0.004], [0.0013, 0.0014]];
+  assert.deepEqual(tops.map(([top]) => d.niceAxisTop(top)), tops.map(([, nice]) => nice));
+  assert.equal(d.niceAxisTop(0), 0, 'an empty axis stays empty');
+});
+
 test('an account burns in the unit its figures come in, a subscription whose tier the cost table does not size in none, and every other grouping in dollars', () => {
   const answered = [
     point(0, 'console', { unit: 'usd', usd: 1.2 }),

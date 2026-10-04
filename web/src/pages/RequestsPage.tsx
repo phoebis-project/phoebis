@@ -780,8 +780,8 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
             ) : bodies.data ? (
               <div className="bodies">
                 {/* Keyed on the request, so a large body of the next request starts compact again. */}
-                <BodyBlock key={`request ${r.id}`} label="Request" value={bodies.data.request} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
-                <BodyBlock key={`response ${r.id}`} label="Response" value={bodies.data.response} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                <BodyBlock key={`request ${r.id}`} label="Request" value={bodies.data.request} stored={bodies.data.requestBytesStored} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
+                <BodyBlock key={`response ${r.id}`} label="Response" value={bodies.data.response} stored={bodies.data.responseBytesStored} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
               </div>
             ) : (
               <p className="muted">Bodies for this request have aged out of retention.</p>
@@ -815,15 +815,15 @@ function CacheRow({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
   );
 }
 
-/** Indenting a body past this many serialized bytes is a long render and a far longer text, so it waits to be asked. */
+/** Indenting a body past this many stored bytes is a long render and a far longer text, so it waits to be asked. */
 const PRETTY_LIMIT = 256 * 1024;
 
-function BodyBlock({ dropped, label, value }: { dropped?: number; label: string; value: unknown }) {
-  // Serialized once per answer rather than per render: the drawer redraws on every clock tick and list reload.
-  const compact = useMemo(() => JSON.stringify(value), [value]);
-  const large = useMemo(() => new TextEncoder().encode(compact).length > PRETTY_LIMIT, [compact]);
+function BodyBlock({ dropped, label, stored, value }: { dropped?: number; label: string; stored: number; value: unknown }) {
+  // The stored byte count sizes the body, so the first draw serializes it once; the memo keeps the drawer's redraws on
+  // every clock tick and list reload from serializing it again.
+  const large = stored > PRETTY_LIMIT;
   const [pretty, setPretty] = useState(false);
-  const text = useMemo(() => (large && !pretty ? compact : JSON.stringify(value, null, 2)), [compact, large, pretty, value]);
+  const text = useMemo(() => (large && !pretty ? JSON.stringify(value) : JSON.stringify(value, null, 2)), [large, pretty, value]);
   // Pretty-print leaves as it is pressed, so the focus moves to the text it indented rather than falling to the page.
   const pre = useRef<HTMLPreElement>(null);
   useEffect(() => {

@@ -1,6 +1,6 @@
 import type { AccountPatch, KeyInput, PoolEngineFields, PoolInput } from '@/api/client';
-import { slug } from '@/api/http';
 import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES } from '@/api/decode';
+import { slug } from '@/api/http';
 import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '@/api/types';
 import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
@@ -137,6 +137,15 @@ export interface PoolChecks {
 }
 
 /**
+ * The id a create derives from a name, and whether the name gave it nothing: `slug` keeps ASCII letters and digits
+ * alone, so a name without one falls back to the id `item`.
+ */
+function derivedId(name: string): { id: string; unnamed: boolean } {
+  const id = slug(name);
+  return { id, unnamed: id === 'item' && !/[a-z0-9]/i.test(name) };
+}
+
+/**
  * Every check of the pool routes the input fails, in rail order and in each group's order below; empty when the routes
  * would take it. `accountIds` null means the account list did not load: one refusal holds the save, and no member is
  * refused for an id the list might hold.
@@ -151,9 +160,7 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
 
   refuse('identity', 'Name', input.name.length > 0 ? null : 'the pool needs a name.');
   if (checks.identity?.isNew && input.name.length > 0) {
-    const id = slug(input.name);
-    // `slug` keeps ASCII letters and digits alone, so a name without one falls back to the id `item`.
-    const unnamed = id === 'item' && !/[a-z0-9]/i.test(input.name);
+    const { id, unnamed } = derivedId(input.name);
     refuse('identity', 'Name', unnamed ? 'The pool needs a name with a letter or a digit.' : checks.identity.poolIds.has(id) ? `Another pool already has the id ${id}.` : null);
   }
 
@@ -301,9 +308,7 @@ export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' |
   const name = form.name.trim();
   if (!name) out.push({ field: 'Name', group: 'key', text: 'the key needs a name.' });
   if (checks.identity?.isNew && name) {
-    const id = slug(name);
-    // `slug` keeps ASCII letters and digits alone, so a name without one falls back to the id `item`.
-    const unnamed = id === 'item' && !/[a-z0-9]/i.test(name);
+    const { id, unnamed } = derivedId(name);
     if (unnamed) out.push({ field: 'Name', group: 'key', text: 'The key needs a name with a letter or a digit.' });
     else if (checks.identity.existingIds.has(id)) out.push({ field: 'Name', group: 'key', text: `Another key already has the id ${id}.` });
   }

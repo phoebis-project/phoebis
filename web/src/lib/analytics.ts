@@ -282,6 +282,23 @@ export function foldBurn(
 }
 
 /** A placement rung as the request drawer words its placed phrase. */
+/**
+ * A capped axis's top raised to the last tick recharts would draw over [0, top] with `ticks` ticks: handed [0, top] as
+ * it stands, recharts closes the round ticks with `top` itself as one more, unround tick.
+ */
+export function niceAxisTop(top: number, ticks = 5): number {
+  if (!(top > 0)) return top;
+  // recharts-scale's step: the rough step over its power of ten, that ratio raised to the next 0.05, or 0.1 when the
+  // rough step has one whole digit.
+  const rough = top / (ticks - 1);
+  const digits = Math.floor(Math.log10(rough)) + 1;
+  const unit = 10 ** digits;
+  const scale = digits === 1 ? 0.1 : 0.05;
+  // Rounded before the ceiling, so a quotient a float's error over a whole step does not climb to the next one.
+  const step = Math.ceil(Number((rough / unit / scale).toFixed(9))) * scale * unit;
+  return Number((step * (ticks - 1)).toPrecision(12));
+}
+
 export const PLACEMENT_RUNG_LABEL: Record<Placement['rung'], string> = { content: 'by its messages', static: 'by its static prefix', with_main: 'with the main conversation' };
 /** A rung the console has no label for reads as the router sent it. */
 export const placementRungLabel = (rung: string): string => (own(PLACEMENT_RUNG_LABEL, rung) ? PLACEMENT_RUNG_LABEL[rung as Placement['rung']] : rung);

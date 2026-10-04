@@ -493,6 +493,11 @@
   font-size: 13px;
 }
 
+/* An action with no body above it keeps the gap the body would leave. */
+.empty__title + .btn {
+  margin-top: 12px;
+}
+
 /* The same box as .empty, in the failure ink: a list that swaps one for the other keeps its layout. */
 .empty--error {
   border-color: var(--critical-border);
