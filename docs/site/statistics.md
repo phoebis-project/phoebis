@@ -202,8 +202,9 @@ poll's reading is kept for `stats.retention_days`, so an idle account adds 288 q
 record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while
 its cost is kept. The same pass cuts the registry's history at the requests' cutoff, in slices of 1,000 rows: its
 resolved credential refresh attempts and its change log. It keeps what is read whatever its age: an attempt whose
-outcome is still uncertain, each account's newest two resolved attempts, which the account view and the attention line
-read, and each key id's newest create and delete, which tell a re-created key from its predecessor.
+outcome is still uncertain, each account's newest two resolved attempts, which the attention line reads, and its
+newest attempt, which the account view reads, and each key id's newest create and delete, which tell a re-created key
+from its predecessor.
 
 ## Metrics
 

@@ -2065,6 +2065,11 @@ fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their
         for resolved_at in [100, 200, 300] {
             attempt("b", Some(resolved_at), Some("failed"));
         }
+        // Two uncertain attempts a later sweep settled after the holder's newest one: the newest two by settling
+        // are the older pair, and the account view's last attempt reads the newest by id.
+        for resolved_at in [400, 500, 150] {
+            attempt("d", Some(resolved_at), Some("failed"));
+        }
         let change = |at: i64, kind: &str, target: &str| {
             tx.execute(
                 "INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (?1, 'test', ?2, ?3, '{}')",
@@ -2125,8 +2130,18 @@ fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their
             ("c".into(), None, None),
             ("b".into(), Some(200), Some("failed".into())),
             ("b".into(), Some(300), Some("failed".into())),
+            ("d".into(), Some(400), Some("failed".into())),
+            ("d".into(), Some(500), Some("failed".into())),
+            ("d".into(), Some(150), Some("failed".into())),
         ],
-        "the open rows and the untouched holder's newest two stay"
+        "the open rows, each untouched holder's newest two and its newest by id stay"
+    );
+    assert_eq!(
+        store
+            .last_refresh_attempt("d", 1)
+            .unwrap()
+            .and_then(|a| a.resolved_at),
+        Some(150)
     );
     assert_eq!(
         store

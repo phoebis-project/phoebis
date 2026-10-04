@@ -67,9 +67,10 @@ const PENDING_WHERE: &str = "resolved_at IS NULL OR outcome = 'uncertain'";
 const HISTORY_SLICE: usize = 1_000;
 
 // A resolved attempt under the cutoff, ordered along `refresh_attempts_resolved`. An `uncertain` row stays, since the
-// startup quarantine still reads it as open, and so does each holder's newest two settled rows, whatever their age:
-// the account view's last attempt and the attention reader's run of failures read them for a holder no refresh
-// touched within the retention.
+// startup quarantine still reads it as open, and so do each holder's newest two settled rows and its newest row by
+// id, whatever their age: the attention reader's run of failures reads the first by settling, and the account
+// view's last attempt the second, for a holder no refresh touched within the retention. The two orders part when
+// older uncertain rows settle after the newest attempt.
 const PURGE_ATTEMPTS: &str = "DELETE FROM refresh_attempts WHERE id IN ( \
      SELECT r.id FROM refresh_attempts r \
      WHERE r.outcome IS NOT NULL AND r.outcome <> 'uncertain' AND r.resolved_at < ?1 \
@@ -77,6 +78,8 @@ const PURGE_ATTEMPTS: &str = "DELETE FROM refresh_attempts WHERE id IN ( \
                         WHERE k.account_id = r.account_id AND k.incarnation = r.incarnation \
                           AND k.outcome IS NOT NULL \
                         ORDER BY k.resolved_at DESC, k.id DESC LIMIT 2) \
+       AND r.id <> (SELECT MAX(m.id) FROM refresh_attempts m \
+                    WHERE m.account_id = r.account_id AND m.incarnation = r.incarnation) \
      ORDER BY r.resolved_at, r.id LIMIT ?2)";
 
 // A change under the cutoff, oldest id first: no index leads with `at`, and the ids follow it. Each key id keeps its
