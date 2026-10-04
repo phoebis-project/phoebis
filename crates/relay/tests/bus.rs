@@ -932,7 +932,13 @@ async fn a_rejection_body_that_cannot_be_read_still_completes_the_request() {
         .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
         .await
         .unwrap();
-    assert_eq!(resp.status(), 502);
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (502, "upstream_stalled")
+    );
     let (events, _) = drain_until_complete(&mut sub).await;
     let kinds: Vec<&str> = events
         .iter()
@@ -959,7 +965,7 @@ async fn a_rejection_body_that_cannot_be_read_still_completes_the_request() {
             complete.error_code.as_deref(),
             complete.outcome
         ),
-        (1, 502, Some("upstream_unreachable"), Outcome::Failed)
+        (1, 502, Some("stream_stalled"), Outcome::Failed)
     );
     up.release();
     up.shutdown().await;

@@ -2423,3 +2423,198 @@ async fn a_drifted_stamp_under_a_key_that_refuses_the_model_gets_the_model_refus
     assert!(up.requests().is_empty());
     up.shutdown().await;
 }
+
+/// A JSON rejection whose error type sits in its first bytes and whose message runs the body past the 64 KiB the relay
+/// reads before it decides.
+fn over_the_bound(error_type: &str, message: &str) -> Vec<u8> {
+    format!(r#"{{"type":"error","error":{{"type":"{error_type}","message":"{message}"}}}}"#)
+        .into_bytes()
+}
+
+/// `n` letters a compressor barely shrinks, so a gzip body built from them stays past the bound on the wire.
+fn noise(n: usize) -> String {
+    let mut state: u32 = 0x9e37_79b9;
+    (0..n)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            char::from(b'a' + (state % 26) as u8)
+        })
+        .collect()
+}
+
+fn gzip(payload: &[u8]) -> Vec<u8> {
+    use std::io::Write;
+    let mut encoder = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::default());
+    encoder
+        .write_all(payload)
+        .expect("a Vec never fails a write");
+    encoder.finish().expect("the encoder flushes into the Vec")
+}
+
+#[tokio::test]
+async fn a_429_over_the_buffer_bound_is_classified_from_its_prefix_and_fails_over() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = two_accounts(&up).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(outcome(&resp).account_id, "a", "the session is pinned to a");
+    resp.into_body().collect().await.unwrap();
+    let Respond::Json { headers, .. } = json_429_unified(RESET, "five_hour") else {
+        unreachable!()
+    };
+    let body = over_the_bound("rate_limit_error", &"x".repeat(70 * 1024));
+    assert!(body.len() > 64 * 1024);
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 429,
+            headers,
+            body,
+        },
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 2),
+        "the 429 cooled its account and the request failed over"
+    );
+    assert_eq!(credentials_seen(&up), [A, A, B]);
+    let cooldowns = h.router.cooldowns().await.unwrap();
+    assert_eq!(
+        cooldowns
+            .iter()
+            .map(|c| (c.account_id.as_str(), c.scope.as_str(), c.window.as_str()))
+            .collect::<Vec<_>>(),
+        [("a", "account", "five_hour")]
+    );
+    assert!(
+        h.router
+            .pins()
+            .await
+            .unwrap()
+            .iter()
+            .any(|p| p.session_id == "s1" && p.account_id == "b"),
+        "the pin moved to the account that served"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_403_authentication_error_over_the_bound_takes_the_mark_path() {
+    // A coded body is read as far as its first 64 KiB on the wire decode, so the gzip one is classified as well.
+    for coding in [None, Some("gzip")] {
+        let body = over_the_bound("authentication_error", &noise(160 * 1024));
+        let (headers, body) = match coding {
+            None => (vec![], body),
+            Some(coding) => (
+                vec![("Content-Encoding".to_string(), coding.to_string())],
+                gzip(&body),
+            ),
+        };
+        assert!(
+            body.len() > 64 * 1024,
+            "{coding:?}: past the bound on the wire"
+        );
+        let up = FakeUpstream::start(vec![
+            Rule {
+                path_prefix: "/v1/messages".into(),
+                respond: Respond::Json {
+                    status: 403,
+                    headers,
+                    body,
+                },
+            },
+            Rule {
+                path_prefix: "/v1/oauth/token".into(),
+                respond: Respond::Json {
+                    status: 400,
+                    headers: vec![],
+                    body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+                },
+            },
+        ])
+        .await;
+        let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                resp.status().as_u16(),
+                resp.headers()
+                    .get("x-phoebis-error-code")
+                    .map(|code| code.to_str().unwrap()),
+                outcome(&resp).account_id.as_str()
+            ),
+            (503, Some("accounts_unavailable"), ""),
+            "{coding:?}: the router's own answer, naming no account"
+        );
+        let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+        let answer: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            answer["error"]["message"], "no account in this pool can serve requests",
+            "{coding:?}"
+        );
+        assert_eq!(token_posts(&up), 1, "{coding:?}: the refresh ran once");
+        wait_for(Duration::from_secs(5), || {
+            (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired)
+                .then_some(())
+        })
+        .await;
+        up.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn a_400_over_the_buffer_bound_whose_arm_forwards_it_reaches_the_client_whole() {
+    let body = over_the_bound("invalid_request_error", &"x".repeat(70 * 1024));
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: body.clone(),
+        },
+    }])
+    .await;
+    let h = two_accounts(&up).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 400);
+    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        bytes.as_ref(),
+        body.as_slice(),
+        "the prefix and the rest, every byte"
+    );
+    assert_eq!(
+        credentials_seen(&up),
+        [A],
+        "the client's own 400 fails nothing over"
+    );
+    up.shutdown().await;
+}

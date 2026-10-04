@@ -716,7 +716,8 @@ impl Inner {
                 self.pause(key, agent_id);
                 return;
             }
-            (true, Some("attempted")) => {
+            // A moved key's next probe admits under its new pool.
+            (true, Some("attempted" | "pool_moved")) => {
                 return self.retry(key, agent_id, Reason::RetryableProbeError, now, None)
             }
             (true, Some("reauth_required")) => {
@@ -888,6 +889,28 @@ mod tests {
                 "the {obstacle} answer holds the agent under its own standing, not the exhausted pool"
             );
         }
+    }
+
+    #[test]
+    fn a_probe_refused_for_a_moved_key_retries_under_the_new_pool_rather_than_pausing_as_exhausted()
+    {
+        let (mut inner, key) = one_agent_inner();
+        inner.probe_error(
+            &key,
+            "main",
+            503,
+            Some("accounts_unavailable"),
+            Some("pool_moved"),
+            Some(1),
+            true,
+            1_000,
+        );
+        let agent = &inner.sessions[&key].agents["main"];
+        assert_eq!(
+            (agent.reason, agent.paused),
+            (Reason::RetryableProbeError, false),
+            "the key's next request admits under its new pool, so the probe retries"
+        );
     }
 
     #[test]

@@ -451,8 +451,17 @@ pub(crate) fn error_type(body: &[u8]) -> Option<String> {
             .and_then(Value::as_str)
             .map(str::to_string);
     }
-    let text = std::str::from_utf8(body).ok()?;
-    textual_member(text, "type").map(str::to_string)
+    textual_member(valid_text(body), "type").map(str::to_string)
+}
+
+/// `body` up to its first byte that is not UTF-8: a prefix cut at the buffer bound can end inside a multi-byte
+/// character, and the text before it still reads.
+fn valid_text(body: &[u8]) -> &str {
+    match std::str::from_utf8(body) {
+        Ok(text) => text,
+        Err(error) => std::str::from_utf8(&body[..error.valid_up_to()])
+            .expect("the bytes before `valid_up_to` are UTF-8"),
+    }
 }
 
 fn names_credit_balance(body: &[u8]) -> bool {
@@ -466,10 +475,7 @@ fn names_spend_limit(body: &[u8]) -> bool {
         return value["error"]["details"]["error_code"].as_str()
             == Some("enforced_spend_limit_reached");
     }
-    let Ok(text) = std::str::from_utf8(body) else {
-        return false;
-    };
-    textual_member(text, "error_code") == Some("enforced_spend_limit_reached")
+    textual_member(valid_text(body), "error_code") == Some("enforced_spend_limit_reached")
 }
 
 /// Whether `error.message` names `wire_model` as a whole token: the byte before and after each occurrence are
@@ -654,6 +660,21 @@ mod tests {
         let cut_before_key = &full[..key_at];
         assert!(serde_json::from_slice::<Value>(cut_before_key).is_err());
         assert!(!names_spend_limit(cut_before_key));
+    }
+
+    /// A rejection read up to the buffer bound can end inside a multi-byte character; what came before it still
+    /// names the error.
+    #[test]
+    fn a_prefix_cut_inside_a_multi_byte_character_still_names_its_error() {
+        let auth = "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"\u{e9}t\u{e9}";
+        let cut = &auth.as_bytes()[..auth.len() - 1];
+        assert!(std::str::from_utf8(cut).is_err());
+        assert_eq!(error_type(cut).as_deref(), Some("authentication_error"));
+        let full = spend_cap_body();
+        let mut cut = full[..full.len() - 2].to_vec();
+        cut.extend_from_slice(&"\u{e9}".as_bytes()[..1]);
+        assert!(std::str::from_utf8(&cut).is_err());
+        assert!(names_spend_limit(&cut));
     }
 
     #[test]

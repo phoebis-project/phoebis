@@ -307,6 +307,10 @@ pub struct Selection {
     /// selector did.
     pub in_overage: bool,
     pub trace: SelectionTrace,
+    /// The pool the candidates were resolved under: a selection re-resolved on a newer revision may name another
+    /// pool than the request was admitted under, which the relay refuses rather than dispatch under one pool's
+    /// policy on another's member.
+    pub pool_id: String,
 }
 
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
@@ -1108,6 +1112,7 @@ pub fn select(
                 placement,
                 cohort_hold,
             },
+            pool_id: pool.id.clone(),
         }),
         writes,
     )
@@ -1676,6 +1681,7 @@ fn renew(
             renewed: true,
             ..SelectionTrace::default()
         },
+        pool_id: pool.id.clone(),
     }
 }
 

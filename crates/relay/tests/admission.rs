@@ -1,4 +1,7 @@
-//! What the relay refuses at admission on the router's own standing: the ledger behind its writer.
+//! What the relay refuses on the router's own standing before any dial: the ledger behind its writer at admission,
+//! and a key moved to another pool between its admission and its selection, which answers the exhaustion `503` with
+//! `Retry-After: 1` under the outcome's obstacle `pool_moved` and files the request `rejected` with
+//! `accounts_unavailable`.
 
 mod common;
 
@@ -12,11 +15,12 @@ use bytes::Bytes;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_bus::{Bus, Delivery, Event, ResponseChunk, QUEUE_DEPTH};
+use phoebis_bus::{Bus, Delivery, Event, Outcome, ResponseChunk, QUEUE_DEPTH};
 use phoebis_relay::{Accounting, AccountingSource, Limits, Probe};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
+const B: &str = "sk-ant-oat01-BBBB";
 
 /// A Claude Code caller's body, which an OAuth-only pool serves: the session rides in `metadata.user_id`.
 const BODY: &str = r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#;
@@ -272,5 +276,101 @@ async fn every_refusal_answers_within_the_deadline_while_the_writer_channel_and_
         "{} dropped for {answered} refusals",
         sleeper.stats.dropped.load(Ordering::SeqCst)
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_key_moved_between_pools_mid_flight_is_refused_and_the_next_request_admits_under_the_new_pool(
+) {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+        bus,
+    )
+    .await;
+    // `main` keeps a and `q` holds b alone, so the account that serves names the pool the request went out under.
+    h.store
+        .set_pool_members("main", &[member("a", 0)], "test")
+        .unwrap();
+    let mut q = h.store.pool("main").unwrap().unwrap();
+    q.id = "q".into();
+    q.label = "q".into();
+    h.store.insert_pool(&q, "test").unwrap();
+    h.store
+        .set_pool_members("q", &[member("b", 0)], "test")
+        .unwrap();
+    h.router.reload().await.unwrap();
+    // One slot: `reserve` returns once the relay took the first chunk, which it reads after it pinned its snapshot
+    // and authenticated the key under `main`.
+    let (tx, rx) = tokio::sync::mpsc::channel::<Result<Bytes, std::io::Error>>(1);
+    let (head, tail) = BODY.split_at(BODY.len() / 2);
+    tx.send(Ok(Bytes::from_static(head.as_bytes())))
+        .await
+        .unwrap();
+    let request = Request::post("/v1/messages")
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json")
+        .header("content-length", BODY.len())
+        .header("user-agent", CLAUDE_CLI_USER_AGENT)
+        .body(Body::from_stream(
+            tokio_stream::wrappers::ReceiverStream::new(rx),
+        ))
+        .unwrap();
+    let app = h.app.clone();
+    let inflight = tokio::spawn(async move { app.oneshot(request).await.unwrap() });
+    let permit = tx.reserve().await.unwrap();
+    let mut desktop = h.store.api_key("desktop").unwrap().unwrap();
+    desktop.pool_id = "q".into();
+    h.store.update_api_key(&desktop, "test").unwrap();
+    h.router.reload().await.unwrap();
+    permit.send(Ok(Bytes::from_static(tail.as_bytes())));
+    drop(tx);
+    let response = inflight.await.unwrap();
+    let header = |name: &str| {
+        response
+            .headers()
+            .get(name)
+            .map(|value| value.to_str().unwrap().to_string())
+    };
+    assert_eq!(
+        (
+            response.status().as_u16(),
+            header("retry-after"),
+            header("x-phoebis-error-code")
+        ),
+        (503, Some("1".into()), Some("accounts_unavailable".into()))
+    );
+    assert_eq!(outcome(&response).obstacle, Some("pool_moved"));
+    let text = text_of(response).await;
+    assert!(
+        text.contains("no account in this pool can serve requests") && !text.contains("\"a\""),
+        "{text}"
+    );
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    let complete = drain_until_complete(&mut sub)
+        .await
+        .into_iter()
+        .find_map(|event| match event {
+            Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (Outcome::Rejected, Some("accounts_unavailable")),
+        "a moved key is no exhaustion of the pool"
+    );
+    let response = h
+        .app
+        .clone()
+        .oneshot(request_to("/v1/messages"))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), 200, "{}", text_of(response).await);
+    assert_eq!(credentials_seen(&up), [B], "served under q's member");
     up.shutdown().await;
 }
