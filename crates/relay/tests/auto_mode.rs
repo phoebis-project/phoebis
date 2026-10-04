@@ -480,7 +480,7 @@ fn first_party_with_an_escaped_stamp() -> Vec<u8> {
 }
 
 #[tokio::test]
-async fn off_refuses_a_stamp_the_restamp_cannot_reach_and_the_default_relays_it_as_sent() {
+async fn a_stamp_the_restamp_cannot_reach_is_refused_under_off_and_the_default_alike() {
     let head = head_with_beta(FixtureKind::OauthFirstParty);
     let sent_body = first_party_with_an_escaped_stamp();
     assert!(
@@ -488,28 +488,17 @@ async fn off_refuses_a_stamp_the_restamp_cannot_reach_and_the_default_relays_it_
         "the raw walk misses the stamp"
     );
 
-    let r = relay(&[account()], key_off(), json_200(), &head, &sent_body).await;
-    assert_eq!(r.status, 400);
-    assert_eq!(r.code, "body_shape");
-    assert!(
-        String::from_utf8_lossy(&r.answer).contains("billing stamp"),
-        "the message names the stamp: {}",
-        String::from_utf8_lossy(&r.answer)
-    );
-    assert!(
-        r.sent.is_empty(),
-        "no cut body under the client's stale hash reached the upstream"
-    );
-
-    // Nothing edits the body under the default, so the client's own stamp travels with the bytes it covers.
-    let r = relay(
-        &[account()],
-        PoolSpec::default(),
-        json_200(),
-        &head,
-        &sent_body,
-    )
-    .await;
-    assert_eq!(r.status, 200);
-    assert!(r.sent[0].body == sent_body, "no byte moved");
+    // Off cuts the member and the default edits nothing; neither reaches the upstream, since a stamp the raw walk
+    // cannot read is one the drift check never verified, whether or not the bytes move under it.
+    for pool in [key_off(), PoolSpec::default()] {
+        let r = relay(&[account()], pool, json_200(), &head, &sent_body).await;
+        assert_eq!(r.status, 400);
+        assert_eq!(r.code, "body_shape");
+        assert!(
+            String::from_utf8_lossy(&r.answer).contains("billing stamp"),
+            "the message names the stamp: {}",
+            String::from_utf8_lossy(&r.answer)
+        );
+        assert!(r.sent.is_empty(), "nothing reached the upstream");
+    }
 }

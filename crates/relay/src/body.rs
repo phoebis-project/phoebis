@@ -78,8 +78,9 @@ pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
 /// resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyMember {
-    /// A billing stamp in `system[0].text` the decoder reads and the raw walk cannot reach, so the restamp
-    /// after an edit would leave the client's hash on bytes it was not computed over.
+    /// A billing stamp in `system[0].text` the decoded walk reads and the raw walk cannot reach, so the restamp
+    /// after an edit would leave the client's hash on bytes it was not computed over, and an unedited body would
+    /// travel under a hash nothing verified.
     BillingStamp,
     /// A `cache_control` marker the decoder reads and the raw walk cannot reach, or one it reaches and cannot
     /// read.
@@ -160,7 +161,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     }
     // Read before any edit moves the line: a client hash is checked and re-signed, the client's own placeholder
     // (its unpatched paths send `00000`, which the server accepts) is neither.
-    let client_hash = carries_a_stamp(body) && !phoebis_cch::carries_only_the_placeholder(body);
+    let client_hash = carries_a_stamp(body)? && !phoebis_cch::carries_only_the_placeholder(body);
     if let Some(client_drift) = drift(body)? {
         // The client hashes by rules this build no longer shares. A stamp the router cannot verify never travels
         // under an account's credential, edited or not: a wrong hash is indistinguishable from tampering and the
@@ -170,19 +171,12 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         return Err(RelayError::ClientDrift { kind: client_drift });
     }
     if let Some(check) = edit.version_check {
-        if carries_a_stamp(body) {
+        if carries_a_stamp(body)? {
             if let Some(kind) = version_drift(body, check) {
                 return Err(RelayError::ClientDrift { kind });
             }
         }
     }
-    // A stamp the raw walk cannot reach (a key on its path or the line spelled with an escape, or a second
-    // spelling after the one the walk reads) is one the restamp below never rewrites, so an edited body would
-    // carry the client's hash over bytes it was not computed for. Kept to compare after the edits: a body no edit
-    // touched still carries the client's own stamp and travels.
-    let unreachable_stamp = (phoebis_cch::decoded_stamp_count(body)
-        > usize::from(carries_a_stamp(body)))
-    .then(|| body.clone());
     if edit.safeguards == SafeguardsEdit::Drop {
         // A second spelling would reach the upstream after the first is cut and a last-wins parser would act
         // on it; an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
@@ -240,9 +234,6 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
         Some(ttl) => set_cache_ttl(body, ttl, edit.markerless)?,
         None => false,
     };
-    if unreachable_stamp.is_some_and(|sent| *body != sent) {
-        return Err(RelayError::BodyShape(BodyMember::BillingStamp));
-    }
     // A client hash is re-signed over the edited bytes it no longer covers. The placeholder, restored or sent by
     // the client, travels unsigned, as the client's unpatched paths send it and the server accepts it; the switch
     // signs a restored one with this build's formula, for a server that rejects the placeholder.
@@ -522,9 +513,10 @@ fn insert_diagnostics(body: &mut Vec<u8>, previous: Option<&str>) -> bool {
 /// stripped.
 ///
 /// `find_cch` reads lowercase hex only, so a client stamping uppercase digits leaves a stamp that scanner
-/// cannot read at all; that counts as drift rather than as a body carrying no hash.
-fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
-    if !carries_a_stamp(body) {
+/// cannot read at all; that counts as drift rather than as a body carrying no hash. Errs as `carries_a_stamp`
+/// errs, on a stamp only the decoded walk reaches.
+pub(crate) fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
+    if !carries_a_stamp(body)? {
         return Ok(None);
     }
     let Some(location) = phoebis_cch::find_cch(body) else {
@@ -554,13 +546,24 @@ fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'static str> {
     (expected.rsplit('.').next() != Some(suffix)).then_some("version_suffix")
 }
 
-/// Whether the billing block claims a hash, readable by `find_cch` or not. A first-party client stamps one; a
-/// non-first-party billing block carries the entrypoint alone and leaves the body free to be edited.
-fn carries_a_stamp(body: &[u8]) -> bool {
-    phoebis_cch::string_member_span(body, &["system", "0", "text"]).is_some_and(|(start, end)| {
-        let text = &body[start..end];
-        text.starts_with(BILLING_BLOCK) && find(text, b"cch=").is_some()
-    })
+/// Whether the billing block claims a hash, read through the decoded keys of `system[0].text` so a stamp spelled
+/// with an escape is seen. `Err(BodyShape(BillingStamp))` when the decoded walk finds a stamp the raw walk
+/// cannot reach: the restamp rewrites what the raw walk finds, so such a body would travel under the client's
+/// hash over bytes it was not computed for, or unedited under a hash nothing verified.
+pub(crate) fn carries_a_stamp(body: &[u8]) -> Result<bool, RelayError> {
+    let raw = phoebis_cch::string_member_span(body, &["system", "0", "text"]).is_some_and(
+        |(start, end)| {
+            let text = &body[start..end];
+            text.starts_with(BILLING_BLOCK) && find(text, b"cch=").is_some()
+        },
+    );
+    // The decoded walk sees a key spelled with an escape; the raw walk, which the restamp edits through, does
+    // not. A stamp only the decoded walk reaches is refused whole rather than sent: edited, it would carry the
+    // client's hash over bytes it was not computed for; unedited, a hash nothing verified.
+    if phoebis_cch::decoded_stamp_count(body) > usize::from(raw) {
+        return Err(RelayError::BodyShape(BodyMember::BillingStamp));
+    }
+    Ok(raw)
 }
 
 fn starts_with_object(body: &[u8]) -> bool {
@@ -1205,11 +1208,18 @@ mod tests {
     }
 
     #[test]
-    fn a_stamp_the_restamp_cannot_reach_refuses_an_edit_and_travels_as_sent_without_one() {
+    fn a_stamp_the_raw_walk_cannot_reach_is_refused_edited_or_not() {
         let sent = escaped_stamp_with_safeguards();
         assert!(
-            phoebis_cch::find_cch(&sent).is_none() && !carries_a_stamp(&sent),
+            phoebis_cch::find_cch(&sent).is_none(),
             "the raw walk misses the stamp"
+        );
+        assert!(
+            matches!(
+                carries_a_stamp(&sent),
+                Err(RelayError::BodyShape(BodyMember::BillingStamp))
+            ),
+            "the decoded walk reads the stamp the raw walk misses"
         );
         let root: serde_json::Value = serde_json::from_slice(&sent).unwrap();
         assert!(
@@ -1236,14 +1246,16 @@ mod tests {
             edit_body(&mut body, &drop_edit(SafeguardsEdit::Drop)),
             Err(RelayError::BodyShape(BodyMember::BillingStamp))
         ));
+        assert!(body == sent, "refused before the cut moved a byte");
 
+        // Nothing to edit, and still refused: the client's digits are ones the drift check never read.
         let mut body = sent.clone();
-        let edits = edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep))
-            .expect("nothing to edit, so nothing to restamp");
-        assert!(!edits.cch_restamped);
         assert!(
-            body == sent,
-            "no byte moved, so the client's own stamp holds"
+            matches!(
+                edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
+                Err(RelayError::BodyShape(BodyMember::BillingStamp))
+            ),
+            "an unedited body is refused as an edited one is"
         );
 
         let mut body = sent.clone();
@@ -1258,7 +1270,7 @@ mod tests {
                 ),
                 Err(RelayError::BodyShape(BodyMember::BillingStamp))
             ),
-            "any edit needs the restamp, the member kept or not"
+            "a model edit is refused as well"
         );
     }
 

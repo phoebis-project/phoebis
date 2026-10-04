@@ -1,5 +1,5 @@
-//! A body whose top-level object repeats a routing member, or whose billing line's path repeats a member, is
-//! refused before anything reaches the upstream.
+//! A body whose top-level object repeats a routing member, or whose billing line's path repeats a member or spells
+//! one with an escape, is refused before anything reaches the upstream.
 
 mod common;
 
@@ -216,5 +216,34 @@ async fn a_body_repeating_its_top_level_system_is_refused_before_the_placeholder
         );
     }
     assert!(up.requests().is_empty(), "nothing reached the upstream");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stamp_bearing_member_spelled_with_an_escape_is_refused_as_a_repeat_is() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    // One spelling, escaped: the decoded walk reads the stamp, the raw walk the restamp edits through does not.
+    // Refused whether or not an edit would touch the body, so the hash never travels unverified.
+    for (system, text) in [("\\u0073ystem", "text"), ("system", "\\u0074ext")] {
+        let body = format!(
+            r#"{{"model":"claude-sonnet-4-5","{system}":[{{"type":"text","{text}":"{UNCHECKED_LINE}"}}],"messages":[],"max_tokens":8}}"#
+        );
+        let (status, code, text) = send(&h, "/v1/messages", &body).await;
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(code, "body_shape", "{text}");
+        assert!(
+            text.contains("billing stamp the relay cannot restamp"),
+            "{text}"
+        );
+    }
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    // The raw spelling with the placeholder still travels: the placeholder claims no hash.
+    let plain = format!(
+        r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{PLACEHOLDER_LINE}"}}],"messages":[],"max_tokens":8}}"#
+    );
+    let (status, _, text) = send(&h, "/v1/messages", &plain).await;
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(up.requests().len(), 1);
     up.shutdown().await;
 }
