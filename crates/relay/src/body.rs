@@ -39,9 +39,6 @@ pub struct NativeEdit<'a> {
     pub cache_ttl: Option<CacheTtl>,
     /// What the TTL rewrite does to a body carrying no marker at all.
     pub markerless: Markerless,
-    /// The `claude-cli/` version of the user agent and the prompt units `BodyFacts` read, for the
-    /// version-suffix check; `None` for a caller the check does not apply to.
-    pub version_check: Option<VersionCheck<'a>>,
     pub safeguards: SafeguardsEdit,
     /// Whether a restored `cch=00000` is signed with this build's formula; off, the placeholder travels as the
     /// client's own unpatched paths send it.
@@ -78,9 +75,8 @@ pub const DANGEROUS_TOOL_USE_BETA: &str = "dangerous-tool-use-2026-09-03";
 /// resolved.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BodyMember {
-    /// A billing stamp in `system[0].text` the decoded walk reads and the raw walk cannot reach, so the restamp
-    /// after an edit would leave the client's hash on bytes it was not computed over, and an unedited body would
-    /// travel under a hash nothing verified.
+    /// A billing stamp in `system[0].text` the decoded walk reads and the raw walk cannot reach; `carries_a_stamp`
+    /// says why such a body is refused.
     BillingStamp,
     /// A `cache_control` marker the decoder reads and the raw walk cannot reach, or one it reaches and cannot
     /// read.
@@ -162,21 +158,11 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
     // Read before any edit moves the line: a client hash is checked and re-signed, the client's own placeholder
     // (its unpatched paths send `00000`, which the server accepts) is neither.
     let client_hash = carries_a_stamp(body)? && !phoebis_cch::carries_only_the_placeholder(body);
-    if let Some(client_drift) = drift(body)? {
-        // The client hashes by rules this build no longer shares. A stamp the router cannot verify never travels
-        // under an account's credential, edited or not: a wrong hash is indistinguishable from tampering and the
-        // cost falls on the account, not on the request; relaying the body unedited under the client's stamp, or
-        // stripping the stamp, would both put that cost on the account, so nothing is sent until the router is
-        // re-pinned, and the caller learns which kind of drift it was.
-        return Err(RelayError::ClientDrift { kind: client_drift });
-    }
-    if let Some(check) = edit.version_check {
-        if carries_a_stamp(body)? {
-            if let Some(kind) = version_drift(body, check) {
-                return Err(RelayError::ClientDrift { kind });
-            }
-        }
-    }
+    // Judged at admission on the body the client sent; a leg never meets a drift.
+    debug_assert!(
+        matches!(drift(body), Ok(None)),
+        "a drifted stamp reached a leg"
+    );
     if edit.safeguards == SafeguardsEdit::Drop {
         // A second spelling would reach the upstream after the first is cut and a last-wins parser would act
         // on it; an escaped spelling is one the raw walk never finds. Both refuse rather than send a body
@@ -533,7 +519,7 @@ pub(crate) fn drift(body: &[u8]) -> Result<Option<&'static str>, RelayError> {
 /// Whether the version suffix the client stamped reproduces from the body's own prompt and the version its
 /// user agent names. A line with no `cc_version`, a bare version with no suffix, or a version other than the
 /// agent's is not this drift: the first two carry nothing to check, and the third is the hash check's to judge.
-fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'static str> {
+pub(crate) fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'static str> {
     let (start, end) = phoebis_cch::string_member_span(body, &["system", "0", "text"])?;
     // The span is the JSON token with its quotes and escapes; the billing line is its decoded text.
     let text = serde_json::from_slice::<String>(&body[start..end]).ok()?;
@@ -546,10 +532,10 @@ fn version_drift(body: &[u8], check: VersionCheck<'_>) -> Option<&'static str> {
     (expected.rsplit('.').next() != Some(suffix)).then_some("version_suffix")
 }
 
-/// Whether the billing block claims a hash, read through the decoded keys of `system[0].text` so a stamp spelled
-/// with an escape is seen. `Err(BodyShape(BillingStamp))` when the decoded walk finds a stamp the raw walk
-/// cannot reach: the restamp rewrites what the raw walk finds, so such a body would travel under the client's
-/// hash over bytes it was not computed for, or unedited under a hash nothing verified.
+/// Whether the billing block claims a hash, as the raw walk the restamp edits through reads `system[0].text`.
+/// `Err(BodyShape(BillingStamp))` when the decoded walk, which sees a key spelled with an escape, finds a stamp
+/// the raw walk cannot reach: edited, such a body would carry the client's hash over bytes it was not computed
+/// for; unedited, a hash nothing verified.
 pub(crate) fn carries_a_stamp(body: &[u8]) -> Result<bool, RelayError> {
     let raw = phoebis_cch::string_member_span(body, &["system", "0", "text"]).is_some_and(
         |(start, end)| {
@@ -557,9 +543,6 @@ pub(crate) fn carries_a_stamp(body: &[u8]) -> Result<bool, RelayError> {
             text.starts_with(BILLING_BLOCK) && find(text, b"cch=").is_some()
         },
     );
-    // The decoded walk sees a key spelled with an escape; the raw walk, which the restamp edits through, does
-    // not. A stamp only the decoded walk reaches is refused whole rather than sent: edited, it would carry the
-    // client's hash over bytes it was not computed for; unedited, a hash nothing verified.
     if phoebis_cch::decoded_stamp_count(body) > usize::from(raw) {
         return Err(RelayError::BodyShape(BodyMember::BillingStamp));
     }
@@ -640,7 +623,6 @@ mod tests {
                 diagnostics: None,
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
-                version_check: None,
                 safeguards: SafeguardsEdit::Keep,
                 sign_placeholder: false,
             },
@@ -665,7 +647,6 @@ mod tests {
                     diagnostics: None,
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
-                    version_check: None,
                     safeguards: SafeguardsEdit::Keep,
                     sign_placeholder: false,
                 },
@@ -687,7 +668,6 @@ mod tests {
                     diagnostics: None,
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
-                    version_check: None,
                     safeguards: SafeguardsEdit::Keep,
                     sign_placeholder: false,
                 },
@@ -708,7 +688,6 @@ mod tests {
                     diagnostics: None,
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
-                    version_check: None,
                     safeguards: SafeguardsEdit::Keep,
                     sign_placeholder: false,
                 },
@@ -729,7 +708,6 @@ mod tests {
                 diagnostics: None,
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
-                version_check: None,
                 safeguards: SafeguardsEdit::Keep,
                 sign_placeholder: false,
             },
@@ -750,7 +728,6 @@ mod tests {
                 diagnostics: None,
                 cache_ttl: None,
                 markerless: Markerless::TakesTheMember,
-                version_check: None,
                 safeguards: SafeguardsEdit::Keep,
                 sign_placeholder: false,
             },
@@ -776,7 +753,6 @@ mod tests {
                     diagnostics: None,
                     cache_ttl: None,
                     markerless: Markerless::TakesTheMember,
-                    version_check: None,
                     safeguards: SafeguardsEdit::Keep,
                     sign_placeholder: false,
                 },
@@ -1068,7 +1044,6 @@ mod tests {
             diagnostics: None,
             cache_ttl: None,
             markerless: Markerless::TakesTheMember,
-            version_check: None,
             safeguards,
             sign_placeholder: false,
         }
@@ -1286,21 +1261,15 @@ mod tests {
     /// first one claims.
     #[test]
     fn a_placeholder_behind_a_stamp_find_cch_cannot_read_is_drift() {
-        let mut body = a_line_stamped("cch=9B244; cch=00000;");
-        assert!(matches!(
-            edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
-            Err(RelayError::ClientDrift { kind: "hash" })
-        ));
+        let body = a_line_stamped("cch=9B244; cch=00000;");
+        assert!(matches!(drift(&body), Ok(Some("hash"))));
     }
 
     /// The second stamp would travel unverified behind a placeholder honoured as the line's only one.
     #[test]
     fn a_placeholder_ahead_of_a_second_stamp_is_drift() {
-        let mut body = a_line_stamped("cch=00000; cch=abcde;");
-        assert!(matches!(
-            edit_body(&mut body, &drop_edit(SafeguardsEdit::Keep)),
-            Err(RelayError::ClientDrift { kind: "hash" })
-        ));
+        let body = a_line_stamped("cch=00000; cch=abcde;");
+        assert!(matches!(drift(&body), Ok(Some("hash"))));
     }
 
     #[test]

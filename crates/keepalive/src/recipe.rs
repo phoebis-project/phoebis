@@ -120,6 +120,21 @@ pub fn make_recipe(
     {
         return Err("unsupported_shape");
     }
+    // The edits below and the restamp walk raw keys; a member only the decoded walk reaches would be missed
+    // (a second `stream` inserted beside an escaped one) or left under a stale hash (a stamp the restamp
+    // never rewrites), so such a body is refused rather than retained. Read after the shape check, so a
+    // `max_tokens` that is no positive number stays an unsupported shape.
+    let decoded =
+        |name: &str| phoebis_cch::top_level_member_count(body, name).map_err(|_| "invalid_request");
+    let stamp_hidden =
+        phoebis_cch::decoded_stamp_count(body) > usize::from(phoebis_cch::find_cch(body).is_some());
+    let stream_hidden = decoded("stream")?
+        > usize::from(phoebis_cch::bool_member_span(body, &["stream"]).is_some());
+    let max_tokens_hidden = decoded("max_tokens")?
+        > usize::from(phoebis_cch::number_member_span(body, &["max_tokens"]).is_some());
+    if stamp_hidden || stream_hidden || max_tokens_hidden {
+        return Err("escaped_key");
+    }
     for key in ["cache_control", "output_config", "thinking", "tool_choice"] {
         if root.get(key).is_some_and(|field| !field.is_object()) {
             return Err("unsupported_shape");

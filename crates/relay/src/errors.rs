@@ -180,7 +180,7 @@ pub(crate) fn relay_failure(error: &RelayError) -> Failure {
             code: phoebis_bus::BODY_SHAPE_ERROR_CODE,
             message: match member {
                 BodyMember::BillingStamp => {
-                    "the request body carries a billing stamp the relay cannot restamp, so the edits the request needs cannot travel with a hash that matches them"
+                    "the request body carries a billing stamp the relay can neither check nor restamp"
                 }
                 BodyMember::CacheControl => {
                     "the request body carries a cache_control marker the relay cannot place, so the pool's cache TTL policy cannot be applied to it"

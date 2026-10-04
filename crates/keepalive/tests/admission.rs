@@ -563,6 +563,33 @@ async fn an_oversized_request_invalidates_only_its_own_agent() {
     }
 }
 
+/// A billing line stamping a hash; its digits need not reproduce, since a stamp the replay cannot reach is
+/// refused before any restamp.
+const STAMPED_LINE: &str =
+    "x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch=abcde;";
+
+#[tokio::test]
+async fn a_body_whose_edited_member_is_spelled_with_an_escape_is_not_retained() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    for body in [
+        // `text` escaped: the decoded walk reads the stamp, the raw walk the restamp edits through does not.
+        format!(
+            r#"{{"model":"m","max_tokens":10,"system":[{{"type":"text","\u0074ext":"{STAMPED_LINE}"}}],"messages":[{{"role":"user","content":"hi"}}]}}"#
+        ),
+        // `stream` escaped: the replay would insert a second flag beside it.
+        r#"{"model":"m","max_tokens":10,"\u0073tream":true,"messages":[{"role":"user","content":"hi"}]}"#
+            .to_string(),
+    ] {
+        r.engine.observe(r.observed("escaped", "main", &body));
+        let status = r.status("main");
+        assert!(
+            status.next_probe_at.is_none() && status.reason == Reason::InvalidRequest,
+            "{body}: {status:?}"
+        );
+    }
+}
+
 #[tokio::test]
 async fn unknown_ownership_needs_a_lifecycle_snapshot_and_a_restart_rearms() {
     let mut r = rig(RigSpec::default()).await;

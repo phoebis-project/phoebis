@@ -1329,6 +1329,26 @@ impl Relay {
                 key.rotated_at,
             )
             .await;
+        // The stamp depends on the body alone, so it is judged once here, before any account is selected, and a
+        // leg never meets it; after the identity is read, so the refusal's row keeps the model, the session and
+        // the agent.
+        let stamp = match crate::body::drift(&raw) {
+            Ok(None) => None,
+            Ok(Some(kind)) => Some(self.drift_refusal(kind, &parts.headers)),
+            Err(error) => Some(LocalRefusal::from(relay_failure(&error))),
+        };
+        if let Some(refusal) = stamp {
+            return self
+                .refused(
+                    &trace,
+                    0,
+                    refusal,
+                    Some(&key),
+                    Some(&identity),
+                    client_version.as_deref(),
+                )
+                .await;
+        }
         let client_class = identity.class;
         let candidates = match resolve(
             &snapshot,
@@ -1406,6 +1426,30 @@ impl Relay {
             }
             _ => None,
         };
+        // The suffix check needs the client's version and the prompt units and nothing an account would add, so it
+        // runs here, with the hash check's standing, rather than on a leg. Only a stamped line is judged, as for the
+        // hash: a reduced-shape line has its missing fields restored and is never refused for its suffix.
+        if let Some(context) = &restore {
+            let check = VersionCheck {
+                client_version: &context.cli_version,
+                prompt_units: context.prompt_units,
+            };
+            if matches!(crate::body::carries_a_stamp(&raw), Ok(true)) {
+                if let Some(kind) = crate::body::version_drift(&raw, check) {
+                    let refusal = self.drift_refusal(kind, &parts.headers);
+                    return self
+                        .refused(
+                            &trace,
+                            0,
+                            refusal,
+                            Some(&key),
+                            Some(&identity),
+                            client_version.as_deref(),
+                        )
+                        .await;
+                }
+            }
+        }
         // The pool's switch alone; a request with no pool reads off. A `count_tokens` request never gets it, since
         // its public schema has no slot for the beta or the member to land in.
         let cache_diagnostics_on = snapshot
@@ -1882,10 +1926,6 @@ impl Relay {
                     diagnostics,
                     cache_ttl: ttl,
                     markerless,
-                    version_check: admitted.restore.as_ref().map(|r| VersionCheck {
-                        client_version: &r.cli_version,
-                        prompt_units: r.prompt_units,
-                    }),
                     safeguards: if admitted.auto_mode_server {
                         SafeguardsEdit::Keep
                     } else {
@@ -1915,47 +1955,6 @@ impl Relay {
         let (mut edited, mut body_injected, mut inject_betas, mut ttl) = match build(&skip) {
             Ok(built) => built,
             Err(error) => {
-                if let RelayError::ClientDrift { kind } = &error {
-                    // Drift depends on the body alone, so it is found on the first account before any wire
-                    // submission: nothing is sent until the router is re-pinned, and the outcome carries the tag.
-                    // A stamp the router cannot verify never travels under an account's credential, edited or
-                    // not: a wrong hash is indistinguishable from tampering and the cost falls on the account
-                    // rather than on the request, so a drifted one is refused rather than relayed unedited under
-                    // the client's stamp or stripped.
-                    tracing::warn!(
-                        account = %account.id,
-                        drift = %kind,
-                        user_agent = %user_agent(admitted.caller),
-                        profile = %self.profile_name,
-                        "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
-                    );
-                    let outcome = self.outcome(
-                        admitted.trace,
-                        Some(admitted.key),
-                        Some(admitted.identity),
-                        &account.id,
-                        0,
-                        0,
-                        false,
-                        Some(kind.to_string()),
-                        admitted.client_version.clone(),
-                        Some("client_drift"),
-                        None,
-                        None,
-                        None,
-                    );
-                    return Leg::Respond(
-                        self.answer(
-                            admitted.trace,
-                            relay_failure(&error).response(admitted.request_id),
-                            outcome,
-                            None,
-                            ResponseFacts::default(),
-                            None,
-                        )
-                        .await,
-                    );
-                }
                 return Leg::Respond(
                     self.refused(
                         admitted.trace,
@@ -3050,11 +3049,15 @@ impl Relay {
         &self,
         trace: &Trace,
         attempt: u8,
-        failure: Failure,
+        refusal: impl Into<LocalRefusal>,
         key: Option<&ApiKeyRow>,
         identity: Option<&RequestIdentity>,
         client_version: Option<&str>,
     ) -> Response {
+        let LocalRefusal {
+            failure,
+            client_drift,
+        } = refusal.into();
         let outcome = self.outcome(
             trace,
             key,
@@ -3063,7 +3066,7 @@ impl Relay {
             0,
             attempt,
             false,
-            None,
+            client_drift.map(str::to_string),
             client_version.map(str::to_string),
             Some(failure.code),
             None,
@@ -3079,6 +3082,20 @@ impl Relay {
             None,
         )
         .await
+    }
+
+    /// A client-drift refusal with its trigger, and the warn that tells the operator which client to re-pin to.
+    fn drift_refusal(&self, kind: &'static str, headers: &HeaderMap) -> LocalRefusal {
+        tracing::warn!(
+            drift = %kind,
+            user_agent = %user_agent(headers),
+            profile = %self.profile_name,
+            "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
+        );
+        LocalRefusal {
+            failure: relay_failure(&RelayError::ClientDrift { kind }),
+            client_drift: Some(kind),
+        }
     }
 
     /// A locally built answer: the outcome rides on the response for the accounting layer, and the completion
@@ -3633,6 +3650,22 @@ enum Next {
     RetryInPlace(Duration),
     /// A 400 named these items; strip them and try again on the same account.
     Strip(Vec<Injected>),
+}
+
+/// What a local refusal answers and files: the failure the caller is told, and the client-drift trigger the
+/// request row carries and the attention reader raises its condition from, `None` for every other refusal.
+struct LocalRefusal {
+    failure: Failure,
+    client_drift: Option<&'static str>,
+}
+
+impl From<Failure> for LocalRefusal {
+    fn from(failure: Failure) -> Self {
+        LocalRefusal {
+            failure,
+            client_drift: None,
+        }
+    }
 }
 
 /// The restoration facts computed once at admission: the client version the wire already named, the

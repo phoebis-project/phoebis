@@ -1540,6 +1540,7 @@ impl Engine {
 
 fn recipe_reason(reason: &str) -> Reason {
     match reason {
+        "escaped_key" => Reason::InvalidRequest,
         "fixed_thinking" => Reason::FixedThinking,
         "forced_tool" => Reason::ForcedTool,
         "headers_too_large" => Reason::HeadersTooLarge,

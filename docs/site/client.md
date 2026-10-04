@@ -56,13 +56,14 @@ suffix of letters, digits, dots, and hyphens) and to the client's own inference 
 a keepalive probe replays a request as the client sent it. Two self-checks guard the
 restoration against a client build the router was not pinned to: a stamped `cch` hash the router cannot reproduce, and a
 `cc_version` suffix that does not reproduce from the prompt and the client's version. Either refuses the request as
-client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). A stamp the router
-cannot verify never travels under an account's credential, edited or not: a wrong hash is indistinguishable from
-tampering and the cost falls on the account rather than on the request, which is why neither relaying the body unedited
-under the client's stamp nor stripping the stamp is an answer. A reduced-shape line, which carries no stamp, is restored
-with the placeholder `cch=00000` and not signed: that placeholder is what the client itself sends wherever its native
-patch does not run, and the server accepts it; `proxy.sign_cch_placeholder` signs it instead, off until a server
-rejection proves it necessary. The variable is an internal one that a later client build may drop.
+client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). Both run when the
+request is admitted, before any account is chosen, so the refusal names no account. A stamp the router cannot verify
+never travels under an account's credential, edited or not: a wrong hash is indistinguishable from tampering and the
+cost falls on the account rather than on the request, which is why neither relaying the body unedited under the client's
+stamp nor stripping the stamp is an answer. A reduced-shape line, which carries no stamp, is restored with the
+placeholder `cch=00000` and not signed: that placeholder is what the client itself sends wherever its native patch does
+not run, and the server accepts it; `proxy.sign_cch_placeholder` signs it instead, off until a server rejection proves
+it necessary. The variable is an internal one that a later client build may drop.
 
 The router also reads two cumulative boundary-hash chains off every request's body: a static chain over the
 tools array and the system blocks, and a message chain with one boundary per entry of `messages`, both computed

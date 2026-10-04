@@ -3,12 +3,8 @@
 
 mod common;
 
-use axum::body::Body;
-use axum::http::Request;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
-use http_body_util::BodyExt;
-use tower::ServiceExt;
 
 fn ok_rule() -> Rule {
     Rule {
@@ -20,24 +16,6 @@ fn ok_rule() -> Rule {
                 .to_vec(),
         },
     }
-}
-
-async fn send(h: &Harness, path: &str, body: &str) -> (u16, String, String) {
-    let request = Request::post(path)
-        .header("authorization", format!("Bearer {KEY}"))
-        .header("content-type", "application/json")
-        .body(Body::from(body.to_string()))
-        .unwrap();
-    let response = h.app.clone().oneshot(request).await.unwrap();
-    let status = response.status().as_u16();
-    let code = response
-        .headers()
-        .get("x-phoebis-error-code")
-        .and_then(|v| v.to_str().ok())
-        .unwrap_or_default()
-        .to_string();
-    let bytes = response.into_body().collect().await.unwrap().to_bytes();
-    (status, code, String::from_utf8_lossy(&bytes).into_owned())
 }
 
 #[tokio::test]
@@ -162,13 +140,6 @@ async fn a_second_top_level_model_is_refused_on_the_count_tokens_route_too() {
     up.shutdown().await;
 }
 
-/// A billing line in the client's placeholder spelling, which the drift check exempts from the hash it verifies.
-const PLACEHOLDER_LINE: &str =
-    "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=00000;";
-/// A billing line stamping a hash this build never computed over the body.
-const UNCHECKED_LINE: &str =
-    "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=abcde;";
-
 #[tokio::test]
 async fn a_billing_block_repeating_its_text_is_refused_before_the_placeholder_exempts_it() {
     let up = FakeUpstream::start(vec![ok_rule()]).await;
@@ -233,7 +204,7 @@ async fn a_stamp_bearing_member_spelled_with_an_escape_is_refused_as_a_repeat_is
         assert_eq!(status, 400, "{body}");
         assert_eq!(code, "body_shape", "{text}");
         assert!(
-            text.contains("billing stamp the relay cannot restamp"),
+            text.contains("billing stamp the relay can neither check nor restamp"),
             "{text}"
         );
     }

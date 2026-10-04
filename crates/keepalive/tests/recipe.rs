@@ -240,6 +240,28 @@ fn an_escaped_safeguards_spelling_is_not_retained() {
 }
 
 #[test]
+fn a_member_the_replays_edits_cannot_reach_is_not_retained() {
+    let raw = r#"{"model":"routing-alias","max_tokens":1024,"stream":true,"system":[{"type":"text","text":"x-anthropic-billing-header: cc_version=2.1.269.517; cc_entrypoint=sdk-cli; cch=abcde;"}],"messages":[{"role":"user","content":"hello"}]}"#;
+    assert!(make_recipe(&headers(), raw.as_bytes(), "routing-alias", 1 << 20).is_ok());
+    // An escape in `system` or `text` hides the stamp from the restamp, in `stream` or `max_tokens` the member
+    // from the edit; a decoder reads each through it.
+    for (key, escaped) in [
+        (r#""system""#, r#""\u0073ystem""#),
+        (r#""text":"x-anthropic"#, r#""\u0074ext":"x-anthropic"#),
+        (r#""stream""#, r#""\u0073tream""#),
+        (r#""max_tokens""#, r#""\u006dax_tokens""#),
+    ] {
+        let body = raw.replacen(key, escaped, 1);
+        assert!(serde_json::from_str::<Value>(&body).is_ok(), "{body}");
+        assert_eq!(
+            make_recipe(&headers(), body.as_bytes(), "routing-alias", 1 << 20),
+            Err("escaped_key"),
+            "{escaped}"
+        );
+    }
+}
+
+#[test]
 fn unsupported_shapes_are_named() {
     for (path, value, reason) in [
         ("messages", json!([]), "unsupported_shape"),

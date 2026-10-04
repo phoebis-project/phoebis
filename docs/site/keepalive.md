@@ -247,6 +247,10 @@ probe that made its net negative, not a contradiction.
 | `storage_limit` | storage limit | The engine is at its retained-request or session limit. |
 | `unsupported_shape` | unsupported shape | The last request had no cacheable prefix the probe could replay. |
 
+A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
+is spelled with a JSON escape, is not retained and holds the recipe under `unsupported_shape`: a probe built from it
+would travel with a stale stamp or a doubled member.
+
 A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is `retrying` rather than paused
 under `quota_exhausted`: its next attempt waits out that answer's `Retry-After` in place of the backoff, since a slot
 frees within seconds.

@@ -2143,3 +2143,137 @@ async fn the_renewal_report_carries_the_usage_the_origin_and_the_ttl_and_a_probe
     );
     up.shutdown().await;
 }
+
+/// The first-party fixture with a stamp this build does not compute, and with a version suffix that does not
+/// reproduce over a body re-signed so its hash does: one body per drift, with the trigger each files.
+fn drifted_first_party_bodies() -> [(Vec<u8>, &'static str); 2] {
+    use phoebis_profile::fixtures::{body, BodyFixture};
+    let fixture = String::from_utf8(body(BodyFixture::FirstParty9b244).to_vec()).unwrap();
+    let hash = fixture.replacen("cch=9b244", "cch=9b245", 1).into_bytes();
+    let suffix = phoebis_cch::sign(
+        fixture
+            .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.abc", 1)
+            .as_bytes(),
+    )
+    .unwrap();
+    [(hash, "hash"), (suffix, "version_suffix")]
+}
+
+#[tokio::test]
+async fn a_drifted_stamp_is_refused_at_admission_before_any_account_is_selected() {
+    use phoebis_profile::fixtures::{inference_head, FixtureKind};
+    for (drifted, trigger) in drifted_first_party_bodies() {
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        }])
+        .await;
+        let bus = Bus::new();
+        let mut sub = bus.subscribe("test");
+        let h = harness_with_bus(
+            &up,
+            &[oauth("a", A, 0), oauth("b", B, 1)],
+            PoolSpec::default(),
+            bus,
+        )
+        .await;
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_from_fixture(
+                inference_head(FixtureKind::OauthFirstParty),
+                &drifted,
+                KEY,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(
+            (
+                resp.status().as_u16(),
+                resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+            ),
+            (400, "client_drift"),
+            "{trigger}"
+        );
+        let o = outcome(&resp);
+        assert_eq!(
+            (o.account_id.as_str(), o.attempt, o.client_drift.as_deref()),
+            ("", 0, Some(trigger)),
+            "no account was selected, so the refusal names none"
+        );
+        assert!(
+            h.router.pins().await.unwrap().is_empty(),
+            "{trigger}: no selection pinned the session"
+        );
+        let events = drain_until_complete(&mut sub).await;
+        let complete = events
+            .iter()
+            .find_map(|e| match e {
+                phoebis_bus::Event::RequestComplete(c) => Some(c.clone()),
+                _ => None,
+            })
+            .expect("the refusal completes on the bus");
+        // The attention reader raises the drift condition from the completion alone.
+        assert_eq!(
+            (
+                complete.client_drift.as_deref(),
+                complete.account_id.as_deref()
+            ),
+            (Some(trigger), None)
+        );
+        let (row, attempts) = rows_of(events);
+        assert_eq!(
+            (
+                row.error_code.as_deref(),
+                row.client_drift.as_deref(),
+                attempts.len()
+            ),
+            (Some("client_drift"), Some(trigger), 0)
+        );
+        // Judged once the identity is read, so the row keeps the model, the session and the agent.
+        assert_eq!(
+            (
+                row.model.as_str(),
+                row.session_id.as_deref(),
+                row.agent_id.as_deref()
+            ),
+            (
+                "claude-sonnet-4-5",
+                Some("11111111-1111-4111-8111-111111111111"),
+                Some("main")
+            )
+        );
+        assert!(up.requests().is_empty(), "{trigger}: nothing was dialled");
+        up.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn a_billing_line_with_no_stamp_is_not_refused_for_its_version_suffix() {
+    use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    // The reduced shape, its suffix one this build does not reproduce, and no `cch=` claiming a hash.
+    let reduced = String::from_utf8(body(BodyFixture::Oauth).to_vec())
+        .unwrap()
+        .replacen("cc_version=2.1.269.517", "cc_version=2.1.269.abc", 1);
+    assert_eq!(phoebis_cch::decoded_stamp_count(reduced.as_bytes()), 0);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_from_fixture(
+            inference_head(FixtureKind::OauthNonFirstParty),
+            reduced.as_bytes(),
+            KEY,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(outcome(&resp).client_drift, None);
+    assert_eq!(credentials_seen(&up), [A]);
+    up.shutdown().await;
+}

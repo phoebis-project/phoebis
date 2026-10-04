@@ -11,6 +11,7 @@ use std::time::Duration;
 use axum::body::Body;
 use axum::http::Request;
 use fake_upstream::{FakeUpstream, Respond, Rule};
+use http_body_util::BodyExt;
 use phoebis_bus::Bus;
 use phoebis_oauth::Clock;
 use phoebis_profile::{
@@ -27,6 +28,7 @@ use phoebis_store::{
     StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
+use tower::ServiceExt;
 // The polls live with the fake so every integration suite has them; the call sites here name them as before.
 #[allow(unused_imports)]
 pub use fake_upstream::{stays_for, wait_for, wait_for_async};
@@ -951,6 +953,33 @@ pub fn request_for(key: &str, model: &str, session: &str) -> Request<Body> {
     );
     set_header(&mut req, "x-claude-code-session-id", session);
     req
+}
+
+/// A billing line in the client's placeholder spelling, which the drift check exempts from the hash it verifies.
+pub const PLACEHOLDER_LINE: &str =
+    "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=00000;";
+/// A billing line stamping a hash this build never computed over the body.
+pub const UNCHECKED_LINE: &str =
+    "x-anthropic-billing-header: cc_version=2.1.269.abc; cc_entrypoint=sdk-py; cch=abcde;";
+
+/// A JSON `POST` of `body` to `path` under the router key and no user agent, answered with its status, its
+/// adapter error code (empty for none) and its body text.
+pub async fn send(h: &Harness, path: &str, body: &str) -> (u16, String, String) {
+    let request = Request::post(path)
+        .header("authorization", format!("Bearer {KEY}"))
+        .header("content-type", "application/json")
+        .body(Body::from(body.to_string()))
+        .unwrap();
+    let response = h.app.clone().oneshot(request).await.unwrap();
+    let status = response.status().as_u16();
+    let code = response
+        .headers()
+        .get("x-phoebis-error-code")
+        .and_then(|v| v.to_str().ok())
+        .unwrap_or_default()
+        .to_string();
+    let bytes = response.into_body().collect().await.unwrap().to_bytes();
+    (status, code, String::from_utf8_lossy(&bytes).into_owned())
 }
 
 /// A `GET` on the proxy listener under the router key, for the `/v1/models` routes.
