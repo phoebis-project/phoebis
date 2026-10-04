@@ -1,7 +1,6 @@
 //! Hands out access tokens, refreshing at most one per account at a time.
 
 use std::collections::HashMap;
-#[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -83,6 +82,9 @@ pub enum AcquireError {
     ReauthRequired,
     #[error("account has no credentials")]
     Unpaired,
+    /// The manager is draining for shutdown, so no refresh starts.
+    #[error("refresh refused at shutdown")]
+    ShuttingDown,
     #[error("credential unavailable: {0}")]
     Unavailable(String),
     #[error(transparent)]
@@ -160,6 +162,8 @@ struct Inner {
     bundles: Mutex<HashMap<String, BundleEntry>>,
     clock: Clock,
     control: Arc<ControlClient>,
+    /// Set by `drain` under the `inflight` lock, so no refresh starts outside the set it waits for.
+    closing: AtomicBool,
     inflight: Mutex<HashMap<String, RefreshFuture>>,
     not_before: Mutex<HashMap<String, (Backoff, Armed)>>,
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -202,6 +206,7 @@ impl CredentialManager {
                 bundles: Mutex::new(HashMap::new()),
                 clock,
                 control,
+                closing: AtomicBool::new(false),
                 inflight: Mutex::new(HashMap::new()),
                 not_before: Mutex::new(HashMap::new()),
                 #[cfg(any(test, feature = "debug-hooks"))]
@@ -255,6 +260,8 @@ impl CredentialManager {
         }
         match self.join_or_start(account_id, bundle.generation).await {
             Ok(token) => Ok(token),
+            // Says nothing about the account, and a recorded message would outlive the process it was true of.
+            Err(AcquireError::ShuttingDown) => Err(AcquireError::ShuttingDown),
             Err(failure) => {
                 // A backoff, a quarantine, or a store race can all fail this call without ever opening a
                 // refresh attempt, which is the one place `resolve` would otherwise have recorded why.
@@ -433,18 +440,16 @@ impl CredentialManager {
         &self.inner.store
     }
 
-    /// Awaits every in-flight refresh up to `REFRESH_TIMEOUT`, the longest a refresh's token request may take;
-    /// one still running then keeps its pending row, its mark at the next start and its log line, as an unjoined
-    /// refresh does. Called once nothing can start another, so the set it takes is the whole set.
+    /// Closes the manager to new refreshes and awaits every in-flight one up to `REFRESH_TIMEOUT`, the longest a
+    /// refresh's token request may take; one still running then keeps its pending row, its mark at the next start
+    /// and its log line, as an unjoined refresh does. The flag is set under the `inflight` lock before the set is
+    /// taken, so a caller that asks afterwards joins a refresh in the set or is refused with `ShuttingDown`.
     pub async fn drain(&self) {
-        let mut running: FuturesUnordered<RefreshFuture> = self
-            .inner
-            .inflight
-            .lock()
-            .expect(LOCK_POISONED)
-            .values()
-            .cloned()
-            .collect();
+        let mut running: FuturesUnordered<RefreshFuture> = {
+            let inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
+            self.inner.closing.store(true, Ordering::SeqCst);
+            inflight.values().cloned().collect()
+        };
         if running.is_empty() {
             return;
         }
@@ -472,6 +477,9 @@ impl CredentialManager {
             let mut inflight = self.inner.inflight.lock().expect(LOCK_POISONED);
             match inflight.get(account_id) {
                 Some(existing) => existing.clone(),
+                None if self.inner.closing.load(Ordering::SeqCst) => {
+                    return Err(AcquireError::ShuttingDown)
+                }
                 None => {
                     let inner = self.inner.clone();
                     let id = account_id.to_string();

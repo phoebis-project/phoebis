@@ -615,8 +615,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     catalog.shutdown().await;
     drop(catalog);
     // A refresh the usage service or the catalog started dies with the runtime otherwise, and the next start
-    // quarantines the account for a lost answer that was only unjoined. Both are stopped above and the listeners
-    // drained, so no refresh starts after the drain takes its set.
+    // quarantines the account for a lost answer that was only unjoined. The drain closes the manager before it
+    // takes its set, so a refresh asked for later, as the ledger's quota poll may until the ledger stops below, is
+    // refused rather than started outside the set.
     refreshes.drain().await;
     // The last Bus handle on the normal path: the relay's, the admin state's, and the metrics router's
     // clones went with their tasks, so the subscribers' queues close here. The ledger then drains off its

@@ -993,6 +993,54 @@ async fn a_refresh_still_running_at_shutdown_is_drained_and_commits_with_no_pend
 }
 
 #[tokio::test]
+async fn a_refresh_requested_after_the_drain_began_starts_nothing_and_is_refused() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Token).to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    mgr.drain().await;
+    assert!(matches!(
+        mgr.acquire("a").await,
+        Err(AcquireError::ShuttingDown)
+    ));
+    assert!(up.requests().is_empty(), "no token request went out");
+    assert!(store.pending_refresh_attempts().unwrap().is_empty());
+    assert!(
+        store
+            .credential_metadata("a")
+            .unwrap()
+            .unwrap()
+            .last_error
+            .is_none(),
+        "a shutdown says nothing about the account, so nothing outlives the process"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
     let now = Arc::new(AtomicI64::new(1_000_000));
     let rule = Rule {
