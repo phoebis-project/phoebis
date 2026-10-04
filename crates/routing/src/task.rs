@@ -2948,7 +2948,7 @@ pub fn sample_from_usage(
     let kept = snapshot
         .windows
         .iter()
-        .filter(|w| w.key == FIVE_HOUR || w.key.starts_with(SEVEN_DAY))
+        .filter(|w| is_plan_window(&w.key))
         .map(|w| (w.key.as_str(), w));
     // The `limits` window comes last, so it is the Fable week's reading whatever top-level key the endpoint sends.
     let fable = snapshot.fable_window.iter().map(|w| (SEVEN_DAY_FABLE, w));

@@ -16,6 +16,7 @@ use crate::affinity::AffinityMap;
 use crate::listing::{row_for, snapshot_date};
 use crate::select::affinity_ttl_ms;
 use crate::task::BurnRates;
+use crate::windows::window_for;
 use crate::RegistrySnapshot;
 
 /// How long an api_key bucket read without its reset header stands: the buckets refill within a minute, so a
@@ -939,8 +940,9 @@ impl RoutingState {
             .is_some()
     }
 
-    /// The live rate-limit rows on the account that `sample` shows recovered: the window the row names has
-    /// allowance again, read from a sample taken after the rejection that set the row. A window the sample
+    /// The live rate-limit rows on the account that `sample` shows recovered: the window the row answers for (a
+    /// model row's is the model's own week) has allowance again, read from a sample taken after the rejection that
+    /// set the row. A window the sample
     /// never read is not evidence, and neither is a row no usage window answers for. A row already past its
     /// deadline is left to the purge tick, which says so. Only an OAuth account is ever sampled, which is what
     /// keeps an api-key account's rows out of here without a registry lookup.
@@ -957,8 +959,10 @@ impl RoutingState {
             if row.window == "retry_after" {
                 return false;
             }
-            if row.scope.starts_with("model:") {
-                return below(&row.window);
+            // A model row recovers on the model's own week: its window keeps the upstream's claim, which the
+            // client reads, and the spend cap's claim names no family's week.
+            if let Some(model) = row.scope.strip_prefix("model:") {
+                return below(window_for(model));
             }
             match row.window.as_str() {
                 "five_hour" => below(FIVE_HOUR),
@@ -2386,11 +2390,10 @@ mod tests {
     }
 
     #[test]
-    fn a_model_row_recovers_on_the_window_it_names_and_on_no_other_models_week() {
-        let mut state = RoutingState::from_load(RoutingLoad::default());
-        let row = |scope: &str, window: &str| CooldownRow {
+    fn a_model_row_recovers_on_its_models_own_week_whatever_window_the_row_names() {
+        let row = |window: &str| CooldownRow {
             account_id: "a".into(),
-            scope: scope.into(),
+            scope: "model:claude-fable-5-1".into(),
             until: 10_000,
             set_at: 1_000,
             reason: "rate_limit".into(),
@@ -2398,7 +2401,6 @@ mod tests {
             source_request_id: None,
             incarnation: 1,
         };
-        state.record_cooldown(row("model:claude-opus-6", "seven_day_opus"));
         let sample = |readings: &[(&str, f64)]| {
             readings.iter().fold(
                 UtilizationSample {
@@ -2424,25 +2426,23 @@ mod tests {
                 .map(|r| r.scope)
                 .collect::<Vec<_>>()
         };
-        assert_eq!(
-            recovered(&state, &[("seven_day_opus", 0.5), (SEVEN_DAY_FABLE, 1.0)]),
-            ["model:claude-opus-6"],
-            "the row's own week has allowance again, whatever the Fable week reads"
-        );
-        assert!(
-            recovered(&state, &[("seven_day_opus", 1.0), (SEVEN_DAY_FABLE, 0.5)]).is_empty(),
-            "another model's week recovering says nothing about this row's"
-        );
-
-        let mut state = RoutingState::from_load(RoutingLoad::default());
-        state.record_cooldown(row("model:claude-fable-5-1", SEVEN_DAY_FABLE));
-        assert_eq!(
-            recovered(&state, &[(SEVEN_DAY_FABLE, 0.5)]),
-            ["model:claude-fable-5-1"]
-        );
-        assert!(
-            recovered(&state, &[(SEVEN_DAY, 0.5), (SEVEN_DAY_FABLE, 1.0)]).is_empty(),
-            "a shared week under 1.0 does not recover a row the Fable week set"
-        );
+        // The spend cap's row keeps the upstream's claim, which names no family's week.
+        for window in ["seven_day_overage_included", SEVEN_DAY_FABLE] {
+            let mut state = RoutingState::from_load(RoutingLoad::default());
+            state.record_cooldown(row(window));
+            assert_eq!(
+                recovered(&state, &[(SEVEN_DAY_FABLE, 0.5)]),
+                ["model:claude-fable-5-1"],
+                "the Fable week has allowance again, whatever the row's window {window} says"
+            );
+            assert!(
+                recovered(&state, &[(window, 0.5), (SEVEN_DAY_FABLE, 1.0)]).is_empty(),
+                "a reading under the row's window text says nothing while the Fable week stays spent"
+            );
+            assert!(
+                recovered(&state, &[(SEVEN_DAY, 0.5)]).is_empty(),
+                "a shared week under 1.0 does not recover the model's row, window {window}"
+            );
+        }
     }
 }

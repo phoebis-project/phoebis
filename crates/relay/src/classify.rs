@@ -249,8 +249,8 @@ fn oauth_cooldown(
                 window: exhaustion_window(Some(u), AccountKind::Oauth),
             };
         }
-        if let Some(key) = model_only(u, ctx.canonical_model)
-            .filter(|_| rejected(&u.seven_day_oi_status) || rejected(&u.status))
+        if model_only(u, ctx.canonical_model).is_some()
+            && (rejected(&u.seven_day_oi_status) || rejected(&u.status))
         {
             // Same deadline rule as the shared row: the later of the rejected window's own reset and the
             // top-level reset, which only ever lengthens the cooldown when it wins.
@@ -258,12 +258,13 @@ fn oauth_cooldown(
             let until = reset
                 .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
                 .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
-            // The row recovers on the window it names, so it names the model's week, whatever the claim spelled.
+            // The row keeps the upstream's claim: it reaches the client as an exhausted pool's claim, and the
+            // client resumes only on a claim it knows. Recovery reads the model's own week, not this text.
             return Cooldown {
                 scope: Scope::Model,
                 until: until.saturating_add(MARGIN_MS),
                 reason: "rate_limit",
-                window: key.to_string(),
+                window: exhaustion_window(Some(u), AccountKind::Oauth),
             };
         }
     }
@@ -726,7 +727,7 @@ mod tests {
             (
                 Scope::Model,
                 NOW + 121_180_000 + MARGIN_MS,
-                "seven_day_fable"
+                "seven_day_overage_included"
             ),
             "the overage window rejected with both shared windows healthy cools the model, not the account"
         );
@@ -763,7 +764,7 @@ mod tests {
             (
                 Scope::Model,
                 NOW + 121_180_000 + MARGIN_MS,
-                "seven_day_fable"
+                "seven_day_overage_included"
             ),
             "an absent 7d status with a utilization below 1.0 is healthy, same as the 5h side"
         );
@@ -845,8 +846,8 @@ mod tests {
         let c = cooldown_of(classify(&model_week_rejection(None), &fable_ctx()));
         assert_eq!(
             (c.scope, c.window.as_str()),
-            (Scope::Model, "seven_day_fable"),
-            "with no claim the 7d_oi status names the requested model's week"
+            (Scope::Model, "retry_after"),
+            "with no claim the 7d_oi status cools the requested model, and the row names no claim"
         );
     }
 

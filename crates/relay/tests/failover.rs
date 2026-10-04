@@ -792,6 +792,87 @@ async fn a_model_only_rejection_leaves_opus_eligible_and_a_5h_rejection_cools_ev
 }
 
 #[tokio::test]
+async fn a_spend_cap_429_on_a_fable_request_answers_the_exhausted_pool_with_the_overage_included_claim(
+) {
+    // The header set an organisation at its spend cap answers, as observed: both shared windows healthy, the
+    // overage week rejected under its own claim.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 429,
+            headers: vec![
+                (
+                    "anthropic-ratelimit-unified-status".into(),
+                    "rejected".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-representative-claim".into(),
+                    "seven_day_overage_included".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-5h-utilization".into(),
+                    "0.00".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-7d-status".into(),
+                    "allowed".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-7d-utilization".into(),
+                    "0.69".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-7d_oi-status".into(),
+                    "rejected".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-overage-disabled-reason".into(),
+                    "org_spend_cap_reached".into(),
+                ),
+                ("retry-after".into(), "121180".into()),
+            ],
+            body: b"{}".to_vec(),
+        },
+    }])
+    .await;
+    let h = harness_with(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec::default(),
+        default_limits(),
+    )
+    .await;
+    h.app
+        .clone()
+        .oneshot(request_for(KEY, "claude-fable-5-1", "s1"))
+        .await
+        .unwrap();
+    let c = h.router.cooldowns().await.unwrap();
+    assert_eq!(
+        (c[0].scope.as_str(), c[0].window.as_str()),
+        ("model:claude-fable-5-1", "seven_day_overage_included"),
+        "the model row keeps the upstream's claim"
+    );
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-fable-5-1", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()
+                .get("anthropic-ratelimit-unified-representative-claim")
+                .map(|v| v.to_str().unwrap())
+        ),
+        (429, Some("seven_day_overage_included")),
+        "the exhausted pool answers with a claim the client resumes on"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_credit_balance_400_marks_funding_required_and_fails_over() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
