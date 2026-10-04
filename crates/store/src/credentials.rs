@@ -303,6 +303,7 @@ impl Store {
             expected_generation,
             attempt_id,
             bundle,
+            jiff::Timestamp::now().as_millisecond(),
         )?;
         tx.commit()?;
         Ok(generation)
@@ -323,6 +324,9 @@ impl Store {
         self.fail_injected_commit()?;
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // One instant for the supersession and the pairing's own row, so the pairing reads as the newest settled
+        // attempt whatever the clock does between the two writes.
+        let now = jiff::Timestamp::now().as_millisecond();
         let generation = self.commit_credentials_in(
             &tx,
             account_id,
@@ -331,8 +335,8 @@ impl Store {
             expected_generation,
             None,
             bundle,
+            now,
         )?;
-        let now = jiff::Timestamp::now().as_millisecond();
         tx.execute(
             "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, \
              started_at, resolved_at, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'committed', 'pairing')",
@@ -362,7 +366,8 @@ impl Store {
         Ok(())
     }
 
-    /// The body both commits share, inside the caller's transaction, which the caller commits.
+    /// The body both commits share, inside the caller's transaction, which the caller commits; `now` stamps the
+    /// credential row and every attempt it settles.
     #[allow(clippy::too_many_arguments)]
     fn commit_credentials_in(
         &self,
@@ -373,6 +378,7 @@ impl Store {
         expected_generation: Option<u64>,
         attempt_id: Option<u64>,
         bundle: &NewBundle,
+        now: i64,
     ) -> Result<u64, StoreError> {
         let account: Option<(i64, i64)> = tx
             .query_row(
@@ -434,7 +440,6 @@ impl Store {
             &credential_aad(account_id, new_generation as i64),
             &plaintext,
         )?;
-        let now = jiff::Timestamp::now().as_millisecond();
 
         // `last_error` is cleared here rather than through a separate call: the connection mutex is not
         // reentrant, and a credential that just committed has nothing stale left to explain.
