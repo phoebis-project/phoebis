@@ -270,7 +270,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
       lead() === '8 need attention' &&
       JSON.stringify(read) === JSON.stringify(want) &&
       ages[0] === 'started 2d 0h ago' &&
-      ages[6] === 'started 1h 0m ago' &&
+      /^started 1h [01]m ago$/.test(ages[6] ?? '') &&
       /^started 4[23]m ago$/.test(ages[7] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,

@@ -535,10 +535,10 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row per line of badges with the lead on the first and a
  * 6 px gap between rows, every badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges, the
- * line inside the content box and clear of the tiles. The mock pass draws the story's eight items. The router pass seeds
- * an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among them)
- * clears: the light pass, which reaches the dashboard first, requires that item, so a route answering an empty list
- * fails it, and the dark pass draws that item or the quiet line, never the unavailable one.
+ * line inside the content box and clear of the tiles. The mock pass draws the story's eight items. The router pass
+ * seeds an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among
+ * them) clears: the light pass, which reaches the dashboard first, requires that item, so a route answering an empty
+ * list fails it, and the dark pass draws that item or the quiet line, never the unavailable one.
  */
 async function attentionLine(theme) {
   const say = (what) => failures.push(`${theme} /: the attention line ${what}`);

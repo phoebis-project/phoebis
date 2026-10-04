@@ -6,7 +6,7 @@ mod reader;
 use std::sync::{Arc, Mutex};
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
-use phoebis_ledger::{AttentionGaugeSource, AttentionGauges, Ledger, LedgerError};
+use phoebis_ledger::{parked_summary, AttentionGaugeSource, AttentionGauges, Ledger, LedgerError};
 use phoebis_oauth::{Clock, UsageService};
 use phoebis_routing::RouterHandle;
 use phoebis_store::{Store, StoreError};
@@ -57,12 +57,22 @@ pub struct Attention {
 impl Attention {
     /// Every subject of every kind, holding or clear; a failed store or ledger read fails the whole read.
     pub fn conditions(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
+        // Read from the file on every call, as `refresh_failed` reads the registry, so the condition holds across a
+        // restart and clears on its own when the start lands the rows. A read that fails fails the whole answer, as
+        // the refresh read's does: a scrape never reports clear what it could not read. Read before the state lock,
+        // so a read waiting on the ledger's reader connection never holds the bus arm's `observe` behind it.
+        let parked = self
+            .ledger
+            .as_ref()
+            .map(|ledger| ledger.db().read_blocking(parked_summary))
+            .transpose()?;
         let mut state = self.state.lock().expect(STATE_POISONED);
         reader::conditions(
             &mut state,
             &self.store,
             &self.router,
-            self.ledger.as_ref(),
+            self.ledger.as_ref().is_some_and(Ledger::degraded),
+            parked.as_deref(),
             self.usage.as_deref(),
             now,
         )

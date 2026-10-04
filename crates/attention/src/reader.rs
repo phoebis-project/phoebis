@@ -6,7 +6,7 @@
 use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::{parked_summary, polled, Ledger};
+use phoebis_ledger::{polled, ParkedSummary};
 use phoebis_oauth::UsageService;
 use phoebis_routing::RouterHandle;
 use phoebis_store::{AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Store};
@@ -341,13 +341,15 @@ fn since_of(
 
 /// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear,
 /// so a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read
-/// this one function, so a scrape and the dashboard never disagree. A store or ledger read that fails fails the whole
-/// read, since a series answered without its evidence could clear a real alarm.
+/// this one function, so a scrape and the dashboard never disagree. A store read that fails fails the whole read, as
+/// the caller's parked read does, since a series answered without its evidence could clear a real alarm. `parked` is
+/// `None` where no ledger is built, and `ledger_record_parked` then has no series.
 pub(crate) fn conditions(
     state: &mut ReaderState,
     store: &Store,
     router: &RouterHandle,
-    ledger: Option<&Ledger>,
+    ledger_degraded: bool,
+    parked: Option<&[ParkedSummary]>,
     usage: Option<&UsageService>,
     now: i64,
 ) -> Result<Vec<Condition>, AttentionError> {
@@ -375,7 +377,7 @@ pub(crate) fn conditions(
     // The two writers are the process's own components and a subject of their own, so the dashboard never reads a
     // stalled disk as an exhausted pool. Neither records when it degraded, so the first read that sees it dates it.
     for (component, degraded) in [
-        ("ledger", ledger.is_some_and(Ledger::degraded)),
+        ("ledger", ledger_degraded),
         ("routing", router.writer_status().degraded),
     ] {
         out.push(condition_for(
@@ -393,11 +395,7 @@ pub(crate) fn conditions(
             json!({ "component": component }),
         ));
     }
-    if let Some(ledger) = ledger {
-        // Read from the file on every call, as `refresh_failed` reads the registry, so the condition holds across a
-        // restart and clears on its own when the start lands the rows. A read that fails fails the whole answer, as
-        // the refresh read's does: a scrape never reports clear what it could not read.
-        let parked = ledger.db().read_blocking(parked_summary)?;
+    if let Some(parked) = parked {
         // The snapshot's pools, then the pools the parked rows name that the snapshot no longer holds: a pool deleted
         // under a parked record keeps the condition, labelled by its id and opening nothing, until the start lands
         // the row.

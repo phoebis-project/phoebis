@@ -263,8 +263,8 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 ### Dashboard
 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
-pool or key where it is fixed, or nothing for an item with no such place (one of the router's own writers, a pool
-deleted since, a drift refusal that named no key); it reads the same conditions the
+pool or key where it is fixed, or nothing for an item with no such place (one of the router's own writers, a parked
+record without a pool, a pool deleted since, a drift refusal that named no key); it reads the same conditions the
 [`phoebis_attention` gauge](#conditions-and-gauges) exports. Four tiles report requests, tokens, estimated cost, and the
 error rate over the last 24 hours, and a line under them says when the figures were read, or that the last refresh
 failed and why. Two cards below show how much of the pooled 5-hour and 7-day capacity is left: each subscription account
