@@ -3575,9 +3575,10 @@ impl Relay {
         let event_stream = head
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
+        let caller_decodes = decoder.is_some();
         // A held stream was decoded and parsed up to its commit by the hold, so the bus copy goes on from there
-        // with the hold's decoder and parser; a copy that stopped following the stream is read afresh.
-        let (bus_decoder, parser, held) = match held {
+        // with the hold's decoder and parser.
+        let handover = match held {
             Some(Inspect {
                 decoder: hold_decoder,
                 parser,
@@ -3587,28 +3588,16 @@ impl Relay {
                     Some(_) => read.text.freeze(),
                     None => prefix.clone(),
                 };
-                (
-                    hold_decoder.filter(|_| decoder.is_none()),
-                    event_stream.then_some(parser),
-                    Some(HeldText {
+                Some((
+                    hold_decoder.filter(|_| !caller_decodes),
+                    parser,
+                    HeldText {
                         text,
                         events: read.events,
-                    }),
-                )
+                    },
+                ))
             }
-            _ => (
-                decoder
-                    .is_none()
-                    .then(|| {
-                        encoding(head)
-                            .ok()
-                            .filter(|e| !matches!(e, Encoding::Identity))
-                            .map(|coding| self.copy_decoder(coding))
-                    })
-                    .flatten(),
-                event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
-                None,
-            ),
+            _ => None,
         };
         // Without a bus every emit and the completion are no-ops; a hook with no bus still needs the parse run
         // for it, a committed 200 needs it too, since the served-model check reads the answer, and so does a
@@ -3619,6 +3608,24 @@ impl Relay {
             || renewal.is_some()
             || affinity.is_some())
         .then(|| {
+            // A copy that stopped following the stream, and a body no hold read, are read afresh.
+            let (bus_decoder, parser, held) = match handover {
+                Some((bus_decoder, parser, held)) => {
+                    (bus_decoder, event_stream.then_some(parser), Some(held))
+                }
+                None => (
+                    (!caller_decodes)
+                        .then(|| {
+                            encoding(head)
+                                .ok()
+                                .filter(|e| !matches!(e, Encoding::Identity))
+                                .map(|coding| self.copy_decoder(coding))
+                        })
+                        .flatten(),
+                    event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
+                    None,
+                ),
+            };
             Publish {
                 trace: trace.clone(),
                 clock: self.clock.clone(),

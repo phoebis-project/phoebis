@@ -1318,3 +1318,127 @@ async fn a_gzip_stream_the_client_takes_as_it_is_is_decoded_once_and_keeps_its_m
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
+    // A non-portable request's 429 past the bound, forwarded as it came: no bus, no pin, no hook and no
+    // conversation report read its body, so nothing decodes a copy of it.
+    let mut state: u32 = 0x9e37_79b9;
+    let noise: String = (0..160 * 1024)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            char::from(b'a' + (state % 26) as u8)
+        })
+        .collect();
+    let body = gzip(
+        format!(r#"{{"type":"error","error":{{"type":"rate_limit_error","message":"{noise}"}}}}"#)
+            .as_bytes(),
+    );
+    assert!(body.len() > 64 * 1024, "past the bound on the wire");
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 429,
+            headers: vec![("Content-Encoding".into(), "gzip".into())],
+            body: body.clone(),
+        },
+    }])
+    .await;
+    let h = common::harness(
+        &up,
+        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        common::PoolSpec::default(),
+    )
+    .await;
+    let before = h.relay.decoders_built();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::non_portable_request(common::KEY, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    let forwarded = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        forwarded.as_ref(),
+        body.as_slice(),
+        "the prefix, then the rest"
+    );
+    assert_eq!(h.relay.decoders_built() - before, 0);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus() {
+    // The first event decodes past the hold's inspection bound in one wire chunk, so the hold commits on its
+    // overflow with a copy that no longer follows the stream; the bus copy reads the stream from its start.
+    let message_start = SseEvent {
+        event: "message_start".into(),
+        data: r#"{"type":"message_start","message":{"id":"msg_ov","usage":{"input_tokens":5}}}"#
+            .into(),
+    };
+    let events = [
+        SseEvent {
+            event: "weird_future_event".into(),
+            data: "y".repeat(100 * 1024),
+        },
+        message_start,
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let wire = gzip(rendered(&events).as_bytes());
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: gzipped_stream(&events),
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let before = h.relay.decoders_built();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    let client = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        client.as_ref(),
+        wire.as_slice(),
+        "the client reads the upstream's bytes"
+    );
+    let published = common::drain_until_complete(&mut sub).await;
+    let chunks: Vec<u8> = published
+        .iter()
+        .filter_map(|e| match e {
+            phoebis_bus::Event::ResponseChunk(chunk) => Some(chunk.body.to_vec()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        String::from_utf8(chunks).unwrap(),
+        rendered(&events),
+        "the bus reads the whole stream decoded"
+    );
+    let complete = published
+        .iter()
+        .find_map(|e| match e {
+            phoebis_bus::Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (complete.outcome, complete.message_id.as_deref()),
+        (phoebis_bus::Outcome::Succeeded, Some("msg_ov"))
+    );
+    assert_eq!(
+        h.relay.decoders_built() - before,
+        2,
+        "the hold's decoder and the bus copy's own"
+    );
+    up.shutdown().await;
+}
