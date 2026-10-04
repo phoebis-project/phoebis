@@ -36,15 +36,16 @@ pub use pattern::{
 pub use plan::{Band, CostTable, Factors, ModelCells, PlanTables};
 pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Speed};
 pub use query::{
-    apply_filter, breakdown, bucket_seconds, burn_rows, burn_series, burn_series_over, dashboard,
-    group_of, hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests,
-    member_spends, moves_by_reason, parked_count, parked_summary, parse_range,
-    pin_migrations_by_reason, placements, pool_traffic, recent_events_of_kind, request_by_id,
-    request_events, request_totals, rewrite_series,
-    series, session_activity, session_burn_series, session_identities,
-    BudgetedMember, BurnPoint, Dashboard, GroupRow, LiveKeys, ParkedSummary, PlacementRow,
-    ProbeCounts, RequestFilter, RollupFilter, SeriesFilter, SeriesPoint, SessionActivity,
-    SessionIdentity, Tiers, Totals, TrafficBucket, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
+    apply_filter, breakdown, breakdown_paged, bucket_seconds, burn_groups_paged, burn_rows,
+    burn_series, burn_series_over, dashboard, group_of, hour_ceil, key_request_totals,
+    latest_extra_usage, latest_quota, list_requests, literal_like, member_spends, moves_by_reason,
+    parked_count, parked_summary, parse_range, pin_migrations_by_reason, placements, pool_traffic,
+    recent_events_of_kind, request_by_id, request_events, request_totals, rewrite_series,
+    series, series_paged,
+    session_activity, session_burn_series, session_identities, BudgetedMember, BurnPoint,
+    Dashboard, GroupRow, LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, RequestFilter,
+    RollupFilter, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, Tiers, Totals,
+    TrafficBucket, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
 };
 pub use quota::{
     polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
@@ -55,9 +56,11 @@ pub use record::{
     QuotaSampleRecord, RequestRecord,
 };
 pub use rollup::{
-    bucket_of, delta_of, fold_account, fold_event, fold_keepalive, fold_request, hour_of,
-    read_account_rollups, read_rollups, AccountRollupRow, CostSplit, RollupRow, FAST_FUNDING,
-    KEY_RANGE_PREDICATE, NO_CLASS, OVERAGE_FUNDING, PLAN_FUNDING, UNATTRIBUTED,
+    bucket_of, delta_of, fold_account, fold_effort, fold_event, fold_identifier, fold_keepalive,
+    fold_request, fold_user_agent, hour_of, read_account_rollups, read_rollups, read_rollups_paged,
+    AccountRollupRow, CostSplit, KeySelector, RollupRow, RollupSelect, DIMENSION_MAX_BYTES,
+    EFFORTS, FAST_FUNDING, KEY_RANGE_PREDICATE, NO_CLASS, OTHER_DIMENSION, OVERAGE_FUNDING,
+    PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
 pub use task::{
     spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, BATCH_RETRY_DELAYS,

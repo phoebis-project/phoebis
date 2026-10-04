@@ -68,6 +68,18 @@ fn main() -> anyhow::Result<()> {
                 config.routing.startup_fetch_seconds
             );
             println!("ledger at {}", config.stats.ledger_path.display());
+            // The start refuses a price file an estimate cannot use, so the check reads it the same way.
+            phoebis_ledger::Pricing::load(config.stats.pricing_path.as_deref()).with_context(|| {
+                format!(
+                    "loading the price table from {}",
+                    config
+                        .stats
+                        .pricing_path
+                        .as_deref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "the built-in table".to_string())
+                )
+            })?;
             let days = |n: u32| if n == 0 { "forever".to_string() } else { format!("{n} days") };
             println!(
                 "retention {}, rollups {}",

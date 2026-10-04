@@ -2,7 +2,7 @@
 //! registry snapshot on request, folds the readings and the usage the relay and the poll report, and writes state
 //! through a single writer so the store sees every change in the order the loop made it.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -29,6 +29,10 @@ use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
 /// The router loop's command queue size, which `/admin/system` reports; a report that finds the queue full is
 /// dropped and counted under its kind.
 pub const COMMANDS: usize = 4_096;
+
+/// The pool a pin of a key the snapshot no longer holds counts under: the ledger's reserved id, which this crate
+/// cannot import, spelled here.
+pub const UNATTRIBUTED_POOL: &str = "-";
 
 const EVENTS: usize = 1_024;
 
@@ -369,6 +373,9 @@ enum Command {
     Pins {
         reply: oneshot::Sender<Vec<PinRow>>,
     },
+    PinsByPool {
+        reply: oneshot::Sender<Vec<(String, u64)>>,
+    },
     ReleaseSession {
         key_id: String,
         session_id: String,
@@ -635,6 +642,11 @@ impl RouterHandle {
     }
     pub async fn pins(&self) -> Result<Vec<PinRow>, RouterGone> {
         self.ask(|reply| Command::Pins { reply }).await
+    }
+    /// The live pins counted per pool by the loop itself, sorted by pool: the metrics scrape reads the counts
+    /// rather than a copy of the pin table.
+    pub async fn pins_by_pool(&self) -> Result<Vec<(String, u64)>, RouterGone> {
+        self.ask(|reply| Command::PinsByPool { reply }).await
     }
     pub async fn cooldowns(&self) -> Result<Vec<CooldownRow>, RouterGone> {
         self.ask(|reply| Command::Cooldowns { reply }).await
@@ -1480,6 +1492,25 @@ impl Task {
             }
             Command::Pins { reply } => {
                 let _ = reply.send(self.state.pins());
+            }
+            Command::PinsByPool { reply } => {
+                let snapshot = self
+                    .snapshot
+                    .read()
+                    .expect("snapshot lock poisoned")
+                    .clone();
+                let mut by_pool: BTreeMap<&str, u64> = BTreeMap::new();
+                for key_id in self.state.pin_key_ids() {
+                    let pool = snapshot
+                        .key(key_id)
+                        .map_or(UNATTRIBUTED_POOL, |k| k.pool_id.as_str());
+                    *by_pool.entry(pool).or_default() += 1;
+                }
+                let counts = by_pool
+                    .into_iter()
+                    .map(|(pool, count)| (pool.to_string(), count))
+                    .collect();
+                let _ = reply.send(counts);
             }
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());

@@ -3,13 +3,14 @@
 use std::collections::{BTreeMap, HashMap};
 
 use phoebis_ledger::{
-    apply_filter, breakdown, bucket_index, burn_rows, burn_series, burn_series_over, delta_of,
-    fold_account, fold_event, fold_keepalive, key_request_totals, list_requests, member_spends,
-    moves_by_reason, placements, read_account_rollups, read_rollups, rewrite_series,
-    run_retention_blocking, session_identities, AttemptRecord, BudgetedMember, EventRecord,
-    Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables,
-    PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, SeriesFilter, Tiers,
-    FAST_FUNDING, NO_CLASS, PLAN_FUNDING, UNATTRIBUTED,
+    apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds, burn_rows, burn_series,
+    burn_series_over, delta_of, fold_account, fold_event, fold_keepalive, hour_ceil, hour_of,
+    key_request_totals, list_requests, member_spends, moves_by_reason, placements,
+    read_account_rollups, read_rollups, rewrite_series, run_retention_blocking, series,
+    series_paged, session_identities, AttemptRecord, BudgetedMember, EventRecord, Histogram,
+    KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable,
+    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, Tiers,
+    FAST_FUNDING, NO_CLASS, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
 use phoebis_routing::{PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR};
 use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
@@ -203,7 +204,9 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
     for (request, attempts) in &rows {
         db.insert_request(request, attempts, None).unwrap();
     }
-    let rollups = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rollups = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
     assert!(
         rollups.iter().all(|r| r.account_id != "z"),
         "a replace that moves a request to another account leaves no row at all for the vacated key"
@@ -218,8 +221,8 @@ fn rollups_for_a_synthetic_day_equal_a_direct_aggregation_for_every_group_by() {
         rollups.iter().any(|r| r.user_agent == UNATTRIBUTED)
             && rollups
                 .iter()
-                .any(|r| r.user_agent == "claude-cli/2.1.300 (external, cli)"),
-        "a caller that sent no agent folds under the reserved id, beside the ones that did"
+                .any(|r| r.user_agent == "claude-cli/2.1.300"),
+        "a caller that sent no agent folds under the reserved id, beside the product tokens of the ones that did"
     );
     let raw_total: u64 = rollups.iter().map(|r| r.requests).sum();
     assert_eq!(raw_total, rows.len() as u64);
@@ -393,9 +396,11 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         ("k1".to_string(), 2_000),
         ("k2".to_string(), 0),
     ]));
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
     let groups = breakdown(
-        &apply_filter(rows.clone(), &RollupFilter::default(), &live),
+        &apply_filter(rows.clone(), &RollupFilter::default()),
         "key",
         true,
         &live,
@@ -421,7 +426,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         "groups sort by label; the reserved id keeps its label and no suffix"
     );
     let agents = breakdown(
-        &apply_filter(rows.clone(), &RollupFilter::default(), &live),
+        &apply_filter(rows.clone(), &RollupFilter::default()),
         "user_agent",
         true,
         &live,
@@ -429,14 +434,15 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
     );
     let ops = agents
         .iter()
-        .find(|g| g.key == "my-client/1.0 (ops@example.invalid)")
-        .expect("the agent is its own group");
+        .find(|g| g.key == "my-client/1.0")
+        .expect("the agent's product token is its own group");
     assert_eq!(
-        ops.label, "my-client/1.0 (ops@example.invalid)",
-        "an agent carrying `@` is labelled verbatim: only a key group is parsed for a generation"
+        ops.label, "my-client/1.0",
+        "an agent is labelled by its token verbatim: only a key group is parsed for a generation, and the \
+         comment carrying `@` stays on the request row"
     );
     let clients = breakdown(
-        &apply_filter(rows.clone(), &RollupFilter::default(), &live),
+        &apply_filter(rows.clone(), &RollupFilter::default()),
         "client",
         true,
         &live,
@@ -454,18 +460,20 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         ],
         "the class groups the rows; a row folded before the column existed labels as every reserved id does"
     );
+    // The selectors resolve against the live keys and bind in the read itself, as the analytics routes read them.
     let sum = |keys: &[&str]| -> u64 {
-        apply_filter(
-            rows.clone(),
-            &RollupFilter {
-                keys: keys.iter().map(|k| k.to_string()).collect(),
-                ..Default::default()
-            },
-            &live,
-        )
-        .iter()
-        .map(|r| r.requests)
-        .sum()
+        let filter = RollupFilter {
+            keys: keys.iter().map(|k| k.to_string()).collect(),
+            ..Default::default()
+        };
+        let Some(select) = filter.rollup_select(&live) else {
+            return 0;
+        };
+        db.read_blocking(|c| read_rollups(c, 0, i64::MAX, &select))
+            .unwrap()
+            .iter()
+            .map(|r| r.requests)
+            .sum()
     };
     assert_eq!(sum(&["k1"]), 1, "a bare id is the live generation");
     assert_eq!(sum(&["k1@1000"]), 2, "the earlier holder is named in full");
@@ -505,6 +513,120 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
     assert_eq!(totals["k1"].requests, 1);
 }
 
+/// The fixed filters as the analytics applied them in memory before the read took them into SQL: a key selector
+/// through `LiveKeys::selects`, and the models compared lowercased.
+fn selected_in_memory(row: &RollupRow, f: &RollupFilter, live: &LiveKeys) -> bool {
+    let models: Vec<String> = f.models.iter().map(|m| m.to_ascii_lowercase()).collect();
+    (f.keys.is_empty() || f.keys.iter().any(|k| live.selects(k, row)))
+        && (f.pools.is_empty() || f.pools.contains(&row.pool_id))
+        && (f.accounts.is_empty() || f.accounts.contains(&row.account_id))
+        && (models.is_empty() || models.contains(&row.canonical_model))
+        && (f.kinds.is_empty() || f.kinds.contains(&row.kind))
+}
+
+/// A long range is read a day at a time and folded as each page arrives; the answer is the one the whole range
+/// read at once and folded in memory gives, under the default filter and under every fixed filter at once. The
+/// pages start at the range's first hour and the daily buckets at the epoch's, so a bucket's rows arrive in two
+/// pages: two requests of one day bucket sit either side of the first page's edge.
+#[tokio::test]
+async fn a_four_hundred_day_range_read_in_pages_answers_the_unpaged_series_and_breakdown() {
+    const HOUR_MS: i64 = 3_600_000;
+    let db = std::sync::Arc::new(LedgerDb::open_in_memory().unwrap());
+    let from = 6 * HOUR_MS;
+    let to = from + 400 * DAY_MS;
+    let mut planted = synthetic_day(17);
+    for (i, (request, attempts)) in planted.iter_mut().enumerate() {
+        let shift = from + (i as i64 % 400) * DAY_MS;
+        request.received_at += shift;
+        for attempt in attempts.iter_mut() {
+            attempt.started_at += shift;
+        }
+    }
+    for (n, at) in [("edge-before", 28 * HOUR_MS), ("edge-after", 30 * HOUR_MS)] {
+        let (mut request, mut attempts) = planted[0].clone();
+        request.id = n.into();
+        request.received_at = at;
+        for attempt in &mut attempts {
+            attempt.request_id = n.into();
+            attempt.started_at = at;
+        }
+        planted.push((request, attempts));
+    }
+    for (request, attempts) in &planted {
+        db.insert_request(request, attempts, None).unwrap();
+    }
+    assert_eq!(
+        (from / 1_000 + PAGE_HOURS * 3_600) * 1_000,
+        30 * HOUR_MS,
+        "the first page ends between the two requests of the second day's bucket"
+    );
+    let live = LiveKeys(BTreeMap::from([
+        ("k1".to_string(), 0),
+        ("k2".to_string(), 1),
+    ]));
+    let narrowed = RollupFilter {
+        keys: vec!["k1".into(), "k2".into(), UNATTRIBUTED.into(), "k3@1".into()],
+        pools: vec!["p1".into(), UNATTRIBUTED.into()],
+        accounts: vec!["a".into(), "b".into(), UNATTRIBUTED.into()],
+        models: vec!["CLAUDE-SONNET-5".into(), "gpt-5".into()],
+        kinds: vec!["inference".into(), "probe".into()],
+        user_agents: vec!["claude-cli/*".into()],
+        ..RollupFilter::default()
+    };
+    let whole = db
+        .read_blocking(|c| read_rollups(c, hour_of(from), hour_ceil(to), &RollupSelect::default()))
+        .unwrap();
+    let bucket = bucket_seconds(from, to);
+    assert_eq!(bucket, 86_400);
+    for filter in [RollupFilter::default(), narrowed] {
+        let rows: Vec<RollupRow> = apply_filter(
+            whole
+                .iter()
+                .filter(|r| selected_in_memory(r, &filter, &live))
+                .cloned()
+                .collect(),
+            &filter,
+        );
+        assert!(!rows.is_empty(), "the filter selects rows: {filter:?}");
+        for group_by in ["all", "effort", "key", "user_agent"] {
+            let unpaged = series(
+                &rows,
+                from,
+                to,
+                bucket,
+                group_by,
+                filter.probes_counted(),
+                &live,
+                &filter.user_agent_groups,
+            )
+            .unwrap();
+            let paged = series_paged(&db, &filter, &live, from, to, bucket, group_by)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&paged).unwrap(),
+                serde_json::to_value(&unpaged).unwrap(),
+                "series by {group_by} under {filter:?}"
+            );
+            let unpaged = breakdown(
+                &rows,
+                group_by,
+                filter.probes_counted(),
+                &live,
+                &filter.user_agent_groups,
+            );
+            let paged = breakdown_paged(&db, &filter, &live, from, to, group_by)
+                .await
+                .unwrap();
+            assert_eq!(
+                serde_json::to_value(&paged).unwrap(),
+                serde_json::to_value(&unpaged).unwrap(),
+                "breakdown by {group_by} under {filter:?}"
+            );
+        }
+    }
+}
+
 #[test]
 fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
     let db = LedgerDb::open_in_memory().unwrap();
@@ -526,8 +648,10 @@ fn a_group_of_probes_alone_stays_out_of_the_default_breakdown() {
         ("k1".to_string(), 0),
         ("k2".to_string(), 0),
     ]));
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
-    let filtered = apply_filter(rows, &RollupFilter::default(), &live);
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default());
     let default_groups = breakdown(&filtered, "key", false, &live, &[]);
     assert!(
         !default_groups.iter().any(|g| g.key == "k1"),
@@ -566,8 +690,10 @@ fn a_group_of_keepalive_credits_alone_stays_in_the_default_breakdown() {
     })
     .unwrap();
     let live = LiveKeys::default();
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
-    let filtered = apply_filter(rows, &RollupFilter::default(), &live);
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default());
     // A kept-warm credit never touches `requests`, so a group made only of credit rows never sees a probe
     // row either; it belongs in the default breakdown, not just the probe-counted one.
     let default_groups = breakdown(&filtered, "user_agent", false, &live, &[]);
@@ -603,7 +729,9 @@ fn a_keepalive_credits_row_files_under_the_reserved_class() {
         Ok(())
     })
     .unwrap();
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(rows[0].request_class, NO_CLASS);
 }
@@ -686,7 +814,9 @@ fn merged_histogram_percentiles_lie_within_one_bucket_of_the_exact_percentiles()
     for (request, attempts) in &rows {
         db.insert_request(request, attempts, None).unwrap();
     }
-    let rollups = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rollups = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
     let exact = |values: &mut Vec<f64>, p: f64| {
         values.sort_by(|a, b| a.partial_cmp(b).unwrap());
         values[(((p * values.len() as f64).ceil() as usize).max(1)) - 1]
@@ -747,8 +877,10 @@ fn a_breakdown_by_request_class_splits_conversation_from_overhead() {
     plant("r2", Some("compaction"));
     plant("r3", None);
     let live = LiveKeys(BTreeMap::from([("k1".to_string(), 0)]));
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
-    let filtered = apply_filter(rows, &RollupFilter::default(), &live);
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default());
     let groups = breakdown(&filtered, "request_class", false, &live, &[]);
     let keys: Vec<&str> = groups.iter().map(|g| g.key.as_str()).collect();
     assert!(
@@ -810,7 +942,9 @@ fn a_fast_answer_files_its_request_under_speed_fast_and_a_silent_answer_under_st
     for (request, attempts) in [&fast, &silent] {
         db.insert_request(request, attempts, None).unwrap();
     }
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
     assert_eq!(
         rows.iter()
             .map(|r| (r.speed.as_str(), r.requests))
@@ -833,8 +967,10 @@ fn group_by_speed_splits_the_rows_by_served_speed() {
         db.insert_request(&request, &attempts, None).unwrap();
     }
     let live = LiveKeys(BTreeMap::from([("k".to_string(), 0)]));
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
-    let filtered = apply_filter(rows, &RollupFilter::default(), &live);
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
+    let filtered = apply_filter(rows, &RollupFilter::default());
     let groups = breakdown(&filtered, "speed", false, &live, &[]);
     assert_eq!(
         groups

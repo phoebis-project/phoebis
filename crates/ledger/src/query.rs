@@ -2,6 +2,7 @@
 //! with merged histograms, the dashboard's day, and the newest quota sample per window.
 
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::Arc;
 
 use phoebis_routing::{MemberSpend, PinUsage, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod};
@@ -9,14 +10,17 @@ use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::db::{row_to_attempt, row_to_request, ATTEMPT_SELECT, REQUEST_SELECT};
+use crate::db::{row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
 use crate::plan::PlanTables;
 use crate::pricing::{PriceTable, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
-use crate::rollup::{read_account_rollups, read_rollups, RollupRow, UNATTRIBUTED};
+use crate::rollup::{
+    hour_of, read_account_rollups, read_rollups, read_rollups_paged, KeySelector, RollupRow,
+    RollupSelect, UNATTRIBUTED,
+};
 use crate::LedgerError;
 
 const HOUR_MS: i64 = 3_600_000;
@@ -188,6 +192,18 @@ fn key_lifetimes(
     });
 }
 
+/// `text` with `\`, `%` and `_` escaped for `LIKE .. ESCAPE '\'`, so every typed character matches itself.
+pub fn literal_like(text: &str) -> String {
+    let mut out = String::with_capacity(text.len());
+    for c in text.chars() {
+        if matches!(c, '\\' | '%' | '_') {
+            out.push('\\');
+        }
+        out.push(c);
+    }
+    out
+}
+
 /// One clause matching any of `patterns` against `column` under the wildcard grammar of `crate::pattern`;
 /// `column` reads as `-` where it is NULL, as the rollup fold already does. No clause when `patterns` is empty.
 fn pattern_any(
@@ -227,9 +243,9 @@ pub fn list_requests(
     let mut args: Vec<Box<dyn ToSql>> = Vec::new();
     let mut clauses: Vec<String> = Vec::new();
     if let Some(text) = filter.text.as_deref().filter(|t| !t.is_empty()) {
-        args.push(Box::new(format!("%{text}%")));
+        args.push(Box::new(format!("%{}%", literal_like(text))));
         let n = args.len();
-        clauses.push(format!("(id LIKE ?{n} OR session_id LIKE ?{n} OR key_id LIKE ?{n} OR model LIKE ?{n} OR error_code LIKE ?{n} OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} OR a.upstream_request_id LIKE ?{n} OR a.upstream_message_id LIKE ?{n})))"));
+        clauses.push(format!("(id LIKE ?{n} ESCAPE '\\' OR session_id LIKE ?{n} ESCAPE '\\' OR key_id LIKE ?{n} ESCAPE '\\' OR model LIKE ?{n} ESCAPE '\\' OR error_code LIKE ?{n} ESCAPE '\\' OR EXISTS (SELECT 1 FROM attempts a WHERE a.request_id = requests.id AND (a.account_id LIKE ?{n} ESCAPE '\\' OR a.upstream_request_id LIKE ?{n} ESCAPE '\\' OR a.upstream_message_id LIKE ?{n} ESCAPE '\\')))"));
     }
     key_lifetimes(&filter.keys, live, &mut args, &mut clauses);
     in_list_or_null("pool_id", &filter.pools, &mut args, &mut clauses);
@@ -633,6 +649,39 @@ impl RollupFilter {
     pub fn probes_counted(&self) -> bool {
         self.include_probes || self.kinds.iter().any(|k| k == "probe")
     }
+
+    /// The fixed filters as the read binds them, each key selector resolved as `LiveKeys::selects` reads it: the
+    /// reserved id at any generation, every other selector at the lifetime `lifetime_of` answers. `None` when the
+    /// filter names keys and none of them names a lifetime, which selects no row rather than every row.
+    pub fn rollup_select(&self, live: &LiveKeys) -> Option<RollupSelect> {
+        let keys: Vec<KeySelector> = self
+            .keys
+            .iter()
+            .filter_map(|selector| {
+                if selector == UNATTRIBUTED {
+                    return Some(KeySelector {
+                        key_id: UNATTRIBUTED.into(),
+                        key_generation: None,
+                    });
+                }
+                live.lifetime_of(selector)
+                    .map(|(id, generation)| KeySelector {
+                        key_id: id.into(),
+                        key_generation: Some(generation),
+                    })
+            })
+            .collect();
+        if !self.keys.is_empty() && keys.is_empty() {
+            return None;
+        }
+        Some(RollupSelect {
+            pools: self.pools.clone(),
+            accounts: self.accounts.clone(),
+            kinds: self.kinds.clone(),
+            models: self.models.iter().map(|m| m.to_ascii_lowercase()).collect(),
+            keys,
+        })
+    }
 }
 
 pub const GROUP_BYS: &[&str] = &[
@@ -771,29 +820,23 @@ fn label_of(key: &str) -> String {
     }
 }
 
-/// The rows a query selects, probe rows among them: whether those count as requests is `probes_counted`,
-/// which the sums take, so a probe's cost reaches the savings panel under every filter.
-pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter, live: &LiveKeys) -> Vec<RollupRow> {
-    let lower: Vec<String> = f.models.iter().map(|m| m.to_ascii_lowercase()).collect();
-    rows.into_iter()
-        .filter(|r| f.keys.is_empty() || f.keys.iter().any(|k| live.selects(k, r)))
-        .filter(|r| f.pools.is_empty() || f.pools.contains(&r.pool_id))
-        .filter(|r| f.accounts.is_empty() || f.accounts.contains(&r.account_id))
-        .filter(|r| lower.is_empty() || lower.contains(&r.canonical_model))
-        .filter(|r| f.kinds.is_empty() || f.kinds.contains(&r.kind))
-        .filter(|r| {
-            f.user_agents.is_empty()
-                || f.user_agents
-                    .iter()
-                    .any(|p| crate::pattern::matches(p, &r.user_agent))
-        })
-        .filter(|r| {
-            f.clients.is_empty()
-                || f.clients
-                    .iter()
-                    .any(|p| crate::pattern::matches(p, &r.client))
-        })
-        .collect()
+/// Whether a row passes the filter's two pattern filters, which SQL does not express under the wildcard grammar.
+fn passes_patterns(r: &RollupRow, f: &RollupFilter) -> bool {
+    (f.user_agents.is_empty()
+        || f.user_agents
+            .iter()
+            .any(|p| crate::pattern::matches(p, &r.user_agent)))
+        && (f.clients.is_empty()
+            || f.clients
+                .iter()
+                .any(|p| crate::pattern::matches(p, &r.client)))
+}
+
+/// The rows of a read the fixed filters already narrowed (`RollupFilter::rollup_select`) that the pattern filters
+/// keep, probe rows among them: whether those count as requests is `probes_counted`, which the sums take, so a
+/// probe's cost reaches the savings panel under every filter.
+pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
+    rows.into_iter().filter(|r| passes_patterns(r, f)).collect()
 }
 
 fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> GroupRow {
@@ -879,21 +922,24 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> G
     }
 }
 
-fn sum_groups(
-    rows: &[&RollupRow],
-    group_by: &str,
-    probes_counted: bool,
-    live: &LiveKeys,
-    agent_groups: &[String],
-) -> Vec<GroupRow> {
-    // Two sums per group, and whether a non-probe row ever joined it: the request side, which a probe row
-    // joins only when probes count as requests; the probe rows on their own, which the derived probe counts
-    // and the probe side of the savings read; and the flag a keepalive credit needs, since it carries a real
-    // kind but never adds to `requests`.
-    let mut sums: BTreeMap<String, (RollupRow, RollupRow, bool)> = BTreeMap::new();
-    for row in rows {
+/// Two sums per group, and whether a non-probe row ever joined it: the request side, which a probe row joins only
+/// when probes count as requests; the probe rows on their own, which the derived probe counts and the probe side of
+/// the savings read; and the flag a keepalive credit needs, since it carries a real kind but never adds to
+/// `requests`. Rows join one at a time, so a paged read folds each page in as it arrives.
+#[derive(Default)]
+struct GroupSums(BTreeMap<String, (RollupRow, RollupRow, bool)>);
+
+impl GroupSums {
+    fn add(
+        &mut self,
+        row: &RollupRow,
+        group_by: &str,
+        probes_counted: bool,
+        live: &LiveKeys,
+        agent_groups: &[String],
+    ) {
         let key = group_of(row, group_by, live, agent_groups);
-        let entry = sums.entry(key.clone()).or_insert_with(|| {
+        let entry = self.0.entry(key.clone()).or_insert_with(|| {
             (
                 RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", ""),
                 RollupRow::key(0, &key, 0, "", "", "", "", "", "", "", "", "", ""),
@@ -909,23 +955,42 @@ fn sum_groups(
             entry.0.add(row);
         }
     }
-    // A group whose rows in the range are all probes never joins the request side under the default filter;
-    // without this it would report zero requests rather than staying out of a breakdown that does not count
-    // probes as requests. A group with any non-probe row, a keepalive credit included, stays.
-    sums.retain(|_, (_, _, saw_non_probe)| probes_counted || *saw_non_probe);
-    let mut out: Vec<GroupRow> = sums
-        .iter()
-        .map(|(k, (sum, probes, _))| {
-            let label = if group_by == "key" {
-                live.label_of(k)
-            } else {
-                label_of(k)
-            };
-            group_row(k, sum, probes, label)
-        })
-        .collect();
-    out.sort_by(|a, b| a.label.cmp(&b.label).then(a.key.cmp(&b.key)));
-    out
+
+    fn finish(mut self, group_by: &str, probes_counted: bool, live: &LiveKeys) -> Vec<GroupRow> {
+        // A group whose rows in the range are all probes never joins the request side under the default filter;
+        // without this it would report zero requests rather than staying out of a breakdown that does not count
+        // probes as requests. A group with any non-probe row, a keepalive credit included, stays.
+        self.0
+            .retain(|_, (_, _, saw_non_probe)| probes_counted || *saw_non_probe);
+        let mut out: Vec<GroupRow> = self
+            .0
+            .iter()
+            .map(|(k, (sum, probes, _))| {
+                let label = if group_by == "key" {
+                    live.label_of(k)
+                } else {
+                    label_of(k)
+                };
+                group_row(k, sum, probes, label)
+            })
+            .collect();
+        out.sort_by(|a, b| a.label.cmp(&b.label).then(a.key.cmp(&b.key)));
+        out
+    }
+}
+
+fn sum_groups(
+    rows: &[&RollupRow],
+    group_by: &str,
+    probes_counted: bool,
+    live: &LiveKeys,
+    agent_groups: &[String],
+) -> Vec<GroupRow> {
+    let mut sums = GroupSums::default();
+    for row in rows {
+        sums.add(row, group_by, probes_counted, live, agent_groups);
+    }
+    sums.finish(group_by, probes_counted, live)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -979,6 +1044,93 @@ pub fn breakdown(
     )
 }
 
+/// `series` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into each
+/// bucket's group sums as the pages arrive, so a long range holds one page of rows at a time.
+pub async fn series_paged(
+    db: &Arc<LedgerDb>,
+    filter: &RollupFilter,
+    live: &LiveKeys,
+    from: i64,
+    to: i64,
+    bucket_seconds: i64,
+    group_by: &str,
+) -> Result<Vec<SeriesPoint>, LedgerError> {
+    if bucket_seconds <= 0 {
+        return Err(LedgerError::Yaml(
+            "bucket_seconds must be positive".to_string(),
+        ));
+    }
+    let first = (from / 1_000).div_euclid(bucket_seconds) * bucket_seconds;
+    let last = hour_ceil(to);
+    let count = (last - first).checked_div(bucket_seconds).unwrap_or(0);
+    if !(0..=MAX_POINTS).contains(&count) {
+        return Err(LedgerError::Yaml(format!(
+            "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
+        )));
+    }
+    let starts: Vec<i64> = (0..)
+        .map(|i| first + i * bucket_seconds)
+        .take_while(|at| *at < last)
+        .collect();
+    let mut buckets: Vec<GroupSums> = starts.iter().map(|_| GroupSums::default()).collect();
+    let probes_counted = filter.probes_counted();
+    if let Some(select) = filter.rollup_select(live) {
+        read_rollups_paged(db, &select, hour_of(from), last, |row| {
+            if !passes_patterns(row, filter) || row.hour < first {
+                return;
+            }
+            let index = ((row.hour - first) / bucket_seconds) as usize;
+            if let Some(sums) = buckets.get_mut(index) {
+                sums.add(
+                    row,
+                    group_by,
+                    probes_counted,
+                    live,
+                    &filter.user_agent_groups,
+                );
+            }
+        })
+        .await?;
+    }
+    Ok(starts
+        .into_iter()
+        .zip(buckets)
+        .map(|(at, sums)| SeriesPoint {
+            at: at * 1_000,
+            groups: sums.finish(group_by, probes_counted, live),
+        })
+        .collect())
+}
+
+/// `breakdown` over `[from, to)` (milliseconds) under `filter`, read through `read_rollups_paged` and folded into the
+/// group sums as the pages arrive.
+pub async fn breakdown_paged(
+    db: &Arc<LedgerDb>,
+    filter: &RollupFilter,
+    live: &LiveKeys,
+    from: i64,
+    to: i64,
+    group_by: &str,
+) -> Result<Vec<GroupRow>, LedgerError> {
+    let mut sums = GroupSums::default();
+    let probes_counted = filter.probes_counted();
+    if let Some(select) = filter.rollup_select(live) {
+        read_rollups_paged(db, &select, hour_of(from), hour_ceil(to), |row| {
+            if passes_patterns(row, filter) {
+                sums.add(
+                    row,
+                    group_by,
+                    probes_counted,
+                    live,
+                    &filter.user_agent_groups,
+                );
+            }
+        })
+        .await?;
+    }
+    Ok(sums.finish(group_by, probes_counted, live))
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct HourPoint {
     pub at: i64,
@@ -1001,22 +1153,27 @@ pub struct Dashboard {
     pub recent: Vec<RequestWithAttempts>,
 }
 
-pub fn dashboard(conn: &Connection, now: i64) -> Result<Dashboard, LedgerError> {
+/// The last day's rollups folded hour by hour through `read_rollups_paged`, and the newest requests.
+pub async fn dashboard(db: &Arc<LedgerDb>, now: i64) -> Result<Dashboard, LedgerError> {
     let to_hour = (now / 1_000).div_euclid(3_600) * 3_600 + 3_600;
     let from_hour = to_hour - 24 * 3_600;
-    let rows = read_rollups(conn, from_hour, to_hour)?;
-    let rows: Vec<RollupRow> = rows.into_iter().filter(|r| r.kind != "probe").collect();
     let mut errors: BTreeMap<String, u64> = BTreeMap::new();
-    let mut hourly = Vec::new();
-    for hour in (from_hour..to_hour).step_by(3_600) {
-        let mut point = HourPoint {
+    let mut hourly: Vec<HourPoint> = (from_hour..to_hour)
+        .step_by(3_600)
+        .map(|hour| HourPoint {
             at: hour * 1_000,
             cost: 0.0,
             errors: 0,
             requests: 0,
             tokens: 0,
-        };
-        for r in rows.iter().filter(|r| r.hour == hour) {
+        })
+        .collect();
+    let mut tokens_cached = 0;
+    read_rollups_paged(db, &RollupSelect::default(), from_hour, to_hour, |r| {
+        if r.kind == "probe" {
+            return;
+        }
+        if let Some(point) = hourly.get_mut(((r.hour - from_hour) / 3_600) as usize) {
             point.requests += r.requests;
             point.errors += r.requests.saturating_sub(r.succeeded);
             point.cost += r.estimated_usd;
@@ -1026,26 +1183,21 @@ pub fn dashboard(conn: &Connection, now: i64) -> Result<Dashboard, LedgerError> 
                 + r.cache_write_1h_tokens
                 + r.output_tokens;
         }
-        hourly.push(point);
-    }
-    for r in &rows {
         for (code, n) in &r.errors {
             *errors.entry(code.clone()).or_default() += n;
         }
-    }
+        tokens_cached += r.cache_read_tokens;
+    })
+    .await?;
     let requests: u64 = hourly.iter().map(|h| h.requests).sum();
     let failed: u64 = hourly.iter().map(|h| h.errors).sum();
-    let (recent, _) = list_requests(
-        conn,
-        &RequestFilter::default(),
-        &LiveKeys::default(),
-        None,
-        20,
-    )?;
+    let (recent, _) = db
+        .read(|c| list_requests(c, &RequestFilter::default(), &LiveKeys::default(), None, 20))
+        .await?;
     Ok(Dashboard {
         requests_24h: requests,
         tokens_24h: hourly.iter().map(|h| h.tokens).sum(),
-        tokens_cached_24h: rows.iter().map(|r| r.cache_read_tokens).sum(),
+        tokens_cached_24h: tokens_cached,
         cost_24h: hourly.iter().map(|h| h.cost).sum(),
         error_rate_24h: (requests > 0).then(|| failed as f64 / requests as f64),
         top_error_code: errors
@@ -1550,14 +1702,20 @@ pub struct TrafficBucket {
     pub cost_usd: f64,
 }
 
-/// Every bucket in the range from the rollups of one pool, probes left out.
-pub fn pool_traffic(
-    conn: &Connection,
+/// Every bucket in the range from the rollups of one pool, probes left out, read through `read_rollups_paged` with
+/// the pool bound in SQL.
+pub async fn pool_traffic(
+    db: &Arc<LedgerDb>,
     pool_id: &str,
     from_hour: i64,
     to_hour: i64,
     bucket_seconds: i64,
 ) -> Result<Vec<TrafficBucket>, LedgerError> {
+    if bucket_seconds <= 0 {
+        return Err(LedgerError::Yaml(
+            "bucket_seconds must be positive".to_string(),
+        ));
+    }
     let first = from_hour.div_euclid(bucket_seconds) * bucket_seconds;
     let count = (to_hour - first).checked_div(bucket_seconds).unwrap_or(0);
     if !(0..=MAX_POINTS).contains(&count) {
@@ -1565,24 +1723,26 @@ pub fn pool_traffic(
             "the range needs {count} points; the most a chart carries is {MAX_POINTS}"
         )));
     }
-    let rows: Vec<RollupRow> = read_rollups(conn, from_hour, to_hour)?
-        .into_iter()
-        .filter(|r| r.pool_id == pool_id && r.kind != "probe")
-        .collect();
-    let mut out = Vec::new();
-    let mut at = first;
-    while at < to_hour {
-        let mut bucket = TrafficBucket {
+    let mut out: Vec<TrafficBucket> = (0..)
+        .map(|i| first + i * bucket_seconds)
+        .take_while(|at| *at < to_hour)
+        .map(|at| TrafficBucket {
             at: at * 1_000,
             requests: 0,
             failed: 0,
             tokens: 0,
             cost_usd: 0.0,
-        };
-        for r in rows
-            .iter()
-            .filter(|r| r.hour >= at && r.hour < at + bucket_seconds)
-        {
+        })
+        .collect();
+    let select = RollupSelect {
+        pools: vec![pool_id.to_string()],
+        ..RollupSelect::default()
+    };
+    read_rollups_paged(db, &select, from_hour, to_hour, |r| {
+        if r.kind == "probe" || r.hour < first {
+            return;
+        }
+        if let Some(bucket) = out.get_mut(((r.hour - first) / bucket_seconds) as usize) {
             bucket.requests += r.requests;
             bucket.failed += r.requests.saturating_sub(r.succeeded);
             bucket.tokens += r.input_tokens
@@ -1592,14 +1752,12 @@ pub fn pool_traffic(
                 + r.output_tokens;
             bucket.cost_usd += r.estimated_usd;
         }
-        out.push(bucket);
-        at += bucket_seconds;
-    }
+    })
+    .await?;
     Ok(out)
 }
 
-/// The range and scope of a series the query reads from the ledger itself, where `RollupFilter` narrows rows
-/// a caller already loaded.
+/// The range and scope of a burn, rewrite or moves series; `RollupFilter` is the analytics routes' filter.
 #[derive(Clone, Debug, Default)]
 pub struct SeriesFilter {
     /// Milliseconds; the range is `from` inclusive to `to` exclusive.
@@ -1758,10 +1916,11 @@ fn price_usage(
 }
 
 /// The rollup rows `burn_series` prices for `filter`: every hour of its bucket range, whatever its scopes, so one
-/// read serves `burn_series_over` for every scope over the same range and bucket.
+/// read serves `burn_series_over` for every scope over the same range and bucket. The burn route reads through
+/// `burn_groups_paged` instead, which holds a page at a time.
 pub fn burn_rows(conn: &Connection, filter: &SeriesFilter) -> Result<Vec<RollupRow>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    read_rollups(conn, first, last)
+    read_rollups(conn, first, last, &RollupSelect::default())
 }
 
 /// `burn_series_over` on the rows `burn_rows` reads for `filter`.
@@ -1789,46 +1948,133 @@ pub fn burn_series_over(
     filter: &SeriesFilter,
 ) -> Result<Vec<BurnPoint>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
-    let matches = |r: &RollupRow| {
-        (filter.keys.is_empty() || filter.keys.contains(&r.key_id))
-            && (filter.pools.is_empty() || filter.pools.contains(&r.pool_id))
-            && (filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
-            && (filter.request_classes.is_empty()
-                || filter.request_classes.contains(&r.request_class))
-    };
-    // Ceiling, as `session_burn_series` counts them: a trailing partial bucket is a point of its own.
-    let count =
-        ((last - first + filter.bucket_seconds - 1) / filter.bucket_seconds).max(0) as usize;
-    let mut points: Vec<BurnPoint> = (0..count)
-        .map(|i| BurnPoint {
-            at: (first + i as i64 * filter.bucket_seconds) * 1_000,
-            ..BurnPoint::default()
-        })
-        .collect();
-    for row in rows.iter().filter(|r| r.hour >= first && matches(r)) {
-        let index = ((row.hour - first) / filter.bucket_seconds) as usize;
-        let Some(point) = points.get_mut(index) else {
-            continue;
-        };
-        price_usage(
-            point,
-            kinds.get(&row.account_id).copied(),
-            tiers.get(&row.account_id).and_then(Option::as_deref),
+    let mut points = empty_burn_points(first, last, filter.bucket_seconds);
+    for row in rows.iter().filter(|r| burn_scope_holds(filter, r)) {
+        price_burn_row(
+            &mut points,
+            first,
+            filter.bucket_seconds,
+            row,
             tables,
-            &UsageRow {
-                canonical_model: &row.canonical_model,
-                input_tokens: row.input_tokens,
-                cache_read_tokens: row.cache_read_tokens,
-                cache_write_5m_tokens: row.cache_write_5m_tokens,
-                cache_write_1h_tokens: row.cache_write_1h_tokens,
-                output_tokens: row.output_tokens,
-                estimated_usd: row.estimated_usd,
-                at: row.hour * 1_000,
-                fast: row.speed == "fast",
-            },
+            kinds,
+            tiers,
         );
     }
     Ok(points)
+}
+
+/// Every bucket of `[first, last)`, empty. Ceiling, as `session_burn_series` counts them: a trailing partial bucket
+/// is a point of its own.
+fn empty_burn_points(first: i64, last: i64, bucket_seconds: i64) -> Vec<BurnPoint> {
+    let count = ((last - first + bucket_seconds - 1) / bucket_seconds).max(0) as usize;
+    (0..count)
+        .map(|i| BurnPoint {
+            at: (first + i as i64 * bucket_seconds) * 1_000,
+            ..BurnPoint::default()
+        })
+        .collect()
+}
+
+fn burn_scope_holds(filter: &SeriesFilter, r: &RollupRow) -> bool {
+    (filter.keys.is_empty() || filter.keys.contains(&r.key_id))
+        && (filter.pools.is_empty() || filter.pools.contains(&r.pool_id))
+        && (filter.accounts.is_empty() || filter.accounts.contains(&r.account_id))
+        && (filter.request_classes.is_empty() || filter.request_classes.contains(&r.request_class))
+}
+
+/// One rollup row priced into the bucket it falls in, nothing for a row before the first bucket's edge.
+fn price_burn_row(
+    points: &mut [BurnPoint],
+    first: i64,
+    bucket_seconds: i64,
+    row: &RollupRow,
+    tables: &PlanTables,
+    kinds: &HashMap<String, AccountKind>,
+    tiers: &Tiers,
+) {
+    if row.hour < first {
+        return;
+    }
+    let Some(point) = points.get_mut(((row.hour - first) / bucket_seconds) as usize) else {
+        return;
+    };
+    price_usage(
+        point,
+        kinds.get(&row.account_id).copied(),
+        tiers.get(&row.account_id).and_then(Option::as_deref),
+        tables,
+        &UsageRow {
+            canonical_model: &row.canonical_model,
+            input_tokens: row.input_tokens,
+            cache_read_tokens: row.cache_read_tokens,
+            cache_write_5m_tokens: row.cache_write_5m_tokens,
+            cache_write_1h_tokens: row.cache_write_1h_tokens,
+            output_tokens: row.output_tokens,
+            estimated_usd: row.estimated_usd,
+            at: row.hour * 1_000,
+            fast: row.speed == "fast",
+        },
+    );
+}
+
+/// The burn series of every group under `group_by` (`account`, `key` or `request_class`, else `account`) within
+/// `filter`'s scopes, read through `read_rollups_paged` and priced into the group's buckets as the pages arrive: each
+/// group's points are the ones `burn_series_over` answers for a scope of that group alone. The groups are the ones
+/// the range itself holds; the read reaches back to the first bucket's edge, which may start before it.
+pub async fn burn_groups_paged(
+    db: &Arc<LedgerDb>,
+    tables: &PlanTables,
+    kinds: &HashMap<String, AccountKind>,
+    tiers: &Tiers,
+    filter: &SeriesFilter,
+    group_by: &str,
+) -> Result<Vec<(String, Vec<BurnPoint>)>, LedgerError> {
+    let (first, last) = bucket_range(filter)?;
+    let from_hour = hour_of(filter.from);
+    let select = RollupSelect {
+        pools: filter.pools.clone(),
+        accounts: filter.accounts.clone(),
+        keys: filter
+            .keys
+            .iter()
+            .map(|id| KeySelector {
+                key_id: id.clone(),
+                key_generation: None,
+            })
+            .collect(),
+        ..RollupSelect::default()
+    };
+    // Each group's points, and whether a row of the range itself joined it.
+    let mut groups: BTreeMap<String, (Vec<BurnPoint>, bool)> = BTreeMap::new();
+    read_rollups_paged(db, &select, first, last, |row| {
+        if !burn_scope_holds(filter, row) {
+            return;
+        }
+        let group = match group_by {
+            "key" => &row.key_id,
+            "request_class" => &row.request_class,
+            _ => &row.account_id,
+        };
+        let (points, held) = groups
+            .entry(group.clone())
+            .or_insert_with(|| (empty_burn_points(first, last, filter.bucket_seconds), false));
+        *held |= row.hour >= from_hour && row.hour < last;
+        price_burn_row(
+            points,
+            first,
+            filter.bucket_seconds,
+            row,
+            tables,
+            kinds,
+            tiers,
+        );
+    })
+    .await?;
+    Ok(groups
+        .into_iter()
+        .filter(|(_, (_, held))| *held)
+        .map(|(group, (points, _))| (group, points))
+        .collect())
 }
 
 /// The cache-write tokens the account rollups booked as a rewrite, per bucket; the bucket's `at` is
@@ -1878,6 +2124,20 @@ pub fn moves_by_reason(
 /// bounded by a caller-independent constant rather than the range's size.
 const SESSION_BURN_LIMIT: usize = 20;
 
+/// `top_sessions_by_tokens`' statement, spelled once so the plan test explains the statement the read runs. A
+/// request is admitted within an hour of any attempt's start, so the request's own index carries the range. The
+/// index is named: the ledger keeps no planner statistics, and without them SQLite prices a scan of every attempt
+/// below this range search.
+const TOP_SESSIONS_BY_TOKENS: &str = "SELECT r.session_id FROM attempts a \
+     JOIN requests r INDEXED BY requests_received ON r.id = a.request_id \
+     WHERE r.session_id IS NOT NULL AND a.started_at >= ?1 AND a.started_at < ?2 \
+     AND r.received_at >= ?1 - 3600000 AND r.received_at < ?2 \
+     GROUP BY r.session_id \
+     ORDER BY SUM(COALESCE(a.input_tokens, 0) + COALESCE(a.cache_read_tokens, 0) \
+         + COALESCE(a.cache_write_5m_tokens, 0) + COALESCE(a.cache_write_1h_tokens, 0) \
+         + COALESCE(a.output_tokens, 0)) DESC, r.session_id \
+     LIMIT ?3";
+
 /// The `limit` sessions with the most tokens over `[from, to)`, ranked in SQL rather than in memory, so a
 /// caller never reads an attempt row belonging to a session it will not answer.
 fn top_sessions_by_tokens(
@@ -1886,15 +2146,7 @@ fn top_sessions_by_tokens(
     to: i64,
     limit: usize,
 ) -> Result<Vec<String>, LedgerError> {
-    let mut stmt = conn.prepare(
-        "SELECT r.session_id FROM attempts a JOIN requests r ON r.id = a.request_id \
-         WHERE r.session_id IS NOT NULL AND a.started_at >= ?1 AND a.started_at < ?2 \
-         GROUP BY r.session_id \
-         ORDER BY SUM(COALESCE(a.input_tokens, 0) + COALESCE(a.cache_read_tokens, 0) \
-             + COALESCE(a.cache_write_5m_tokens, 0) + COALESCE(a.cache_write_1h_tokens, 0) \
-             + COALESCE(a.output_tokens, 0)) DESC, r.session_id \
-         LIMIT ?3",
-    )?;
+    let mut stmt = conn.prepare(TOP_SESSIONS_BY_TOKENS)?;
     let rows = stmt.query_map(params![from, to, limit as i64], |row| {
         row.get::<_, String>(0)
     })?;
@@ -1923,6 +2175,35 @@ struct SessionAttempt {
     speed: Option<String>,
 }
 
+/// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
+/// statement the read runs. A request is admitted within an hour of any attempt's start, so the request's own index
+/// carries the range.
+fn session_attempts_statement(
+    from: i64,
+    to: i64,
+    sessions: &[String],
+) -> (String, Vec<rusqlite::types::Value>) {
+    let placeholders = sessions.iter().map(|_| "?").collect::<Vec<_>>().join(",");
+    let sql = format!(
+        "SELECT r.session_id, a.account_id, a.started_at, \
+         COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
+         a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
+         a.output_tokens, a.estimated_usd, a.speed \
+         FROM attempts a JOIN requests r ON r.id = a.request_id \
+         WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
+         AND r.received_at >= ? AND r.received_at < ?"
+    );
+    let mut bind: Vec<rusqlite::types::Value> = sessions
+        .iter()
+        .map(|s| rusqlite::types::Value::Text(s.clone()))
+        .collect();
+    bind.push(rusqlite::types::Value::Integer(from));
+    bind.push(rusqlite::types::Value::Integer(to));
+    bind.push(rusqlite::types::Value::Integer(from - 3_600_000));
+    bind.push(rusqlite::types::Value::Integer(to));
+    (sql, bind)
+}
+
 fn read_session_attempts(
     conn: &Connection,
     from: i64,
@@ -1932,22 +2213,8 @@ fn read_session_attempts(
     if sessions.is_empty() {
         return Ok(Vec::new());
     }
-    let placeholders = sessions.iter().map(|_| "?").collect::<Vec<_>>().join(",");
-    let sql = format!(
-        "SELECT r.session_id, a.account_id, a.started_at, \
-         COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
-         a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
-         a.output_tokens, a.estimated_usd, a.speed \
-         FROM attempts a JOIN requests r ON r.id = a.request_id \
-         WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ?"
-    );
+    let (sql, bind) = session_attempts_statement(from, to, sessions);
     let mut stmt = conn.prepare(&sql)?;
-    let mut bind: Vec<rusqlite::types::Value> = sessions
-        .iter()
-        .map(|s| rusqlite::types::Value::Text(s.clone()))
-        .collect();
-    bind.push(rusqlite::types::Value::Integer(from));
-    bind.push(rusqlite::types::Value::Integer(to));
     let tokens = |v: Option<i64>| v.unwrap_or(0).max(0) as u64;
     let rows = stmt.query_map(params_from_iter(bind), |row| {
         Ok(SessionAttempt {
@@ -2043,6 +2310,44 @@ pub fn session_burn_series(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn plan_of(sql: &str, binds: Vec<rusqlite::types::Value>) -> Vec<String> {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        db.read_blocking(|c| {
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let rows = stmt
+                .query_map(params_from_iter(binds), |r| r.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap()
+    }
+
+    /// The session burn chart's two reads bound the request by its own `received_at` beside the attempt's start,
+    /// which no index leads with, so the request side seeks the range rather than walking every retained session.
+    #[test]
+    fn the_session_burn_reads_search_the_requests_by_their_received_range() {
+        let ranged = |plan: &[String]| {
+            plan.iter().any(|step| {
+                step.starts_with("SEARCH r USING ")
+                    && step.contains("received_at>?")
+                    && step.contains("received_at<?")
+            }) && !plan.iter().any(|step| step.starts_with("SCAN"))
+        };
+        let top = plan_of(
+            TOP_SESSIONS_BY_TOKENS,
+            vec![
+                rusqlite::types::Value::Integer(0),
+                rusqlite::types::Value::Integer(3_600_000),
+                rusqlite::types::Value::Integer(20),
+            ],
+        );
+        assert!(ranged(&top), "{top:?}");
+        let (sql, binds) =
+            session_attempts_statement(0, 3_600_000, &["s1".to_string(), "s2".to_string()]);
+        let attempts = plan_of(&sql, binds);
+        assert!(ranged(&attempts), "{attempts:?}");
+    }
 
     #[test]
     fn the_newest_events_of_a_kind_are_read_by_seeking_to_the_kind() {

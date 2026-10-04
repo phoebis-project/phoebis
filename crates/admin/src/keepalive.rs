@@ -7,7 +7,7 @@ use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
-use phoebis_ledger::{hour_of, read_rollups};
+use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use serde_json::json;
 
 use crate::analytics::ledger_failure;
@@ -25,7 +25,7 @@ pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
     let rows = match state
         .ledger
         .db()
-        .read(move |c| read_rollups(c, week, to))
+        .read(move |c| read_rollups(c, week, to, &RollupSelect::default()))
         .await
     {
         Ok(rows) => rows,

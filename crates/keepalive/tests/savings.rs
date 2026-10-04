@@ -8,15 +8,17 @@ use std::time::Duration;
 use common::*;
 use fake_upstream::Respond;
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
-use phoebis_ledger::{hour_of, read_rollups, RollupRow};
+use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
 
 /// Every rollup row the rig wrote, once the writer has landed what the test waits for. The whole table
 /// rather than the rig's own hour: a test that moves the clock to the next UTC day writes past it.
 async fn rollups(r: &Rig, want: impl Fn(&[RollupRow]) -> bool) -> Vec<RollupRow> {
     wait_for(Duration::from_secs(5), || {
         let rows =
-            r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-                .unwrap();
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
         want(&rows).then_some(rows)
     })
     .await
@@ -595,8 +597,10 @@ async fn a_request_open_past_its_entry_keeps_its_credit_and_the_recipe_lapses_af
     assert_eq!(r.status("main").reason, Reason::Expired);
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
-        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-            .unwrap();
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
     assert_eq!(
         (
             inference_rows(&rows).kept_warm_requests,
@@ -632,8 +636,10 @@ async fn a_warm_return_without_the_credit_answers_the_probes_it_kept() {
     .unwrap();
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
-        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-            .unwrap();
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
     assert_eq!(
         (
             inference_rows(&rows).kept_warm_requests,
@@ -847,8 +853,10 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
             // asserts is that no row lands at all.
             r.ledger.clone().shutdown().await.unwrap();
             let rows =
-                r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-                    .unwrap();
+                r.db.read_blocking(|c| {
+                    read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+                })
+                .unwrap();
             let probe = probe_rows(&rows);
             assert_eq!(
                 (probe.wasted_probes, probe.probe_cost_usd),

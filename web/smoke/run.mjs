@@ -6577,6 +6577,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics the page groups by request class, a classless row as unattributed', ok: ['main', 'subagent', 'unattributed'].every((c) => requestClasses.includes(c)), missing: requestClasses });
 
     await groupBy('User agent');
+    const tokens = trafficRows('user agent').map((row) => row[0]);
+    results.push({
+      name: '/analytics the user agent grouping lists each agent by its product token, as the rollups key it',
+      ok: tokens.includes('claude-cli/2.1.269') && tokens.every((t) => !t.includes(' (')),
+      missing: tokens,
+    });
     const listCheck = '/analytics a user agent pattern list names the groups and gathers the rest';
     await typeGroups(listCheck, 'claude-cli/2.1.*\nphoebis-batch/*');
     const named = trafficRows('user agent').map((row) => row[0]);

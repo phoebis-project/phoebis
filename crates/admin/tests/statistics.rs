@@ -8,6 +8,9 @@ const HOUR: i64 = 3_600_000;
 /// Two client builds, so a group-by over them has more than one group; `nokey` sends neither.
 const SDK_CLI: &str = "claude-cli/2.1.269 (external, sdk-cli)";
 const NEWER_CLI: &str = "claude-cli/2.1.300 (external, cli)";
+/// The product tokens the hourly rollups key the two builds under.
+const SDK_CLI_TOKEN: &str = "claude-cli/2.1.269";
+const NEWER_CLI_TOKEN: &str = "claude-cli/2.1.300";
 
 fn request(
     id: &str,
@@ -289,15 +292,15 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
             .iter()
             .map(|r| (r["key"].as_str().unwrap(), r["requests"].as_u64().unwrap()))
             .collect::<Vec<_>>(),
-        vec![(SDK_CLI, 3), (NEWER_CLI, 3), ("-", 1)],
-        "two client builds and the request that named none"
+        vec![(SDK_CLI_TOKEN, 3), (NEWER_CLI_TOKEN, 3), ("-", 1)],
+        "two client builds by their product tokens, and the request that named none"
     );
-    // A comma is part of every measured agent, so the filter splits on newlines rather than commas.
+    // The analytics agent filter matches the product token the rollups keep, not the raw header.
     let one_agent = json(
         get(
             &parts.app,
             "/admin/analytics/series?range=24h&group_by=user_agent\
-             &user_agents=claude-cli%2F2.1.300%20(external,%20cli)",
+             &user_agents=claude-cli%2F2.1.300",
             Some(&cookie),
         )
         .await,
@@ -311,7 +314,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         .map(|g| g["key"].as_str().unwrap())
         .collect();
     assert_eq!(
-        groups, [NEWER_CLI; 3],
+        groups, [NEWER_CLI_TOKEN; 3],
         "the series holds that build's three requests and nothing else"
     );
     let same_three = json(
@@ -332,7 +335,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         .map(|g| g["key"].as_str().unwrap())
         .collect();
     assert_eq!(
-        groups, [NEWER_CLI; 3],
+        groups, [NEWER_CLI_TOKEN; 3],
         "a pattern with no exact match still selects that build's three requests"
     );
     let grouped = json(

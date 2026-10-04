@@ -78,9 +78,29 @@ impl PriceTable {
         PriceTable::from_yaml(SHIPPED, "shipped").expect("the shipped price table parses")
     }
 
+    /// Refuses a cell that is not a finite non-negative number: a negative or `NaN` price makes every estimate
+    /// negative or `NaN`, which a budget then never trips on.
     pub fn from_yaml(text: &str, source: &str) -> Result<PriceTable, LedgerError> {
         let file: PriceFile =
             serde_norway::from_str(text).map_err(|e| LedgerError::Yaml(e.to_string()))?;
+        for (model, row) in &file.models {
+            let blocks = [("", Some(&row.standard)), ("fast.", row.fast.as_ref())];
+            for (prefix, cells) in blocks {
+                let Some(p) = cells else { continue };
+                let named = [
+                    ("input", p.input),
+                    ("cache_write_5m", p.cache_write_5m),
+                    ("cache_write_1h", p.cache_write_1h),
+                    ("cache_read", p.cache_read),
+                    ("output", p.output),
+                ];
+                if let Some((cell, _)) = named.iter().find(|(_, v)| !v.is_finite() || *v < 0.0) {
+                    return Err(LedgerError::Yaml(format!(
+                        "model {model}, cell {prefix}{cell} must be a finite non-negative number"
+                    )));
+                }
+            }
+        }
         Ok(PriceTable {
             version: file.effective.clone(),
             effective: file.effective,
@@ -272,6 +292,56 @@ mod tests {
     use super::*;
     use crate::record::AttemptRecord;
     use std::sync::atomic::{AtomicU64, Ordering};
+
+    /// The refusal `from_yaml` answers for a file whose one model carries `standard` and, when given, `fast` cells.
+    fn refusal(standard: &str, fast: Option<&str>) -> String {
+        let fast = fast.map(|f| format!(", fast: {{{f}}}")).unwrap_or_default();
+        PriceTable::from_yaml(
+            &format!("effective: 2026-10-04\nmodels:\n  m: {{{standard}{fast}}}\n"),
+            "file",
+        )
+        .unwrap_err()
+        .to_string()
+    }
+
+    const CELLS: &str = "input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1";
+
+    /// A negative price makes every estimate negative, which a budget never trips on.
+    #[test]
+    fn a_negative_price_cell_is_refused_naming_the_model_and_the_cell() {
+        assert_eq!(
+            refusal(&CELLS.replace("input: 1", "input: -1"), None),
+            "pricing table: model m, cell input must be a finite non-negative number"
+        );
+    }
+
+    #[test]
+    fn a_nan_price_cell_is_refused_naming_the_model_and_the_cell() {
+        assert_eq!(
+            refusal(&CELLS.replace("output: 1", "output: .nan"), None),
+            "pricing table: model m, cell output must be a finite non-negative number"
+        );
+    }
+
+    #[test]
+    fn an_infinite_price_cell_is_refused_naming_the_model_and_the_cell() {
+        assert_eq!(
+            refusal(&CELLS.replace("cache_read: 1", "cache_read: .inf"), None),
+            "pricing table: model m, cell cache_read must be a finite non-negative number"
+        );
+    }
+
+    /// The fast block repeats the standard cells' names, so its cell is named under `fast.`.
+    #[test]
+    fn a_bad_fast_cell_is_refused_under_its_fast_name() {
+        assert_eq!(
+            refusal(
+                CELLS,
+                Some(&CELLS.replace("cache_write_1h: 1", "cache_write_1h: -.inf"))
+            ),
+            "pricing table: model m, cell fast.cache_write_1h must be a finite non-negative number"
+        );
+    }
 
     #[test]
     fn the_shipped_table_is_the_specs_and_an_estimate_is_list_price_per_million() {

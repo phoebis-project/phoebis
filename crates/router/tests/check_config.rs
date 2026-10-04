@@ -166,6 +166,39 @@ fn the_summary_names_the_routing_keys() {
     );
 }
 
+/// The start refuses a price file whose cell an estimate cannot use, so the check refuses it too, naming the file, the
+/// model and the cell.
+#[test]
+fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the_cell() {
+    let dir = tempfile::tempdir().unwrap();
+    let prices = dir.path().join("pricing.yaml");
+    std::fs::write(
+        &prices,
+        "effective: 2026-10-04\nmodels:\n  m: {input: -1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
+         output: 1}\n",
+    )
+    .unwrap();
+    let config = config_file(
+        dir.path(),
+        "negative-price",
+        &format!("stats:\n  pricing_path: {}\n", prices.display()),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(format!("Error: loading the price table from {}", prices.display()).as_str()),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains("pricing table: model m, cell input must be a finite non-negative number"),
+        "{}",
+        printed(&out)
+    );
+}
+
 const REMOVED_KEY: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
 
 #[test]

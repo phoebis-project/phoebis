@@ -105,6 +105,10 @@ A model that serves fast mode carries a second set of five cells at the fast rat
 whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model
 without them at the standard cells.
 
+A price file whose cell is not a finite non-negative number is refused at start and by `check-config`, naming the
+model and the cell (`fast.<cell>` for a fast-mode cell): a negative or `NaN` price would turn every estimate negative
+or `NaN`, which no budget trips on.
+
 ## Plan meter
 
 A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
@@ -192,6 +196,9 @@ poll's reading is kept for `stats.retention_days`, so an idle account adds 288 q
 record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while
 its cost is kept.
 
+The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
+its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
+
 ## Metrics
 
 `stats.metrics_listen` serves `/metrics` in Prometheus text format and nothing else; it speaks plain HTTP and
@@ -229,7 +236,8 @@ cannot grow the label set by naming models it likes.
 attributed, the same reserved id a request row with no account reads under.
 `phoebis_account_cooldown_seconds`, `phoebis_account_overage_in_use`, `phoebis_keepalive_agents`, and
 `phoebis_pins_active` are the four routing gauges; each is computed fresh from the router's own snapshot on every
-scrape rather than accumulated between them.
+scrape rather than accumulated between them. `phoebis_pins_active` is counted per pool by the routing loop itself, so
+a scrape copies one count per pool rather than the pin table.
 `phoebis_ledger_queued` reads the records waiting in the ledger's writer channel at the scrape, and
 `phoebis_ledger_behind_refusals_total` counts the requests answered `ledger_behind` while it was at least half full
 ([run the container](installation.md#run-the-container)).
@@ -317,7 +325,8 @@ client request however many attempts it took, and the attempt trail reads as "ma
 first account failed over to a 200 on the second. A request that did not succeed names how it ended beside its status:
 `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request that waited for a slot while every account was
 at its cap carries a held marker beside its attempts with the time it waited. The search matches the request id, the
-session, the key, the model, the error code, and an attempt's account, upstream request id or upstream message id.
+session, the key, the model, the error code, and an attempt's account, upstream request id or upstream message id,
+literally: `_` and `%` are characters, not wildcards.
 Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of
 characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the client filter
 takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the values the
@@ -363,15 +372,21 @@ until Pretty-print is pressed.
 
 A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every chart
 and table by account, client, effort, key, kind, model, pool, request class, speed, or user agent; the client grouping
-reads the class and the user agent grouping the raw agent. The request class shown by this grouping is the value the
-client sent on its class header, verbatim, so a class a client adds later shows up under its own name; a classless
-request folds under the reserved value alongside a keepalive credit. The speed grouping reads the speed the answer
-reported, `standard` for one that named none. A key deleted and created again under the same id appears twice under the
-key grouping, since its figures stay with the key that spent them. The earlier holder is labelled
-`<id> (deleted, created 2026-09-14 09:31 UTC)`, the date and time it was created at minute precision, or
-`<id> (deleted)` when the ledger holds no creation time for it. The client and user agent filters take the same patterns
-as the request log's, and under the user agent grouping a pattern list names the groups: `claude-cli/2.1.*` and
-`claude-cli/2.0.*` as two groups, every other agent under `other`.
+reads the class and the user agent grouping the agent's first product token (`claude-cli/2.1.286` for
+`claude-cli/2.1.286 (external, cli)`). The hourly rollups key these on a bounded vocabulary: the effort is one of `low`,
+`medium`, `high`, `xhigh`, `max` or `none`, else `other`; the request class and the client fold to `other` past 64
+bytes; the user agent is the header's first product token (`name/version`), cut to 64 bytes, else `other`. The request
+row keeps the raw values, so the drawer shows what the client sent. The request class shown by this grouping is the
+value the client sent on its class header, so a class a client adds later shows up under its own name; a classless
+request folds under the reserved value alongside a keepalive credit, and a request that sent no user agent under the
+reserved id. The speed grouping reads the speed the answer reported, `standard` for one that named none. A key deleted
+and created again under the same id appears twice under the key grouping, since its figures stay with the key that spent
+them. The earlier holder is labelled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date and time it was created at
+minute precision, or `<id> (deleted)` when the ledger holds no creation time for it. The client and user agent filters
+take the request log's pattern grammar; the analytics agent filter matches the folded token while the request log's
+matches the raw header, so a pattern over the part after the token (`*sdk-cli*`) selects nothing here. Under the user
+agent grouping a pattern list names the groups: `claude-cli/2.1.*` and `claude-cli/2.0.*` as two groups, every other
+agent under `other`.
 
 Traffic reports request volume by outcome (the chart's OK, Rate limited, Failed, Incomplete and Exhausted, and the
 per-group table's Rejected beside them) and the error rate, with a Failovers chart and a Migration rewrites card beside

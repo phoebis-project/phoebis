@@ -6,7 +6,7 @@ use common::*;
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason, LEASE_MS};
 use phoebis_ledger::{
     hour_of, member_spends, read_rollups, AttemptRecord, BudgetedMember, PriceTable, Record,
-    RequestRecord,
+    RequestRecord, RollupSelect,
 };
 use phoebis_routing::{
     lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
@@ -110,8 +110,10 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
     assert_eq!(r.up.requests().len(), sent, "no request after the lapse");
     let wasted = wait_for(std::time::Duration::from_secs(5), || {
         let rows =
-            r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-                .unwrap();
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
         let wasted: u64 = rows
             .iter()
             .filter_map(|row| row.wasted_probe_reasons.get("expired"))
@@ -123,8 +125,10 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
     // Drained rather than polled: a second skip row landing late must not read as one.
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
-        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-            .unwrap();
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
     assert_eq!(
         rows.iter().map(|row| row.probes_skipped).sum::<u64>(),
         1,
@@ -148,8 +152,10 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
     assert_eq!(r.status("main").reason, Reason::Expired);
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
-        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-            .unwrap();
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
     let skipped: Vec<(&str, u64)> = rows
         .iter()
         .filter(|row| row.probes_skipped > 0)
@@ -186,8 +192,10 @@ async fn a_hold_lifted_after_the_expiry_sends_no_probe() {
     // Drained rather than polled: a second skip row landing late must not read as one.
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
-        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-            .unwrap();
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
     assert_eq!(
         rows.iter().map(|row| row.probes_skipped).sum::<u64>(),
         1,
@@ -991,8 +999,10 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
     assert!(r.engine.recipes_for("desktop", "session").is_empty());
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let rows =
-            r.db.read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
-                .unwrap();
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(c, 0, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
         rows.iter()
             .any(|row| row.wasted_probes == 1)
             .then_some(rows)
@@ -1337,8 +1347,10 @@ async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
 async fn skipped(r: &Rig, want: u64) -> u64 {
     wait_for(std::time::Duration::from_secs(5), || {
         let rows =
-            r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-                .unwrap();
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
         let total: u64 = rows.iter().map(|row| row.probes_skipped).sum();
         (total >= want).then_some(total)
     })
@@ -1531,8 +1543,10 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     );
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let rows =
-            r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-                .unwrap();
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
         rows.iter()
             .any(|row| row.wasted_probes == 1)
             .then_some(rows)
@@ -1601,8 +1615,10 @@ async fn a_hold_counts_its_skip_when_the_held_probe_comes_due() {
     // Drained rather than polled: what this half asserts is that no skipped row lands at all.
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
-        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-            .unwrap();
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
     assert_eq!(
         rows.iter().map(|row| row.probes_skipped).sum::<u64>(),
         0,

@@ -1,7 +1,10 @@
 //! The ledger schema: `requests`, `attempts`, `bodies`, `quota_samples`, `extra_usage_samples`,
 //! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `cooldown_segments`, `kept_warm_marks`, `events`,
-//! and `parked_records`, plus `meta` for the schema marker.
+//! and `parked_records`, plus `meta` for the schema marker. `SCHEMA` is version 1; `MIGRATIONS` builds the rest.
 
+/// Frozen: the fresh path is the upgrade path from version 1. A column folded in here and added by a migration would
+/// fail the migration with a duplicate column on a fresh file, one dropped by a migration would fail it with a missing
+/// one, and two DDL sources would have to stay aligned.
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
 CREATE TABLE IF NOT EXISTS requests (
@@ -130,7 +133,6 @@ CREATE TABLE IF NOT EXISTS rollups_hourly (
   wasted_probes INTEGER NOT NULL,
   wasted_probe_usd REAL NOT NULL,
   wasted_probe_reasons_json TEXT NOT NULL,
-  probes_skipped INTEGER NOT NULL DEFAULT 0,
   ttfb_hist BLOB NOT NULL,
   ttfc_hist BLOB NOT NULL,
   duration_hist BLOB NOT NULL,
@@ -152,21 +154,6 @@ CREATE TABLE IF NOT EXISTS account_rollups_hourly (
   pins_migrated_out INTEGER NOT NULL,
   PRIMARY KEY (hour, account_id)
 );
-CREATE TABLE IF NOT EXISTS cooldown_spans (
-  account_id TEXT NOT NULL,
-  scope TEXT NOT NULL,
-  hour INTEGER NOT NULL,
-  until INTEGER NOT NULL,
-  PRIMARY KEY (account_id, scope)
-);
-CREATE TABLE IF NOT EXISTS cooldown_segments (
-  account_id TEXT NOT NULL,
-  scope TEXT NOT NULL,
-  hour INTEGER NOT NULL,
-  seconds INTEGER NOT NULL,
-  PRIMARY KEY (account_id, scope, hour)
-);
-CREATE TABLE IF NOT EXISTS kept_warm_marks (request_id TEXT PRIMARY KEY, marked_at INTEGER NOT NULL);
 CREATE TABLE IF NOT EXISTS events (
   at INTEGER NOT NULL,
   kind TEXT NOT NULL,

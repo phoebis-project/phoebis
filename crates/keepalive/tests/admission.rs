@@ -8,7 +8,7 @@ use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage}
 use phoebis_keepalive::{
     AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState,
 };
-use phoebis_ledger::{hour_of, read_rollups};
+use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 
 /// The ledger row for a request, once the writer has landed it.
 async fn landed(r: &Rig, id: &str) {
@@ -556,7 +556,9 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     let evicted = fake_upstream::wait_for(Duration::from_secs(5), || {
         let rows = r3
             .db
-            .read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+            .read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
             .unwrap();
         let evicted: u64 = rows
             .iter()
