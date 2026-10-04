@@ -637,6 +637,43 @@ async fn a_400_naming_the_injected_beta_strips_it_retries_once_on_the_same_accou
 }
 
 #[tokio::test]
+async fn a_400_over_the_buffer_bound_naming_the_injected_beta_strips_it_and_retries_once() {
+    // The message names the beta in its first bytes and runs the body far past the 64 KiB read before a verdict, so
+    // the drain stops before the body's end and the document never parses whole.
+    let refused = format!(
+        r#"{{"type":"error","error":{{"type":"invalid_request_error","message":"Unexpected value(s) `cache-diagnosis-2026-04-07` for the `anthropic-beta` header. {}"}}}}"#,
+        "x".repeat(200 * 1024)
+    );
+    let up = FakeUpstream::start(vec![]).await;
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_400(&refused));
+    up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[api_key("acct", ACCT_SECRET, 0)],
+        PoolSpec {
+            cache_diagnostics: true,
+            ..Default::default()
+        },
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).attempt),
+        (200, 2),
+        "the cut message named the router's own beta, so the leg stripped it and retried"
+    );
+    assert_eq!(up.requests().len(), 2);
+    assert!(!beta_header(&up.requests()[1])
+        .is_some_and(|b| b.split(',').any(|t| t == CACHE_DIAGNOSIS_BETA)));
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_400_naming_a_beta_the_client_sent_is_forwarded_unchanged() {
     let up = FakeUpstream::start(vec![]).await;
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_400(REFUSED_BETA));

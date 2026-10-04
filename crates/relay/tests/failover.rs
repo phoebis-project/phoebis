@@ -2587,7 +2587,8 @@ async fn a_403_authentication_error_over_the_bound_takes_the_mark_path() {
 
 #[tokio::test]
 async fn a_400_over_the_buffer_bound_whose_arm_forwards_it_reaches_the_client_whole() {
-    let body = over_the_bound("invalid_request_error", &"x".repeat(70 * 1024));
+    // Long enough that the drain stops well before the body's end, so the reader still holds a rest to forward.
+    let body = over_the_bound("invalid_request_error", &"x".repeat(200 * 1024));
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: Respond::Json {
@@ -2615,6 +2616,49 @@ async fn a_400_over_the_buffer_bound_whose_arm_forwards_it_reaches_the_client_wh
         credentials_seen(&up),
         [A],
         "the client's own 400 fails nothing over"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_model_404_over_the_buffer_bound_cools_the_model_and_fails_over() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    // Long enough that the drain stops well before the body's end, so the document never parses whole.
+    let message = format!("model: claude-sonnet-4-5 ({})", "x".repeat(200 * 1024));
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 404,
+            headers: vec![],
+            body: over_the_bound("not_found_error", &message),
+        },
+    );
+    let h = two_accounts(&up).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 2),
+        "the 404 named the model, so the request failed over"
+    );
+    assert_eq!(credentials_seen(&up), [A, B]);
+    let cooldowns = h.router.cooldowns().await.unwrap();
+    assert_eq!(
+        cooldowns
+            .iter()
+            .map(|c| (c.account_id.as_str(), c.scope.as_str(), c.reason.as_str()))
+            .collect::<Vec<_>>(),
+        [("a", "model:claude-sonnet-4-5-20250929", "model_rejected")]
     );
     up.shutdown().await;
 }
