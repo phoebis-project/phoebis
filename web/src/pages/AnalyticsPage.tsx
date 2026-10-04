@@ -1287,8 +1287,8 @@ function CostByGroup({ axis, points, groupBy, groupSlot, loading }: { axis: Time
 const UNFILTERED_NOTE = '; the filters above do not apply here';
 type TimeAxis = { height?: number; label?: { fill: string; fontSize: number; position: 'insideBottomRight'; value: string }; tickFormatter: (v: number) => string };
 /**
- * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their day ticks print the
- * UTC date and the axis says so once; hour ticks stay local, as the tooltips do.
+ * A time axis over buckets `bucketMs` wide. The 6-hour and daily buckets are UTC multiples, so their day ticks print
+ * the UTC date and the axis says so once; hour ticks stay local, as the tooltips do.
  */
 function timeAxis(bucketMs: number, ink: ChartInk): TimeAxis {
   if (bucketMs < 6 * HOUR) return { tickFormatter: (v) => fmtHourTick(v) };

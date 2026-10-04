@@ -1,6 +1,9 @@
 import type { QuotaHistory } from '@/api/types';
 
-/** Percents; a 7-day or Fable value is null before that series' first sample. */
+/**
+ * Percents; a 7-day or Fable value is null before that series' first sample, and every Fable value is null for an
+ * account without a Fable window.
+ */
 export interface TrendPoint {
   at: number;
   u5: number;

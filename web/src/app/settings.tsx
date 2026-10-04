@@ -60,5 +60,7 @@ export function useAppSettings(): AppSettings {
   return v;
 }
 
-/** For a component that formats times and reads no other setting: it re-renders on the preference, not on a clock tick. */
+/**
+ * For a component that formats times and reads no other setting: it re-renders on the preference, not on a clock tick.
+ */
 export const useFormatVersion = (): number => useAppSettings().formatVersion;

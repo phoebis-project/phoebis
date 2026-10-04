@@ -246,8 +246,8 @@ they run, with filters, a pause control, and a range control for switching to a 
 opens a detail pane with its error code and phase waterfall, and a Streams grid shows every stream still open. A stream
 that fails after its 200 head keeps that status, so a finished request with an error code never reads as a success.
 
-![The Observe view: the metric strip, the live table, and the phase waterfall](assets/observe-light.png#only-light)
-![The Observe view: the metric strip, the live table, and the phase waterfall](assets/observe-dark.png#only-dark)
+![The Observe view: the metric strip and the live table](assets/observe-light.png#only-light)
+![The Observe view: the metric strip and the live table](assets/observe-dark.png#only-dark)
 
 ### Quota
 

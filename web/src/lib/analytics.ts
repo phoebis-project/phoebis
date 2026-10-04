@@ -84,8 +84,8 @@ export interface BurnRow {
    */
   seconds: number;
   /**
-   * Whether the bucket sets the chart's axis and the line's peak: one covering less than a tenth of its width rates a few
-   * seconds of traffic as if they ran the whole bucket.
+   * Whether the bucket sets the chart's axis and the line's peak: one covering less than a tenth of its width rates a
+   * few seconds of traffic as if they ran the whole bucket.
    */
   setsScale: boolean;
   sevenDay: (number | null)[];
@@ -244,8 +244,8 @@ export function foldBurn(
         usd: sums.map((s) => s.usd / minutes),
       };
     });
-  // Weighed by the share of its width a bucket covers rather than its seconds: the same mean, and a range of full buckets
-  // reads the plain mean to the last bit.
+  // Weighed by the share of its width a bucket covers rather than its seconds: the same mean, and a range of full
+  // buckets reads the plain mean to the last bit.
   const weightOf = (r: BurnRow) => r.seconds / bucketSeconds;
 
   const mean = (read: (r: BurnRow) => number) => (rows.length ? weighedMean(rows.map((r) => ({ value: read(r), weight: weightOf(r) }))) : 0);

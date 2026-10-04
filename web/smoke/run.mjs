@@ -4345,7 +4345,6 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     }
     await m.settle(100);
     const status = desktop?.querySelector('.dialog__status');
-    // Every rail entry carrying a refusal dot, in the rail's order.
     const marked = [...(desktop?.querySelectorAll('.dialog-rail__group') ?? [])].filter((b) => b.querySelector('.dialog-rail__dot')).map((b) => b.getAttribute('data-group'));
     const read = [String(override?.checked), String(foot(desktop, 'Save')?.disabled), status?.textContent ?? '', JSON.stringify(marked), JSON.stringify(field?.value), String(field?.getAttribute('aria-invalid'))];
     status?.querySelector('button')?.click();
@@ -5707,7 +5706,8 @@ m.unmount();
   else {
     const spy = countCalls('listRequests');
     typeFocused(typed, 'abc');
-    // One turn: the focus move and the click, with no render of the router between them.
+    // One turn for the focus move and the click: the blur's write renders, but a transition it starts gets no task to
+    // render in before the click.
     held.focus();
     held.click();
     await switched.settle();
@@ -5852,8 +5852,8 @@ m.unmount();
   held.unmount();
 }
 
-// A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters before
-// the change read; Try again reads the new filters again.
+// A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters
+// before the change read; Try again reads the new filters again.
 {
   const page = await mount('/analytics');
   const keyRows = () => [...([...page.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Traffic by key'))?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim() ?? '');
@@ -8764,8 +8764,8 @@ m.unmount();
 }
 
 {
-  // Without the Max 20x row in the cost table no account of the story is sized for the 7-day window, so that ring weighs
-  // nobody; the 5-hour ring still weighs Pro and Max 5x and names business alone.
+  // Without the Max 20x row in the cost table no account of the story is sized for the 7-day window, so that ring
+  // weighs nobody; the 5-hour ring still weighs Pro and Max 5x and names business alone.
   const { getSettings } = api;
   api.getSettings = async () => {
     const settings = await getSettings.call(api);
@@ -8889,7 +8889,7 @@ m.unmount();
 }
 
 {
-  // Two Observe checks that spend real time on a mount of their own, late in the run like the checks around them, so
+  // Three Observe checks that spend real time on a mount of their own, late in the run like the checks around them, so
   // the time they take moves none of the story's relative times the checks above read.
   const live = await mount('/observe');
   const keyOf = (tr) => liveCell(live, tr, 'Key')?.textContent ?? '';

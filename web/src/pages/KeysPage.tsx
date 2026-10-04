@@ -42,7 +42,7 @@ export function KeysPage() {
   const [created, setCreated] = useState<{ key: CreatedApiKey; title: string } | null>(null);
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const { notify } = useSession();
-  // The rows whose menu is open, by key id: an answer landing under an open menu would re-sort the rows beneath it.
+  // The rows whose menu is open, by key id: an answer landing under an open menu could add or drop rows beneath it.
   const [openMenus, setOpenMenus] = useState<ReadonlySet<string>>(() => new Set());
   // The key dialog resets its fields whenever the pool list changes, so a refresh landing under it would wipe them.
   const paused = dialog !== null || created !== null || confirm !== null || openMenus.size > 0;

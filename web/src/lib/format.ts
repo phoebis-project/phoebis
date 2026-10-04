@@ -45,8 +45,8 @@ export const fmtUsdTick = (v: number, digits: number) => {
 /** A dated model id's label: the catalog lists `claude-haiku-4-5-20251001`, the operator reads `claude-haiku-4-5`. */
 export const undatedModel = (id: string) => id.replace(/-\d{8}$/, '');
 /**
- * A model id as a narrow column shows it: every Anthropic id starts `claude-`, so the prefix drops with the date and the
- * family and version remain (`haiku-4-5`); the cell's title carries the id as sent.
+ * A model id as a narrow column shows it: every Anthropic id starts `claude-`, so the prefix drops with the date and
+ * the family and version remain (`haiku-4-5`); the cell's title carries the id as sent.
  */
 export const shortModel = (id: string) => undatedModel(id).replace(/^claude-/, '');
 export const fmtPct = (ratio: number, digits = 0) => `${(ratio * 100).toFixed(digits)}%`;

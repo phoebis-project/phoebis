@@ -299,8 +299,8 @@ export interface KeyChecks {
 }
 
 /**
- * The key dialog's holds in rail order: a missing name, a new key's id that is taken or that the name gives no letter
- * or digit for, a missing pool, the model rules, an override's hours; empty when Save may go.
+ * The key dialog's holds in rail order: a missing name, a new key's name whose id is taken or that holds no ASCII
+ * letter or digit, a missing pool, the model rules, an override's hours; empty when Save may go.
  */
 export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' | 'modelRules' | 'name' | 'poolId'>, checks: KeyChecks = {}): KeyRefusal[] {
   const out: KeyRefusal[] = [];
