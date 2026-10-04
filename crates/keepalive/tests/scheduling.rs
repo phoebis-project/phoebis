@@ -1022,9 +1022,11 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
         1,
         "one probe, so the recipe has an unanswered probe to settle"
     );
-    let (mut key, stamp) = r.h.store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, stamp, "test").unwrap();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     let sent = r.up.requests().len();
     r.advance(270_000);
@@ -1562,9 +1564,11 @@ async fn the_retention_rules_reach_a_paused_recipe() {
         "the 429 paused the recipe and cleared its schedule"
     );
     assert!(!r.engine.recipes_for("desktop", "session").is_empty());
-    let (mut key, stamp) = r.h.store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, stamp, "test").unwrap();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(

@@ -477,7 +477,9 @@ pub struct ApiKeyRow {
     pub secret_digest: Vec<u8>,
     pub prefix: String,
     pub created_at: i64,
-    /// The row's last write: the create, an edit, a rotation or a revocation, never a use's `last_used_at`.
+    /// The row's last write: the create, an edit, a rotation or a revocation, never a use's `last_used_at`. The
+    /// create stamps `created_at`; every later write stamps the clock or one past the stored stamp, whichever is
+    /// later, so two writes inside one millisecond never share a stamp and an edit fenced on it is exact.
     pub updated_at: i64,
     pub rotated_at: Option<i64>,
     pub last_used_at: Option<i64>,
@@ -930,30 +932,6 @@ impl Store {
         .map_err(StoreError::from)
     }
 
-    /// The key with the `updated_at` it carries, read in one transaction, so an edit built from the row fences on
-    /// the stamp of the row it applied to.
-    pub fn api_key_with_stamp(&self, id: &str) -> Result<Option<(ApiKeyRow, i64)>, StoreError> {
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction()?;
-        let Some(row) = tx
-            .query_row(
-                &format!("{KEY_SELECT} WHERE id = ?1"),
-                params![id],
-                row_to_key,
-            )
-            .optional()?
-        else {
-            return Ok(None);
-        };
-        let stamp = tx.query_row(
-            "SELECT updated_at FROM api_keys WHERE id = ?1",
-            params![id],
-            |r| r.get(0),
-        )?;
-        tx.commit()?;
-        Ok(Some((row, stamp)))
-    }
-
     /// Answers the `created_at` it stamped, which is the row's `updated_at` too: a caller's own clock is not the
     /// generation, and a selector or a response built from the row would name the wrong holder after a re-create.
     pub fn insert_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<i64, StoreError> {
@@ -1093,7 +1071,7 @@ impl Store {
         // A new grace starts unpresented: a stamp under the retired secret this rotation just replaced would
         // otherwise read as if it belonged to the one this rotation creates.
         tx.execute(
-            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL, updated_at = ?5 WHERE id = ?1",
+            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL, updated_at = MAX(?5, updated_at + 1) WHERE id = ?1",
             params![id, digest, prefix, at, now_ms()],
         )?;
         record_change(

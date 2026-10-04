@@ -1818,9 +1818,11 @@ async fn a_probe_that_lands_after_midnight_charges_the_new_day() {
     let spent = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
     assert!(spent > 0.0, "the probe after midnight charged its pool");
     // The opt-out keeps the next tick from starting another probe, so the sum it leaves is the probe's own.
-    let (mut key, stamp) = r.h.store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, stamp, "test").unwrap();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(
@@ -1888,9 +1890,11 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
             "test",
         )
         .unwrap();
-    let (mut key, stamp) = r.h.store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.pool_id = "warm".into();
-    r.h.store.update_api_key(&key, stamp, "test").unwrap();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     // The warm pool has spent nothing of its own cap, so the recipe the moved key holds probes once more.
     r.advance(270_000);

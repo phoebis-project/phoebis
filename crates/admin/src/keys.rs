@@ -309,11 +309,12 @@ pub(crate) async fn patch(
     let Ok(input) = serde_json::from_slice::<KeyInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
-    let (mut row, read_at) = match state.store.api_key_with_stamp(&id) {
-        Ok(Some(read)) => read,
+    let mut row = match state.store.api_key(&id) {
+        Ok(Some(row)) => row,
         Ok(None) => return failure(StatusCode::NOT_FOUND, "key not found"),
         Err(e) => return store_failure(e),
     };
+    let read_at = row.updated_at;
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }

@@ -1271,10 +1271,12 @@ fn a_pool_reopens_on_and_a_key_reopens_inheriting_until_set_off() {
     drop(store);
     let store = Store::open(&path, &key_store).unwrap();
     assert!(store.pool("main").unwrap().unwrap().auto_mode_server);
-    let (mut read, stamp) = store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let mut read = store.api_key("desktop").unwrap().unwrap();
     assert_eq!(read.auto_mode_server, None, "a new key inherits the pool's");
     read.auto_mode_server = Some(false);
-    store.update_api_key(&read, stamp, "test").unwrap();
+    store
+        .update_api_key(&read, read.updated_at, "test")
+        .unwrap();
     drop(store);
     let store = Store::open(&path, &key_store).unwrap();
     assert_eq!(
@@ -1706,7 +1708,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
                 long_context_twins: false,
                 ..k.clone()
             },
-            store.api_key_with_stamp("desktop").unwrap().unwrap().1,
+            store.api_key("desktop").unwrap().unwrap().updated_at,
             "test",
         )
         .unwrap();
@@ -1887,14 +1889,14 @@ fn two_key_edits_from_one_read_answer_stale_on_the_second() {
             "test",
         )
         .unwrap();
-    let (read, stamp) = store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let read = store.api_key("desktop").unwrap().unwrap();
     store
         .update_api_key(
             &ApiKeyRow {
                 label: "First".into(),
                 ..read.clone()
             },
-            stamp,
+            read.updated_at,
             "test",
         )
         .unwrap();
@@ -1904,21 +1906,21 @@ fn two_key_edits_from_one_read_answer_stale_on_the_second() {
                 label: "Second".into(),
                 ..read.clone()
             },
-            stamp,
+            read.updated_at,
             "test"
         ),
         Err(StoreError::Stale)
     ));
-    let (first, moved) = store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let first = store.api_key("desktop").unwrap().unwrap();
     assert_eq!(first.label, "First", "the stale edit wrote nothing");
     assert!(
-        moved > stamp,
+        first.updated_at > read.updated_at,
         "a write inside the stamp's own millisecond still moves it"
     );
     store.revoke_api_key("desktop", 5, "test").unwrap();
     assert!(
         matches!(
-            store.update_api_key(&first, moved, "test"),
+            store.update_api_key(&first, first.updated_at, "test"),
             Err(StoreError::Stale)
         ),
         "an edit read before the revocation cannot switch the revoked key back on"
@@ -2224,6 +2226,79 @@ fn every_key_write_stamps_updated_at_and_a_use_leaves_it() {
     clear();
     store.revoke_api_key("k", 9, "test").unwrap();
     assert_ne!(stamped(), 0, "a revocation stamps the row");
+}
+
+#[test]
+fn two_key_updates_inside_one_millisecond_read_two_different_stamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("p"), "test").unwrap();
+    let created_at = store
+        .insert_api_key(&key(&store, "k", "p", "secret-one"), "test")
+        .unwrap();
+    // A stored stamp an hour past the clock is the state several writes inside one millisecond leave: the clock
+    // has not moved past the newest stamp, so each write has to step past it to read as a change.
+    let ahead = created_at + 3_600_000;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute("UPDATE api_keys SET updated_at = ?1", [ahead])
+        .unwrap();
+    let read = store.api_key("k").unwrap().unwrap();
+    let first = store
+        .update_api_key(
+            &ApiKeyRow {
+                label: "first".into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    let moved = store.api_key("k").unwrap().unwrap();
+    let second = store
+        .update_api_key(
+            &ApiKeyRow {
+                label: "second".into(),
+                ..moved.clone()
+            },
+            moved.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        (first, second),
+        (ahead + 1, ahead + 2),
+        "each update steps one past the stamp it fenced on"
+    );
+    assert_eq!(store.api_key("k").unwrap().unwrap().updated_at, second);
+    assert!(
+        matches!(
+            store.update_api_key(&moved, moved.updated_at, "test"),
+            Err(StoreError::Stale)
+        ),
+        "an edit read between the two cannot pass the fence"
+    );
+    store
+        .rotate_api_key(
+            "k",
+            &store.api_key_digest("secret-two"),
+            &phoebis_store::key_prefix("secret-two"),
+            7,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        store.api_key("k").unwrap().unwrap().updated_at,
+        ahead + 3,
+        "a rotation steps the same way"
+    );
+    store.revoke_api_key("k", 9, "test").unwrap();
+    assert_eq!(
+        store.api_key("k").unwrap().unwrap().updated_at,
+        ahead + 4,
+        "and so does a revocation"
+    );
 }
 
 #[test]

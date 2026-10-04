@@ -730,14 +730,14 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
     let app = phoebis_ledger::usage_router(h.db.clone(), h.router.clone(), clock_of(&h));
 
-    let (row, stamp) = h.store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let row = h.store.api_key("desktop").unwrap().unwrap();
     h.store
         .update_api_key(
             &ApiKeyRow {
                 label: "<b>Desk</b> & \"Co\"".into(),
                 ..row
             },
-            stamp,
+            row.updated_at,
             "test",
         )
         .unwrap();

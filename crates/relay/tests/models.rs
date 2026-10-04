@@ -80,10 +80,12 @@ async fn the_listing_answers_the_callers_key_with_each_list_level_applied() {
         },
     )
     .await;
-    let (mut desktop, stamp) = h.store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let mut desktop = h.store.api_key("desktop").unwrap().unwrap();
     desktop.model_rules = rules(&["NOT claude-haiku*"]);
     desktop.model_rules_mode = RulesMode::Extend;
-    h.store.update_api_key(&desktop, stamp, "test").unwrap();
+    h.store
+        .update_api_key(&desktop, desktop.updated_at, "test")
+        .unwrap();
     h.router.reload().await.unwrap();
 
     let resp = h
@@ -160,9 +162,11 @@ async fn the_twins_are_switched_off_per_key() {
     let up = FakeUpstream::start(vec![]).await;
     let catalog_up = FakeUpstream::start(catalog_rows()).await;
     let h = harness_with_catalog(&up, catalog_up, &[oauth("a", A, 0)], PoolSpec::default()).await;
-    let (mut desktop, stamp) = h.store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let mut desktop = h.store.api_key("desktop").unwrap().unwrap();
     desktop.long_context_twins = false;
-    h.store.update_api_key(&desktop, stamp, "test").unwrap();
+    h.store
+        .update_api_key(&desktop, desktop.updated_at, "test")
+        .unwrap();
     h.router.reload().await.unwrap();
 
     let resp = h

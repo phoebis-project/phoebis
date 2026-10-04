@@ -156,7 +156,7 @@ async fn an_unknown_key_401_a_policy_404_and_an_exhaustion_have_a_row_and_no_att
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let (desktop, stamp) = h.store.api_key_with_stamp("desktop").unwrap().unwrap();
+    let desktop = h.store.api_key("desktop").unwrap().unwrap();
     h.store
         .update_api_key(
             &phoebis_store::ApiKeyRow {
@@ -172,7 +172,7 @@ async fn an_unknown_key_401_a_policy_404_and_an_exhaustion_have_a_row_and_no_att
                 ],
                 ..desktop
             },
-            stamp,
+            desktop.updated_at,
             "test",
         )
         .unwrap();
