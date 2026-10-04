@@ -40,7 +40,8 @@ const failures = [];
 if (chunks.length === 1) failures.push('the build emitted one chunk');
 if (kb > ENTRY_LIMIT_KB) failures.push(`the entry passes ${ENTRY_LIMIT_KB} kB`);
 for (const name of loaded) {
-  if (read(name).includes('recharts-')) failures.push(`${name === entry ? 'the entry' : `${name}, loaded with the entry,`} carries Recharts code`);
+  const which = name === entry ? 'the entry' : `${name}, loaded with the entry,`;
+  if (read(name).includes('recharts-')) failures.push(`${which} carries Recharts code`);
 }
 for (const failure of failures) console.error(failure);
 process.exit(failures.length ? 1 : 0);

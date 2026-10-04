@@ -1361,8 +1361,16 @@ async function poolKeyMenus(theme) {
         measurements.push(`${theme} /pools dialog Keys of ${pool} last menu ${JSON.stringify(items)}`);
         if (items.length !== 2) say(`${pool}'s last key menu draws ${items.length} items, not Move to and Revoke`);
         for (const item of items.filter((it) => !it.hit)) say(`${pool}'s last key menu item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
-        await trigger.click();
+        // Escape with the menu open, in the browser whose dialog turns the same key into a close request: the menu
+        // closes, focus returns to its trigger, and the dialog stays.
+        await page.keyboard.press('Escape');
         await settle();
+        // Read only while the dialog stands: a locator inside a closed one waits out its timeout.
+        const open = await dialog.isVisible();
+        const escaped = open ? { focused: await trigger.evaluate((el) => el === document.activeElement), lists: await dialog.locator('.menu__list').count(), open } : { open };
+        measurements.push(`${theme} /pools dialog Keys of ${pool} Escape in the key menu ${JSON.stringify(escaped)}`);
+        if (!open) say(`Escape inside ${pool}'s key menu closed the dialog`);
+        else if (escaped.lists > 0 || !escaped.focused) say(`Escape inside ${pool}'s key menu left ${escaped.lists} lists open and focus ${escaped.focused ? 'on' : 'off'} the trigger`);
       }
     } catch (error) {
       say(`${pool}: ${error instanceof Error ? error.message : String(error)}`);
@@ -2262,9 +2270,24 @@ async function requestsTableFits(theme) {
  * fit never sees. Recorded rather than asserted, since room for them would have to come from another default column.
  */
 async function requestPageWidths(theme) {
+  // On the router an answer can land after the clock's step, so each read first waits for the one it measures: the
+  // first load draws a skeleton table until then, and Next keeps the page it left.
+  const firstRow = () => page.evaluate(() => document.querySelector('.requests__table tbody tr td')?.textContent ?? null);
+  const landed = (left) =>
+    page
+      .waitForFunction(
+        (prior) => {
+          const first = document.querySelector('.requests__table tbody tr td');
+          return document.querySelector('.requests__table .skeleton') === null && first !== null && first.textContent !== prior;
+        },
+        left,
+        { timeout: 15_000 },
+      )
+      .catch(() => {});
   await page.goto(`${base}/requests`);
   await booted();
   await advance(LOAD_MS);
+  await landed(null);
   const widths = [];
   for (let n = 1; n <= 20; n += 1) {
     const read = await page.evaluate(() => {
@@ -2279,8 +2302,10 @@ async function requestPageWidths(theme) {
     }
     widths.push(`${read.scroll} of ${read.client}px${read.scroll > read.client ? ` (${read.scroll - read.client}px over)` : ''}`);
     if (!read.more) break;
+    const left = await firstRow();
     await page.locator('button[aria-label="Next page"]').click();
     await advance(LOAD_MS);
+    await landed(left);
   }
   measurements.push(`${theme} /requests default pages ${JSON.stringify(widths)}`);
 }
@@ -3059,7 +3084,7 @@ async function costReference(theme) {
 
 /**
  * The Sessions table's default columns fit its card at the pass's 1280 by 800: the table needs no more than its wrap's
- * width, so nothing scrolls sideways and the companion, the recipe state and the next probe stay in view.
+ * width, so nothing scrolls sideways and the companion and the cache warming state stay in view.
  */
 async function sessionsTableFits(theme) {
   const read = await page.evaluate(() => {
