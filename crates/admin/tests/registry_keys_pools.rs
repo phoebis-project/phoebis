@@ -1215,18 +1215,21 @@ async fn a_pool_under_never_reads_exhausted_when_its_only_member_is_in_overage()
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","overage_policy":"never","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
-    parts.router.report(phoebis_routing::Report::Overage {
-        account_id: "direct".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: Some(common::NOW),
-            reset: None,
-            observed_at: common::NOW,
-            source: phoebis_routing::EvidenceSource::Head,
+    parts
+        .router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "direct".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(common::NOW),
+                reset: None,
+                observed_at: common::NOW,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     let pools = common::wait_json(&parts.app, "/admin/pools", &cookie, |v| {
         v["pools"][0]["status"] == "exhausted"
     })
@@ -1255,18 +1258,21 @@ async fn an_overage_whose_reset_has_passed_no_longer_marks_the_pool() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
     post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","overage_policy":"never","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
-    parts.router.report(phoebis_routing::Report::Overage {
-        account_id: "direct".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: Some(common::NOW - 3_600_000),
-            reset: Some(common::NOW - 1),
-            observed_at: common::NOW - 3_600_000,
-            source: phoebis_routing::EvidenceSource::Head,
+    parts
+        .router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "direct".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(common::NOW - 3_600_000),
+                reset: Some(common::NOW - 1),
+                observed_at: common::NOW - 3_600_000,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     // Synchronized on the account view, which reads the raw flag, before reading the pool, which converts it.
     common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
         v["accounts"]
@@ -1291,18 +1297,21 @@ async fn an_overage_whose_reset_has_passed_no_longer_marks_the_pool() {
 async fn the_account_list_answers_from_one_router_ask_for_the_whole_list() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    parts.router.report(phoebis_routing::Report::Overage {
-        account_id: "business".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: Some(common::NOW),
-            reset: None,
-            observed_at: common::NOW,
-            source: phoebis_routing::EvidenceSource::Head,
+    parts
+        .router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "business".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(common::NOW),
+                reset: None,
+                observed_at: common::NOW,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     let accounts = common::wait_json(&parts.app, "/admin/accounts", &cookie, |v| {
         v["accounts"][0]["overage"]["in_use"] == true
     })
@@ -2451,18 +2460,21 @@ async fn a_member_at_its_budget_reads_ineligible_and_its_lone_pool_reads_exhaust
         Some(&cookie),
     )
     .await;
-    parts.router.report(phoebis_routing::Report::Overage {
-        account_id: "direct".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: Some(common::NOW - 3_600_000),
-            reset: Some(common::NOW + 3_600_000),
-            observed_at: common::NOW,
-            source: phoebis_routing::EvidenceSource::Head,
+    parts
+        .router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "direct".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(common::NOW - 3_600_000),
+                reset: Some(common::NOW + 3_600_000),
+                observed_at: common::NOW,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     let both = wait_json(app, "/admin/pools", &cookie, |v| {
         v["pools"][0]["overage_policy"] == "never"
     })

@@ -202,17 +202,19 @@ async fn with_every_account_credits_blocked_the_router_answers_fast_credits_unav
         "a refusal without an overage reset holds for an hour"
     );
     // The poll reads b's credits as switched off.
-    h.router.report(Report::Credits {
-        account_id: "b".into(),
-        state: CreditsState {
-            enabled: false,
-            disabled_reason: Some("org_level_disabled".into()),
-            utilization: None,
-            observed_at: NOW,
+    h.router
+        .report(Report::Credits {
+            account_id: "b".into(),
+            state: CreditsState {
+                enabled: false,
+                disabled_reason: Some("org_level_disabled".into()),
+                utilization: None,
+                observed_at: NOW,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     let dialed = up.requests().len();
     let reason = |resp: &axum::http::Response<Body>| {
         (
@@ -317,17 +319,19 @@ async fn concurrent_credits_and_rate_limit_refusals_keep_a_row_each_and_a_credit
         );
         body_json(resp).await;
         // The poll reads a's credits back with room, after both refusals.
-        h.router.report(Report::Credits {
-            account_id: "a".into(),
-            state: CreditsState {
-                enabled: true,
-                disabled_reason: None,
-                utilization: Some(0.2),
-                observed_at: NOW + 1,
+        h.router
+            .report(Report::Credits {
+                account_id: "a".into(),
+                state: CreditsState {
+                    enabled: true,
+                    disabled_reason: None,
+                    utilization: Some(0.2),
+                    observed_at: NOW + 1,
+                    incarnation: 1,
+                },
                 incarnation: 1,
-            },
-            incarnation: 1,
-        });
+            })
+            .await;
         assert_eq!(
             rows(&h.router.cooldowns().await.unwrap()),
             [("a", "fast", "fast_rate_limit", "fast", 1_090_000 + 1_000)],
@@ -356,23 +360,25 @@ async fn a_pinned_fast_session_under_a_plan_window_cooldown_is_served_on_its_acc
     let resp = h.app.clone().oneshot(fast_request("s1")).await.unwrap();
     assert_eq!(outcome(&resp).account_id, "a");
     body_json(resp).await;
-    h.router.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    h.router
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "account".into(),
-            until: NOW + HOUR,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: NOW + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
             incarnation: 1,
-        },
-        pin: None,
-        incarnation: 1,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-    });
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
     assert_eq!(h.router.cooldowns().await.unwrap().len(), 1);
     let resp = h.app.clone().oneshot(fast_request("s1")).await.unwrap();
     assert_eq!(

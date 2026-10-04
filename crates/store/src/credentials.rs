@@ -177,6 +177,11 @@ pub(crate) fn store_api_key_secret(
 
 impl Store {
     pub fn credentials(&self, account_id: &str) -> Result<Option<CredentialBundle>, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        {
+            self.count_credential_read();
+            self.park_on_credential_hold();
+        }
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let row: Option<CredentialRow> = conn
             .query_row(
@@ -464,6 +469,11 @@ impl Store {
         &self,
         account_id: &str,
     ) -> Result<Option<(Secret, u64)>, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        {
+            self.count_credential_read();
+            self.park_on_credential_hold();
+        }
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let row: Option<(Vec<u8>, Vec<u8>, i64)> = conn
             .query_row(

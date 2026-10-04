@@ -12,8 +12,7 @@ use axum::routing::get;
 use axum::Router;
 use phoebis_bus::{Bus, SubscriberStats};
 use phoebis_oauth::Clock;
-use phoebis_routing::RouterHandle;
-use phoebis_store::StoreError;
+use phoebis_routing::{RouterHandle, WriterStatus};
 
 use crate::histogram::{bucket_edges, bucket_index, top_edge, BUCKET_COUNT};
 use crate::pricing::{PriceTable, Pricing};
@@ -266,6 +265,18 @@ impl Metrics {
                         ));
                     }
                 }
+                "phoebis_router_writer_degraded" => {
+                    out.push_str(&format!(
+                        "phoebis_router_writer_degraded {}\n",
+                        u8::from(gauges.writer.degraded)
+                    ));
+                }
+                "phoebis_router_writer_depth" => {
+                    out.push_str(&format!(
+                        "phoebis_router_writer_depth {}\n",
+                        gauges.writer.depth
+                    ));
+                }
                 "phoebis_bus_subscriber_panics_total" => {
                     for (subscriber, stats) in bus {
                         out.push_str(&format!(
@@ -425,6 +436,8 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_pricing_unknown_model_total", "counter"),
     ("phoebis_requests_total", "counter"),
     ("phoebis_router_dropped_reports_total", "counter"),
+    ("phoebis_router_writer_degraded", "gauge"),
+    ("phoebis_router_writer_depth", "gauge"),
     ("phoebis_tokens_total", "counter"),
     ("phoebis_upstream_ttfb_seconds", "histogram"),
 ];
@@ -447,8 +460,11 @@ pub struct AttentionGauges {
 }
 
 /// A closure over the attention reader, read fresh on every scrape: the attention crate depends on this one for these
-/// types, so the binary supplies the closure rather than a type the ledger could name.
-pub type AttentionGaugeSource = Arc<dyn Fn() -> Result<AttentionGauges, StoreError> + Send + Sync>;
+/// types, so the binary supplies the closure rather than a type the ledger could name, and the reader's error crosses
+/// boxed for the same reason.
+pub type AttentionGaugeSource = Arc<
+    dyn Fn() -> Result<AttentionGauges, Box<dyn std::error::Error + Send + Sync>> + Send + Sync,
+>;
 
 #[derive(Clone, Debug, Default)]
 pub struct RoutingGauges {
@@ -471,6 +487,8 @@ pub struct RoutingGauges {
     pub ledger_degraded: bool,
     /// Priced records parked since start, from `Ledger::parked_priced`.
     pub ledger_parked_priced: u64,
+    /// The routing state writer at scrape, from `RouterHandle::writer_status`.
+    pub writer: WriterStatus,
 }
 
 pub async fn gather(
@@ -495,6 +513,7 @@ pub async fn gather(
         }),
         ledger_degraded: ledger.is_some_and(Ledger::degraded),
         ledger_parked_priced: ledger.map_or(0, Ledger::parked_priced),
+        writer: router.writer_status(),
         ..RoutingGauges::default()
     };
     if let Ok(cooldowns) = router.cooldowns().await {
@@ -565,7 +584,7 @@ pub fn metrics_router(
                 async move {
                     // A scrape answered without the conditions would read 0 for a held one and clear the alarm a
                     // rule fires on, so the scraper records a failed scrape instead. The listener asks for no
-                    // credential, so the store's words stay in the log.
+                    // credential, so the store's or the ledger's words stay in the log.
                     let attention = match attention.map(|a| a()).transpose() {
                         Ok(attention) => attention.unwrap_or_default(),
                         Err(error) => {

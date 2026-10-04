@@ -6,6 +6,7 @@ use phoebis_bus::{
     ClientFacts, Event, Kind, Origin, Outcome, RequestComplete, RequestObserved, RequestShape,
     ResponseFacts,
 };
+use phoebis_ledger::LedgerDb;
 use phoebis_store::{AccountState, AttemptOutcome};
 use serde_json::json as j;
 
@@ -60,6 +61,19 @@ fn complete(id: &str, outcome: Outcome, drift: Option<&str>, at: i64) -> Event {
         message_id: None,
         finished_at: at,
     })
+}
+
+/// Parks one priced record of `pool` on `account` at `at`. Its record is not JSON, so the ledger's start pass, which
+/// lands every parked row whose record parses, never takes it out from under the read.
+fn park(db: &LedgerDb, pool: &str, account: &str, at: i64) {
+    db.write(|c| {
+        c.execute_batch(&format!(
+            "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+             VALUES ({at}, {at}, 'parked-{at}', '{pool}', '{account}', 'not json', 'refused by test');"
+        ))?;
+        Ok(())
+    })
+    .unwrap();
 }
 
 #[tokio::test]
@@ -119,6 +133,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     parts
         .attention
         .observe(&complete("r-drift", Outcome::Rejected, Some("hash"), later));
+    park(&parts.db, "main", "business", later - 1_000);
     let body = json(get(app, "/admin/attention", Some(&cookie)).await).await;
     let items = body["items"].as_array().unwrap();
     assert_eq!(
@@ -136,6 +151,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             ("reauth_required", "business"),
             ("funding_required", "direct"),
             ("refresh_failed", "business"),
+            ("ledger_record_parked", "main"),
         ],
         "{body}"
     );
@@ -186,6 +202,18 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
             &j!({ "account": "business", "failures": 2, "last_error": "invalid_grant", "outcome": "failed" })
         ),
         "the run dates from its first failed attempt"
+    );
+    assert_eq!(
+        items[6],
+        j!({
+            "kind": "ledger_record_parked",
+            "subject": { "type": "pool", "id": "main", "label": "Main" },
+            "link": { "page": "pools", "id": "main" },
+            "pools": ["main"],
+            "since": later - 1_000,
+            "detail": { "accounts": ["business"], "count": 1, "pool": "main" },
+        }),
+        "a parked record opens its pool's card and dates from the oldest row"
     );
 }
 
@@ -242,6 +270,26 @@ async fn a_failed_holder_read_answers_500_rather_than_an_empty_list() {
     assert_eq!(json(response).await, j!({ "error": "storage failure" }));
     let response = get(&parts.app, "/admin/attention", Some(&cookie)).await;
     assert_eq!(response.status(), 200, "the next read answers again");
+}
+
+#[tokio::test]
+async fn a_failed_parked_read_answers_500_as_a_failed_holder_read_does() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts
+        .db
+        .write(|c| {
+            c.execute_batch("DROP TABLE parked_records;")?;
+            Ok(())
+        })
+        .unwrap();
+    let response = get(&parts.app, "/admin/attention", Some(&cookie)).await;
+    assert_eq!(
+        response.status(),
+        500,
+        "an empty list would read as the quiet state"
+    );
+    assert_eq!(json(response).await, j!({ "error": "storage failure" }));
 }
 
 #[tokio::test]

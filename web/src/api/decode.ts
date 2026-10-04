@@ -230,7 +230,7 @@ export function decodeSnapshot(accountId: string, v: unknown): QuotaSnapshot {
 }
 
 export const ATTENTION_PAGE_VALUES = ['accounts', 'keys', 'pools'] as const satisfies readonly NonNullable<AttentionItem['link']>['page'][];
-export const ATTENTION_SUBJECT_VALUES = ['account', 'client', 'pool'] as const satisfies readonly AttentionItem['subject']['type'][];
+export const ATTENTION_SUBJECT_VALUES = ['account', 'client', 'pool', 'router'] as const satisfies readonly AttentionItem['subject']['type'][];
 
 export function decodeAttention(v: unknown): AttentionItem {
   const a = rec(v);

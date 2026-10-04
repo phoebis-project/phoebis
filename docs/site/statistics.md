@@ -181,6 +181,11 @@ and not its captured bodies, so the capture of a parked request is gone while it
 retry the ledger is degraded: the system page shows it, `phoebis_ledger_degraded` reads 1, and routing treats every
 budgeted member's spend as unknown until a batch lands and the spend is read again.
 
+The routing state writer is bounded the same way: a stalled registry file leaves its writes in memory, coalesced per
+row, and the system page's `router.writer` reads `degraded` until they drain. A batch the registry file as a whole
+refuses is tried once more at the writer's next wake and counted under `router.writer.failed_batches`; a second
+refusal drops it.
+
 ## Retention
 
 | Data | Kept for |
@@ -202,7 +207,7 @@ its own read, so a 400-day range holds one day of rows in memory and the reader 
 ## Metrics
 
 `stats.metrics_listen` serves `/metrics` in Prometheus text format and nothing else; it speaks plain HTTP and
-asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-one families are
+asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-three families are
 rendered:
 
 | Metric | Type | Labels |
@@ -226,6 +231,8 @@ rendered:
 | `phoebis_pricing_unknown_model_total` | counter | none |
 | `phoebis_requests_total` | counter | `key`, `kind`, `outcome` |
 | `phoebis_router_dropped_reports_total` | counter | `kind` |
+| `phoebis_router_writer_degraded` | gauge | none |
+| `phoebis_router_writer_depth` | gauge | none |
 | `phoebis_tokens_total` | counter | `account`, `kind`, `model` |
 | `phoebis_upstream_ttfb_seconds` | histogram | `model` |
 
@@ -235,9 +242,12 @@ cannot grow the label set by naming models it likes.
 `phoebis_keepalive_probes_total`'s `account` label reads `-` for a probe cancelled before any account was
 attributed, the same reserved id a request row with no account reads under.
 `phoebis_account_cooldown_seconds`, `phoebis_account_overage_in_use`, `phoebis_keepalive_agents`, and
-`phoebis_pins_active` are the four routing gauges; each is computed fresh from the router's own snapshot on every
+`phoebis_pins_active` are the four routing-state gauges; each is computed fresh from the router's own snapshot on every
 scrape rather than accumulated between them. `phoebis_pins_active` is counted per pool by the routing loop itself, so
-a scrape copies one count per pool rather than the pin table.
+a scrape copies one count per pool rather than the pin table. Beside the four, `phoebis_router_writer_depth` and
+`phoebis_router_writer_degraded` are read at the scrape from the router's writer status: the batches waiting in the
+routing state writer's channel, and 1 while writes past its bound wait in memory
+([the ledger writer](#the-ledger-writer)).
 `phoebis_ledger_queued` reads the records waiting in the ledger's writer channel at the scrape, and
 `phoebis_ledger_behind_refusals_total` counts the requests answered `ledger_behind` while it was at least half full
 ([run the container](installation.md#run-the-container)).
@@ -261,15 +271,16 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 ### Dashboard
 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
-pool or key where it is fixed; it reads the same conditions the [`phoebis_attention` gauge](#conditions-and-gauges)
-exports. Four tiles report requests, tokens, estimated cost, and the error rate over the last 24 hours, and a line under
-them says when the figures were read, or that the last refresh failed and why. Two cards below show how much of the
-pooled 5-hour and 7-day capacity is left: each subscription account is weighed by its tier's capacity in Max 20x windows
-from the cost table and listed with its own remaining share, and the line under the ring reads the windows left against
-the pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A window whose reset has passed with no reading since
-counts as a full allowance. An account whose tier the table does not size, or whose window the table has not measured,
-is named under the ring instead, with the reason. The page ends with the most recent requests and a sessions card that
-leads with the router's live pins and the accounts they sit on.
+pool or key where it is fixed, or nothing for an item with no such place (one of the router's own writers, a parked
+record without a pool, a pool deleted since, a drift refusal that named no key); it reads the same conditions the
+[`phoebis_attention` gauge](#conditions-and-gauges) exports. Four tiles report requests, tokens, estimated cost, and the
+error rate over the last 24 hours, and a line under them says when the figures were read, or that the last refresh
+failed and why. Two cards below show how much of the pooled 5-hour and 7-day capacity is left: each subscription account
+is weighed by its tier's capacity in Max 20x windows from the cost table and listed with its own remaining share, and
+the line under the ring reads the windows left against the pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A
+window whose reset has passed with no reading since counts as a full allowance. An account whose tier the table does not
+size, or whose window the table has not measured, is named under the ring instead, with the reason. The page ends with
+the most recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
 
 ### Observe
 
@@ -449,17 +460,23 @@ The router exports what needs an operator as Prometheus gauges and shows the sam
 attention line and the pool cards, which read `GET /admin/attention` ([API](api.md#get-adminattention)), worst first
 and the oldest first within a kind. `phoebis_attention` carries the labels `kind` and `subject`, reads 1 while the cause
 holds and 0 once it clears, and has a series for every subject the kind applies to, so a cleared condition reads 0
-rather than vanishing; a deleted account or pool loses its series at the next read. A restart starts the conditions fed
-by the request bus over, and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new
-backoff run is thirty minutes old; only the conditions read from the registry hold again at the first read.
+rather than vanishing; a deleted account or pool loses its series at the next read, except that a pool a parked record
+names keeps a holding `ledger_record_parked` series after it is deleted, and the `-` subject's and a deleted pool's
+`ledger_record_parked` series leave when their rows go. A restart starts the conditions fed by the request bus over,
+and the usage poll keeps its backoff in memory as well, so `poll_backoff` reads 0 until a new backoff run is thirty
+minutes old; the conditions read from the registry, and `ledger_record_parked`, read from the ledger file, hold again
+at the first read.
 
 | Kind | Subject | Clears when |
 | --- | --- | --- |
 | `pool_exhausted` | the pool | a request of the pool succeeds |
 | `client_drift` | the client version | an inference request from that version is relayed, or a re-pinned build starts |
+| `writer_degraded` | the ledger | a batch lands and the spend refresh after it succeeds |
+| `writer_degraded` | the routing state writer | the backlog drains |
 | `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
 | `funding_required` | the Anthropic-key account | the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
+| `ledger_record_parked` | the pool, or `-` for a record without one | the start after the fault lands the parked rows |
 | `poll_backoff` | the polled account | a poll answers clean |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
@@ -476,6 +493,14 @@ versions are kept: a new one takes the place of the cleared version whose run st
 held longest when every version holds. The detail names the version, what drifted (`hash` or `version_suffix`) and the
 key of the newest refusal, which the item opens; a refusal that named no key opens nothing.
 
+**`writer_degraded`** holds for the ledger from a batch it could not write, through the batch's retries and the hold of
+a record the file as a whole refuses, until a batch lands and the spend refresh after it succeeds; it holds for routing
+while the routing loop keeps state writes in memory because the registry file is not taking them
+([the ledger writer](#the-ledger-writer)). The subject is the component, `ledger` or `routing`, which the detail names;
+neither writer records when it degraded, so the item dates from the first read of this process that saw it, and it opens
+nothing. While the ledger's holds, routing treats every budgeted member's spend as unknown
+([routing](routing.md#pools)).
+
 **`reauth_required`** holds while the account's state is `reauth_required`, read from the registry
 ([account states](pairing.md#account-states)). The registry records no time for a state change, so the item dates from
 the first read of this process that saw the state. The detail names the account and its label.
@@ -487,6 +512,11 @@ over the account's credit balance; it is read from the registry and dated and de
 a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a
 re-pairing settles a refresh still pending. The detail counts the run's failures and gives the newest attempt's outcome
 and error.
+
+**`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own; each is
+tried again once at the next start, and the condition clears when the table empties. The subject is the pool the record
+was served under, or `-` for a record without one; a pool deleted since shows under its id with nothing to open. The
+item dates from the oldest row, and the detail counts the rows and names the accounts.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,

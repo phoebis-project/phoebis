@@ -319,6 +319,55 @@ async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
 }
 
 #[tokio::test]
+async fn a_pairing_commit_replaces_the_bundle_the_manager_had_cached() {
+    use common::{json, login, post};
+    let (app, _up, _store, manager) = common::paired_parts().await;
+    let cached = manager.acquire("business").await.unwrap();
+    assert_eq!(cached.generation, 1);
+    let cookie = login(&app, "admin-secret").await;
+    let started = post(
+        &app,
+        "/admin/oauth/sessions",
+        r#"{"account_id":"business","login":"claude_ai"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(started.status(), 201);
+    let started = json(started).await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let callback = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(callback.status(), 200);
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 200);
+    // The cached bundle is far from its expiry, so only the confirm's own drop of it brings the new one.
+    let paired = manager.acquire("business").await.unwrap();
+    assert_eq!(
+        paired.generation, 2,
+        "the confirmed bundle, not the cached one"
+    );
+}
+
+#[tokio::test]
 async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
     use common::{get, json, login, post};
     let (app, up) = common::admin_app().await;
@@ -659,27 +708,29 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
     // What a restart loads from the persisted windows, before the poll has read the account.
-    h.router.report(Report::Sample {
-        account_id: "business".into(),
-        sample: UtilizationSample::default()
-            .with(
-                FIVE_HOUR,
-                WindowReading {
-                    utilization: 0.25,
-                    reset: Some(NOW + 3_600_000),
-                    observed_at: NOW - 120_000,
-                },
-            )
-            .with(
-                SEVEN_DAY,
-                WindowReading {
-                    utilization: 0.5,
-                    reset: Some(NOW + 86_400_000),
-                    observed_at: NOW - 60_000,
-                },
-            ),
-        incarnation: 1,
-    });
+    h.router
+        .report(Report::Sample {
+            account_id: "business".into(),
+            sample: UtilizationSample::default()
+                .with(
+                    FIVE_HOUR,
+                    WindowReading {
+                        utilization: 0.25,
+                        reset: Some(NOW + 3_600_000),
+                        observed_at: NOW - 120_000,
+                    },
+                )
+                .with(
+                    SEVEN_DAY,
+                    WindowReading {
+                        utilization: 0.5,
+                        reset: Some(NOW + 86_400_000),
+                        observed_at: NOW - 60_000,
+                    },
+                ),
+            incarnation: 1,
+        })
+        .await;
     let held = wait_json(&h.app, path, &cookie, |v| v["error"].is_null()).await;
     assert_eq!(
         held["windows"],
@@ -732,14 +783,16 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         reset,
         observed_at: read_at,
     };
-    h.router.report(Report::Sample {
-        account_id: "business".into(),
-        sample: UtilizationSample::default()
-            .with(FIVE_HOUR, reading(0.9, Some(NOW - 25 * HOUR)))
-            .with(SEVEN_DAY, reading(0.5, Some(NOW + 72 * HOUR)))
-            .with(SEVEN_DAY_FABLE, reading(0.2, Some(NOW + 72 * HOUR))),
-        incarnation: 1,
-    });
+    h.router
+        .report(Report::Sample {
+            account_id: "business".into(),
+            sample: UtilizationSample::default()
+                .with(FIVE_HOUR, reading(0.9, Some(NOW - 25 * HOUR)))
+                .with(SEVEN_DAY, reading(0.5, Some(NOW + 72 * HOUR)))
+                .with(SEVEN_DAY_FABLE, reading(0.2, Some(NOW + 72 * HOUR))),
+            incarnation: 1,
+        })
+        .await;
     wait_json(&h.app, "/admin/accounts/business/usage", &cookie, |v| {
         v["error"].is_null()
     })
@@ -1453,18 +1506,21 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
         "the fold's own timestamp, not the cache clock"
     );
     // Pushed into overage with a reset ahead of now: the same pin reads the dollar average instead.
-    parts.router.report(phoebis_routing::Report::Overage {
-        account_id: "business".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: Some(now - 3_600_000),
-            reset: Some(now + 3_600_000),
-            observed_at: now,
-            source: phoebis_routing::EvidenceSource::Head,
+    parts
+        .router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "business".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(now - 3_600_000),
+                reset: Some(now + 3_600_000),
+                observed_at: now,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     let overage_sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         v["sessions"]
             .as_array()
@@ -1481,18 +1537,21 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     // A reset that has already passed no longer counts as overage: a raw `in_use` read would still answer
     // `usd` here, since the flag itself never cleared. A later `observed_at` than the ahead-of-now report
     // above, or the router's own newest-wins rule drops this one on the floor.
-    parts.router.report(phoebis_routing::Report::Overage {
-        account_id: "business".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: Some(now - 3_600_000),
-            reset: Some(now - 1),
-            observed_at: now + 1,
-            source: phoebis_routing::EvidenceSource::Head,
+    parts
+        .router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "business".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(now - 3_600_000),
+                reset: Some(now - 1),
+                observed_at: now + 1,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     let recovered_sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         v["sessions"]
             .as_array()
@@ -1525,24 +1584,27 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     let cookie = login(&parts.app, "admin-secret").await;
     // A million Opus 5.5 input tokens at the fixed clock, which the peak band never covers, folded over the
     // pool's default 600-second burn window.
-    parts.router.report(phoebis_routing::Report::PinRenewed {
-        pin: phoebis_routing::PinRef {
-            key_id: "desktop".into(),
-            session_id: "s1".into(),
-            agent_id: "main".into(),
-            model: "claude-opus-5-5".into(),
-            epoch: 1,
-            lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
-        },
-        now,
-        usage: Some(phoebis_routing::PinUsage {
-            input: 1_000_000,
-            ..phoebis_routing::PinUsage::default()
-        }),
-        origin: "client",
-        cache_ttl_ms: 300_000,
-        fast: false,
-    });
+    parts
+        .router
+        .report(phoebis_routing::Report::PinRenewed {
+            pin: phoebis_routing::PinRef {
+                key_id: "desktop".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: "claude-opus-5-5".into(),
+                epoch: 1,
+                lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+            },
+            now,
+            usage: Some(phoebis_routing::PinUsage {
+                input: 1_000_000,
+                ..phoebis_routing::PinUsage::default()
+            }),
+            origin: "client",
+            cache_ttl_ms: 300_000,
+            fast: false,
+        })
+        .await;
     let window = 600.0;
     let on_max_20x = 0.01461 * 3_600.0 / window;
     let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
@@ -1600,18 +1662,21 @@ async fn a_pin_on_a_model_with_an_unmeasured_cell_reads_no_burn() {
         (None, Some("window_share".into())),
         "a null cell under the burn prices no share"
     );
-    parts.router.report(phoebis_routing::Report::Overage {
-        account_id: "business".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: Some(now - 3_600_000),
-            reset: Some(now + 3_600_000),
-            observed_at: now,
-            source: phoebis_routing::EvidenceSource::Head,
+    parts
+        .router
+        .report(phoebis_routing::Report::Overage {
+            account_id: "business".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(now - 3_600_000),
+                reset: Some(now + 3_600_000),
+                observed_at: now,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     let in_overage = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         session_row(v, "s1")["burn_unit"] == "usd"
     })
@@ -1886,19 +1951,26 @@ async fn deleting_either_fast_cooldown_clears_its_own_row_and_leaves_the_others(
         credential_generation: 1,
         incarnation: 1,
     };
-    parts.router.report(cooled(
-        "fast",
-        phoebis_routing::FAST_RATE_LIMIT_REASON,
-        "fast",
-    ));
-    parts.router.report(cooled(
-        "fast_credits",
-        phoebis_routing::FAST_CREDITS_REASON,
-        "out_of_credits",
-    ));
     parts
         .router
-        .report(cooled("account", "rate_limit", "five_hour"));
+        .report(cooled(
+            "fast",
+            phoebis_routing::FAST_RATE_LIMIT_REASON,
+            "fast",
+        ))
+        .await;
+    parts
+        .router
+        .report(cooled(
+            "fast_credits",
+            phoebis_routing::FAST_CREDITS_REASON,
+            "out_of_credits",
+        ))
+        .await;
+    parts
+        .router
+        .report(cooled("account", "rate_limit", "five_hour"))
+        .await;
     // A query queues behind the reports, so the rows it answers are the ones the route will read.
     assert_eq!(parts.router.cooldowns().await.unwrap().len(), 3);
     let shown = json(get(&parts.app, "/admin/accounts/business", Some(&cookie)).await).await;

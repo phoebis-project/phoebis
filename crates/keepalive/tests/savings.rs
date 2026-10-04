@@ -1230,7 +1230,7 @@ async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budget
         ..subscription_spec()
     })
     .await;
-    r.enter_overage("o", r.now() + 10_000_000);
+    r.enter_overage("o", r.now() + 10_000_000).await;
     settled(&r, |r| async move {
         r.h.router
             .overage("o")
@@ -2237,7 +2237,7 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
     let share_balance = after_plan_credit.net_five_hour_share;
 
     // Leg 2: the account enters overage; the next probe and credit land in dollars, the share balance stands.
-    r.enter_overage("o", r.now() + 10_000_000);
+    r.enter_overage("o", r.now() + 10_000_000).await;
     settled(&r, |r| async move {
         r.h.router
             .overage("o")
@@ -2295,7 +2295,7 @@ async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balanc
     );
 
     // Leg 3: the overage's reset passes; a real request re-arms, and the next probe settles in the share again.
-    r.leave_overage("o");
+    r.leave_overage("o").await;
     settled(&r, |r| async move {
         r.h.router
             .overage("o")
@@ -2340,7 +2340,7 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    r.enter_overage("o", r.now() + 10_000_000);
+    r.enter_overage("o", r.now() + 10_000_000).await;
     settled(&r, |r| async move {
         r.h.router
             .overage("o")
@@ -2368,7 +2368,7 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
 
     // The reverse: dispatched in overage; the reset passes before the gated response is released.
     let mut r = rig(subscription_spec()).await;
-    r.enter_overage("o", r.now() + 10_000_000);
+    r.enter_overage("o", r.now() + 10_000_000).await;
     settled(&r, |r| async move {
         r.h.router
             .overage("o")
@@ -2390,7 +2390,7 @@ async fn a_probe_settles_in_the_funding_captured_with_its_serving_attempt() {
         (r.up.requests().len() == 2).then_some(())
     })
     .await;
-    r.leave_overage("o");
+    r.leave_overage("o").await;
     settled(&r, |r| async move {
         r.h.router
             .overage("o")

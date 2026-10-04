@@ -236,7 +236,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'reauth_required', 'funding_required', 'refresh_failed', 'poll_backoff'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'reauth_required', 'funding_required', 'refresh_failed', 'ledger_record_parked', 'poll_backoff'] as const;
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
 
 /** One condition that holds now, as `GET /admin/attention` answers it. */
@@ -244,14 +244,17 @@ export interface AttentionItem {
   /** The members the condition's kind carries, passed through as the route sent them. */
   detail: Record<string, unknown>;
   kind: AttentionKind;
-  /** Where the operator fixes it; null for a drift refusal that carried no key. */
+  /** Where the operator fixes it; null for a drift refusal that carried no key, a router subject and a deleted pool. */
   link: { id: string; page: 'accounts' | 'keys' | 'pools' } | null;
   /** The pools the item belongs to, which a pool card filters the same list by. */
   pools: string[];
   /** When the condition started, as an ISO instant. */
   since: string;
-  /** An account or a pool by id and label, or a client version as both. */
-  subject: { id: string; label: string; type: 'account' | 'client' | 'pool' };
+  /**
+   * An account or a pool by id and label, a client version as both, or one of the router's own components as both:
+   * the ledger or the routing state writer, or `-` for a parked record without a pool.
+   */
+  subject: { id: string; label: string; type: 'account' | 'client' | 'pool' | 'router' };
 }
 
 export type PoolStrategy = 'pace' | 'priority' | 'round_robin';

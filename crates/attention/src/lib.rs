@@ -6,7 +6,7 @@ mod reader;
 use std::sync::{Arc, Mutex};
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
-use phoebis_ledger::{AttentionGaugeSource, AttentionGauges};
+use phoebis_ledger::{parked_summary, AttentionGaugeSource, AttentionGauges, Ledger, LedgerError};
 use phoebis_oauth::{Clock, UsageService};
 use phoebis_routing::RouterHandle;
 use phoebis_store::{Store, StoreError};
@@ -24,6 +24,9 @@ const STATE_POISONED: &str = "attention state mutex poisoned by a prior panic";
 pub struct AttentionParts {
     pub bus: Bus,
     pub clock: Clock,
+    /// The ledger's degraded flag and its parked rows; `None` where a harness builds no ledger, and then
+    /// `writer_degraded` for the ledger reads 0 and `ledger_record_parked` has no series.
+    pub ledger: Option<Ledger>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
     /// Where the poll's standing per account is read; `None` where a harness builds no usage service, and no account
@@ -31,9 +34,20 @@ pub struct AttentionParts {
     pub usage: Option<Arc<UsageService>>,
 }
 
+/// A read the reader could not finish; the route answers 500 and the scrape answers 500 on either, so no condition
+/// is reported clear that was not read.
+#[derive(Debug, thiserror::Error)]
+pub enum AttentionError {
+    #[error(transparent)]
+    Ledger(#[from] LedgerError),
+    #[error(transparent)]
+    Store(#[from] StoreError),
+}
+
 /// The one reader both the metrics listener and the admin route ask, with the request-fed state the bus arm writes.
 pub struct Attention {
     clock: Clock,
+    ledger: Option<Ledger>,
     router: RouterHandle,
     state: Mutex<ReaderState>,
     store: Arc<Store>,
@@ -41,13 +55,24 @@ pub struct Attention {
 }
 
 impl Attention {
-    /// Every subject of every kind, holding or clear; a failed store read fails the whole read.
-    pub fn conditions(&self, now: i64) -> Result<Vec<Condition>, StoreError> {
+    /// Every subject of every kind, holding or clear; a failed store or ledger read fails the whole read.
+    pub fn conditions(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
+        // Read from the file on every call, as `refresh_failed` reads the registry, so the condition holds across a
+        // restart and clears on its own when the start lands the rows. A read that fails fails the whole answer, as
+        // the refresh read's does: a scrape never reports clear what it could not read. Read before the state lock,
+        // so a read waiting on the ledger's reader connection never holds the bus arm's `observe` behind it.
+        let parked = self
+            .ledger
+            .as_ref()
+            .map(|ledger| ledger.db().read_blocking(parked_summary))
+            .transpose()?;
         let mut state = self.state.lock().expect(STATE_POISONED);
         reader::conditions(
             &mut state,
             &self.store,
             &self.router,
+            self.ledger.as_ref().is_some_and(Ledger::degraded),
+            parked.as_deref(),
             self.usage.as_deref(),
             now,
         )
@@ -102,6 +127,7 @@ pub fn spawn(parts: AttentionParts) -> (Arc<Attention>, AttentionHandles) {
     let subscriber = parts.bus.subscribe("attention", Delivery::BestEffort);
     let attention = Arc::new(Attention {
         clock: parts.clock,
+        ledger: parts.ledger,
         router: parts.router,
         state: Mutex::new(ReaderState::default()),
         store: parts.store,

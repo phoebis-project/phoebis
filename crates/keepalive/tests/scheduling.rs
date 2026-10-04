@@ -48,23 +48,25 @@ async fn a_cooled_account_holds_the_probe_until_the_cooldown_clears() {
     })
     .await;
     let until = r.now() + 600_000;
-    r.h.router.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    r.h.router
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "account".into(),
-            until,
-            set_at: r.now(),
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until,
+                set_at: r.now(),
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     settled(&r, |r| async move {
         r.h.router
             .cooldowns()
@@ -282,20 +284,22 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
             ..RigSpec::default()
         })
         .await;
-        r.h.router.report(Report::Overage {
-            account_id: "a".into(),
-            evidence: OverageEvidence {
-                in_use: true,
-                since: Some(r.now()),
-                // Ahead of the `now` the gate reads after the advance below: this test is about the policy,
-                // not the predicate's own reset or fallback handling.
-                reset: Some(r.now() + 1_000_000),
-                observed_at: r.now(),
-                source: EvidenceSource::Head,
+        r.h.router
+            .report(Report::Overage {
+                account_id: "a".into(),
+                evidence: OverageEvidence {
+                    in_use: true,
+                    since: Some(r.now()),
+                    // Ahead of the `now` the gate reads after the advance below: this test is about the policy,
+                    // not the predicate's own reset or fallback handling.
+                    reset: Some(r.now() + 1_000_000),
+                    observed_at: r.now(),
+                    source: EvidenceSource::Head,
+                    incarnation: 1,
+                },
                 incarnation: 1,
-            },
-            incarnation: 1,
-        });
+            })
+            .await;
         settled(&r, |r| async move {
             r.h.router
                 .overage("a")
@@ -320,18 +324,20 @@ async fn overage_under_prefer_plan_holds_and_under_allow_does_not() {
             )
         );
         if held {
-            r.h.router.report(Report::Overage {
-                account_id: "a".into(),
-                evidence: OverageEvidence {
-                    in_use: false,
-                    since: None,
-                    reset: None,
-                    observed_at: r.now() + 1,
-                    source: EvidenceSource::Head,
+            r.h.router
+                .report(Report::Overage {
+                    account_id: "a".into(),
+                    evidence: OverageEvidence {
+                        in_use: false,
+                        since: None,
+                        reset: None,
+                        observed_at: r.now() + 1,
+                        source: EvidenceSource::Head,
+                        incarnation: 1,
+                    },
                     incarnation: 1,
-                },
-                incarnation: 1,
-            });
+                })
+                .await;
             settled(&r, |r| async move {
                 r.h.router
                     .overage("a")
@@ -402,18 +408,20 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
         ..RigSpec::default()
     })
     .await;
-    r.h.router.report(Report::Overage {
-        account_id: "a".into(),
-        evidence: OverageEvidence {
-            in_use: true,
-            since: Some(r.now()),
-            reset: Some(r.now() - 1),
-            observed_at: r.now(),
-            source: EvidenceSource::Head,
+    r.h.router
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: OverageEvidence {
+                in_use: true,
+                since: Some(r.now()),
+                reset: Some(r.now() - 1),
+                observed_at: r.now(),
+                source: EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     settled(&r, |r| async move {
         r.h.router
             .overage("a")
@@ -443,19 +451,21 @@ async fn after_the_named_reset_passes_the_probe_is_no_longer_held_for_overage_an
         ..RigSpec::default()
     })
     .await;
-    r.h.router.report(Report::Overage {
-        account_id: "a".into(),
-        evidence: OverageEvidence {
-            in_use: true,
-            since: Some(r.now()),
-            // Ahead of the `now` the gate reads after the advance below, not just of the report's own `now`.
-            reset: Some(r.now() + 270_001),
-            observed_at: r.now(),
-            source: EvidenceSource::Head,
+    r.h.router
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: OverageEvidence {
+                in_use: true,
+                since: Some(r.now()),
+                // Ahead of the `now` the gate reads after the advance below, not just of the report's own `now`.
+                reset: Some(r.now() + 270_001),
+                observed_at: r.now(),
+                source: EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
     settled(&r, |r| async move {
         r.h.router
             .overage("a")
@@ -542,10 +552,10 @@ async fn plant_spend(r: &Rig, id: &str, usd: f64) {
 
 /// Lands a second real request straight through the store, without the channel `plant_spend` uses, then reads
 /// `a`'s current-period spend the way the ledger's own background refresh would (the same query, the same rows)
-/// and relays it to the router at once: neither step awaits, so a caller racing this against the scheduler
+/// and relays it to the router at once: neither step waits, so a caller racing this against the scheduler
 /// controls exactly when the router sees it, with a real sum a later background round can only confirm, never
 /// contradict.
-fn plant_and_report_spend(r: &Rig, id: &str, usd: f64) {
+async fn plant_and_report_spend(r: &Rig, id: &str, usd: f64) {
     let (request, attempt) = spend_of(id, r.now(), usd);
     r.db.insert_request(&request, &[attempt], None).unwrap();
     let rows =
@@ -563,7 +573,7 @@ fn plant_and_report_spend(r: &Rig, id: &str, usd: f64) {
             )
         })
         .unwrap();
-    r.h.router.report(Report::MemberSpend(rows));
+    r.h.router.report(Report::MemberSpend(rows)).await;
 }
 
 /// `a` at a budget of 5.0 beside `b`, no budget: the shorthand both budget-hold tests below seed the pool with.
@@ -719,7 +729,7 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
     // nothing awaited in between, queues the report on the router's one command channel ahead of the spawned
     // job's own `select`, so the selection that follows reads the crossed spend. A later background refresh
     // would compute the same real figure, so nothing after this can disagree with it.
-    plant_and_report_spend(&r, "crossing", 3.5);
+    plant_and_report_spend(&r, "crossing", 3.5).await;
     r.engine.wait_idle().await;
     r.pump(None).await;
     assert!(
@@ -1071,23 +1081,25 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
 
     // A cooldown on the subagent's account holds its recipe alone.
     let until = r.now() + 600_000;
-    r.h.router.report(Report::Cooldown {
-        account_id: worker_account.clone(),
-        row: CooldownRow {
+    r.h.router
+        .report(Report::Cooldown {
             account_id: worker_account.clone(),
-            scope: "account".into(),
-            until,
-            set_at: r.now(),
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: worker_account.clone(),
+                scope: "account".into(),
+                until,
+                set_at: r.now(),
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     settled(&r, |r| {
         let worker_account = worker_account.clone();
         async move {
@@ -1131,30 +1143,32 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
             .into_iter()
             .find(|p| p.session_id == "session" && p.agent_id == "main")
             .expect("the first observed request left a pin");
-    r.h.router.report(Report::Cooldown {
-        account_id: first.clone(),
-        row: CooldownRow {
+    r.h.router
+        .report(Report::Cooldown {
             account_id: first.clone(),
-            scope: "account".into(),
-            until: r.now() + 600_000,
-            set_at: r.now(),
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: first.clone(),
+                scope: "account".into(),
+                until: r.now() + 600_000,
+                set_at: r.now(),
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(PinRef {
+                key_id: pin.key_id.clone(),
+                session_id: pin.session_id.clone(),
+                agent_id: pin.agent_id.clone(),
+                model: pin.model.clone(),
+                epoch: pin.epoch,
+                lane: pin.lane.clone(),
+            }),
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: Some(PinRef {
-            key_id: pin.key_id.clone(),
-            session_id: pin.session_id.clone(),
-            agent_id: pin.agent_id.clone(),
-            model: pin.model.clone(),
-            epoch: pin.epoch,
-            lane: pin.lane.clone(),
-        }),
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     settled(&r, |r| {
         let first = first.clone();
         async move {
@@ -1367,23 +1381,25 @@ async fn a_hold_counts_one_skipped_probe_however_many_ticks_it_spans() {
     })
     .await;
     let until = r.now() + 600_000;
-    r.h.router.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    r.h.router
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "account".into(),
-            until,
-            set_at: r.now(),
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until,
+                set_at: r.now(),
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     settled(&r, |r| async move {
         r.h.router
             .cooldowns()
@@ -1438,7 +1454,7 @@ async fn an_auxiliary_request_mid_hold_leaves_the_skipped_count_at_one() {
         ..RigSpec::default()
     })
     .await;
-    r.enter_overage("a", r.now() + 600_000);
+    r.enter_overage("a", r.now() + 600_000).await;
     settled(&r, |r| async move {
         r.h.router
             .overage("a")
@@ -1565,23 +1581,25 @@ async fn the_retention_rules_reach_a_paused_recipe() {
 
 /// A five-hour cooldown on the rig's one account, applied and settled.
 async fn cool_account(r: &Rig) {
-    r.h.router.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    r.h.router
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "account".into(),
-            until: r.now() + 600_000,
-            set_at: r.now(),
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: r.now() + 600_000,
+                set_at: r.now(),
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     settled(r, |r| async move {
         r.h.router
             .cooldowns()
@@ -1672,23 +1690,25 @@ async fn a_recipe_retained_before_its_model_resolved_is_held_by_a_cooldown_under
         r.h.catalog.lookup("claude-sonnet-4-5").as_deref(),
         Some(DATED)
     );
-    r.h.router.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    r.h.router
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: format!("model:{DATED}"),
-            until: r.now() + 600_000,
-            set_at: r.now(),
-            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
-            window: "model_rejection".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: format!("model:{DATED}"),
+                until: r.now() + 600_000,
+                set_at: r.now(),
+                reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+                window: "model_rejection".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     settled(&r, |r| async move {
         r.h.router
             .cooldowns()

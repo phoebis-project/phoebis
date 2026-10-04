@@ -1,17 +1,18 @@
-//! The six conditions, read fresh on every call: the account states and the pools from the registry, the refresh
-//! runs from the store, the poll's standing from the usage service, and the exhaustions and drift refusals from the
-//! request outcomes the bus arm keeps.
+//! The eight conditions, read fresh on every call: the account states and the pools from the registry, the refresh
+//! runs from the store, the parked records and the ledger's degraded state from the ledger, the routing state
+//! writer's from the router, the poll's standing from the usage service, and the exhaustions and drift refusals from
+//! the request outcomes the bus arm keeps.
 
 use std::collections::{HashMap, HashSet};
 
 use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::polled;
+use phoebis_ledger::{polled, ParkedSummary};
 use phoebis_oauth::UsageService;
 use phoebis_routing::RouterHandle;
-use phoebis_store::{
-    AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Store, StoreError,
-};
+use phoebis_store::{AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Store};
 use serde_json::json;
+
+use crate::AttentionError;
 
 /// How long after a run's first 429 the poll backoff condition holds, so a single 429 or a short run never reads 1.
 pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
@@ -26,6 +27,9 @@ const IN_FLIGHT_TTL_MS: i64 = 15 * 60 * 1_000;
 /// The subject of a drift refusal whose completion names no client version.
 const UNKNOWN_VERSION: &str = "unknown";
 
+/// The subject of the parked records served under no pool; no pool id can read `-`.
+const NO_POOL: &str = "-";
+
 /// The subject of a drift refusal whose version does not read as a release, so a malformed or oversized label shares
 /// one series.
 const OTHER_VERSION: &str = "other";
@@ -37,15 +41,18 @@ const DRIFT_SUBJECTS: usize = 16;
 const RELEASE_VERSION_MAX_BYTES: usize = 32;
 
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
-/// every pool, an account that serves nothing until the operator acts, a credential about to lapse, windows that read
-/// stale.
+/// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
+/// back), an account that serves nothing until the operator acts, a credential about to lapse, priced records the
+/// ledger file keeps until the next start lands them, windows that read stale.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
     ClientDrift,
+    WriterDegraded,
     ReauthRequired,
     FundingRequired,
     RefreshFailed,
+    LedgerRecordParked,
     PollBackoff,
 }
 
@@ -54,9 +61,11 @@ impl Kind {
         match self {
             Kind::PoolExhausted => "pool_exhausted",
             Kind::ClientDrift => "client_drift",
+            Kind::WriterDegraded => "writer_degraded",
             Kind::ReauthRequired => "reauth_required",
             Kind::FundingRequired => "funding_required",
             Kind::RefreshFailed => "refresh_failed",
+            Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::PollBackoff => "poll_backoff",
         }
     }
@@ -67,6 +76,9 @@ pub enum SubjectKind {
     Account,
     Client,
     Pool,
+    /// One of the process's own components: the ledger or the routing state writer, or `-` for a parked record
+    /// served under no pool.
+    Router,
 }
 
 impl SubjectKind {
@@ -75,11 +87,13 @@ impl SubjectKind {
             SubjectKind::Account => "account",
             SubjectKind::Client => "client",
             SubjectKind::Pool => "pool",
+            SubjectKind::Router => "router",
         }
     }
 }
 
-/// What a condition is about: the account's or the pool's id and label, or the client version as both.
+/// What a condition is about: the account's or the pool's id and label, the client version as both, or the router's
+/// own component as both.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Subject {
     pub kind: SubjectKind,
@@ -111,6 +125,14 @@ impl Subject {
             label: pool.label.clone(),
         }
     }
+
+    fn router(component: &str) -> Subject {
+        Subject {
+            kind: SubjectKind::Router,
+            id: component.into(),
+            label: component.into(),
+        }
+    }
 }
 
 /// The console page where the operator fixes the condition, and the row it opens there.
@@ -129,7 +151,8 @@ pub struct Condition {
     pub since: Option<i64>,
     /// The pools the condition belongs to, so a pool card filters the same list the dashboard reads.
     pub pools: Vec<String>,
-    /// `None` for a drift refusal that carried no key, which leaves nothing to open.
+    /// `None` for a drift refusal that carried no key, a router subject, and a pool deleted under a parked record,
+    /// which leave nothing to open.
     pub link: Option<Link>,
     pub detail: serde_json::Value,
 }
@@ -278,17 +301,58 @@ fn evict_drift(drift: &mut HashMap<String, Drift>) {
     }
 }
 
+/// A condition about a pool or one of the router's own components: a pool's belongs to its card and opens it, a
+/// component's belongs to no pool and opens nothing.
+fn condition_for(
+    kind: Kind,
+    subject: Subject,
+    holds: bool,
+    since: Option<i64>,
+    detail: serde_json::Value,
+) -> Condition {
+    let pool = (subject.kind == SubjectKind::Pool).then(|| subject.id.clone());
+    Condition {
+        kind,
+        subject,
+        holds,
+        since,
+        pools: pool.iter().cloned().collect(),
+        link: pool.map(|id| Link { page: "pools", id }),
+        detail,
+    }
+}
+
+/// When a state its source records no time for started: the first read that saw it hold. The entry joins `seen`, so
+/// the prune at the end of the read keeps it for as long as the state holds.
+fn since_of(
+    state: &mut ReaderState,
+    seen: &mut HashSet<(Kind, String)>,
+    kind: Kind,
+    id: &str,
+    holds: bool,
+    now: i64,
+) -> Option<i64> {
+    holds.then(|| {
+        let entry = (kind, id.to_string());
+        seen.insert(entry.clone());
+        *state.state_since.entry(entry).or_insert(now)
+    })
+}
+
 /// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear,
 /// so a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read
-/// this one function, so a scrape and the dashboard never disagree. A store read that fails fails the whole read,
-/// since a series answered without its evidence could clear a real alarm.
+/// this one function, so a scrape and the dashboard never disagree. A store read that fails fails the whole read, as
+/// the caller's parked read does, since a series answered without its evidence could clear a real alarm. `parked` is
+/// `None` where no ledger is built, and `ledger_record_parked` then has no series.
 pub(crate) fn conditions(
     state: &mut ReaderState,
     store: &Store,
     router: &RouterHandle,
+    ledger_degraded: bool,
+    parked: Option<&[ParkedSummary]>,
     usage: Option<&UsageService>,
     now: i64,
-) -> Result<Vec<Condition>, StoreError> {
+) -> Result<Vec<Condition>, AttentionError> {
     let snapshot = router.snapshot();
     let accounts = store.accounts()?;
     let mut out = Vec::new();
@@ -309,6 +373,76 @@ pub(crate) fn conditions(
             detail: json!({ "key": held.and_then(|e| e.key.clone()), "pool": pool.id }),
         });
     }
+    let mut seen = HashSet::new();
+    // The two writers are the process's own components and a subject of their own, so the dashboard never reads a
+    // stalled disk as an exhausted pool. Neither records when it degraded, so the first read that sees it dates it.
+    for (component, degraded) in [
+        ("ledger", ledger_degraded),
+        ("routing", router.writer_status().degraded),
+    ] {
+        out.push(condition_for(
+            Kind::WriterDegraded,
+            Subject::router(component),
+            degraded,
+            since_of(
+                state,
+                &mut seen,
+                Kind::WriterDegraded,
+                component,
+                degraded,
+                now,
+            ),
+            json!({ "component": component }),
+        ));
+    }
+    if let Some(parked) = parked {
+        // The snapshot's pools, then the pools the parked rows name that the snapshot no longer holds: a pool deleted
+        // under a parked record keeps the condition, labelled by its id and opening nothing, until the start lands
+        // the row.
+        let mut pools: Vec<(String, String, bool)> = snapshot
+            .pools()
+            .map(|pool| (pool.id.clone(), pool.label.clone(), true))
+            .collect();
+        for id in parked.iter().filter_map(|p| p.pool_id.as_deref()) {
+            if snapshot.pool(id).is_none() && !pools.iter().any(|(known, _, _)| known == id) {
+                pools.push((id.to_string(), id.to_string(), false));
+            }
+        }
+        for (pool_id, label, live) in pools {
+            let row = parked
+                .iter()
+                .find(|p| p.pool_id.as_deref() == Some(pool_id.as_str()));
+            let mut condition = condition_for(
+                Kind::LedgerRecordParked,
+                Subject {
+                    kind: SubjectKind::Pool,
+                    id: pool_id.clone(),
+                    label,
+                },
+                row.is_some(),
+                row.map(|r| r.oldest_at),
+                json!({
+                    "accounts": row.map(|r| r.account_ids.clone()).unwrap_or_default(),
+                    "count": row.map_or(0, |r| r.count),
+                    "pool": pool_id,
+                }),
+            );
+            if !live {
+                condition.link = None;
+                condition.pools.clear();
+            }
+            out.push(condition);
+        }
+        if let Some(row) = parked.iter().find(|p| p.pool_id.is_none()) {
+            out.push(condition_for(
+                Kind::LedgerRecordParked,
+                Subject::router(NO_POOL),
+                true,
+                Some(row.oldest_at),
+                json!({ "accounts": row.account_ids, "count": row.count, "pool": null }),
+            ));
+        }
+    }
     for (version, drift) in &state.drift {
         let pool = drift
             .key
@@ -328,7 +462,6 @@ pub(crate) fn conditions(
             detail: json!({ "client_version": version, "key": drift.key, "trigger": drift.trigger }),
         });
     }
-    let mut seen = HashSet::new();
     for account in &accounts {
         let mut pools: Vec<String> = snapshot
             .pools()

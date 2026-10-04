@@ -129,10 +129,9 @@ present, and lets the next start create an empty registry, in which every accoun
 6. Restart the service: `sudo systemctl restart phoebis`. The service drains in-flight requests for up to 30 seconds;
    the unit's `TimeoutStopSec=40` covers that drain.
 7. Confirm the upgrade with `phoebis --version`, then `GET /admin/system` for `version`, `storage_ok`, `ready`,
-   `ledger.write_failures` reading `0` and `router.dropped_reports` all reading `0`. A non-zero count there names a
-   routing fact the router loop's queue refused, a cooldown, a usage reading or a pin change, which the next request on
-   that account re-learns; a count that grows under ordinary load means the routing loop is stalled behind a reload or
-   the disk.
+   `ledger.write_failures` reading `0` and `router.dropped_reports` all reading `0`. `router.dropped_reports` counts the
+   reports a closed queue refused at shutdown, zero on a running router; a loop that stopped keeping up shows as
+   `router.queued` at `command_depth` and as keys holding their requests past the answer.
 
 Under the container, the same sequence is: read the changelog, take the backup, set `image:` in `compose.yaml` to
 the new version, validate the mounted configuration with the new image (`docker compose run --rm phoebis

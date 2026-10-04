@@ -411,7 +411,7 @@ test('the attention read is one GET, and its failures reach no toast, since the 
   const calls = stub(() => answer(200, body));
   const items = await new HttpApi().getAttention();
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['GET', '/admin/attention']]);
-  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), [['pool_exhausted', 'main', { id: 'main', page: 'pools' }]]);
+  assert.deepEqual(items.map((i) => [i.kind, i.subject.id, i.link]), [['pool_exhausted', 'main', { id: 'main', page: 'pools' }], ['ledger_record_parked', 'main', { id: 'main', page: 'pools' }]]);
   stub(() => answer(500, { error: 'the store is unavailable' }));
   await assert.rejects(new HttpApi().getAttention(), (e) => e instanceof ApiError && e.status === 500 && e.message === 'the store is unavailable');
   stub(() => Promise.reject(new TypeError('fetch failed')));

@@ -256,22 +256,39 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   const want = [
     ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
+    ['State writer degraded: routing', 'badge--serious', null, ['component: routing']],
     ['Re-auth required: team', 'badge--critical', '/accounts/team', ['account: team', 'label: team']],
     ['Funding required: Console workspace', 'badge--serious', '/accounts/console', ['account: console', 'label: Console workspace']],
     ['Credential refresh failed: team', 'badge--critical', '/accounts/team', ['account: team', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    ['Priced record parked: codex', 'badge--serious', '/pools#codex', ['accounts: ["evals"]', 'count: 1', 'pool: codex']],
     ['Usage poll backing off: mail', 'badge--warning', '/accounts/mail', ['account: mail', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
   ];
   const ages = badges().map((b) => b.title.split('\n').pop());
   results.push({
     name: '/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed and titled with its detail and age',
     ok:
-      lead() === '6 need attention' &&
+      lead() === '8 need attention' &&
       JSON.stringify(read) === JSON.stringify(want) &&
       ages[0] === 'started 2d 0h ago' &&
-      /^started 4[23]m ago$/.test(ages[5] ?? '') &&
+      /^started 1h [01]m ago$/.test(ages[6] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[7] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
+  });
+  // The writers are the router's own components, so their badge opens nothing; a parked record opens its pool's card,
+  // and neither is drawn as the pool's exhaustion.
+  const writer = badges().find((b) => b.text.startsWith('State writer degraded'));
+  const parked = badges().find((b) => b.text.startsWith('Priced record parked'));
+  results.push({
+    name: "/ the attention line draws the routing state writer's badge as one that opens nothing and a parked record's as one that opens its pool's card, neither as an exhausted pool",
+    ok:
+      writer?.text === 'State writer degraded: routing' &&
+      writer.href === null &&
+      parked?.text === 'Priced record parked: codex' &&
+      parked.href === '/pools#codex' &&
+      badges().filter((b) => b.text.startsWith('Pool exhausted')).length === 1,
+    missing: [JSON.stringify(writer ?? null), JSON.stringify(parked ?? null)],
   });
   localStorage.setItem('phoebis.mockEmpty', '1');
   await tick();
@@ -315,7 +332,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its six items again', ok: lead() === '6 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its eight items again', ok: lead() === '8 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 }
 
@@ -1631,16 +1648,26 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   const attentionRows = (name) =>
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href') ?? null]);
-  // The story's items: codex exhausted; the laptop key's client drift, the Console workspace out of funding and
-  // mail's poll backoff in all; and nothing on studio, whose one member and one key carry no item.
+  // The story's items: codex exhausted and holding a parked record; the laptop key's client drift, the Console
+  // workspace out of funding and mail's poll backoff in all; nothing on studio, whose one member and one key carry no
+  // item; and the routing state writer on no card, since it belongs to no pool.
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own row unlinked, and a card with none draws no list",
     ok:
-      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null]]) &&
+      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null], ['Priced record parked', 'codex', null]]) &&
       JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'Console workspace', '/accounts/console'], ['Usage poll backing off', 'mail', '/accounts/mail']]) &&
       card('studio')?.querySelector('.attention') === null,
     missing: ['codex', 'all', 'studio'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
   });
+  {
+    const parkedRow = [...(card('codex')?.querySelectorAll('ul.attention > li.attention__row') ?? [])].find((li) => li.querySelector('.badge')?.textContent?.trim() === 'Priced record parked');
+    const writerRows = [...cards.values()].filter((c) => [...c.querySelectorAll('ul.attention .badge')].some((b) => b.textContent?.trim() === 'State writer degraded')).length;
+    results.push({
+      name: "/pools a pool's card draws its parked records' row with the count and the accounts, and no card draws the state writer",
+      ok: parkedRow?.querySelector('.attention__detail')?.textContent === '1 priced record parked, landing at the next start (evals)' && writerRows === 0,
+      missing: [parkedRow?.querySelector('.attention__detail')?.textContent ?? 'no parked row', `writer rows ${writerRows}`],
+    });
+  }
   const caption = (name) => card(name)?.querySelector('.serving caption');
   const captions = ['all', 'codex', 'studio'].map((name) => [caption(name)?.textContent?.trim(), caption(name)?.getAttribute('title')]);
   const fable = 'A request for a Fable model is placed on the Fable window instead, which this card does not draw.';
@@ -1713,9 +1740,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     { detail: { key: 'ci', pool: 'codex' }, kind: 'pool_exhausted', link: { id: 'codex', page: 'pools' }, pools: ['codex'], since: at(1), subject: { id: 'codex', label: 'codex', type: 'pool' } },
     { detail: { client_version: '2.1.271', key: 'laptop', trigger: 'hash' }, kind: 'client_drift', link: { id: 'laptop', page: 'keys' }, pools: ['all'], since: at(3), subject: { id: '2.1.271', label: '2.1.271', type: 'client' } },
     { detail: { client_version: '2.1.272', key: null, trigger: 'version_suffix' }, kind: 'client_drift', link: null, pools: [], since: at(2), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } },
+    { detail: { component: 'ledger' }, kind: 'writer_degraded', link: null, pools: [], since: at(1), subject: { id: 'ledger', label: 'ledger', type: 'router' } },
     { ...account('team', 'team'), detail: { account: 'team', label: 'team' }, kind: 'reauth_required', pools: [], since: at(5) },
     { ...account('evals', 'Evals workspace'), detail: { account: 'evals', label: 'Evals workspace' }, kind: 'funding_required', pools: ['codex'], since: at(4) },
     { ...account('team', 'team'), detail: { account: 'team', failures: 3, last_error: 'invalid_grant', outcome: 'failed' }, kind: 'refresh_failed', pools: [], since: at(6) },
+    { detail: { accounts: ['evals', 'mail'], count: 2, pool: 'codex' }, kind: 'ledger_record_parked', link: { id: 'codex', page: 'pools' }, pools: ['codex'], since: at(8), subject: { id: 'codex', label: 'codex', type: 'pool' } },
     { ...account('mail', 'mail'), detail: { account: 'mail', backoff_since: now - 2 * 3_600_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, kind: 'poll_backoff', pools: ['all'], since: at(2) },
   ];
   const a = await mountNode(h(AttentionRows, { items, now }));
@@ -1733,13 +1762,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     row('Pool exhausted', 'badge--critical', 'codex', null, 'no member could take a request from key ci', '1h 0m ago'),
     row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
     row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
+    row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried; budgeted members are held back until a batch lands', '1h 0m ago'),
     row('Re-auth required', 'badge--critical', 'team', '/accounts/team', 'serves nothing until its credential is renewed', '5h 0m ago'),
     row('Funding required', 'badge--serious', 'Evals workspace', '/accounts/evals', 'serves nothing until its organization is funded again', '4h 0m ago'),
     row('Credential refresh failed', 'badge--critical', 'team', '/accounts/team', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
+    row('Priced record parked', 'badge--serious', 'codex', null, '2 priced records parked, landing at the next start (evals, mail)', '8h 0m ago'),
     row('Usage poll backing off', 'badge--warning', 'mail', '/accounts/mail', '6 rate-limited answers in a row', '2h 0m ago'),
   ];
   results.push({
-    name: "the attention rows keep the route's order, link a subject through the item's link, name the pool's own row and a keyless drift alone, and read each detail as one sentence titled with its age",
+    name: "the attention rows keep the route's order, link a subject through the item's link, name the pool's own row, a keyless drift and a router component alone, and read each detail as one sentence titled with its age",
     ok: JSON.stringify(rows) === JSON.stringify(want),
     missing: rows.map((r) => r.join(' | ')),
   });

@@ -1,5 +1,6 @@
 //! Upstream connection lifecycle and the piece-by-piece relay of a response body.
 
+use std::future::Future;
 use std::io;
 use std::sync::Arc;
 use std::time::Duration;
@@ -54,7 +55,59 @@ pub(crate) const STREAM_DECODED_CHUNK_MAX: usize = 1 << 20;
 /// already consumed are not seen a second time and the parser's bound is all the memory this costs.
 pub(crate) struct PostCommit {
     pub inspect: Inspect,
-    pub on_error: Box<dyn FnOnce(Bytes) + Send>,
+    pub on_error: OnError,
+}
+
+/// Reports what a post-commit error event means for routing, through the body's `Waiting`, so a report the full
+/// mailbox refuses waits behind the client's answer and ahead of the answer's own end reports.
+pub(crate) type OnError = Box<dyn FnOnce(Bytes, &mut Waiting) + Send>;
+
+/// The reports an answer could not hand the router at once, in the order it made them. Each report takes a mailbox
+/// slot where it is made while the router keeps up, so an affinity number is filed and a cooldown is in force before
+/// the client reads the answer's end; from the first report a full mailbox refuses, that one and every later one wait
+/// here, and the body task awaits them after the client's answer, holding the request's guards until they are queued.
+#[derive(Default)]
+pub(crate) struct Waiting(Vec<BoxFuture<'static, ()>>);
+
+impl Waiting {
+    /// Hands `report` to the router now when its mailbox has a slot and nothing of this answer waits ahead of it,
+    /// answering what `RouterHandle::report` does; otherwise answers the report back for `wait`.
+    pub(crate) fn try_now(
+        &self,
+        router: &RouterHandle,
+        report: Report,
+    ) -> Result<Option<u64>, Box<Report>> {
+        if self.0.is_empty() {
+            router.try_report(report)
+        } else {
+            Err(Box::new(report))
+        }
+    }
+
+    /// `try_now`, and behind the waiting reports when it cannot go now.
+    pub(crate) fn send(&mut self, router: &RouterHandle, report: Report) {
+        if let Err(report) = self.try_now(router, report) {
+            let router = router.clone();
+            self.wait(async move {
+                router.report(*report).await;
+            });
+        }
+    }
+
+    pub(crate) fn wait(&mut self, report: impl Future<Output = ()> + Send + 'static) {
+        self.0.push(Box::pin(report));
+    }
+
+    pub(crate) fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Awaits each waiting report in order.
+    pub(crate) async fn land(self) {
+        for report in self.0 {
+            report.await;
+        }
+    }
 }
 
 /// What the body task tells the bus as the body goes by: every decoded piece as a chunk, the SSE phases it
@@ -135,28 +188,41 @@ impl Renewal {
     }
 
     /// `fast` is whether the answer reported `usage.speed` `fast`.
-    pub(crate) fn send(self, now: i64, status: u16, usage: Option<&Usage>, fast: bool) {
+    pub(crate) fn send(
+        self,
+        now: i64,
+        status: u16,
+        usage: Option<&Usage>,
+        fast: bool,
+        waiting: &mut Waiting,
+    ) {
         if self.releases(status) {
             let (incarnation, lifecycle_generation, credential_generation) = self.generations;
-            self.router.report(Report::PinReleased {
-                pin: self.pin,
-                incarnation,
-                lifecycle_generation,
-                credential_generation,
-            });
+            waiting.send(
+                &self.router,
+                Report::PinReleased {
+                    pin: self.pin,
+                    incarnation,
+                    lifecycle_generation,
+                    credential_generation,
+                },
+            );
             return;
         }
         if !self.renews {
             return;
         }
-        self.router.report(Report::PinRenewed {
-            pin: self.pin,
-            now,
-            usage: usage.filter(|u| !u.is_empty()).map(pin_usage),
-            origin: self.origin,
-            cache_ttl_ms: self.cache_ttl_ms,
-            fast,
-        });
+        waiting.send(
+            &self.router,
+            Report::PinRenewed {
+                pin: self.pin,
+                now,
+                usage: usage.filter(|u| !u.is_empty()).map(pin_usage),
+                origin: self.origin,
+                cache_ttl_ms: self.cache_ttl_ms,
+                fast,
+            },
+        );
     }
 }
 
@@ -194,8 +260,8 @@ pub(crate) struct AffinityFacts {
 impl AffinityFacts {
     /// Sends `Report::Usage` for an answer whose usage is not empty, then converts into `AffinityReport`
     /// (`cache_touched` and `prefix_tokens` from the usage's three cache fields, false and 0 without them) and
-    /// sends `Report::Affinity` through `router.report`, filing the sequence it took in `pending`; a committed
-    /// answer only (`status == 200`), since a rejection continues no conversation and consumes no window.
+    /// sends `Report::Affinity` through `waiting`, filing the sequence it took in `pending` once it has one; a
+    /// committed answer only (`status == 200`), since a rejection continues no conversation and consumes no window.
     pub(crate) fn send(
         self,
         now: i64,
@@ -203,20 +269,24 @@ impl AffinityFacts {
         message_id: Option<String>,
         usage: Option<&Usage>,
         fast: bool,
+        waiting: &mut Waiting,
     ) {
         // A rejection continues no conversation, so it leaves no link to resolve a later request by.
         if status != 200 {
             return;
         }
         if let Some(counted) = usage.filter(|u| !u.is_empty()) {
-            self.router.report(Report::Usage {
-                account_id: self.account_id.clone(),
-                at: now,
-                canonical_model: self.canonical_model.clone(),
-                incarnation: self.incarnation,
-                usage: pin_usage(counted),
-                fast,
-            });
+            waiting.send(
+                &self.router,
+                Report::Usage {
+                    account_id: self.account_id.clone(),
+                    at: now,
+                    canonical_model: self.canonical_model.clone(),
+                    incarnation: self.incarnation,
+                    usage: pin_usage(counted),
+                    fast,
+                },
+            );
         }
         let cached = |field: fn(&Usage) -> Option<u64>| usage.and_then(field).unwrap_or(0);
         let prefix_tokens = cached(|u| u.cache_read_tokens)
@@ -228,7 +298,12 @@ impl AffinityFacts {
             .iter()
             .map(|id| format!("session:{id}"))
             .collect();
-        let key_id = self.key_id.clone();
+        let (router, pending, key_id, key_generation) = (
+            self.router,
+            self.pending,
+            self.key_id.clone(),
+            self.key_generation,
+        );
         let report = AffinityReport {
             account_id: self.account_id,
             incarnation: self.incarnation,
@@ -251,14 +326,17 @@ impl AffinityFacts {
             cache_write_1h_tokens: usage.and_then(|u| u.cache_write_1h_tokens),
             uniform_ttl_ms: self.uniform_ttl_ms,
         };
-        if let Some(seq) = self.router.report(Report::Affinity(report)) {
-            self.pending.record(
-                &key_id,
-                self.key_generation,
-                &ids,
-                seq,
-                self.router.applied_report(),
-            );
+        let file = move |router: &RouterHandle, seq: Option<u64>| {
+            if let Some(seq) = seq {
+                pending.record(&key_id, key_generation, &ids, seq, router.applied_report());
+            }
+        };
+        match waiting.try_now(&router, Report::Affinity(report)) {
+            Ok(seq) => file(&router, seq),
+            Err(report) => waiting.wait(async move {
+                let seq = router.report(*report).await;
+                file(&router, seq);
+            }),
         }
     }
 }
@@ -394,7 +472,8 @@ impl Publish {
         }
     }
 
-    async fn finish(mut self, end: &BodyEnd) {
+    /// The answer's end reports go through `waiting`, ahead of the completion.
+    async fn finish(mut self, end: &BodyEnd, waiting: &mut Waiting) {
         let last = self.parser.as_mut().and_then(|parser| parser.finish());
         if let Some(event) = last {
             if let Some(phase) = self.phase_of(&event) {
@@ -446,7 +525,7 @@ impl Publish {
         let usage = (!self.usage.is_empty()).then(|| self.usage.clone());
         let fast = self.response.speed.as_deref() == Some("fast");
         if let Some(renewal) = self.renewal.take() {
-            renewal.send((self.clock)(), self.status, usage.as_ref(), fast);
+            renewal.send((self.clock)(), self.status, usage.as_ref(), fast, waiting);
         }
         if let Some(affinity) = self.affinity.take() {
             affinity.send(
@@ -455,6 +534,7 @@ impl Publish {
                 self.message_id.clone(),
                 usage.as_ref(),
                 fast,
+                waiting,
             );
         }
         self.trace
@@ -562,9 +642,10 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             mut publish,
             mut reader,
         } = relayed;
+        let mut waiting = Waiting::default();
         // The hold already fed the held bytes to the inspection copy, so the prefix is scanned for what it left
         // behind rather than fed again.
-        observe(&mut observer);
+        observe(&mut observer, &mut waiting);
         let end = 'body: {
             if !prefix.is_empty() {
                 match decode_piece(decoder.as_mut(), prefix.clone()) {
@@ -608,9 +689,10 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 };
                 // The raw chunk, because the inspection copy runs the upstream's own content coding; it is read
                 // before the chunk goes out so a late rate-limit error is acted on no later than the client
-                // sees it.
+                // sees it. That holds while the router's mailbox has room; a full one makes the cooldown wait
+                // until after the body's end, behind the client's answer.
                 feed(&mut observer, &chunk);
-                observe(&mut observer);
+                observe(&mut observer, &mut waiting);
                 let piece = match decode_piece(decoder.as_mut(), chunk.clone()) {
                     Ok(piece) => piece,
                     Err(error) => {
@@ -628,7 +710,7 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     Delivery::Gone => break 'body BodyEnd::ClientGone,
                 }
             }
-            observe_end(&mut observer);
+            observe_end(&mut observer, &mut waiting);
             if let Some(mut decoder) = decoder {
                 match decoder.finish_bounded(STREAM_DECODED_CHUNK_MAX) {
                     Ok(tail) if !tail.is_empty() => {
@@ -669,10 +751,21 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             }
         }
         if let Some(publish) = publish {
-            publish.finish(&end).await;
+            publish.finish(&end, &mut waiting).await;
         }
-        // Ahead of the sender's drop, so a caller that has read the body's end finds both counts released.
-        drop(guards);
+        if waiting.is_empty() {
+            // Ahead of the sender's drop, so a caller that has read the body's end finds both counts released.
+            drop(guards);
+            drop(tx);
+        } else {
+            // The client reads its EOF before any report is awaited: a full mailbox holds the key permit and the
+            // account ticket, never the answer. The counts are released once the reports are queued, so under a
+            // wedged loop a client's next turn can arrive before this one's affinity number is filed, and its
+            // climb runs without the wait.
+            drop(tx);
+            waiting.land().await;
+            drop(guards);
+        }
     });
     Body::from_stream(futures::stream::unfold(rx, |mut rx| async move {
         rx.recv().await.map(|item| (item, rx))
@@ -745,7 +838,7 @@ fn feed(observer: &mut Option<PostCommit>, raw: &[u8]) {
 }
 
 /// Fires the observer on the first `error` event the inspection copy can parse.
-fn observe(observer: &mut Option<PostCommit>) {
+fn observe(observer: &mut Option<PostCommit>, waiting: &mut Waiting) {
     let Some(post) = observer.as_mut() else {
         return;
     };
@@ -756,12 +849,12 @@ fn observe(observer: &mut Option<PostCommit>) {
             break;
         }
     }
-    fire(observer, found);
+    fire(observer, found, waiting);
 }
 
 /// A stream cut off after its last event never sent the empty line that would close it, so the error can still
 /// be sitting in the parser when the body ends.
-fn observe_end(observer: &mut Option<PostCommit>) {
+fn observe_end(observer: &mut Option<PostCommit>, waiting: &mut Waiting) {
     let Some(post) = observer.as_mut() else {
         return;
     };
@@ -771,16 +864,16 @@ fn observe_end(observer: &mut Option<PostCommit>) {
         .finish()
         .filter(|event| event.name.as_deref() == Some(b"error".as_slice()))
         .map(|event| event.data);
-    fire(observer, found);
+    fire(observer, found, waiting);
 }
 
 /// One firing per stream: the observer is taken with it, so a second `error` event changes nothing.
-fn fire(observer: &mut Option<PostCommit>, data: Option<Vec<u8>>) {
+fn fire(observer: &mut Option<PostCommit>, data: Option<Vec<u8>>, waiting: &mut Waiting) {
     let Some(data) = data else {
         return;
     };
     if let Some(post) = observer.take() {
-        (post.on_error)(Bytes::from(data));
+        (post.on_error)(Bytes::from(data), waiting);
     }
 }
 

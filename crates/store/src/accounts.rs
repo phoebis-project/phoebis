@@ -151,6 +151,8 @@ impl Store {
     }
 
     pub fn account(&self, id: &str) -> Result<Option<AccountRow>, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.count_credential_read();
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
             "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state \
@@ -414,6 +416,8 @@ impl Store {
     /// The account's current revision, for a holder that wants to know whether the row moved without
     /// paying for the whole row and its identity.
     pub fn account_revision(&self, id: &str) -> Result<Option<u64>, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.count_credential_read();
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
             "SELECT revision FROM accounts WHERE id = ?1",

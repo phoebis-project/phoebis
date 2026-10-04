@@ -784,14 +784,18 @@ impl CatalogService {
     ) -> Result<Vec<(String, String)>, DiscoveryError> {
         let credential = match (account.kind, secret) {
             (AccountKind::Oauth, _) => {
-                let token = self.manager.acquire(&account.id).await.map_err(|error| {
-                    tracing::warn!(
-                        account = %account.id,
-                        %error,
-                        "the catalog discovery could not obtain the account's credential"
-                    );
-                    DiscoveryError::NoCredential
-                })?;
+                let token = self
+                    .manager
+                    .acquire_for(account, None)
+                    .await
+                    .map_err(|error| {
+                        tracing::warn!(
+                            account = %account.id,
+                            %error,
+                            "the catalog discovery could not obtain the account's credential"
+                        );
+                        DiscoveryError::NoCredential
+                    })?;
                 (
                     "Authorization".to_string(),
                     format!("Bearer {}", token.secret.expose()),

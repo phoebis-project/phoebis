@@ -190,6 +190,18 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         "a ledger that lands every batch is current, retries nothing and parks nothing: {system}"
     );
     assert_eq!(system["router"]["command_depth"].as_u64(), Some(4_096));
+    // A write in flight reads `depth` 1 for an instant, so the idle figures are waited for.
+    wait_json(&parts.app, "/admin/system", &cookie, |system| {
+        system["router"]["queued"].as_u64() == Some(0)
+            && system["router"]["writer"]
+                == serde_json::json!({
+                    "depth": 0,
+                    "deferred": 0,
+                    "degraded": false,
+                    "failed_batches": 0,
+                })
+    })
+    .await;
     let dropped = system["router"]["dropped_reports"].as_object().unwrap();
     assert_eq!(
         dropped.keys().map(String::as_str).collect::<Vec<_>>(),

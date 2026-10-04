@@ -1,5 +1,5 @@
 //! A store with an OAuth account, an Anthropic-key account, a pool holding both and a key on it, the router over
-//! them, and a clock the test moves; the reader spawns on the rig's bus.
+//! them, a ledger over an in-memory file, and a clock the test moves; the reader spawns on the rig's bus.
 #![allow(dead_code)]
 use std::sync::atomic::{AtomicI64, Ordering};
 use std::sync::Arc;
@@ -12,6 +12,7 @@ use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
     RequestShape, ResponseFacts,
 };
+use phoebis_ledger::{Ledger, LedgerConfig, LedgerDb, Metrics, PriceTable, Pricing};
 use phoebis_oauth::{Clock, CredentialManager, UsageService};
 use phoebis_profile::claude_code_2_1_269_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
@@ -28,6 +29,9 @@ pub const NOW: i64 = 1_700_000_000_000;
 pub struct Rig {
     pub bus: Bus,
     pub clock: Arc<AtomicI64>,
+    /// The ledger's file, which a test writes its parked rows and its faults through.
+    pub db: Arc<LedgerDb>,
+    pub ledger: Ledger,
     pub router: RouterHandle,
     pub store: Arc<Store>,
 }
@@ -38,7 +42,7 @@ impl Rig {
         Arc::new(move || c.load(Ordering::SeqCst))
     }
 
-    /// The reader over the rig's store, router and clock, its arm on the rig's bus.
+    /// The reader over the rig's store, router, ledger and clock, its arm on the rig's bus.
     pub fn attention(
         &self,
         usage: Option<Arc<UsageService>>,
@@ -46,6 +50,7 @@ impl Rig {
         phoebis_attention::spawn(AttentionParts {
             bus: self.bus.clone(),
             clock: self.clock(),
+            ledger: Some(self.ledger.clone()),
             router: self.router.clone(),
             store: self.store.clone(),
             usage,
@@ -74,10 +79,24 @@ pub async fn rig_with_store(store: Arc<Store>) -> Rig {
         let c = clock_cell.clone();
         Arc::new(move || c.load(Ordering::SeqCst))
     };
-    let router = spawn_router(store.clone(), clock, RouterConfig::default()).unwrap();
+    let router = spawn_router(store.clone(), clock.clone(), RouterConfig::default()).unwrap();
+    let bus = Bus::new();
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let ledger = phoebis_ledger::spawn(
+        db.clone(),
+        Arc::new(Pricing::new(PriceTable::shipped())),
+        store.clone(),
+        &bus,
+        router.clone(),
+        clock,
+        Arc::new(Metrics::new()),
+        LedgerConfig::default(),
+    );
     Rig {
-        bus: Bus::new(),
+        bus,
         clock: clock_cell,
+        db,
+        ledger,
         router,
         store,
     }

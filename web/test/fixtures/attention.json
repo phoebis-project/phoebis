@@ -21,6 +21,29 @@
           "key": "desktop",
           "pool": "main"
         }
+      },
+      {
+        "kind": "ledger_record_parked",
+        "subject": {
+          "type": "pool",
+          "id": "main",
+          "label": "Main"
+        },
+        "link": {
+          "page": "pools",
+          "id": "main"
+        },
+        "pools": [
+          "main"
+        ],
+        "since": 1000000,
+        "detail": {
+          "accounts": [
+            "business"
+          ],
+          "count": 1,
+          "pool": "main"
+        }
       }
     ]
   }

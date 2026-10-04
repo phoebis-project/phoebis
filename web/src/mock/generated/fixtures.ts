@@ -3797,6 +3797,29 @@ export const FIXTURES: Record<string, Fixture> = {
             "key": "desktop",
             "pool": "main"
           }
+        },
+        {
+          "kind": "ledger_record_parked",
+          "subject": {
+            "type": "pool",
+            "id": "main",
+            "label": "Main"
+          },
+          "link": {
+            "page": "pools",
+            "id": "main"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1000000,
+          "detail": {
+            "accounts": [
+              "business"
+            ],
+            "count": 1,
+            "pool": "main"
+          }
         }
       ]
     }
@@ -8267,10 +8290,11 @@ export const FIXTURES: Record<string, Fixture> = {
         "behind_refusals": 0,
         "degraded": false,
         "retrying": 0,
-        "parked_priced": 0
+        "parked_priced": 1
       },
       "router": {
         "command_depth": 4096,
+        "queued": 0,
         "dropped_reports": {
           "account_state": 0,
           "accounting": 0,
@@ -8284,6 +8308,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "pin_renewed": 0,
           "sample": 0,
           "usage": 0
+        },
+        "writer": {
+          "depth": 0,
+          "deferred": 0,
+          "degraded": false,
+          "failed_batches": 0
         }
       },
       "bus": [

@@ -796,6 +796,69 @@ async fn a_committed_stream_holds_its_key_permit_and_its_account_ticket_until_it
 }
 
 #[tokio::test]
+async fn a_client_reads_a_committed_responses_end_while_its_report_waits_on_a_full_mailbox() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status().as_u16(), 200, "the client holds the head");
+    assert_eq!(in_flight(&h, "a"), (1, 1));
+    // Parked once the selection is answered: nothing between the head and the body's end asks the loop.
+    let park = h.router.park_loop().await;
+    let fill: Vec<_> = (0..phoebis_routing::COMMANDS)
+        .map(|_| {
+            let router = h.router.clone();
+            tokio::spawn(async move {
+                router
+                    .report(phoebis_routing::Report::Cooldown {
+                        account_id: "a".into(),
+                        row: phoebis_store::CooldownRow {
+                            account_id: "a".into(),
+                            scope: "model:claude-unused".into(),
+                            until: i64::MAX,
+                            set_at: 0,
+                            reason: "rate_limit".into(),
+                            window: "five_hour".into(),
+                            source_request_id: None,
+                            incarnation: 1,
+                        },
+                        pin: None,
+                        incarnation: 1,
+                        lifecycle_generation: 1,
+                        credential_generation: 1,
+                    })
+                    .await
+            })
+        })
+        .collect();
+    wait_for(Duration::from_secs(5), || {
+        (h.router.queued() == phoebis_routing::COMMANDS).then_some(())
+    })
+    .await;
+    up.release();
+    let body = drain(resp).await;
+    assert!(String::from_utf8_lossy(&body).contains("message_stop"));
+    assert_eq!(
+        in_flight(&h, "a"),
+        (1, 1),
+        "the reports waiting on the mailbox hold the key permit and the account ticket"
+    );
+    drop(park);
+    for report in fill {
+        report.await.unwrap();
+    }
+    wait_for(Duration::from_secs(5), || {
+        (in_flight(&h, "a") == (0, 0)).then_some(())
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_client_disconnect_mid_stream_releases_both() {
     let up = FakeUpstream::start(messages(held_stream())).await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;

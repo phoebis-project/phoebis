@@ -1,6 +1,6 @@
-//! The six conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear, a
-//! deleted subject's series gone, a refresh run read back by a second reader, and the gauge the metrics listener
-//! scrapes from the same read.
+//! The eight conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
+//! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
+//! refresh run read back by a second reader, and the gauge the metrics listener scrapes from the same read.
 mod common;
 use std::sync::Arc;
 use std::time::Duration;
@@ -9,9 +9,12 @@ use axum::body::Body;
 use axum::http::Request;
 use common::*;
 use http_body_util::BodyExt;
-use phoebis_attention::{Attention, Condition, Kind, Link, BACKOFF_ATTENTION_AFTER_MS};
+use phoebis_attention::{
+    Attention, AttentionError, Condition, Kind, Link, Subject, SubjectKind,
+    BACKOFF_ATTENTION_AFTER_MS,
+};
 use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
-use phoebis_ledger::{Metrics, PriceTable, Pricing};
+use phoebis_ledger::{AttemptRecord, Metrics, PriceTable, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
 use phoebis_store::{AccountState, AttemptOutcome, NewBundle, Secret, StorageKey, Store};
 use serde_json::json;
@@ -47,14 +50,17 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
         series(&read(&attention, NOW)),
         [
             ("funding_required", "direct".to_string(), false),
+            ("ledger_record_parked", "main".to_string(), false),
             ("poll_backoff", "business".to_string(), false),
             ("pool_exhausted", "main".to_string(), false),
             ("reauth_required", "business".to_string(), false),
             ("reauth_required", "direct".to_string(), false),
             ("refresh_failed", "business".to_string(), false),
+            ("writer_degraded", "ledger".to_string(), false),
+            ("writer_degraded", "routing".to_string(), false),
         ],
         "every account carries its re-auth state, an Anthropic key its funding, and an OAuth account its refresh run \
-         and, before any poll status exists, its backoff"
+         and, before any poll status exists, its backoff; every pool its parked records, and each writer its state"
     );
 }
 
@@ -847,7 +853,7 @@ async fn scrape(rig: &Rig, attention: &Arc<Attention>) -> (u16, String) {
         Duration::from_secs(60),
         None,
         Some(attention.gauge_source()),
-        None,
+        Some(rig.ledger.clone()),
     );
     let response = app
         .oneshot(Request::get("/metrics").body(Body::empty()).unwrap())
@@ -912,5 +918,286 @@ async fn a_failed_holder_read_fails_the_conditions_and_the_scrape() {
         scrape(&rig, &attention).await.0,
         200,
         "the next scrape answers again"
+    );
+}
+
+/// The `parked_records` table as the ledger's migration creates it.
+const PARKED_RECORDS: &str = "CREATE TABLE parked_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  parked_at INTEGER NOT NULL,
+  last_tried_at INTEGER NOT NULL,
+  request_id TEXT NOT NULL,
+  pool_id TEXT,
+  account_id TEXT,
+  record TEXT NOT NULL,
+  error TEXT NOT NULL
+);";
+
+fn ledger_sql(rig: &Rig, sql: &str) {
+    rig.db
+        .write(|c| {
+            c.execute_batch(sql)?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// Parks one priced record of `pool` (none for `None`) on `account` at `at`. Its record is not JSON, so the ledger's
+/// start pass, which lands every parked row whose record parses, never takes the row out from under the read.
+fn park(rig: &Rig, pool: Option<&str>, account: &str, at: i64) {
+    let pool = pool.map_or("NULL".to_string(), |p| format!("'{p}'"));
+    ledger_sql(
+        rig,
+        &format!(
+            "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+             VALUES ({at}, {at}, 'parked-{at}', {pool}, '{account}', 'not json', 'refused by test');"
+        ),
+    );
+}
+
+fn pool_subject(id: &str, label: &str) -> Subject {
+    Subject {
+        kind: SubjectKind::Pool,
+        id: id.into(),
+        label: label.into(),
+    }
+}
+
+fn router_subject(id: &str) -> Subject {
+    Subject {
+        kind: SubjectKind::Router,
+        id: id.into(),
+        label: id.into(),
+    }
+}
+
+#[tokio::test]
+async fn a_parked_priced_record_holds_the_condition_on_its_pool_until_the_table_empties() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    park(&rig, Some("main"), "business", NOW - 60_000);
+    let conditions = read(&attention, NOW);
+    let parked = find(&conditions, Kind::LedgerRecordParked, "main").unwrap();
+    assert_eq!(
+        (
+            parked.holds,
+            parked.since,
+            &parked.subject,
+            &parked.pools,
+            &parked.link,
+            &parked.detail
+        ),
+        (
+            true,
+            Some(NOW - 60_000),
+            &pool_subject("main", "Main"),
+            &vec!["main".to_string()],
+            &Some(Link {
+                page: "pools",
+                id: "main".into()
+            }),
+            &json!({ "accounts": ["business"], "count": 1, "pool": "main" })
+        ),
+        "the condition dates from the oldest parked row and opens the pool's card"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(r#"phoebis_attention{kind="ledger_record_parked",subject="main"} 1"#),
+        "{text}"
+    );
+    ledger_sql(&rig, "DELETE FROM parked_records;");
+    let conditions = read(&attention, NOW);
+    let cleared = find(&conditions, Kind::LedgerRecordParked, "main")
+        .expect("a pool keeps its series once its rows are gone");
+    assert_eq!(
+        (cleared.holds, cleared.since, &cleared.detail),
+        (
+            false,
+            None,
+            &json!({ "accounts": [], "count": 0, "pool": "main" })
+        ),
+        "the condition clears on its own when the table empties"
+    );
+}
+
+#[tokio::test]
+async fn a_parked_record_without_a_pool_holds_under_the_router_subject_until_its_row_goes() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    assert!(
+        find(&read(&attention, NOW), Kind::LedgerRecordParked, "-").is_none(),
+        "no record without a pool, no series for one"
+    );
+    park(&rig, None, "direct", NOW - 1_000);
+    let conditions = read(&attention, NOW);
+    let parked = find(&conditions, Kind::LedgerRecordParked, "-").unwrap();
+    assert_eq!(
+        (
+            parked.holds,
+            parked.since,
+            &parked.subject,
+            parked.pools.is_empty(),
+            &parked.link,
+            &parked.detail
+        ),
+        (
+            true,
+            Some(NOW - 1_000),
+            &router_subject("-"),
+            true,
+            &None,
+            &json!({ "accounts": ["direct"], "count": 1, "pool": null })
+        )
+    );
+    assert!(
+        !find(&conditions, Kind::LedgerRecordParked, "main")
+            .unwrap()
+            .holds,
+        "a record without a pool holds no pool's condition"
+    );
+    ledger_sql(&rig, "DELETE FROM parked_records;");
+    assert!(
+        find(&read(&attention, NOW), Kind::LedgerRecordParked, "-").is_none(),
+        "the series leaves with the rows"
+    );
+}
+
+#[tokio::test]
+async fn a_parked_record_keeps_its_condition_after_its_pool_is_deleted() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    // An id the registry does not hold, as the pool of a record parked before the pool was deleted.
+    park(&rig, Some("gone"), "business", NOW - 5_000);
+    let conditions = read(&attention, NOW);
+    let parked = find(&conditions, Kind::LedgerRecordParked, "gone").unwrap();
+    assert_eq!(
+        (
+            parked.holds,
+            parked.since,
+            &parked.subject,
+            &parked.link,
+            parked.pools.is_empty(),
+            &parked.detail
+        ),
+        (
+            true,
+            Some(NOW - 5_000),
+            &pool_subject("gone", "gone"),
+            &None,
+            true,
+            &json!({ "accounts": ["business"], "count": 1, "pool": "gone" })
+        ),
+        "the deleted pool is named by its id, with no card to open"
+    );
+    ledger_sql(&rig, "DELETE FROM parked_records;");
+    assert!(
+        find(&read(&attention, NOW), Kind::LedgerRecordParked, "gone").is_none(),
+        "the deleted pool's series leaves with its rows"
+    );
+}
+
+#[tokio::test]
+async fn a_failed_parked_read_fails_the_attention_read_as_the_refresh_read_does() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    ledger_sql(&rig, "DROP TABLE parked_records;");
+    assert!(
+        matches!(attention.conditions(NOW), Err(AttentionError::Ledger(_))),
+        "a read without the parked rows would report a held condition clear"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(
+        (status, text.as_str()),
+        (500, "attention read failed"),
+        "a scrape without the evidence would read 0 for a held condition"
+    );
+    ledger_sql(&rig, PARKED_RECORDS);
+    assert!(
+        find(&read(&attention, NOW), Kind::LedgerRecordParked, "main").is_some_and(|c| !c.holds),
+        "the read answers again once the table is back"
+    );
+}
+
+/// A finished request of pool `main` served by `business`, priced by its million input tokens.
+fn priced(id: &str) -> Record {
+    Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: NOW,
+            finished_at: Some(NOW + 500),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        attempts: vec![AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "business".into(),
+            account_kind: "oauth".into(),
+            started_at: NOW,
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000_000),
+            ..Default::default()
+        }],
+        bodies: None,
+    }
+}
+
+#[tokio::test]
+async fn a_degraded_ledger_holds_writer_degraded_from_the_first_read_that_saw_it() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    // The file refuses every request row, so the next batch fails and the ledger reads degraded; the rig's clock
+    // stands still, so the batch's retry never comes due and the state holds.
+    ledger_sql(
+        &rig,
+        "CREATE TRIGGER refuse BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'refused by test'); END;",
+    );
+    rig.ledger.record_request(priced("r1")).await;
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
+    while !rig.ledger.degraded() {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the ledger never read degraded"
+        );
+        tokio::time::sleep(Duration::from_millis(10)).await;
+    }
+    let first = read(&attention, NOW + 1_000);
+    let held = find(&first, Kind::WriterDegraded, "ledger").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.link,
+            held.pools.is_empty(),
+            &held.detail
+        ),
+        (
+            true,
+            Some(NOW + 1_000),
+            &router_subject("ledger"),
+            &None,
+            true,
+            &json!({ "component": "ledger" })
+        ),
+        "the ledger records no time for its state, so the first read that saw it dates it"
+    );
+    assert!(
+        !find(&first, Kind::WriterDegraded, "routing").unwrap().holds,
+        "the routing state writer has its own series"
+    );
+    let second = read(&attention, NOW + 5_000);
+    assert_eq!(
+        find(&second, Kind::WriterDegraded, "ledger").unwrap().since,
+        Some(NOW + 1_000),
+        "a later read keeps the date of the first read that saw it"
     );
 }

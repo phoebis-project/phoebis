@@ -9,8 +9,8 @@ use phoebis_routing::{
     BurnRates, ClientClass, CreditsState, Exhaustion, KeyRefusal, MemberSpend, PinRef,
     PinUsage, Presented, RateTable, Rates, Refusal, ReloadError, Report, ResolveError,
     RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
-    UtilizationSample, WindowReading, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON,
-    FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    UtilizationSample, WindowReading, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow,
@@ -30,7 +30,15 @@ fn seeded_oauth(ids: &[&str]) -> Arc<Store> {
 }
 
 fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    seed(
+        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        kind,
+        ids,
+    )
+}
+
+/// The pool `p` over `ids` and the key `k`, written into a store the caller opened.
+fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     for id in ids {
         store
             .insert_account(&AccountRow {
@@ -164,6 +172,10 @@ fn request(
 /// How long a store write may take to reach disk before the test calls it lost. Only ever waited out in
 /// full when the write never lands.
 const WRITTEN: Duration = Duration::from_secs(2);
+
+/// How long a full writer channel's worth of writes may take to land: a thousand statements in one wake, on a debug
+/// build under the parallel suite. Only ever waited out in full when they never land.
+const DRAINED: Duration = Duration::from_secs(10);
 
 /// The window a write that must never land is given to prove it. A bounded negative check has to wait.
 const NOT_WRITTEN: Duration = Duration::from_millis(50);
@@ -401,6 +413,75 @@ async fn a_failed_reload_keeps_the_old_snapshot_and_says_so() {
 }
 
 #[tokio::test]
+async fn five_reloads_against_a_parked_loop_cost_at_most_two_loads_and_answer_every_caller() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let store = seeded(&["a"]);
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let before = store.debug_load_count();
+    let park = handle.park_loop().await;
+    let reloads: Vec<_> = (0..5)
+        .map(|_| {
+            let h = handle.clone();
+            tokio::spawn(async move { h.reload().await })
+        })
+        .collect();
+    drop(park);
+    for reload in reloads {
+        reload.await.unwrap().unwrap();
+    }
+    assert!(
+        store.debug_load_count() - before <= 2,
+        "{}",
+        store.debug_load_count() - before
+    );
+}
+
+#[tokio::test]
+async fn a_selection_is_answered_while_a_registry_load_runs() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let store = seeded(&["a"]);
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let hold = store.debug_hold_next_load();
+    let reload = {
+        let handle = handle.clone();
+        tokio::spawn(async move { handle.reload().await })
+    };
+    wait_for(WRITTEN, || hold.is_parked().then_some(())).await;
+    let answer = tokio::time::timeout(WRITTEN, handle.select(request(&handle, Some("s1"), 1_000)))
+        .await
+        .expect("the selection is answered while the load waits on the store")
+        .unwrap();
+    assert!(matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "a"));
+    drop(hold);
+    reload.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn dropping_the_last_handle_ends_the_loop_and_frees_the_stores_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let key = StorageKey::generate();
+    let store = seed(
+        Arc::new(Store::open(&path, &key).unwrap()),
+        AccountKind::ApiKey,
+        &["a"],
+    );
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let answer = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    assert!(matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "a"));
+    drop(answer);
+    drop(store);
+    // No `shutdown`: the loop has to end on its own once nothing can send to it, releasing its store.
+    drop(handle);
+    let reopened = wait_for(DRAINED, || Store::open(&path, &key).ok()).await;
+    drop(reopened);
+}
+
+#[tokio::test]
 async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
@@ -415,30 +496,34 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             .unwrap();
         assert!(matches!(answer.result, SelectResult::Selected(_)));
     }
-    handle.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "account".into(),
-            until: 1_000 + HOUR,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
-    handle.report(Report::AccountState {
-        account_id: "a".into(),
-        state: AccountState::ReauthRequired,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::ReauthRequired,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
     handle.shutdown().await.unwrap();
     let load = store.load_routing().unwrap();
     assert_eq!(
@@ -494,32 +579,111 @@ async fn a_report_the_stopped_task_cannot_take_counts_one_drop_under_its_kind_an
     assert_dropped(&handle, "cooldown", 0);
     handle.shutdown().await.unwrap();
     assert_eq!(
-        handle.report(model_cooldown("a", "model:claude-sonnet-5", 1_000)),
+        handle
+            .report(model_cooldown("a", "model:claude-sonnet-5", 1_000))
+            .await,
         None
     );
     assert_dropped(&handle, "cooldown", 1);
 }
 
 #[tokio::test]
-async fn a_full_command_queue_counts_the_dropped_report_under_its_kind() {
+async fn a_parked_loop_holds_every_control_fact_and_drops_none() {
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
     let park = handle.park_loop().await;
-    // The loop took its own park command off the queue, so every slot is free and only the last report is refused.
-    for _ in 0..COMMANDS + 1 {
-        handle.report(model_cooldown("a", "model:claude-sonnet-5", 1_000));
-    }
-    assert_dropped(&handle, "cooldown", 1);
+    // The loop took its own park command off the queue, so every slot is free and only the last report waits for one.
+    let reports: Vec<_> = (0..COMMANDS + 1)
+        .map(|_| {
+            let handle = handle.clone();
+            tokio::spawn(async move {
+                handle
+                    .report(model_cooldown("a", "model:claude-sonnet-5", 1_000))
+                    .await
+            })
+        })
+        .collect();
+    wait_for(WRITTEN, || (handle.queued() == COMMANDS).then_some(())).await;
+    assert_dropped(&handle, "cooldown", 0);
     drop(park);
-    // Queued behind the reports, so it answers once every one of them has landed.
+    for report in reports {
+        assert_eq!(report.await.unwrap(), None, "a cooldown takes no number");
+    }
     let cooldowns = handle.cooldowns().await.unwrap();
-    assert!(
+    assert_eq!(
         cooldowns
             .iter()
-            .any(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-5"),
-        "the queued reports land once the loop runs again: {cooldowns:?}"
+            .filter(|c| c.account_id == "a" && c.scope == "model:claude-sonnet-5")
+            .count(),
+        1,
+        "the held reports land once the loop runs again: {cooldowns:?}"
     );
-    assert_dropped(&handle, "cooldown", 1);
+    assert_dropped(&handle, "cooldown", 0);
+}
+
+#[tokio::test]
+async fn two_samples_of_one_key_replace_each_other_and_the_newest_observed_alone_lands() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded_oauth(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let park = handle.park_loop().await;
+    // The newer reading arrives first, so only the merge rule, never the arrival order, keeps it.
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.3, None)))
+        .await;
+    handle
+        .report(observed("a", sample_with(1_500, FIVE_HOUR, 0.9, None)))
+        .await;
+    drop(park);
+    let samples = handle.samples().await.unwrap();
+    let (_, sample) = samples
+        .iter()
+        .find(|(id, _)| id == "a")
+        .expect("a's sample landed");
+    assert_eq!(
+        sample
+            .reading(FIVE_HOUR)
+            .map(|r| (r.utilization, r.observed_at)),
+        Some((0.3, 2_000)),
+        "the newer observation alone"
+    );
+}
+
+#[tokio::test]
+async fn a_stale_account_state_never_replaces_a_current_pending_one() {
+    let store = seeded(&["a"]);
+    // A reconnect: the lifecycle moves on and the credential generation starts again.
+    assert_eq!(store.bump_lifecycle("a").unwrap(), 2);
+    store
+        .set_api_key_secret("a", &phoebis_store::Secret::new("k2"))
+        .unwrap();
+    let credential = store.credential_generation("a").unwrap().unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let park = handle.park_loop().await;
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::ReauthRequired,
+            incarnation: 1,
+            lifecycle_generation: 2,
+            credential_generation: credential,
+        })
+        .await;
+    // The previous lifecycle's verdict, under a credential generation the reconnect has not reached again.
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::FundingRequired,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: credential + 2,
+        })
+        .await;
+    drop(park);
+    wait_for(WRITTEN, || {
+        (store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
+    })
+    .await;
 }
 
 /// The handle counts a dropped report by looking its kind up in `Report::KINDS` and panics on a name the list lacks,
@@ -615,25 +779,29 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
     store
         .set_api_key_secret("a", &phoebis_store::Secret::new("k2"))
         .unwrap();
-    handle.report(Report::AccountState {
-        account_id: "a".into(),
-        state: AccountState::ReauthRequired,
-        lifecycle_generation: 1,
-        credential_generation: generation,
-        incarnation: 1,
-    });
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::ReauthRequired,
+            lifecycle_generation: 1,
+            credential_generation: generation,
+            incarnation: 1,
+        })
+        .await;
     // The verdict named the key the store has since replaced, so the writer fences it out.
     stays_for(NOT_WRITTEN, || {
         store.account("a").unwrap().unwrap().state == AccountState::Ready
     })
     .await;
-    handle.report(Report::AccountState {
-        account_id: "a".into(),
-        state: AccountState::ReauthRequired,
-        lifecycle_generation: 1,
-        credential_generation: generation + 1,
-        incarnation: 1,
-    });
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::ReauthRequired,
+            lifecycle_generation: 1,
+            credential_generation: generation + 1,
+            incarnation: 1,
+        })
+        .await;
     wait_for(WRITTEN, || {
         (store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
     })
@@ -669,23 +837,25 @@ async fn a_cooldown_survives_a_restart_and_an_expired_row_does_not_revive() {
     let now = Arc::new(AtomicI64::new(1_000));
     {
         let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-        handle.report(Report::Cooldown {
-            account_id: "a".into(),
-            row: CooldownRow {
+        handle
+            .report(Report::Cooldown {
                 account_id: "a".into(),
-                scope: "account".into(),
-                until: 1_000 + 2 * HOUR,
-                set_at: 0,
-                reason: "rate_limit".into(),
-                window: "five_hour".into(),
-                source_request_id: None,
+                row: CooldownRow {
+                    account_id: "a".into(),
+                    scope: "account".into(),
+                    until: 1_000 + 2 * HOUR,
+                    set_at: 0,
+                    reason: "rate_limit".into(),
+                    window: "five_hour".into(),
+                    source_request_id: None,
+                    incarnation: 1,
+                },
+                pin: None,
+                lifecycle_generation: 1,
+                credential_generation: 1,
                 incarnation: 1,
-            },
-            pin: None,
-            lifecycle_generation: 1,
-            credential_generation: 1,
-            incarnation: 1,
-        });
+            })
+            .await;
         wait_for(WRITTEN, || {
             store
                 .load_routing()
@@ -805,23 +975,25 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
         ("a", epoch),
         "the pin renews under the dated id rather than starting over"
     );
-    handle.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "model:claude-sonnet-4-5".into(),
-            until: 2_000 + HOUR,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "model:claude-sonnet-4-5".into(),
+                until: 2_000 + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     let cooled = wait_for_async(WRITTEN, || async {
         handle
             .cooldowns()
@@ -905,7 +1077,9 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
     } else {
         "a"
     };
-    handle.report(model_cooldown(other, "model:claude-sonnet-4-5", 1_000));
+    handle
+        .report(model_cooldown(other, "model:claude-sonnet-4-5", 1_000))
+        .await;
     handle
         .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 1_500)
         .await
@@ -932,7 +1106,9 @@ async fn a_refused_rekey() -> (Arc<Store>, phoebis_routing::RouterHandle) {
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(model_cooldown("a", "model:claude-sonnet-4-5", 1_000));
+    handle
+        .report(model_cooldown("a", "model:claude-sonnet-4-5", 1_000))
+        .await;
     wait_for(WRITTEN, || {
         (!store.load_routing().unwrap().cooldowns.is_empty()).then_some(())
     })
@@ -979,7 +1155,9 @@ async fn landed(store: &Store, scope: &str) {
 async fn a_rekey_the_store_refused_is_retried_once_at_the_next_write_and_then_dropped() {
     let (store, handle) = a_refused_rekey().await;
     restore_a(&store);
-    handle.report(model_cooldown("b", "model:claude-opus-5", 1_000));
+    handle
+        .report(model_cooldown("b", "model:claude-opus-5", 1_000))
+        .await;
     landed(&store, "model:claude-opus-5").await;
     let load = store.load_routing().unwrap();
     assert_eq!(
@@ -998,10 +1176,14 @@ async fn a_rekey_the_store_refused_is_retried_once_at_the_next_write_and_then_dr
     );
 
     let (store, handle) = a_refused_rekey().await;
-    handle.report(model_cooldown("b", "model:claude-opus-5", 1_000));
+    handle
+        .report(model_cooldown("b", "model:claude-opus-5", 1_000))
+        .await;
     landed(&store, "model:claude-opus-5").await;
     restore_a(&store);
-    handle.report(model_cooldown("b", "model:claude-haiku-4-5", 1_000));
+    handle
+        .report(model_cooldown("b", "model:claude-haiku-4-5", 1_000))
+        .await;
     landed(&store, "model:claude-haiku-4-5").await;
     assert!(
         store.load_routing().unwrap().resolutions.is_empty(),
@@ -1035,11 +1217,13 @@ async fn a_burst_of_reports_queued_behind_one_wake_lands_in_one_commit() {
     // the two wakes counted below.
     let before = store.debug_routing_commits();
     let hold = store.debug_hold_next_routing_write();
-    handle.report(model_cooldown("a", "model:claude-opus-5", 1_000));
+    handle
+        .report(model_cooldown("a", "model:claude-opus-5", 1_000))
+        .await;
     wait_for(WRITTEN, || hold.is_parked().then_some(())).await;
     let scopes: Vec<String> = (0..20).map(|i| format!("model:claude-burst-{i}")).collect();
     for scope in &scopes {
-        handle.report(model_cooldown("b", scope, 1_000));
+        handle.report(model_cooldown("b", scope, 1_000)).await;
     }
     // Released before this, a report still in the command queue would land in a wake of its own.
     queued(&handle, &scopes).await;
@@ -1060,6 +1244,161 @@ async fn a_burst_of_reports_queued_behind_one_wake_lands_in_one_commit() {
     );
 }
 
+/// A router whose writer is parked on its first wake, the purge tick's batch: armed before the spawn, so every
+/// write a test makes after this answers goes to the channel, and past `WRITER_DEPTH` of them to the backlog.
+async fn parked_writer(
+    store: &Arc<Store>,
+    now: &Arc<AtomicI64>,
+) -> (RouterHandle, phoebis_store::RoutingWriteHold) {
+    let hold = store.debug_hold_next_routing_write();
+    let handle = spawn(store.clone(), clock(now), RouterConfig::default()).unwrap();
+    wait_for(WRITTEN, || hold.is_parked().then_some(())).await;
+    (handle, hold)
+}
+
+/// A write of its own row per call: `b`'s cooldown under a scope no request asks for.
+async fn fill(handle: &RouterHandle, index: usize) {
+    handle
+        .report(model_cooldown("b", &format!("model:fill-{index}"), 1_000))
+        .await;
+}
+
+#[tokio::test]
+async fn a_full_writer_channel_defers_its_writes_and_lands_them_once_a_slot_frees() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    let pin = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    // The placement and `WRITER_DEPTH - 1` renewals fill the channel; the last two renewals find it full and
+    // share the pin's one row in the backlog.
+    for i in 0..WRITER_DEPTH as i64 + 1 {
+        handle
+            .report(renewal(
+                pin.clone(),
+                1_001 + i,
+                PinUsage::default(),
+                "client",
+                0,
+            ))
+            .await;
+    }
+    // Asked behind the renewals, so the loop has handled every one of them.
+    handle.pins().await.unwrap();
+    assert_eq!(
+        handle.writer_status(),
+        WriterStatus {
+            depth: WRITER_DEPTH,
+            deferred: 1,
+            degraded: true,
+            failed_batches: 0,
+        },
+        "two writes past the channel's bound, held in memory as their row's last"
+    );
+    hold.release();
+    let last = 1_001 + WRITER_DEPTH as i64;
+    wait_for(DRAINED, || {
+        let status = handle.writer_status();
+        let landed = store
+            .load_routing()
+            .unwrap()
+            .pins
+            .iter()
+            .any(|p| p.session_id == "s1" && p.last_used_at == last);
+        (status.deferred == 0 && !status.degraded && landed).then_some(())
+    })
+    .await;
+}
+
+#[tokio::test]
+async fn a_delete_arriving_while_the_backlog_holds_the_pins_upsert_never_recreates_the_pin() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    // Other rows fill the channel: a renewal of the pin would mark it served, and a release would leave it.
+    for index in 0..WRITER_DEPTH {
+        fill(&handle, index).await;
+    }
+    let pin = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    assert_eq!(
+        handle.writer_status().deferred,
+        1,
+        "the placement waits in the backlog"
+    );
+    hold.release();
+    handle
+        .report(Report::PinReleased {
+            pin,
+            incarnation: 1,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+        })
+        .await;
+    wait_for(DRAINED, || {
+        let landed = store.load_routing().unwrap().cooldowns.len();
+        (handle.writer_status().deferred == 0 && landed == WRITER_DEPTH).then_some(())
+    })
+    .await;
+    handle.shutdown().await.unwrap();
+    assert!(
+        store
+            .load_routing()
+            .unwrap()
+            .pins
+            .iter()
+            .all(|p| p.session_id != "s1"),
+        "the release lands after the placement it releases, or replaces it in the backlog"
+    );
+}
+
+#[tokio::test]
+async fn a_shutdown_with_a_full_writer_channel_lands_every_deferred_write() {
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let (handle, hold) = parked_writer(&store, &now).await;
+    for index in 0..WRITER_DEPTH + 1 {
+        fill(&handle, index).await;
+    }
+    for session in ["s1", "s2", "s3"] {
+        handle
+            .select(request(&handle, Some(session), 1_000))
+            .await
+            .unwrap();
+    }
+    let placed = handle.pins().await.unwrap();
+    assert_eq!(
+        handle.writer_status().deferred,
+        4,
+        "the last filler and the three placements wait in the backlog"
+    );
+    let shutdown = tokio::spawn({
+        let handle = handle.clone();
+        async move { handle.shutdown().await }
+    });
+    hold.release();
+    shutdown.await.unwrap().unwrap();
+    let load = store.load_routing().unwrap();
+    for pin in &placed {
+        assert!(
+            load.pins.contains(pin),
+            "{} lands as placed: {:?}",
+            pin.session_id,
+            load.pins
+        );
+    }
+    assert_eq!(placed.len(), 3);
+    assert_eq!(load.cooldowns.len(), WRITER_DEPTH + 1);
+}
+
 /// `a_refused_rekey`'s shape with the writer parked on an earlier write before the resolution, so the refused
 /// rekey and whatever the test queues next share the wake after the release.
 async fn a_refused_rekey_behind_a_hold(
@@ -1067,14 +1406,18 @@ async fn a_refused_rekey_behind_a_hold(
     let store = seeded(&["a", "b"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(model_cooldown("a", "model:claude-sonnet-4-5", 1_000));
+    handle
+        .report(model_cooldown("a", "model:claude-sonnet-4-5", 1_000))
+        .await;
     wait_for(WRITTEN, || {
         (!store.load_routing().unwrap().cooldowns.is_empty()).then_some(())
     })
     .await;
     store.delete_account("a", "test").unwrap();
     let hold = store.debug_hold_next_routing_write();
-    handle.report(model_cooldown("b", "model:claude-opus-5", 1_000));
+    handle
+        .report(model_cooldown("b", "model:claude-opus-5", 1_000))
+        .await;
     wait_for(WRITTEN, || hold.is_parked().then_some(())).await;
     handle
         .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 1_500)
@@ -1098,7 +1441,7 @@ async fn a_batch_with_one_refused_write_lands_every_other_write() {
     let (store, handle, hold) = a_refused_rekey_behind_a_hold().await;
     let behind = ["model:claude-haiku-4-5", "model:claude-sonnet-5"].map(String::from);
     for scope in &behind {
-        handle.report(model_cooldown("b", scope, 1_000));
+        handle.report(model_cooldown("b", scope, 1_000)).await;
     }
     queued(&handle, &behind).await;
     hold.release();
@@ -1111,7 +1454,9 @@ async fn a_batch_with_one_refused_write_lands_every_other_write() {
     );
 
     restore_a(&store);
-    handle.report(model_cooldown("b", "model:claude-fable-5", 1_000));
+    handle
+        .report(model_cooldown("b", "model:claude-fable-5", 1_000))
+        .await;
     landed(&store, "model:claude-fable-5").await;
     assert_eq!(
         resolutions(&store),
@@ -1141,7 +1486,9 @@ async fn a_refused_rekey_superseded_by_a_later_rekey_of_its_spelling_in_the_batc
 
     // With `a` back, a retry of the first rekey would land and put its dated id back.
     restore_a(&store);
-    handle.report(model_cooldown("b", "model:claude-haiku-4-5", 1_000));
+    handle
+        .report(model_cooldown("b", "model:claude-haiku-4-5", 1_000))
+        .await;
     landed(&store, "model:claude-haiku-4-5").await;
     assert_eq!(
         resolutions(&store),
@@ -1226,20 +1573,20 @@ async fn a_key_is_touched_at_most_once_a_minute() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.touch_key("k", Presented::Live, None);
+    handle.touch_key("k", Presented::Live, None).await;
     wait_for(WRITTEN, || {
         (store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)).then_some(())
     })
     .await;
     now.store(11_000, Ordering::SeqCst);
-    handle.touch_key("k", Presented::Live, None);
+    handle.touch_key("k", Presented::Live, None).await;
     // Ten seconds on from the last touch, which is inside the minute, so nothing is written.
     stays_for(NOT_WRITTEN, || {
         store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)
     })
     .await;
     now.store(62_000, Ordering::SeqCst);
-    handle.touch_key("k", Presented::Live, None);
+    handle.touch_key("k", Presented::Live, None).await;
     wait_for(WRITTEN, || {
         (store.api_key("k").unwrap().unwrap().last_used_at == Some(62_000)).then_some(())
     })
@@ -1263,13 +1610,13 @@ async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_writ
         .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.touch_key("k", Presented::Live, rotated_at);
+    handle.touch_key("k", Presented::Live, rotated_at).await;
     wait_for(WRITTEN, || {
         (store.api_key("k").unwrap().unwrap().last_used_at == Some(1_000)).then_some(())
     })
     .await;
     now.store(11_000, Ordering::SeqCst);
-    handle.touch_key("k", Presented::Retired, rotated_at);
+    handle.touch_key("k", Presented::Retired, rotated_at).await;
     wait_for(WRITTEN, || {
         (store
             .api_key("k")
@@ -1281,7 +1628,7 @@ async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_writ
     })
     .await;
     now.store(21_000, Ordering::SeqCst);
-    handle.touch_key("k", Presented::Retired, rotated_at);
+    handle.touch_key("k", Presented::Retired, rotated_at).await;
     stays_for(NOT_WRITTEN, || {
         store
             .api_key("k")
@@ -1304,7 +1651,9 @@ async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_writ
         )
         .unwrap();
     now.store(21_500, Ordering::SeqCst);
-    handle.touch_key("k", Presented::Retired, Some(30_000));
+    handle
+        .touch_key("k", Presented::Retired, Some(30_000))
+        .await;
     wait_for(WRITTEN, || {
         (store
             .api_key("k")
@@ -1318,7 +1667,7 @@ async fn a_retired_presentation_inside_the_minute_after_a_live_one_is_still_writ
     // A touch that authenticated under the earlier rotation lands after a later one: the new grace stays
     // unpresented.
     now.store(90_000, Ordering::SeqCst);
-    handle.touch_key("k", Presented::Retired, rotated_at);
+    handle.touch_key("k", Presented::Retired, rotated_at).await;
     stays_for(NOT_WRITTEN, || {
         store
             .api_key("k")
@@ -1450,23 +1799,25 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
         .unwrap();
     handle.reload().await.unwrap();
     // A rejection that left the upstream while the first key was still in use.
-    handle.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "account".into(),
-            until: 1_000 + HOUR,
-            set_at: 0,
-            reason: "permission".into(),
-            window: "none".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "permission".into(),
+                window: "none".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin_of(&handle).await),
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: Some(pin_of(&handle).await),
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     stays_for(NOT_WRITTEN, || {
         store.load_routing().unwrap().cooldowns.is_empty()
     })
@@ -1481,23 +1832,25 @@ async fn a_cooldown_about_a_replaced_credential_is_dropped_and_the_pin_survives(
         "and the session it would have moved keeps its account"
     );
     // The same report against the key the account holds now is recorded.
-    handle.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "account".into(),
-            until: 1_000 + HOUR,
-            set_at: 0,
-            reason: "permission".into(),
-            window: "none".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "permission".into(),
+                window: "none".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 2,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 2,
-        incarnation: 1,
-    });
+        })
+        .await;
     wait_for(WRITTEN, || store.load_routing().unwrap().cooldowns.pop()).await;
 }
 
@@ -1524,23 +1877,25 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: "a".into(),
-            scope: "account".into(),
-            until: 1_000 + 48 * HOUR,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "seven_day".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "a".into(),
+                scope: "account".into(),
+                until: 1_000 + 48 * HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "seven_day".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     wait_for(WRITTEN, || store.load_routing().unwrap().cooldowns.pop()).await;
     let answer = handle.select(request(&handle, None, 1_000)).await.unwrap();
     assert!(
@@ -1669,21 +2024,25 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
     store.delete_account("a", "test").unwrap();
     insert_account_a(&store);
     handle.reload().await.unwrap();
-    handle.report(Report::AccountState {
-        account_id: "a".into(),
-        state: AccountState::FundingRequired,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
-    handle.report(Report::Cooldown {
-        account_id: "a".into(),
-        row: cooldown_row("a"),
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+    handle
+        .report(Report::AccountState {
+            account_id: "a".into(),
+            state: AccountState::FundingRequired,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
+    handle
+        .report(Report::Cooldown {
+            account_id: "a".into(),
+            row: cooldown_row("a"),
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
+            incarnation: 1,
+        })
+        .await;
     // The report and the ask share one sender, so both reports are applied before this answers.
     assert!(handle.cooldowns().await.unwrap().is_empty());
     // Shutdown drains the writer, so a verdict that was going to land has landed by now.
@@ -1721,7 +2080,7 @@ async fn a_pin_mark_from_the_previous_holder_leaves_the_new_holders_pin_alone() 
         lifecycle_generation: 1,
         credential_generation: 1,
     };
-    handle.report(mark(1));
+    handle.report(mark(1)).await;
     assert_eq!(
         handle.pins().await.unwrap().len(),
         1,
@@ -1731,7 +2090,7 @@ async fn a_pin_mark_from_the_previous_holder_leaves_the_new_holders_pin_alone() 
         !store.load_routing().unwrap().pins.is_empty()
     })
     .await;
-    handle.report(mark(2));
+    handle.report(mark(2)).await;
     assert!(
         handle.pins().await.unwrap().is_empty(),
         "the same mark from the current holder ends the pin"
@@ -1759,26 +2118,32 @@ async fn one_reload_over_a_delete_and_a_recreate_keeps_none_of_the_previous_hold
         store.load_routing().unwrap().pins.first().cloned()
     })
     .await;
-    handle.report(cooled(
-        "a",
-        "account",
-        1_000 + HOUR,
-        "rate_limit",
-        "five_hour",
-    ));
-    handle.report(Report::Overage {
-        account_id: "a".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: Some(1_100),
-            reset: None,
-            observed_at: 1_100,
-            source: phoebis_routing::EvidenceSource::Head,
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            1_000 + HOUR,
+            "rate_limit",
+            "five_hour",
+        ))
+        .await;
+    handle
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: Some(1_100),
+                reset: None,
+                observed_at: 1_100,
+                source: phoebis_routing::EvidenceSource::Head,
+                incarnation: 1,
+            },
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
-    handle.report(observed("a", sample_with(1_100, FIVE_HOUR, 1.0, None)));
+        })
+        .await;
+    handle
+        .report(observed("a", sample_with(1_100, FIVE_HOUR, 1.0, None)))
+        .await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     assert_eq!(handle.overages().await.unwrap().len(), 1);
     assert_eq!(handle.samples().await.unwrap().len(), 1);
@@ -1847,23 +2212,27 @@ async fn a_reading_reported_for_a_previous_incarnation_changes_nothing() {
     insert_account_a(&store);
     handle.reload().await.unwrap();
     // The answers of a poll that left under the first holder and landed after the reload.
-    handle.report(Report::Sample {
-        account_id: "a".into(),
-        sample: sample_with(1_500, FIVE_HOUR, 1.0, None),
-        incarnation: 1,
-    });
-    handle.report(Report::Overage {
-        account_id: "a".into(),
-        evidence: phoebis_routing::OverageEvidence {
-            in_use: true,
-            since: None,
-            reset: None,
-            observed_at: 1_500,
-            source: phoebis_routing::EvidenceSource::Sample,
+    handle
+        .report(Report::Sample {
+            account_id: "a".into(),
+            sample: sample_with(1_500, FIVE_HOUR, 1.0, None),
             incarnation: 1,
-        },
-        incarnation: 1,
-    });
+        })
+        .await;
+    handle
+        .report(Report::Overage {
+            account_id: "a".into(),
+            evidence: phoebis_routing::OverageEvidence {
+                in_use: true,
+                since: None,
+                reset: None,
+                observed_at: 1_500,
+                source: phoebis_routing::EvidenceSource::Sample,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
     assert!(
         handle.samples().await.unwrap().is_empty(),
         "the old holder's sample was refused"
@@ -1996,19 +2365,23 @@ async fn a_completed_requests_share_is_added_to_the_reading_until_the_next_readi
         },
     )
     .unwrap();
-    handle.report(observed(
-        "a",
-        sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
-    ));
-    handle.report(a_million_input("a", 2_000));
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+        ))
+        .await;
+    handle.report(a_million_input("a", 2_000)).await;
     assert!(
         close(read(&handle, "a", FIVE_HOUR).await, 0.6),
         "the reading plus the request's share"
     );
-    handle.report(observed(
-        "a",
-        sample_with(3_000, FIVE_HOUR, 0.55, Some(10 * HOUR)),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(3_000, FIVE_HOUR, 0.55, Some(10 * HOUR)),
+        ))
+        .await;
     assert!(
         close(read(&handle, "a", FIVE_HOUR).await, 0.55),
         "a reading observed after the request carries it, so the share is dropped"
@@ -2029,16 +2402,22 @@ async fn a_fast_completion_charges_no_window() {
         },
     )
     .unwrap();
-    handle.report(observed(
-        "a",
-        sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
-    ));
-    handle.report(a_million_input_served("a", 2_000, false));
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+        ))
+        .await;
+    handle
+        .report(a_million_input_served("a", 2_000, false))
+        .await;
     assert!(
         close(read(&handle, "a", FIVE_HOUR).await, 0.6),
         "a standard completion adds its share to the reading"
     );
-    handle.report(a_million_input_served("a", 2_500, true));
+    handle
+        .report(a_million_input_served("a", 2_500, true))
+        .await;
     assert!(
         close(read(&handle, "a", FIVE_HOUR).await, 0.6),
         "a fast completion draws usage credits and leaves the window where the standard one left it"
@@ -2111,27 +2490,27 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             .zip(expected)
             .all(|(read, expected)| close(*read, expected))
     };
-    handle.report(readings(1));
+    handle.report(readings(1)).await;
 
-    handle.report(used("claude-fable-5", 1));
+    handle.report(used("claude-fable-5", 1)).await;
     let fable = windows().await;
     assert!(
         reads(fable.clone(), [0.6, 0.6, 0.7]),
         "a Fable request charges both shared windows and its week at twice the 7-day share: {fable:?}"
     );
-    handle.report(used("claude-sonnet-5", 1));
+    handle.report(used("claude-sonnet-5", 1)).await;
     let sonnet = windows().await;
     assert!(
         reads(sonnet.clone(), [0.7, 0.7, 0.7]),
         "any other model leaves the Fable week alone: {sonnet:?}"
     );
-    handle.report(used("claude-unpriced-1", 1));
+    handle.report(used("claude-unpriced-1", 1)).await;
     let five_hour_alone = windows().await;
     assert!(
         reads(five_hour_alone.clone(), [0.8, 0.7, 0.7]),
         "a model priced on the 5-hour window alone charges that window and leaves the 7-day one: {five_hour_alone:?}"
     );
-    handle.report(used("claude-unpriced-2", 1));
+    handle.report(used("claude-unpriced-2", 1)).await;
     let neither = windows().await;
     assert!(
         reads(neither.clone(), [0.8, 0.7, 0.7]),
@@ -2155,12 +2534,12 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
         .unwrap();
     with_tier(&store, "a");
     handle.reload().await.unwrap();
-    handle.report(readings(2));
+    handle.report(readings(2)).await;
     assert!(
         reads(windows().await, [0.5, 0.5, 0.5]),
         "the new holder reads its own readings"
     );
-    handle.report(used("claude-sonnet-5", 1));
+    handle.report(used("claude-sonnet-5", 1)).await;
     let moved_past = windows().await;
     assert!(
         reads(moved_past.clone(), [0.5, 0.5, 0.5]),
@@ -2178,13 +2557,15 @@ async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
         reset: Some(100 * HOUR),
         observed_at: 1_000,
     };
-    handle.report(observed(
-        "a",
-        sample(1_000)
-            .with(FIVE_HOUR, reading(0.2))
-            .with(SEVEN_DAY, reading(0.3))
-            .with(SEVEN_DAY_FABLE, reading(0.4)),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample(1_000)
+                .with(FIVE_HOUR, reading(0.2))
+                .with(SEVEN_DAY, reading(0.3))
+                .with(SEVEN_DAY_FABLE, reading(0.4)),
+        ))
+        .await;
     let rows = wait_for(WRITTEN, || {
         let windows = store.load_routing().unwrap().windows;
         (windows.len() == 3).then_some(windows)
@@ -2205,10 +2586,12 @@ async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
             (SEVEN_DAY_FABLE, 0.4, 1_000, 1)
         ]
     );
-    handle.report(observed(
-        "a",
-        sample_with(900, FIVE_HOUR, 0.9, Some(100 * HOUR)),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(900, FIVE_HOUR, 0.9, Some(100 * HOUR)),
+        ))
+        .await;
     handle.shutdown().await.unwrap();
     assert_eq!(
         store.load_routing().unwrap().windows,
@@ -2253,11 +2636,13 @@ async fn an_api_key_account_and_an_account_without_a_tier_are_charged_nothing() 
     )
     .unwrap();
     for account in ["k", "n", "a"] {
-        handle.report(observed(
-            account,
-            sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
-        ));
-        handle.report(a_million_input(account, 2_000));
+        handle
+            .report(observed(
+                account,
+                sample_with(1_000, FIVE_HOUR, 0.5, Some(10 * HOUR)),
+            ))
+            .await;
+        handle.report(a_million_input(account, 2_000)).await;
     }
     assert!(
         close(read(&handle, "k", FIVE_HOUR).await, 0.5),
@@ -2279,10 +2664,12 @@ async fn a_windows_write_queued_for_a_deleted_holder_lands_nowhere_and_its_repla
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(observed(
-        "a",
-        sample_with(1_000, FIVE_HOUR, 0.7, Some(5 * HOUR)),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.7, Some(5 * HOUR)),
+        ))
+        .await;
     let rows = wait_for(WRITTEN, || {
         let windows = store.load_routing().unwrap().windows;
         (!windows.is_empty()).then_some(windows)
@@ -2362,23 +2749,25 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         SelectResult::Selected(s) => s.pin.clone().unwrap(),
         _ => unreachable!(),
     };
-    handle.report(Report::Cooldown {
-        account_id: a.clone(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: a.clone(),
-            scope: "account".into(),
-            until: 1_000 + HOUR,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: Some("req_1".into()),
+            row: CooldownRow {
+                account_id: a.clone(),
+                scope: "account".into(),
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: Some("req_1".into()),
+                incarnation: 1,
+            },
+            pin: Some(pin),
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: Some(pin),
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownSet { account_id, scope, until, source_request_id: Some(r), .. } if account_id == a && scope == "account" && until == 1_000 + HOUR && r == "req_1")
     );
@@ -2400,21 +2789,18 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         source: phoebis_routing::EvidenceSource::Head,
         incarnation: 1,
     };
-    handle.report(Report::Overage {
-        account_id: b.clone(),
-        evidence: evidence(true, 1_200),
-        incarnation: 1,
-    });
-    handle.report(Report::Overage {
-        account_id: b.clone(),
-        evidence: evidence(true, 1_300),
-        incarnation: 1,
-    });
-    handle.report(Report::Overage {
-        account_id: b.clone(),
-        evidence: evidence(false, 1_400),
-        incarnation: 1,
-    });
+    // Each reading is read back before the next is reported: readings reported back to back replace each other
+    // in the pending map, and only the newest lands.
+    for (in_use, at) in [(true, 1_200), (true, 1_300), (false, 1_400)] {
+        handle
+            .report(Report::Overage {
+                account_id: b.clone(),
+                evidence: evidence(in_use, at),
+                incarnation: 1,
+            })
+            .await;
+        handle.overage(&b).await.unwrap();
+    }
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::OverageStarted { account_id, .. } if account_id == b)
     );
@@ -2449,13 +2835,15 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, .. } if session_id == "s2")
     );
-    handle.report(cooled(
-        &a,
-        "account",
-        2_000 + HOUR,
-        "rate_limit",
-        "five_hour",
-    ));
+    handle
+        .report(cooled(
+            &a,
+            "account",
+            2_000 + HOUR,
+            "rate_limit",
+            "five_hour",
+        ))
+        .await;
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::CooldownSet { .. }
@@ -2471,18 +2859,20 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     );
     // Last, because a fresh reading below the limit releases the rate-limit cooldown the assertions above
     // need still standing.
-    handle.report(Report::Sample {
-        account_id: a.clone(),
-        sample: sample_with(1_500, FIVE_HOUR, 0.7, Some(9 * HOUR)).with(
-            SEVEN_DAY,
-            WindowReading {
-                utilization: 0.2,
-                reset: None,
-                observed_at: 1_500,
-            },
-        ),
-        incarnation: 1,
-    });
+    handle
+        .report(Report::Sample {
+            account_id: a.clone(),
+            sample: sample_with(1_500, FIVE_HOUR, 0.7, Some(9 * HOUR)).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.2,
+                    reset: None,
+                    observed_at: 1_500,
+                },
+            ),
+            incarnation: 1,
+        })
+        .await;
     // The report and the ask share one sender, so the task has applied the sample before it answers this.
     let samples = handle.samples().await.unwrap();
     assert_eq!(
@@ -2525,16 +2915,20 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
             },
         )
     };
-    handle.report(Report::Sample {
-        account_id: a.clone(),
-        sample: spent(1.0, 1_500),
-        incarnation: 1,
-    });
-    handle.report(Report::Sample {
-        account_id: b.into(),
-        sample: spent(0.2, 1_500),
-        incarnation: 1,
-    });
+    handle
+        .report(Report::Sample {
+            account_id: a.clone(),
+            sample: spent(1.0, 1_500),
+            incarnation: 1,
+        })
+        .await;
+    handle
+        .report(Report::Sample {
+            account_id: b.into(),
+            sample: spent(0.2, 1_500),
+            incarnation: 1,
+        })
+        .await;
     let second = handle
         .select(request(&handle, Some("s1"), 2_000))
         .await
@@ -2576,27 +2970,33 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
             },
         )
     };
-    handle.report(cooled(
-        &a,
-        "account",
-        1_000 + HOUR,
-        "rate_limit",
-        "five_hour",
-    ));
+    handle
+        .report(cooled(
+            &a,
+            "account",
+            1_000 + HOUR,
+            "rate_limit",
+            "five_hour",
+        ))
+        .await;
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::CooldownSet { .. }
     ));
-    handle.report(Report::Sample {
-        account_id: a.clone(),
-        sample: spent(1_500),
-        incarnation: 1,
-    });
-    handle.report(Report::Sample {
-        account_id: b.into(),
-        sample: spent(1_500),
-        incarnation: 1,
-    });
+    handle
+        .report(Report::Sample {
+            account_id: a.clone(),
+            sample: spent(1_500),
+            incarnation: 1,
+        })
+        .await;
+    handle
+        .report(Report::Sample {
+            account_id: b.into(),
+            sample: spent(1_500),
+            incarnation: 1,
+        })
+        .await;
     let second = handle
         .select(request(&handle, Some("s1"), 2_000))
         .await
@@ -2673,13 +3073,15 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
-    handle.report(cooled(
-        "a",
-        "account",
-        1_000 + 5 * HOUR,
-        "rate_limit",
-        "five_hour",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            1_000 + 5 * HOUR,
+            "rate_limit",
+            "five_hour",
+        ))
+        .await;
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownSet { account_id, .. } if account_id == "a")
     );
@@ -2696,7 +3098,9 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
     );
     // Anthropic moved the reset in: hours before the deadline the 429 announced, the window reads below 1.
     now.store(2_000, Ordering::SeqCst);
-    handle.report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)));
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)))
+        .await;
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { account_id, scope, cause, at } if account_id == "a" && scope == "account" && cause == "recovered" && at == 2_000)
     );
@@ -2723,18 +3127,22 @@ async fn a_repeated_rejection_moves_the_fence_a_recovery_sample_has_to_clear() {
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let rejection = || cooled("a", "account", 1_000 + 5 * HOUR, "rate_limit", "five_hour");
-    handle.report(rejection());
+    handle.report(rejection()).await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     now.store(3_000, Ordering::SeqCst);
-    handle.report(rejection());
+    handle.report(rejection()).await;
     // The poll behind this reading read the endpoint before the second rejection and landed after it.
-    handle.report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)));
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "a reading older than the latest rejection is not evidence the account recovered"
     );
-    handle.report(observed("a", sample_with(3_001, FIVE_HOUR, 0.4, None)));
+    handle
+        .report(observed("a", sample_with(3_001, FIVE_HOUR, 0.4, None)))
+        .await;
     assert!(
         handle.cooldowns().await.unwrap().is_empty(),
         "one taken after it is"
@@ -2746,23 +3154,29 @@ async fn a_sample_the_cooled_account_was_holding_when_it_was_rejected_releases_n
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(2_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(cooled(
-        "a",
-        "account",
-        2_000 + 5 * HOUR,
-        "rate_limit",
-        "five_hour",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            2_000 + 5 * HOUR,
+            "rate_limit",
+            "five_hour",
+        ))
+        .await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     // The usage endpoint serves a cached view for a minute, so the snapshot that arrives first can be older
     // than the rejection.
-    handle.report(observed("a", sample_with(1_999, FIVE_HOUR, 0.4, None)));
+    handle
+        .report(observed("a", sample_with(1_999, FIVE_HOUR, 0.4, None)))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "a reading from before the row was set is not evidence about it"
     );
-    handle.report(observed("a", sample_with(2_001, FIVE_HOUR, 0.4, None)));
+    handle
+        .report(observed("a", sample_with(2_001, FIVE_HOUR, 0.4, None)))
+        .await;
     assert!(
         handle.cooldowns().await.unwrap().is_empty(),
         "the same reading taken after it is"
@@ -2774,27 +3188,35 @@ async fn a_window_at_its_limit_keeps_the_cooldown() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(cooled(
-        "a",
-        "account",
-        1_000 + 48 * HOUR,
-        "rate_limit",
-        "seven_day",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            1_000 + 48 * HOUR,
+            "rate_limit",
+            "seven_day",
+        ))
+        .await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
-    handle.report(observed("a", sample_with(2_000, SEVEN_DAY, 1.0, None)));
+    handle
+        .report(observed("a", sample_with(2_000, SEVEN_DAY, 1.0, None)))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "a window that is exactly full has nothing left to serve with"
     );
-    handle.report(observed("a", sample_with(2_001, FIVE_HOUR, 0.1, None)));
+    handle
+        .report(observed("a", sample_with(2_001, FIVE_HOUR, 0.1, None)))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "and the row names the window that is read, not whichever one recovered"
     );
-    handle.report(observed("a", sample_with(2_002, SEVEN_DAY, 0.99, None)));
+    handle
+        .report(observed("a", sample_with(2_002, SEVEN_DAY, 0.99, None)))
+        .await;
     assert!(handle.cooldowns().await.unwrap().is_empty());
 }
 
@@ -2805,47 +3227,55 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     // The upstream's representative claim travels into the row as it came, so the window is not always one of
     // the two names the sample reads.
-    handle.report(cooled(
-        "a",
-        "account",
-        1_000 + 5 * HOUR,
-        "rate_limit",
-        "seven_day_oauth_apps",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            1_000 + 5 * HOUR,
+            "rate_limit",
+            "seven_day_oauth_apps",
+        ))
+        .await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
-    handle.report(observed(
-        "a",
-        sample_with(2_000, FIVE_HOUR, 0.4, None).with(
-            SEVEN_DAY,
-            WindowReading {
-                utilization: 1.0,
-                reset: None,
-                observed_at: 2_000,
-            },
-        ),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.4, None).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 1.0,
+                    reset: None,
+                    observed_at: 2_000,
+                },
+            ),
+        ))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "one shared window still full is enough to hold the account out"
     );
-    handle.report(observed("a", sample_with(2_001, FIVE_HOUR, 0.4, None)));
+    handle
+        .report(observed("a", sample_with(2_001, FIVE_HOUR, 0.4, None)))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "and a window the sample never read is no evidence either"
     );
-    handle.report(observed(
-        "a",
-        sample_with(2_002, FIVE_HOUR, 0.4, None).with(
-            SEVEN_DAY,
-            WindowReading {
-                utilization: 0.9,
-                reset: None,
-                observed_at: 2_002,
-            },
-        ),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_002, FIVE_HOUR, 0.4, None).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.9,
+                    reset: None,
+                    observed_at: 2_002,
+                },
+            ),
+        ))
+        .await;
     assert!(handle.cooldowns().await.unwrap().is_empty());
 }
 
@@ -2854,52 +3284,60 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(cooled(
-        "a",
-        "account",
-        1_000 + 5 * HOUR,
-        "rate_limit",
-        "retry_after",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            1_000 + 5 * HOUR,
+            "rate_limit",
+            "retry_after",
+        ))
+        .await;
     // A permission rejection over a window a sample can read: the reason is what keeps the row, because no
     // amount of allowance restores an entitlement.
-    handle.report(cooled(
-        "a",
-        "model:claude-sonnet-5",
-        1_000 + HOUR,
-        "permission",
-        "five_hour",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "model:claude-sonnet-5",
+            1_000 + HOUR,
+            "permission",
+            "five_hour",
+        ))
+        .await;
     // A fable-only 429 whose headers carried no claim: the upstream sent a deadline and named no window, so
     // the fable reading is a guess about which window the rejection was for.
-    handle.report(cooled(
-        "a",
-        "model:claude-fable-5-1",
-        1_000 + HOUR,
-        "rate_limit",
-        "retry_after",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "model:claude-fable-5-1",
+            1_000 + HOUR,
+            "rate_limit",
+            "retry_after",
+        ))
+        .await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 3);
-    handle.report(observed(
-        "a",
-        sample_with(2_000, SEVEN_DAY_FABLE, 0.0, None)
-            .with(
-                FIVE_HOUR,
-                WindowReading {
-                    utilization: 0.0,
-                    reset: None,
-                    observed_at: 2_000,
-                },
-            )
-            .with(
-                SEVEN_DAY,
-                WindowReading {
-                    utilization: 0.0,
-                    reset: None,
-                    observed_at: 2_000,
-                },
-            ),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, SEVEN_DAY_FABLE, 0.0, None)
+                .with(
+                    FIVE_HOUR,
+                    WindowReading {
+                        utilization: 0.0,
+                        reset: None,
+                        observed_at: 2_000,
+                    },
+                )
+                .with(
+                    SEVEN_DAY,
+                    WindowReading {
+                        utilization: 0.0,
+                        reset: None,
+                        observed_at: 2_000,
+                    },
+                ),
+        ))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         3,
@@ -2912,24 +3350,32 @@ async fn a_sample_older_than_the_one_already_stored_releases_nothing() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(cooled(
-        "a",
-        "account",
-        1_000 + 5 * HOUR,
-        "rate_limit",
-        "five_hour",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            1_000 + 5 * HOUR,
+            "rate_limit",
+            "five_hour",
+        ))
+        .await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
     // Two pulls in flight, the newer one back first: the older one is still later than the row was set, and
     // its reading is the one the window has already moved past.
-    handle.report(observed("a", sample_with(3_000, FIVE_HOUR, 1.0, None)));
-    handle.report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)));
+    handle
+        .report(observed("a", sample_with(3_000, FIVE_HOUR, 1.0, None)))
+        .await;
+    handle
+        .report(observed("a", sample_with(2_000, FIVE_HOUR, 0.4, None)))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "the account's newest reading is what the row is answered against"
     );
-    handle.report(observed("a", sample_with(3_001, FIVE_HOUR, 0.4, None)));
+    handle
+        .report(observed("a", sample_with(3_001, FIVE_HOUR, 0.4, None)))
+        .await;
     assert!(
         handle.cooldowns().await.unwrap().is_empty(),
         "and the next reading past the stored one releases it"
@@ -2951,22 +3397,26 @@ async fn a_sample_that_arrives_after_the_deadline_leaves_the_row_to_the_purge_ti
     )
     .unwrap();
     let mut events = handle.subscribe_events();
-    handle.report(cooled(
-        "a",
-        "account",
-        1_000 + HOUR,
-        "rate_limit",
-        "five_hour",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "account",
+            1_000 + HOUR,
+            "rate_limit",
+            "five_hour",
+        ))
+        .await;
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::CooldownSet { .. }
     ));
     now.store(1_000 + HOUR + 1, Ordering::SeqCst);
-    handle.report(observed(
-        "a",
-        sample_with(1_000 + HOUR + 1, FIVE_HOUR, 0.4, None),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000 + HOUR + 1, FIVE_HOUR, 0.4, None),
+        ))
+        .await;
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::CooldownCleared { cause, .. } if cause == "expired"),
         "the deadline arriving is not a window that reset early, and the ledger has to tell them apart"
@@ -2978,39 +3428,47 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(cooled(
-        "a",
-        "model:claude-sonnet-5",
-        1_000 + 48 * HOUR,
-        "rate_limit",
-        "seven_day_fable",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "model:claude-sonnet-5",
+            1_000 + 48 * HOUR,
+            "rate_limit",
+            "seven_day_fable",
+        ))
+        .await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
-    handle.report(observed(
-        "a",
-        sample_with(2_000, FIVE_HOUR, 0.1, None).with(
-            SEVEN_DAY,
-            WindowReading {
-                utilization: 0.1,
-                reset: None,
-                observed_at: 2_000,
-            },
-        ),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.1, None).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.1,
+                    reset: None,
+                    observed_at: 2_000,
+                },
+            ),
+        ))
+        .await;
     assert_eq!(
         handle.cooldowns().await.unwrap().len(),
         1,
         "the shared windows say nothing about a model-scoped allowance"
     );
-    handle.report(observed(
-        "a",
-        sample_with(2_001, SEVEN_DAY_FABLE, 1.0, None),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_001, SEVEN_DAY_FABLE, 1.0, None),
+        ))
+        .await;
     assert_eq!(handle.cooldowns().await.unwrap().len(), 1);
-    handle.report(observed(
-        "a",
-        sample_with(2_002, SEVEN_DAY_FABLE, 0.5, None),
-    ));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_002, SEVEN_DAY_FABLE, 0.5, None),
+        ))
+        .await;
     assert!(handle.cooldowns().await.unwrap().is_empty());
 }
 
@@ -3218,23 +3676,25 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         SelectResult::Selected(s) => s.pin.clone().unwrap(),
         _ => unreachable!(),
     };
-    handle.report(Report::Cooldown {
-        account_id: a.clone(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: a.clone(),
-            scope: "account".into(),
-            until: 1_000 + HOUR,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: a.clone(),
+                scope: "account".into(),
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin),
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: Some(pin),
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::CooldownSet { .. }
@@ -3275,23 +3735,25 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
     ));
-    handle.report(Report::Cooldown {
-        account_id: from.clone(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: from.clone(),
-            scope: "fast".into(),
-            until: 1_000 + 600_000,
-            set_at: 0,
-            reason: FAST_RATE_LIMIT_REASON.into(),
-            window: "fast".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: from.clone(),
+                scope: "fast".into(),
+                until: 1_000 + 600_000,
+                set_at: 0,
+                reason: FAST_RATE_LIMIT_REASON.into(),
+                window: "fast".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin),
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: Some(pin),
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::CooldownSet { scope, .. } if scope == "fast"
@@ -3369,38 +3831,48 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
-    handle.report(cooled(
-        "a",
-        "fast_credits",
-        1_000 + 5 * HOUR,
-        FAST_CREDITS_REASON,
-        "out_of_credits",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "fast_credits",
+            1_000 + 5 * HOUR,
+            FAST_CREDITS_REASON,
+            "out_of_credits",
+        ))
+        .await;
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::CooldownSet { scope, .. } if scope == "fast_credits"
     ));
     now.store(2_000, Ordering::SeqCst);
-    handle.report(observed(
-        "a",
-        sample_with(2_000, FIVE_HOUR, 0.4, None).with(
-            SEVEN_DAY,
-            WindowReading {
-                utilization: 0.4,
-                reset: None,
-                observed_at: 2_000,
-            },
-        ),
-    ));
-    handle.report(credits_at(true, None, Some(20.0), 900));
-    handle.report(credits_at(false, Some("out_of_credits"), None, 2_500));
-    handle.report(credits_at(true, None, Some(100.0), 2_600));
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.4, None).with(
+                SEVEN_DAY,
+                WindowReading {
+                    utilization: 0.4,
+                    reset: None,
+                    observed_at: 2_000,
+                },
+            ),
+        ))
+        .await;
+    handle.report(credits_at(true, None, Some(20.0), 900)).await;
+    handle
+        .report(credits_at(false, Some("out_of_credits"), None, 2_500))
+        .await;
+    handle
+        .report(credits_at(true, None, Some(100.0), 2_600))
+        .await;
     assert_eq!(
         fast_rows(&handle).await,
         [FAST_CREDITS_REASON],
         "a plan sample, a reading from before the rejection, a refusal and credits at their limit lift nothing"
     );
-    handle.report(credits_at(true, None, Some(20.0), 3_000));
+    handle
+        .report(credits_at(true, None, Some(20.0), 3_000))
+        .await;
     loop {
         match next_event(&mut events).await {
             RouterEvent::CooldownCleared {
@@ -3420,26 +3892,32 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
         }
     }
     assert!(fast_rows(&handle).await.is_empty());
-    handle.report(cooled(
-        "a",
-        "fast",
-        2_000 + 600_000,
-        FAST_RATE_LIMIT_REASON,
-        "fast",
-    ));
-    handle.report(cooled(
-        "a",
-        "fast_credits",
-        2_000 + HOUR,
-        FAST_CREDITS_REASON,
-        "out_of_credits",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "fast",
+            2_000 + 600_000,
+            FAST_RATE_LIMIT_REASON,
+            "fast",
+        ))
+        .await;
+    handle
+        .report(cooled(
+            "a",
+            "fast_credits",
+            2_000 + HOUR,
+            FAST_CREDITS_REASON,
+            "out_of_credits",
+        ))
+        .await;
     assert_eq!(
         fast_rows(&handle).await,
         [FAST_RATE_LIMIT_REASON, FAST_CREDITS_REASON],
         "the two refusals keep a row each"
     );
-    handle.report(credits_at(true, None, Some(20.0), 4_000));
+    handle
+        .report(credits_at(true, None, Some(20.0), 4_000))
+        .await;
     assert_eq!(
         fast_rows(&handle).await,
         [FAST_RATE_LIMIT_REASON],
@@ -3452,7 +3930,9 @@ async fn a_restart_judges_fast_eligibility_on_the_credits_state_the_last_poll_re
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(credits_at(false, Some("out_of_credits"), None, 1_000));
+    handle
+        .report(credits_at(false, Some("out_of_credits"), None, 1_000))
+        .await;
     wait_for(WRITTEN, || {
         let credits = store.load_routing().unwrap().credits;
         (!credits.is_empty()).then_some(credits)
@@ -3480,20 +3960,24 @@ async fn a_restart_restores_both_fast_rows_and_a_fast_request_waits_on_whichever
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(cooled(
-        "a",
-        "fast_credits",
-        1_000 + HOUR,
-        FAST_CREDITS_REASON,
-        "out_of_credits",
-    ));
-    handle.report(cooled(
-        "a",
-        "fast",
-        1_000 + 600_000,
-        FAST_RATE_LIMIT_REASON,
-        "fast",
-    ));
+    handle
+        .report(cooled(
+            "a",
+            "fast_credits",
+            1_000 + HOUR,
+            FAST_CREDITS_REASON,
+            "out_of_credits",
+        ))
+        .await;
+    handle
+        .report(cooled(
+            "a",
+            "fast",
+            1_000 + 600_000,
+            FAST_RATE_LIMIT_REASON,
+            "fast",
+        ))
+        .await;
     wait_for(WRITTEN, || {
         (store.load_routing().unwrap().cooldowns.len() == 2).then_some(())
     })
@@ -3608,11 +4092,13 @@ async fn a_resolution_between_selection_and_completion_files_the_affinity_entry_
         .await
         .unwrap();
     // The answer completes after the resolution landed, and its report still names what admission read.
-    handle.report(Report::Affinity(AffinityReport {
-        canonical_model: "claude-sonnet-4-5".into(),
-        lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
-        ..affinity_report(&handle, "a", 2_000)
-    }));
+    handle
+        .report(Report::Affinity(AffinityReport {
+            canonical_model: "claude-sonnet-4-5".into(),
+            lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+            ..affinity_report(&handle, "a", 2_000)
+        }))
+        .await;
     // A query queues behind the report, so the map it reads afterwards holds the report's entries.
     handle.pins().await.unwrap();
     let entry = handle
@@ -3646,14 +4132,16 @@ async fn a_fork_after_a_resolution_places_on_the_warm_entry_a_late_report_filed_
         .await
         .unwrap();
     // The source's answer completes after the resolution, its message boundary confirmed warm.
-    handle.report(Report::Affinity(AffinityReport {
-        canonical_model: "claude-sonnet-4-5".into(),
-        lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
-        cache_touched: true,
-        message_ttl_ms: Some(300_000),
-        prefix_tokens: 40_000,
-        ..affinity_report(&handle, &source, 2_000)
-    }));
+    handle
+        .report(Report::Affinity(AffinityReport {
+            canonical_model: "claude-sonnet-4-5".into(),
+            lane: lane_key("claude-sonnet-4-5", "standard", "none", "-"),
+            cache_touched: true,
+            message_ttl_ms: Some(300_000),
+            prefix_tokens: 40_000,
+            ..affinity_report(&handle, &source, 2_000)
+        }))
+        .await;
     // A fork under a session of its own, admitted on the dated id, continues the source's messages.
     let fork = SelectRequest {
         session_id: Some("s2".into()),
@@ -3706,18 +4194,75 @@ async fn a_credits_state_older_than_the_held_one_is_dropped() {
     let store = seeded_oauth(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
-    handle.report(cooled(
-        "a",
-        "fast_credits",
-        1_000 + 5 * HOUR,
-        FAST_CREDITS_REASON,
-        "out_of_credits",
-    ));
-    handle.report(credits_at(false, Some("out_of_credits"), None, 3_000));
-    handle.report(credits_at(true, None, Some(10.0), 2_500));
+    handle
+        .report(cooled(
+            "a",
+            "fast_credits",
+            1_000 + 5 * HOUR,
+            FAST_CREDITS_REASON,
+            "out_of_credits",
+        ))
+        .await;
+    handle
+        .report(credits_at(false, Some("out_of_credits"), None, 3_000))
+        .await;
+    handle
+        .report(credits_at(true, None, Some(10.0), 2_500))
+        .await;
     assert_eq!(fast_rows(&handle).await, [FAST_CREDITS_REASON]);
-    handle.report(credits_at(true, None, Some(10.0), 3_500));
+    handle
+        .report(credits_at(true, None, Some(10.0), 3_500))
+        .await;
     assert!(fast_rows(&handle).await.is_empty());
+}
+
+#[tokio::test]
+async fn older_overage_and_credits_readings_never_replace_newer_pending_ones() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let overage = |in_use: bool, observed_at: i64| Report::Overage {
+        account_id: "a".into(),
+        evidence: phoebis_routing::OverageEvidence {
+            in_use,
+            since: in_use.then_some(observed_at),
+            reset: Some(10 * HOUR),
+            observed_at,
+            source: phoebis_routing::EvidenceSource::Head,
+            incarnation: 1,
+        },
+        incarnation: 1,
+    };
+    let park = handle.park_loop().await;
+    // Each newer reading arrives first, so only the merge rule keeps it.
+    handle.report(overage(true, 3_000)).await;
+    handle.report(overage(false, 2_000)).await;
+    handle
+        .report(credits_at(false, Some("out_of_credits"), None, 3_000))
+        .await;
+    handle
+        .report(credits_at(true, None, Some(10.0), 2_500))
+        .await;
+    drop(park);
+    assert_eq!(
+        handle
+            .overage("a")
+            .await
+            .unwrap()
+            .map(|e| (e.in_use, e.observed_at)),
+        Some((true, 3_000)),
+        "the newer overage reading"
+    );
+    wait_for(WRITTEN, || {
+        store
+            .load_routing()
+            .unwrap()
+            .credits
+            .iter()
+            .any(|row| row.account_id == "a" && !row.enabled && row.observed_at == 3_000)
+            .then_some(())
+    })
+    .await;
 }
 
 #[tokio::test]
@@ -3743,23 +4288,25 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
         SelectResult::Selected(s) => s.pin.clone().unwrap(),
         _ => unreachable!(),
     };
-    handle.report(Report::Cooldown {
-        account_id: a.clone(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: a.clone(),
-            scope: "account".into(),
-            until: 1_000 + HOUR,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "five_hour".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: a.clone(),
+                scope: "account".into(),
+                until: 1_000 + HOUR,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "five_hour".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(pin),
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: Some(pin),
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::CooldownSet { .. }
@@ -3825,14 +4372,16 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
         0,
         "the probe replays the compacted headers and chain, and selection judges none of it"
     );
-    handle.report(Report::PinRenewed {
-        pin: selection.pin.expect("the probe held the pin"),
-        now: 3_500,
-        usage: None,
-        origin: "keepalive",
-        cache_ttl_ms: 300_000,
-        fast: false,
-    });
+    handle
+        .report(Report::PinRenewed {
+            pin: selection.pin.expect("the probe held the pin"),
+            now: 3_500,
+            usage: None,
+            origin: "keepalive",
+            cache_ttl_ms: 300_000,
+            fast: false,
+        })
+        .await;
     let pin = handle.pins().await.unwrap().remove(0);
     assert_eq!(
         pin.last_refresh_at, 3_500,
@@ -3916,13 +4465,15 @@ async fn a_probe_renewal_from_the_lane_the_session_left_leaves_the_switched_pins
     );
     // The session switches to fast mode while the probe is in flight: the pin reads cold on its new lane.
     selected_pin(handle.select(turn(&handle, true, 3_000)).await.unwrap());
-    handle.report(renewal(
-        probe,
-        4_000,
-        PinUsage::default(),
-        "keepalive",
-        300_000,
-    ));
+    handle
+        .report(renewal(
+            probe,
+            4_000,
+            PinUsage::default(),
+            "keepalive",
+            300_000,
+        ))
+        .await;
     let pins = handle.pins().await.unwrap();
     assert_eq!(
         pins.iter()
@@ -3942,23 +4493,25 @@ async fn a_late_fast_429_from_the_lane_the_session_left_never_deletes_its_standa
     let account = handle.pins().await.unwrap()[0].account_id.clone();
     // The session's next turn is standard, and the fast turn's refusal lands after it.
     selected_pin(handle.select(turn(&handle, false, 2_000)).await.unwrap());
-    handle.report(Report::Cooldown {
-        account_id: account.clone(),
-        row: CooldownRow {
+    handle
+        .report(Report::Cooldown {
             account_id: account.clone(),
-            scope: "fast".into(),
-            until: 1_000 + 600_000,
-            set_at: 0,
-            reason: FAST_RATE_LIMIT_REASON.into(),
-            window: "fast".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: account.clone(),
+                scope: "fast".into(),
+                until: 1_000 + 600_000,
+                set_at: 0,
+                reason: FAST_RATE_LIMIT_REASON.into(),
+                window: "fast".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: Some(fast),
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: Some(fast),
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     assert_eq!(fast_rows(&handle).await, [FAST_RATE_LIMIT_REASON]);
     let pins = handle.pins().await.unwrap();
     assert_eq!(
@@ -4012,17 +4565,25 @@ async fn a_renewal_with_usage_folds_the_typed_rates_and_the_banded_copy_and_a_pr
         input: 500,
         ..PinUsage::default()
     };
-    handle.report(renewal(client.clone(), 2_000, first, "client", 300_000));
-    handle.report(renewal(client, 62_000, second, "client", 300_000));
-    handle.report(renewal(probe, 2_000, first, "keepalive", 300_000));
-    handle.report(Report::PinRenewed {
-        pin: unmetered,
-        now: 2_000,
-        usage: None,
-        origin: "client",
-        cache_ttl_ms: 3_600_000,
-        fast: false,
-    });
+    handle
+        .report(renewal(client.clone(), 2_000, first, "client", 300_000))
+        .await;
+    handle
+        .report(renewal(client, 62_000, second, "client", 300_000))
+        .await;
+    handle
+        .report(renewal(probe, 2_000, first, "keepalive", 300_000))
+        .await;
+    handle
+        .report(Report::PinRenewed {
+            pin: unmetered,
+            now: 2_000,
+            usage: None,
+            origin: "client",
+            cache_ttl_ms: 3_600_000,
+            fast: false,
+        })
+        .await;
     let pins = handle.pins().await.unwrap();
     // The pool's burn window is the default 600 s, and the second fold lands 60 s after the first.
     let window = 600.0_f64;
@@ -4114,16 +4675,22 @@ async fn a_fast_renewal_weighs_the_plain_copy_by_the_fast_cells_and_lets_the_ban
         input: tokens,
         ..PinUsage::default()
     };
-    handle.report(renewal(fast.clone(), 2_000, input(600), "client", 300_000));
-    handle.report(Report::PinRenewed {
-        pin: fast,
-        now: 62_000,
-        usage: Some(input(1_000)),
-        origin: "client",
-        cache_ttl_ms: 300_000,
-        fast: true,
-    });
-    handle.report(renewal(standard, 62_000, input(1_000), "client", 300_000));
+    handle
+        .report(renewal(fast.clone(), 2_000, input(600), "client", 300_000))
+        .await;
+    handle
+        .report(Report::PinRenewed {
+            pin: fast,
+            now: 62_000,
+            usage: Some(input(1_000)),
+            origin: "client",
+            cache_ttl_ms: 300_000,
+            fast: true,
+        })
+        .await;
+    handle
+        .report(renewal(standard, 62_000, input(1_000), "client", 300_000))
+        .await;
     let pins = handle.pins().await.unwrap();
     // The pool's burn window is the default 600 s, and the fast fold lands 60 s after the standard one.
     let window = 600.0_f64;
@@ -4170,7 +4737,9 @@ async fn the_burn_lands_in_the_store_with_the_input_size_and_the_ttl() {
         write_1h: 30,
         output: 12,
     };
-    handle.report(renewal(pin, 2_000, usage, "client", 3_600_000));
+    handle
+        .report(renewal(pin, 2_000, usage, "client", 3_600_000))
+        .await;
     let row = wait_for(WRITTEN, || {
         store
             .load_routing()
@@ -4244,8 +4813,12 @@ async fn a_renewal_inside_the_band_folds_a_heavier_banded_copy_and_the_same_plai
         input: 600,
         ..PinUsage::default()
     };
-    handle.report(renewal(afternoon, inside, usage, "client", 300_000));
-    handle.report(renewal(evening, outside, usage, "client", 300_000));
+    handle
+        .report(renewal(afternoon, inside, usage, "client", 300_000))
+        .await;
+    handle
+        .report(renewal(evening, outside, usage, "client", 300_000))
+        .await;
     let pins = handle.pins().await.unwrap();
     let pin = |session: &str| pins.iter().find(|p| p.session_id == session).unwrap();
     let (afternoon, evening) = (pin("s1").burn_banded, pin("s2").burn_banded);
@@ -4274,7 +4847,7 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
             request_id: Some("req-1".into()),
             ..affinity_report(&handle, "a", 1_000)
         };
-        handle.report(Report::Affinity(report));
+        handle.report(Report::Affinity(report)).await;
         wait_for(WRITTEN, || {
             (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
         })
@@ -4304,12 +4877,16 @@ async fn a_shutdown_persists_a_refreshed_entrys_time() {
     let store = seeded(&["a"]);
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000)));
+    handle
+        .report(Report::Affinity(affinity_report(&handle, "a", 1_000)))
+        .await;
     wait_for(WRITTEN, || {
         (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
     })
     .await;
-    handle.report(Report::Affinity(affinity_report(&handle, "a", 2_000)));
+    handle
+        .report(Report::Affinity(affinity_report(&handle, "a", 2_000)))
+        .await;
     // The refresh is marked dirty, not written through: the store's row keeps the first report's time until a
     // drain, and the default purge tick is a minute out, so here the shutdown is the one that drains it.
     stays_for(NOT_WRITTEN, || {
@@ -4342,15 +4919,19 @@ async fn an_affinity_report_takes_a_sequence_at_enqueue_and_the_wait_sees_it_app
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     assert_eq!(
-        handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000))),
+        handle
+            .report(Report::Affinity(affinity_report(&handle, "a", 1_000)))
+            .await,
         Some(1)
     );
     assert_eq!(
-        handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000))),
+        handle
+            .report(Report::Affinity(affinity_report(&handle, "a", 1_000)))
+            .await,
         Some(2)
     );
     assert_eq!(
-        handle.report(a_million_input("a", 1_000)),
+        handle.report(a_million_input("a", 1_000)).await,
         None,
         "only an affinity report takes a number"
     );
@@ -4360,7 +4941,9 @@ async fn an_affinity_report_takes_a_sequence_at_enqueue_and_the_wait_sees_it_app
 
     let hold = handle.hold_reports().await;
     assert_eq!(
-        handle.report(Report::Affinity(affinity_report(&handle, "a", 2_000))),
+        handle
+            .report(Report::Affinity(affinity_report(&handle, "a", 2_000)))
+            .await,
         Some(3)
     );
     // A query queues behind the report, so its answer proves the task reached the report and parked it.
@@ -4401,13 +4984,17 @@ async fn the_purge_tick_writes_a_refreshed_entrys_time_so_a_restart_without_a_sh
             },
         )
         .unwrap();
-        handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000)));
+        handle
+            .report(Report::Affinity(affinity_report(&handle, "a", 1_000)))
+            .await;
         wait_for(WRITTEN, || {
             (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
         })
         .await;
         now.store(2_000, Ordering::SeqCst);
-        handle.report(Report::Affinity(affinity_report(&handle, "a", 2_000)));
+        handle
+            .report(Report::Affinity(affinity_report(&handle, "a", 2_000)))
+            .await;
         wait_for(WRITTEN, || {
             store
                 .load_routing()
@@ -4450,7 +5037,9 @@ async fn the_purge_tick_deletes_an_aged_entry_from_the_store() {
         },
     )
     .unwrap();
-    handle.report(Report::Affinity(affinity_report(&handle, "a", 1_000)));
+    handle
+        .report(Report::Affinity(affinity_report(&handle, "a", 1_000)))
+        .await;
     wait_for(WRITTEN, || {
         (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
     })
@@ -4474,7 +5063,7 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let report = affinity_report(&handle, "a", 1_000);
-    handle.report(Report::Affinity(report.clone()));
+    handle.report(Report::Affinity(report.clone())).await;
     wait_for(WRITTEN, || {
         (!store.load_routing().unwrap().affinity.is_empty()).then_some(())
     })
@@ -4523,7 +5112,7 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
     })
     .await;
 
-    handle.report(Report::Affinity(report));
+    handle.report(Report::Affinity(report)).await;
     stays_for(NOT_WRITTEN, || handle.affinity().read().unwrap().is_empty()).await;
     assert!(
         store.load_routing().unwrap().affinity.is_empty(),
@@ -4555,7 +5144,7 @@ async fn the_accounting_report_flips_the_degraded_state_both_ways() {
         "a router starts with the ledger current"
     );
 
-    handle.report(Report::Accounting { degraded: true });
+    handle.report(Report::Accounting { degraded: true }).await;
     assert!(handle.accounting_degraded().await.unwrap());
     let answer = handle
         .select(request(&handle, Some("s1"), 1_000))
@@ -4567,7 +5156,7 @@ async fn the_accounting_report_flips_the_degraded_state_both_ways() {
         answer.result
     );
 
-    handle.report(Report::Accounting { degraded: false });
+    handle.report(Report::Accounting { degraded: false }).await;
     assert!(!handle.accounting_degraded().await.unwrap());
     let answer = handle
         .select(request(&handle, Some("s1"), 1_001))
@@ -4710,15 +5299,17 @@ async fn the_handle_answers_no_row_for_a_member_whose_period_the_report_predates
         .unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
-    handle.report(Report::MemberSpend(vec![MemberSpend {
-        pool_id: "p".into(),
-        account_id: "a".into(),
-        period: phoebis_store::BudgetPeriod::Month,
-        period_start: 0,
-        period_end: 100_000,
-        spent_usd: 5.0,
-        observed_at: 1_000,
-    }]));
+    handle
+        .report(Report::MemberSpend(vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: phoebis_store::BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 100_000,
+            spent_usd: 5.0,
+            observed_at: 1_000,
+        }]))
+        .await;
     wait_for_async(WRITTEN, || async {
         handle
             .member_spends()

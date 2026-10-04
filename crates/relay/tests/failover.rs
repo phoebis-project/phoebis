@@ -272,23 +272,25 @@ async fn every_eligible_account_is_tried_once_and_then_the_exhaustion_answers() 
     );
     h.store.set_state("d", AccountState::Ready).unwrap();
     h.router.reload().await.unwrap();
-    h.router.report(phoebis_routing::Report::Cooldown {
-        account_id: "d".into(),
-        row: phoebis_store::CooldownRow {
+    h.router
+        .report(phoebis_routing::Report::Cooldown {
             account_id: "d".into(),
-            scope: "account".into(),
-            until: NOW + 90_000,
-            set_at: 0,
-            reason: "rate_limit".into(),
-            window: "seven_day".into(),
-            source_request_id: None,
+            row: phoebis_store::CooldownRow {
+                account_id: "d".into(),
+                scope: "account".into(),
+                until: NOW + 90_000,
+                set_at: 0,
+                reason: "rate_limit".into(),
+                window: "seven_day".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     let resp = h
         .app
         .clone()
@@ -427,23 +429,25 @@ async fn every_member_cooled_for_a_rejection_answers_404_model_rejected_without_
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
-    h.router.report(phoebis_routing::Report::Cooldown {
-        account_id: "a".into(),
-        row: phoebis_store::CooldownRow {
+    h.router
+        .report(phoebis_routing::Report::Cooldown {
             account_id: "a".into(),
-            scope: "model:claude-sonnet-4-5".into(),
-            until: NOW + 3_600_000,
-            set_at: 0,
-            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
-            window: "model_rejection".into(),
-            source_request_id: None,
+            row: phoebis_store::CooldownRow {
+                account_id: "a".into(),
+                scope: "model:claude-sonnet-4-5".into(),
+                until: NOW + 3_600_000,
+                set_at: 0,
+                reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+                window: "model_rejection".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
     let resp = h
         .app
         .clone()
@@ -1940,6 +1944,9 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
             },
         )
         .unwrap();
+    // Committed through the store, so the reload is what moves the snapshot's generation past the bundle the
+    // manager cached at the catalog's prefetch.
+    h.router.reload().await.unwrap();
     let app = h.app.clone();
     let inflight = tokio::spawn(async move {
         app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
@@ -1957,6 +1964,7 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
     h.store
         .update_account("a", 1, "a (edited)", "test")
         .unwrap();
+    h.router.reload().await.unwrap();
     up.release();
     let resp = inflight.await.unwrap();
     assert_eq!(resp.status(), 200);

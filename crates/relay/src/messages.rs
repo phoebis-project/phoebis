@@ -1,7 +1,7 @@
 //! The Messages routes: admission against the registry, the account the router selects, the failover loop
 //! across accounts, and the response the caller gets.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeSet, HashMap};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
@@ -30,7 +30,8 @@ use phoebis_routing::{
     SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore, Store,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
+    Secret, Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
@@ -72,8 +73,8 @@ use crate::observe::{answer_from_json, message_id_from_json, published_headers, 
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, relay_body, AffinityFacts, Checkin, Drained, PostCommit, Publish, Relayed,
-    Renewal, ReturnToPool, MAX_BUFFERED_BODY,
+    drain_bounded, relay_body, AffinityFacts, Checkin, Drained, OnError, PostCommit, Publish,
+    Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY,
 };
 use crate::{
     edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
@@ -234,10 +235,26 @@ pub struct Relay {
     readiness: Option<ReadinessSource>,
     resolver: Resolver,
     router: RouterHandle,
+    /// The Anthropic keys legs dispatch with, by account id, so a leg reads no registry while its row's lineage
+    /// and the snapshot's generation hold.
+    secrets: Mutex<HashMap<String, SecretEntry>>,
     /// `proxy.sign_cch_placeholder`: whether a restored `cch=00000` is signed rather than sent as the placeholder.
     sign_cch_placeholder: bool,
     store: Arc<Store>,
 }
+
+/// A cached Anthropic key and the lineage it was read under: the holder's incarnation and lifecycle generation
+/// beside the credential generation, since a deleted and recreated id and a disconnected and reconnected one both
+/// restart the generation at 1, and an entry keyed on the generation alone would serve the old holder's secret.
+struct SecretEntry {
+    incarnation: u64,
+    lifecycle_generation: u64,
+    generation: u64,
+    secret: Secret,
+}
+
+// A poisoned cache mutex means a prior panic happened mid-update, so an entry may not describe its secret.
+const SECRETS_POISONED: &str = "relay secret cache mutex poisoned by a prior panic";
 
 /// The components `/api/ready` names dead, read on every ask. A closure rather than the handles themselves, so
 /// the relay needs no dependency on the crate that composes them.
@@ -284,6 +301,7 @@ impl Relay {
             readiness: None,
             resolver,
             router,
+            secrets: Mutex::new(HashMap::new()),
             sign_cch_placeholder: false,
             store,
         }
@@ -1039,7 +1057,9 @@ impl Relay {
         };
         // A probe is the router's own traffic; "used" in the key list means a client presented the key.
         if probe.is_none() {
-            self.router.touch_key(&key.id, presented, key.rotated_at);
+            self.router
+                .touch_key(&key.id, presented, key.rotated_at)
+                .await;
         }
         let capture_hours = snapshot
             .body_capture_hours(&key)
@@ -2360,8 +2380,9 @@ impl Relay {
             ctx.cache_ttl_ms,
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
-        self.report_overage(ctx.account, &head, head_at);
-        self.report_head_sample(ctx.account, &head, &ctx.identity.canonical_model, head_at);
+        self.report_overage(ctx.account, &head, head_at).await;
+        self.report_head_sample(ctx.account, &head, &ctx.identity.canonical_model, head_at)
+            .await;
 
         // Heads the table reads a body for are drained within the bound; a body too large to read
         // commits. The reader survives only where the body was left alone, because a drained body has
@@ -2414,13 +2435,14 @@ impl Relay {
                         ctx.request_id,
                         generations,
                         (self.clock)(),
-                    );
+                    )
+                    .await;
                     if ctx.portable {
                         return Next::FailOver { auth_marked: false };
                     }
                     let release = self.release_on(&ctx, head.status);
                     return Next::Respond(
-                        self.authentication_exhausted(&ctx, &head, outcome, release)
+                        self.authentication_exhausted(&mut ctx, &head, outcome, release)
                             .await,
                     );
                 }
@@ -2729,7 +2751,7 @@ impl Relay {
                             status: head.status,
                             headers: head.headers.clone(),
                         };
-                        let on_error = Box::new(move |data: Bytes| {
+                        let on_error = Box::new(move |data: Bytes, waiting: &mut Waiting| {
                             // After commit nothing fails over. A rate-limit error records the cooldown
                             // and, on a portable request, invalidates the pin so the next request
                             // migrates; a non-portable request keeps its pin. The deadline is measured
@@ -2754,8 +2776,7 @@ impl Relay {
                                     fast,
                                 },
                             ) {
-                                report_failover(
-                                    &router,
+                                for report in failover_reports(
                                     &account_id,
                                     &canonical_model,
                                     cooldown,
@@ -2764,16 +2785,20 @@ impl Relay {
                                     &request_id,
                                     generations,
                                     now,
-                                );
+                                ) {
+                                    waiting.send(&router, report);
+                                }
                             }
-                        }) as Box<dyn FnOnce(Bytes) + Send>;
+                        }) as OnError;
                         (bytes, Some(PostCommit { inspect, on_error }))
                     }
                 };
                 let responded = match buffered {
                     Some(buffered) => {
+                        let guards = ctx.guards();
                         self.forward_buffered(
                             ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
+                            guards,
                         )
                         .await
                     }
@@ -2823,7 +2848,8 @@ impl Relay {
             ctx.request_id,
             generations,
             arrived,
-        );
+        )
+        .await;
         if let Some(delay) = retry_in_place {
             drop(reader);
             return Next::RetryInPlace(delay);
@@ -2877,43 +2903,69 @@ impl Relay {
                 .then(|| self.release_on(&ctx, head.status))
                 .flatten();
             return Next::Respond(
-                self.authentication_exhausted(&ctx, &head, outcome, release)
+                self.authentication_exhausted(&mut ctx, &head, outcome, release)
                     .await,
             );
         }
         Next::Respond(
-            self.forward_buffered(ctx.trace, &head, buffered, ctx.caller, outcome, None, None)
-                .await,
+            self.forward_buffered(
+                ctx.trace,
+                &head,
+                buffered,
+                ctx.caller,
+                outcome,
+                None,
+                None,
+                Guards::default(),
+            )
+            .await,
         )
     }
 
     /// The router's own answer when an account's authentication failure is the request's last word: the
     /// untimed exhaustion body, so the client sees no account and no reason. `release` is the fresh pin this
-    /// request created, sent before the answer as the forwarded error would have sent it.
+    /// request created, sent before the answer as the forwarded error would have sent it while the router's
+    /// mailbox has room; on a full one it waits on a tracked task after the answer, holding the request's guards.
     async fn authentication_exhausted(
         &self,
-        ctx: &Responding<'_>,
+        ctx: &mut Responding<'_>,
         head: &ResponseHead,
         mut outcome: RelayOutcome,
         release: Option<Renewal>,
     ) -> Response {
+        let mut waiting = Waiting::default();
         if let Some(release) = release {
-            release.send((self.clock)(), head.status, None, false);
+            release.send((self.clock)(), head.status, None, false, &mut waiting);
         }
         outcome.error_code = Some("accounts_unavailable".to_string());
         // A probe bound to its account never reaches the selector's exhaustion, so its own answer names the mark.
         if ctx.trace.kind == Kind::Probe && ctx.auth_marked {
             outcome.obstacle = Some(REAUTH_OBSTACLE);
         }
-        self.answer(
-            ctx.trace,
-            exhaustion_response(&Exhaustion::Untimed, (self.clock)(), ctx.request_id),
-            outcome,
-            None,
-            ResponseFacts::default(),
-            None,
-        )
-        .await
+        let response = self
+            .answer(
+                ctx.trace,
+                exhaustion_response(&Exhaustion::Untimed, (self.clock)(), ctx.request_id),
+                outcome,
+                None,
+                ResponseFacts::default(),
+                None,
+            )
+            .await;
+        self.after_answer(waiting, ctx.guards());
+        response
+    }
+
+    /// Runs the reports a full mailbox left waiting on a task the shutdown waits on, holding the request's guards
+    /// until they are queued: the client's answer never waits on the router, and the key permits still bound the
+    /// reports a parked loop can hold.
+    fn after_answer(&self, waiting: Waiting, guards: Guards) {
+        if !waiting.is_empty() {
+            self.bodies.spawn(async move {
+                waiting.land().await;
+                drop(guards);
+            });
+        }
     }
 
     /// The report a pinned answer sends at its end: a renewal, or the release of a pin this request created and
@@ -3016,12 +3068,18 @@ impl Relay {
         (delay <= ctx.retry_in_place && left.is_none_or(|left| delay < left)).then_some(delay)
     }
 
-    /// The credential to dispatch with, fenced by the revision of the row the selection handed over:
-    /// acquiring takes time, and an edit landing inside it would pair a replacement secret with the endpoint
-    /// the request was selected for, which nothing ever verified together.
+    /// The credential to dispatch with, from the same snapshot lineage as the row the selection chose: the row
+    /// (the router's snapshot at selection), the secret or bundle (the cache entry of that row's holder and
+    /// credential generation, read from the registry on a miss alone) and the fence (the router's snapshot once
+    /// the credential is in hand), so a worker never waits behind the session memory's flush or an admin write
+    /// while the lineage holds. A reload between selection and dispatch that moved the holder, the revision or the
+    /// generation past the credential refuses `Stale`. A write landed but not yet swapped passes with the old row
+    /// and the cached credential, which belong together; a miss inside that window reads the newer credential,
+    /// which goes out under the old row for the one load the reload takes.
     async fn credential(&self, account: &AccountRow) -> Result<Credential, NoCredential> {
+        let expected = self.router.snapshot().credential_generation(&account.id);
         let credential = match account.kind {
-            AccountKind::Oauth => match self.manager.acquire(&account.id).await {
+            AccountKind::Oauth => match self.manager.acquire_for(account, expected).await {
                 Ok(token) => Credential::from(token),
                 Err(error) => {
                     tracing::warn!(account = %account.id, %error, "no credential for the selected account");
@@ -3029,7 +3087,7 @@ impl Relay {
                 }
             },
             // The generation comes along so an api_key verdict is fenced by the same rule an OAuth one is.
-            AccountKind::ApiKey => match self.store.api_key_credential(&account.id) {
+            AccountKind::ApiKey => match self.api_key_secret(account, expected).await {
                 Ok(Some((secret, generation))) => Credential {
                     account_uuid: None,
                     generation,
@@ -3045,20 +3103,86 @@ impl Relay {
                 }
             },
         };
-        match self.store.account_revision(&account.id) {
-            Ok(Some(revision)) if revision == account.revision => Ok(credential),
-            Ok(_) => {
+        // Read after the awaits, on the snapshot in force now: an edit and a reload that landed while the
+        // credential was being acquired moved the row or its holder, and the credential in hand may be the old
+        // one. A generation ahead of the snapshot's under the same holder and revision is a refresh the reload has
+        // not caught up with and passes; one behind it is a cache a rotation outran and refuses.
+        let current = self.router.snapshot();
+        match current.account(&account.id) {
+            Some(row)
+                if row.incarnation == account.incarnation
+                    && row.revision == account.revision
+                    && current
+                        .credential_generation(&account.id)
+                        .is_none_or(|snapshot| credential.generation >= snapshot) =>
+            {
+                Ok(credential)
+            }
+            _ => {
                 tracing::warn!(
                     account = %account.id,
                     "the account changed while its credential was being acquired",
                 );
                 Err(NoCredential::Stale)
             }
-            Err(error) => {
-                tracing::error!(account = %account.id, %error, "the account's revision is unreadable");
-                Err(NoCredential::Stale)
-            }
         }
+    }
+
+    /// The account's Anthropic key and its generation: the cached entry while its holder and lifecycle are the
+    /// row's and its generation is at or above the snapshot's, else one store read on a blocking thread, which
+    /// replaces the entry under the row's lineage and the generation the store returned. The snapshot's figure
+    /// catches up with the store's at the next reload, so a mismatch between the two costs one more read at most.
+    async fn api_key_secret(
+        &self,
+        account: &AccountRow,
+        expected: Option<u64>,
+    ) -> Result<Option<(Secret, u64)>, String> {
+        let cached = self
+            .secrets
+            .lock()
+            .expect(SECRETS_POISONED)
+            .get(&account.id)
+            .filter(|entry| {
+                entry.incarnation == account.incarnation
+                    && entry.lifecycle_generation == account.lifecycle_generation
+                    && expected.is_none_or(|expected| entry.generation >= expected)
+            })
+            .map(|entry| (Secret::new(entry.secret.expose()), entry.generation));
+        if cached.is_some() {
+            return Ok(cached);
+        }
+        let store = self.store.clone();
+        let id = account.id.clone();
+        let read = tokio::task::spawn_blocking(move || store.api_key_credential(&id))
+            .await
+            .map_err(|error| format!("the key read failed: {error}"))?
+            .map_err(|error| error.to_string())?;
+        // The walk reads its own snapshot: a reload's purge is what takes an id out, and the next miss drops its
+        // entry here.
+        let current = self.router.snapshot();
+        let mut secrets = self.secrets.lock().expect(SECRETS_POISONED);
+        secrets.retain(|id, _| current.account(id).is_some());
+        let Some((secret, generation)) = read else {
+            return Ok(None);
+        };
+        // A read that lost a race to a newer one of the same holder would put the older key back.
+        let newer = secrets.get(&account.id).is_some_and(|entry| {
+            entry.incarnation == account.incarnation
+                && entry.lifecycle_generation == account.lifecycle_generation
+                && entry.generation > generation
+        });
+        if !newer {
+            secrets.insert(
+                account.id.clone(),
+                SecretEntry {
+                    incarnation: account.incarnation,
+                    lifecycle_generation: account.lifecycle_generation,
+                    generation,
+                    secret: Secret::new(secret.expose()),
+                },
+            );
+        }
+        Ok(Some((secret, generation)))
     }
 
     /// Reads the ledger's standing for a request refused or admitted before any dial, once per request. `counts`
@@ -3318,7 +3442,7 @@ impl Relay {
 
     /// A head that answers none of the three header families (the api_key buckets, the fast lane's buckets, the
     /// unified windows) carries no sample and changes nothing.
-    fn report_head_sample(
+    async fn report_head_sample(
         &self,
         account: &AccountRow,
         head: &ResponseHead,
@@ -3329,15 +3453,17 @@ impl Relay {
         let Some(sample) = head_sample(head, account.kind, canonical_model, observed_at) else {
             return;
         };
-        self.router.report(Report::Sample {
-            account_id: account.id.clone(),
-            sample,
-            incarnation: account.incarnation,
-        });
+        self.router
+            .report(Report::Sample {
+                account_id: account.id.clone(),
+                sample,
+                incarnation: account.incarnation,
+            })
+            .await;
     }
 
     /// Only an OAuth head with the unified headers is evidence; everything else changes nothing.
-    fn report_overage(&self, account: &AccountRow, head: &ResponseHead, now: i64) {
+    async fn report_overage(&self, account: &AccountRow, head: &ResponseHead, now: i64) {
         if account.kind != AccountKind::Oauth {
             return;
         }
@@ -3363,18 +3489,20 @@ impl Relay {
             .filter_map(|(_, r)| r)
             .max()
         });
-        self.router.report(Report::Overage {
-            account_id: account.id.clone(),
-            evidence: OverageEvidence {
-                in_use,
-                since: in_use.then_some(observed_at),
-                reset,
-                observed_at,
-                source: EvidenceSource::Head,
+        self.router
+            .report(Report::Overage {
+                account_id: account.id.clone(),
+                evidence: OverageEvidence {
+                    in_use,
+                    since: in_use.then_some(observed_at),
+                    reset,
+                    observed_at,
+                    source: EvidenceSource::Head,
+                    incarnation: account.incarnation,
+                },
                 incarnation: account.incarnation,
-            },
-            incarnation: account.incarnation,
-        });
+            })
+            .await;
     }
 
     async fn stream<C: AsyncRead + ReturnToPool + Send + Unpin + 'static>(
@@ -3479,7 +3607,8 @@ impl Relay {
         with_outcome(built(builder, body), outcome)
     }
 
-    /// `renewal` is sent once the answer's usage is read, beside the completion.
+    /// `renewal` is sent once the answer's usage is read, beside the completion. `guards` are the request's
+    /// counts, which a report the full mailbox makes wait holds on its task after the answer.
     #[allow(clippy::too_many_arguments)]
     async fn forward_buffered(
         &self,
@@ -3490,6 +3619,7 @@ impl Relay {
         outcome: RelayOutcome,
         renewal: Option<Renewal>,
         affinity: Option<AffinityFacts>,
+        guards: Guards,
     ) -> Response {
         // A buffered answer is never an event stream, so its status alone says whether it is a rate limit.
         let (builder, decoder) = match forward_head(head, caller, false) {
@@ -3554,8 +3684,15 @@ impl Relay {
             None => (None, ResponseFacts::default()),
         };
         let fast = facts.speed.as_deref() == Some("fast");
+        let mut waiting = Waiting::default();
         if let Some(renewal) = renewal {
-            renewal.send((self.clock)(), head.status, usage.as_ref(), fast);
+            renewal.send(
+                (self.clock)(),
+                head.status,
+                usage.as_ref(),
+                fast,
+                &mut waiting,
+            );
         }
         if let Some(affinity) = affinity {
             affinity.send(
@@ -3564,6 +3701,7 @@ impl Relay {
                 message_id,
                 usage.as_ref(),
                 fast,
+                &mut waiting,
             );
         }
         let response = built(builder, Body::from(payload.clone()));
@@ -3584,6 +3722,7 @@ impl Relay {
                 (self.clock)(),
             )
             .await;
+        self.after_answer(waiting, guards);
         with_outcome(response, outcome)
     }
 }
@@ -3814,9 +3953,9 @@ enum Leg {
 
 /// `generations` is the attempt's (incarnation, lifecycle, credential) triple, which fences the mark: a
 /// verdict about a credential that was replaced, or a holder the id lost, while the request was in flight
-/// lands nowhere.
+/// lands nowhere. Awaited where it stands: between legs no client byte has gone out yet.
 #[allow(clippy::too_many_arguments)]
-pub(crate) fn report_failover(
+pub(crate) async fn report_failover(
     router: &RouterHandle,
     account_id: &str,
     canonical_model: &str,
@@ -3827,6 +3966,34 @@ pub(crate) fn report_failover(
     generations: (u64, u64, u64),
     set_at: i64,
 ) {
+    for report in failover_reports(
+        account_id,
+        canonical_model,
+        cooldown,
+        mark,
+        pin,
+        request_id,
+        generations,
+        set_at,
+    ) {
+        router.report(report).await;
+    }
+}
+
+/// What a failover verdict tells the router, in order: the cooldown, or without one the end of the pin, then the
+/// mark.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn failover_reports(
+    account_id: &str,
+    canonical_model: &str,
+    cooldown: Option<Cooldown>,
+    mark: Option<AccountState>,
+    pin: Option<PinRef>,
+    request_id: &str,
+    generations: (u64, u64, u64),
+    set_at: i64,
+) -> Vec<Report> {
+    let mut reports = Vec::new();
     if let Some(cooldown) = cooldown {
         let scope = match cooldown.scope {
             Scope::Account => "account".to_string(),
@@ -3844,7 +4011,7 @@ pub(crate) fn report_failover(
             source_request_id: Some(request_id.to_string()),
             incarnation: generations.0,
         };
-        router.report(Report::Cooldown {
+        reports.push(Report::Cooldown {
             account_id: account_id.to_string(),
             row,
             pin,
@@ -3854,7 +4021,7 @@ pub(crate) fn report_failover(
         });
     } else if let Some(pin) = pin {
         // A mark without a cooldown still ends the pin: the account cannot serve until an operator acts.
-        router.report(Report::PinInvalidated {
+        reports.push(Report::PinInvalidated {
             account_id: account_id.to_string(),
             pin,
             incarnation: generations.0,
@@ -3863,7 +4030,7 @@ pub(crate) fn report_failover(
         });
     }
     if let Some(state) = mark {
-        router.report(Report::AccountState {
+        reports.push(Report::AccountState {
             account_id: account_id.to_string(),
             state,
             incarnation: generations.0,
@@ -3871,6 +4038,7 @@ pub(crate) fn report_failover(
             credential_generation: generations.2,
         });
     }
+    reports
 }
 
 /// The sink reports the room left in the call it refused; the caller's own bound is the number worth telling.

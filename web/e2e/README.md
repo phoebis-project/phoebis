@@ -13,7 +13,7 @@ size, weight and ink, 6 px after its label on the label's line and short of the 
 ink), the cell grid through an expert field's wrapper (a half cell beside the plain one, a lone field the grid's width),
 the sidebar's brand row (the mark's box 36 px square with the logo drawn 26 px square in it, the name 17 px at weight
 600 on one line and inside the sidebar's content box), the dashboard's attention line (one 22 px row per line of badges,
-each badge the pool card's strip badge, inside the content box and clear of the tiles; the story's six items in the mock
+each badge the pool card's strip badge, in the content box and clear of the tiles; the story's eight items in the mock
 pass, the seeded exhaustion or the quiet line in the router pass), the sidebar's Expert view row above the version line,
 pool chips, the caching controls, the select-below threshold, the load groups, the pool card's serving table and tiles,
 the settings cards' order, the listener hint's gaps and size and About's lines (their order, one type and one gap), the

@@ -498,7 +498,7 @@ async fn writer(
                     tracing::warn!(
                         "a ledger batch could not be written; budgeted members wait until it lands"
                     );
-                    router.report(Report::Accounting { degraded: true });
+                    router.report(Report::Accounting { degraded: true }).await;
                 }
                 held = Some(Held {
                     records: batch,
@@ -917,7 +917,7 @@ async fn refresh_member_spends(
     if members.is_empty() {
         return SpendRefresh {
             due: None,
-            refreshed: !degraded || reached(router, Report::Accounting { degraded: false }),
+            refreshed: !degraded || reached(router, Report::Accounting { degraded: false }).await,
         };
     }
     let table = pricing.current();
@@ -928,8 +928,8 @@ async fn refresh_member_spends(
         Ok(rows) => {
             let earliest = rows.iter().map(|r| r.period_end).min();
             // The standing follows the rows on the same queue, so the selector resumes on spend it has read.
-            let refreshed = reached(router, Report::MemberSpend(rows))
-                && reached(router, Report::Accounting { degraded: false });
+            let refreshed = reached(router, Report::MemberSpend(rows)).await
+                && reached(router, Report::Accounting { degraded: false }).await;
             SpendRefresh {
                 due: earliest,
                 refreshed,
@@ -949,20 +949,11 @@ async fn refresh_member_spends(
     }
 }
 
-/// Sends `report` and answers whether the router's queue took it. The ledger writer is the one sender of the spend
-/// and accounting kinds, so a drop counted under the kind across the send is this report's.
-fn reached(router: &RouterHandle, report: Report) -> bool {
-    let kind = report.kind();
-    let dropped = || {
-        router
-            .dropped_reports()
-            .into_iter()
-            .find(|(k, _)| *k == kind)
-            .map_or(0, |(_, n)| n)
-    };
-    let before = dropped();
-    router.report(report);
-    dropped() == before
+/// Sends a replacing reading and answers whether the router can still take it: the reading always lands in the
+/// router's pending map, so a stopped router is the one way it is lost.
+async fn reached(router: &RouterHandle, report: Report) -> bool {
+    router.report(report).await;
+    router.is_alive()
 }
 
 /// Resolves once the ledger's clock reaches `deadline`, read every `CLOCK_TICK` so a stepped clock is seen as a

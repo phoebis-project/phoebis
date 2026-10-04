@@ -200,23 +200,25 @@ async fn a_member_whose_fetch_fails_contributes_nothing_and_a_cooled_model_still
     .await;
 
     let now = h.clock.load(Ordering::SeqCst);
-    h.router.report(phoebis_routing::Report::Cooldown {
-        account_id: "b".into(),
-        row: CooldownRow {
+    h.router
+        .report(phoebis_routing::Report::Cooldown {
             account_id: "b".into(),
-            scope: "model:claude-sonnet-4-5-20250929".into(),
-            until: now + 3_600_000,
-            set_at: now,
-            reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
-            window: "model_rejection".into(),
-            source_request_id: None,
+            row: CooldownRow {
+                account_id: "b".into(),
+                scope: "model:claude-sonnet-4-5-20250929".into(),
+                until: now + 3_600_000,
+                set_at: now,
+                reason: phoebis_routing::MODEL_REJECTED_REASON.into(),
+                window: "model_rejection".into(),
+                source_request_id: None,
+                incarnation: 1,
+            },
+            pin: None,
+            lifecycle_generation: 1,
+            credential_generation: 1,
             incarnation: 1,
-        },
-        pin: None,
-        lifecycle_generation: 1,
-        credential_generation: 1,
-        incarnation: 1,
-    });
+        })
+        .await;
 
     let resp = h
         .app
