@@ -16,6 +16,7 @@ use phoebis_store::{ApiKeyRow, StoreError, ROTATION_GRACE_MS};
 use rand::Rng;
 use serde_json::{json, Value};
 
+use crate::accounts::within_text_bound;
 use crate::pools::valid_slug;
 use crate::routes::{double_option, failure, reload_or_refuse, store_failure, CreatedId};
 use crate::rules::{parse_mode, parse_rules, RuleInput};
@@ -61,6 +62,8 @@ fn new_secret() -> String {
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 fn apply(state: &AdminState, row: &mut ApiKeyRow, input: &KeyInput) -> Result<(), Response> {
+    within_text_bound("label", input.label.as_deref())?;
+    within_text_bound("notes", input.notes.as_ref().and_then(Option::as_deref))?;
     if let Some(label) = &input.label {
         row.label = label.clone();
     }
@@ -302,16 +305,27 @@ pub(crate) async fn patch(
     let Ok(input) = serde_json::from_slice::<KeyInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
-    let mut row = match state.store.api_key(&id) {
-        Ok(Some(row)) => row,
+    let (mut row, read_at) = match state.store.api_key_with_stamp(&id) {
+        Ok(Some(read)) => read,
         Ok(None) => return failure(StatusCode::NOT_FOUND, "key not found"),
         Err(e) => return store_failure(e),
     };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
-    if let Err(error) = state.store.update_api_key(&row, ACTOR) {
-        return store_failure(error);
+    match state.store.update_api_key(&row, read_at, ACTOR) {
+        Ok(()) => {}
+        Err(StoreError::Stale) => {
+            return failure(
+                StatusCode::CONFLICT,
+                "the key changed while it was being edited; reload and try again",
+            )
+        }
+        Err(StoreError::KeyNotFound(_)) => return failure(StatusCode::NOT_FOUND, "key not found"),
+        Err(StoreError::PoolNotFound(_)) => {
+            return failure(StatusCode::NOT_FOUND, "pool not found")
+        }
+        Err(error) => return store_failure(error),
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;

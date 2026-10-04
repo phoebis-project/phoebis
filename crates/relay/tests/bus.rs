@@ -245,7 +245,7 @@ async fn a_capture_window_past_the_running_cap_is_published_at_the_cap() {
     .await;
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.body_capture_hours = 72;
-    h.store.update_pool(&pool, "test").unwrap();
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
     h.router.reload().await.unwrap();
     let resp = h
         .app

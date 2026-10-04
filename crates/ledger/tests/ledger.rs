@@ -156,6 +156,7 @@ async fn an_unknown_key_401_a_policy_404_and_an_exhaustion_have_a_row_and_no_att
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let (desktop, stamp) = h.store.api_key_with_stamp("desktop").unwrap().unwrap();
     h.store
         .update_api_key(
             &phoebis_store::ApiKeyRow {
@@ -169,8 +170,9 @@ async fn an_unknown_key_401_a_policy_404_and_an_exhaustion_have_a_row_and_no_att
                         not: true,
                     },
                 ],
-                ..h.store.api_key("desktop").unwrap().unwrap()
+                ..desktop
             },
+            stamp,
             "test",
         )
         .unwrap();
@@ -636,6 +638,36 @@ async fn text_matches_an_upstream_message_id_and_an_upstream_request_id() {
     );
     assert!(listed("msg_nope").is_empty(), "an id no attempt carries");
     up.shutdown().await;
+}
+
+#[test]
+fn the_recent_gaps_are_the_newest_gap_events_at_or_after_the_cutoff() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (at, kind) in [
+        (100, "ledger_gap"),
+        (200, "ledger_gap"),
+        (300, "registry_changed"),
+        (400, "ledger_gap"),
+    ] {
+        db.insert_event(&EventRecord {
+            at,
+            kind: kind.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    let since = db
+        .read_blocking(|c| phoebis_ledger::recent_gaps(c, 200, 50))
+        .unwrap();
+    assert_eq!(
+        since.iter().map(|g| g.at).collect::<Vec<_>>(),
+        [400, 200],
+        "newest first, the cutoff itself included, no other kind"
+    );
+    let newest = db
+        .read_blocking(|c| phoebis_ledger::recent_gaps(c, 0, 1))
+        .unwrap();
+    assert_eq!(newest.iter().map(|g| g.at).collect::<Vec<_>>(), [400]);
 }
 
 /// The search matches what was typed character for character: `_`, `%` and `\` are characters, not wildcards or an

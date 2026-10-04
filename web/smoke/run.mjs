@@ -2703,8 +2703,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(200);
 }
 {
-  // The route stores a pool's settings before its members, so a save it refused may have changed the pool after all:
-  // a dialog closed after a refused save reads the lists again, and one closed after no save reads nothing.
+  // A save refused because the pool changed while it was edited means the lists the dialog read are out of date: a
+  // dialog closed after a refused save reads the lists again, and one closed after no save reads nothing.
   const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const openAll = async () => {
     [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
@@ -2723,7 +2723,19 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const quiet = await readsOnCancel(await openAll());
   results.push({ name: '/pools Cancel without a refused save reloads nothing', ok: JSON.stringify(quiet) === '[0,0]', missing: quiet.map(String) });
   const dlg = await openAll();
-  const sentence = "the pool's settings were saved; its members were not: account ghost not found";
+  // The dialog keys its members by account, so it cannot send a repeat itself; the route's 409 is stubbed to prove the
+  // refusal reaches the footer line as the route words it, with the dialog left open.
+  const twice = 'members name account console twice';
+  failNextCall('updatePool', '/admin/pools/all', twice, { status: 409 });
+  footButton(dlg, 'Save pool')?.click();
+  await m.settle(600);
+  const repeat = [dlg?.hasAttribute('open') === true, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
+  results.push({
+    name: '/pools a member list the route refuses as naming an account twice keeps the dialog open with its words',
+    ok: repeat[0] && repeat[1].startsWith(twice),
+    missing: repeat.map(String),
+  });
+  const sentence = 'the pool changed while it was being edited; reload and try again';
   failNextCall('updatePool', '/admin/pools/all', sentence, { status: 409 });
   footButton(dlg, 'Save pool')?.click();
   await m.settle(600);
@@ -2731,7 +2743,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
   const reads = await readsOnCancel(dlg);
   results.push({
-    name: '/pools Cancel after a refused save reloads the pools and keys',
+    name: '/pools Cancel after a save refused as stale reloads the pools and keys',
     ok: stayed && status.startsWith(sentence) && JSON.stringify(reads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
     missing: [stayed ? 'open' : 'closed', status, ...reads.map(String)],
   });

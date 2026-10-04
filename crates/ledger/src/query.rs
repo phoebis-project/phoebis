@@ -477,6 +477,31 @@ pub fn recent_events_of_kind(
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
+const RECENT_GAPS: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT ?2";
+
+/// The newest `limit` `ledger_gap` events at or after `since`, newest first: what the system page lists beside the
+/// writer's gap counter.
+pub fn recent_gaps(
+    conn: &Connection,
+    since: i64,
+    limit: usize,
+) -> Result<Vec<EventRecord>, LedgerError> {
+    let mut stmt = conn.prepare(RECENT_GAPS)?;
+    let rows = stmt.query_map(params![since, limit as i64], |r| {
+        Ok(EventRecord {
+            at: r.get(0)?,
+            kind: r.get(1)?,
+            account_id: r.get(2)?,
+            key_id: r.get(3)?,
+            session_id: r.get(4)?,
+            model: r.get(5)?,
+            actor: r.get(6)?,
+            detail: r.get(7)?,
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
 /// The `pin_migrated` events in `[from, to)` for the given accounts, counted by the move's `detail.reason`
 /// (`unknown` when the event named none). Reads the events table's `(kind, at)` index directly rather than an
 /// hourly rollup bucket, so a pool card's "last hour" figure is the last hour exactly. An empty `accounts` list

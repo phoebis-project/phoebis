@@ -919,7 +919,7 @@ export function PoolDialog({
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];
   models: { label: string; value: string }[];
-  /** `reload` is true after a save the route answered with a refusal: it may have stored the settings before refusing. */
+  /** `reload` is true after a save the route answered with a refusal: one saying the pool changed while it was edited means the lists are out of date. */
   onClose: (reload: boolean) => void;
   onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;

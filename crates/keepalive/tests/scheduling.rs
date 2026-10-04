@@ -855,7 +855,9 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
     let mut r = armed(RigSpec::default()).await;
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.affinity_ttl_seconds = 120;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
@@ -864,12 +866,24 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
         (0, Reason::AffinityTooShort)
     );
     pool.affinity_ttl_seconds = 0;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(r.status("main").probes, 0);
     pool.affinity_ttl_seconds = 3_600;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
@@ -879,7 +893,13 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
         ..RigSpec::default().policy
     })
     .unwrap();
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
@@ -901,7 +921,9 @@ async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin
     .await;
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.affinity_ttl_seconds = 1_800;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.event(Event {
         event: "agent_start".into(),
@@ -940,7 +962,13 @@ async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin
     );
     // A pin as long as the hour recipe's due time carries its probe.
     pool.affinity_ttl_seconds = 3_240;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(3_240_000 - 270_000);
     r.step().await;
@@ -964,7 +992,9 @@ async fn turning_warm_subagents_off_drops_an_armed_subagent_recipe_at_the_gate()
         ..RigSpec::default().policy
     })
     .unwrap();
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
@@ -990,9 +1020,9 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
         1,
         "one probe, so the recipe has an unanswered probe to settle"
     );
-    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    let (mut key, stamp) = r.h.store.api_key_with_stamp("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.store.update_api_key(&key, stamp, "test").unwrap();
     r.h.router.reload().await.unwrap();
     let sent = r.up.requests().len();
     r.advance(270_000);
@@ -1049,7 +1079,9 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
     // fixture body, so a shared static boundary would otherwise land them on one account.
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.affinity.subagent_placement = phoebis_store::SubagentPlacement::ByStrategy;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.observe("main").await;
     r.event(Event {
@@ -1284,7 +1316,9 @@ async fn the_due_time_follows_the_pools_lead_and_jitter() {
         ..RigSpec::default().policy
     })
     .unwrap();
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     let probed_at = r.now();
     r.step().await;
@@ -1525,9 +1559,9 @@ async fn the_retention_rules_reach_a_paused_recipe() {
         "the 429 paused the recipe and cleared its schedule"
     );
     assert!(!r.engine.recipes_for("desktop", "session").is_empty());
-    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    let (mut key, stamp) = r.h.store.api_key_with_stamp("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.store.update_api_key(&key, stamp, "test").unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(

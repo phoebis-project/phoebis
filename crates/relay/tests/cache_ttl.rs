@@ -410,7 +410,7 @@ async fn a_token_count_never_takes_the_member() {
 async fn set_affinity_mode(h: &Harness, mode: AffinityMode) {
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.affinity.mode = mode;
-    h.store.update_pool(&pool, "test").unwrap();
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
     h.router.reload().await.unwrap();
 }
 

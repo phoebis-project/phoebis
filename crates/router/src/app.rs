@@ -324,14 +324,16 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // on the keepalive crate.
     let keepalive_gauge_source = keepalive.gauge_source();
     let vault = Arc::new(PairingVault::new());
+    let pairing = Arc::new(PairingSessions::new());
+    let sessions = Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE));
     let admin = Arc::new(AdminState {
         store,
         manager,
         usage,
-        pairing: Arc::new(PairingSessions::new()),
+        pairing: pairing.clone(),
         control,
         profile,
-        sessions: Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE)),
+        sessions: sessions.clone(),
         secrets: AdminSecrets {
             admin: Secret::new(config.admin.secret.expose()),
         },
@@ -442,16 +444,25 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         .merge(phoebis_admin::router(admin))
         .merge(phoebis_ui::router());
     // An exchange nobody confirms holds a credential bundle in memory, and only this sweep frees one whose
-    // pairing session has run out.
+    // pairing session has run out; an ended pairing and an expired admin session would otherwise stay in their
+    // maps until the process ends.
     let sweeper = {
         let clock = clock.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(SWEEP_INTERVAL);
             loop {
                 tick.tick().await;
-                let swept = vault.sweep(clock());
-                if swept > 0 {
-                    tracing::debug!(swept, "abandoned pairing exchanges dropped");
+                let now = clock();
+                let exchanges = vault.sweep(now);
+                let pairings = pairing.sweep(now);
+                let admin_sessions = sessions.sweep(now);
+                if exchanges + pairings + admin_sessions > 0 {
+                    tracing::debug!(
+                        exchanges,
+                        pairings,
+                        admin_sessions,
+                        "ended pairings and expired admin sessions dropped"
+                    );
                 }
             }
         })

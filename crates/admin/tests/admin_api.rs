@@ -39,6 +39,34 @@ async fn login_sets_a_cookie_that_reaches_every_route_until_logout() {
 }
 
 #[tokio::test]
+async fn a_dead_cookie_on_logout_answers_204_with_the_clear() {
+    use common::{delete, login};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(
+        delete(&app, "/admin/session", Some(&cookie)).await.status(),
+        204
+    );
+    for (presented, what) in [
+        (Some(cookie.as_str()), "a cookie already logged out"),
+        (Some("never-issued"), "a cookie no session ever had"),
+        (None, "no cookie at all"),
+    ] {
+        let again = delete(&app, "/admin/session", presented).await;
+        assert_eq!(again.status(), 204, "{what}");
+        let clear = again
+            .headers()
+            .get("set-cookie")
+            .map(|v| v.to_str().unwrap().to_string())
+            .unwrap_or_default();
+        assert!(
+            clear.starts_with("phoebis_admin=;") && clear.contains("Max-Age=0"),
+            "{what} still clears the browser's copy: {clear:?}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_cookie_carries_secure_exactly_when_plain_http_is_off() {
     use common::{post, post_from};
     let (loopback, _up) = common::admin_app().await;
@@ -974,6 +1002,11 @@ async fn mutations_require_the_configured_origin() {
         "a refusal is no more cacheable than an answer"
     );
     assert_eq!(
+        bare.headers().get("x-content-type-options").unwrap(),
+        "nosniff",
+        "and no more sniffable"
+    );
+    assert_eq!(
         post_from(
             &app,
             "/admin/accounts/business/pause",
@@ -1244,7 +1277,52 @@ async fn an_abandoned_exchange_is_swept_at_its_deadline() {
         "the deadline has not passed"
     );
     assert_eq!(vault.sweep(common::NOW + 600_001), 1);
-    assert!(vault.take_exchange(&id).is_none(), "the bundle is gone");
+    assert!(
+        vault.take_exchange(&id, common::NOW + 600_001).is_none(),
+        "the bundle is gone"
+    );
+}
+
+#[tokio::test]
+async fn a_confirmed_pairing_leaves_the_vault_ten_minutes_after_its_confirm() {
+    use common::{get, login, post};
+    use std::sync::atomic::Ordering;
+    let parts = common::admin_parts_sweepable().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let id = common::exchanged_session_for(&parts.app, &cookie, "business").await;
+    assert_eq!(
+        post(
+            &parts.app,
+            &format!("/admin/oauth/sessions/{id}/confirm"),
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    let path = format!("/admin/oauth/sessions/{id}");
+    let inside = common::NOW + 600_000 - 1;
+    parts.clock_cell.store(inside, Ordering::SeqCst);
+    assert_eq!(
+        (parts.vault.sweep(inside), parts.pairing.sweep(inside)),
+        (0, 0),
+        "inside its ten minutes the ended pairing stays readable"
+    );
+    assert_eq!(get(&parts.app, &path, Some(&cookie)).await.status(), 200);
+    let after = common::NOW + 11 * 60_000;
+    parts.clock_cell.store(after, Ordering::SeqCst);
+    assert_eq!(
+        parts.vault.sweep(after),
+        1,
+        "the confirmed record leaves the vault"
+    );
+    assert_eq!(
+        parts.pairing.sweep(after),
+        1,
+        "and the ended session leaves the pairings"
+    );
+    assert_eq!(get(&parts.app, &path, Some(&cookie)).await.status(), 404);
 }
 
 #[tokio::test]
@@ -1283,7 +1361,7 @@ async fn a_second_start_by_the_owning_session_replaces_its_standing_pairing() {
     .await;
     assert_eq!(shown["status"], "pending");
     assert!(
-        vault.take_exchange(&first).is_none(),
+        vault.take_exchange(&first, common::NOW).is_none(),
         "the replaced pairing's credential is dropped at once, not left for the sweep"
     );
 }

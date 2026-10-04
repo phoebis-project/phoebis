@@ -45,6 +45,23 @@ struct PatchInput {
     subscription_ends_at: Option<Option<i64>>,
 }
 
+/// The longest `label` or `notes` an account or key route accepts, in bytes.
+const TEXT_MAX_BYTES: usize = 256;
+
+/// Refuses `value` past `TEXT_MAX_BYTES`, naming `field`, before anything is written.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn within_text_bound(field: &str, value: Option<&str>) -> Result<(), Response> {
+    match value {
+        Some(value) if value.len() > TEXT_MAX_BYTES => Err(failure(
+            StatusCode::BAD_REQUEST,
+            &format!("{field} is at most {TEXT_MAX_BYTES} bytes"),
+        )),
+        _ => Ok(()),
+    }
+}
+
 fn valid_slug(id: &str) -> bool {
     (1..=64).contains(&id.len())
         && id
@@ -65,6 +82,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             StatusCode::BAD_REQUEST,
             "id must match [a-z0-9][a-z0-9-]{0,63}",
         );
+    }
+    if let Err(refusal) = within_text_bound("label", Some(&input.label)) {
+        return refusal;
     }
     let kind = match input.kind.as_str() {
         "oauth" => AccountKind::Oauth,
@@ -166,6 +186,9 @@ pub(crate) async fn patch(
     let Ok(input) = serde_json::from_slice::<PatchInput>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must be a JSON object");
     };
+    if let Err(refusal) = within_text_bound("label", input.label.as_deref()) {
+        return refusal;
+    }
     let row = match account(&state, &id) {
         Ok(row) => row,
         Err(refusal) => return refusal,
@@ -191,8 +214,8 @@ pub(crate) async fn patch(
                 "only an oauth account is cancelled",
             );
         }
-        // The stored end alone never trips this: `set_cancelled` drops it the moment the flag goes off, so
-        // only an end this patch itself asked for can conflict with an uncancel it also asked for.
+        // The stored end alone never trips this: a write drops it the moment the flag goes off, so only an end
+        // this patch itself asked for can conflict with an uncancel it also asked for.
         if !cancelled && input.subscription_ends_at.flatten().is_some() {
             return failure(
                 StatusCode::BAD_REQUEST,
@@ -210,34 +233,47 @@ pub(crate) async fn patch(
         None
     };
     let label = input.label.as_deref().unwrap_or(&row.label);
-    let verifying = row.kind == AccountKind::ApiKey && input.secret.is_some();
-    if verifying {
-        let secret = Secret::new(input.secret.as_deref().expect("verifying implies a secret"));
+    let secret = match (row.kind, input.secret.as_deref()) {
+        (AccountKind::ApiKey, Some(secret)) => Some(Secret::new(secret)),
+        _ => None,
+    };
+    if let Some(secret) = &secret {
         // Staged, never written: the row the store holds is untouched until discovery has passed, and the
         // verification below has to see what the patch would land, not what is stored now.
         let staged = AccountRow {
             label: label.to_string(),
             ..row.clone()
         };
-        if let Err(refusal) = verify_staged(&state, &staged, &secret).await {
+        if let Err(refusal) = verify_staged(&state, &staged, secret).await {
             return refusal;
         }
+    }
+    // A body naming no field moves no revision, so nothing that watches the revision is told the account changed.
+    let edits = input.label.is_some()
+        || secret.is_some()
+        || input.enabled.is_some()
+        || cancellation.is_some();
+    if edits {
+        // One commit for every field, fenced on the revision the row was read at: an edit built from a stale
+        // read lands nothing, and a combined edit never fences against its own earlier write.
         let update = AccountUpdate {
             id: &id,
             expected_revision: row.revision,
             lifecycle_generation: row.lifecycle_generation,
             label,
-            secret: Some(&secret),
-            state: AccountState::Ready,
+            secret: secret.as_ref(),
+            state: secret.as_ref().map(|_| AccountState::Ready),
             at: (state.clock)(),
             actor: ACTOR,
+            enabled: input.enabled,
+            cancellation,
         };
         match state.store.commit_account_update(&update) {
             Ok(()) => {}
             Err(StoreError::Stale) => {
                 return failure(
                     StatusCode::CONFLICT,
-                    "the account changed while the edit was being verified",
+                    "the account changed while the edit was being saved",
                 )
             }
             Err(StoreError::AccountNotFound(_)) => {
@@ -245,36 +281,8 @@ pub(crate) async fn patch(
             }
             Err(error) => return store_failure(error),
         }
-        state.catalog.evict(&id);
-    } else if input.label.is_some() {
-        // Fenced on the revision the row was read at, like the verified branch above: a patch built from a
-        // stale read must not land on a row another edit has moved since.
-        if let Err(error) = state.store.update_account(&id, row.revision, label, ACTOR) {
-            match &error {
-                StoreError::Stale => {
-                    return failure(
-                        StatusCode::CONFLICT,
-                        "the account changed while the edit was being saved",
-                    )
-                }
-                _ => return store_failure(error),
-            }
-        }
-    }
-    // Last, because every refusal above answers that nothing changed: a rejected key that had already flipped
-    // `enabled` would make that answer a lie.
-    if let Some(enabled) = input.enabled {
-        if let Err(error) = state.store.set_enabled(&id, enabled) {
-            // A verified edit may already be in the store, so it is published before the storage failure is
-            // answered rather than left waiting for an unrelated write.
-            let _ = reload_or_refuse(&state).await;
-            return store_failure(error);
-        }
-    }
-    if let Some((cancelled, ends_at)) = cancellation {
-        if let Err(error) = state.store.set_cancelled(&id, cancelled, ends_at) {
-            let _ = reload_or_refuse(&state).await;
-            return store_failure(error);
+        if secret.is_some() {
+            state.catalog.evict(&id);
         }
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
@@ -302,7 +310,7 @@ pub(crate) async fn remove(
     state.catalog.evict(&id);
     state.usage.invalidate(&id);
     let now = (state.clock)();
-    for (session_id, owner) in state.vault.discard_for_account(&id) {
+    for (session_id, owner) in state.vault.discard_for_account(&id, now) {
         let _ = state.pairing.cancel(&session_id, &owner, now);
     }
     if let Err(refusal) = reload_or_refuse(&state).await {

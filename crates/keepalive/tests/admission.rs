@@ -121,7 +121,9 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
     );
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&RigSpec::default().policy).unwrap();
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.observe("main").await;
     assert_eq!(
@@ -129,9 +131,9 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
         Reason::Scheduled,
         "enabling the pool retains the next request"
     );
-    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    let (mut key, stamp) = r.h.store.api_key_with_stamp("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.store.update_api_key(&key, stamp, "test").unwrap();
     r.h.router.reload().await.unwrap();
     r.observe("main").await;
     assert_eq!(
@@ -167,9 +169,9 @@ async fn an_oauth_account_on_an_enabled_pool_retains_its_recipe() {
 async fn a_title_request_between_an_opted_out_selection_and_its_completion_leaves_the_reason_alone()
 {
     let r = rig(RigSpec::default()).await;
-    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
+    let (mut key, stamp) = r.h.store.api_key_with_stamp("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.store.update_api_key(&key, stamp, "test").unwrap();
     r.h.router.reload().await.unwrap();
     r.engine.observe(r.observed("req", "main", BODY));
     r.engine.observe(r.selected("req", "a"));

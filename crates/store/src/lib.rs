@@ -220,9 +220,13 @@ pub struct Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     fail_next_schema_version: AtomicBool,
     #[cfg(any(test, feature = "debug-hooks"))]
+    key_write_hold: Mutex<Option<Arc<HoldGate>>>,
+    #[cfg(any(test, feature = "debug-hooks"))]
     load_hold: Mutex<Option<Arc<HoldGate>>>,
     #[cfg(any(test, feature = "debug-hooks"))]
     loads: AtomicU64,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pool_write_hold: Mutex<Option<Arc<HoldGate>>>,
     #[cfg(any(test, feature = "debug-hooks"))]
     routing_commits: AtomicU64,
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -307,9 +311,13 @@ impl Store {
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_schema_version: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
+            key_write_hold: Mutex::new(None),
+            #[cfg(any(test, feature = "debug-hooks"))]
             load_hold: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             loads: AtomicU64::new(0),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            pool_write_hold: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             routing_commits: AtomicU64::new(0),
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -339,9 +347,13 @@ impl Store {
             #[cfg(any(test, feature = "debug-hooks"))]
             fail_next_schema_version: AtomicBool::new(false),
             #[cfg(any(test, feature = "debug-hooks"))]
+            key_write_hold: Mutex::new(None),
+            #[cfg(any(test, feature = "debug-hooks"))]
             load_hold: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             loads: AtomicU64::new(0),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            pool_write_hold: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             routing_commits: AtomicU64::new(0),
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -488,6 +500,36 @@ impl Store {
         CredentialReadHold(gate)
     }
 
+    /// Parks the next fenced pool write before its lock until the hold drops, so a test can land another edit
+    /// between a handler's read and its write.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_hold_next_pool_write(&self) -> FencedWriteHold {
+        let gate = Arc::new(HoldGate::default());
+        *self.pool_write_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        FencedWriteHold(gate)
+    }
+
+    /// The key's counterpart of `debug_hold_next_pool_write`.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_hold_next_key_write(&self) -> FencedWriteHold {
+        let gate = Arc::new(HoldGate::default());
+        *self.key_write_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        FencedWriteHold(gate)
+    }
+
+    /// Before the connection's lock, so the edit the test lands under the hold does not wait on the parked one.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pub(crate) fn park_on_pool_write_hold(&self) {
+        park_on(&self.pool_write_hold);
+    }
+
+    #[cfg(any(test, feature = "debug-hooks"))]
+    pub(crate) fn park_on_key_write_hold(&self) {
+        park_on(&self.key_write_hold);
+    }
+
     /// Parks the next `load_registry` before its lock until the hold drops, so a test can ask the router for
     /// something while a reload's load runs.
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -598,6 +640,32 @@ impl CredentialReadHold {
 /// Released on drop, as `RoutingWriteHold` is.
 #[cfg(any(test, feature = "debug-hooks"))]
 impl Drop for CredentialReadHold {
+    fn drop(&mut self) {
+        self.0.open();
+    }
+}
+
+/// A test's hold on the next fenced pool or key edit, from `Store::debug_hold_next_pool_write` or
+/// `Store::debug_hold_next_key_write`.
+#[cfg(any(test, feature = "debug-hooks"))]
+#[doc(hidden)]
+pub struct FencedWriteHold(Arc<HoldGate>);
+
+#[cfg(any(test, feature = "debug-hooks"))]
+impl FencedWriteHold {
+    /// Whether an edit waits on the hold.
+    pub fn is_parked(&self) -> bool {
+        self.0.parked.load(Ordering::SeqCst)
+    }
+
+    pub fn release(self) {
+        drop(self);
+    }
+}
+
+/// Released on drop, as `RoutingWriteHold` is.
+#[cfg(any(test, feature = "debug-hooks"))]
+impl Drop for FencedWriteHold {
     fn drop(&mut self) {
         self.0.open();
     }
@@ -1333,12 +1401,14 @@ mod tests {
             2,
             "FULL after the credential commit"
         );
+        let read = store.pool("p").unwrap().unwrap();
         store
             .update_pool(
                 &PoolRow {
                     enabled: false,
-                    ..pool("p")
+                    ..read.clone()
                 },
+                read.updated_at,
                 "test",
             )
             .unwrap();

@@ -310,7 +310,7 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
             not: true,
         },
     ];
-    store.update_pool(&pool, "test").unwrap();
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     handle.reload().await.unwrap();
     let answer = handle.select(stale(admitted.clone())).await.unwrap();
     assert!(matches!(
@@ -2315,7 +2315,7 @@ async fn a_restart_loads_the_persisted_windows_and_the_first_selection_ranks_by_
     let store = seeded_oauth(&["a", "b"]);
     let mut pool = store.pool("p").unwrap().unwrap();
     pool.strategy = Strategy::Pace;
-    store.update_pool(&pool, "test").unwrap();
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     let reset = Some(1_000 + 3 * HOUR);
     for (account, utilization) in [("a", 0.9), ("b", 0.1)] {
         for window in [FIVE_HOUR, SEVEN_DAY] {
@@ -5018,7 +5018,7 @@ async fn the_purge_tick_deletes_an_aged_entry_from_the_store() {
     // Short enough for the entry to age inside the test's own window, rather than the hour-scale default.
     let mut pool = store.pool("p").unwrap().unwrap();
     pool.affinity_ttl_seconds = 1;
-    store.update_pool(&pool, "test").unwrap();
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),

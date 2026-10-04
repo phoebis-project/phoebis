@@ -2540,3 +2540,347 @@ async fn a_patch_leaves_an_absent_engine_field_at_its_stored_value() {
         "an unrelated patch leaves every engine field at what it was stored with"
     );
 }
+
+#[tokio::test]
+async fn a_member_list_naming_an_account_twice_is_refused_before_any_write_on_post_put_and_patch() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let twice = r#"[{"account_id":"direct","priority":0},{"account_id":"business","priority":1},{"account_id":"direct","priority":2}]"#;
+    let refused = post(
+        &app,
+        "/admin/pools",
+        &format!(r#"{{"id":"dup","label":"Dup","strategy":"priority","members":{twice}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        json(refused).await["error"],
+        "members name account direct twice"
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    assert!(
+        listed["pools"].as_array().unwrap().is_empty(),
+        "the refused create left no pool row: {listed}"
+    );
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let before = json(get(&app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    let put_refused = put(
+        &app,
+        "/admin/pools/main/members",
+        &format!(r#"{{"members":{twice}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(put_refused.status(), 409);
+    assert_eq!(
+        json(put_refused).await["error"],
+        "members name account direct twice"
+    );
+    let patch_refused = patch(
+        &app,
+        "/admin/pools/main",
+        &format!(r#"{{"label":"Renamed","affinity_ttl_seconds":120,"members":{twice}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(patch_refused.status(), 409);
+    assert_eq!(
+        json(patch_refused).await["error"],
+        "members name account direct twice"
+    );
+    let unknown_twice = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"members":[{"account_id":"ghost","priority":0},{"account_id":"ghost","priority":1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            unknown_twice.status().as_u16(),
+            json(unknown_twice).await["error"].clone()
+        ),
+        (409, serde_json::json!("members name account ghost twice")),
+        "the repeat is refused before any member is looked up"
+    );
+    let after = json(get(&app, "/admin/pools", Some(&cookie)).await).await["pools"][0].clone();
+    assert_eq!(
+        (
+            &after["label"],
+            &after["affinity_ttl_seconds"],
+            &after["members"],
+            &after["updated_at"]
+        ),
+        (
+            &before["label"],
+            &before["affinity_ttl_seconds"],
+            &before["members"],
+            &before["updated_at"]
+        ),
+        "neither the members nor the policy moved"
+    );
+}
+
+#[tokio::test]
+async fn a_label_or_notes_past_256_bytes_is_refused_naming_the_field() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let long = "x".repeat(257);
+    // 129 characters but 258 bytes: the bound counts bytes.
+    let wide = "\u{e9}".repeat(129);
+    // 128 characters, 256 bytes: at the bound, so admitted.
+    let edge = "\u{e9}".repeat(128);
+    let created = post(
+        &app,
+        "/admin/accounts",
+        &format!(r#"{{"id":"long","kind":"oauth","label":"{long}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            created.status().as_u16(),
+            json(created).await["error"].clone()
+        ),
+        (400, serde_json::json!("label is at most 256 bytes"))
+    );
+    assert!(store.account("long").unwrap().is_none());
+    let renamed = patch(
+        &app,
+        "/admin/accounts/business",
+        &format!(r#"{{"label":"{wide}","enabled":false}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            renamed.status().as_u16(),
+            json(renamed).await["error"].clone()
+        ),
+        (400, serde_json::json!("label is at most 256 bytes"))
+    );
+    let business = store.account("business").unwrap().unwrap();
+    assert_eq!(
+        (business.label.as_str(), business.enabled),
+        ("Business", true),
+        "the refused edit wrote nothing"
+    );
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let key = post(
+        &app,
+        "/admin/keys",
+        &format!(r#"{{"id":"desktop","label":"{long}","pool_id":"main"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (key.status().as_u16(), json(key).await["error"].clone()),
+        (400, serde_json::json!("label is at most 256 bytes"))
+    );
+    assert!(store.api_key("desktop").unwrap().is_none());
+    let key = post(
+        &app,
+        "/admin/keys",
+        &format!(r#"{{"id":"desktop","label":"{edge}","notes":"{edge}","pool_id":"main"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(key.status(), 201, "256 bytes is within the bound");
+    let notes = patch(
+        &app,
+        "/admin/keys/desktop",
+        &format!(r#"{{"label":"Desktop","notes":"{long}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (notes.status().as_u16(), json(notes).await["error"].clone()),
+        (400, serde_json::json!("notes is at most 256 bytes"))
+    );
+    let stored = store.api_key("desktop").unwrap().unwrap();
+    assert_eq!(
+        (stored.label.as_str(), stored.notes.as_deref()),
+        (edge.as_str(), Some(edge.as_str())),
+        "the refused edit wrote nothing"
+    );
+}
+
+#[tokio::test]
+async fn listing_three_pools_reads_the_registry_once() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let create = |id: &'static str| {
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            let body = format!(
+                r#"{{"id":"{id}","label":"{id}","strategy":"priority","members":[{{"account_id":"direct","priority":0}},{{"account_id":"business","priority":1}}]}}"#
+            );
+            assert_eq!(
+                post(&app, "/admin/pools", &body, Some(&cookie))
+                    .await
+                    .status(),
+                201
+            );
+        }
+    };
+    // The fewest takes over three lists, so a background task that takes the store during one of them cannot
+    // pass for a read the list made.
+    let takes_per_list = || {
+        let (app, cookie, store) = (app.clone(), cookie.clone(), store.clone());
+        async move {
+            let mut fewest = u64::MAX;
+            for _ in 0..3 {
+                let before = store.debug_lock_count();
+                let listed = get(&app, "/admin/pools", Some(&cookie)).await;
+                assert_eq!(listed.status(), 200);
+                fewest = fewest.min(store.debug_lock_count() - before);
+            }
+            fewest
+        }
+    };
+    create("one").await;
+    let one = takes_per_list().await;
+    create("two").await;
+    create("three").await;
+    let three = takes_per_list().await;
+    assert_eq!(
+        three, one,
+        "the list takes the store the same number of times for three pools as for one"
+    );
+}
+
+/// Waits, within five seconds, for the edit spawned before it to park on its store hold.
+async fn until_parked(parked: impl Fn() -> bool) {
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !parked() {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the first edit never reached its write"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(1)).await;
+    }
+}
+
+// Multi-threaded: the parked edit blocks the worker it runs on until the hold is released.
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_pool_edits_from_one_read_answer_409_on_the_second() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let hold = store.debug_hold_next_pool_write();
+    let first = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            patch(
+                &app,
+                "/admin/pools/main",
+                r#"{"label":"First"}"#,
+                Some(&cookie),
+            )
+            .await
+        }
+    });
+    until_parked(|| hold.is_parked()).await;
+    let second = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"label":"Second"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(second.status(), 200);
+    hold.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.status(), 409);
+    assert_eq!(
+        json(first).await["error"],
+        "the pool changed while it was being edited; reload and try again"
+    );
+    assert_eq!(
+        store.pool("main").unwrap().unwrap().label,
+        "Second",
+        "the edit read before the other landed wrote nothing"
+    );
+}
+
+#[tokio::test(flavor = "multi_thread", worker_threads = 4)]
+async fn two_key_edits_from_one_read_answer_409_on_the_second() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        post(
+            &app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let hold = store.debug_hold_next_key_write();
+    let first = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            patch(
+                &app,
+                "/admin/keys/desktop",
+                r#"{"label":"First"}"#,
+                Some(&cookie),
+            )
+            .await
+        }
+    });
+    until_parked(|| hold.is_parked()).await;
+    let second = patch(
+        &app,
+        "/admin/keys/desktop",
+        r#"{"label":"Second"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(second.status(), 200);
+    hold.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.status(), 409);
+    assert_eq!(
+        json(first).await["error"],
+        "the key changed while it was being edited; reload and try again"
+    );
+    assert_eq!(
+        store.api_key("desktop").unwrap().unwrap().label,
+        "Second",
+        "the edit read before the other landed wrote nothing"
+    );
+}

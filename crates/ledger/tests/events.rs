@@ -225,9 +225,8 @@ async fn a_registry_change_lands_with_its_diff_decoded_once() {
         },
     )
     .await;
-    h.store
-        .update_pool(&h.store.pool("main").unwrap().unwrap(), "test")
-        .unwrap();
+    let pool = h.store.pool("main").unwrap().unwrap();
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
     let row = wait_for_async(Duration::from_secs(5), || async {
         h.db.events(0, i64::MAX, 100)
             .await
