@@ -242,14 +242,11 @@ pub(crate) struct AffinityFacts {
     pub key_generation: i64,
     pub canonical_model: String,
     pub lane: String,
-    /// The identity's `session_id`, `None` for a request with no identity (the first message boundary is the
-    /// root then).
+    /// The identity's session id, `None` for a request with no identity.
     pub root: Option<String>,
-    pub static_boundaries: Vec<String>,
+    pub static_boundaries: Arc<[String]>,
     pub static_sizes: Vec<u64>,
-    pub message_boundaries: Vec<String>,
-    /// The upstream head's `request-id`, the id a client sends back as `cc_prev_req`.
-    pub request_id: Option<String>,
+    pub message_boundaries: Arc<[String]>,
     /// `tier_ttls` of the body as this pass sent it upstream.
     pub static_ttl_ms: Option<i64>,
     pub message_ttl_ms: Option<i64>,
@@ -266,7 +263,6 @@ impl AffinityFacts {
         self,
         now: i64,
         status: u16,
-        message_id: Option<String>,
         usage: Option<&Usage>,
         fast: bool,
         waiting: &mut Waiting,
@@ -315,8 +311,6 @@ impl AffinityFacts {
             static_boundaries: self.static_boundaries,
             message_boundaries: self.message_boundaries,
             static_sizes: self.static_sizes,
-            message_id,
-            request_id: self.request_id,
             static_ttl_ms: self.static_ttl_ms,
             message_ttl_ms: self.message_ttl_ms,
             cache_touched: prefix_tokens > 0,
@@ -528,14 +522,7 @@ impl Publish {
             renewal.send((self.clock)(), self.status, usage.as_ref(), fast, waiting);
         }
         if let Some(affinity) = self.affinity.take() {
-            affinity.send(
-                (self.clock)(),
-                self.status,
-                self.message_id.clone(),
-                usage.as_ref(),
-                fast,
-                waiting,
-            );
+            affinity.send((self.clock)(), self.status, usage.as_ref(), fast, waiting);
         }
         self.trace
             .complete(

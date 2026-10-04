@@ -3,6 +3,8 @@
 //! subagent's first request. The warmth verdict and the placement of each case are the selector's tests, and the
 //! fork facts the relay reads from a match are the relay's own.
 
+use std::sync::Arc;
+
 use phoebis_routing::{
     lane_key, AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup,
     ConversationMatch, ConversationQuery,
@@ -21,11 +23,9 @@ fn report(key_id: &str, account_id: &str, message_boundaries: &[&str], now: i64)
         canonical_model: "claude-sonnet-5".into(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         root: None,
-        static_boundaries: Vec::new(),
-        message_boundaries: boundaries(message_boundaries),
+        static_boundaries: Arc::from([]),
+        message_boundaries: Arc::from(boundaries(message_boundaries)),
         static_sizes: Vec::new(),
-        message_id: None,
-        request_id: None,
         static_ttl_ms: None,
         message_ttl_ms: None,
         cache_touched: false,
@@ -46,7 +46,6 @@ fn query<'a>(key_id: &'a str, message_boundaries: &'a [String]) -> ConversationQ
         canonical_model: "claude-sonnet-5",
         key_id,
         key_generation: 0,
-        parent_ids: &[],
         message_boundaries,
         incarnation_of: &incarnation_of,
     }
@@ -85,7 +84,7 @@ fn the_lookup_answers_a_replaced_last_message_one_boundary_shallower() {
 fn fresh_messages_under_a_known_static_prefix_name_no_conversation_and_match_the_static_depth() {
     let mut map = AffinityMap::default();
     map.record(&AffinityReport {
-        static_boundaries: boundaries(&["s1", "s2"]),
+        static_boundaries: Arc::from(boundaries(&["s1", "s2"])),
         static_sizes: vec![10, 20],
         cache_touched: true,
         static_ttl_ms: Some(3_600_000),
@@ -104,7 +103,7 @@ fn fresh_messages_under_a_known_static_prefix_name_no_conversation_and_match_the
 fn the_lookup_follows_the_message_chain_across_a_tools_change() {
     let mut map = AffinityMap::default();
     map.record(&AffinityReport {
-        static_boundaries: boundaries(&["s1"]),
+        static_boundaries: Arc::from(boundaries(&["s1"])),
         static_sizes: vec![10],
         cache_touched: true,
         static_ttl_ms: Some(3_600_000),
@@ -131,7 +130,7 @@ fn a_compacted_body_names_no_conversation_and_its_continuation_matches_the_compa
 fn a_subagents_first_request_matches_its_cohorts_static_prefix_and_no_message_boundary() {
     let mut map = AffinityMap::default();
     map.record(&AffinityReport {
-        static_boundaries: boundaries(&["t1", "t2"]),
+        static_boundaries: Arc::from(boundaries(&["t1", "t2"])),
         static_sizes: vec![10, 20],
         cache_touched: true,
         static_ttl_ms: Some(3_600_000),

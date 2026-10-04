@@ -15,8 +15,62 @@ use phoebis_store::{
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
+use std::alloc::{GlobalAlloc, Layout, System};
+use std::cell::Cell;
+use std::sync::Arc;
 
 const HOUR: i64 = 3_600_000;
+
+/// The system allocator, counting the allocations of the current thread while `COUNTING` is set: the tests of
+/// this binary run on threads of their own, so a count taken around one call is that call's alone.
+struct CountingAllocator;
+
+thread_local! {
+    static COUNTING: Cell<bool> = const { Cell::new(false) };
+    static ALLOCATIONS: Cell<usize> = const { Cell::new(0) };
+}
+
+fn count_allocation() {
+    // `try_with`, since an allocation can land while the thread's locals are already torn down.
+    let _ = COUNTING.try_with(|counting| {
+        if counting.get() {
+            let _ = ALLOCATIONS.try_with(|n| n.set(n.get() + 1));
+        }
+    });
+}
+
+unsafe impl GlobalAlloc for CountingAllocator {
+    unsafe fn alloc(&self, layout: Layout) -> *mut u8 {
+        count_allocation();
+        System.alloc(layout)
+    }
+
+    unsafe fn alloc_zeroed(&self, layout: Layout) -> *mut u8 {
+        count_allocation();
+        System.alloc_zeroed(layout)
+    }
+
+    unsafe fn realloc(&self, ptr: *mut u8, layout: Layout, new_size: usize) -> *mut u8 {
+        count_allocation();
+        System.realloc(ptr, layout, new_size)
+    }
+
+    unsafe fn dealloc(&self, ptr: *mut u8, layout: Layout) {
+        System.dealloc(ptr, layout)
+    }
+}
+
+#[global_allocator]
+static ALLOCATOR: CountingAllocator = CountingAllocator;
+
+/// What `f` answers and how many allocations the current thread made while it ran.
+fn allocations_of<T>(f: impl FnOnce() -> T) -> (T, usize) {
+    ALLOCATIONS.with(|n| n.set(0));
+    COUNTING.with(|counting| counting.set(true));
+    let answer = f();
+    COUNTING.with(|counting| counting.set(false));
+    (answer, ALLOCATIONS.with(Cell::get))
+}
 /// The fallback `request()` carries, for a call to the overage predicate outside a full `SelectRequest`.
 const FALLBACK_MS: i64 = 60_000;
 
@@ -325,9 +379,9 @@ fn request(
         request_class: None,
         context_compacted: false,
         static_hash: None,
-        boundaries: Vec::new(),
+        boundaries: Arc::from([]),
         client: ClientClass::ClaudeCode,
-        static_boundaries: Vec::new(),
+        static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
@@ -4407,9 +4461,9 @@ fn two_pools_sharing_an_account_share_its_entries() {
         request_class: None,
         context_compacted: false,
         static_hash: None,
-        boundaries: vec!["m1".into()],
+        boundaries: Arc::from(["m1".to_string()]),
         client: ClientClass::ClaudeCode,
-        static_boundaries: Vec::new(),
+        static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
@@ -7960,7 +8014,7 @@ fn a_request_on_another_lane_is_cold_whatever_its_boundaries_and_its_continuatio
 }
 
 #[test]
-fn a_request_that_continues_nothing_on_another_lane_leaves_a_shared_identitys_pin_untouched() {
+fn a_request_that_continues_nothing_on_another_lane_leaves_the_sessions_pin_untouched() {
     let s = snapshot(Pool {
         members: vec![("a", 0)],
         ..Pool::default()
@@ -8376,7 +8430,7 @@ fn two_conversations_alternating_on_one_pin_each_refresh_it() {
             ),
         ],
     );
-    let mut b_continues = placement_req(
+    let b_continues = placement_req(
         request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
         &["b1", "b2"],
         &[],
@@ -8389,7 +8443,7 @@ fn two_conversations_alternating_on_one_pin_each_refresh_it() {
         "b's continuation refreshes though the pin's tail is a's own boundary"
     );
 
-    let mut a_continues = placement_req(
+    let a_continues = placement_req(
         request(&s, Some("s1"), "claude-sonnet-5", true, &[], 3_000),
         &["a1", "a2"],
         &[],
@@ -8400,6 +8454,45 @@ fn two_conversations_alternating_on_one_pin_each_refresh_it() {
         pinned(&st, "s1").last_refresh_at,
         3_000,
         "a's continuation refreshes though the tail is now b's"
+    );
+}
+
+#[test]
+fn a_selection_over_a_long_conversation_allocates_fewer_times_than_the_conversation_has_boundaries()
+{
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = pinned_state(&s, 1_000);
+    // Only the last boundary names an entry on the pin, so the warmth walk reads the map at every boundary first.
+    seed_affinity(
+        &st,
+        vec![affinity_row(
+            &s,
+            "claude-sonnet-5",
+            "m149",
+            AffinityChain::Message,
+            "a",
+            1_000,
+            300_000,
+            900,
+            "s1",
+        )],
+    );
+    let boundaries: Vec<String> = (0..150).map(|i| format!("m{i}")).collect();
+    let mut req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    req.boundaries = boundaries.clone().into();
+    let mut rng = rng();
+    let ((result, _), allocations) = allocations_of(|| select(&mut st, &s, &req, &mut rng));
+    let SelectResult::Selected(sel) = result else {
+        panic!("the pin renews")
+    };
+    assert!(sel.trace.renewed, "the walk found the continuation");
+    assert!(
+        allocations < boundaries.len(),
+        "{allocations} allocations for {} boundaries",
+        boundaries.len()
     );
 }
 

@@ -995,7 +995,6 @@ impl ConversationLookup for RouterHandle {
             canonical_model: query.canonical_model,
             key_id: query.key_id,
             key_generation: query.key_generation,
-            parent_ids: query.parent_ids,
             message_boundaries: query.message_boundaries,
             incarnation_of: &incarnation_of,
         };

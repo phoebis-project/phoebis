@@ -304,10 +304,10 @@ Release, and, once it has ledgered traffic, "View in analytics" and "View in obs
 requests of the key holder the row belongs to. The view reads its sessions again every 15 seconds, so a session that
 keeps sending requests stays on it, and its tiles once a minute.
 
-A session whose first request
-branched from another conversation carries a `fork at 3` badge beside its id, 3 being the depth where the two part;
-following the badge scrolls to the row of the session it branched from and marks that row, and where that session is
-not listed the badge names it instead, as `fork of 4ef130f1-90e0…`.
+A session
+whose first request branched from another conversation carries a `fork at 3` badge beside its id, 3 being the depth
+where the two part; following the badge scrolls to the row of the session it branched from and marks that row, and where
+that session is not listed the badge names it instead, as `fork of 4ef130f1-90e0…`.
 
 ![The Analytics view's Cache warming tab: probes by outcome, savings, wasted probes, and kept-warm
 requests](assets/analytics-cache-warming-light.png#only-light)

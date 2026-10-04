@@ -158,9 +158,9 @@ fn request(
         request_class: None,
         context_compacted: false,
         static_hash: None,
-        boundaries: Vec::new(),
+        boundaries: Arc::from([]),
         client: ClientClass::ClaudeCode,
-        static_boundaries: Vec::new(),
+        static_boundaries: Arc::from([]),
         marker: false,
         parent_agent_id: None,
         holds: Vec::new(),
@@ -202,11 +202,9 @@ fn affinity_report(
         canonical_model: "claude-sonnet-5".into(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
         root: None,
-        static_boundaries: Vec::new(),
-        message_boundaries: vec!["b1".into()],
+        static_boundaries: Arc::from([]),
+        message_boundaries: Arc::from(["b1".to_string()]),
         static_sizes: Vec::new(),
-        message_id: None,
-        request_id: None,
         static_ttl_ms: None,
         message_ttl_ms: None,
         cache_touched: false,
@@ -929,9 +927,9 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             request_class: None,
             context_compacted: false,
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
-            static_boundaries: Vec::new(),
+            static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
@@ -1058,9 +1056,9 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             request_class: None,
             context_compacted: false,
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
-            static_boundaries: Vec::new(),
+            static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
@@ -4147,7 +4145,7 @@ async fn a_fork_after_a_resolution_places_on_the_warm_entry_a_late_report_filed_
         session_id: Some("s2".into()),
         canonical_model: DATED.into(),
         lane: lane_key(DATED, "standard", "none", "-"),
-        boundaries: vec!["b1".into(), "fork-1".into()],
+        boundaries: Arc::from(["b1".to_string(), "fork-1".to_string()]),
         ..spelled(&handle, 3_000)
     };
     let answer = handle.select(fork).await.unwrap();
@@ -4350,7 +4348,7 @@ async fn a_probe_after_a_compacted_request_refreshes_warmth() {
         request_class: Some("main".into()),
         context_compacted: true,
         static_hash: Some("s0".into()),
-        boundaries: vec!["c1".into()],
+        boundaries: Arc::from(["c1".to_string()]),
         ..request(&handle, Some("s1"), now)
     };
     handle
@@ -4842,9 +4840,7 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
     {
         let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
         let report = AffinityReport {
-            message_boundaries: vec!["b1".into(), "b2".into()],
-            message_id: Some("resp-1".into()),
-            request_id: Some("req-1".into()),
+            message_boundaries: Arc::from(["b1".to_string(), "b2".to_string()]),
             ..affinity_report(&handle, "a", 1_000)
         };
         handle.report(Report::Affinity(report)).await;
@@ -4854,11 +4850,7 @@ async fn a_reports_affinity_rows_reach_the_store_and_a_restart_reloads_them() {
         .await;
     }
     let rows = store.load_routing().unwrap().affinity;
-    assert_eq!(
-        rows.len(),
-        4,
-        "the two message boundaries plus the response and request ids"
-    );
+    assert_eq!(rows.len(), 2, "the two message boundaries");
     let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
     let entry = handle
         .affinity()

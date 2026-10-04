@@ -227,11 +227,11 @@ process, billed to the account's windows, as the [client page](client.md#auto-mo
 whose `safeguards` member the router cannot cut under an off setting (spelled with an escape, or carried twice) is
 refused `400` with the error code `body_shape` before anything reaches the upstream.
 
-A conversation is identified by its session header: the session id the client sends names it.
-A turn that follows its own conversation's previous answer within milliseconds waits on its session id,
-at most five milliseconds, for that answer's report to reach the map.
-A new session id whose messages continue another conversation of the
-same key keeps its own identity, and is recorded as a fork of that conversation at the depth where the two part.
+A conversation is identified by its session header: the session id the client sends names it, keys its pin and its
+session memory, and is what a turn that follows its own conversation's previous answer within milliseconds waits on, at
+most five milliseconds, for that answer's report to reach the map. A new session id whose messages continue another
+conversation of the same key keeps its own identity, and is recorded as a fork of that conversation at the depth where
+the two part.
 
 ## Model rules
 
@@ -307,11 +307,10 @@ judged for the fast lane instead: it passes an account cooldown whose window is 
 lane is cooling or whose usage credits the poll reads as unavailable cannot serve it; an Anthropic-key account serves
 it whenever it can serve at all.
 
-A pin is held per agent of a conversation, where a conversation is the session id
-or the conversation's own messages. It lasts `affinity_ttl_seconds` from its last
-use: while it is live and its account is still eligible, the request returns to that account, and stickiness wins over
-priority even across a later priority change. A pool with affinity off (`affinity_ttl_seconds` at `0`) keeps no pins
-at all.
+A pin is held per agent of a conversation, where a conversation is the session id or the conversation's own messages. It
+lasts `affinity_ttl_seconds` from its last use: while it is live and its account is still eligible, the request returns
+to that account, and stickiness wins over priority even across a later priority change. A pool with affinity off
+(`affinity_ttl_seconds` at `0`) keeps no pins at all.
 
 Narrowing then trims what is left. For a model with a week of its own (a canonical id containing `fable`), an account
 whose week or either shared window reads at or above 1 drops outright, unless the pool's overage policy is `allow` and
@@ -340,9 +339,9 @@ kept as the last resort, ranked by the same score among the others below it, onc
 A request with no session id skips pins and stickiness: it runs the eligible set, the narrowing, and the pick
 only.
 
-A non-portable request, one whose body references a `file_id`, a `container`, or a server-tool result, is
-answered by its live pin's account or not at all. With affinity off, an expired pin, or no session id, it runs
-the normal selection instead, and the account-scoped reference it carries may then not resolve.
+A non-portable request, one whose body references a `file_id`, a `container`, or a server-tool result, is answered by
+its live pin's account or not at all. With affinity off or no live pin, it runs the normal selection instead, and the
+account-scoped reference it carries may then not resolve.
 
 ### The windows the router works from
 
@@ -445,17 +444,15 @@ control entry for), whatever its messages continue, and the pin takes the new la
 leaves its lane as it was, and a per-turn control entry is one more message and continues the conversation. Without the
 class header, a request whose messages extend the session's conversation refreshes the pin; one that repeats the
 session's static prefix (tools and system prompt) without extending its messages restarted the conversation and reads
-cold; one that matches neither changes nothing. Where one session holds several conversations,
-a request that extends any conversation the pin
-has served refreshes it.
-A request that carries `x-claude-code-context-compacted` reads cold whatever else it says, so a compacted
-session goes first in the round's order on the request that carries the fact. A body the router cannot read refreshes
-the pin on every request on the pin's lane; the first one after a request on another lane reads it cold, as any lane
-change does. A keepalive probe replays another request's headers and body, so the router judges none of them: a probe
-never colds a session, and its renewal counts as a refresh while the pin still holds the lane the probe was sent on; a
-renewal that lands after the session moved to another lane refreshed another cache and leaves the pin as it was. A
-`count_tokens` request creates no cache entry, so it neither refreshes nor colds the pin and leaves its cache TTL as it
-was.
+cold; one that matches neither changes nothing. Where one session holds several conversations, a request that extends
+any conversation the pin has served refreshes it. A request that carries `x-claude-code-context-compacted` reads cold
+whatever else it says, so a compacted session goes first in the round's order on the request that carries the fact. A
+body the router cannot read refreshes the pin on every request on the pin's lane; the first one after a request on
+another lane reads it cold, as any lane change does. A keepalive probe replays another request's headers and body, so
+the router judges none of them: a probe never colds a session, and its renewal counts as a refresh while the pin still
+holds the lane the probe was sent on; a renewal that lands after the session moved to another lane refreshed another
+cache and leaves the pin as it was. A `count_tokens` request creates no cache entry, so it neither refreshes nor colds
+the pin and leaves its cache TTL as it was.
 
 **Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
 1-hour cache writes, output) for the pin's one model, in two copies: one plain and one weighed by the peak band at each

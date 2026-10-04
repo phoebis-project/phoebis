@@ -73,11 +73,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (41, V41),
     (42, V42),
     (43, V43),
+    (44, V44),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 43;
+pub const SCHEMA_VERSION: u32 = 44;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -635,4 +636,16 @@ DROP TABLE alert_events;
 DROP TABLE alert_rules;
 CREATE INDEX refresh_attempts_holder_resolved ON refresh_attempts (account_id, incarnation, resolved_at, id)
   WHERE outcome IS NOT NULL;
+"#;
+
+// A holder's newest attempt is its highest id under its account and incarnation, which neither refresh index serves:
+// one is partial on the pending attempts, the other on the settled ones. A key's `updated_at` dates its last change,
+// and a key stored before this version takes the migration's instant, the earliest a reader can date it to. Only a
+// session id or a message boundary identifies a conversation, so the request and response links leave and no loader
+// meets a chain it does not know.
+const V44: &str = r#"
+CREATE INDEX refresh_attempts_account ON refresh_attempts (account_id, incarnation, id);
+ALTER TABLE api_keys ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
+UPDATE api_keys SET updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
+DELETE FROM affinity WHERE chain IN ('request', 'response');
 "#;

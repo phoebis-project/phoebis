@@ -4,6 +4,7 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
@@ -86,9 +87,9 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             request_class: None,
             context_compacted: false,
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
-            static_boundaries: Vec::new(),
+            static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
