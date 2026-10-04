@@ -361,7 +361,19 @@ async fn the_purge_pass_cuts_the_registrys_settled_refresh_attempts_and_a_zero_r
                 .len()
         };
         if retention_days == 0 {
-            fake_upstream::stays_for(Duration::from_millis(100), || settled() == left).await;
+            // Two passes finished after the clock moved, so a cut the zero skipped would have landed by now.
+            let passes = || {
+                h.ledger
+                    .stats()
+                    .purge_passes
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            };
+            let before = passes();
+            fake_upstream::wait_for(Duration::from_secs(5), || {
+                (passes() >= before + 2).then_some(())
+            })
+            .await;
+            assert_eq!(settled(), left, "the passes ran and cut nothing");
         } else {
             fake_upstream::wait_for(Duration::from_secs(5), || (settled() == left).then_some(()))
                 .await;

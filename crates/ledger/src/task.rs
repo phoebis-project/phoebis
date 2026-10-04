@@ -93,6 +93,8 @@ pub struct LedgerStats {
     pub retrying: AtomicU64,
     /// Priced records parked since start.
     pub parked_priced: AtomicU64,
+    /// Retention passes the purge task finished since start, whatever each one cut.
+    pub purge_passes: AtomicU64,
 }
 
 /// What the relay's ledger check reads: counted here, since every `behind` answer is one `ledger_behind` refusal.
@@ -290,6 +292,7 @@ pub fn spawn(
                 purge_clock(),
             )
             .await;
+            purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
         }
     });
     ledger.track(purge);
