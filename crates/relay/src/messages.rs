@@ -3072,9 +3072,10 @@ impl Relay {
     /// (the router's snapshot at selection), the secret or bundle (the cache entry of that row's holder and
     /// credential generation, read from the registry on a miss alone) and the fence (the router's snapshot once
     /// the credential is in hand), so a worker never waits behind the session memory's flush or an admin write
-    /// while the lineage holds. A reload between selection and dispatch refuses `Stale`. A write landed but not yet
-    /// swapped passes with the old row and the cached credential, which belong together; a miss inside that window
-    /// reads the newer credential, which goes out under the old row for the one load the reload takes.
+    /// while the lineage holds. A reload between selection and dispatch that moved the holder, the revision or the
+    /// generation past the credential refuses `Stale`. A write landed but not yet swapped passes with the old row
+    /// and the cached credential, which belong together; a miss inside that window reads the newer credential,
+    /// which goes out under the old row for the one load the reload takes.
     async fn credential(&self, account: &AccountRow) -> Result<Credential, NoCredential> {
         let expected = self.router.snapshot().credential_generation(&account.id);
         let credential = match account.kind {

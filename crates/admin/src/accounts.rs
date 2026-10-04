@@ -297,6 +297,8 @@ pub(crate) async fn remove(
         }
         Err(error) => return store_failure(error),
     }
+    // The delete took the bundle outside the manager, so the copy it keeps goes with it.
+    state.manager.invalidate(&id);
     state.catalog.evict(&id);
     state.usage.invalidate(&id);
     let now = (state.clock)();
