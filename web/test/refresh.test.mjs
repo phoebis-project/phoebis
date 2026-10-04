@@ -168,7 +168,7 @@ const held = () => {
   return { calls, load };
 };
 
-test('of two overlapping refreshes the one started last keeps the screen, with its fetchedAt', async () => {
+test('an older refresh that settles after a newer one landed changes nothing, and fetchedAt stays the newer one', async () => {
   const clock = frozen();
   const reads = held();
   const p = await probe(reads.load);
@@ -198,6 +198,37 @@ test('a failure of an older read that settles after a newer success sets no erro
   reads.calls[1].reject(new Error('ledger locked'));
   await settled();
   assert.deepEqual([p.last().data, p.last().error, p.last().stale], ['third', null, false]);
+});
+
+test('a refresh slower than the period lands while nothing newer has, and the newer one lands after it', async () => {
+  const clock = frozen();
+  const reads = held();
+  const p = await probe(reads.load);
+  reads.calls[0].resolve('first');
+  await settled();
+  act(() => clock.tick(30_000));
+  act(() => clock.tick(30_000));
+  act(() => clock.tick(1_000));
+  reads.calls[1].resolve('second');
+  await settled();
+  const slow = [p.last().data, p.last().fetchedAt];
+  act(() => clock.tick(1_000));
+  reads.calls[2].resolve('third');
+  await settled();
+  assert.deepEqual([slow, p.last().data, p.last().fetchedAt], [['second', at(61_000)], 'third', at(62_000)]);
+});
+
+test('a first load still out through a pause lands once it answers', async () => {
+  const clock = frozen();
+  const reads = held();
+  const p = await probe(reads.load);
+  act(() => clock.tick(30_000));
+  assert.equal(reads.calls.length, 2, 'a refresh starts while the load is out');
+  p.render({ paused: true, refreshMs: 30_000 });
+  p.render({ refreshMs: 30_000 });
+  reads.calls[0].resolve('load');
+  await settled();
+  assert.deepEqual([p.last().data, p.last().loading, p.last().fetchedAt], ['load', false, at(30_000)]);
 });
 
 test("a refresh that outruns the first load ends the loading, and the load's late answer is dropped", async () => {

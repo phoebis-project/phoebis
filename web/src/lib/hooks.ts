@@ -22,7 +22,7 @@ export interface AsyncOptions {
   /**
    * Re-run `load` every `refreshMs` while the document is visible and `paused` is false; a refresh keeps `data` drawn,
    * never turns `loading` on, replaces `data` on success and keeps it on failure with `error` set; a refresh still in
-   * flight when `paused` turns true is dropped. Of reads that overlap, only the one started last lands.
+   * flight when `paused` turns true is dropped. A read that settles after a newer one has landed is dropped.
    */
   refreshMs?: number;
   paused?: boolean;
@@ -47,9 +47,16 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
   // The load effect's run for the current deps: a refresh that lands after the deps changed or the page left is
   // dropped by it, as the load's own answer is.
   const run = useRef({ alive: false });
-  // Every read takes the next number, and one that settles under the newest started is dropped, success and failure
-  // alike: a slow read that outlasts the next one would otherwise put an older answer over a newer one.
+  // Every read takes the next number, and one that settles after a higher number has landed is dropped, success and
+  // failure alike, so an older answer never replaces a newer one; a slow read still lands while nothing newer has.
   const started = useRef(0);
+  const landedSeq = useRef(0);
+  /** Whether the read numbered `seq` may land, which marks it as the newest landed. */
+  const lands = (seq: number) => {
+    if (seq < landedSeq.current) return false;
+    landedSeq.current = seq;
+    return true;
+  };
   // Whether the last read, the load or a refresh, failed: the next refresh runs quiet, so a failing streak toasts once.
   const failing = useRef(false);
   // The routes the streak failed on, each reported recovered once by the read that ends it, which takes down the
@@ -89,12 +96,12 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
     const seq = started.current;
     load().then(
       (value) => {
-        if (!current.alive || seq !== started.current) return;
+        if (!current.alive || !lands(seq)) return;
         landed(value, deps);
         setLoading(false);
       },
       (err: unknown) => {
-        if (!current.alive || seq !== started.current) return;
+        if (!current.alive || !lands(seq)) return;
         failed(err);
         setLoading(false);
       },
@@ -118,12 +125,12 @@ export function useAsync<T>(load: () => Promise<T>, deps: readonly unknown[] = [
       // A refresh that outruns the load it supersedes ends the loading too, since that load's answer will be dropped.
       (failing.current ? quietly(read) : read()).then(
         (value) => {
-          if (!armed.alive || !loadRun.alive || seq !== started.current) return;
+          if (!armed.alive || !loadRun.alive || !lands(seq)) return;
           landed(value, answered);
           setLoading(false);
         },
         (err: unknown) => {
-          if (!armed.alive || !loadRun.alive || seq !== started.current) return;
+          if (!armed.alive || !loadRun.alive || !lands(seq)) return;
           failed(err);
           setLoading(false);
         },
