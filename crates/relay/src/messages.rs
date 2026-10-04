@@ -25,9 +25,9 @@ use phoebis_bus::{
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, resolve, AccountTicket, ClientClass, CohortHold, EvidenceSource, Exhaustion,
-    HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented,
-    Refusal, Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection,
-    SelectionTrace, BUDGET_WINDOW,
+    HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented, Refusal,
+    Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace,
+    BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -69,7 +69,7 @@ use crate::identity::{
 use crate::memory::{
     uuid_v4, Injected, MemoryKey, Previous, SessionMemory, MEMORY_CAP, MEMORY_IDLE_MS,
 };
-use crate::observe::{answer_from_json, message_id_from_json, published_headers, wants_stream};
+use crate::observe::{answer_from_json, published_headers, wants_stream};
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
@@ -1370,7 +1370,7 @@ impl Relay {
         let boundaries = facts
             .chains
             .as_ref()
-            .map_or(&[][..], |c| c.message_boundaries.as_slice());
+            .map_or(&[][..], |c| &c.message_boundaries[..]);
         let ids = waits_on(&identity, boundaries);
         let applied = self.router.applied_report();
         if let Some((id, seq)) =
@@ -1402,7 +1402,7 @@ impl Relay {
                 facts
                     .chains
                     .as_ref()
-                    .map(|c| c.message_boundaries.clone())
+                    .map(|c| c.message_boundaries.to_vec())
                     .unwrap_or_default(),
                 client_facts(&parts.headers, Some(&identity), Some(&facts)),
                 auto_mode,
@@ -2727,7 +2727,7 @@ impl Relay {
                 });
                 // Sent where the answer ends, the only place its usage is known.
                 let renewal = self.renewal(&ctx);
-                let affinity = self.affinity(&ctx, &head);
+                let affinity = self.affinity(&ctx);
                 let (prefix, observer) = match held {
                     None => (Bytes::new(), None),
                     Some(Held { bytes, inspect, .. }) => {
@@ -3005,11 +3005,16 @@ impl Relay {
     /// The conversation report a committed answer sends once its usage is known: every fact the request knows,
     /// whatever the cache did and whether or not the request holds a pin, so a marker-less conversation still
     /// links its turns. `None` for a token count, which writes no cache.
-    fn affinity(&self, ctx: &Responding<'_>, head: &ResponseHead) -> Option<AffinityFacts> {
+    fn affinity(&self, ctx: &Responding<'_>) -> Option<AffinityFacts> {
         if ctx.trace.kind == Kind::CountTokens {
             return None;
         }
-        let root = ctx.identity.session_id.clone();
+        let root = ctx
+            .identity
+            .session_id
+            .is_some()
+            .then(|| ctx.identity.session_id.clone())
+            .flatten();
         Some(AffinityFacts {
             router: self.router.clone(),
             pending: self.pending_reports.clone(),
@@ -3033,7 +3038,6 @@ impl Relay {
                 .chains
                 .map(|c| c.message_boundaries.clone())
                 .unwrap_or_default(),
-            request_id: head.get("request-id").map(str::to_string),
             static_ttl_ms: ctx.tier_ttls.0,
             message_ttl_ms: ctx.tier_ttls.1,
             uniform_ttl_ms: ctx.uniform_ttl_ms,
@@ -3671,7 +3675,6 @@ impl Relay {
         // reaches the bus as text. A body that will not decode reaches it as nothing, because a consumer of a
         // chunk was promised text and coded bytes are worse than none.
         let mut chunk_published = false;
-        let mut message_id = None;
         let answer = match inspectable_copy(head, &raw).map(Bytes::from) {
             None => None,
             Some(text) => {
@@ -3683,7 +3686,6 @@ impl Relay {
                     phase: None,
                 });
                 chunk_published = true;
-                message_id = message_id_from_json(&text, &[]);
                 // Only the error statuses `respond` drains (400, 401, 403, 404, 429) reach here, a 200 being read
                 // by the body task; the 200 arm guards a caller that would buffer one, whose usage still counts.
                 (head.status == 200).then(|| answer_from_json(&text, &[]))
@@ -3708,7 +3710,6 @@ impl Relay {
             affinity.send(
                 (self.clock)(),
                 head.status,
-                message_id,
                 usage.as_ref(),
                 fast,
                 &mut waiting,

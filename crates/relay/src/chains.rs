@@ -2,6 +2,8 @@
 //! and the system blocks, and a message chain with one boundary per entry of `messages`. Both travel with the
 //! observation and the selection, so a warm pin's continuation and a keepalive's guard read the same hashes.
 
+use std::sync::Arc;
+
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 
@@ -16,10 +18,11 @@ const ATTRIBUTION_PREFIX: &str = "x-anthropic-billing-header: ";
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Chains {
     /// The tools array as one unit, then each system block in order, the attribution line skipped; the last
-    /// entry is the request's static hash.
-    pub static_boundaries: Vec<String>,
-    /// One boundary per entry of `messages`, on a seed of its own.
-    pub message_boundaries: Vec<String>,
+    /// entry is the request's static hash. Shared by pointer with every attempt's selection and the answer's
+    /// affinity report.
+    pub static_boundaries: Arc<[String]>,
+    /// One boundary per entry of `messages`, on a seed of its own; shared as the static chain is.
+    pub message_boundaries: Arc<[String]>,
     /// Parallel to `static_boundaries`: the estimated token size of the blocks up to and including each
     /// boundary, the canonical bytes the chain hashed over four; 0 at the empty-tools boundary of a request
     /// without tools.
@@ -59,8 +62,8 @@ impl Chains {
             }
         }
         Some(Chains {
-            static_boundaries,
-            message_boundaries,
+            static_boundaries: static_boundaries.into(),
+            message_boundaries: message_boundaries.into(),
             static_sizes,
         })
     }
@@ -198,7 +201,7 @@ mod tests {
         assert!(
             a.static_boundaries
                 .iter()
-                .zip(&b.static_boundaries)
+                .zip(b.static_boundaries.iter())
                 .all(|(x, y)| x != y),
             "every static boundary moves, not only the first"
         );

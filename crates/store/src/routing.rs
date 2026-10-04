@@ -147,8 +147,6 @@ pub struct RekeyWrite {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum AffinityChain {
     Message,
-    Request,
-    Response,
     Static,
 }
 
@@ -156,8 +154,6 @@ impl AffinityChain {
     pub fn as_str(self) -> &'static str {
         match self {
             AffinityChain::Message => "message",
-            AffinityChain::Request => "request",
-            AffinityChain::Response => "response",
             AffinityChain::Static => "static",
         }
     }
@@ -165,8 +161,6 @@ impl AffinityChain {
     pub fn parse(value: &str) -> Option<AffinityChain> {
         match value {
             "message" => Some(AffinityChain::Message),
-            "request" => Some(AffinityChain::Request),
-            "response" => Some(AffinityChain::Response),
             "static" => Some(AffinityChain::Static),
             _ => None,
         }
@@ -185,7 +179,7 @@ impl ToSql for AffinityChain {
     }
 }
 
-/// One boundary or parent id: which account the conversation it names last ran on, whose conversation it belongs
+/// One boundary: which account the conversation it names last ran on, whose conversation it belongs
 /// to, and, when the cache confirmed it, how warm it is. The links (the account, the key, the root) are written
 /// for every completed response; the warmth is written only with cache evidence.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -202,7 +196,7 @@ pub struct AffinityRow {
     /// unconfirmed refresh shortens it to what remained, so the boundary's warm deadline never moves; 0 for a
     /// link the cache never confirmed, which never places. `prefix_tokens` is the promised prefix: for a
     /// `static` row the relay's estimate of the blocks the boundary covers (canonical bytes over four), for a
-    /// `message`, `response` or `request` row the cached tokens the upstream reported for the writing request.
+    /// `message` row the cached tokens the upstream reported for the writing request.
     pub written_at: i64,
     pub ttl_ms: i64,
     pub prefix_tokens: u64,

@@ -103,17 +103,15 @@ pub fn climb(
     // The relay has no incarnation reading of its own; the `RouterHandle` implementation substitutes the
     // snapshot's, so a raw lookup only sees this when it is not that handle.
     let no_incarnation = |_: &str| None;
-    let ask = |parent_ids: &[String], boundaries: &[String]| {
-        // A boundary-less, parent-less call would answer nothing anyway; skipped so the lookup is never
-        // reached over an empty slice.
-        if parent_ids.is_empty() && boundaries.is_empty() {
+    let ask = |boundaries: &[String]| {
+        // A boundary-less call would answer nothing anyway, so the lookup is never asked over an empty slice.
+        if boundaries.is_empty() {
             return None;
         }
         lookup.conversation(&ConversationQuery {
             canonical_model: &canonical_model,
             key_id: &key.id,
             key_generation: key.created_at,
-            parent_ids,
             message_boundaries: boundaries,
             incarnation_of: &no_incarnation,
         })
@@ -122,7 +120,7 @@ pub fn climb(
     // A session that has no pin of its own is new to the map, so its deepest own-key match names the
     // conversation it branched from; the session id keeps the identity.
     if identity.session_id.is_some() {
-        if let Some(m) = ask(&[], message_boundaries) {
+        if let Some(m) = ask(message_boundaries) {
             if identity.session_id.as_deref() != Some(m.root.as_str()) {
                 identity.forked_from = Some(m.root);
                 identity.fork_depth = m.depth;
@@ -398,9 +396,7 @@ mod tests {
         }
     }
 
-    fn identity_of(
-        session_id: Option<&str>,
-    ) -> RequestIdentity {
+    fn identity_of(session_id: Option<&str>) -> RequestIdentity {
         RequestIdentity {
             session_id: session_id.map(String::from),
             agent_id: "main".into(),
@@ -459,6 +455,7 @@ mod tests {
         let k = key();
         climb(&mut identity, &k, &[], &Panicking);
         assert_eq!(identity.forked_from, None);
+        assert_eq!(identity.fork_depth, None);
     }
 
     #[test]

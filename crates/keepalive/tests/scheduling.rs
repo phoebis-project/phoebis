@@ -13,6 +13,7 @@ use phoebis_routing::{
     SelectResult,
 };
 use phoebis_store::{AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy};
+use std::sync::Arc;
 
 async fn armed(spec: RigSpec) -> Rig {
     let mut r = rig(spec).await;
@@ -386,9 +387,9 @@ async fn select_main(r: &Rig) -> SelectResult {
             request_class: None,
             context_compacted: false,
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
-            static_boundaries: Vec::new(),
+            static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
@@ -709,9 +710,9 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
             request_class: None,
             context_compacted: false,
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
-            static_boundaries: Vec::new(),
+            static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
@@ -1207,9 +1208,9 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
                 request_class: None,
                 context_compacted: false,
                 static_hash: None,
-                boundaries: Vec::new(),
+                boundaries: Arc::from([]),
                 client: ClientClass::ClaudeCode,
-                static_boundaries: Vec::new(),
+                static_boundaries: Arc::from([]),
                 marker: false,
                 parent_agent_id: None,
                 holds: Vec::new(),

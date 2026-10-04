@@ -806,7 +806,7 @@ async fn the_observation_carries_the_class_and_the_chains_and_a_refusal_carries_
     let chains = phoebis_relay::Chains::read(&root).expect("the fixture body is a JSON object");
     assert_eq!(observed.client.request_class.as_deref(), Some("main"));
     assert_eq!(observed.static_hash.as_deref(), chains.static_hash());
-    assert_eq!(observed.boundaries, chains.message_boundaries);
+    assert_eq!(observed.boundaries, chains.message_boundaries.to_vec());
     let pins = h.router.pins().await.unwrap();
     assert_eq!(
         (pins[0].static_hash.as_deref(), pins[0].tail_hash.as_deref()),

@@ -1868,6 +1868,149 @@ async fn every_session_row_answers_its_fork_members_and_a_forked_session_names_i
 }
 
 #[tokio::test]
+async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_releasing_it_frees_the_pin(
+) {
+    use common::{generation, login, post, wait_json};
+    use phoebis_ledger::{EventRecord, Record, RequestRecord};
+    use std::sync::atomic::Ordering;
+
+    let seed = common::admin_parts_full().await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(
+        &seed.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#,
+        Some(&seeding),
+    )
+    .await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    let key_generation = generation(&seed.store, "desktop");
+    let now = common::NOW + 200_000_000;
+    // A request groups under its own session id, the one its pin is held under.
+    seed.store
+        .upsert_pin(&phoebis_store::PinRow {
+            key_id: "desktop".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            account_id: "business".into(),
+            epoch: 2,
+            created_at: now - 2_000,
+            last_used_at: now - 1_000,
+            key_generation,
+            incarnation: 1,
+            burn: phoebis_store::PinBurn {
+                input: 1.0,
+                ..phoebis_store::PinBurn::default()
+            },
+            burn_at: Some(now - 1_000),
+            burn_banded: phoebis_store::PinBurn {
+                input: 1.0,
+                ..phoebis_store::PinBurn::default()
+            },
+            last_input_tokens: 100,
+            last_refresh_at: now - 1_000,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on(seed.store.clone()).await;
+    parts.clock_cell.store(now, Ordering::SeqCst);
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            id: "r-plain".into(),
+            received_at: now - 1_500,
+            finished_at: Some(now - 1_000),
+            key_id: Some("desktop".into()),
+            key_generation,
+            session_id: Some("s1".into()),
+            agent_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            ..Default::default()
+        },
+        attempts: vec![],
+        bodies: None,
+    });
+    parts.ledger.record(Record::Event(EventRecord {
+        at: now - 1_200,
+        kind: "pin_migrated".into(),
+        account_id: Some("business".into()),
+        key_id: Some("desktop".into()),
+        session_id: Some("s1".into()),
+        model: Some("claude-sonnet-5".into()),
+        actor: None,
+        detail: Some(
+            r#"{"agent_id":"main","epoch":2,"from_account":"direct","reason":"cooldown"}"#.into(),
+        ),
+    }));
+
+    let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        v["sessions"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|r| r["requests"].as_u64() == Some(1))
+    })
+    .await;
+    let rows = sessions["sessions"].as_array().unwrap();
+    assert_eq!(
+        rows.len(),
+        1,
+        "the pin and the activity are one row: {rows:?}"
+    );
+    assert_eq!(
+        (
+            rows[0]["session_id"].as_str(),
+            rows[0]["pinned"].as_bool(),
+            rows[0]["requests"].as_u64(),
+        ),
+        (Some("s1"), Some(true), Some(1)),
+        "the row is the session's own"
+    );
+
+    let detail = wait_json(&parts.app, "/admin/requests/r-plain", &cookie, |v| {
+        v["events"].as_array().is_some_and(|e| !e.is_empty())
+    })
+    .await;
+    assert!(
+        detail["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "pin_migrated"),
+        "the request's events carry the move of the pin it was routed by: {detail}"
+    );
+
+    let released = post(
+        &parts.app,
+        "/admin/sessions/desktop/s1/release",
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(released.status(), 204);
+    assert!(
+        parts.router.pins().await.unwrap().is_empty(),
+        "releasing the session frees its pin"
+    );
+}
+
+#[tokio::test]
 async fn a_request_row_answers_its_fork_fields() {
     use common::{generation, get, json, login, post, wait_json};
     use phoebis_ledger::{Record, RequestRecord};

@@ -2,6 +2,7 @@
 //! files to the live key shape so a route and its decoder cannot drift apart unnoticed.
 mod common;
 use std::path::PathBuf;
+use std::sync::Arc;
 
 use common::{deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
 use phoebis_bus::{
@@ -425,9 +426,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
             request_class: None,
             context_compacted: false,
             static_hash: None,
-            boundaries: Vec::new(),
+            boundaries: Arc::from([]),
             client: ClientClass::ClaudeCode,
-            static_boundaries: Vec::new(),
+            static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
             holds: Vec::new(),
@@ -459,11 +460,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 canonical_model: "claude-sonnet-5-5".into(),
                 lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
                 root: Some("s0".into()),
-                static_boundaries: Vec::new(),
-                message_boundaries: boundaries.clone(),
+                static_boundaries: Arc::from([]),
+                message_boundaries: Arc::from(boundaries.clone()),
                 static_sizes: Vec::new(),
-                message_id: None,
-                request_id: None,
                 static_ttl_ms: None,
                 message_ttl_ms: Some(300_000),
                 cache_touched: true,
@@ -501,9 +500,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
             request_class: None,
             context_compacted: false,
             static_hash: None,
-            boundaries: [boundaries.as_slice(), &["b-fixture-3".to_string()]].concat(),
+            boundaries: Arc::from([boundaries.as_slice(), &["b-fixture-3".to_string()]].concat()),
             client: ClientClass::ClaudeCode,
-            static_boundaries: Vec::new(),
+            static_boundaries: Arc::from([]),
             marker: false,
             parent_agent_id: None,
             holds: vec![phoebis_routing::HoldFacts {

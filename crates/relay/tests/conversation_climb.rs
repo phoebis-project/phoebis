@@ -5,7 +5,7 @@ mod common;
 use axum::body::Body;
 use axum::http::Request;
 use common::*;
-use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
+use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event, Fork};
 use serde_json::{json, Value};
@@ -273,7 +273,7 @@ async fn a_marker_on_the_tail_alone_records_the_static_boundaries_as_links_witho
 }
 
 #[tokio::test]
-async fn a_completed_response_lands_its_boundaries_and_ids_in_the_affinity_map() {
+async fn a_completed_response_lands_its_boundaries_in_the_affinity_map() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: ok("msg_1", Some("req_up_0001"), true),
@@ -294,13 +294,13 @@ async fn a_completed_response_lands_its_boundaries_and_ids_in_the_affinity_map()
     identified(&mut sub).await;
     settle(&h).await;
 
-    let account_id = h.router.pins().await.unwrap()[0].account_id.clone();
+    let account_id = "a";
     let key = h.store.api_key("desktop").unwrap().unwrap();
     let now = h.clock.load(std::sync::atomic::Ordering::SeqCst);
     {
         let map = h.router.affinity();
         let guard = map.read().unwrap();
-        for boundary in &message_boundaries {
+        for boundary in message_boundaries.iter() {
             let entry = guard
                 .entry(MODEL, boundary)
                 .expect("every message boundary lands in the map");
@@ -310,64 +310,10 @@ async fn a_completed_response_lands_its_boundaries_and_ids_in_the_affinity_map()
             assert_eq!(entry.key_id, key.id);
             assert_eq!(entry.key_generation, key.created_at);
         }
-        let response_entry = guard
-            .parent("msg_1")
-            .expect("the answer's own id lands as a response link");
-        assert_eq!(
-            response_entry.chain,
-            phoebis_routing::AffinityChain::Response
-        );
-        let request_entry = guard
-            .parent("req_up_0001")
-            .expect("the upstream's request-id lands as a request link");
-        assert_eq!(request_entry.chain, phoebis_routing::AffinityChain::Request);
         let static_entry = guard
             .entry(MODEL, &static_hash)
             .expect("the static boundary lands too, under the same cache evidence");
         assert_eq!(static_entry.chain, phoebis_routing::AffinityChain::Static);
-    }
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_streamed_answer_lands_its_message_id_in_the_affinity_map() {
-    let events = vec![
-        SseEvent {
-            event: "message_start".into(),
-            data: r#"{"type":"message_start","message":{"id":"msg_stream_1","usage":{"input_tokens":5,"cache_read_input_tokens":2}}}"#.into(),
-        },
-        SseEvent {
-            event: "message_stop".into(),
-            data: r#"{"type":"message_stop"}"#.into(),
-        },
-    ];
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: Respond::Sse {
-            status: 200,
-            headers: vec![],
-            events,
-            delay_between: std::time::Duration::from_millis(1),
-        },
-    }])
-    .await;
-    let (h, mut sub) = setup(&up, &one()).await;
-
-    let mut value = body(vec![user("a streamed turn")]);
-    value["stream"] = json!(true);
-    send(&h, req(&value)).await;
-    identified(&mut sub).await;
-    settle(&h).await;
-    {
-        let map = h.router.affinity();
-        let guard = map.read().unwrap();
-        let response_entry = guard
-            .parent("msg_stream_1")
-            .expect("the streamed answer's own message id lands as a response link, off the message_start event");
-        assert_eq!(
-            response_entry.chain,
-            phoebis_routing::AffinityChain::Response
-        );
     }
     up.shutdown().await;
 }

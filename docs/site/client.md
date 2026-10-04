@@ -274,12 +274,10 @@ accepting requests right now` and `Retry-After: 5`.
 ### How a request is identified
 
 A conversation is identified by the `x-claude-code-session-id` header.
-Every one of these hints is optional: a client that sends none of them is still relayed.
-A body the strict JSON reader refuses because a string was cut between
-two halves of a character is still read for its facts; the bytes sent on are the client's own. A client that forks a
-session under a new id, whose messages continue an earlier conversation of the same key, keeps the new id as that
-session's own identity; the fork is recorded beside it, visible in the console, without moving the new session off the
-account its own history names.
+A body the strict JSON reader refuses because a string was cut between two halves of a character is still read
+for its facts; the bytes sent on are the client's own. A client that forks a session under a new id, whose messages
+continue an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is recorded
+beside it, visible in the console, without moving the new session off the account its own history names.
 
 ### The per-turn effort form
 

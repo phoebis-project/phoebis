@@ -14,10 +14,11 @@ use crate::{crypto, StorageKey, Store, StoreError, LOCK_POISONED, PENDING_WHERE}
 const IN_FLIGHT_WHERE: &str = "resolved_at IS NULL";
 
 // `PENDING_WHERE` as one term is the predicate of the partial index `refresh_attempts_pending`, so SQLite answers
-// this read from that index rather than the table.
+// this read from that index rather than the table. Named, since the planner otherwise prefers
+// `refresh_attempts_account`, which leads with both equality columns but holds every attempt the holder made.
 fn holder_pending_query() -> String {
     format!(
-        "SELECT EXISTS(SELECT 1 FROM refresh_attempts \
+        "SELECT EXISTS(SELECT 1 FROM refresh_attempts INDEXED BY refresh_attempts_pending \
          WHERE account_id = ?1 AND incarnation = ?2 AND ({PENDING_WHERE}))"
     )
 }

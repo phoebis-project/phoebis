@@ -1,6 +1,7 @@
 //! One selection: the spec's seven steps over the snapshot and the routing state.
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, CooldownRow, OveragePolicy, PinBurn,
@@ -64,10 +65,11 @@ pub struct SelectRequest {
     /// The static chain's last boundary and every boundary of the message chain, lowercase hex; empty when
     /// the body carried no chain.
     pub static_hash: Option<String>,
-    pub boundaries: Vec<String>,
+    /// Shared with the attempts before and after and with the answer's affinity report, never copied per attempt.
+    pub boundaries: Arc<[String]>,
     pub client: ClientClass,
     /// Every static boundary in chain order; `static_hash` stays the last one.
-    pub static_boundaries: Vec<String>,
+    pub static_boundaries: Arc<[String]>,
     /// The body carries a `cache_control` marker, or the TTL policy will add one: the cache gate.
     pub marker: bool,
     /// `x-claude-code-parent-agent-id` as sent; `with_main` reads it, `main` when absent.
@@ -189,11 +191,11 @@ pub enum Warmth {
 /// request whose boundaries contain the pin's tail or name an entry the pin's key and generation wrote on the pin's
 /// account and incarnation continues the conversation (so where one session holds several conversations, a
 /// continuation of any of them refreshes the pin), one that matches the static prefix without such a boundary
-/// restarted it, and one matching
-/// neither is foreign. A body without a chain refreshes, the fallback for a request that carries no fact. A
-/// keepalive probe replays the recipe's headers and body verbatim, the re-arming request's rather than its own, so
-/// it is judged by none of this: its renewal report stamps the refresh instead. A token count is judged by none of
-/// it either, since it creates no cache entry to be warm about.
+/// restarted it, and one matching neither is foreign. A body
+/// without a chain refreshes, the fallback for a request that carries no fact. A keepalive probe replays the
+/// recipe's headers and body verbatim, the re-arming request's rather than its own, so it is judged by none of
+/// this: its renewal report stamps the refresh instead. A token count is judged by none of it either, since it
+/// creates no cache entry to be warm about.
 pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> Warmth {
     if request.probe || request.count {
         return Warmth::Untouched;
