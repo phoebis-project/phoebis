@@ -347,9 +347,15 @@ async fn a_key_moved_between_pools_mid_flight_is_refused_and_the_next_request_ad
     assert_eq!(outcome(&response).obstacle, Some("pool_moved"));
     let text = text_of(response).await;
     assert!(
-        text.contains("no account in this pool can serve requests") && !text.contains("\"a\""),
+        text.contains("no account in this pool can serve requests"),
         "{text}"
     );
+    for named in ["\"b\"", "\"q\"", "\"main\""] {
+        assert!(
+            !text.contains(named),
+            "the refusal names neither the account nor a pool: {text}"
+        );
+    }
     assert!(up.requests().is_empty(), "nothing reached the upstream");
     let complete = drain_until_complete(&mut sub)
         .await
