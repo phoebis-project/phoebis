@@ -254,8 +254,8 @@ impl PlanTables {
         }
     }
 
-    /// `reference_share` over the tier's factor for the window (`seven_day_fable` twice the 7-day share); `None`
-    /// when either is.
+    /// `reference_share` over the tier's factor for the window (`seven_day_fable` twice the 7-day share, any other
+    /// model week the 7-day share once until the table measures it); `None` when either is.
     pub fn share(
         &self,
         window: &str,
@@ -266,6 +266,7 @@ impl PlanTables {
         let (priced, times) = match window {
             FIVE_HOUR | SEVEN_DAY => (window, 1.0),
             SEVEN_DAY_FABLE => (SEVEN_DAY, 2.0),
+            w if w.starts_with(SEVEN_DAY) => (SEVEN_DAY, 1.0),
             _ => return None,
         };
         let reference = self.cost.reference_share(priced, canonical_model, usage)?;
@@ -315,14 +316,19 @@ impl PlanTables {
         RateTable { rows, fallback }
     }
 
-    /// The tier's factor for the window (`seven_day_fable` reads the 7-day one), `None` for a tier the table lacks,
-    /// a factor left `null`, or a window that is none of the three.
+    /// The tier's factor for the window (every weekly window reads the 7-day one), `None` for a tier the table
+    /// lacks, a factor left `null`, or a window that is neither the 5-hour nor a weekly one.
     pub fn tier_factor(&self, tier: &str, window: &str) -> Option<f64> {
         let factors = tier_row(&self.cost.tiers, tier)?;
         match window {
             FIVE_HOUR => factors.five_hour,
-            SEVEN_DAY | SEVEN_DAY_FABLE => factors.seven_day,
+            w if w.starts_with(SEVEN_DAY) => factors.seven_day,
             _ => None,
         }
+    }
+
+    /// `share` for a model window the table does not name prices the 7-day share once; this reads false for it.
+    pub fn measured(&self, window: &str) -> bool {
+        matches!(window, FIVE_HOUR | SEVEN_DAY | SEVEN_DAY_FABLE)
     }
 }

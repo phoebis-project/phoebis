@@ -465,7 +465,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           {account.windows.length === 0 && !account.fableWindow ? (
             <p className="muted">This account does not report quota windows.</p>
           ) : (
-            <WindowTriple account={account} now={now} />
+            <WindowTriple account={account} now={now} others />
           )}
           {extra && (extra.enabled || extra.disabledReason) && (
             <div className="extra-usage">

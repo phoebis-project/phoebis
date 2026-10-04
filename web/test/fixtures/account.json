@@ -49,21 +49,27 @@
     },
     "windows": [
       {
-        "id": "7d",
+        "id": "five_hour",
+        "utilization": 0.62,
+        "resets_at": 4600000,
+        "observed_at": 900000
+      },
+      {
+        "id": "seven_day",
         "utilization": 0.41,
         "resets_at": 87400000,
         "observed_at": 900000
       },
       {
-        "id": "fable",
+        "id": "seven_day_fable",
         "utilization": 0.12,
         "resets_at": 87400000,
         "observed_at": 900000
       },
       {
-        "id": "five_hour",
-        "utilization": 0.62,
-        "resets_at": 4600000,
+        "id": "seven_day_opus",
+        "utilization": 0.03,
+        "resets_at": 87400000,
         "observed_at": 900000
       }
     ],

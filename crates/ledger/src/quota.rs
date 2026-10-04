@@ -8,7 +8,10 @@ use std::time::Duration;
 
 use phoebis_oauth::{UsageService, UsageSnapshot};
 use phoebis_relay::UnifiedHeaders;
-use phoebis_routing::{credits_from_usage, sample_from_usage, Report, RouterHandle};
+use phoebis_routing::{
+    credits_from_usage, sample_from_usage, Report, RouterHandle, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
+};
 use phoebis_store::{AccountKind, AccountRow, AccountState, Store};
 use phoebis_transport::response::ResponseHead;
 use tokio::task::JoinSet;
@@ -33,6 +36,9 @@ const WAKE_TOLERANCE: Duration = Duration::from_secs(1);
 /// The profile is read again on every twelfth poll of an account, an hour apart: a tier moves rarely, and the
 /// profile endpoint shares the usage endpoint's per-account limit.
 pub const PROFILE_EVERY_POLLS: u32 = 12;
+
+/// The usage endpoint's key for the week the head reports as `7d_oi`.
+const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
 
 pub fn samples_from_head(
     account_id: &str,
@@ -64,11 +70,21 @@ pub(crate) fn samples_from_unified(
             .filter(|f| f.is_finite())
     };
     let mut quota = Vec::new();
+    // The head names its windows `5h`, `7d` and `7d_oi`; the table spells them by the usage endpoint's keys, so a
+    // head and a poll of one bucket write one row per window.
     let windows = [
-        ("5h", unified.five_hour_utilization, unified.five_hour_reset),
-        ("7d", unified.seven_day_utilization, unified.seven_day_reset),
         (
-            "7d_oi",
+            FIVE_HOUR,
+            unified.five_hour_utilization,
+            unified.five_hour_reset,
+        ),
+        (
+            SEVEN_DAY,
+            unified.seven_day_utilization,
+            unified.seven_day_reset,
+        ),
+        (
+            SEVEN_DAY_OVERAGE_INCLUDED,
             float("anthropic-ratelimit-unified-7d_oi-utilization"),
             unified.seven_day_oi_reset,
         ),
@@ -116,13 +132,16 @@ pub fn samples_from_poll(
         source: "poll".into(),
         observed_at: Some(snapshot.fetched_at),
     };
+    // The `limits` window is the Fable week, as the router reads it: a top-level key of the same name would be a
+    // second reading of one window, and the table keeps one row per window.
     let mut quota: Vec<QuotaSampleRecord> = snapshot
         .windows
         .iter()
+        .filter(|w| snapshot.fable_window.is_none() || w.key != SEVEN_DAY_FABLE)
         .map(|w| row(&w.key, w.utilization, w.resets_at))
         .collect();
     if let Some(fable) = &snapshot.fable_window {
-        quota.push(row("fable", fable.utilization, fable.resets_at));
+        quota.push(row(SEVEN_DAY_FABLE, fable.utilization, fable.resets_at));
     }
     let extra = snapshot
         .extra_usage
@@ -544,6 +563,7 @@ mod tests {
             ("anthropic-ratelimit-unified-5h-utilization", "0.42"),
             ("anthropic-ratelimit-unified-5h-reset", "2000"),
             ("anthropic-ratelimit-unified-7d-utilization", "0.13"),
+            ("anthropic-ratelimit-unified-7d_oi-utilization", "0.91"),
             ("anthropic-ratelimit-unified-overage-in-use", "true"),
             ("anthropic-ratelimit-unified-overage-utilization", "0.5"),
             ("anthropic-ratelimit-unified-overage-reset", "3000"),
@@ -564,8 +584,15 @@ mod tests {
                 ))
                 .collect::<Vec<_>>(),
             [
-                ("5h", Some(0.42), Some(2_000_000), 1_200, "header"),
-                ("7d", Some(0.13), None, 1_200, "header")
+                ("five_hour", Some(0.42), Some(2_000_000), 1_200, "header"),
+                ("seven_day", Some(0.13), None, 1_200, "header"),
+                (
+                    "seven_day_overage_included",
+                    Some(0.91),
+                    None,
+                    1_200,
+                    "header"
+                )
             ]
         );
         let extra = extra.unwrap();
@@ -621,7 +648,7 @@ mod tests {
             [
                 ("five_hour", Some(0.125), 600, "poll"),
                 ("seven_day_opus", Some(0.03), 600, "poll"),
-                ("fable", Some(0.42), 600, "poll")
+                ("seven_day_fable", Some(0.42), 600, "poll")
             ]
         );
         let extra = extra.unwrap();

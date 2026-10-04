@@ -12,7 +12,7 @@ use rand::{Rng, RngExt};
 use crate::affinity::{AffinityEntry, AffinityMap};
 use crate::state::{
     budget_deadline, shed_marks, warm, BurnUnit, CreditsState, PinRef, RoutingState, StateWrite,
-    Tier, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    Tier, FIVE_HOUR, SEVEN_DAY,
 };
 use crate::windows::window_for;
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -454,22 +454,43 @@ fn budget_unknown(
     state.accounting_degraded() && budgeted_member(snapshot, pool_id, account_id).is_some()
 }
 
-/// Whether an account can still serve a request whose allowance is judged in `window`: the model's own weekly
-/// window for a fable request, both shared plan windows otherwise, either of whose two predictions at 1.0 is
-/// spent. No sample, or a sample that never read the window, counts as allowance (an api_key account, whose
-/// sample carries no plan window of its own, always holds it here); a reading past its reset, or one a newer
-/// head lowered, no longer excludes.
+/// Whether an account can still serve a request whose allowance is judged in `window` (`window_for`'s answer):
+/// for a model with a week of its own, that week and both shared plan windows, since its requests draw on the
+/// shared windows too; both shared plan windows otherwise. A prediction at 1.0 is spent. No sample, or a sample
+/// that never read the window, counts as allowance (an api_key account, whose sample carries no plan window of
+/// its own, always holds it here); a reading past its reset, or one a newer head lowered, no longer excludes.
 fn holds_allowance(state: &RoutingState, account_id: &str, window: &str, now: i64) -> bool {
     let spent = |name: &str| {
         state
             .predicted(account_id, name, now)
             .is_some_and(|r| r.utilization >= 1.0)
     };
-    if window == SEVEN_DAY_FABLE {
-        !spent(SEVEN_DAY_FABLE)
+    if window != SEVEN_DAY {
+        !spent(window) && !spent(FIVE_HOUR) && !spent(SEVEN_DAY)
     } else {
         !spent(FIVE_HOUR) && !spent(SEVEN_DAY)
     }
+}
+
+/// The latest reset among the spent windows `holds_allowance` reads for `window`, with that window's key: the
+/// moment the account can serve the request again once every spent window has reset. `None` when no spent window
+/// names a reset.
+fn spent_until<'a>(
+    state: &RoutingState,
+    account_id: &str,
+    window: &'a str,
+    now: i64,
+) -> Option<(i64, &'a str)> {
+    [window, FIVE_HOUR, SEVEN_DAY]
+        .into_iter()
+        .filter_map(|name| {
+            state
+                .predicted(account_id, name, now)
+                .filter(|r| r.utilization >= 1.0)
+                .and_then(|r| r.reset)
+                .map(|reset| (reset, name))
+        })
+        .max_by_key(|(reset, _)| *reset)
 }
 
 /// The pool's affinity in milliseconds, saturating for a value no clock reaches.
@@ -839,41 +860,53 @@ pub fn select(
         }
     }
 
-    // Step 6: a model with its own window needs allowance left in it, the cap bounds a fresh placement, the
-    // ceiling prefers the accounts under it, the wind-down prefers accounts that can take a fresh session, and
-    // under Pace the floor keeps an almost-spent account as the last resort. Each preference falls through to
-    // the wider set it narrowed when it would otherwise empty the selection, and every candidate a partition
-    // drops joins the trace under that partition's name.
+    // Step 6: a model with its own window needs allowance left in it and in both shared windows, the cap bounds a
+    // fresh placement, the ceiling prefers the accounts under it, the wind-down prefers accounts that can take a
+    // fresh session, and under Pace the floor keeps an almost-spent account as the last resort. Each preference
+    // falls through to the wider set it narrowed when it would otherwise empty the selection, and every candidate
+    // a partition drops joins the trace under that partition's name.
     let mut skipped: Vec<Skipped> = Vec::new();
-    // A dated deadline for the accounts the Fable partition drops, kept apart from `skipped`: it answers
-    // `exhaustion_of` when nothing is left to choose from, but every dropped candidate joins the trace as
+    // A dated deadline for the accounts the model-window partition passes over, kept apart from `skipped`: it
+    // answers `exhaustion_of` when nothing is left to choose from, but every dropped candidate joins the trace as
     // `spent` whether or not its reading names a reset, so the deadline never doubles as its own trace label.
     let mut spent_deadlines: Vec<(String, Obstacle)> = Vec::new();
+    // Under `allow`, the spent candidates kept on extra usage: `choose` orders them behind every plan-funded one.
+    let mut spent_model: Vec<String> = Vec::new();
     // The candidates placement may choose among, before any of step 6's own partitions: judged on the account
     // itself, never on whether a preference below narrowed the wider set around it.
     let allowed: Vec<&Candidate> = selection_set.clone();
-    if window == SEVEN_DAY_FABLE {
-        let (left, spent): (Vec<&Candidate>, Vec<&Candidate>) = selection_set
-            .iter()
-            .copied()
-            .partition(|c| holds_allowance(state, &c.account_id, window, request.now));
-        for c in &spent {
-            skipped.push(Skipped {
-                account_id: c.account_id.clone(),
-                obstacle: "spent",
-            });
-            if let Some(until) = state
-                .predicted(&c.account_id, SEVEN_DAY_FABLE, request.now)
-                .and_then(|r| r.reset)
-            {
+    if window != SEVEN_DAY {
+        let mut left: Vec<&Candidate> = Vec::new();
+        for c in selection_set.iter().copied() {
+            if holds_allowance(state, &c.account_id, window, request.now) {
+                left.push(c);
+                continue;
+            }
+            if let Some((until, spent)) = spent_until(state, &c.account_id, window, request.now) {
                 spent_deadlines.push((
                     c.account_id.clone(),
                     Obstacle::Cooldown {
                         reason: "spent".into(),
                         until,
-                        window: SEVEN_DAY_FABLE.to_string(),
+                        window: spent.to_string(),
                     },
                 ));
+            }
+            // Extra usage funds every model, so under `allow` a spent week goes on in overage while the poll reads
+            // the account's extra usage as enabled; a state the poll has not read is no such reading.
+            let funded = pool.overage_policy == OveragePolicy::Allow
+                && snapshot
+                    .account(&c.account_id)
+                    .and_then(|a| state.credits_of(&c.account_id, a.incarnation))
+                    .is_some_and(|credits| credits.blocked().is_none());
+            if funded {
+                spent_model.push(c.account_id.clone());
+                left.push(c);
+            } else {
+                skipped.push(Skipped {
+                    account_id: c.account_id.clone(),
+                    obstacle: "spent",
+                });
             }
         }
         selection_set = left;
@@ -954,6 +987,7 @@ pub fn select(
             pool,
             window,
             &selection_set,
+            &spent_model,
             request.now,
             request.fallback_ms,
             !held,
@@ -1207,8 +1241,8 @@ fn under_band(
 }
 
 /// Whether the account's allowance is known: an api_key account has no plan window to read, and a subscription
-/// account holds a prediction of the request's window, `SEVEN_DAY_FABLE` for a Fable request and both shared
-/// windows otherwise.
+/// account holds a prediction of every window `holds_allowance` reads for the request: the model's own week and
+/// both shared windows for a model with a week of its own, both shared windows otherwise.
 fn allowance_known(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1218,8 +1252,8 @@ fn allowance_known(
 ) -> bool {
     let known = |name: &str| state.predicted(account_id, name, now).is_some();
     snapshot.account(account_id).map(|a| a.kind) == Some(AccountKind::ApiKey)
-        || if window == SEVEN_DAY_FABLE {
-            known(SEVEN_DAY_FABLE)
+        || if window != SEVEN_DAY {
+            known(window) && known(FIVE_HOUR) && known(SEVEN_DAY)
         } else {
             known(FIVE_HOUR) && known(SEVEN_DAY)
         }
@@ -1255,32 +1289,31 @@ fn move_of<'a>(
                 .is_none_or(|at| now - at >= dwell_ms)
             && state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap
     };
-    let destinations =
-        |state: &RoutingState, keep: &dyn Fn(&Candidate) -> bool| -> Vec<&'a Candidate> {
-            let set: Vec<&'a Candidate> = eligible
-                .iter()
-                .copied()
-                .filter(|c| c.account_id != current.account_id && keep(c))
-                // An account with no allowance left in the model's own window is no destination: step 6 drops it,
-                // so releasing the pin for a set of them would strand the request on nothing.
-                .filter(|c| {
-                    window != SEVEN_DAY_FABLE || holds_allowance(state, &c.account_id, window, now)
-                })
-                .collect();
-            // A hot destination would shed the session again at its next round, so every move prefers a cool
-            // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
-            // hot sibling still answers, which staying put does not.
-            if pool.migrate_above_utilization.is_none() {
-                return set;
-            }
-            let preferred: Vec<&'a Candidate> =
-                set.iter().copied().filter(|c| cool(state, c)).collect();
-            if preferred.is_empty() {
-                set
-            } else {
-                preferred
-            }
-        };
+    let destinations = |state: &RoutingState,
+                        keep: &dyn Fn(&Candidate) -> bool|
+     -> Vec<&'a Candidate> {
+        let set: Vec<&'a Candidate> = eligible
+            .iter()
+            .copied()
+            .filter(|c| c.account_id != current.account_id && keep(c))
+            // An account with no allowance left in the model's own window is no destination: step 6 drops it,
+            // so releasing the pin for a set of them would strand the request on nothing.
+            .filter(|c| window == SEVEN_DAY || holds_allowance(state, &c.account_id, window, now))
+            .collect();
+        // A hot destination would shed the session again at its next round, so every move prefers a cool
+        // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
+        // hot sibling still answers, which staying put does not.
+        if pool.migrate_above_utilization.is_none() {
+            return set;
+        }
+        let preferred: Vec<&'a Candidate> =
+            set.iter().copied().filter(|c| cool(state, c)).collect();
+        if preferred.is_empty() {
+            set
+        } else {
+            preferred
+        }
+    };
 
     // A spent window is not a hover: the pinned account cannot serve the request until the window resets, so
     // the pin moves outside the round's budget as soon as a sibling is known to hold allowance, rather than
@@ -1902,6 +1935,7 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
 }
 
 /// `places` is false for a request the cap holds: the choice names the account it waits for and places nothing.
+/// `spent_model` names the candidates step 6 kept on extra usage with the request's model week spent.
 #[allow(clippy::too_many_arguments)]
 fn choose<'a>(
     state: &mut RoutingState,
@@ -1909,6 +1943,7 @@ fn choose<'a>(
     pool: &PoolRow,
     window: &str,
     set: &[&'a Candidate],
+    spent_model: &[String],
     now: i64,
     fallback_ms: i64,
     places: bool,
@@ -1931,15 +1966,19 @@ fn choose<'a>(
         }
     };
     // The kind order puts the group ahead of the priority; within a group, `prefer_plan` still orders an
-    // overage account behind a plan-quota one, group three (api_key) included.
+    // overage account behind a plan-quota one, group three (api_key) included. A candidate step 6 kept on extra
+    // usage with its model week spent bills as an account in overage does, so every plan-funded sibling goes ahead
+    // of it whatever the priorities: it joins the overage group under the kind order and leads the key otherwise.
     let key_of = |c: &Candidate| -> Tier {
+        let spent = spent_model.contains(&c.account_id);
         let in_overage = state.in_overage(&c.account_id, now, fallback_ms);
-        let overage_bit = u8::from(pool.overage_policy == OveragePolicy::PreferPlan && in_overage);
-        let group = group_of(c, in_overage);
+        let overage_bit =
+            u8::from(spent || (pool.overage_policy == OveragePolicy::PreferPlan && in_overage));
+        let group = group_of(c, in_overage || spent);
         if kind_ordered {
             (group, c.priority, overage_bit)
         } else {
-            (0, c.priority, group)
+            (u8::from(spent), c.priority, group)
         }
     };
     let first = set.iter().map(|c| key_of(c)).min()?;

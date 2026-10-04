@@ -695,7 +695,7 @@ async fn cooldowns_are_partitioned_by_account_kind() {
 }
 
 #[tokio::test]
-async fn a_fable_only_rejection_leaves_opus_eligible_and_a_5h_rejection_cools_every_model() {
+async fn a_model_only_rejection_leaves_opus_eligible_and_a_5h_rejection_cools_every_model() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
         respond: json_200(),

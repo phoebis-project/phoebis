@@ -639,6 +639,7 @@ fn router_config(
     tables: Arc<phoebis_ledger::PlanTables>,
 ) -> phoebis_routing::RouterConfig {
     let band = tables.clone();
+    let measured = tables.clone();
     phoebis_routing::RouterConfig {
         band: phoebis_routing::BandWeight::new(move |window, at| band.cost.band_factor(window, at)),
         rates: phoebis_routing::BurnRates {
@@ -651,7 +652,8 @@ fn router_config(
                 phoebis_routing::FIVE_HOUR => tables.five_hour_share_at(tier, model, usage, at),
                 window => tables.share(window, tier, model, usage),
             },
-        ),
+        )
+        .with_measured(move |window| measured.measured(window)),
         ..phoebis_routing::RouterConfig::default()
     }
 }

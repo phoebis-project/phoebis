@@ -1873,7 +1873,7 @@ async fn a_relayed_heads_reading_reaches_the_router_and_a_header_sample_with_its
             .await
             .unwrap()
             .into_iter()
-            .find(|q| q.window == "5h")
+            .find(|q| q.window == "five_hour")
     })
     .await;
     assert_eq!(
@@ -1952,7 +1952,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 27);
+    assert_eq!(db.schema_version().await.unwrap(), 28);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -2051,7 +2051,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 27);
+    assert_eq!(db.schema_version().await.unwrap(), 28);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -2105,7 +2105,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 27);
+    assert_eq!(db.schema_version().await.unwrap(), 28);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2184,7 +2184,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 27);
+    assert_eq!(db.schema_version().await.unwrap(), 28);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -2257,7 +2257,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 27);
+    assert_eq!(db.schema_version().await.unwrap(), 28);
     let mut rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap()
@@ -2322,7 +2322,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 27);
+    assert_eq!(db.schema_version().await.unwrap(), 28);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -2375,7 +2375,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 27);
+    assert_eq!(db.schema_version().await.unwrap(), 28);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -2399,6 +2399,64 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         message_ids,
         vec![None],
         "an attempt from before the column names no message"
+    );
+}
+
+#[tokio::test]
+async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_and_keeps_the_header_row_of_a_collision(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        // Before 28 the head wrote `5h`, `7d` and `7d_oi` and the poll the endpoint's keys plus `fable`, so a head
+        // and a poll of one bucket could each hold a row for one window; the top-level `seven_day_overage_included`
+        // and `seven_day_fable` rows stand for a poll key the captured bodies never carried.
+        db.write(|c| {
+            c.execute_batch(
+                "INSERT INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES \
+                   ('a', 0, '5h', 0.5, NULL, 'header', 10), \
+                   ('a', 0, 'five_hour', 0.4, NULL, 'poll', 20), \
+                   ('a', 0, '7d', 0.2, NULL, 'header', 10), \
+                   ('a', 0, '7d_oi', 0.9, NULL, 'header', 10), \
+                   ('a', 0, 'seven_day_overage_included', 0.8, NULL, 'poll', 20), \
+                   ('a', 0, 'fable', 0.42, NULL, 'poll', 20), \
+                   ('a', 0, 'seven_day_fable', 0.5, NULL, 'poll', 20), \
+                   ('a', 0, 'seven_day_opus', 0.03, NULL, 'poll', 20), \
+                   ('a', 300, 'five_hour', 0.3, NULL, 'poll', 320); \
+                 UPDATE meta SET value = '27' WHERE key = 'schema_version';",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 28);
+    let rows: Vec<(i64, String, Option<f64>, String)> = db
+        .quota_samples("a", 0, i64::MAX)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|q| (q.bucket, q.window, q.utilization, q.source))
+        .collect();
+    let rows: Vec<(i64, &str, Option<f64>, &str)> = rows
+        .iter()
+        .map(|(bucket, window, utilization, source)| {
+            (*bucket, window.as_str(), *utilization, source.as_str())
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            (0, "five_hour", Some(0.5), "header"),
+            (300, "five_hour", Some(0.3), "poll"),
+            (0, "seven_day", Some(0.2), "header"),
+            (0, "seven_day_fable", Some(0.42), "poll"),
+            (0, "seven_day_opus", Some(0.03), "poll"),
+            (0, "seven_day_overage_included", Some(0.9), "header"),
+        ],
+        "each window reads under the endpoint's key, a colliding pair keeps the row the old spelling named, and a \
+         poll row with nothing to collide with stays"
     );
 }
 

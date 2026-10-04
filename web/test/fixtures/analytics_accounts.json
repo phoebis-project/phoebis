@@ -7,9 +7,9 @@
       {
         "account_id": "business",
         "peak": {
-          "5h": 0.4,
-          "7d": null,
-          "7d_oi": null
+          "five_hour": 0.4,
+          "seven_day": null,
+          "seven_day_overage_included": null
         },
         "overage_seconds": 0,
         "cooldown_seconds": 1800,
@@ -46,9 +46,9 @@
       {
         "account_id": "direct",
         "peak": {
-          "5h": 0.4,
-          "7d": null,
-          "7d_oi": null
+          "five_hour": 0.4,
+          "seven_day": null,
+          "seven_day_overage_included": null
         },
         "overage_seconds": 0,
         "cooldown_seconds": 0,

@@ -1079,8 +1079,12 @@ await emailLines('/accounts/business the head reads the email under the name', [
   }
   const pair = m.container.querySelector('.detail__pair');
   results.push({ name: '/accounts identity and usage share a grid', ok: pair !== null && pair.querySelectorAll('.card--fill').length === 2, missing: [] });
-  const fable = m.container.querySelector('.detail .wbars--3');
-  results.push({ name: '/accounts usage card has three bars', ok: (fable?.querySelectorAll('.wbar').length ?? 0) === 3, missing: [String(fable?.querySelectorAll('.wbar').length)] });
+  const usageBars = [...(m.container.querySelector('.detail .wbars--3')?.querySelectorAll('.wbar') ?? [])].map((b) => b.querySelector('.wbar__label')?.textContent ?? '');
+  results.push({
+    name: '/accounts usage card draws the three known windows, then a week no family row names under its key',
+    ok: JSON.stringify(usageBars) === JSON.stringify(['5-hour', '7-day', 'Fable', 'seven_day_opus']),
+    missing: usageBars,
+  });
 }
 {
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Disconnect')?.click();

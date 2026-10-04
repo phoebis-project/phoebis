@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
   RuleCooldown, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
 } from './types';
@@ -10,7 +10,7 @@ import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } 
 import { emptyCounts } from '@/lib/counts';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { isFastScope } from '@/lib/quota';
-import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER } from '@/lib/windows';
+import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
 const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
@@ -31,17 +31,34 @@ const isoOr = (ms: unknown, fallback: string): string => isoOrNull(ms) ?? fallba
 const epoch = '1970-01-01T00:00:00.000Z';
 
 /**
- * The header sampler writes the short forms and the usage poll writes the endpoint's own keys; the ledger keeps
- * both, and each pair is one window to the UI. `fable` and `7d_oi` both mean the model-scoped weekly window the
- * UI draws third.
+ * The ledger, the request log and the usage endpoint spell a window by the endpoint's key; the live feed carries
+ * the head's short ids and the router's own windows name the Fable week `fable`. Each spelling of a window is one
+ * window to the UI: `seven_day_fable`, `seven_day_overage_included`, `7d_oi` and `fable` all mean the model-scoped
+ * week the UI draws third. Any other key is a window of its own, kept under its name.
  */
-const WINDOW_IDS = new Map<string, WindowId>([['5h', '5h'], ['7d', '7d'], ['7d_oi', '7d_fable'], ['fable', '7d_fable'], ['five_hour', '5h'], ['seven_day', '7d'], ['seven_day_opus', '7d']]);
-const windowId = (id: string): WindowId | null => WINDOW_IDS.get(id) ?? null;
+const WINDOW_IDS = new Map<string, KnownWindowId>([
+  ['5h', '5h'],
+  ['7d', '7d'],
+  ['7d_oi', '7d_fable'],
+  ['fable', '7d_fable'],
+  ['five_hour', '5h'],
+  ['seven_day', '7d'],
+  ['seven_day_fable', '7d_fable'],
+  ['seven_day_overage_included', '7d_fable'],
+]);
+/** The UI's id for a window key: a known window's own id, any other key as it is, `null` for no key at all. */
+export const windowId = (id: string): WindowId | null => WINDOW_IDS.get(id) ?? (id === '' ? null : id);
+
+/** The known windows in the order the pages draw them, then every other id in the order it was first seen. */
+function inDrawnOrder<T>(byId: Map<WindowId, T>): T[] {
+  const known: readonly WindowId[] = WINDOW_ORDER;
+  return [...WINDOW_ORDER.flatMap((id) => byId.get(id) ?? []), ...[...byId].filter(([id]) => !known.includes(id)).map(([, value]) => value)];
+}
 
 function decodeWindow(w: Rec): RateLimitWindow | null {
   const id = windowId(str(w.id));
   if (id === null) return null;
-  return { id, label: WINDOW_LABEL[id], observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id], resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization) };
+  return { id, label: WINDOW_LABEL[id] ?? id, observedAt: isoOr(w.observed_at, epoch), periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id), resetsAt: isoOrNull(w.resets_at), utilization: num(w.utilization) };
 }
 
 /** One window per id, the newest reading when both samplers wrote one, in the order the pages draw them. */
@@ -51,7 +68,7 @@ function foldWindows(windows: RateLimitWindow[]): RateLimitWindow[] {
     const seen = newest.get(w.id);
     if (!seen || Date.parse(w.observedAt) > Date.parse(seen.observedAt)) newest.set(w.id, w);
   }
-  return WINDOW_ORDER.flatMap((id) => newest.get(id) ?? []);
+  return inDrawnOrder(newest);
 }
 
 /** The account's state and its flags folded onto the one badge the pages show. */
@@ -203,7 +220,7 @@ export function decodeQuotaHistory(v: unknown): QuotaHistory[] {
     // A window the header and the poll both sampled is one series, whatever each called it.
     byId.set(id, seen ? { ...seen, samples: [...seen.samples, ...samples].sort((x, y) => x.at.localeCompare(y.at)) } : { accountId: str(q.account_id), samples, windowId: id });
   }
-  return WINDOW_ORDER.flatMap((id) => byId.get(id) ?? []);
+  return inDrawnOrder(byId);
 }
 
 export const POLL_OUTCOME_VALUES = ['clean', 'failed', 'rate_limited'] as const;

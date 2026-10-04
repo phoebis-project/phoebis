@@ -4,7 +4,10 @@
 export const ACCOUNT_KIND_VALUES = ['api_key', 'oauth'] as const;
 export type AccountKind = (typeof ACCOUNT_KIND_VALUES)[number];
 export type AccountStatus = 'cooldown' | 'funding_required' | 'paused' | 'reauth_required' | 'ready' | 'unpaired';
-export type WindowId = '5h' | '7d' | '7d_fable';
+/** The three windows the pages know: the two shared ones and the model-scoped week. */
+export type KnownWindowId = '5h' | '7d' | '7d_fable';
+/** A known window, or the key of a window the pages do not know, which is shown under its name. */
+export type WindowId = KnownWindowId | (string & {});
 
 export interface RateLimitWindow {
   id: WindowId;

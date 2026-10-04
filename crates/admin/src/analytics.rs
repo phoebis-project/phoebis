@@ -273,7 +273,7 @@ pub(crate) async fn accounts(
     }
     let accounts: Vec<_> = by_account.into_iter().map(|(id, (sum, hours))| json!({
         "account_id": id,
-        "peak": { "5h": sum.utilization_5h_max, "7d": sum.utilization_7d_max, "7d_oi": sum.utilization_7d_oi_max },
+        "peak": { "five_hour": sum.utilization_5h_max, "seven_day": sum.utilization_7d_max, "seven_day_overage_included": sum.utilization_7d_oi_max },
         "overage_seconds": sum.overage_seconds, "cooldown_seconds": sum.cooldown_seconds,
         "pins": { "created": sum.pins_created, "migrated_in": sum.pins_migrated_in, "migrated_out": sum.pins_migrated_out },
         "hours": hours.iter().map(|h| json!({ "hour": h.hour * 1_000, "utilization_5h_max": h.utilization_5h_max, "utilization_7d_max": h.utilization_7d_max, "utilization_7d_oi_max": h.utilization_7d_oi_max, "overage_seconds": h.overage_seconds, "cooldown_seconds": h.cooldown_seconds, "pins_created": h.pins_created, "pins_migrated_in": h.pins_migrated_in, "pins_migrated_out": h.pins_migrated_out })).collect::<Vec<_>>(),

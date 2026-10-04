@@ -285,6 +285,8 @@ impl LiveState {
             let oi = wire
                 .get("anthropic-ratelimit-unified-7d_oi-utilization")
                 .and_then(|v| v.trim().parse().ok());
+            // The live feed carries the head's own ids; the console's decoder maps them and the endpoint's keys
+            // the request log answers onto the same windows.
             for (id, utilization, resets_at) in [
                 ("5h", u.five_hour_utilization, u.five_hour_reset),
                 ("7d", u.seven_day_utilization, u.seven_day_reset),

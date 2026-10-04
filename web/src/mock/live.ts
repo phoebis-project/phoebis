@@ -52,7 +52,8 @@ interface Plan {
 const windowsFor = (accountId: string): AttemptWindow[] => {
   const account = ACCOUNTS.find((a) => a.id === accountId);
   if (!account || account.kind !== 'oauth') return [];
-  return account.windows.map((w) => ({ id: w.id, resetsAt: w.resetsAt, utilization: w.utilization }));
+  // A head reports the two shared windows and the overage week; a week only the poll reads never reaches an attempt.
+  return account.windows.filter((w) => w.id === '5h' || w.id === '7d').map((w) => ({ id: w.id, resetsAt: w.resetsAt, utilization: w.utilization }));
 };
 
 // The live feed draws no thinking share and no server-tool calls: neither reaches the console before the

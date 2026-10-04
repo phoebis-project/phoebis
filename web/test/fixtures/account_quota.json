@@ -6,7 +6,18 @@
     "to": 1000000,
     "windows": [
       {
-        "id": "7d",
+        "id": "five_hour",
+        "samples": [
+          {
+            "at": 900000,
+            "utilization": 0.62,
+            "resets_at": 4600000,
+            "source": "poll"
+          }
+        ]
+      },
+      {
+        "id": "seven_day",
         "samples": [
           {
             "at": 900000,
@@ -17,7 +28,7 @@
         ]
       },
       {
-        "id": "fable",
+        "id": "seven_day_fable",
         "samples": [
           {
             "at": 900000,
@@ -28,12 +39,12 @@
         ]
       },
       {
-        "id": "five_hour",
+        "id": "seven_day_opus",
         "samples": [
           {
             "at": 900000,
-            "utilization": 0.62,
-            "resets_at": 4600000,
+            "utilization": 0.03,
+            "resets_at": 87400000,
             "source": "poll"
           }
         ]

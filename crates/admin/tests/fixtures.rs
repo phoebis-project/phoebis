@@ -499,8 +499,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .db
         .insert_samples(
             &[
-                // The two samplers spell a window differently: the poll writes the usage endpoint's keys, the header the
-                // short forms. The fixture carries one of each so the decoder is proven over both.
+                // Both samplers spell a window by the usage endpoint's key; the fixture carries one sample of each
+                // source, and a weekly window no family row names, which the console keeps under its own key.
                 QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket,
@@ -513,7 +513,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket,
-                    window: "7d".into(),
+                    window: "seven_day".into(),
                     utilization: Some(0.41),
                     reset_at: Some(now + 86_400_000),
                     source: "header".into(),
@@ -522,8 +522,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket,
-                    window: "fable".into(),
+                    window: "seven_day_fable".into(),
                     utilization: Some(0.12),
+                    reset_at: Some(now + 86_400_000),
+                    source: "poll".into(),
+                    observed_at: None,
+                },
+                QuotaSampleRecord {
+                    account_id: "business".into(),
+                    bucket,
+                    window: "seven_day_opus".into(),
+                    utilization: Some(0.03),
                     reset_at: Some(now + 86_400_000),
                     source: "poll".into(),
                     observed_at: None,

@@ -313,25 +313,29 @@ use: while it is live and its account is still eligible, the request returns to 
 priority even across a later priority change. A pool with affinity off (`affinity_ttl_seconds` at `0`) keeps no pins
 at all.
 
-Narrowing then trims what is left. A model-specific window (a canonical id containing `fable`) at or above 1 drops the
-account outright, and an account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every
-preference below; with every account at its cap the request is held for a slot instead (see **In-flight caps**, below).
-The rest are preferences that fall back to the wider set rather than stranding the request: `select_below_utilization`
-drops every account at or above that threshold in 5-hour utilization, and an account winding down toward its
-subscription end (see **Subscription end**, below) is skipped for a fresh placement too.
+Narrowing then trims what is left. For a model with a week of its own (a canonical id containing `fable`), an account
+whose week or either shared window reads at or above 1 drops outright, unless the pool's overage policy is `allow` and
+the poll reads the account's extra usage as enabled, in which case it stays and orders behind every plan-funded account;
+an account already at the pool's `in_flight_cap` takes no fresh placement, ahead of every preference below; with every
+account at its cap the request is held for a slot instead (see **In-flight caps**, below). The rest are preferences that
+fall back to the wider set rather than stranding the request: `select_below_utilization` drops every account at or above
+that threshold in 5-hour utilization, and an account winding down toward its subscription end (see **Subscription end**,
+below) is skipped for a fresh placement too.
 
 What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
 plan quota, overage, then Anthropic key; within a group, or across the whole set with the flag off, tiers order by
-priority ascending, then, under `prefer_plan`, an account not in overage before one in overage. The strategy picks
-inside the first non-empty tier. `pace` reads each account's sample as a window map: a subscription account scores by
-remaining allowance in its own window (the model's own window when it has one, else the shared 7-day window) over the
-hours to the earlier of that window's reset and the account's derived end; an api_key account scores by one minus its
-worst live rate-limit bucket's utilization alone, with no division by hours, since a bucket refills within a minute and
-its own reset never enters the score. Either way a window nobody has read reads as untouched: remaining 1 over the full
-week. A subscription window read past its reset reads as the router's own use since it, while an api_key bucket past its
-reset is refunded and reads as untouched, with no share of the router's own. Ties are random. An account whose remaining
-allowance is at or below the pool's `pace_floor` is kept as the last resort, ranked by the same score among the others
-below it, once no account above the floor remains; `priority` and `round_robin` read no sample and no floor at all.
+priority ascending, then, under `prefer_plan`, an account not in overage before one in overage. An account kept under
+`allow` with the model's week spent joins the overage group with the flag on, and with it off sorts behind every account
+that is not, whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's
+sample as a window map: a subscription account scores by remaining allowance in its own window (the model's own window
+when it has one, else the shared 7-day window) over the hours to the earlier of that window's reset and the account's
+derived end; an api_key account scores by one minus its worst live rate-limit bucket's utilization alone, with no
+division by hours, since a bucket refills within a minute and its own reset never enters the score. Either way a window
+nobody has read reads as untouched: remaining 1 over the full week. A subscription window read past its reset reads as
+the router's own use since it, while an api_key bucket past its reset is refunded and reads as untouched, with no share
+of the router's own. Ties are random. An account whose remaining allowance is at or below the pool's `pace_floor` is
+kept as the last resort, ranked by the same score among the others below it, once no account above the floor remains;
+`priority` and `round_robin` read no sample and no floor at all.
 
 A request with no session id skips pins and stickiness: it runs the eligible set, the narrowing, and the pick
 only.
@@ -342,24 +346,27 @@ the normal selection instead, and the account-scoped reference it carries may th
 
 ### The windows the router works from
 
-The router judges a subscription account by three windows, the 5-hour, the 7-day and the Fable-scoped week, read from
-two sources: every response head the account answers, and a poll of the usage endpoint every five minutes per account,
-each account on its own phase, backed off alone on a 429 (see the [statistics page](statistics.md#quota-samples)).
-Between readings the router predicts: a reading stands until its window's reset, plus the share of the window the
-router's own requests consumed since the reading (priced through the cost table and the account's tier factor); a window
-the table cannot price for the request's model adds nothing and holds its reading; at the reset it reads zero and counts
-the requests since, a weekly window's reset advanced by whole weeks, the 5-hour window's next reset named by the next
-reading. A reading that names no reset stands until the next reading; an Anthropic-key account's rate-limit buckets
-stand until their reset or, without one, for a minute. The share is priced through the account's stored tier: a tier
-change is read at the next profile refresh, within the hour, and applied when the router reloads; a tier changed while
-the router was down is read at start. The newest reading per account and window is kept in the registry and loaded at
-startup, so a restart, and an account whose first poll the endpoint refuses, route from the last known windows. The
-router never fetches usage at a selection; use of an account outside the router shows in the next head or poll, so a
-decision can lag it by up to five minutes plus any backoff, and by up to one more interval after a failed poll or a
-restart. The [Quota view](statistics.md#quota) shows when the poll last asked the endpoint for each OAuth account and
-how it answered, and while an account backs off, since when and when its next attempt comes; the `poll_backoff`
-condition of the [`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off
-for thirty minutes.
+The router judges a subscription account by the 5-hour and the 7-day window every model shares, and a model family's own
+week where the family table names one (today Fable's `seven_day_fable`); a weekly reading the endpoint reports under a
+key the table does not name (such as `seven_day_opus`) is kept, shown and persisted, cools the account when a 429 claims
+it, and feeds no allowance until a row names it. The windows are read from two sources: every response head the account
+answers, and a poll of the usage endpoint every five minutes per account, each account on its own phase, backed off
+alone on a 429 (see the [statistics page](statistics.md#quota-samples)). Between readings the router predicts: a reading
+stands until its window's reset, plus the share of the window the router's own requests consumed since the reading
+(priced through the cost table and the account's tier factor); a window the table cannot price for the request's model
+adds nothing and holds its reading; at the reset it reads zero and counts the requests since, a weekly window's reset
+advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that names no reset stands
+until the next reading; an Anthropic-key account's rate-limit buckets stand until their reset or, without one, for a
+minute. The share is priced through the account's stored tier: a tier change is read at the next profile refresh, within
+the hour, and applied when the router reloads; a tier changed while the router was down is read at start. The newest
+reading per account and window is kept in the registry and loaded at startup, so a restart, and an account whose first
+poll the endpoint refuses, route from the last known windows. The router never fetches usage at a selection; use of an
+account outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus any
+backoff, and by up to one more interval after a failed poll or a restart. The [Quota view](statistics.md#quota) shows
+when the poll last asked the endpoint for each OAuth account and how it answered, and while an account backs off, since
+when and when its next attempt comes; the `poll_backoff` condition of the
+[`phoebis_attention` gauge](statistics.md#conditions-and-gauges) holds once an account has backed off for thirty
+minutes.
 
 ### Moves
 
@@ -376,16 +383,17 @@ account; an unsampled account reads as under), has run no shedding round of its 
 has room under the pool's `in_flight_cap`. When no destination of a rule is cool, the rule still moves the pin to one of
 them, so a full cool sibling never keeps a free hot one from the session; only the shed rule insists on a cool one.
 
-**Spent** The pinned account's window for the session's model is spent: the Fable window for a Fable session and the
-shared plan window otherwise (either the 5-hour or the 7-day reading at or above 1.0), while that reading stands (until
-its reset; a reading that names none stands until the next). With `migrate_when_spent` on (the default), the pin moves
-on this request to a sibling that holds allowance in that window, without waiting for the upstream's 429. The shedding
-budget does not apply, and the band and the dwell only order the siblings: one reading over the threshold but under 1.0
-still receives the session when no cool one can. The router has to know the sibling's allowance: an Anthropic-key
-account has no plan window to spend, and any other sibling needs a reading of that window, from a head, the poll or the
-windows kept across restarts, carried forward as the windows passage says; a sibling with none stays out of the choice.
-Under `prefer_plan` a sibling in overage does not receive a spent pin, since the overage move would hand the session
-straight back. With the toggle off, or no sibling holding allowance, the session stays.
+**Spent** The pinned account's allowance for the session's model is spent: the model's own week and both shared windows
+for a model with a week of its own, the shared plan windows otherwise (any of those readings at or above 1.0), while
+that reading stands (until its reset; a reading that names none stands until the next). With `migrate_when_spent` on
+(the default), the pin moves on this request to a sibling that holds allowance in those windows, without waiting for the
+upstream's 429. The shedding budget does not apply, and the band and the dwell only order the siblings: one reading over
+the threshold but under 1.0 still receives the session when no cool one can. The router has to know the sibling's
+allowance: an Anthropic-key account has no plan window to spend, and any other sibling needs a reading of each of those
+windows, from a head, the poll or the windows kept across restarts, carried forward as the windows passage says; a
+sibling with none stays out of the choice. Under `prefer_plan` a sibling in overage does not receive a spent pin, since
+the overage move would hand the session straight back. With the toggle off, or no sibling holding allowance, the session
+stays.
 
 **Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
 moves to a subscription sibling that is not in overage, never to an Anthropic-key account. The sibling has to hold
@@ -482,8 +490,8 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 
 | Upstream result | Cooldown | Failover |
 | --- | --- | --- |
-| 429, 7d_oi-status rejected, 5h/7d healthy | Model-scoped for the model until reset, Retry-After, or fallback | Yes |
-| 429, `status` rejected under a `seven_day_` claim, 5h/7d healthy | Model-scoped for the model, same deadline | Yes |
+| 429, a claim naming the model's own week, 5h/7d healthy | Model-scoped until reset, Retry-After, or fallback | Yes |
+| 429, 7d_oi-status rejected, no other week claimed, 5h/7d healthy | Model-scoped, same deadline | Yes |
 | 429, a shared window (5h or 7d) or `status` rejected | Account-wide, same deadline | Yes |
 | 429 without unified headers | Account-wide, Retry-After or fallback | Yes |
 | 200 SSE, first event `error`/`rate_limit_error` | As the 429 rows, using the response's headers | Yes |
@@ -491,6 +499,13 @@ first, `oauth`, `api_key`, or `shared` for both; within a partition the first ma
 A shared window is healthy when its status reads `allowed` or `allowed_warning`, or when the status is absent and the
 window's own utilization reads below 1.0; an absent status with no utilization, or any other status value, is not
 evidence that the window is fine, and the rejection cools the whole account.
+
+The two model-scoped rows apply to a model whose family has a week of its own in the family table (today Fable, whose
+week is `seven_day_fable`); the row cools that model on the account and recovers once a reading of that week is under
+1.0. The claim is the `representative-claim` header: one naming the model's own week, or `seven_day_overage_included`,
+or none at all leaves the decision to these rows; a claim naming another family's week, or a week no row names (such
+as `seven_day_opus`), cools the account whatever the 7d_oi status reads, and so does any of these rejections for a
+model without a week of its own.
 
 **api_key**
 
@@ -720,6 +735,11 @@ A pool's `overage_policy` chooses what happens once an account starts billing ex
 - **Allow** (`allow`): ignore extra usage.
 - **Never** (`never`): treat an account in extra usage as unavailable until its window resets.
 
+Under `allow`, a subscription account whose model week is spent (for a model with a week of its own, that week or a
+shared window) stays eligible for that model while the poll reads its extra usage as enabled, ordered behind
+plan-funded siblings, since extra usage funds every model; a credits state the poll has not read yet does not count as
+enabled. Under `prefer_plan` and `never` it is passed over until the week resets.
+
 An account is in overage when its latest quota evidence says so, and only newer evidence, by the upstream's own clock,
 replaces that state. A response head sets the flag when `anthropic-ratelimit-unified-overage-in-use` is true, and clears
 it when the header is present and false, or absent while the shared window headers are present. The poll's snapshot sets
@@ -728,7 +748,7 @@ both shared windows are below 1.0. An account with extra usage enabled keeps ser
 quota empties, so `prefer_plan` and `never` act through this flag rather than through a cooldown. Once the
 organisation's spend cap is reached it answers `429` with the overage window rejected and the claim
 `seven_day_overage_included`; both shared windows still read healthy, so the cooldown path scopes that rejection to the
-model.
+requested model on its own week when it has one (the Fable-scoped week today) and to the account otherwise.
 
 Whether the flag still counts is one rule every reader applies alike, the selector and the keepalive scheduler
 included: an account counts as in overage while the reset its evidence names is ahead of now; evidence that names

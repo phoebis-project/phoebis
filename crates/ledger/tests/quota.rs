@@ -267,7 +267,7 @@ fn secs_past_now(at_ms: i64) -> f64 {
 }
 
 #[tokio::test]
-async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwrite_it() {
+async fn a_head_and_a_poll_in_one_bucket_land_one_row_per_window_and_the_head_keeps_its_rows() {
     let up = FakeUpstream::start(vec![
         Rule {
             path_prefix: "/v1/messages".into(),
@@ -292,18 +292,18 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
     let header = wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
         rows.iter()
-            .any(|r| r.window == "5h" && r.source == "header")
+            .any(|r| r.window == "five_hour" && r.source == "header")
             .then_some(rows)
     })
     .await;
-    let five = header.iter().find(|r| r.window == "5h").unwrap();
+    let five = header.iter().find(|r| r.window == "five_hour").unwrap();
     assert_eq!(
         (five.utilization, five.reset_at, five.bucket),
         (Some(0.77), Some(4_600_000), bucket)
     );
     assert!(header
         .iter()
-        .any(|r| r.window == "7d" && r.utilization == Some(0.2)));
+        .any(|r| r.window == "seven_day" && r.utilization == Some(0.2)));
     let extra =
         h.db.extra_usage_samples("a", bucket, bucket + 300)
             .await
@@ -318,32 +318,34 @@ async fn a_head_writes_its_bucket_and_a_poll_in_the_same_bucket_does_not_overwri
         "a head carries no credits"
     );
 
-    // The head landed first; the account's first slot falls in the same bucket: the header rows stay, the poll
-    // adds its own windows beside them, and the credits wait.
+    // The head landed first; the account's first slot falls in the same bucket. Both samplers spell a window by
+    // the endpoint's key, so each window holds one row: the header's where the head read it, the poll's where
+    // only the poll did, and the credits wait.
     let paused = start_polling(&h, &up).await;
     step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(usage_asked(&up, A), 1, "the first slot");
     let rows = resumed(wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.quota_samples("a", bucket, bucket + 300).await.unwrap();
-        rows.iter().any(|r| r.window == "fable").then_some(rows)
+        rows.iter()
+            .any(|r| r.window == "seven_day_fable")
+            .then_some(rows)
     }))
     .await;
-    let five = rows.iter().find(|r| r.window == "5h").unwrap();
-    assert_eq!(
-        (five.source.as_str(), five.utilization),
-        ("header", Some(0.77)),
-        "the header sample survived the poll"
-    );
-    let fable = rows.iter().find(|r| r.window == "fable").unwrap();
-    assert_eq!(
-        (fable.source.as_str(), fable.utilization),
-        ("poll", Some(0.42)),
-        "read from limits[], not from the named key"
-    );
-    assert!(rows.iter().all(|r| r.window != "cinder_cove"));
-    assert!(rows
+    let mut windows: Vec<(&str, &str, Option<f64>)> = rows
         .iter()
-        .any(|r| r.window == "five_hour" && r.utilization == Some(0.125)));
+        .map(|r| (r.window.as_str(), r.source.as_str(), r.utilization))
+        .collect();
+    windows.sort_by(|a, b| a.0.cmp(b.0));
+    assert_eq!(
+        windows,
+        [
+            ("five_hour", "header", Some(0.77)),
+            ("seven_day", "header", Some(0.2)),
+            ("seven_day_fable", "poll", Some(0.42)),
+        ],
+        "one row per window: the header's readings survive the poll, the Fable week comes from limits[] and \
+         not from the named key"
+    );
     let extra = resumed(h.db.extra_usage_samples("a", bucket, bucket + 300))
         .await
         .unwrap();
@@ -987,10 +989,12 @@ async fn the_startup_step_records_and_reports_one_sample_per_polled_account() {
         let bucket = phoebis_ledger::bucket_of(NOW);
         let rows = wait_for_async(Duration::from_secs(5), || async {
             let rows = h.db.quota_samples(id, bucket, bucket + 300).await.unwrap();
-            rows.iter().any(|r| r.window == "fable").then_some(rows)
+            rows.iter()
+                .any(|r| r.window == "seven_day_fable")
+                .then_some(rows)
         })
         .await;
-        for window in ["five_hour", "seven_day", "fable"] {
+        for window in ["five_hour", "seven_day", "seven_day_fable"] {
             assert_eq!(
                 rows.iter().filter(|r| r.window == window).count(),
                 1,

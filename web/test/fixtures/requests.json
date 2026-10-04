@@ -87,7 +87,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 4570000
               }
@@ -201,7 +201,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 4540000
               }
@@ -309,7 +309,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 4480000
               }
@@ -421,7 +421,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000600
               }
@@ -529,7 +529,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000500
               }
@@ -640,7 +640,7 @@
             },
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000000
               }
@@ -696,7 +696,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000400
               }
