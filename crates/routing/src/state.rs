@@ -16,6 +16,7 @@ use crate::affinity::AffinityMap;
 use crate::listing::{row_for, snapshot_date};
 use crate::select::affinity_ttl_ms;
 use crate::task::BurnRates;
+use crate::windows::window_for;
 use crate::RegistrySnapshot;
 
 /// How long an api_key bucket read without its reset header stands: the buckets refill within a minute, so a
@@ -136,9 +137,10 @@ pub struct WindowReading {
     pub observed_at: i64,
 }
 
-/// An account's latest readings by window name: `five_hour`, `seven_day`, `seven_day_fable` for a subscription
-/// account; `rpm:<model>`, `itpm:<model>`, `otpm:<model>` per canonical model for an api_key account; and for
-/// either kind `fast_input` and `fast_output`, the fast lane's two buckets.
+/// An account's latest readings by window name: `five_hour`, `seven_day`, `seven_day_fable` and any other
+/// `seven_day_*` key the usage endpoint reports for a subscription account; `rpm:<model>`, `itpm:<model>`,
+/// `otpm:<model>` per canonical model for an api_key account; and for either kind `fast_input` and `fast_output`,
+/// the fast lane's two buckets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UtilizationSample {
     pub windows: BTreeMap<String, WindowReading>,
@@ -227,8 +229,8 @@ pub struct MemberSpend {
     pub observed_at: i64,
 }
 
-/// A candidate's sort key in `choose`: group, priority, and the overage bit under the kind order; 0, priority,
-/// and the overage bit otherwise.
+/// A candidate's sort key in `choose`: group, priority, and the overage bit under the kind order; otherwise 1 for
+/// a candidate kept on extra usage with its model week spent (0 for every other), priority, and the overage bit.
 pub type Tier = (u8, u32, u8);
 
 /// One usage report's token counts, the shape the relay reads off `Usage`.
@@ -244,9 +246,13 @@ pub struct PinUsage {
 /// The share of an account's own window a completed request consumed, priced through the ledger's tables, which
 /// this crate cannot name; the default prices nothing, so a task spawned without one predicts from readings alone.
 #[derive(Clone)]
-pub struct SharePricer(Arc<Price>);
+pub struct SharePricer {
+    price: Arc<Price>,
+    measured: Arc<Measured>,
+}
 
 type Price = dyn Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync;
+type Measured = dyn Fn(&str) -> bool + Send + Sync;
 
 impl SharePricer {
     /// `price(window, tier, canonical_model, usage, at)`: the share of `window` on `tier` at `at` (the band
@@ -255,7 +261,22 @@ impl SharePricer {
     pub fn new(
         price: impl Fn(&str, &str, &str, PinUsage, i64) -> Option<f64> + Send + Sync + 'static,
     ) -> SharePricer {
-        SharePricer(Arc::new(price))
+        SharePricer {
+            price: Arc::new(price),
+            measured: Arc::new(|_| true),
+        }
+    }
+
+    /// `measured(window)`: whether the tables price `window` from cells of its own rather than as the 7-day share
+    /// once; every window reads measured until this is set.
+    pub fn with_measured(
+        self,
+        measured: impl Fn(&str) -> bool + Send + Sync + 'static,
+    ) -> SharePricer {
+        SharePricer {
+            measured: Arc::new(measured),
+            ..self
+        }
     }
 
     pub fn price(
@@ -266,7 +287,11 @@ impl SharePricer {
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
-        (self.0)(window, tier, canonical_model, usage, at)
+        (self.price)(window, tier, canonical_model, usage, at)
+    }
+
+    pub fn measured(&self, window: &str) -> bool {
+        (self.measured)(window)
     }
 }
 
@@ -286,30 +311,16 @@ impl std::fmt::Debug for SharePricer {
 
 /// The router's own requests completed on one account since its readings, as `(at, share)` per plan window.
 #[derive(Clone, Debug, Default)]
-struct Charges {
-    five_hour: Vec<(i64, f64)>,
-    seven_day: Vec<(i64, f64)>,
-    seven_day_fable: Vec<(i64, f64)>,
-}
+struct Charges(HashMap<String, Vec<(i64, f64)>>);
 
 impl Charges {
-    /// The window's entries, empty for a name that is none of the three.
+    /// The window's entries, empty for a window nothing was charged to.
     fn of(&self, window: &str) -> &[(i64, f64)] {
-        match window {
-            FIVE_HOUR => &self.five_hour,
-            SEVEN_DAY => &self.seven_day,
-            SEVEN_DAY_FABLE => &self.seven_day_fable,
-            _ => &[],
-        }
+        self.0.get(window).map_or(&[], Vec::as_slice)
     }
 
-    fn of_mut(&mut self, window: &str) -> Option<&mut Vec<(i64, f64)>> {
-        match window {
-            FIVE_HOUR => Some(&mut self.five_hour),
-            SEVEN_DAY => Some(&mut self.seven_day),
-            SEVEN_DAY_FABLE => Some(&mut self.seven_day_fable),
-            _ => None,
-        }
+    fn of_mut(&mut self, window: &str) -> &mut Vec<(i64, f64)> {
+        self.0.entry(window.to_string()).or_default()
     }
 }
 
@@ -929,8 +940,9 @@ impl RoutingState {
             .is_some()
     }
 
-    /// The live rate-limit rows on the account that `sample` shows recovered: the window the row names has
-    /// allowance again, read from a sample taken after the rejection that set the row. A window the sample
+    /// The live rate-limit rows on the account that `sample` shows recovered: the window the row answers for (a
+    /// model row's is the model's own week) has allowance again, read from a sample taken after the rejection that
+    /// set the row. A window the sample
     /// never read is not evidence, and neither is a row no usage window answers for. A row already past its
     /// deadline is left to the purge tick, which says so. Only an OAuth account is ever sampled, which is what
     /// keeps an api-key account's rows out of here without a registry lookup.
@@ -947,8 +959,10 @@ impl RoutingState {
             if row.window == "retry_after" {
                 return false;
             }
-            if row.scope.starts_with("model:") {
-                return below(SEVEN_DAY_FABLE);
+            // A model row recovers on the model's own week: its window keeps the upstream's claim, which the
+            // client reads, and the spend cap's claim names no family's week.
+            if let Some(model) = row.scope.strip_prefix("model:") {
+                return below(window_for(model));
             }
             match row.window.as_str() {
                 "five_hour" => below(FIVE_HOUR),
@@ -1111,10 +1125,12 @@ impl RoutingState {
                 .get(&window)
                 .is_none_or(|existing| reading.observed_at > existing.observed_at);
             if newer {
+                // Looked up rather than created: most of a sample's names (the api_key and fast buckets) are never
+                // charged.
                 if let Some(charges) = self
                     .charges
                     .get_mut(account_id)
-                    .and_then(|c| c.of_mut(&window))
+                    .and_then(|c| c.0.get_mut(&window))
                 {
                     charges.retain(|(at, _)| *at > reading.observed_at);
                 }
@@ -1133,30 +1149,13 @@ impl RoutingState {
         moved
     }
 
-    /// Books a completed request's share on the account's windows at `at`: each window's share that is `Some`
-    /// (the Fable week's only for a model that has one); a `None` window keeps its reading. A charge lives until a
+    /// Books the shares on their windows at `at`; a window with no entry keeps its reading. A charge lives until a
     /// reading observed after it lands on its window, or a week.
-    pub fn charge(
-        &mut self,
-        account_id: &str,
-        at: i64,
-        five_hour: Option<f64>,
-        seven_day: Option<f64>,
-        seven_day_fable: Option<f64>,
-    ) {
+    pub fn charge(&mut self, account_id: &str, at: i64, shares: &[(&str, f64)]) {
         let charges = self.charges.entry(account_id.to_string()).or_default();
-        let shares = [
-            (FIVE_HOUR, five_hour),
-            (SEVEN_DAY, seven_day),
-            (SEVEN_DAY_FABLE, seven_day_fable),
-        ];
         for (window, share) in shares {
-            let Some(entries) = charges.of_mut(window) else {
-                continue;
-            };
-            if let Some(share) = share {
-                entries.push((at, share));
-            }
+            let entries = charges.of_mut(window);
+            entries.push((at, *share));
             // No window outlives a week, so a charge older than that is past every reset it could count toward.
             entries.retain(|(booked, _)| *booked >= at - WEEK_MS);
         }
@@ -1184,7 +1183,7 @@ impl RoutingState {
             Some(reset) if reset <= now => match window {
                 // The weekly windows reset at the same weekday time every week, so the reading's reset names every
                 // later one; the 5-hour window opens with the next request and names its reset in the next reading.
-                SEVEN_DAY | SEVEN_DAY_FABLE => {
+                w if w.starts_with(SEVEN_DAY) => {
                     let next = reset + ((now - reset) / WEEK_MS + 1) * WEEK_MS;
                     Some(WindowReading {
                         utilization: since(next - WEEK_MS),
@@ -1205,13 +1204,19 @@ impl RoutingState {
         }
     }
 
-    /// The account's sample with each plan window replaced by its prediction at `now`, the api_key buckets as
-    /// read; what `RouterHandle::samples` answers.
+    /// The account's sample with each plan window replaced by its prediction at `now`, the api_key and fast-lane
+    /// buckets as read; what `RouterHandle::samples` answers.
     pub fn predicted_sample(&self, account_id: &str, now: i64) -> Option<UtilizationSample> {
         let mut sample = self.samples.get(account_id)?.clone();
-        for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
-            if let Some(predicted) = self.predicted(account_id, window, now) {
-                sample.windows.insert(window.to_string(), predicted);
+        let plan: Vec<String> = sample
+            .windows
+            .keys()
+            .filter(|window| is_plan_window(window))
+            .cloned()
+            .collect();
+        for window in plan {
+            if let Some(predicted) = self.predicted(account_id, &window, now) {
+                sample.windows.insert(window, predicted);
             }
         }
         Some(sample)
@@ -2236,7 +2241,7 @@ mod tests {
     fn a_five_hour_reading_past_its_reset_reads_zero_with_no_successor() {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         read(&mut state, FIVE_HOUR, 0.5, Some(5_000), 1_000);
-        state.charge("a", 3_000, Some(0.25), Some(0.0), None);
+        state.charge("a", 3_000, &[(FIVE_HOUR, 0.25), (SEVEN_DAY, 0.0)]);
         assert!((utilization(&state, FIVE_HOUR, 4_000) - 0.75).abs() < CLOSE);
         assert_eq!(
             state.predicted("a", FIVE_HOUR, 5_000),
@@ -2247,7 +2252,7 @@ mod tests {
             }),
             "at the reset the window reads zero, and the next reading names the reset after it"
         );
-        state.charge("a", 6_000, Some(0.125), Some(0.0), None);
+        state.charge("a", 6_000, &[(FIVE_HOUR, 0.125), (SEVEN_DAY, 0.0)]);
         assert!(
             (utilization(&state, FIVE_HOUR, 7_000) - 0.125).abs() < CLOSE,
             "a request completed since the reset counts; the one before it does not"
@@ -2259,7 +2264,7 @@ mod tests {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         read(&mut state, FIVE_HOUR, 0.5, Some(HOUR_MS), 1_000);
         read(&mut state, SEVEN_DAY, 0.3, Some(WEEK_MS), 1_000);
-        state.charge("a", 2_000, Some(0.1), Some(0.1), None);
+        state.charge("a", 2_000, &[(FIVE_HOUR, 0.1), (SEVEN_DAY, 0.1)]);
         assert!((utilization(&state, FIVE_HOUR, 3_000) - 0.6).abs() < CLOSE);
         let moved = state.record_sample(
             "a",
@@ -2285,7 +2290,7 @@ mod tests {
             (utilization(&state, SEVEN_DAY, 3_000) - 0.4).abs() < CLOSE,
             "the 7-day window read nothing newer and keeps it"
         );
-        state.charge("a", 2_600, Some(0.1), Some(0.1), None);
+        state.charge("a", 2_600, &[(FIVE_HOUR, 0.1), (SEVEN_DAY, 0.1)]);
         assert!(
             (utilization(&state, FIVE_HOUR, 3_000) - 0.65).abs() < CLOSE,
             "a charge after the reading reads on top of it"
@@ -2387,5 +2392,62 @@ mod tests {
             (Some(5_000), Some(4_500)),
             "the credits row holds a fast request alone, beside the fast lane's rate limit"
         );
+    }
+
+    #[test]
+    fn a_model_row_recovers_on_its_models_own_week_whatever_window_the_row_names() {
+        let row = |window: &str| CooldownRow {
+            account_id: "a".into(),
+            scope: "model:claude-fable-5-1".into(),
+            until: 10_000,
+            set_at: 1_000,
+            reason: "rate_limit".into(),
+            window: window.into(),
+            source_request_id: None,
+            incarnation: 1,
+        };
+        let sample = |readings: &[(&str, f64)]| {
+            readings.iter().fold(
+                UtilizationSample {
+                    observed_at: 2_000,
+                    ..Default::default()
+                },
+                |sample, (window, utilization)| {
+                    sample.with(
+                        window,
+                        WindowReading {
+                            utilization: *utilization,
+                            reset: None,
+                            observed_at: 2_000,
+                        },
+                    )
+                },
+            )
+        };
+        let recovered = |state: &RoutingState, readings: &[(&str, f64)]| {
+            state
+                .recovered_cooldowns("a", &sample(readings), 3_000)
+                .into_iter()
+                .map(|r| r.scope)
+                .collect::<Vec<_>>()
+        };
+        // The spend cap's row keeps the upstream's claim, which names no family's week.
+        for window in ["seven_day_overage_included", SEVEN_DAY_FABLE] {
+            let mut state = RoutingState::from_load(RoutingLoad::default());
+            state.record_cooldown(row(window));
+            assert_eq!(
+                recovered(&state, &[(SEVEN_DAY_FABLE, 0.5)]),
+                ["model:claude-fable-5-1"],
+                "the Fable week has allowance again, whatever the row's window {window} says"
+            );
+            assert!(
+                recovered(&state, &[(window, 0.5), (SEVEN_DAY_FABLE, 1.0)]).is_empty(),
+                "a reading under the row's window text says nothing while the Fable week stays spent"
+            );
+            assert!(
+                recovered(&state, &[(SEVEN_DAY, 0.5)]).is_empty(),
+                "a shared week under 1.0 does not recover the model's row, window {window}"
+            );
+        }
     }
 }

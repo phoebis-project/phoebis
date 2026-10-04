@@ -58,21 +58,27 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "windows": [
         {
-          "id": "7d",
+          "id": "five_hour",
+          "utilization": 0.62,
+          "resets_at": 4600000,
+          "observed_at": 900000
+        },
+        {
+          "id": "seven_day",
           "utilization": 0.41,
           "resets_at": 87400000,
           "observed_at": 900000
         },
         {
-          "id": "fable",
+          "id": "seven_day_fable",
           "utilization": 0.12,
           "resets_at": 87400000,
           "observed_at": 900000
         },
         {
-          "id": "five_hour",
-          "utilization": 0.62,
-          "resets_at": 4600000,
+          "id": "seven_day_opus",
+          "utilization": 0.03,
+          "resets_at": 87400000,
           "observed_at": 900000
         }
       ],
@@ -153,7 +159,18 @@ export const FIXTURES: Record<string, Fixture> = {
       "to": 1000000,
       "windows": [
         {
-          "id": "7d",
+          "id": "five_hour",
+          "samples": [
+            {
+              "at": 900000,
+              "utilization": 0.62,
+              "resets_at": 4600000,
+              "source": "poll"
+            }
+          ]
+        },
+        {
+          "id": "seven_day",
           "samples": [
             {
               "at": 900000,
@@ -164,7 +181,7 @@ export const FIXTURES: Record<string, Fixture> = {
           ]
         },
         {
-          "id": "fable",
+          "id": "seven_day_fable",
           "samples": [
             {
               "at": 900000,
@@ -175,12 +192,12 @@ export const FIXTURES: Record<string, Fixture> = {
           ]
         },
         {
-          "id": "five_hour",
+          "id": "seven_day_opus",
           "samples": [
             {
               "at": 900000,
-              "utilization": 0.62,
-              "resets_at": 4600000,
+              "utilization": 0.03,
+              "resets_at": 87400000,
               "source": "poll"
             }
           ]
@@ -301,21 +318,27 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "windows": [
             {
-              "id": "7d",
+              "id": "five_hour",
+              "utilization": 0.62,
+              "resets_at": 4600000,
+              "observed_at": 900000
+            },
+            {
+              "id": "seven_day",
               "utilization": 0.41,
               "resets_at": 87400000,
               "observed_at": 900000
             },
             {
-              "id": "fable",
+              "id": "seven_day_fable",
               "utilization": 0.12,
               "resets_at": 87400000,
               "observed_at": 900000
             },
             {
-              "id": "five_hour",
-              "utilization": 0.62,
-              "resets_at": 4600000,
+              "id": "seven_day_opus",
+              "utilization": 0.03,
+              "resets_at": 87400000,
               "observed_at": 900000
             }
           ],
@@ -408,9 +431,9 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "account_id": "business",
           "peak": {
-            "5h": 0.4,
-            "7d": null,
-            "7d_oi": null
+            "five_hour": 0.4,
+            "seven_day": null,
+            "seven_day_overage_included": null
           },
           "overage_seconds": 0,
           "cooldown_seconds": 1800,
@@ -447,9 +470,9 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "account_id": "direct",
           "peak": {
-            "5h": 0.4,
-            "7d": null,
-            "7d_oi": null
+            "five_hour": 0.4,
+            "seven_day": null,
+            "seven_day_overage_included": null
           },
           "overage_seconds": 0,
           "cooldown_seconds": 0,
@@ -4508,7 +4531,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 4570000
                 }
@@ -4622,7 +4645,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 4540000
                 }
@@ -4730,7 +4753,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 4480000
                 }
@@ -4842,7 +4865,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 1000600
                 }
@@ -4950,7 +4973,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 1000500
                 }
@@ -5061,7 +5084,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 1000000
                 }
@@ -5117,7 +5140,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 1000400
                 }
@@ -5169,21 +5192,27 @@ export const FIXTURES: Record<string, Fixture> = {
           "account_id": "business",
           "windows": [
             {
-              "id": "7d",
+              "id": "five_hour",
+              "utilization": 0.62,
+              "resets_at": 4600000,
+              "bucket": 900000
+            },
+            {
+              "id": "seven_day",
               "utilization": 0.41,
               "resets_at": 87400000,
               "bucket": 900000
             },
             {
-              "id": "fable",
+              "id": "seven_day_fable",
               "utilization": 0.12,
               "resets_at": 87400000,
               "bucket": 900000
             },
             {
-              "id": "five_hour",
-              "utilization": 0.62,
-              "resets_at": 4600000,
+              "id": "seven_day_opus",
+              "utilization": 0.03,
+              "resets_at": 87400000,
               "bucket": 900000
             }
           ]
@@ -6772,7 +6801,7 @@ export const FIXTURES: Record<string, Fixture> = {
             },
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000000
               }
@@ -6828,7 +6857,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000400
               }
@@ -7052,7 +7081,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 4570000
                 }
@@ -7166,7 +7195,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 4540000
                 }
@@ -7274,7 +7303,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 4480000
                 }
@@ -7386,7 +7415,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 1000600
                 }
@@ -7494,7 +7523,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 1000500
                 }
@@ -7605,7 +7634,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 1000000
                 }
@@ -7661,7 +7690,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown_set": null,
               "windows": [
                 {
-                  "id": "5h",
+                  "id": "five_hour",
                   "utilization": 0.4,
                   "resets_at": 1000400
                 }
@@ -8278,7 +8307,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 27,
+        "schema_version": 28,
         "written": 14,
         "dropped": 0,
         "write_failures": 0,

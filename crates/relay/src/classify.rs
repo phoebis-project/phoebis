@@ -230,7 +230,7 @@ fn oauth_cooldown(
 ) -> Cooldown {
     let rejected = |s: &Option<String>| s.as_deref() == Some("rejected");
     if let Some(u) = unified {
-        if shared_window_rejected(u) {
+        if shared_window_rejected(u, ctx.canonical_model) {
             let reset = [
                 u.five_hour_reset.filter(|_| rejected(&u.five_hour_status)),
                 u.seven_day_reset.filter(|_| rejected(&u.seven_day_status)),
@@ -249,13 +249,17 @@ fn oauth_cooldown(
                 window: exhaustion_window(Some(u), AccountKind::Oauth),
             };
         }
-        if fable_only(u) && (rejected(&u.seven_day_oi_status) || rejected(&u.status)) {
+        if model_only(u, ctx.canonical_model).is_some()
+            && (rejected(&u.seven_day_oi_status) || rejected(&u.status))
+        {
             // Same deadline rule as the shared row: the later of the rejected window's own reset and the
             // top-level reset, which only ever lengthens the cooldown when it wins.
             let reset = [u.seven_day_oi_reset, u.reset].into_iter().flatten().max();
             let until = reset
                 .or_else(|| retry_after(head, ctx.now).map(|d| ctx.now.saturating_add(d)))
                 .unwrap_or(ctx.now.saturating_add(ctx.fallback_ms));
+            // The row keeps the upstream's claim: it reaches the client as an exhausted pool's claim, and the
+            // client resumes only on a claim it knows. Recovery reads the model's own week, not this text.
             return Cooldown {
                 scope: Scope::Model,
                 until: until.saturating_add(MARGIN_MS),
@@ -275,10 +279,11 @@ fn oauth_cooldown(
     }
 }
 
-/// A shared plan window rejected: the 5-hour or the 7-day status, or the top-level status unless the model-scoped
-/// window is the only one that rejected.
-fn shared_window_rejected(u: &UnifiedHeaders) -> bool {
-    plan_window_rejected(u) || (u.status.as_deref() == Some("rejected") && !fable_only(u))
+/// A shared plan window rejected: the 5-hour or the 7-day status, or the top-level status unless the requested
+/// model's own week is the only one that rejected.
+fn shared_window_rejected(u: &UnifiedHeaders, canonical_model: &str) -> bool {
+    plan_window_rejected(u)
+        || (u.status.as_deref() == Some("rejected") && model_only(u, canonical_model).is_none())
 }
 
 /// The 5-hour or the 7-day status rejected. The top-level status is left out for a fast request: it draws neither
@@ -348,16 +353,31 @@ fn shared_healthy(status: &Option<String>, utilization: Option<f64>) -> bool {
     }
 }
 
-/// A rejection whose only rejected window is the model-scoped one: both shared windows healthy, and either
-/// the 7d_oi window rejected or a representative claim that names a `seven_day_` window.
-fn fable_only(u: &UnifiedHeaders) -> bool {
+/// The overage week's own claim: the window the `7d_oi` status reads, which no model family owns.
+const OVERAGE_INCLUDED_CLAIM: &str = "seven_day_overage_included";
+
+/// The model window's key when the rejection names the request model's own week and nothing shared, else `None`:
+/// both shared windows healthy, the model's family has a row in the window table, and the representative claim
+/// names that row's window, or names the overage week or no week while the 7d_oi status is rejected. A claim
+/// naming another family's week, or one no row knows, is read before the status fallback and is no model
+/// evidence: the account cools, the safe direction while the claim vocabulary is not yet measured live, and a
+/// foreign week never borrows the fallback.
+fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> Option<&'static str> {
+    let own = phoebis_routing::window_for(canonical_model);
+    if own == phoebis_routing::SEVEN_DAY {
+        return None;
+    }
     let shared_fine = shared_healthy(&u.five_hour_status, u.five_hour_utilization)
         && shared_healthy(&u.seven_day_status, u.seven_day_utilization);
-    shared_fine
-        && (u.seven_day_oi_status.as_deref() == Some("rejected")
-            || u.representative_claim
-                .as_deref()
-                .is_some_and(|c| c.starts_with("seven_day_")))
+    if !shared_fine {
+        return None;
+    }
+    match u.representative_claim.as_deref() {
+        Some(claim) if claim == own => Some(own),
+        // Another family's week, or a week no row names: the account-wide cooldown, whatever `7d_oi` reads.
+        Some(claim) if claim.starts_with("seven_day_") && claim != OVERAGE_INCLUDED_CLAIM => None,
+        _ => (u.seven_day_oi_status.as_deref() == Some("rejected")).then_some(own),
+    }
 }
 
 fn api_key_cooldown(head: &ResponseHead, ctx: &HeadContext<'_>) -> Cooldown {
@@ -542,6 +562,14 @@ mod tests {
         }
     }
 
+    /// A subscription request for a model whose family has a week of its own.
+    fn fable_ctx<'a>() -> HeadContext<'a> {
+        HeadContext {
+            canonical_model: "claude-fable-5-1",
+            ..context(AccountKind::Oauth)
+        }
+    }
+
     fn cooldown_of(verdict: Verdict) -> Cooldown {
         match verdict {
             Verdict::FailOver {
@@ -646,7 +674,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fable_only_rejection_cools_only_the_requested_model() {
+    fn a_model_only_rejection_cools_only_the_requested_model() {
         let h = head(
             429,
             &[
@@ -661,7 +689,7 @@ mod tests {
                 ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
             ],
         );
-        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        let c = cooldown_of(classify(&h, &fable_ctx()));
         assert_eq!(
             (c.scope, c.until, c.window.as_str()),
             (Scope::Model, 1_700_007_200_000 + 1_000, "seven_day_fable")
@@ -693,7 +721,7 @@ mod tests {
                 ("retry-after", "121180"),
             ],
         );
-        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        let c = cooldown_of(classify(&h, &fable_ctx()));
         assert_eq!(
             (c.scope, c.until, c.window.as_str()),
             (
@@ -730,7 +758,7 @@ mod tests {
                 ("retry-after", "121180"),
             ],
         );
-        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        let c = cooldown_of(classify(&h, &fable_ctx()));
         assert_eq!(
             (c.scope, c.until, c.window.as_str()),
             (
@@ -743,7 +771,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fable_only_rejection_under_a_five_hour_warning_cools_only_the_model() {
+    fn a_model_only_rejection_under_a_five_hour_warning_cools_only_the_model() {
         let h = head(
             429,
             &[
@@ -758,7 +786,7 @@ mod tests {
                 ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
             ],
         );
-        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        let c = cooldown_of(classify(&h, &fable_ctx()));
         assert_eq!(
             (c.scope, c.until, c.window.as_str()),
             (
@@ -766,6 +794,60 @@ mod tests {
                 1_700_007_200_000 + MARGIN_MS,
                 "seven_day_fable"
             )
+        );
+    }
+
+    /// A rejection whose shared windows both read healthy and whose `7d_oi` status is rejected, under `claim`:
+    /// the status alone would answer a model-scoped row, so the claim decides.
+    fn model_week_rejection(claim: Option<&str>) -> ResponseHead {
+        let mut headers = vec![
+            ("anthropic-ratelimit-unified-status", "rejected"),
+            ("anthropic-ratelimit-unified-5h-status", "allowed"),
+            ("anthropic-ratelimit-unified-7d-status", "allowed"),
+            ("anthropic-ratelimit-unified-7d_oi-status", "rejected"),
+            ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
+        ];
+        if let Some(claim) = claim {
+            headers.push(("anthropic-ratelimit-unified-representative-claim", claim));
+        }
+        head(429, &headers)
+    }
+
+    #[test]
+    fn a_model_week_rejection_cools_the_account_for_a_model_without_a_week_of_its_own() {
+        let sonnet = HeadContext {
+            canonical_model: "claude-sonnet-5",
+            ..context(AccountKind::Oauth)
+        };
+        for claim in [
+            Some("seven_day_fable"),
+            Some("seven_day_overage_included"),
+            None,
+        ] {
+            let c = cooldown_of(classify(&model_week_rejection(claim), &sonnet));
+            assert_eq!(
+                c.scope,
+                Scope::Account,
+                "a model the family table has no row for has no week to cool alone: claim {claim:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_claim_naming_another_familys_week_or_an_unknown_one_cools_the_account() {
+        for claim in ["seven_day_opus", "seven_day_unknown"] {
+            let c = cooldown_of(classify(&model_week_rejection(Some(claim)), &fable_ctx()));
+            assert_eq!(
+                (c.scope, c.window.as_str()),
+                (Scope::Account, claim),
+                "the claim names no week of the requested model's family, whatever the 7d_oi status reads"
+            );
+        }
+        let c = cooldown_of(classify(&model_week_rejection(None), &fable_ctx()));
+        assert_eq!(
+            (c.scope, c.window.as_str()),
+            (Scope::Model, "retry_after"),
+            "with no claim the 7d_oi status cools the requested model, and the row names no claim"
         );
     }
 
@@ -784,7 +866,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            cooldown_of(classify(&h, &context(AccountKind::Oauth))).scope,
+            cooldown_of(classify(&h, &fable_ctx())).scope,
             Scope::Account,
             "a utilization at 1.0 is a spent window, whatever the missing status would have said"
         );
@@ -800,7 +882,7 @@ mod tests {
                 ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
             ],
         );
-        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        let c = cooldown_of(classify(&h, &fable_ctx()));
         assert_eq!(
             c.scope,
             Scope::Account,
@@ -814,7 +896,7 @@ mod tests {
             ],
         );
         assert_eq!(
-            cooldown_of(classify(&h, &context(AccountKind::Oauth))).scope,
+            cooldown_of(classify(&h, &fable_ctx())).scope,
             Scope::Account,
             "one shared status is not both"
         );
@@ -832,7 +914,7 @@ mod tests {
                 ("anthropic-ratelimit-unified-7d_oi-reset", "1700007200"),
             ],
         );
-        let c = cooldown_of(classify(&h, &context(AccountKind::Oauth)));
+        let c = cooldown_of(classify(&h, &fable_ctx()));
         assert_eq!(
             c.scope,
             Scope::Account,

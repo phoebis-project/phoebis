@@ -2697,6 +2697,268 @@ fn a_spent_fable_window_moves_a_fable_pin_and_leaves_a_sonnet_pin_on_the_same_ac
 }
 
 #[test]
+fn a_fable_pin_moves_off_an_account_whose_five_hour_window_is_spent_though_its_fable_week_holds() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let fable = |st: &mut RoutingState, session: &str, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, Some(session), "claude-fable-5-1", true, &[], now),
+            &mut rng(),
+        )
+    };
+    assert_eq!(picked(&fable(&mut st, "s1", 1_000).0), "a");
+    st.record_sample(
+        "a",
+        with_fable(
+            refreshing(1.0, 2 * HOUR, 9 * HOUR, 1_500),
+            0.5,
+            Some(9 * HOUR),
+        ),
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.2, 0.1, 1_500), 0.5, Some(9 * HOUR)),
+    );
+    let SelectResult::Selected(sel) = fable(&mut st, "s1", 2_000).0 else {
+        panic!()
+    };
+    assert_eq!(
+        (sel.account.id.as_str(), sel.migrated),
+        ("b", Some(MigrateReason::Spent)),
+        "a Fable request draws on the shared five-hour window too, so a spent one moves the pin"
+    );
+
+    let only_a = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    assert_eq!(
+        select(
+            &mut st,
+            &only_a,
+            &request(&only_a, Some("s2"), "claude-fable-5-1", true, &[], 3_000),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 2 * HOUR,
+            window: FIVE_HOUR.into()
+        }),
+        "a fresh Fable placement passes the account over, dated by the window that is spent"
+    );
+}
+
+#[test]
+fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_while_extra_usage_is_enabled()
+{
+    for prefer_subscription in [false, true] {
+        let s = snapshot(Pool {
+            policy: OveragePolicy::Allow,
+            members: vec![("a", 0), ("b", 1)],
+            prefer_subscription,
+            ..Pool::default()
+        });
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_sample(
+            "a",
+            with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+        );
+        st.record_sample(
+            "b",
+            with_fable(sample(0.3, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+        );
+        st.record_credits("a", credits(true, None, Some(0.2), 1_000));
+        let fable = |st: &mut RoutingState, now: i64| {
+            select(
+                st,
+                &s,
+                &request(&s, None, "claude-fable-5-1", true, &[], now),
+                &mut rng(),
+            )
+            .0
+        };
+        assert_eq!(
+            picked(&fable(&mut st, 2_000)),
+            "b",
+            "a plan-funded sibling goes first whatever its priority, kind order {prefer_subscription}"
+        );
+        st.record_cooldown(cooled(
+            "b",
+            "account",
+            2_000 + HOUR,
+            "five_hour",
+            "rate_limit",
+        ));
+        assert_eq!(
+            picked(&fable(&mut st, 3_000)),
+            "a",
+            "with the sibling cooled, the spent week goes on in extra usage, kind order {prefer_subscription}"
+        );
+        st.record_credits("a", credits(false, None, None, 4_000));
+        assert!(
+            matches!(fable(&mut st, 5_000), SelectResult::Exhausted(_)),
+            "extra usage disabled funds nothing, kind order {prefer_subscription}"
+        );
+        let mut unread = RoutingState::from_load(RoutingLoad::default());
+        unread.record_sample(
+            "a",
+            with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+        );
+        unread.record_cooldown(cooled(
+            "b",
+            "account",
+            2_000 + HOUR,
+            "five_hour",
+            "rate_limit",
+        ));
+        assert!(
+            matches!(fable(&mut unread, 3_000), SelectResult::Exhausted(_)),
+            "a credits state the poll has not read is not extra usage enabled, kind order {prefer_subscription}"
+        );
+    }
+}
+
+#[test]
+fn under_never_a_spent_model_week_drops_its_account_whatever_the_credits_read() {
+    let s = snapshot(Pool {
+        policy: OveragePolicy::Never,
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample(
+        "a",
+        with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+    );
+    st.record_sample(
+        "b",
+        with_fable(sample(0.3, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+    );
+    st.record_credits("a", credits(true, None, Some(0.2), 1_000));
+    let fable = |st: &mut RoutingState, now: i64| {
+        select(
+            st,
+            &s,
+            &request(&s, None, "claude-fable-5-1", true, &[], now),
+            &mut rng(),
+        )
+        .0
+    };
+    let result = fable(&mut st, 2_000);
+    assert_eq!(picked(&result), "b");
+    assert!(
+        skipped_as(&result).contains(&("a", "spent")),
+        "{:?}",
+        skipped_as(&result)
+    );
+    st.record_cooldown(cooled(
+        "b",
+        "account",
+        2_000 + HOUR,
+        "five_hour",
+        "rate_limit",
+    ));
+    assert!(
+        matches!(fable(&mut st, 3_000), SelectResult::Exhausted(_)),
+        "never continues no spent week in extra usage"
+    );
+}
+
+#[test]
+fn a_seven_day_opus_reading_at_its_limit_is_kept_in_the_sample_and_drops_nothing() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let window = |key: &str, utilization: f64| phoebis_oauth::UsageWindow {
+        key: key.into(),
+        utilization: Some(utilization),
+        resets_at: Some(9 * HOUR),
+    };
+    let (sample, _) = phoebis_routing::sample_from_usage(
+        &phoebis_oauth::UsageSnapshot {
+            account_id: "a".into(),
+            identity_generation: 1,
+            fetched_at: 1_000,
+            windows: vec![
+                window("five_hour", 20.0),
+                window("seven_day", 10.0),
+                window("seven_day_opus", 100.0),
+            ],
+            fable_window: None,
+            extra_usage: None,
+            raw_keys: Vec::new(),
+            error: None,
+        },
+        1,
+    );
+    st.record_sample("a", sample);
+    assert_eq!(
+        st.sample("a")
+            .and_then(|s| s.reading("seven_day_opus"))
+            .map(|r| r.utilization),
+        Some(1.0),
+        "a week the family table has no row for is kept under its own key"
+    );
+    for model in ["claude-opus-5", "claude-fable-5-1", "claude-sonnet-5"] {
+        assert_eq!(
+            picked(
+                &select(
+                    &mut st,
+                    &s,
+                    &request(&s, None, model, true, &[], 2_000),
+                    &mut rng()
+                )
+                .0
+            ),
+            "a",
+            "no row reads the week, so it feeds no allowance for {model}"
+        );
+    }
+}
+
+#[test]
+fn an_unknown_seven_day_reading_drops_nothing() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_sample(
+        "a",
+        sample(0.2, 0.1, 1_000).with(
+            "seven_day_x",
+            WindowReading {
+                utilization: 1.0,
+                reset: Some(9 * HOUR),
+                observed_at: 1_000,
+            },
+        ),
+    );
+    for model in ["claude-fable-5-1", "claude-sonnet-5"] {
+        assert_eq!(
+            picked(
+                &select(
+                    &mut st,
+                    &s,
+                    &request(&s, None, model, true, &[], 2_000),
+                    &mut rng()
+                )
+                .0
+            ),
+            "a",
+            "{model}"
+        );
+    }
+}
+
+#[test]
 fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell() {
     let s = snapshot(Pool {
         migrate: Some(0.8),

@@ -1,6 +1,6 @@
 import { planName } from '@/api/decode';
 import type { Account, QuotaHistory, QuotaSample, QuotaSnapshot, RateLimitWindow, WindowId } from '@/api/types';
-import { WINDOW_HOURS, WINDOW_LABEL } from '@/lib/windows';
+import { WINDOW_HOURS, WINDOW_LABEL, hoursOfKey } from '@/lib/windows';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, QUOTA_SNAPSHOT_SAMPLE } from './samples';
 import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
@@ -8,9 +8,9 @@ import { DAY, HOUR, MINUTE, NOW, ago, ahead, iso } from './time';
 function win(id: WindowId, utilization: number, resetsInMs: number, observedAgoMs = 40_000): RateLimitWindow {
   return {
     id,
-    label: WINDOW_LABEL[id],
+    label: WINDOW_LABEL[id] ?? id,
     observedAt: ago(observedAgoMs),
-    periodHours: WINDOW_HOURS[id],
+    periodHours: WINDOW_HOURS[id] ?? hoursOfKey(id),
     resetsAt: ahead(resetsInMs),
     utilization,
   };
@@ -37,7 +37,8 @@ export const ACCOUNTS: Account[] = ([
       { poolId: 'all', priority: 0 },
       { poolId: 'studio', priority: 0 },
     ],
-    windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
+    // The poll's week for a model the family table has no row for: kept and shown under its key, read by no rule.
+    windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: false, monthlyLimitCredits: 5000, usedCredits: 1234 },
     fastLane: fastLane(1, 0.64, 12 * MINUTE),
@@ -290,12 +291,12 @@ function sawtooth(seed: number, resetsAtMs: number, periodMs: number, target: nu
   return samples;
 }
 
-const HISTORY_SEED: Record<WindowId, number> = { '5h': 1, '7d': 2, '7d_fable': 3 };
+const HISTORY_SEED: Partial<Record<WindowId, number>> = { '5h': 1, '7d': 2, '7d_fable': 3 };
 
 export const QUOTA_HISTORY: QuotaHistory[] = ACCOUNTS.flatMap((account, i) =>
   [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => ({
     accountId: account.id,
     windowId: w.id,
-    samples: sawtooth(1000 + i * 7 + HISTORY_SEED[w.id], Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization),
+    samples: sawtooth(1000 + i * 7 + (HISTORY_SEED[w.id] ?? 4), Date.parse(w.resetsAt ?? ''), w.periodHours * HOUR, w.utilization),
   })),
 );

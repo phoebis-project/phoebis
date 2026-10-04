@@ -21,9 +21,9 @@ use crate::affinity::{
 };
 use crate::select::{release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult};
 use crate::state::{
-    burn_folded, AccountTicket, CreditsState, EvidenceSource, InFlight, MemberSpend,
-    OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer, StateWrite,
-    UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    burn_folded, is_plan_window, AccountTicket, CreditsState, EvidenceSource, InFlight,
+    MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
+    StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
 };
 use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -2341,10 +2341,8 @@ impl Task {
                         self.release_cooldown(row.account_id, row.scope, "recovered");
                     }
                     // An api_key bucket refills within a minute, so only the plan windows are worth a restart.
-                    let windows: Vec<String> = moved
-                        .into_iter()
-                        .filter(|w| [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE].contains(&w.as_str()))
-                        .collect();
+                    let windows: Vec<String> =
+                        moved.into_iter().filter(|w| is_plan_window(w)).collect();
                     let rows = self.state.window_rows(&account_id, &windows, incarnation);
                     self.write(rows.into_iter().map(StateWrite::UpsertWindow).collect());
                 }
@@ -2381,11 +2379,21 @@ impl Task {
                         .share
                         .price(window, tier, &canonical_model, usage, at)
                 };
-                let fable = (window_for(&canonical_model) == SEVEN_DAY_FABLE)
-                    .then(|| price(SEVEN_DAY_FABLE))
-                    .flatten();
-                self.state
-                    .charge(&account_id, at, price(FIVE_HOUR), price(SEVEN_DAY), fable);
+                let own = window_for(&canonical_model);
+                let mut shares = vec![(FIVE_HOUR, price(FIVE_HOUR)), (SEVEN_DAY, price(SEVEN_DAY))];
+                if own != SEVEN_DAY {
+                    // A model week the table does not measure is priced as the 7-day share once, until the cost
+                    // table measures it; the share pricer says which.
+                    if !self.config.share.measured(own) {
+                        tracing::debug!(window = own, "a model window is priced unmeasured");
+                    }
+                    shares.push((own, price(own)));
+                }
+                let shares: Vec<(&str, f64)> = shares
+                    .into_iter()
+                    .filter_map(|(w, s)| s.map(|s| (w, s)))
+                    .collect();
+                self.state.charge(&account_id, at, &shares);
             }
             Report::AccountState {
                 account_id,
@@ -2957,39 +2965,31 @@ pub fn credits_from_usage(snapshot: &UsageSnapshot, incarnation: u64) -> Option<
     })
 }
 
-/// `incarnation` is the holder of the account id the snapshot was fetched for, which the evidence names.
+/// `incarnation` is the holder of the account id the snapshot was fetched for, which the evidence names. The
+/// sample keeps `five_hour`, `seven_day` and every other `seven_day_*` window under the endpoint's key, and the
+/// `limits` window as `seven_day_fable`; a key no family row names is kept and feeds no allowance.
 pub fn sample_from_usage(
     snapshot: &UsageSnapshot,
     incarnation: u64,
 ) -> (UtilizationSample, Option<OverageEvidence>) {
-    let window = |key: &str| snapshot.windows.iter().find(|w| w.key == key);
     let mut sample = UtilizationSample {
         observed_at: snapshot.fetched_at,
         ..Default::default()
     };
-    for (name, utilization, reset) in [
-        (
-            FIVE_HOUR,
-            window("five_hour").and_then(|w| w.utilization),
-            window("five_hour").and_then(|w| w.resets_at),
-        ),
-        (
-            SEVEN_DAY,
-            window("seven_day").and_then(|w| w.utilization),
-            window("seven_day").and_then(|w| w.resets_at),
-        ),
-        (
-            SEVEN_DAY_FABLE,
-            snapshot.fable_window.as_ref().and_then(|w| w.utilization),
-            snapshot.fable_window.as_ref().and_then(|w| w.resets_at),
-        ),
-    ] {
-        if let Some(utilization) = utilization {
+    let kept = snapshot
+        .windows
+        .iter()
+        .filter(|w| is_plan_window(&w.key))
+        .map(|w| (w.key.as_str(), w));
+    // The `limits` window comes last, so it is the Fable week's reading whatever top-level key the endpoint sends.
+    let fable = snapshot.fable_window.iter().map(|w| (SEVEN_DAY_FABLE, w));
+    for (name, window) in kept.chain(fable) {
+        if let Some(utilization) = window.utilization {
             sample = sample.with(
                 name,
                 WindowReading {
                     utilization: utilization / 100.0,
-                    reset,
+                    reset: window.resets_at,
                     observed_at: snapshot.fetched_at,
                 },
             );

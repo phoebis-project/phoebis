@@ -3431,7 +3431,7 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
     handle
         .report(cooled(
             "a",
-            "model:claude-sonnet-5",
+            "model:claude-fable-5-1",
             1_000 + 48 * HOUR,
             "rate_limit",
             "seven_day_fable",

@@ -223,8 +223,9 @@ pub fn head_sample(
                         },
                     );
                 }
-                // Unlike the shared windows, the overage-included 7-day reading carries no status of its own to
-                // gate on, only the utilization header itself.
+                // The head carries the Fable week under the overage-included name, the one model week a head
+                // reports here; whether a second model week ever arrives by head is for the first live run to read.
+                // Unlike the shared windows, it carries no status of its own to gate on, only the utilization.
                 if let Some(utilization) = unified.seven_day_oi_utilization {
                     sample = sample.with(
                         SEVEN_DAY_FABLE,

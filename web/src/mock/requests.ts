@@ -115,7 +115,8 @@ const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): 
 const oauthWindows = (accountId: string, atMs: number): AttemptWindow[] => {
   const account = ACCOUNTS.find((a) => a.id === accountId);
   if (!account || account.kind !== 'oauth') return [];
-  const reported = account.windows.filter((w) => w.id !== '7d_fable').map((w) => walkBack(w, atMs, () => rng.float(0.4, 1.1)));
+  // A head reports the two shared windows and the overage week; a week only the poll reads never reaches an attempt.
+  const reported = account.windows.filter((w) => w.id === '5h' || w.id === '7d').map((w) => walkBack(w, atMs, () => rng.float(0.4, 1.1)));
   // Plans that serve Fable send its weekly headers alongside the other two; the
   // rest send nothing and the detail panel reads n/a. A fixed factor rather than
   // a draw keeps the seeded stream the other fixtures read from where it was.

@@ -463,7 +463,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
         .iter()
         .find(|a| a["account_id"] == "business")
         .unwrap();
-    assert_eq!(business["peak"]["5h"].as_f64(), Some(0.3));
+    assert_eq!(business["peak"]["five_hour"].as_f64(), Some(0.3));
     assert_eq!(
         get(
             &parts.app,
@@ -989,7 +989,7 @@ async fn the_request_log_filters_paginates_and_shows_one_row_per_request_with_it
             failover["attempts"][0]["windows"][0]["id"].as_str(),
             failover["attempts"][0]["windows"][0]["utilization"].as_f64()
         ),
-        (Some("5h"), Some(0.3))
+        (Some("five_hour"), Some(0.3))
     );
     assert_eq!(
         (

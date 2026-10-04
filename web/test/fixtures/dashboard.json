@@ -263,7 +263,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 4570000
               }
@@ -377,7 +377,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 4540000
               }
@@ -485,7 +485,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 4480000
               }
@@ -597,7 +597,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000600
               }
@@ -705,7 +705,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000500
               }
@@ -816,7 +816,7 @@
             },
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000000
               }
@@ -872,7 +872,7 @@
             "cooldown_set": null,
             "windows": [
               {
-                "id": "5h",
+                "id": "five_hour",
                 "utilization": 0.4,
                 "resets_at": 1000400
               }
@@ -924,21 +924,27 @@
         "account_id": "business",
         "windows": [
           {
-            "id": "7d",
+            "id": "five_hour",
+            "utilization": 0.62,
+            "resets_at": 4600000,
+            "bucket": 900000
+          },
+          {
+            "id": "seven_day",
             "utilization": 0.41,
             "resets_at": 87400000,
             "bucket": 900000
           },
           {
-            "id": "fable",
+            "id": "seven_day_fable",
             "utilization": 0.12,
             "resets_at": 87400000,
             "bucket": 900000
           },
           {
-            "id": "five_hour",
-            "utilization": 0.62,
-            "resets_at": 4600000,
+            "id": "seven_day_opus",
+            "utilization": 0.03,
+            "resets_at": 87400000,
             "bucket": 900000
           }
         ]

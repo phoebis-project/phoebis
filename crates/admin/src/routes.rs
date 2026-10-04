@@ -24,8 +24,8 @@ use phoebis_oauth::{
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
-    MemberSpend, OverageEvidence, ReloadError, UtilizationSample, WindowReading, FIVE_HOUR,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    is_plan_window, MemberSpend, OverageEvidence, ReloadError, UtilizationSample, WindowReading,
+    SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
@@ -1329,18 +1329,23 @@ fn has_windows(snapshot: &UsageSnapshot) -> bool {
     !snapshot.windows.is_empty() || snapshot.fable_window.is_some()
 }
 
-/// The router's plan windows under the keys the usage endpoint gives them, in the endpoint's order: what both
-/// the usage `GET` and the account view show when they read the router's windows.
-fn held_windows(sample: &UtilizationSample) -> Vec<(&'static str, WindowReading)> {
-    // The router names the 5-hour and 7-day windows as the endpoint does.
-    [
-        (FIVE_HOUR, FIVE_HOUR),
-        (SEVEN_DAY, SEVEN_DAY),
-        (SEVEN_DAY_FABLE, FABLE_WINDOW_KEY),
-    ]
-    .into_iter()
-    .filter_map(|(name, key)| sample.reading(name).map(|reading| (key, reading)))
-    .collect()
+/// The router's plan windows under the keys the usage endpoint gives them: what both the usage `GET` and the
+/// account view show when they read the router's windows.
+fn held_windows(sample: &UtilizationSample) -> Vec<(String, WindowReading)> {
+    // The router names every plan window as the endpoint does, except the Fable week it reads from `limits`.
+    sample
+        .windows
+        .iter()
+        .filter(|(name, _)| is_plan_window(name))
+        .map(|(name, reading)| {
+            let key = if name == SEVEN_DAY_FABLE {
+                FABLE_WINDOW_KEY
+            } else {
+                name.as_str()
+            };
+            (key.to_string(), *reading)
+        })
+        .collect()
 }
 
 /// The fast lane's input and output buckets as the router last read them off an answer's head; `None` while it
@@ -1371,8 +1376,8 @@ fn compose_usage(
         });
     }
     // The router reads a utilization as a fraction; the endpoint's windows carry a percentage.
-    let window = |(key, reading): &(&str, WindowReading)| UsageWindow {
-        key: key.to_string(),
+    let window = |(key, reading): &(String, WindowReading)| UsageWindow {
+        key: key.clone(),
         utilization: Some(reading.utilization * 100.0),
         resets_at: reading.reset,
     };

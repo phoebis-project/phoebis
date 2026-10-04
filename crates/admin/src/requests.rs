@@ -75,11 +75,21 @@ fn attempt_json(a: &AttemptRecord) -> Value {
         (u.is_some() || reset.is_some())
             .then(|| json!({ "id": id, "utilization": u, "resets_at": reset }))
     };
+    // The attempt's columns hold the head's `5h`, `7d` and `7d_oi`, answered under the usage endpoint's keys as
+    // the quota samples are.
     let windows: Vec<Value> = [
-        window("5h", a.ratelimit_5h_utilization, a.ratelimit_5h_reset),
-        window("7d", a.ratelimit_7d_utilization, a.ratelimit_7d_reset),
         window(
-            "7d_oi",
+            "five_hour",
+            a.ratelimit_5h_utilization,
+            a.ratelimit_5h_reset,
+        ),
+        window(
+            "seven_day",
+            a.ratelimit_7d_utilization,
+            a.ratelimit_7d_reset,
+        ),
+        window(
+            "seven_day_overage_included",
             a.ratelimit_7d_oi_utilization,
             a.ratelimit_7d_oi_reset,
         ),

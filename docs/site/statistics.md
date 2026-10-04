@@ -79,6 +79,11 @@ headers, which cost nothing to read and cover whichever accounts are in use at t
 endpoint, every five minutes per OAuth account with each account on its own phase across the interval, fills the gaps
 an idle account leaves, is the only source of extra-usage credit totals, and hands every clean reading to the router.
 
+A sample's window is one of the endpoint's keys: `five_hour`, `seven_day`, `seven_day_overage_included` (the head's
+overage-included week), `seven_day_fable` (the `limits` window) and any other `seven_day_*` key the poll reports; the
+metric's `window` label and the console use the same spelling. A head and a poll of the same five-minute bucket write
+one row per window, the head's where both read it.
+
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
 accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the first
 request after a restart; an account whose first answer is a 429 serves from the windows kept in the registry from its

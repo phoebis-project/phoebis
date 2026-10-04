@@ -23,8 +23,8 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.subscription.plan, 'max');
   assert.ok(isIso(a.subscription.since));
   assert.equal(a.subscription.trialEndsAt, null);
-  assert.deepEqual(fixture('account').windows.map((w) => w.id), ['7d', 'fable', 'five_hour'], 'the route passes each sampler spelling through, in the ledger order');
-  assert.deepEqual(a.windows.map((w) => w.id), ['5h', '7d'], 'the poll spelling folds onto the UI id and the order is the drawn one');
+  assert.deepEqual(fixture('account').windows.map((w) => w.id), ['five_hour', 'seven_day', 'seven_day_fable', 'seven_day_opus'], 'the route passes the ledger\'s one spelling through, in the ledger order');
+  assert.deepEqual(a.windows.map((w) => w.id), ['5h', '7d', 'seven_day_opus'], 'the endpoint keys fold onto the UI ids, a week no row names keeps its key, and the order is the drawn one');
   assert.equal(a.fableWindow.id, '7d_fable');
   assert.ok(isIso(a.windows[0].resetsAt) && isIso(a.windows[0].observedAt));
   assert.equal(a.windows[0].utilization, 0.62, 'the five_hour sample is the 5h window');
@@ -159,6 +159,36 @@ test('a quota history both samplers wrote merges into one series in time order',
   assert.deepEqual(history.map((h) => h.windowId), ['5h', '7d'], 'merged, and in the order the pages draw them');
   assert.deepEqual(history[0].samples.map((s) => s.utilization), [0.3, 0.5], 'both samplers land in one series, oldest first');
   assert.equal(history[0].accountId, 'business');
+});
+
+test('the window key helper names the three known windows and keeps any other key as its own window', () => {
+  const keys = ['five_hour', '5h', 'seven_day', '7d', 'seven_day_fable', 'seven_day_overage_included', '7d_oi', 'fable', 'seven_day_opus'];
+  assert.deepEqual(keys.map(d.windowId), ['5h', '5h', '7d', '7d', '7d_fable', '7d_fable', '7d_fable', '7d_fable', 'seven_day_opus']);
+});
+
+test('an unknown weekly window decodes under its key after the known ones, in the account, its history and its cooldowns', () => {
+  const base = fixture('account');
+  const opus = { id: 'seven_day_opus', observed_at: 1_000_000, resets_at: 9_000_000, utilization: 0.03 };
+  const shared = [{ id: 'five_hour', observed_at: 1_000_000, resets_at: 9, utilization: 0.1 }, { id: 'seven_day', observed_at: 1_000_000, resets_at: 9, utilization: 0.4 }];
+  const a = d.decodeAccount({ ...base, windows: [opus, ...shared], cooldowns: [{ scope: 'account', until: 1, reason: 'rate_limit', window: 'seven_day_opus', set_at: 0 }] });
+  assert.deepEqual(
+    a.windows.map((w) => [w.id, w.label, w.periodHours]),
+    [['5h', '5-hour', 5], ['7d', '7-day', 168], ['seven_day_opus', 'seven_day_opus', 168]],
+    'kept under its key with a weekly period, drawn after the windows the pages know',
+  );
+  assert.equal(a.cooldowns[0].windowId, 'seven_day_opus');
+  const history = d.decodeQuotaHistory({
+    account_id: 'business',
+    windows: [
+      { id: 'seven_day_opus', samples: [{ at: 1_000_000, utilization: 0.03 }] },
+      { id: 'five_hour', samples: [{ at: 1_000_000, utilization: 0.3 }] },
+    ],
+  });
+  assert.deepEqual(history.map((h) => h.windowId), ['5h', 'seven_day_opus']);
+  const captured = d.decodeAccount(base);
+  assert.deepEqual(captured.windows.map((w) => w.id), ['5h', '7d', 'seven_day_opus'], 'the captured account carries the opus week after the two shared ones; the Fable week sits apart');
+  const captive = captured.windows.find((w) => w.id === 'seven_day_opus');
+  assert.deepEqual([captive.label, captive.periodHours], ['seven_day_opus', 168]);
 });
 
 test('plan labels read the tier', () => {
@@ -1162,7 +1192,7 @@ test('settings, pricing, pairing, quota, and usage decode', () => {
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));
   const history = d.decodeQuotaHistory(fixture('account_quota'));
-  assert.deepEqual(history.map((h) => h.windowId), ['5h', '7d', '7d_fable']);
+  assert.deepEqual(history.map((h) => h.windowId), ['5h', '7d', '7d_fable', 'seven_day_opus']);
   assert.ok(history.every((h) => h.samples.every((x) => isIso(x.at))));
   const snapshot = d.decodeSnapshot('business', fixture('account_usage'));
   assert.equal(snapshot.status, 'success');

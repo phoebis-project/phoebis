@@ -820,4 +820,18 @@ CREATE TABLE parked_records (
   error TEXT NOT NULL
 );",
     ),
+    // Before 28 the head wrote `5h`, `7d` and `7d_oi` and the poll the endpoint's keys plus `fable`. A poll row
+    // whose old-spelled partner holds the same account, bucket and window goes first, so the rename meets no
+    // primary key twice: the head's row wins as "header replaces" would have had it, and the `limits` reading
+    // wins the Fable week.
+    (
+        28,
+        "DELETE FROM quota_samples WHERE source = 'poll'
+  AND window IN ('five_hour', 'seven_day', 'seven_day_overage_included', 'seven_day_fable') AND EXISTS (
+  SELECT 1 FROM quota_samples o WHERE o.account_id = quota_samples.account_id AND o.bucket = quota_samples.bucket
+  AND o.window = CASE quota_samples.window WHEN 'five_hour' THEN '5h' WHEN 'seven_day' THEN '7d'
+    WHEN 'seven_day_overage_included' THEN '7d_oi' ELSE 'fable' END);
+UPDATE quota_samples SET window = CASE window WHEN '5h' THEN 'five_hour' WHEN '7d' THEN 'seven_day'
+  WHEN '7d_oi' THEN 'seven_day_overage_included' WHEN 'fable' THEN 'seven_day_fable' ELSE window END;",
+    ),
 ];
