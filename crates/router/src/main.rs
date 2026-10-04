@@ -3,7 +3,7 @@
 
 use std::path::PathBuf;
 
-use anyhow::Context;
+use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 
 #[derive(Parser)]
@@ -28,7 +28,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate the configuration, the key file and the registry's key canary, taking no lock and opening no socket.
+    /// Validate the configuration, the key file, the registry's key canary and the registry's and the ledger's
+    /// schema versions, taking no lock and opening no socket.
     CheckConfig,
     /// Probe the proxy listener's `/api/ready`: exit 0 when it answers 200, 1 otherwise.
     Health,
@@ -115,6 +116,27 @@ fn main() -> anyhow::Result<()> {
                     registry.display()
                 ),
                 phoebis_store::CanaryRead::Absent | phoebis_store::CanaryRead::Matches => {}
+            }
+            // The start refuses a file a newer build wrote; reading both versions here, read-only and taking no
+            // lock, finds that before anything starts.
+            let found = phoebis_store::Store::read_schema_version(registry)
+                .with_context(|| format!("reading the registry at {}", registry.display()))?;
+            if let Some(found) = found.filter(|found| *found > phoebis_store::SCHEMA_VERSION) {
+                bail!(
+                    "the registry at {} is at schema {found}, newer than the {} this build reads",
+                    registry.display(),
+                    phoebis_store::SCHEMA_VERSION
+                );
+            }
+            let ledger = &config.stats.ledger_path;
+            let found = phoebis_ledger::LedgerDb::read_schema_version(ledger)
+                .with_context(|| format!("reading the ledger at {}", ledger.display()))?;
+            let supported = phoebis_ledger::LedgerDb::supported_schema_version();
+            if let Some(found) = found.filter(|found| *found > supported) {
+                bail!(
+                    "the ledger at {} is at schema {found}, newer than the {supported} this build reads",
+                    ledger.display()
+                );
             }
             let name = &config.admin.secret_env;
             if phoebis_router::config::secret_is_unset(name) {

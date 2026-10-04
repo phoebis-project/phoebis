@@ -4,17 +4,13 @@
 use std::str::FromStr;
 
 use phoebis_routing::{UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+pub use phoebis_routing::{FAST_INPUT, FAST_OUTPUT};
 use phoebis_store::AccountKind;
 use phoebis_transport::response::ResponseHead;
 
 const PREFIX: &str = "anthropic-ratelimit-unified-";
 const BUCKET_PREFIX: &str = "anthropic-ratelimit-";
 const FAST_PREFIX: &str = "anthropic-fast-";
-
-/// The fast lane's two buckets, per organization and shared by every fast-capable model, so the names carry no
-/// model suffix and neither `worst_bucket`'s prefixes nor the plan-window persistence match them.
-pub const FAST_INPUT: &str = "fast_input";
-pub const FAST_OUTPUT: &str = "fast_output";
 
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UnifiedHeaders {

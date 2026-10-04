@@ -292,6 +292,68 @@ impl Store {
         attempt_id: Option<u64>,
         bundle: &NewBundle,
     ) -> Result<u64, StoreError> {
+        self.fail_injected_commit()?;
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let generation = self.commit_credentials_in(
+            &tx,
+            account_id,
+            incarnation,
+            lifecycle_generation,
+            expected_generation,
+            attempt_id,
+            bundle,
+            jiff::Timestamp::now().as_millisecond(),
+        )?;
+        tx.commit()?;
+        Ok(generation)
+    }
+
+    /// `commit_credentials` for a pairing: the credential write, the supersession of the pending and uncertain
+    /// rows and the pairing's own resolved `committed` attempt (`detail = 'pairing'`) in one transaction, so a
+    /// commit refused by its fences or its write records no success. The attempt is what ends a run of failed
+    /// refreshes for the attention reader when nothing was pending to supersede.
+    pub fn commit_pairing(
+        &self,
+        account_id: &str,
+        incarnation: u64,
+        lifecycle_generation: u64,
+        expected_generation: Option<u64>,
+        bundle: &NewBundle,
+    ) -> Result<u64, StoreError> {
+        self.fail_injected_commit()?;
+        let mut conn = self.conn.lock().expect(LOCK_POISONED);
+        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        // One instant for the supersession and the pairing's own row, so the pairing reads as the newest settled
+        // attempt whatever the clock does between the two writes.
+        let now = jiff::Timestamp::now().as_millisecond();
+        let generation = self.commit_credentials_in(
+            &tx,
+            account_id,
+            incarnation,
+            lifecycle_generation,
+            expected_generation,
+            None,
+            bundle,
+            now,
+        )?;
+        tx.execute(
+            "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, credential_generation, \
+             started_at, resolved_at, outcome, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?5, 'committed', 'pairing')",
+            params![
+                account_id,
+                incarnation as i64,
+                lifecycle_generation as i64,
+                generation as i64,
+                now
+            ],
+        )?;
+        tx.commit()?;
+        Ok(generation)
+    }
+
+    /// The seam `debug_fail_next_credential_commit` arms, checked before either commit's transaction.
+    fn fail_injected_commit(&self) -> Result<(), StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         if self
             .fail_next_credential_commit
@@ -301,9 +363,23 @@ impl Store {
                 "injected credential commit failure",
             )));
         }
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        Ok(())
+    }
 
+    /// The body both commits share, inside the caller's transaction, which the caller commits; `now` stamps the
+    /// credential row and every attempt it settles.
+    #[allow(clippy::too_many_arguments)]
+    fn commit_credentials_in(
+        &self,
+        tx: &rusqlite::Transaction<'_>,
+        account_id: &str,
+        incarnation: u64,
+        lifecycle_generation: u64,
+        expected_generation: Option<u64>,
+        attempt_id: Option<u64>,
+        bundle: &NewBundle,
+        now: i64,
+    ) -> Result<u64, StoreError> {
         let account: Option<(i64, i64)> = tx
             .query_row(
                 "SELECT incarnation, lifecycle_generation FROM accounts WHERE id = ?1",
@@ -364,7 +440,6 @@ impl Store {
             &credential_aad(account_id, new_generation as i64),
             &plaintext,
         )?;
-        let now = jiff::Timestamp::now().as_millisecond();
 
         // `last_error` is cleared here rather than through a separate call: the connection mutex is not
         // reentrant, and a credential that just committed has nothing stale left to explain.
@@ -412,12 +487,10 @@ impl Store {
             // A row that exists but was already settled elsewhere, by a disconnect for instance, leaves the
             // commit alone: the tokens in hand were rotated upstream and losing them to a rollback would
             // strand the account on a refresh token the endpoint has already replaced.
-            if updated == 0 && !attempt_exists(&tx, id, Some(account_id))? {
+            if updated == 0 && !attempt_exists(tx, id, Some(account_id))? {
                 return Err(StoreError::AttemptNotFound(id));
             }
         }
-
-        tx.commit()?;
         Ok(new_generation)
     }
 
@@ -536,7 +609,7 @@ impl Store {
     }
 
     /// Where a mirror starts: the newest settled attempt, read through the resolved index rather than by
-    /// loading a table nothing prunes.
+    /// loading a table the history purge cuts only at the retention.
     pub fn newest_resolved_refresh_attempt(&self) -> Result<Option<(i64, u64)>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(

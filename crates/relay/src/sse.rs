@@ -1,6 +1,6 @@
 //! An incremental SSE parser: events end with an empty line, lines end with LF, CRLF, or CR, and a boundary may
-//! arrive split across reads. Shared by the pre-commit hold and the post-commit observer, so both see the same
-//! events in the same order.
+//! arrive split across reads. The pre-commit hold's parser goes on as the bus copy's past the commit, so a stream is
+//! parsed once and every reader sees the same events in the same order.
 
 use bytes::BytesMut;
 

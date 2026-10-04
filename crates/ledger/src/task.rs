@@ -13,7 +13,7 @@ use phoebis_store::{AccountKind, Store};
 use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
-use crate::bodies::run_retention;
+use crate::bodies::{request_cutoff, run_retention};
 use crate::db::{begin_write, insert_event_in, insert_request_in, insert_samples_in};
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
@@ -93,6 +93,8 @@ pub struct LedgerStats {
     pub retrying: AtomicU64,
     /// Priced records parked since start.
     pub parked_priced: AtomicU64,
+    /// Retention passes the purge task finished since start, whatever each one cut.
+    pub purge_passes: AtomicU64,
 }
 
 /// What the relay's ledger check reads: counted here, since every `behind` answer is one `ledger_behind` refusal.
@@ -246,6 +248,7 @@ pub fn spawn(
         done: Arc::new(Mutex::new(Some(done_rx))),
         tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
+    let purge_store = store.clone();
     let mirror = spawn_event_mirror(
         db.clone(),
         ledger.clone(),
@@ -281,7 +284,15 @@ pub fn spawn(
         tick.tick().await;
         loop {
             tick.tick().await;
-            run_purge(purging.db(), &purge_config, &purge_router, purge_clock()).await;
+            run_purge(
+                purging.db(),
+                &purge_store,
+                &purge_config,
+                &purge_router,
+                purge_clock(),
+            )
+            .await;
+            purging.stats.purge_passes.fetch_add(1, Ordering::Relaxed);
         }
     });
     ledger.track(purge);
@@ -1109,11 +1120,37 @@ async fn land(
     }
 }
 
-async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, router: &RouterHandle, now: i64) {
+async fn run_purge(
+    db: &Arc<LedgerDb>,
+    store: &Arc<Store>,
+    config: &LedgerConfig,
+    router: &RouterHandle,
+    now: i64,
+) {
     let budgeted = budgeted_members(&router.snapshot());
-    match run_retention(db.clone(), config.clone(), now, budgeted).await {
-        Ok(purged) => tracing::debug!(?purged, "ledger retention ran"),
-        Err(error) => tracing::warn!(%error, "ledger retention failed"),
+    let purged = run_retention(db.clone(), config.clone(), now, budgeted).await;
+    // The registry's settled refresh attempts and its change log follow the requests' cutoff, so a zero
+    // `retention_days` keeps them as it keeps the requests.
+    let history = match request_cutoff(config, now) {
+        None => None,
+        Some(cutoff) => {
+            let store = store.clone();
+            match tokio::task::spawn_blocking(move || store.purge_history(cutoff)).await {
+                Ok(Ok(history)) => Some(history),
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "registry history retention failed");
+                    None
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "registry history retention did not finish");
+                    None
+                }
+            }
+        }
+    };
+    match purged {
+        Ok(purged) => tracing::debug!(?purged, ?history, "ledger retention ran"),
+        Err(error) => tracing::warn!(%error, ?history, "ledger retention failed"),
     }
 }
 

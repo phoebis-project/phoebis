@@ -10,6 +10,7 @@ use phoebis_transport::TransportError;
 use tokio::io::AsyncRead;
 
 use crate::sse::{Overflow, SseEvent, SseParser};
+use crate::stream::STREAM_DECODED_CHUNK_MAX;
 
 pub const HOLD_BUFFER: usize = 64 * 1024;
 pub const INSPECT_BUFFER: usize = 64 * 1024;
@@ -27,6 +28,20 @@ pub enum Commit {
 pub struct Inspect {
     pub decoder: Option<Box<dyn Decoder>>,
     pub parser: SseParser,
+    /// What the hold read, which the bus copy of a committed stream takes over with the decoder and the parser
+    /// rather than decoding and parsing the held bytes a second time; `None` once the copy stopped following the
+    /// stream (a piece that did not decode, a parser overflow) or its text outgrew what the bus copy would decode of
+    /// the held bytes in one piece.
+    pub read: Option<HeldRead>,
+}
+
+/// The held bytes as the hold read them.
+#[derive(Default)]
+pub struct HeldRead {
+    /// The decoder's output; empty without a content coding, where the held bytes are their own text.
+    pub text: BytesMut,
+    /// Every event the hold took from the parser, the committing one last.
+    pub events: Vec<SseEvent>,
 }
 
 impl Inspect {
@@ -34,17 +49,54 @@ impl Inspect {
         Inspect {
             decoder,
             parser: SseParser::new(INSPECT_BUFFER),
+            read: Some(HeldRead::default()),
         }
     }
 
     pub fn feed_raw(&mut self, raw: &[u8]) -> Result<(), Overflow> {
-        match self.decoder.as_mut() {
+        let fed = match self.decoder.as_mut() {
             None => self.parser.feed(raw),
             // A copy that will not decode is not one the relay can act on; the caller treats it as an overflow.
             Some(decoder) => match decoder.feed_bounded(raw, INSPECT_BUFFER) {
-                Ok(out) => self.parser.feed(&out),
+                Ok(out) => {
+                    if let Some(read) = self.read.as_mut() {
+                        if read.text.len() + out.len() > STREAM_DECODED_CHUNK_MAX {
+                            self.read = None;
+                        } else {
+                            read.text.extend_from_slice(&out);
+                        }
+                    }
+                    self.parser.feed(&out)
+                }
                 Err(_) => Err(Overflow),
             },
+        };
+        if fed.is_err() {
+            self.read = None;
+        }
+        fed
+    }
+
+    /// The parser's next complete event, kept for the bus copy.
+    fn next_event(&mut self) -> Option<SseEvent> {
+        let event = self.parser.next_event()?;
+        self.keep(&event);
+        Some(event)
+    }
+
+    /// The last event of a stream that ended, kept for the bus copy whatever it is.
+    fn finish(&mut self) -> Option<SseEvent> {
+        let event = self.parser.finish()?;
+        self.keep(&event);
+        Some(event)
+    }
+
+    fn keep(&mut self, event: &SseEvent) {
+        if let Some(read) = self.read.as_mut() {
+            read.events.push(SseEvent {
+                name: event.name.clone(),
+                data: event.data.clone(),
+            });
         }
     }
 }
@@ -64,7 +116,7 @@ pub async fn hold<R: AsyncRead + Unpin>(
     let mut raw = BytesMut::new();
     loop {
         // Events are taken in stream order, so the first committing one decides and a later one is post-commit.
-        while let Some(event) = inspect.parser.next_event() {
+        while let Some(event) = inspect.next_event() {
             match event.name.as_deref() {
                 Some(b"message_start") => {
                     return Ok(Held {
@@ -103,7 +155,7 @@ pub async fn hold<R: AsyncRead + Unpin>(
         let Some(chunk) = next else {
             // A stream cut off after its last event never sent the empty line that would close it, so the
             // committing event can still be sitting in the parser's buffer.
-            let commit = match inspect.parser.finish() {
+            let commit = match inspect.finish() {
                 Some(SseEvent { name, data }) => match name.as_deref() {
                     Some(b"message_start") => Commit::MessageStart(Bytes::from(data)),
                     Some(b"error") => Commit::Error(Bytes::from(data)),

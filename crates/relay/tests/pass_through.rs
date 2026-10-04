@@ -439,6 +439,7 @@ async fn an_lf_terminated_head_ends_where_hyper_ends_it() {
                 secret_digest: h.store.api_key_digest(SECOND).to_vec(),
                 prefix: phoebis_store::key_prefix(SECOND),
                 created_at: NOW,
+                updated_at: 0,
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,

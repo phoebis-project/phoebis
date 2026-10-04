@@ -21,7 +21,6 @@ use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
 use crate::catalog::CatalogService;
-use crate::hold::Inspect;
 use crate::identity::PendingReports;
 use crate::messages::{Guards, RelayOutcome, Trace};
 use crate::observe::{answer_from_json, is_tool_use_delta, message_id_from_json};
@@ -33,8 +32,8 @@ use crate::sse::{SseEvent, SseParser};
 const CHANNEL_DEPTH: usize = 64;
 
 /// Cap on a response the relay reads before it can decide what to do with it, and on the decoded copy a
-/// compressed rejection is classified from. Only a 400, 401, 403, 404 or 429 takes that path and those bodies are a
-/// few hundred bytes, so a larger one goes unread: a 401 is never forwarded, and any other status is.
+/// compressed rejection is classified from: a 400, 401, 403, 404 or 429 is classified from its first 64 KiB, and a
+/// larger body is forwarded after the prefix when the verdict forwards it.
 pub(crate) const MAX_BUFFERED_BODY: usize = 64 * 1024;
 
 /// The three ways a body ends short, the request row's `error_code`: under `incomplete` on a 200, and a cut or a
@@ -51,16 +50,16 @@ pub const STREAM_STALLED: &str = "stream_stalled";
 /// unaffected.
 pub(crate) const STREAM_DECODED_CHUNK_MAX: usize = 1 << 20;
 
-/// What a committed stream is still watched for. The inspection copy is the pre-commit hold's, so the events it
-/// already consumed are not seen a second time and the parser's bound is all the memory this costs.
-pub(crate) struct PostCommit {
-    pub inspect: Inspect,
-    pub on_error: OnError,
-}
-
 /// Reports what a post-commit error event means for routing, through the body's `Waiting`, so a report the full
 /// mailbox refuses waits behind the client's answer and ahead of the answer's own end reports.
 pub(crate) type OnError = Box<dyn FnOnce(Bytes, &mut Waiting) + Send>;
+
+/// The held bytes of a stream as the pre-commit hold read them: their text and the events the hold took from them,
+/// the committing one last. The bus copy publishes these rather than decoding and parsing the held bytes again.
+pub(crate) struct HeldText {
+    pub text: Bytes,
+    pub events: Vec<SseEvent>,
+}
 
 /// The reports an answer could not hand the router at once, in the order it made them. Each report takes a mailbox
 /// slot where it is made while the router keeps up, so an affinity number is filed and a cooldown is in force before
@@ -120,14 +119,20 @@ pub(crate) struct Publish {
     /// bounded refresh of the account that served it.
     pub catalog: Arc<CatalogService>,
     /// Decodes the raw chunk for the bus when the caller receives the upstream's coding as it is; `None`
-    /// when the relay already decodes for the caller and the piece is text.
+    /// when the relay already decodes for the caller and the piece is text. A held stream's is the hold's own,
+    /// already past the held bytes.
     pub decoder: Option<Box<dyn Decoder>>,
     /// Set once the decoder above rejected a piece, and never cleared: what follows it is no more readable
     /// than the piece that failed.
     pub decode_failed: bool,
     /// Parses the decoded copy for phases on an event stream; `None` for any other body, and dropped on
-    /// overflow so a malformed stream costs a bounded buffer and no phases rather than the chunks.
+    /// overflow so a malformed stream costs a bounded buffer and no phases rather than the chunks. A held stream's
+    /// is the hold's own, already past the held events.
     pub parser: Option<SseParser>,
+    /// The held bytes' text and events when the hold handed its decoder and parser over, taken by the prefix.
+    pub held: Option<HeldText>,
+    /// Fired once, on the first `error` event after the commit; `None` for a stream nothing watches.
+    pub on_error: Option<OnError>,
     /// The decoded copy of a committed body that is not an event stream, kept up to the request bound so its
     /// usage block can be read at the end; `None` for a stream or once the bound is passed.
     pub json: Option<Vec<u8>>,
@@ -346,8 +351,28 @@ fn pin_usage(usage: &Usage) -> PinUsage {
 }
 
 impl Publish {
+    /// The bytes the body starts with: a held stream's as the hold read them, any other prefix as a chunk.
+    async fn prefix(&mut self, raw: &[u8], piece: &Bytes, waiting: &mut Waiting) {
+        let Some(held) = self.held.take() else {
+            return self.chunk(raw, piece, waiting).await;
+        };
+        self.bytes += piece.len() as u64;
+        // The held events were the verdict's to read, the committing one among them; only what follows them is
+        // watched for a late error.
+        let on_error = self.on_error.take();
+        let mut phases: Vec<Phase> = held
+            .events
+            .iter()
+            .filter_map(|event| self.phase_of(event, waiting))
+            .collect();
+        self.on_error = on_error;
+        phases.extend(self.parsed(waiting));
+        self.emit_phases(held.text, phases);
+        self.fire_pending_hook().await;
+    }
+
     /// `raw` is the wire chunk and `piece` what the caller is sent; one of the two is the text.
-    async fn chunk(&mut self, raw: &[u8], piece: &Bytes) {
+    async fn chunk(&mut self, raw: &[u8], piece: &Bytes, waiting: &mut Waiting) {
         // The size is what the caller received, which stands whether or not the bus could read it.
         self.bytes += piece.len() as u64;
         if self.decode_failed {
@@ -375,14 +400,19 @@ impl Publish {
                 json.extend_from_slice(&text);
             }
         }
-        let mut phases = self.phases(&text);
+        let phases = self.phases(&text, waiting);
+        self.emit_phases(text, phases);
+        self.fire_pending_hook().await;
+    }
+
+    fn emit_phases(&mut self, text: Bytes, phases: Vec<Phase>) {
+        let mut phases = phases.into_iter();
         let first = phases.next();
         self.emit(text, first);
         // A piece that carried several phase events: the rest go out as empty chunks with their phase.
         for phase in phases {
             self.emit(Bytes::new(), Some(phase));
         }
-        self.fire_pending_hook().await;
     }
 
     fn emit(&mut self, body: Bytes, phase: Option<Phase>) {
@@ -396,29 +426,34 @@ impl Publish {
         self.index += 1;
     }
 
-    fn phases(&mut self, text: &[u8]) -> std::vec::IntoIter<Phase> {
-        let mut out = Vec::new();
+    fn phases(&mut self, text: &[u8], waiting: &mut Waiting) -> Vec<Phase> {
         let Some(parser) = self.parser.as_mut() else {
-            return out.into_iter();
+            return Vec::new();
         };
         if parser.feed(text).is_err() {
             self.parser = None;
-            return out.into_iter();
+            return Vec::new();
         }
+        self.parsed(waiting)
+    }
+
+    /// The phases of the complete events the parser holds.
+    fn parsed(&mut self, waiting: &mut Waiting) -> Vec<Phase> {
+        let Some(parser) = self.parser.as_mut() else {
+            return Vec::new();
+        };
         // Collected first: `phase_of` borrows the whole struct, so the parser's borrow has to end before it runs.
         let mut events = Vec::new();
         while let Some(event) = parser.next_event() {
             events.push(event);
         }
-        for event in &events {
-            if let Some(phase) = self.phase_of(event) {
-                out.push(phase);
-            }
-        }
-        out.into_iter()
+        events
+            .iter()
+            .filter_map(|event| self.phase_of(event, waiting))
+            .collect()
     }
 
-    fn phase_of(&mut self, event: &SseEvent) -> Option<Phase> {
+    fn phase_of(&mut self, event: &SseEvent, waiting: &mut Waiting) -> Option<Phase> {
         match event.name.as_deref() {
             Some(b"message_start") => {
                 let answer = answer_from_json(&event.data, &["message"]);
@@ -454,11 +489,14 @@ impl Publish {
                 self.saw_stop = true;
                 Some(Phase::MessageStop)
             }
-            // The post-commit observer already acts on this event for routing; here it only decides how the
-            // request is accounted, so the bytes the client sees are untouched.
+            // Read before the piece that carries it goes out, so a late rate limit is acted on no later than the
+            // client sees it; the bytes the client sees are untouched.
             Some(b"error") => {
                 if self.stream_error.is_none() {
                     self.stream_error = Some(error_type_of(&event.data));
+                }
+                if let Some(on_error) = self.on_error.take() {
+                    on_error(Bytes::copy_from_slice(&event.data), waiting);
                 }
                 None
             }
@@ -468,9 +506,11 @@ impl Publish {
 
     /// The answer's end reports go through `waiting`, ahead of the completion.
     async fn finish(mut self, end: &BodyEnd, waiting: &mut Waiting) {
+        // A stream cut off after its last event never sent the empty line that would close it, so the event, an
+        // error among them, can still be sitting in the parser.
         let last = self.parser.as_mut().and_then(|parser| parser.finish());
         if let Some(event) = last {
-            if let Some(phase) = self.phase_of(&event) {
+            if let Some(phase) = self.phase_of(&event, waiting) {
                 self.emit(Bytes::new(), Some(phase));
             }
         }
@@ -601,7 +641,6 @@ pub(crate) struct Relayed<C> {
     pub guards: Guards,
     pub idle_timeout: Duration,
     pub keep_alive: bool,
-    pub observer: Option<PostCommit>,
     /// Body bytes already read, which go out ahead of anything the reader still produces.
     pub prefix: Bytes,
     pub publish: Option<Publish>,
@@ -624,20 +663,18 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
             guards,
             idle_timeout,
             keep_alive,
-            mut observer,
             prefix,
             mut publish,
             mut reader,
         } = relayed;
         let mut waiting = Waiting::default();
-        // The hold already fed the held bytes to the inspection copy, so the prefix is scanned for what it left
-        // behind rather than fed again.
-        observe(&mut observer, &mut waiting);
         let end = 'body: {
             if !prefix.is_empty() {
                 match decode_piece(decoder.as_mut(), prefix.clone()) {
                     Ok(piece) => {
-                        publish_piece(&mut publish, &prefix, &piece).await;
+                        if let Some(publish) = publish.as_mut() {
+                            publish.prefix(&prefix, &piece, &mut waiting).await;
+                        }
                         match send(&tx, &cancel, Ok(piece)).await {
                             Delivery::Delivered => {}
                             Delivery::Cancelled => break 'body BodyEnd::Cancelled,
@@ -674,12 +711,6 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                 let Some(chunk) = next else {
                     break;
                 };
-                // The raw chunk, because the inspection copy runs the upstream's own content coding; it is read
-                // before the chunk goes out so a late rate-limit error is acted on no later than the client
-                // sees it. That holds while the router's mailbox has room; a full one makes the cooldown wait
-                // until after the body's end, behind the client's answer.
-                feed(&mut observer, &chunk);
-                observe(&mut observer, &mut waiting);
                 let piece = match decode_piece(decoder.as_mut(), chunk.clone()) {
                     Ok(piece) => piece,
                     Err(error) => {
@@ -687,7 +718,10 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                         break 'body BodyEnd::Failed(Cut::Transport);
                     }
                 };
-                publish_piece(&mut publish, &chunk, &piece).await;
+                // Published before the piece goes out, so a late rate-limit error is acted on no later than the
+                // client sees it. That holds while the router's mailbox has room; a full one makes the cooldown
+                // wait until after the body's end, behind the client's answer.
+                publish_piece(&mut publish, &chunk, &piece, &mut waiting).await;
                 if piece.is_empty() {
                     continue;
                 }
@@ -697,14 +731,13 @@ pub(crate) fn relay_body<C: AsyncRead + ReturnToPool + Unpin + Send + 'static>(
                     Delivery::Gone => break 'body BodyEnd::ClientGone,
                 }
             }
-            observe_end(&mut observer, &mut waiting);
             if let Some(mut decoder) = decoder {
                 match decoder.finish_bounded(STREAM_DECODED_CHUNK_MAX) {
                     Ok(tail) if !tail.is_empty() => {
                         let tail = Bytes::from(tail);
                         // The tail is the rest of the decoded body, so the chunks a consumer joins are the
                         // whole of what the caller received.
-                        publish_piece(&mut publish, &[], &tail).await;
+                        publish_piece(&mut publish, &[], &tail, &mut waiting).await;
                         match send(&tx, &cancel, Ok(tail)).await {
                             Delivery::Delivered => {}
                             Delivery::Cancelled => break 'body BodyEnd::Cancelled,
@@ -808,59 +841,14 @@ async fn send(
 }
 
 /// Hands a forwarded piece to the bus: the wire chunk and what the caller is sent, one of which is the text.
-async fn publish_piece(publish: &mut Option<Publish>, raw: &[u8], piece: &Bytes) {
+async fn publish_piece(
+    publish: &mut Option<Publish>,
+    raw: &[u8],
+    piece: &Bytes,
+    waiting: &mut Waiting,
+) {
     if let Some(publish) = publish.as_mut() {
-        publish.chunk(raw, piece).await;
-    }
-}
-
-/// Hands a forwarded chunk to the inspection copy. A copy that no longer decodes or no longer fits its bound
-/// cannot be acted on, so the observer goes rather than guessing at what it missed.
-fn feed(observer: &mut Option<PostCommit>, raw: &[u8]) {
-    if let Some(post) = observer.as_mut() {
-        if post.inspect.feed_raw(raw).is_err() {
-            *observer = None;
-        }
-    }
-}
-
-/// Fires the observer on the first `error` event the inspection copy can parse.
-fn observe(observer: &mut Option<PostCommit>, waiting: &mut Waiting) {
-    let Some(post) = observer.as_mut() else {
-        return;
-    };
-    let mut found = None;
-    while let Some(event) = post.inspect.parser.next_event() {
-        if event.name.as_deref() == Some(b"error".as_slice()) {
-            found = Some(event.data);
-            break;
-        }
-    }
-    fire(observer, found, waiting);
-}
-
-/// A stream cut off after its last event never sent the empty line that would close it, so the error can still
-/// be sitting in the parser when the body ends.
-fn observe_end(observer: &mut Option<PostCommit>, waiting: &mut Waiting) {
-    let Some(post) = observer.as_mut() else {
-        return;
-    };
-    let found = post
-        .inspect
-        .parser
-        .finish()
-        .filter(|event| event.name.as_deref() == Some(b"error".as_slice()))
-        .map(|event| event.data);
-    fire(observer, found, waiting);
-}
-
-/// One firing per stream: the observer is taken with it, so a second `error` event changes nothing.
-fn fire(observer: &mut Option<PostCommit>, data: Option<Vec<u8>>, waiting: &mut Waiting) {
-    let Some(data) = data else {
-        return;
-    };
-    if let Some(post) = observer.take() {
-        (post.on_error)(Bytes::from(data), waiting);
+        publish.chunk(raw, piece, waiting).await;
     }
 }
 
@@ -914,9 +902,23 @@ fn cancelled() -> TransportError {
     ))
 }
 
+/// The idle bound's error, its own payload type telling it apart from any other timeout.
+#[derive(Debug)]
+struct Stalled;
+
+impl std::fmt::Display for Stalled {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str("upstream stopped sending")
+    }
+}
+
+impl std::error::Error for Stalled {}
+
 fn stalled() -> TransportError {
-    TransportError::Io(io::Error::new(
-        io::ErrorKind::TimedOut,
-        "upstream stopped sending",
-    ))
+    TransportError::Io(io::Error::new(io::ErrorKind::TimedOut, Stalled))
+}
+
+/// Whether `error` is the idle bound's: the upstream went silent past it.
+pub(crate) fn is_stalled(error: &TransportError) -> bool {
+    matches!(error, TransportError::Io(error) if error.get_ref().is_some_and(|inner| inner.is::<Stalled>()))
 }

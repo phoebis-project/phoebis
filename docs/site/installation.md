@@ -140,14 +140,14 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | Command | Effect |
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
-| `phoebis check-config --config ./config.yaml` | Validates the file, the key file and the registry's key canary. |
+| `phoebis check-config --config ./config.yaml` | Validates the file, key file, key canary and both schema versions. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
 that path instead, and the flag wins when both are given. `check-config` takes no lock, runs no migration and opens
-no socket; it reads the key file and the registry's canary read-only, so it is safe to run against a production file
-while the router is up. It prints, in order:
+no socket; it reads the key file, the registry's canary and the registry's and the ledger's schema versions read-only,
+so it is safe to run against a production file while the router is up. It prints, in order:
 
 1. `{config path} is valid`
 2. `proxy listens on {config.proxy.listen}`
@@ -168,9 +168,15 @@ while the router is up. It prints, in order:
 Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
 expects; the router starts either way and logs the same warnings.
 
+A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and `the registry at
+{config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at
+{config.stats.ledger_path}`, since the start refuses either file the same way.
+
 On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds and then ends whatever is
 still running. That 30 seconds also covers the keepalive shutdown ahead of it, so a slow keepalive shutdown leaves the
-listeners whatever is left of the one budget rather than a fresh 30 seconds of their own.
+listeners whatever is left of the one budget rather than a fresh 30 seconds of their own. After the listeners drain, a
+credential refresh still in flight is waited for up to its own 30-second timeout, so a token the upstream already
+rotated is stored rather than lost to the next start's quarantine.
 
 `health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
 the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, and

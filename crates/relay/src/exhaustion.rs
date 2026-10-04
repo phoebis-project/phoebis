@@ -1,6 +1,6 @@
 //! The answers for a pool with nothing to select: a 429 shaped like one rate-limited account so the client's
-//! automatic continue arms, a 503 only an operator can clear, and the two 429s of a fast request no upstream's
-//! fast lane can take.
+//! automatic continue arms, a 503 only an operator can clear, the same 503 with a one-second retry for a key moved
+//! to another pool mid-flight, and the two 429s of a fast request no upstream's fast lane can take.
 
 use axum::http::StatusCode;
 use axum::response::Response;
@@ -88,6 +88,17 @@ pub fn exhaustion_response(exhaustion: &Exhaustion, now: i64, request_id: &str) 
             response
         }
     }
+}
+
+/// The answer for a key moved to another pool between its admission and its selection: the untimed exhaustion's
+/// body, naming no account and no reason, with a one-second `Retry-After`, since the next request admits under the
+/// key's new pool.
+pub(crate) fn pool_moved_response(request_id: &str) -> Response {
+    let mut response = exhaustion_response(&Exhaustion::Untimed, 0, request_id);
+    response
+        .headers_mut()
+        .insert("retry-after", "1".parse().expect("digits"));
+    response
 }
 
 /// The wait until `deadline` in whole seconds, rounded up and at least one, as `Retry-After` carries it.

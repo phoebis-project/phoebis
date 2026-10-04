@@ -1,7 +1,8 @@
 //! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown or removed key,
 //! names the routing keys in its summary, and passes every shipped deploy config. It reads the key file as the start
 //! does and proves the key against the registry's canary, or against the sealed rows of a registry from before the
-//! canary, and warns about an unset secret variable while refusing a set one the start refuses.
+//! canary, refuses a registry or a ledger a newer build wrote, and warns about an unset secret variable while
+//! refusing a set one the start refuses.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -345,6 +346,69 @@ fn a_registry_that_cannot_be_read_fails_check_config_naming_the_path() {
         printed(&out)
     );
     assert!(stderr.contains("not a database"), "{}", printed(&out));
+}
+
+#[test]
+fn a_registry_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_versions() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "newer-registry", "");
+    let registry = dir.path().join("router.sqlite");
+    let key = StorageKey::from_file(&dir.path().join("storage.key")).unwrap();
+    Store::open(&registry, &key)
+        .unwrap()
+        .debug_set_schema_version(99)
+        .unwrap();
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).lines().next(),
+        Some(
+            format!(
+                "Error: the registry at {} is at schema 99, newer than the {} this build reads",
+                registry.display(),
+                phoebis_store::SCHEMA_VERSION
+            )
+            .as_str()
+        ),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_ledger_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_versions() {
+    let dir = tempfile::tempdir().unwrap();
+    let ledger = dir.path().join("ledger.sqlite");
+    let config = config_file(
+        dir.path(),
+        "newer-ledger",
+        &format!("stats:\n  ledger_path: {}\n", ledger.display()),
+    );
+    phoebis_ledger::LedgerDb::open(&ledger)
+        .unwrap()
+        .write(|c| {
+            c.execute(
+                "UPDATE meta SET value = '99' WHERE key = 'schema_version'",
+                [],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).lines().next(),
+        Some(
+            format!(
+                "Error: the ledger at {} is at schema 99, newer than the {} this build reads",
+                ledger.display(),
+                phoebis_ledger::LedgerDb::supported_schema_version()
+            )
+            .as_str()
+        ),
+        "{}",
+        printed(&out)
+    );
 }
 
 #[test]

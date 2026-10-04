@@ -22,6 +22,11 @@ use crate::RegistrySnapshot;
 /// How long an api_key bucket read without its reset header stands: the buckets refill within a minute, so a
 /// bucket older than that says nothing about the account now.
 pub const BUCKET_LIFE_MS: i64 = 60_000;
+/// A bucket refills within a minute; ten minutes keeps a live model's last reading through a quiet spell and lets
+/// a model nobody asks for leave the map.
+pub const BUCKET_TTL_MS: i64 = 600_000;
+/// Bucket windows an account holds at most, the oldest reading evicted at insert.
+pub const MAX_BUCKETS_PER_ACCOUNT: usize = 64;
 pub const WEEK_MS: i64 = 7 * 24 * 3_600_000;
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -137,9 +142,25 @@ pub struct WindowReading {
     pub observed_at: i64,
 }
 
+/// The fast lane's two buckets, per organization and shared by every fast-capable model, so the names carry no
+/// model suffix and neither `worst_bucket`'s prefixes nor the plan-window persistence match them.
+pub const FAST_INPUT: &str = "fast_input";
+pub const FAST_OUTPUT: &str = "fast_output";
+
+/// An api_key bucket, one per canonical model under each prefix.
+fn is_model_bucket(window: &str) -> bool {
+    window.starts_with("rpm:") || window.starts_with("itpm:") || window.starts_with("otpm:")
+}
+
+/// A window `BUCKET_TTL_MS` and `MAX_BUCKETS_PER_ACCOUNT` bound: an api_key bucket or one of the fast lane's two,
+/// never a plan window.
+fn is_bucket_window(window: &str) -> bool {
+    is_model_bucket(window) || window == FAST_INPUT || window == FAST_OUTPUT
+}
+
 /// An account's latest readings by window name: `five_hour`, `seven_day`, `seven_day_fable` and any other
 /// `seven_day_*` key the usage endpoint reports for a subscription account; `rpm:<model>`, `itpm:<model>`,
-/// `otpm:<model>` per canonical model for an api_key account; and for either kind `fast_input` and `fast_output`,
+/// `otpm:<model>` per canonical model for an api_key account; and for either kind `FAST_INPUT` and `FAST_OUTPUT`,
 /// the fast lane's two buckets.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct UtilizationSample {
@@ -158,9 +179,7 @@ impl UtilizationSample {
     pub fn worst_bucket(&self, now: i64) -> Option<WindowReading> {
         self.windows
             .iter()
-            .filter(|(name, _)| {
-                name.starts_with("rpm:") || name.starts_with("itpm:") || name.starts_with("otpm:")
-            })
+            .filter(|(name, _)| is_model_bucket(name))
             .filter(|(_, reading)| match reading.reset {
                 Some(reset) => reset > now,
                 None => now - reading.observed_at < BUCKET_LIFE_MS,
@@ -1112,7 +1131,8 @@ impl RoutingState {
     /// Folds `sample` in window by window and answers the names of the windows it moved, empty when none. A
     /// reading lands only when it is newer than the one already stored for that name, so an api_key head that
     /// carries one model's buckets never erases another model's. A moved plan window's charges observed at or
-    /// before the new reading are dropped, since the reading carries them.
+    /// before the new reading are dropped, since the reading carries them. Past `MAX_BUCKETS_PER_ACCOUNT` bucket
+    /// windows the oldest readings leave, and a window that left is not reported as moved.
     pub fn record_sample(&mut self, account_id: &str, sample: UtilizationSample) -> Vec<String> {
         if sample.windows.is_empty() {
             return Vec::new();
@@ -1136,6 +1156,25 @@ impl RoutingState {
                 }
                 current.windows.insert(window.clone(), reading);
                 moved.push(window);
+            }
+        }
+        // An account asked for many models would otherwise grow a bucket per model between two purge ticks.
+        let buckets = current
+            .windows
+            .keys()
+            .filter(|window| is_bucket_window(window))
+            .count();
+        if buckets > MAX_BUCKETS_PER_ACCOUNT {
+            let mut oldest: Vec<(i64, String)> = current
+                .windows
+                .iter()
+                .filter(|(window, _)| is_bucket_window(window))
+                .map(|(window, reading)| (reading.observed_at, window.clone()))
+                .collect();
+            oldest.sort();
+            for (_, window) in oldest.into_iter().take(buckets - MAX_BUCKETS_PER_ACCOUNT) {
+                current.windows.remove(&window);
+                moved.retain(|w| *w != window);
             }
         }
         if !moved.is_empty() {
@@ -1596,13 +1635,13 @@ impl RoutingState {
             .filter(move |p| p.key_id == key_id && p.session_id == session_id && p.model == model)
     }
 
-    /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, and everything
-    /// held against an account the registry no longer has. An id is reusable, so state the deleted account
-    /// left behind would otherwise be inherited by whatever is created under that id next: a two-day cooldown
-    /// would keep a brand new account out of every pool it joins. A delete and a create under one id can both
-    /// land before one reload, so a row is held against the account only while the snapshot's holder carries
-    /// the incarnation it names. A pin names its key's creation time too, and one whose key or account was
-    /// replaced reads `deleted`: its holder is gone, whatever took the id.
+    /// Expired cooldowns, pins past their pool's idle TTL, pins whose key or pool is gone, bucket windows read
+    /// longer than `BUCKET_TTL_MS` ago, and everything held against an account the registry no longer has. An id
+    /// is reusable, so state the deleted account left behind would otherwise be inherited by whatever is created
+    /// under that id next: a two-day cooldown would keep a brand new account out of every pool it joins. A delete
+    /// and a create under one id can both land before one reload, so a row is held against the account only while
+    /// the snapshot's holder carries the incarnation it names. A pin names its key's creation time too, and one
+    /// whose key or account was replaced reads `deleted`: its holder is gone, whatever took the id.
     pub fn purge(&mut self, snapshot: &RegistrySnapshot, now: i64) -> Purged {
         let gone = |account_id: &str, incarnation: u64| {
             snapshot
@@ -1656,6 +1695,14 @@ impl RoutingState {
         self.credits
             .retain(|account_id, state| !gone(account_id, state.incarnation));
         self.samples.retain(|account_id, _| !absent(account_id));
+        // A bucket names a canonical model, so without the cut every model an account was ever asked for would keep
+        // its buckets for the account's life.
+        let expired_before = now - BUCKET_TTL_MS;
+        for sample in self.samples.values_mut() {
+            sample.windows.retain(|window, reading| {
+                !is_bucket_window(window) || reading.observed_at >= expired_before
+            });
+        }
         self.charges.retain(|account_id, _| !absent(account_id));
         self.round_robin.retain(|(pool_id, _, cohort), _| {
             snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))
@@ -2133,6 +2180,85 @@ mod tests {
                 .map(|r| r.utilization),
             Some(0.1)
         );
+    }
+
+    #[test]
+    fn a_bucket_window_past_its_ttl_leaves_at_the_purge_and_the_oldest_leaves_at_the_bound() {
+        let reading = |observed_at: i64| WindowReading {
+            utilization: 0.5,
+            reset: None,
+            observed_at,
+        };
+        // The account is present, so only the bucket cut can empty its map.
+        let snapshot = RegistrySnapshot::from_load(
+            phoebis_store::RegistryLoad {
+                accounts: vec![phoebis_store::AccountRow {
+                    id: "a".into(),
+                    kind: AccountKind::ApiKey,
+                    label: "a".into(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision: 1,
+                    state: AccountState::Ready,
+                }],
+                ..Default::default()
+            },
+            [0; 32],
+            0,
+            1,
+        );
+        let now = 20_000 + BUCKET_TTL_MS;
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        // Seeded into the map directly: the insert bound alone would keep 64 of them.
+        let sample = state.samples.entry("a".into()).or_default();
+        for i in 0..10_000_i64 {
+            let prefix = ["itpm", "otpm", "rpm"][(i % 3) as usize];
+            sample
+                .windows
+                .insert(format!("{prefix}:model-{i}"), reading(1_000 + i));
+        }
+        sample.windows.insert(FAST_INPUT.into(), reading(1_000));
+        sample.windows.insert(FAST_OUTPUT.into(), reading(1_000));
+        sample.windows.insert(FIVE_HOUR.into(), reading(1_000));
+        sample.windows.insert("rpm:live".into(), reading(now - 1));
+        state.purge(&snapshot, now);
+        let windows = &state.sample("a").unwrap().windows;
+        assert_eq!(windows.len(), 2, "every expired bucket left");
+        assert_eq!(
+            windows.keys().map(String::as_str).collect::<Vec<_>>(),
+            [FIVE_HOUR, "rpm:live"],
+            "the live bucket and the plan window stayed"
+        );
+
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_sample(
+            "a",
+            UtilizationSample::default().with(FIVE_HOUR, reading(1_000)),
+        );
+        for i in 0..MAX_BUCKETS_PER_ACCOUNT as i64 {
+            state.record_sample(
+                "a",
+                UtilizationSample::default().with(&format!("rpm:model-{i}"), reading(2_000 + i)),
+            );
+        }
+        state.record_sample(
+            "a",
+            UtilizationSample::default().with("rpm:model-64", reading(3_000)),
+        );
+        let sample = state.sample("a").unwrap();
+        assert!(
+            sample.reading("rpm:model-0").is_none(),
+            "the oldest bucket left"
+        );
+        assert!(sample.reading("rpm:model-1").is_some());
+        assert!(sample.reading("rpm:model-64").is_some());
+        assert!(
+            sample.reading(FIVE_HOUR).is_some(),
+            "a plan window never counts toward the bound, however old"
+        );
+        assert_eq!(sample.windows.len(), MAX_BUCKETS_PER_ACCOUNT + 1);
     }
 
     #[test]

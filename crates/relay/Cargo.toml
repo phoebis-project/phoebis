@@ -5,6 +5,11 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+# The count of the decoders the relay builds for its own reads of a response, see `Relay::decoders_built`. The
+# relay's own dev-dependency below turns it on for a test build, so a release build carries no counter.
+debug-hooks = []
+
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
@@ -39,6 +44,8 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-ledger = { path = "../ledger" }
+# An integration test builds the library without `cfg(test)`, so the counter it reads needs the feature on.
+phoebis-relay = { path = ".", features = ["debug-hooks"] }
 # The router task's report hold, which the conversation climb's wait tests park a report behind.
 phoebis-routing = { path = "../routing", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }

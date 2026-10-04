@@ -326,6 +326,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let vault = Arc::new(PairingVault::new());
     let pairing = Arc::new(PairingSessions::new());
     let sessions = Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE));
+    // The admin state takes the manager; the shutdown drains its refreshes after the admin listener is gone.
+    let refreshes = manager.clone();
     let admin = Arc::new(AdminState {
         store,
         manager,
@@ -627,6 +629,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // A retry sleeping its backoff would otherwise hold the store past this function's return.
     catalog.shutdown().await;
     drop(catalog);
+    // A refresh the usage service or the catalog started dies with the runtime otherwise, and the next start
+    // quarantines the account for a lost answer that was only unjoined. The drain closes the manager before it
+    // takes its set, so a refresh asked for later, as the ledger's quota poll may until the ledger stops below, is
+    // refused rather than started outside the set.
+    refreshes.drain().await;
     // The last Bus handle on the normal path: the relay's, the admin state's, and the metrics router's
     // clones went with their tasks, so the subscribers' queues close here. The ledger then drains off its
     // stop watch before the router task, the last writer of the registry, shuts down.

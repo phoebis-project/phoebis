@@ -226,27 +226,52 @@ async fn a_chunked_rejection_is_read_and_replayed() {
 }
 
 #[tokio::test]
-async fn a_401_too_large_to_read_fails_over_without_a_refresh_and_ends_at_the_503() {
-    // The relay cannot tell whether this rejection is the one that warrants a refresh without holding 200 KiB
-    // of it in memory, so the account fails over unread and, with no account left, the router answers itself.
+async fn a_401_over_the_buffer_bound_is_refreshed_and_replayed_as_a_small_one_is() {
+    // Classified from its first 64 KiB, where the authentication error asks for the same refresh a small 401 gets.
     let body = format!(
         r#"{{"type":"error","error":{{"type":"authentication_error","message":"{}"}}}}"#,
         "x".repeat(200 * 1024)
     );
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: Respond::Json {
-            status: 401,
-            headers: vec![],
-            body: body.clone().into_bytes(),
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: phoebis_profile::fixtures::control_response(
+                    phoebis_profile::fixtures::ControlFixture::Token,
+                )
+                .to_vec(),
+            },
         },
-    }])
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: Respond::Json {
+                status: 401,
+                headers: vec![],
+                body: body.into_bytes(),
+            },
+        },
+    ])
     .await;
+    up.set_rule_after(
+        1,
+        "/v1/messages",
+        Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
     let bus = phoebis_bus::Bus::new();
     let mut sub = bus.subscribe("test", phoebis_bus::Delivery::Durable);
+    // The token fixture names `ACCOUNT_UUID`, so the refresh rotates rather than refusing a mismatched identity.
     let h = common::harness_with_bus(
         &up,
-        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        &[common::TestAccount {
+            uuid: Some(common::ACCOUNT_UUID),
+            ..common::oauth("a", "sk-ant-oat01-AAAA", 0)
+        }],
         common::PoolSpec::default(),
         bus,
     )
@@ -257,23 +282,22 @@ async fn a_401_too_large_to_read_fails_over_without_a_refresh_and_ends_at_the_50
         .oneshot(common::stream_request(common::KEY))
         .await
         .unwrap();
+    assert_eq!(resp.status(), 200, "the caller gets the replay's answer");
+    resp.into_body().collect().await.unwrap();
+    let lines: Vec<String> = up.requests().iter().map(|r| r.line.clone()).collect();
     assert_eq!(
         (
-            resp.status().as_u16(),
-            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+            lines
+                .iter()
+                .filter(|l| l.starts_with("POST /v1/messages"))
+                .count(),
+            lines
+                .iter()
+                .filter(|l| l.starts_with("POST /v1/oauth/token"))
+                .count()
         ),
-        (503, "accounts_unavailable")
-    );
-    let bytes = resp.into_body().collect().await.unwrap().to_bytes();
-    let answer: serde_json::Value = serde_json::from_slice(&bytes).unwrap();
-    assert_eq!(
-        answer["error"]["message"], "no account in this pool can serve requests",
-        "the router's own body, not the upstream's"
-    );
-    assert_eq!(
-        up.requests().len(),
-        1,
-        "an unread rejection triggers no refresh and no replay"
+        (2, 1),
+        "one rejection, one refresh and one replay"
     );
     let events = common::drain_until_complete(&mut sub).await;
     let heads: Vec<_> = events
@@ -283,7 +307,13 @@ async fn a_401_too_large_to_read_fails_over_without_a_refresh_and_ends_at_the_50
             _ => None,
         })
         .collect();
-    assert_eq!(heads, [(401, phoebis_bus::AttemptOutcome::AuthFailed)]);
+    assert_eq!(
+        heads,
+        [
+            (401, phoebis_bus::AttemptOutcome::AuthFailed),
+            (200, phoebis_bus::AttemptOutcome::Succeeded)
+        ]
+    );
     up.shutdown().await;
 }
 
@@ -1204,6 +1234,248 @@ async fn a_gzipped_stream_passed_through_as_is_is_read_for_its_message_stop_on_t
         (complete.outcome, complete.error_code.as_deref()),
         (phoebis_bus::Outcome::Incomplete, Some("stream_incomplete")),
         "the same stream without its stop"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_connection_cut_after_the_head_answers_502_upstream_cut_and_files_stream_cut() {
+    // The cut comes before any committing event, so the hold has nothing the client could be sent.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::SseCut {
+            status: 200,
+            headers: vec![],
+            events: vec![ping_event()],
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (502, "upstream_cut")
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_cut"))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_stall_after_the_head_answers_502_upstream_stalled() {
+    // A 429 whose body never comes is drained under the idle bound before any client byte; the stall is the fake's.
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Stall {
+            status: 429,
+            headers: vec![],
+            events: vec![],
+        },
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(
+        &up,
+        phoebis_relay::Limits {
+            idle_timeout: Duration::from_millis(300),
+            ..common::default_limits()
+        },
+    )
+    .await;
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        h.app.clone().oneshot(common::stream_request(common::KEY)),
+    )
+    .await
+    .expect("answered at the idle bound")
+    .unwrap();
+    assert_eq!(
+        (
+            resp.status().as_u16(),
+            resp.headers()["x-phoebis-error-code"].to_str().unwrap()
+        ),
+        (502, "upstream_stalled")
+    );
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        (complete.outcome, complete.error_code.as_deref()),
+        (phoebis_bus::Outcome::Failed, Some("stream_stalled"))
+    );
+    up.release();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_gzip_stream_the_client_takes_as_it_is_is_decoded_once_and_keeps_its_message_start() {
+    let message_start = SseEvent {
+        event: "message_start".into(),
+        data: r#"{"type":"message_start","message":{"id":"msg_gz","usage":{"input_tokens":5,"cache_read_input_tokens":2}}}"#.into(),
+    };
+    let events = [message_start, text_delta_event("hi"), message_stop_event()];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: gzipped_stream(&events),
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let before = h.relay.decoders_built();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    resp.into_body().collect().await.unwrap();
+    let complete = completion(&mut sub).await;
+    assert_eq!(
+        h.relay.decoders_built() - before,
+        1,
+        "the hold's decoder reads the stream to its end for the bus copy"
+    );
+    assert_eq!(
+        (complete.outcome, complete.message_id.as_deref()),
+        (phoebis_bus::Outcome::Succeeded, Some("msg_gz")),
+        "the held message_start still names the message"
+    );
+    let usage = complete.usage.expect("the held message_start's usage");
+    assert_eq!(
+        (usage.input_tokens, usage.cache_read_tokens),
+        (Some(5), Some(2))
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_forwarded_coded_rejection_nothing_reads_builds_no_bus_decoder() {
+    // A non-portable request's 429 past the bound, forwarded as it came: no bus, no pin, no hook and no
+    // conversation report read its body, so nothing decodes a copy of it.
+    let mut state: u32 = 0x9e37_79b9;
+    let noise: String = (0..160 * 1024)
+        .map(|_| {
+            state ^= state << 13;
+            state ^= state >> 17;
+            state ^= state << 5;
+            char::from(b'a' + (state % 26) as u8)
+        })
+        .collect();
+    let body = gzip(
+        format!(r#"{{"type":"error","error":{{"type":"rate_limit_error","message":"{noise}"}}}}"#)
+            .as_bytes(),
+    );
+    assert!(body.len() > 64 * 1024, "past the bound on the wire");
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Json {
+            status: 429,
+            headers: vec![("Content-Encoding".into(), "gzip".into())],
+            body: body.clone(),
+        },
+    }])
+    .await;
+    let h = common::harness(
+        &up,
+        &[common::oauth("a", "sk-ant-oat01-AAAA", 0)],
+        common::PoolSpec::default(),
+    )
+    .await;
+    let before = h.relay.decoders_built();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::non_portable_request(common::KEY, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 429);
+    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    let forwarded = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        forwarded.as_ref(),
+        body.as_slice(),
+        "the prefix, then the rest"
+    );
+    assert_eq!(h.relay.decoders_built() - before, 0);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_held_stream_whose_hold_copy_overflowed_is_decoded_afresh_for_the_bus() {
+    // The first event decodes past the hold's inspection bound in one wire chunk, so the hold commits on its
+    // overflow with a copy that no longer follows the stream; the bus copy reads the stream from its start.
+    let message_start = SseEvent {
+        event: "message_start".into(),
+        data: r#"{"type":"message_start","message":{"id":"msg_ov","usage":{"input_tokens":5}}}"#
+            .into(),
+    };
+    let events = [
+        SseEvent {
+            event: "weird_future_event".into(),
+            data: "y".repeat(100 * 1024),
+        },
+        message_start,
+        text_delta_event("hi"),
+        message_stop_event(),
+    ];
+    let wire = gzip(rendered(&events).as_bytes());
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: gzipped_stream(&events),
+    }])
+    .await;
+    let (h, mut sub) = bus_harness(&up, common::default_limits()).await;
+    let before = h.relay.decoders_built();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(common::stream_request(common::KEY))
+        .await
+        .unwrap();
+    assert_eq!(resp.headers().get("content-encoding").unwrap(), "gzip");
+    let client = resp.into_body().collect().await.unwrap().to_bytes();
+    assert_eq!(
+        client.as_ref(),
+        wire.as_slice(),
+        "the client reads the upstream's bytes"
+    );
+    let published = common::drain_until_complete(&mut sub).await;
+    let chunks: Vec<u8> = published
+        .iter()
+        .filter_map(|e| match e {
+            phoebis_bus::Event::ResponseChunk(chunk) => Some(chunk.body.to_vec()),
+            _ => None,
+        })
+        .flatten()
+        .collect();
+    assert_eq!(
+        String::from_utf8(chunks).unwrap(),
+        rendered(&events),
+        "the bus reads the whole stream decoded"
+    );
+    let complete = published
+        .iter()
+        .find_map(|e| match e {
+            phoebis_bus::Event::RequestComplete(complete) => Some(complete),
+            _ => None,
+        })
+        .unwrap();
+    assert_eq!(
+        (complete.outcome, complete.message_id.as_deref()),
+        (phoebis_bus::Outcome::Succeeded, Some("msg_ov"))
+    );
+    assert_eq!(
+        h.relay.decoders_built() - before,
+        2,
+        "the hold's decoder and the bus copy's own"
     );
     up.shutdown().await;
 }

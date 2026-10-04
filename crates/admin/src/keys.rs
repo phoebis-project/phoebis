@@ -265,6 +265,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         secret_digest: state.store.api_key_digest(&secret).to_vec(),
         prefix: phoebis_store::key_prefix(&secret),
         created_at: now,
+        updated_at: now,
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
@@ -276,7 +277,10 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     match state.store.insert_api_key(&row, ACTOR) {
         // The store stamps the generation, moving a create that lands inside the previous holder's millisecond
         // one past it; an `<id>@<generation>` selector built from this answer has to name that stamp.
-        Ok(created_at) => row.created_at = created_at,
+        Ok(created_at) => {
+            row.created_at = created_at;
+            row.updated_at = created_at;
+        }
         Err(StoreError::PoolNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "pool not found")
         }
@@ -314,7 +318,7 @@ pub(crate) async fn patch(
         return refusal;
     }
     match state.store.update_api_key(&row, read_at, ACTOR) {
-        Ok(()) => {}
+        Ok(updated_at) => row.updated_at = updated_at,
         Err(StoreError::Stale) => {
             return failure(
                 StatusCode::CONFLICT,
@@ -420,7 +424,7 @@ fn key_json(
         "model_rules_mode": row.model_rules_mode.as_str(), "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": snapshot.body_capture_hours(row),
         "auto_mode_server": row.auto_mode_server, "effective_auto_mode_server": snapshot.auto_mode_server(row),
-        "prefix": row.prefix, "created_at": row.created_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
+        "prefix": row.prefix, "created_at": row.created_at, "updated_at": row.updated_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
         "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,
         "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },
         "lifetime": { "cost_usd": lifetime.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": lifetime.get(&row.id).map_or(0, |t| t.requests) },

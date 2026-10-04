@@ -225,6 +225,7 @@ pub async fn harness_on(
                     secret_digest: store.api_key_digest(KEY).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY),
                     created_at: NOW,
+                    updated_at: 0,
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,

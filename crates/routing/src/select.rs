@@ -46,6 +46,10 @@ pub struct SelectRequest {
     pub agent_id: String,
     pub session_id: Option<String>,
     pub canonical_model: String,
+    /// The client's spelling with the `[1m]` suffix removed and ASCII lowercased, the relay's own folded id, so
+    /// the stale-revision re-resolve keeps the client's spelling rather than the canonical id, also when the
+    /// admission resolved no candidate to copy it from.
+    pub folded_model: String,
     pub candidates: Vec<Candidate>,
     pub portable: bool,
     pub attempted: Vec<String>,
@@ -307,6 +311,10 @@ pub struct Selection {
     /// selector did.
     pub in_overage: bool,
     pub trace: SelectionTrace,
+    /// The pool the candidates were resolved under: a selection re-resolved on a newer revision may name another
+    /// pool than the request was admitted under, which the relay refuses rather than dispatch under one pool's
+    /// policy on another's member.
+    pub pool_id: String,
 }
 
 /// The reason a rejection cooldown row carries; the verdict writes it and the report below reads it.
@@ -1108,6 +1116,7 @@ pub fn select(
                 placement,
                 cohort_hold,
             },
+            pool_id: pool.id.clone(),
         }),
         writes,
     )
@@ -1183,7 +1192,8 @@ fn fenced(
     exhaustion_of(own.into_iter().collect())
 }
 
-fn seconds_ms(seconds: u64) -> i64 {
+/// Seconds as milliseconds, saturating at `i64::MAX`, so no product depends on a setting's bound.
+pub fn seconds_ms(seconds: u64) -> i64 {
     i64::try_from(seconds)
         .ok()
         .and_then(|s| s.checked_mul(1_000))
@@ -1695,6 +1705,7 @@ fn renew(
             renewed: true,
             ..SelectionTrace::default()
         },
+        pool_id: pool.id.clone(),
     }
 }
 

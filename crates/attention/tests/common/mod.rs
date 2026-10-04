@@ -189,6 +189,7 @@ fn seed(store: &Store) {
                 secret_digest: store.api_key_digest("phoebis-desktop").to_vec(),
                 prefix: "phoebis-desk".into(),
                 created_at: NOW,
+                updated_at: 0,
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,

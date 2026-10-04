@@ -66,6 +66,7 @@ fn key(id: &str, pool_id: &str, secret: &str, rules: Vec<ModelRule>, mode: Rules
         secret_digest: phoebis_store::digest_with(&DIGEST_KEY, secret.as_bytes()).to_vec(),
         prefix: phoebis_store::key_prefix(secret),
         created_at: 0,
+        updated_at: 0,
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,

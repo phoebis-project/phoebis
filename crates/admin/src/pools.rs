@@ -790,7 +790,7 @@ pub(crate) async fn pool_json_from(
     let accounts = &context.accounts;
     let spends = &context.spends;
     let snapshot = &context.snapshot;
-    let fallback_ms = (state.settings.cooldown_fallback_seconds * 1_000) as i64;
+    let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     // Why routing would refuse a member, mirroring the selector's `obstacle` in the order it checks them: not
     // enabled or not ready, a subscription past its saved end, an account-wide cooldown, a budget the member's
     // own spend has reached, or overage the pool's policy admits no substitute for. `None` is eligible. An

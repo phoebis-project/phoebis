@@ -57,9 +57,10 @@ use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
     accounts_at_cap, auth_failure, body_budget_exhausted, key_body_reads, key_refusal,
     relay_failure, Failure, ACCOUNTS_AT_CAP, ACCOUNT_CANCELLED, METHOD_NOT_ALLOWED,
-    MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_UNREACHABLE,
+    MODEL_NOT_ALLOWED, MODEL_REJECTED, NOT_FOUND, ROUTER_UNAVAILABLE, UPSTREAM_CUT,
+    UPSTREAM_STALLED, UPSTREAM_UNREACHABLE,
 };
-use crate::exhaustion::exhaustion_response;
+use crate::exhaustion::{exhaustion_response, pool_moved_response};
 use crate::facts::{BodyFacts, ClientHints};
 use crate::headers::{outbound_headers, CredentialKind};
 use crate::hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
@@ -73,8 +74,9 @@ use crate::observe::{answer_from_json, published_headers, wants_stream};
 use crate::ratelimit::{head_sample, retry_after, upstream_date, UnifiedHeaders};
 use crate::sse::SseParser;
 use crate::stream::{
-    drain_bounded, relay_body, AffinityFacts, Checkin, Drained, OnError, PostCommit, Publish,
-    Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY,
+    drain_bounded, is_stalled, relay_body, AffinityFacts, Checkin, Drained, HeldText, OnError,
+    Publish, Relayed, Renewal, ReturnToPool, Waiting, MAX_BUFFERED_BODY, STREAM_CUT,
+    STREAM_STALLED,
 };
 use crate::{
     edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftGuard,
@@ -184,8 +186,8 @@ pub struct RelayOutcome {
     /// `budget` when the selector answered a probe pinned to a member at its spend budget, `operator`,
     /// `subscription_ended` or `attempted` when it answered one on its pinned member's standing
     /// (`Exhaustion::Pinned`), `reauth_required` when a leg of the probe marked its account for re-authentication
-    /// (`REAUTH_OBSTACLE`): the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None`
-    /// otherwise.
+    /// (`REAUTH_OBSTACLE`), `pool_moved` when the request's key moved to another pool between its admission and its
+    /// selection: the obstacles the keepalive holds on rather than pauses as an exhausted pool; `None` otherwise.
     pub obstacle: Option<&'static str>,
     /// The holds this request waited through, the summary `phoebis_routing::cohort_hold` gives; `None` for none.
     pub held: Option<CohortHold>,
@@ -194,6 +196,10 @@ pub struct RelayOutcome {
 /// On `RelayOutcome`: the obstacle a probe's exhaustion carries when a leg of the request marked the pinned
 /// account `reauth_required`; the keepalive pauses under `ProbeAuthenticationError` on it.
 pub const REAUTH_OBSTACLE: &str = "reauth_required";
+
+/// On `RelayOutcome`: the obstacle of a request refused because its key moved to another pool between its admission
+/// and its selection; the keepalive retries a probe on it, since the next one admits under the new pool.
+const POOL_MOVED: &str = "pool_moved";
 
 /// Which side funded the account a request served under, on the response's extensions beside `RelayOutcome`.
 /// The keepalive's probe path is the one reader today: a probe's cost and the credit it later earns price
@@ -224,6 +230,9 @@ pub struct Relay {
     bus: Option<Bus>,
     catalog: Arc<CatalogService>,
     pub(crate) clock: Clock,
+    /// The decoders built for the hold's and the bus copy's reads of a response.
+    #[cfg(feature = "debug-hooks")]
+    pub(crate) decoders_built: Arc<std::sync::atomic::AtomicU64>,
     drift: DriftGuard,
     pub(crate) limits: Limits,
     manager: Arc<CredentialManager>,
@@ -293,6 +302,8 @@ impl Relay {
             bus: None,
             catalog,
             clock,
+            #[cfg(feature = "debug-hooks")]
+            decoders_built: Arc::default(),
             drift: DriftGuard,
             limits,
             manager,
@@ -315,6 +326,13 @@ impl Relay {
 
     pub(crate) fn router(&self) -> &RouterHandle {
         &self.router
+    }
+
+    /// A decoder for the relay's own read of a response body: the hold's inspection copy or the bus copy.
+    fn copy_decoder(&self, coding: Encoding) -> Box<dyn Decoder> {
+        #[cfg(feature = "debug-hooks")]
+        self.decoders_built.fetch_add(1, Ordering::Relaxed);
+        decoder(coding)
     }
 
     /// Attaches the bus every relayed request is published to. Without one the relay publishes nothing.
@@ -1581,6 +1599,7 @@ impl Relay {
             markers_ttl_ms: facts.markers_ttl_ms,
             memory_key,
             original,
+            pool_id: pool.map(|p| p.id.clone()),
             portable,
             raw: &raw,
             request_id: &trace.request_id,
@@ -1631,6 +1650,7 @@ impl Relay {
                     agent_id: identity.agent_id.clone(),
                     session_id: identity.session_id.clone(),
                     canonical_model: identity.canonical_model.clone(),
+                    folded_model: identity.folded_model.clone(),
                     candidates: candidates.clone(),
                     portable,
                     attempted: attempted.clone(),
@@ -1904,6 +1924,48 @@ impl Relay {
         attempt: &mut u8,
         key_permit: &mut Option<KeyPermit>,
     ) -> Leg {
+        // The admission pinned this pool's policy and the row's attribution; a selection on a newer revision
+        // resolved the key's current pool, so a key moved between the two would dispatch under one pool's policy
+        // on another's member. Refused with the router's own 503 and a one-second retry: the next request admits
+        // under the new pool.
+        if admitted.pool_id.as_deref() != Some(selection.pool_id.as_str()) {
+            tracing::warn!(
+                key = %admitted.key.id,
+                admitted_pool = ?admitted.pool_id,
+                selected_pool = %selection.pool_id,
+                obstacle = POOL_MOVED,
+                "the key moved between pools after admission; the request is refused"
+            );
+            let mut outcome = self.outcome(
+                admitted.trace,
+                Some(admitted.key),
+                Some(admitted.identity),
+                "",
+                0,
+                *attempt,
+                false,
+                None,
+                admitted.client_version.clone(),
+                Some("accounts_unavailable"),
+                None,
+                None,
+                None,
+            );
+            // `outcome_of` files an `accounts_unavailable` that carries an obstacle as rejected, so the pool's
+            // exhaustion gauge and rollups never count a moved key as the pool's.
+            outcome.obstacle = Some(POOL_MOVED);
+            return Leg::Respond(
+                self.answer(
+                    admitted.trace,
+                    pool_moved_response(admitted.request_id),
+                    outcome,
+                    None,
+                    ResponseFacts::default(),
+                    None,
+                )
+                .await,
+            );
+        }
         // The row the router selected, not one looked up again in the admission snapshot: the endpoint a
         // request goes out to and the credential it carries have to be the pair one snapshot held.
         let account = &selection.account;
@@ -2394,10 +2456,10 @@ impl Relay {
         self.report_head_sample(ctx.account, &head, &ctx.identity.canonical_model, head_at)
             .await;
 
-        // Heads the table reads a body for are drained within the bound; a body too large to read
-        // commits. The reader survives only where the body was left alone, because a drained body has
-        // already handed its connection back to the pool.
-        let (buffered, mut reader) = if matches!(head.status, 400 | 401 | 403 | 404 | 429) {
+        // Heads the table reads a body for are drained within the bound. A body past the bound is classified from
+        // the prefix the drain read as if it were the whole body, and keeps its reader for the rest should the
+        // verdict forward it; a body drained whole has already handed its connection back to the pool.
+        let (buffered, mut reader, cut) = if matches!(head.status, 400 | 401 | 403 | 404 | 429) {
             let Some(drained) = until_cancelled(
                 drain_bounded(&mut reader, self.limits.idle_timeout),
                 ctx.cancel,
@@ -2411,94 +2473,20 @@ impl Relay {
                     if reusable {
                         reader.into_inner().return_to(checkin.clone());
                     }
-                    (Some(buffered), None)
+                    (Some(buffered), None, false)
                 }
-                // The body is past the buffer bound, so nothing can be read that would justify a refresh or a
-                // mark: the leg fails over once, unmarked, rather than act on a head nobody classified, and the
-                // 401 never reaches the client.
-                Ok(Drained::TooLarge(_)) if head.status == 401 => {
-                    tracing::debug!(account = %ctx.account.id, "failing over from a 401 too large to inspect");
-                    drop(reader);
-                    ctx.trace
-                        .head(
-                            ctx.attempt,
-                            &head,
-                            None,
-                            AttemptOutcome::AuthFailed,
-                            None,
-                            written_at,
-                            head_at,
-                        )
-                        .await;
-                    let generations = (
-                        ctx.account.incarnation,
-                        ctx.account.lifecycle_generation,
-                        ctx.credential_generation,
-                    );
-                    report_failover(
-                        &self.router,
-                        &ctx.account.id,
-                        &ctx.identity.canonical_model,
-                        None,
-                        None,
-                        ctx.portable.then(|| ctx.pin.cloned()).flatten(),
-                        ctx.request_id,
-                        generations,
-                        (self.clock)(),
-                    )
-                    .await;
-                    if ctx.portable {
-                        return Next::FailOver { auth_marked: false };
-                    }
-                    let release = self.release_on(&ctx, head.status);
-                    return Next::Respond(
-                        self.authentication_exhausted(&mut ctx, &head, outcome, release)
-                            .await,
-                    );
-                }
-                Ok(Drained::TooLarge(prefix)) => {
-                    tracing::debug!(account = %ctx.account.id, "forwarding a rejection too large to inspect");
-                    let release = self.release_on(&ctx, head.status);
-                    return Next::Respond(
-                        self.stream(Forward {
-                            affinity: None,
-                            caller: ctx.caller,
-                            cancel: ctx.cancel.clone(),
-                            checkin,
-                            guards: ctx.guards(),
-                            head: &head,
-                            keep_alive: reusable,
-                            observer: None,
-                            on_message_id: None,
-                            outcome,
-                            prefix,
-                            rate_limit_event: false,
-                            reader,
-                            renewal: release,
-                            trace: ctx.trace,
-                        })
-                        .await,
-                    );
-                }
+                Ok(Drained::TooLarge(prefix)) => (Some(prefix), Some(reader), true),
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the rejection body was not readable");
-                    return Next::Respond(
-                        self.answer(
-                            ctx.trace,
-                            UPSTREAM_UNREACHABLE.response(ctx.request_id),
-                            unreachable_outcome(outcome),
-                            None,
-                            ResponseFacts::default(),
-                            None,
-                        )
-                        .await,
-                    );
+                    return Next::Respond(self.unreadable(ctx.trace, &error, outcome).await);
                 }
             }
         } else {
-            (None, Some(reader))
+            (None, Some(reader), false)
         };
-        let decoded = buffered.as_ref().and_then(|b| inspectable_copy(&head, b));
+        let decoded = buffered
+            .as_ref()
+            .and_then(|b| inspectable_copy(&head, b, cut));
         // A streaming 200 is held until it commits: an error event ahead of `message_start` is a
         // rejection the caller must never see, because the request can still go to another account.
         let streaming = head.status == 200
@@ -2510,7 +2498,7 @@ impl Relay {
         if let (true, Some(reader)) = (streaming, reader.as_mut()) {
             let inspect = Inspect::new(match encoding(&head) {
                 Ok(Encoding::Identity) => None,
-                Ok(coding) => Some(decoder(coding)),
+                Ok(coding) => Some(self.copy_decoder(coding)),
                 Err(_) => None,
             });
             let Some(result) =
@@ -2527,17 +2515,7 @@ impl Relay {
                 }
                 Err(error) => {
                     tracing::warn!(account = %ctx.account.id, %error, "the stream ended before it committed");
-                    return Next::Respond(
-                        self.answer(
-                            ctx.trace,
-                            UPSTREAM_UNREACHABLE.response(ctx.request_id),
-                            unreachable_outcome(outcome),
-                            None,
-                            ResponseFacts::default(),
-                            None,
-                        )
-                        .await,
-                    );
+                    return Next::Respond(self.unreadable(ctx.trace, &error, outcome).await);
                 }
             }
         }
@@ -2610,6 +2588,9 @@ impl Relay {
             // A rejected replay is conclusive: the refreshed token was refused too.
             Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired), false),
             Verdict::Refresh => {
+                // Nothing of the rejection goes back, so a body cut at the bound gives up its connection before
+                // the ladder's waits rather than hold the rest unread through them.
+                drop(reader.take());
                 let mut tries = 0u8;
                 loop {
                     tries += 1;
@@ -2728,8 +2709,8 @@ impl Relay {
                 // Sent where the answer ends, the only place its usage is known.
                 let renewal = self.renewal(&ctx);
                 let affinity = self.affinity(&ctx);
-                let (prefix, observer) = match held {
-                    None => (Bytes::new(), None),
+                let (prefix, held, on_error) = match held {
+                    None => (Bytes::new(), None, None),
                     Some(Held { bytes, inspect, .. }) => {
                         let fallback_ms = ctx.fallback_ms;
                         let model_rejection_ms = self.limits.model_rejection.as_millis() as i64;
@@ -2800,11 +2781,11 @@ impl Relay {
                                 }
                             }
                         }) as OnError;
-                        (bytes, Some(PostCommit { inspect, on_error }))
+                        (bytes, Some(inspect), Some(on_error))
                     }
                 };
-                let responded = match buffered {
-                    Some(buffered) => {
+                let responded = match (buffered, reader) {
+                    (Some(buffered), None) => {
                         let guards = ctx.guards();
                         self.forward_buffered(
                             ctx.trace, &head, buffered, ctx.caller, outcome, renewal, affinity,
@@ -2812,7 +2793,9 @@ impl Relay {
                         )
                         .await
                     }
-                    None => {
+                    // A body cut at the bound goes out from the prefix the drain read, a held stream from its held
+                    // bytes, and the reader produces the rest.
+                    (cut_prefix, reader) => {
                         let guards = ctx.guards();
                         self.stream(Forward {
                             affinity,
@@ -2821,14 +2804,15 @@ impl Relay {
                             checkin,
                             guards,
                             head: &head,
+                            held,
                             keep_alive: reusable,
-                            observer,
+                            on_error,
                             on_message_id,
                             outcome,
-                            prefix,
+                            prefix: cut_prefix.unwrap_or(prefix),
                             rate_limit_event: false,
                             reader: reader.expect(
-                                "a head the table reads no body for still holds its reader",
+                                "a head the table reads no body for, or one cut at the bound, still holds its reader",
                             ),
                             renewal,
                             trace: ctx.trace,
@@ -2882,8 +2866,9 @@ impl Relay {
                     checkin,
                     guards,
                     head: &head,
+                    held: Some(held.inspect),
                     keep_alive: false,
-                    observer: None,
+                    on_error: None,
                     on_message_id: None,
                     outcome,
                     prefix: held.bytes,
@@ -2917,17 +2902,42 @@ impl Relay {
                     .await,
             );
         }
+        let Some(reader) = reader else {
+            return Next::Respond(
+                self.forward_buffered(
+                    ctx.trace,
+                    &head,
+                    buffered,
+                    ctx.caller,
+                    outcome,
+                    None,
+                    None,
+                    Guards::default(),
+                )
+                .await,
+            );
+        };
+        // A body cut at the bound: the prefix the drain read, then the rest.
+        let guards = ctx.guards();
         Next::Respond(
-            self.forward_buffered(
-                ctx.trace,
-                &head,
-                buffered,
-                ctx.caller,
+            self.stream(Forward {
+                affinity: None,
+                caller: ctx.caller,
+                cancel: ctx.cancel.clone(),
+                checkin,
+                guards,
+                head: &head,
+                held: None,
+                keep_alive: reusable,
+                on_error: None,
+                on_message_id: None,
                 outcome,
-                None,
-                None,
-                Guards::default(),
-            )
+                prefix: buffered,
+                rate_limit_event: false,
+                reader,
+                renewal: None,
+                trace: ctx.trace,
+            })
             .await,
         )
     }
@@ -3333,6 +3343,31 @@ impl Relay {
         with_outcome(response, outcome)
     }
 
+    /// The relay's own 502 for an upstream response it could not read after the head: `upstream_stalled` when the
+    /// upstream went silent past the idle bound, filed `stream_stalled`, and `upstream_cut` for any other failure (a
+    /// cut connection, a coding the relay cannot read, a payload that does not decode), filed `stream_cut`.
+    async fn unreadable(
+        &self,
+        trace: &Trace,
+        error: &TransportError,
+        outcome: RelayOutcome,
+    ) -> Response {
+        let (failure, code) = if is_stalled(error) {
+            (UPSTREAM_STALLED, STREAM_STALLED)
+        } else {
+            (UPSTREAM_CUT, STREAM_CUT)
+        };
+        self.answer(
+            trace,
+            failure.response(&outcome.request_id),
+            unreachable_outcome(outcome, code),
+            None,
+            ResponseFacts::default(),
+            None,
+        )
+        .await
+    }
+
     /// Sleeps until the relay's clock reaches `until`, or `deadline` when that comes first. The clock is read again
     /// after every `HOLD_TICK` rather than slept against once, so a clock a test steps is noticed within a tick and
     /// production time passes as it does.
@@ -3530,8 +3565,9 @@ impl Relay {
             checkin,
             guards,
             head,
+            held,
             keep_alive,
-            observer,
+            on_error,
             on_message_id,
             outcome,
             prefix,
@@ -3544,21 +3580,36 @@ impl Relay {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
-                return self
-                    .answer(
-                        trace,
-                        UPSTREAM_UNREACHABLE.response(&outcome.request_id),
-                        unreachable_outcome(outcome),
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    )
-                    .await;
+                return self.unreadable(trace, &error, outcome).await;
             }
         };
         let event_stream = head
             .get("content-type")
             .is_some_and(|v| v.to_ascii_lowercase().starts_with("text/event-stream"));
+        let caller_decodes = decoder.is_some();
+        // A held stream was decoded and parsed up to its commit by the hold, so the bus copy goes on from there
+        // with the hold's decoder and parser.
+        let handover = match held {
+            Some(Inspect {
+                decoder: hold_decoder,
+                parser,
+                read: Some(read),
+            }) => {
+                let text = match hold_decoder {
+                    Some(_) => read.text.freeze(),
+                    None => prefix.clone(),
+                };
+                Some((
+                    hold_decoder.filter(|_| !caller_decodes),
+                    parser,
+                    HeldText {
+                        text,
+                        events: read.events,
+                    },
+                ))
+            }
+            _ => None,
+        };
         // Without a bus every emit and the completion are no-ops; a hook with no bus still needs the parse run
         // for it, a committed 200 needs it too, since the served-model check reads the answer, and so does a
         // renewal, which carries the usage the parse assembles.
@@ -3568,22 +3619,34 @@ impl Relay {
             || renewal.is_some()
             || affinity.is_some())
         .then(|| {
+            // A copy that stopped following the stream, and a body no hold read, are read afresh.
+            let (bus_decoder, parser, held) = match handover {
+                Some((bus_decoder, parser, held)) => {
+                    (bus_decoder, event_stream.then_some(parser), Some(held))
+                }
+                None => (
+                    (!caller_decodes)
+                        .then(|| {
+                            encoding(head)
+                                .ok()
+                                .filter(|e| !matches!(e, Encoding::Identity))
+                                .map(|coding| self.copy_decoder(coding))
+                        })
+                        .flatten(),
+                    event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
+                    None,
+                ),
+            };
             Publish {
                 trace: trace.clone(),
                 clock: self.clock.clone(),
                 outcome: outcome.clone(),
                 catalog: self.catalog.clone(),
-                decoder: decoder
-                    .is_none()
-                    .then(|| {
-                        encoding(head)
-                            .ok()
-                            .filter(|e| !matches!(e, Encoding::Identity))
-                            .map(phoebis_transport::decode::decoder)
-                    })
-                    .flatten(),
+                decoder: bus_decoder,
                 decode_failed: false,
-                parser: event_stream.then(|| SseParser::new(INSPECT_BUFFER)),
+                parser,
+                held,
+                on_error,
                 // A committed JSON answer is inspected for its usage block; a rejection or a stream is not.
                 json: (!event_stream && head.status == 200).then(Vec::new),
                 json_bound: self.limits.max_request_bytes,
@@ -3611,7 +3674,6 @@ impl Relay {
                 guards,
                 idle_timeout: self.limits.idle_timeout,
                 keep_alive,
-                observer,
                 prefix,
                 publish,
                 reader,
@@ -3640,16 +3702,7 @@ impl Relay {
             Ok(parts) => parts,
             Err(error) => {
                 tracing::warn!(%error, "the upstream response cannot be forwarded");
-                return self
-                    .answer(
-                        trace,
-                        UPSTREAM_UNREACHABLE.response(&outcome.request_id),
-                        unreachable_outcome(outcome),
-                        None,
-                        ResponseFacts::default(),
-                        None,
-                    )
-                    .await;
+                return self.unreadable(trace, &error, outcome).await;
             }
         };
         let payload = match decoder {
@@ -3658,16 +3711,7 @@ impl Relay {
                 Ok(payload) => payload,
                 Err(error) => {
                     tracing::warn!(%error, "the upstream response cannot be decoded");
-                    return self
-                        .answer(
-                            trace,
-                            UPSTREAM_UNREACHABLE.response(&outcome.request_id),
-                            unreachable_outcome(outcome),
-                            None,
-                            ResponseFacts::default(),
-                            None,
-                        )
-                        .await;
+                    return self.unreadable(trace, &error, outcome).await;
                 }
             },
         };
@@ -3675,7 +3719,7 @@ impl Relay {
         // reaches the bus as text. A body that will not decode reaches it as nothing, because a consumer of a
         // chunk was promised text and coded bytes are worse than none.
         let mut chunk_published = false;
-        let answer = match inspectable_copy(head, &raw).map(Bytes::from) {
+        let answer = match inspectable_copy(head, &raw, false).map(Bytes::from) {
             None => None,
             Some(text) => {
                 trace.publish_chunk(ResponseChunk {
@@ -3738,11 +3782,11 @@ impl Relay {
     }
 }
 
-/// The outcome of a request the relay answered with its own 502 after an upstream head it could not use: the
-/// code names the failure the caller was actually given, not the head that never reached it.
-fn unreachable_outcome(outcome: RelayOutcome) -> RelayOutcome {
+/// The outcome of a request the relay answered with its own 502 after an upstream head it could not use: `code`
+/// names how the response failed, not the head that never reached the caller.
+fn unreachable_outcome(outcome: RelayOutcome, code: &str) -> RelayOutcome {
     RelayOutcome {
-        error_code: Some(UPSTREAM_UNREACHABLE.code.to_string()),
+        error_code: Some(code.to_string()),
         ..outcome
     }
 }
@@ -3757,9 +3801,11 @@ struct Forward<'a, C> {
     /// The response's in-flight counts, which ride the body to its end.
     guards: Guards,
     head: &'a ResponseHead,
+    /// The pre-commit hold's read of a held stream, whose decoder and parser the bus copy goes on with.
+    held: Option<Inspect>,
     keep_alive: bool,
     /// Set for a committed stream, which is watched for a rate-limit error arriving after the commit.
-    observer: Option<PostCommit>,
+    on_error: Option<OnError>,
     on_message_id: Option<Box<dyn FnOnce(String) -> BoxFuture<'static, ()> + Send>>,
     outcome: RelayOutcome,
     prefix: Bytes,
@@ -3940,6 +3986,9 @@ struct Admitted<'a> {
     /// The caller's head as it arrived, absent for an in-process caller and for a connection the recorder
     /// gave up on.
     original: Option<&'a OriginalHead>,
+    /// The pool the key was in at admission, whose policy this request was admitted under; `None` for a key whose
+    /// pool the snapshot did not hold.
+    pool_id: Option<String>,
     portable: bool,
     raw: &'a Bytes,
     request_id: &'a str,
@@ -4173,10 +4222,13 @@ const DECODE_PIECE: usize = 4096;
 
 /// The decoded copy the classification table reads. A compressed body is decoded because the table reads JSON,
 /// and the copy is inspection only: what the caller receives is the upstream's own bytes under the upstream's
-/// own headers. `None` means the payload does not decode or does not fit.
-fn inspectable_copy(head: &ResponseHead, raw: &[u8]) -> Option<Vec<u8>> {
+/// own headers. `None` means the payload does not decode or does not fit. `cut` is a body the drain stopped
+/// reading at the bound: its coded stream ends early and its text may run past the bound, so the copy is what
+/// decoded up to there, as far as the bound.
+fn inspectable_copy(head: &ResponseHead, raw: &[u8], cut: bool) -> Option<Vec<u8>> {
     match encoding(head) {
         Ok(Encoding::Identity) => Some(raw.to_vec()),
+        Ok(coding) if cut => Some(inspectable_prefix(decoder(coding).as_mut(), raw)),
         Ok(coding) => inspectable(decoder(coding).as_mut(), raw),
         Err(_) => None,
     }
@@ -4193,6 +4245,19 @@ fn inspectable(decoder: &mut dyn Decoder, raw: &[u8]) -> Option<Vec<u8>> {
     }
     out.extend(decoder.finish_bounded(MAX_BUFFERED_BODY - out.len()).ok()?);
     Some(out)
+}
+
+/// What a cut coded body decodes to, piece by piece until a piece fails or the bound is reached, with no finish:
+/// the coded stream's end was never read, so a finish would refuse the whole copy for a trailer it cannot have.
+fn inspectable_prefix(decoder: &mut dyn Decoder, raw: &[u8]) -> Vec<u8> {
+    let mut out = Vec::new();
+    for piece in raw.chunks(DECODE_PIECE) {
+        match decoder.feed_bounded(piece, MAX_BUFFERED_BODY - out.len()) {
+            Ok(text) => out.extend(text),
+            Err(_) => break,
+        }
+    }
+    out
 }
 
 /// Local identifier for one relayed request, echoed in every local error body so a caller's failure can be

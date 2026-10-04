@@ -419,7 +419,8 @@ pub fn exhaustion_window(unified: Option<&UnifiedHeaders>, kind: AccountKind) ->
 
 /// The value of a `"key": "value"` member, scanned textually in a body a JSON parse could not complete: the
 /// search starts after the first `"error"` key and trusts only a `"key"` that opens an object or follows a
-/// sibling field, never one embedded in a string value.
+/// sibling field, never one embedded in a string value. The value is the raw text up to its closing quote, escapes
+/// left as written, and runs to the end of the text when the body was cut inside it.
 fn textual_member<'a>(text: &'a str, key: &str) -> Option<&'a str> {
     let needle = format!(r#""{key}""#);
     let error_at = text.find(r#""error""#)?;
@@ -433,11 +434,25 @@ fn textual_member<'a>(text: &'a str, key: &str) -> Option<&'a str> {
                 .strip_prefix(':')?
                 .trim_start()
                 .strip_prefix('"')?;
-            return after.split('"').next();
+            return Some(&after[..closing_quote(after)]);
         }
         cursor = match_at + needle.len();
     }
     None
+}
+
+/// Where a JSON string's raw text ends: at the first quote no backslash escapes, or at the end of the text. A
+/// message that quotes a model name escapes its quotes, and the value goes on past them.
+fn closing_quote(raw: &str) -> usize {
+    let mut escaped = false;
+    for (at, byte) in raw.bytes().enumerate() {
+        match byte {
+            b'\\' => escaped = !escaped,
+            b'"' if !escaped => return at,
+            _ => escaped = false,
+        }
+    }
+    raw.len()
 }
 
 /// The error body's `error.type`. A complete body parses directly, which is what keeps a `"type"` string that
@@ -451,12 +466,32 @@ pub(crate) fn error_type(body: &[u8]) -> Option<String> {
             .and_then(Value::as_str)
             .map(str::to_string);
     }
-    let text = std::str::from_utf8(body).ok()?;
-    textual_member(text, "type").map(str::to_string)
+    textual_member(valid_text(body), "type").map(str::to_string)
+}
+
+/// `body` up to its first byte that is not UTF-8: a prefix cut at the buffer bound can end inside a multi-byte
+/// character, and the text before it still reads.
+fn valid_text(body: &[u8]) -> &str {
+    match std::str::from_utf8(body) {
+        Ok(text) => text,
+        Err(error) => std::str::from_utf8(&body[..error.valid_up_to()])
+            .expect("the bytes before `valid_up_to` are UTF-8"),
+    }
 }
 
 fn names_credit_balance(body: &[u8]) -> bool {
-    std::str::from_utf8(body).is_ok_and(|t| t.to_ascii_lowercase().contains("credit balance"))
+    valid_text(body)
+        .to_ascii_lowercase()
+        .contains("credit balance")
+}
+
+/// The body's `error.message`: read off the parsed document when it is complete, and textually as far as the cut
+/// when the body was read only up to the buffer bound.
+fn error_message(body: &[u8]) -> Option<String> {
+    match serde_json::from_slice::<Value>(body) {
+        Ok(value) => value["error"]["message"].as_str().map(str::to_string),
+        Err(_) => textual_member(valid_text(body), "message").map(str::to_string),
+    }
 }
 
 /// Whether the body names the upstream's own monthly spend-cap code: a complete body reads
@@ -466,10 +501,7 @@ fn names_spend_limit(body: &[u8]) -> bool {
         return value["error"]["details"]["error_code"].as_str()
             == Some("enforced_spend_limit_reached");
     }
-    let Ok(text) = std::str::from_utf8(body) else {
-        return false;
-    };
-    textual_member(text, "error_code") == Some("enforced_spend_limit_reached")
+    textual_member(valid_text(body), "error_code") == Some("enforced_spend_limit_reached")
 }
 
 /// Whether `error.message` names `wire_model` as a whole token: the byte before and after each occurrence are
@@ -480,10 +512,7 @@ fn names_model(body: &[u8], wire_model: &str) -> bool {
     if wire_model.is_empty() {
         return false;
     }
-    let Some(message) = serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|v| v["error"]["message"].as_str().map(str::to_ascii_lowercase))
-    else {
+    let Some(message) = error_message(body).map(|message| message.to_ascii_lowercase()) else {
         return false;
     };
     let wire_model = wire_model.to_ascii_lowercase();
@@ -499,10 +528,7 @@ fn names_model(body: &[u8], wire_model: &str) -> bool {
 /// `request_id` can spell any of these names by accident), each as a whole token: bounded on both sides by a
 /// character outside `[A-Za-z0-9_-]` or the string's edge.
 pub(crate) fn refused_names(body: &[u8], candidates: &[Injected]) -> Vec<Injected> {
-    let Some(message) = serde_json::from_slice::<Value>(body)
-        .ok()
-        .and_then(|v| v["error"]["message"].as_str().map(str::to_string))
-    else {
+    let Some(message) = error_message(body) else {
         return Vec::new();
     };
     let boundary =
@@ -654,6 +680,21 @@ mod tests {
         let cut_before_key = &full[..key_at];
         assert!(serde_json::from_slice::<Value>(cut_before_key).is_err());
         assert!(!names_spend_limit(cut_before_key));
+    }
+
+    /// A rejection read up to the buffer bound can end inside a multi-byte character; what came before it still
+    /// names the error.
+    #[test]
+    fn a_prefix_cut_inside_a_multi_byte_character_still_names_its_error() {
+        let auth = "{\"type\":\"error\",\"error\":{\"type\":\"authentication_error\",\"message\":\"\u{e9}t\u{e9}";
+        let cut = &auth.as_bytes()[..auth.len() - 1];
+        assert!(std::str::from_utf8(cut).is_err());
+        assert_eq!(error_type(cut).as_deref(), Some("authentication_error"));
+        let full = spend_cap_body();
+        let mut cut = full[..full.len() - 2].to_vec();
+        cut.extend_from_slice(&"\u{e9}".as_bytes()[..1]);
+        assert!(std::str::from_utf8(&cut).is_err());
+        assert!(names_spend_limit(&cut));
     }
 
     #[test]
@@ -1398,6 +1439,32 @@ mod tests {
         ctx.injected = &[Injected::CacheDiagnosisBeta];
         ctx.body_prefix = Some(&message);
         assert!(matches!(classify(&head(400, &[]), &ctx), Verdict::Commit));
+    }
+
+    /// A rejection read up to the buffer bound does not parse as a whole; its `error.message` still reads as far as
+    /// the cut, a quote the message escapes included, so the model, the injected items and a credit balance it names
+    /// are found.
+    #[test]
+    fn a_prefix_cut_mid_message_still_names_its_model_its_injected_items_and_a_credit_balance() {
+        let cut = |body: Vec<u8>| body[..body.len() - 8].to_vec();
+        let model = cut(not_found(
+            r#"The model "claude-opus-5" does not exist, and so on"#,
+        ));
+        assert!(serde_json::from_slice::<Value>(&model).is_err());
+        assert!(names_model(&model, "claude-opus-5"));
+        let refused = cut(refusal(
+            "Unexpected value(s) `cache-diagnosis-2026-04-07` for the header, and so on",
+        ));
+        assert_eq!(
+            refused_names(
+                &refused,
+                &[Injected::CacheDiagnosisBeta, Injected::Diagnostics]
+            ),
+            vec![Injected::CacheDiagnosisBeta]
+        );
+        let mut credit = cut(refusal("Your credit balance is too low, and so on"));
+        credit.extend_from_slice(&"\u{e9}".as_bytes()[..1]);
+        assert!(names_credit_balance(&credit));
     }
 
     #[test]

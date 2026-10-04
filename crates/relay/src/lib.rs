@@ -51,7 +51,7 @@ pub use drift::DriftGuard;
 pub use errors::{anthropic_error, auth_error_response, key_refusal_response};
 pub use exhaustion::exhaustion_response;
 pub use headers::{outbound_headers, CredentialKind};
-pub use hold::{hold, Commit, Held, Inspect, INSPECT_BUFFER};
+pub use hold::{hold, Commit, Held, HeldRead, Inspect, INSPECT_BUFFER};
 pub use identity::{identify, RequestIdentity};
 pub use memory::{MemoryKey, Previous};
 pub use messages::{
@@ -65,6 +65,16 @@ pub use ratelimit::{
 };
 pub use serve::{serve, Limits as ListenLimits};
 pub use sse::{SseEvent, SseParser};
+
+#[cfg(feature = "debug-hooks")]
+impl Relay {
+    /// How many decoders this relay built for the hold's and the bus copy's reads of a response, so a test can
+    /// tell how many times a committed stream was decoded.
+    pub fn decoders_built(&self) -> u64 {
+        self.decoders_built
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+}
 
 /// A request the relay refuses before it reaches the upstream.
 #[derive(Debug, thiserror::Error)]

@@ -477,6 +477,8 @@ pub struct ApiKeyRow {
     pub secret_digest: Vec<u8>,
     pub prefix: String,
     pub created_at: i64,
+    /// The row's last write: the create, an edit, a rotation or a revocation, never a use's `last_used_at`.
+    pub updated_at: i64,
     pub rotated_at: Option<i64>,
     pub last_used_at: Option<i64>,
     /// When the secret a rotation retired last authenticated; cleared by the next rotation.
@@ -663,9 +665,9 @@ impl Store {
                 })?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // The change log's own order decides, never the two clocks: a delete and the create that
-            // follows it can share a millisecond, and the id is reused all the same. `registry_changes` is
-            // never pruned, so the create that made the live key is always on record, and both lookups run
-            // on `registry_changes_target (target, id)`.
+            // follows it can share a millisecond, and the id is reused all the same. The history purge keeps
+            // each id's newest create and delete whatever their age, so the create that made the live key and
+            // the delete before it stay on record, and both lookups run on `registry_changes_target (target, id)`.
             reused_key_ids: tx
                 .prepare(
                     "SELECT k.id FROM api_keys k WHERE EXISTS ( \
@@ -952,8 +954,8 @@ impl Store {
         Ok(Some((row, stamp)))
     }
 
-    /// Answers the `created_at` it stamped: a caller's own clock is not the generation, and a selector or a
-    /// response built from the row would name the wrong holder after a re-create.
+    /// Answers the `created_at` it stamped, which is the row's `updated_at` too: a caller's own clock is not the
+    /// generation, and a selector or a response built from the row would name the wrong holder after a re-create.
     pub fn insert_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<i64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -966,8 +968,8 @@ impl Store {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
         // The id is reusable and the generation is this stamp, so a key created inside the millisecond its
-        // previous holder was created in must not share it: the change log remembers every create under the
-        // id (never pruned, served by `registry_changes_target`), and the stamp goes one past the last one
+        // previous holder was created in must not share it: the change log keeps the newest create under the
+        // id through the history purge (served by `registry_changes_target`), and the stamp goes one past it
         // when the clock has not moved.
         let previous: Option<i64> = tx.query_row(
             "SELECT MAX(at) FROM registry_changes WHERE target = ?1 AND kind = 'key_created'",
@@ -976,8 +978,8 @@ impl Store {
         )?;
         let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, rotated_at, last_used_at, retired_secret_last_used_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, NULL, NULL, NULL)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, NULL, NULL, NULL)",
             params![
                 row.id,
                 row.label,
@@ -1003,12 +1005,13 @@ impl Store {
     }
 
     /// The edit fenced on the `updated_at` the caller read: `Stale` when another write moved the row since.
+    /// Answers the `updated_at` it stamped, which a response built from `row` carries.
     pub fn update_api_key(
         &self,
         row: &ApiKeyRow,
         expected_updated_at: i64,
         actor: &str,
-    ) -> Result<(), StoreError> {
+    ) -> Result<i64, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.park_on_key_write_hold();
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
@@ -1055,7 +1058,7 @@ impl Store {
         }
         record_change(&tx, at, actor, "key_updated", &row.id, &key_diff(row))?;
         tx.commit()?;
-        Ok(())
+        Ok(at)
     }
 
     pub fn rotate_api_key(
@@ -1090,8 +1093,8 @@ impl Store {
         // A new grace starts unpresented: a stamp under the retired secret this rotation just replaced would
         // otherwise read as if it belonged to the one this rotation creates.
         tx.execute(
-            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL WHERE id = ?1",
-            params![id, digest, prefix, at],
+            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL, updated_at = ?5 WHERE id = ?1",
+            params![id, digest, prefix, at, now_ms()],
         )?;
         record_change(
             &tx,
@@ -1273,8 +1276,8 @@ impl Store {
         Ok(())
     }
 
-    /// Where a mirror starts: the newest change, read off the primary key rather than by loading a log
-    /// nothing prunes.
+    /// Where a mirror starts: the newest change, read off the primary key rather than by loading a log the
+    /// history purge cuts only at the retention.
     pub fn newest_registry_change_id(&self) -> Result<Option<u64>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         Ok(conn
@@ -1353,7 +1356,7 @@ fn set_pool_members_in(
 }
 
 const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server FROM pools";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server FROM api_keys";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -1434,6 +1437,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         secret_digest: r.get(9)?,
         prefix: r.get(10)?,
         created_at: r.get(11)?,
+        updated_at: r.get(19)?,
         rotated_at: r.get(12)?,
         last_used_at: r.get(13)?,
         retired_secret_last_used_at: r.get(14)?,

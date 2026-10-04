@@ -272,7 +272,8 @@ would travel with a stale stamp or a doubled member.
 
 A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is `retrying` rather than paused
 under `quota_exhausted`: its next attempt waits out that answer's `Retry-After` in place of the backoff, since a slot
-frees within seconds.
+frees within seconds. A probe answered `503 accounts_unavailable` because its key moved to another pool while it was in
+flight is `retrying` rather than paused under `pool_exhausted`: its next attempt admits under the new pool.
 
 A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
 lapses or is evicted, or when the next request after the probe reads no cache:

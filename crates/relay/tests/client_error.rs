@@ -76,6 +76,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             agent_id: "main".into(),
             session_id: Some(session.into()),
             canonical_model: canonical,
+            folded_model: MODEL.into(),
             candidates,
             portable: true,
             attempted: Vec::new(),
@@ -693,24 +694,32 @@ async fn a_non_portable_fresh_pins_401_that_marked_nothing_releases_it() {
 }
 
 #[tokio::test]
-async fn a_non_portable_401_too_large_to_read_answers_the_503_and_releases_its_fresh_pin() {
+async fn a_non_portable_401_over_the_buffer_bound_takes_the_refresh_path_and_releases_its_fresh_pin(
+) {
+    // Classified from its first 64 KiB: the refresh runs, the token endpoint's 503 marks nothing, and the answer is
+    // the router's own on the account the request is bound to.
     let body = format!(
         r#"{{"type":"error","error":{{"type":"authentication_error","message":"{}"}}}}"#,
         "x".repeat(200 * 1024)
     );
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/messages".into(),
-        respond: json(401, &body),
-    }])
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json(401, &body),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: json(503, "{}"),
+        },
+    ])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
     let mut events = h.router.subscribe_events();
-    let resp = h
-        .app
-        .clone()
-        .oneshot(non_portable_request(KEY, "s1"))
-        .await
-        .unwrap();
+    let app = h.app.clone();
+    let inflight =
+        tokio::spawn(async move { app.oneshot(non_portable_request(KEY, "s1")).await.unwrap() });
+    step_to_backoff(&h, &up, "a").await;
+    let resp = inflight.await.unwrap();
     assert_eq!(
         (
             resp.status().as_u16(),
@@ -721,10 +730,20 @@ async fn a_non_portable_401_too_large_to_read_answers_the_503_and_releases_its_f
         "the leg's own answer on the account it is bound to"
     );
     drain(resp).await;
+    let lines: Vec<String> = up.requests().iter().map(|r| r.line.clone()).collect();
     assert_eq!(
-        up.requests().len(),
-        1,
-        "an unread rejection triggers no refresh and no replay"
+        (
+            lines
+                .iter()
+                .filter(|l| l.starts_with("POST /v1/messages"))
+                .count(),
+            lines
+                .iter()
+                .filter(|l| l.starts_with("POST /v1/oauth/token"))
+                .count()
+        ),
+        (1, 2),
+        "the rejection is refreshed twice and never replayed"
     );
     assert_eq!(
         released(&mut events, "s1").await,

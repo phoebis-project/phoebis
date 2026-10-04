@@ -332,6 +332,58 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
     up.shutdown().await;
 }
 
+/// The purge task's pass cuts the registry's settled refresh attempts at the requests' cutoff, a holder keeping its
+/// newest two, and a zero `retention_days` keeps them as it keeps the requests.
+#[tokio::test]
+async fn the_purge_pass_cuts_the_registrys_settled_refresh_attempts_and_a_zero_retention_keeps_them(
+) {
+    let up = FakeUpstream::start(vec![]).await;
+    let day = 86_400_000i64;
+    for (retention_days, left) in [(1, 2), (0, 5)] {
+        let config = LedgerConfig {
+            retention_days,
+            purge_interval: Duration::from_millis(5),
+            ..LedgerConfig::default()
+        };
+        let h = harness(&up, &[oauth("a", A, 0)], (0, None), config).await;
+        for _ in 0..5 {
+            let id = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+            h.store
+                .resolve_refresh_attempt(id, 1, phoebis_store::AttemptOutcome::Failed("x".into()))
+                .unwrap();
+        }
+        // The store dates its rows by the wall clock; the ledger's clock moves two days past the newest.
+        let (newest, _) = h.store.newest_resolved_refresh_attempt().unwrap().unwrap();
+        h.clock
+            .store(newest + 2 * day, std::sync::atomic::Ordering::SeqCst);
+        let settled = || {
+            h.store
+                .newest_resolved_refresh_attempts("a", 1, 10)
+                .unwrap()
+                .len()
+        };
+        if retention_days == 0 {
+            // Two passes finished after the clock moved, so a cut the zero skipped would have landed by now.
+            let passes = || {
+                h.ledger
+                    .stats()
+                    .purge_passes
+                    .load(std::sync::atomic::Ordering::Relaxed)
+            };
+            let before = passes();
+            fake_upstream::wait_for(Duration::from_secs(5), || {
+                (passes() >= before + 2).then_some(())
+            })
+            .await;
+            assert_eq!(settled(), left, "the passes ran and cut nothing");
+        } else {
+            fake_upstream::wait_for(Duration::from_secs(5), || (settled() == left).then_some(()))
+                .await;
+        }
+    }
+    up.shutdown().await;
+}
+
 /// Zero on either key means forever: the purge of that family is skipped, the other families run as before. The
 /// samples are raw rows, so a zero `retention_days` keeps them too.
 #[tokio::test]

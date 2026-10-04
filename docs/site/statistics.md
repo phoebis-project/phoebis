@@ -196,6 +196,7 @@ refusal drops it.
 | --- | --- |
 | Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default; 0 forever) |
 | Quota and extra-usage samples | `stats.retention_days` (90 days by default; 0 forever) |
+| Resolved credential refresh attempts and registry changes | `stats.retention_days` (90 days by default; 0 forever) |
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
 
@@ -203,7 +204,11 @@ The purge that enforces these runs once an hour on its own connection, in slices
 the writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute
 poll's reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per day. A parked
 record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while
-its cost is kept.
+its cost is kept. The same pass cuts the registry's history at the requests' cutoff, in slices of 1,000 rows: its
+resolved credential refresh attempts and its change log. It keeps what is read whatever its age: an attempt whose
+outcome is still uncertain, each account's newest two resolved attempts, which the attention line reads, and its
+newest attempt, which the account view reads, and each key id's newest create and delete, which tell a re-created key
+from its predecessor.
 
 The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
 its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
@@ -514,8 +519,8 @@ over the account's credit balance; it is read from the registry and dated and de
 
 **`refresh_failed`** holds while the account's newest two resolved credential refreshes both failed or went uncertain,
 a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a
-re-pairing settles a refresh still pending. The detail counts the run's failures and gives the newest attempt's outcome
-and error.
+re-pairing settles a refresh still pending; a pairing records its own committed attempt, so it ends the run even when
+nothing was pending. The detail counts the run's failures and gives the newest attempt's outcome and error.
 
 **`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own; each is
 tried again once at the next start, and the condition clears when the table empties. The subject is the pool the record

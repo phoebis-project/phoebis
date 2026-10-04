@@ -346,6 +346,135 @@ async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
     );
 }
 
+/// Starts, calls back and confirms a pairing of `business`, answering the confirm's response.
+async fn pair_business(app: &axum::Router, cookie: &str) -> axum::response::Response {
+    use common::{json, post};
+    let started = post(
+        app,
+        "/admin/oauth/sessions",
+        r#"{"account_id":"business","login":"claude_ai"}"#,
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(started.status(), 201);
+    let started = json(started).await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let callback = post(
+        app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(callback.status(), 200);
+    post(
+        app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(cookie),
+    )
+    .await
+}
+
+/// Two settled failures, the run `refresh_failed` holds on, with nothing left open for a commit to supersede.
+fn seed_failed_refreshes(store: &phoebis_store::Store) {
+    for detail in ["first", "second"] {
+        let attempt = store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+        store
+            .resolve_refresh_attempt(
+                attempt,
+                1,
+                phoebis_store::AttemptOutcome::Failed(detail.into()),
+            )
+            .unwrap();
+    }
+}
+
+async fn refresh_failed_holds(app: &axum::Router, cookie: &str) -> bool {
+    let body = common::json(common::get(app, "/admin/attention", Some(cookie)).await).await;
+    body["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .any(|item| item["kind"] == "refresh_failed" && item["subject"]["id"] == "business")
+}
+
+#[tokio::test]
+async fn a_pairing_over_an_uncertain_refresh_row_leaves_the_commit_as_the_newest_resolved_attempt()
+{
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = common::login(&app, "admin-secret").await;
+    let attempt = store.open_refresh_attempt("business", 1, 1, 1).unwrap();
+    store
+        .resolve_refresh_attempt(
+            attempt,
+            1,
+            phoebis_store::AttemptOutcome::Uncertain("lost".into()),
+        )
+        .unwrap();
+    assert_eq!(pair_business(&app, &cookie).await.status(), 200);
+    let newest: Vec<(String, Option<String>)> = store
+        .newest_resolved_refresh_attempts("business", 1, 16)
+        .unwrap()
+        .into_iter()
+        .map(|a| (a.outcome, a.detail))
+        .collect();
+    assert_eq!(
+        newest,
+        [
+            ("committed".to_string(), Some("pairing".to_string())),
+            ("failed".to_string(), Some("superseded".to_string())),
+        ]
+    );
+    assert!(store.pending_refresh_attempts().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_pairing_ends_a_run_of_failed_refreshes_with_its_own_committed_attempt() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = common::login(&app, "admin-secret").await;
+    seed_failed_refreshes(&store);
+    assert!(refresh_failed_holds(&app, &cookie).await);
+    assert_eq!(pair_business(&app, &cookie).await.status(), 200);
+    let newest = store
+        .newest_resolved_refresh_attempts("business", 1, 16)
+        .unwrap();
+    assert_eq!(
+        (newest[0].outcome.as_str(), newest[0].detail.as_deref()),
+        ("committed", Some("pairing"))
+    );
+    assert!(
+        !refresh_failed_holds(&app, &cookie).await,
+        "the pairing's own attempt ends the run"
+    );
+}
+
+#[tokio::test]
+async fn a_pairing_whose_credential_commit_fails_records_no_committed_attempt() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = common::login(&app, "admin-secret").await;
+    seed_failed_refreshes(&store);
+    store.debug_fail_next_credential_commit();
+    assert_eq!(pair_business(&app, &cookie).await.status(), 500);
+    assert!(
+        store
+            .newest_resolved_refresh_attempts("business", 1, 16)
+            .unwrap()
+            .iter()
+            .all(|a| a.detail.as_deref() != Some("pairing")),
+        "no success is recorded for a credential that was never stored"
+    );
+    assert!(refresh_failed_holds(&app, &cookie).await);
+}
+
 #[tokio::test]
 async fn a_pairing_commit_replaces_the_bundle_the_manager_had_cached() {
     use common::{json, login, post};

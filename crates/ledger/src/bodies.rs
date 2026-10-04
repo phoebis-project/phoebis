@@ -92,10 +92,14 @@ struct Cutoffs {
     sample: Option<i64>,
 }
 
+/// The requests' cutoff, `None` at a zero `retention_days`; the registry's history purge reads the same one.
+pub(crate) fn request_cutoff(config: &LedgerConfig, now: i64) -> Option<i64> {
+    (config.retention_days != 0).then(|| now - config.retention_days as i64 * DAY_MS)
+}
+
 impl Cutoffs {
     fn of(config: &LedgerConfig, now: i64) -> Cutoffs {
-        let request =
-            (config.retention_days != 0).then(|| now - config.retention_days as i64 * DAY_MS);
+        let request = request_cutoff(config, now);
         let rollup = (config.rollup_retention_days != 0)
             .then(|| now / 1_000 - config.rollup_retention_days as i64 * DAY_S);
         // The samples' buckets are seconds while the requests' timestamps are milliseconds; one window, two units.

@@ -415,6 +415,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             agent_id: "main".into(),
             session_id: Some("s-fixture".into()),
             canonical_model: "claude-sonnet-5".into(),
+            folded_model: "claude-sonnet-5".into(),
             candidates,
             portable: true,
             attempted: Vec::new(),
@@ -483,6 +484,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             // No session, so the placement writes no pin and `sessions.json` keeps the one pinned row above.
             session_id: None,
             canonical_model: "claude-sonnet-5-5".into(),
+            folded_model: "claude-sonnet-5-5".into(),
             candidates: phoebis_routing::resolve(
                 &snapshot,
                 &key_row,

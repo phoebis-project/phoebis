@@ -547,11 +547,20 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 | 529 | None | No; forwarded, retries |
 | Other 5xx | None | No; forwarded |
 | Transport failure before fully written | None | Yes, once, same account |
-| Transport failure after fully written, no head | None | No; 502 `upstream_unreachable`, client retries |
+| Transport failure after fully written, no head at all | None | No; 502 `upstream_unreachable`, client retries |
+| Transport failure after the head, before any byte reached the client | None | No; 502 `upstream_cut` |
+| Idle bound after the head, before any byte reached the client | None | No; 502 `upstream_stalled` |
 | 200 head, body ends before its end | None | No; the request reads `incomplete` |
 
-A `401` whose body is too large to classify fails over unread, while a `403` whose body is too large to classify is
-forwarded as it came, since it cannot be told from a `permission_error`.
+The router classifies a rejection whose body runs past 64 KiB from its first 64 KiB, a coded body decoded as far as it
+was read: a 429 cools and fails over, a 401 or a 403 `authentication_error` takes the credential path, and a body the
+verdict forwards reaches the client whole, the prefix first.
+
+The router answers a failure after the head with its own `502` while nothing of the upstream's answer has reached the
+client: `upstream_stalled` when a rejection body went silent past the idle bound, and `upstream_cut` for any other
+answer it cannot read, a connection cut while a rejection body or a held stream was being read, or a content coding or a
+payload it cannot decode. The request reads `failed` with `stream_stalled` or `stream_cut`. `upstream_unreachable` names
+a request that got no head at all.
 
 An `incomplete` request's error code says how its body ended: `stream_cut` when the connection or the decoder failed
 mid-body, `stream_incomplete` when an event stream closed without its `message_stop`, and `stream_stalled` when the
@@ -572,8 +581,10 @@ A response head also lands a selection sample on the account it answered for, wh
 OAuth head's unified `5h` and `7d` windows, and its `7d_oi` utilization when the response reports one; an api_key head's
 `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}` headers, one bucket per canonical
 model. A later head for another model adds that model's buckets beside the ones already on file rather than replacing
-them. A head's readings are one of the two sources of the windows the router works from (see above); the poll is the
-other.
+them. A bucket reading, an api_key head's or the fast lane's, leaves the account's map ten minutes after it was read,
+and an account holds at most 64 of them, the oldest leaving first, so a model nobody asks for any more leaves no
+buckets behind; the plan windows are never cut. A head's readings are one of the two sources of the windows the router
+works from (see above); the poll is the other.
 
 A 404 whose message names the model the body carried is the upstream's answer that it does not serve that model:
 the account is skipped for that model for `routing.model_rejection_seconds` (an hour by default), the request goes
@@ -676,17 +687,20 @@ and the message is `every account in this pool is rate limited`. With every acco
 `phoebis` answers `429` with error code `accounts_at_cap` and a `Retry-After` of at most 19 seconds ([in-flight
 caps](#in-flight-caps)), since the pool frees on its own. For anything only an operator can clear, such as a pool whose
 accounts are all paused, `phoebis` answers `503` with error code `accounts_unavailable`, message `no account in this
-pool can serve requests`, and no `retry-after`. A request admitted under a key that was deleted, or deleted and created
-again under its id, before it was routed is refused with the `401` admission answers a key the registry does not hold
-(see [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget
-answers `429` with the `overage` claim, the same one an account in overage carries (see [Pools](#pools)), and a probe
-pinned to a member at its budget is answered with the end of the latest period whose budget is reached as its reset,
-whatever its siblings hold. A probe whose pinned account is disabled, past its subscription's end, or a member with a
-budget while the ledger is degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one
-that already tried its pinned account while a sibling could take it, where moving would otherwise land the pin on that
-sibling; such a probe never moves the pin, and its request row reads rejected rather than exhausted, so the
-`pool_exhausted` condition of the `phoebis_attention` gauge does not count it. A probe that already tried its pinned
-account with no sibling to take it gets the pool's own answer above.
+pool can serve requests`, and no `retry-after`. `phoebis` answers a request whose key moved to another pool between its
+admission and its selection with the same `503` and `Retry-After: 1` rather than dispatching it under the old pool's
+policy: it logs a warning naming the key, both pools and the obstacle `pool_moved`, the request row reads rejected
+rather than exhausted, and the next request admits under the new pool. A request admitted under a key that was deleted,
+or deleted and created again under its id, before it was routed is refused with the `401` admission answers a key the
+registry does not hold (see [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has
+reached its spend budget answers `429` with the `overage` claim, the same one an account in overage carries (see
+[Pools](#pools)), and a probe pinned to a member at its budget is answered with the end of the latest period whose
+budget is reached as its reset, whatever its siblings hold. A probe whose pinned account is disabled, past its
+subscription's end, or a member with a budget while the ledger is degraded is answered `503` `accounts_unavailable`
+whatever its siblings hold, and so is one that already tried its pinned account while a sibling could take it, where
+moving would otherwise land the pin on that sibling; such a probe never moves the pin, and its request row reads
+rejected rather than exhausted, so the `pool_exhausted` condition of the `phoebis_attention` gauge does not count it. A
+probe that already tried its pinned account with no sibling to take it gets the pool's own answer above.
 
 Every answer the router commits loses the upstream's rate-limit headers, the `anthropic-ratelimit-*` families and the
 `anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees

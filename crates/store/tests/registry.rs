@@ -216,6 +216,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         secret_digest: store.api_key_digest(secret).to_vec(),
         prefix: phoebis_store::key_prefix(secret),
         created_at: 1,
+        updated_at: 0,
         rotated_at: None,
         last_used_at: None,
         retired_secret_last_used_at: None,
@@ -2172,6 +2173,198 @@ fn the_newest_change_id_is_the_mirrors_starting_watermark() {
             .unwrap()
             .is_empty(),
         "so a mirror starting there replays nothing"
+    );
+}
+
+#[test]
+fn every_key_write_stamps_updated_at_and_a_use_leaves_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("p"), "test").unwrap();
+    let created_at = store
+        .insert_api_key(&key(&store, "k", "p", "secret-one"), "test")
+        .unwrap();
+    let stamped = || store.api_key("k").unwrap().unwrap().updated_at;
+    assert_eq!(stamped(), created_at, "the create dates the row");
+    // Cleared beside the store between the writes, so each write has to stamp the row itself.
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    let clear = || {
+        raw.execute("UPDATE api_keys SET updated_at = 0", [])
+            .unwrap();
+    };
+    clear();
+    store.touch_api_key("k", 5, false, None).unwrap();
+    assert_eq!(stamped(), 0, "a use is no change to the row");
+    let row = store.api_key("k").unwrap().unwrap();
+    let read_at = row.updated_at;
+    let answered = store
+        .update_api_key(
+            &ApiKeyRow {
+                label: "renamed".into(),
+                ..row
+            },
+            read_at,
+            "test",
+        )
+        .unwrap();
+    assert_ne!(answered, 0);
+    assert_eq!(stamped(), answered, "an edit answers the stamp it wrote");
+    clear();
+    store
+        .rotate_api_key(
+            "k",
+            &store.api_key_digest("secret-two"),
+            &phoebis_store::key_prefix("secret-two"),
+            7,
+            "test",
+        )
+        .unwrap();
+    assert_ne!(stamped(), 0, "a rotation stamps the row");
+    clear();
+    store.revoke_api_key("k", 9, "test").unwrap();
+    assert_ne!(stamped(), 0, "a revocation stamps the row");
+}
+
+#[test]
+fn the_history_purge_cuts_old_resolved_attempts_and_changes_and_keeps_what_their_readers_need() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    let cutoff = 1_000_000;
+    {
+        let mut raw = rusqlite::Connection::open(&path).unwrap();
+        let tx = raw.transaction().unwrap();
+        let attempt = |account_id: &str, resolved_at: Option<i64>, outcome: Option<&str>| {
+            tx.execute(
+                "INSERT INTO refresh_attempts (account_id, incarnation, lifecycle_generation, \
+                 credential_generation, started_at, resolved_at, outcome) VALUES (?1, 1, 1, 1, ?2, ?3, ?4)",
+                rusqlite::params![account_id, resolved_at.unwrap_or(10), resolved_at, outcome],
+            )
+            .unwrap();
+        };
+        for i in 0..2_500 {
+            let outcome = if i % 2 == 0 { "failed" } else { "committed" };
+            attempt("a", Some(1_000 + i), Some(outcome));
+        }
+        // Still open: the startup quarantine reads it, whatever its age.
+        attempt("a", Some(500), Some("uncertain"));
+        attempt("c", None, None);
+        // A holder no refresh touched since: its newest two are what the attention reader and the account
+        // view read.
+        for resolved_at in [100, 200, 300] {
+            attempt("b", Some(resolved_at), Some("failed"));
+        }
+        // Two uncertain attempts a later sweep settled after the holder's newest one: the newest two by settling
+        // are the older pair, and the account view's last attempt reads the newest by id.
+        for resolved_at in [400, 500, 150] {
+            attempt("d", Some(resolved_at), Some("failed"));
+        }
+        let change = |at: i64, kind: &str, target: &str| {
+            tx.execute(
+                "INSERT INTO registry_changes (at, actor, kind, target, diff_json) VALUES (?1, 'test', ?2, ?3, '{}')",
+                rusqlite::params![at, kind, target],
+            )
+            .unwrap();
+        };
+        for i in 0..1_500 {
+            change(1_000 + i, "pool_updated", "p");
+        }
+        // A reused id: the newest create and delete tell the ledger's stamp and the next create's generation
+        // that the id had an earlier holder.
+        change(10, "key_created", "gone");
+        change(11, "key_deleted", "gone");
+        change(12, "key_created", "gone");
+        change(13, "key_deleted", "gone");
+        tx.commit().unwrap();
+    }
+    for _ in 0..2 {
+        let id = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+        store
+            .resolve_refresh_attempt(id, 1, phoebis_store::AttemptOutcome::Failed("x".into()))
+            .unwrap();
+    }
+    let watermark = store.newest_registry_change_id().unwrap().unwrap();
+    store.insert_pool(&pool("p"), "test").unwrap();
+    store
+        .insert_api_key(&key(&store, "k", "p", "secret"), "test")
+        .unwrap();
+    let fresh: Vec<u64> = store
+        .registry_changes_after(watermark, 100)
+        .unwrap()
+        .iter()
+        .map(|c| c.id)
+        .collect();
+    assert_eq!(fresh.len(), 2);
+
+    let purged = store.purge_history(cutoff).unwrap();
+    assert_eq!(
+        purged,
+        phoebis_store::PurgedHistory {
+            attempts: 2_500 + 1,
+            changes: 1_500 + 2,
+        }
+    );
+    let raw = rusqlite::Connection::open(&path).unwrap();
+    let attempts: Vec<(String, Option<i64>, Option<String>)> = raw
+        .prepare("SELECT account_id, resolved_at, outcome FROM refresh_attempts WHERE resolved_at IS NULL OR resolved_at < ?1 ORDER BY id")
+        .unwrap()
+        .query_map([cutoff], |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        attempts,
+        [
+            ("a".into(), Some(500), Some("uncertain".into())),
+            ("c".into(), None, None),
+            ("b".into(), Some(200), Some("failed".into())),
+            ("b".into(), Some(300), Some("failed".into())),
+            ("d".into(), Some(400), Some("failed".into())),
+            ("d".into(), Some(500), Some("failed".into())),
+            ("d".into(), Some(150), Some("failed".into())),
+        ],
+        "the open rows, each untouched holder's newest two and its newest by id stay"
+    );
+    assert_eq!(
+        store
+            .last_refresh_attempt("d", 1)
+            .unwrap()
+            .and_then(|a| a.resolved_at),
+        Some(150)
+    );
+    assert_eq!(
+        store
+            .newest_resolved_refresh_attempts("a", 1, 10)
+            .unwrap()
+            .len(),
+        3,
+        "the fresh attempts stay beside the open one"
+    );
+    let kept: Vec<(i64, String)> = raw
+        .prepare("SELECT at, kind FROM registry_changes WHERE at < ?1 ORDER BY id")
+        .unwrap()
+        .query_map([cutoff], |r| Ok((r.get(0)?, r.get(1)?)))
+        .unwrap()
+        .collect::<rusqlite::Result<_>>()
+        .unwrap();
+    assert_eq!(
+        kept,
+        [(12, "key_created".into()), (13, "key_deleted".into())],
+        "the reused id keeps its newest create and delete"
+    );
+    assert_eq!(
+        store
+            .registry_changes_after(watermark, 100)
+            .unwrap()
+            .iter()
+            .map(|c| c.id)
+            .collect::<Vec<_>>(),
+        fresh,
+        "a mirror's watermark still reads the fresh changes"
     );
 }
 
