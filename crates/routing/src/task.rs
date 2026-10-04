@@ -9,7 +9,8 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RekeyWrite, RoutingTx, Store, StoreError,
+    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RegistryLoad, RekeyWrite, RoutingTx, Store,
+    StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -557,6 +558,11 @@ enum Command {
     Shutdown {
         reply: oneshot::Sender<()>,
     },
+    /// A finished registry load, sent back by the task that ran it; the loop applies the swap.
+    Swap {
+        loaded: Result<(RegistryLoad, [u8; 32]), String>,
+        started_at: i64,
+    },
     Touch {
         key_id: String,
         presented: Presented,
@@ -799,6 +805,11 @@ impl RouterHandle {
             .await
     }
 
+    /// Loads the registry again and answers once the new snapshot is in force. The load runs beside the loop and
+    /// is shared: a reload asked while one runs waits for one more, since the write it follows may postdate the
+    /// running load's read. A failed load leaves the previous snapshot in force and answers `Load`; a reload still
+    /// waiting when the router shuts down answers `Gone`, since the shutdown drops its load's answer with every
+    /// other command queued behind it.
     pub async fn reload(&self) -> Result<(), ReloadError> {
         self.ask(|reply| Command::Reload { reply })
             .await?
@@ -1002,13 +1013,23 @@ struct Task {
     /// The writes the full channel could not take; while it holds any, every new write folds into it.
     deferred: Mutex<Deferred>,
     events: broadcast::Sender<RouterEvent>,
+    /// The loop's own way back into its mailbox, weak so it never keeps its receiver alive: upgraded for the one
+    /// load a task runs, and dropped with that task.
+    handle_tx: mpsc::WeakSender<Command>,
     /// The account a pin was invalidated from, why, and when. The next select for that same key
     /// within `MIGRATION_WINDOW_MS` reports a migration rather than a fresh pin; older entries go on purge.
     invalidated: HashMap<PinKey, (String, &'static str, i64)>,
+    /// The reloads the running load answers: those that were waiting when it started.
+    load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
+    /// Whether a registry load runs; at most one does.
+    loading: bool,
     /// The affinity reports a test's hold keeps unapplied, in queue order; `None` while no hold is on.
     #[cfg(any(test, feature = "debug-hooks"))]
     parked: Option<Vec<(Report, u64)>>,
     pending: Pending,
+    /// The reloads that arrived while a load ran, which one more load answers: the write each follows may postdate
+    /// the running load's read.
+    reload_waiters: Vec<oneshot::Sender<Result<(), String>>>,
     reports: Arc<ReportSequence>,
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
@@ -1107,10 +1128,14 @@ pub fn spawn(
         config,
         deferred: Mutex::default(),
         events,
+        handle_tx: tx.downgrade(),
         invalidated: HashMap::new(),
+        load_waiters: Vec::new(),
+        loading: false,
         #[cfg(any(test, feature = "debug-hooks"))]
         parked: None,
         pending,
+        reload_waiters: Vec::new(),
         reports,
         revision: 1,
         snapshot,
@@ -1751,7 +1776,21 @@ impl Task {
                 );
             }
             Command::Reload { reply } => {
-                let _ = reply.send(self.reload().await);
+                self.reload_waiters.push(reply);
+                if !self.loading {
+                    self.start_load();
+                }
+            }
+            Command::Swap { loaded, started_at } => {
+                let answer =
+                    loaded.map(|(load, digest_key)| self.swap(load, digest_key, started_at));
+                for waiter in self.load_waiters.drain(..) {
+                    let _ = waiter.send(answer.clone());
+                }
+                self.loading = false;
+                if !self.reload_waiters.is_empty() {
+                    self.start_load();
+                }
             }
             Command::Shutdown { .. } => unreachable!("the loop takes shutdown before handle"),
             Command::ReleaseSession {
@@ -2410,29 +2449,50 @@ impl Task {
         holder(&snapshot, account_id, incarnation).is_none()
     }
 
-    async fn reload(&mut self) -> Result<(), String> {
-        let store = self.store.clone();
-        let now = (self.clock)();
-        let loaded = tokio::task::spawn_blocking(move || {
-            store.load_registry().map(|load| (load, store.digest_key()))
-        })
-        .await;
-        let (load, digest_key) = match loaded {
-            Ok(Ok(loaded)) => loaded,
-            Ok(Err(error)) => {
-                tracing::error!(%error, "the registry could not be reloaded; the previous snapshot stays in force");
-                return Err(error.to_string());
-            }
-            Err(error) => {
-                tracing::error!(%error, "the registry load panicked; the previous snapshot stays in force");
-                return Err(error.to_string());
-            }
+    /// Starts the one registry load, which answers every reload waiting now. Off the loop: a selection is answered
+    /// while the load runs, and a burst of reloads costs two loads at most (the one running, and one more for the
+    /// writes that may postdate its read transaction).
+    fn start_load(&mut self) {
+        // A strong sender held by the task itself would keep the receiver alive after the last handle is gone, and
+        // the loop with it; this one lives as long as the load. A refused upgrade means no handle is left, so
+        // nothing waits on the answer either.
+        let Some(tx) = self.handle_tx.upgrade() else {
+            return;
         };
+        self.loading = true;
+        self.load_waiters = std::mem::take(&mut self.reload_waiters);
+        let store = self.store.clone();
+        let started_at = (self.clock)();
+        // The blocking load runs under a task that awaits it, so a panic in the load still sends its `Swap` and
+        // no reload waits on an answer that never comes.
+        tokio::spawn(async move {
+            let loaded = match tokio::task::spawn_blocking(move || {
+                store.load_registry().map(|load| (load, store.digest_key()))
+            })
+            .await
+            {
+                Ok(Ok(loaded)) => Ok(loaded),
+                Ok(Err(error)) => {
+                    tracing::error!(%error, "the registry could not be reloaded; the previous snapshot stays in force");
+                    Err(error.to_string())
+                }
+                Err(error) => {
+                    tracing::error!(%error, "the registry load panicked; the previous snapshot stays in force");
+                    Err(error.to_string())
+                }
+            };
+            let _ = tx.send(Command::Swap { loaded, started_at }).await;
+        });
+    }
+
+    /// The in-memory half of a reload: the load becomes the snapshot under the next revision, the streams of a
+    /// departed holder end, and what the registry no longer holds is purged.
+    fn swap(&mut self, load: RegistryLoad, digest_key: [u8; 32], loaded_at: i64) {
         self.revision += 1;
         let next = Arc::new(RegistrySnapshot::from_load(
             load,
             digest_key,
-            now,
+            loaded_at,
             self.revision,
         ));
         let previous = self
@@ -2467,7 +2527,6 @@ impl Task {
         // not one of them: `select` step 1 decides that per request, since a non-portable request keeps such
         // a pin by design.
         self.purge();
-        Ok(())
     }
 
     /// The burn window of the pool the key routes through; the default preset's for a key the snapshot no

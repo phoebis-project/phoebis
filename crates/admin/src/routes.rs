@@ -456,6 +456,8 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
         }
         Err(error) => return store_failure(error),
     }
+    // The bump deleted the bundle outside the manager, so the copy it keeps goes with it.
+    state.manager.invalidate(&id);
     state.catalog.evict(&id);
     // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An Anthropic-key slot
     // has no pairing to run, so it rests where a slot that never had a key rests.
@@ -872,6 +874,9 @@ async fn pairing_confirm(
             other => unstored(&state, other),
         };
     }
+    // Committed outside the manager, which still keeps the replaced bundle: the usage service and the catalog
+    // expect no generation, so they would be served it until it neared its expiry.
+    state.manager.invalidate(&row.id);
     // Stored now rather than left to the poll, so a freshly paired account shows its plan and start at once
     // instead of waiting out the next interval; a failure here is not the confirm's to fail, since the poll
     // rewrites the row regardless.

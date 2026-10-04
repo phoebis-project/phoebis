@@ -30,3 +30,4 @@ phoebis-profile = { path = "../profile" }
 phoebis-routing = { path = ".", features = ["debug-hooks"] }
 phoebis-store = { path = "../store", features = ["debug-hooks"] }
 phoebis-transport = { path = "../transport" }
+tempfile = { workspace = true }

@@ -30,7 +30,15 @@ fn seeded_oauth(ids: &[&str]) -> Arc<Store> {
 }
 
 fn seeded_kind(kind: AccountKind, ids: &[&str]) -> Arc<Store> {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    seed(
+        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        kind,
+        ids,
+    )
+}
+
+/// The pool `p` over `ids` and the key `k`, written into a store the caller opened.
+fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     for id in ids {
         store
             .insert_account(&AccountRow {
@@ -402,6 +410,75 @@ async fn a_failed_reload_keeps_the_old_snapshot_and_says_so() {
             .is_err(),
         "the next successful reload publishes the revocation"
     );
+}
+
+#[tokio::test]
+async fn five_reloads_against_a_parked_loop_cost_at_most_two_loads_and_answer_every_caller() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let store = seeded(&["a"]);
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let before = store.debug_load_count();
+    let park = handle.park_loop().await;
+    let reloads: Vec<_> = (0..5)
+        .map(|_| {
+            let h = handle.clone();
+            tokio::spawn(async move { h.reload().await })
+        })
+        .collect();
+    drop(park);
+    for reload in reloads {
+        reload.await.unwrap().unwrap();
+    }
+    assert!(
+        store.debug_load_count() - before <= 2,
+        "{}",
+        store.debug_load_count() - before
+    );
+}
+
+#[tokio::test]
+async fn a_selection_is_answered_while_a_registry_load_runs() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let store = seeded(&["a"]);
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let hold = store.debug_hold_next_load();
+    let reload = {
+        let handle = handle.clone();
+        tokio::spawn(async move { handle.reload().await })
+    };
+    wait_for(WRITTEN, || hold.is_parked().then_some(())).await;
+    let answer = tokio::time::timeout(WRITTEN, handle.select(request(&handle, Some("s1"), 1_000)))
+        .await
+        .expect("the selection is answered while the load waits on the store")
+        .unwrap();
+    assert!(matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "a"));
+    drop(hold);
+    reload.await.unwrap().unwrap();
+}
+
+#[tokio::test]
+async fn dropping_the_last_handle_ends_the_loop_and_frees_the_stores_lock() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let key = StorageKey::generate();
+    let store = seed(
+        Arc::new(Store::open(&path, &key).unwrap()),
+        AccountKind::ApiKey,
+        &["a"],
+    );
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let answer = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    assert!(matches!(answer.result, SelectResult::Selected(ref s) if s.account.id == "a"));
+    drop(answer);
+    drop(store);
+    // No `shutdown`: the loop has to end on its own once nothing can send to it, releasing its store.
+    drop(handle);
+    let reopened = wait_for(DRAINED, || Store::open(&path, &key).ok()).await;
+    drop(reopened);
 }
 
 #[tokio::test]

@@ -1944,6 +1944,9 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
             },
         )
         .unwrap();
+    // Committed through the store, so the reload is what moves the snapshot's generation past the bundle the
+    // manager cached at the catalog's prefetch.
+    h.router.reload().await.unwrap();
     let app = h.app.clone();
     let inflight = tokio::spawn(async move {
         app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
@@ -1961,6 +1964,7 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
     h.store
         .update_account("a", 1, "a (edited)", "test")
         .unwrap();
+    h.router.reload().await.unwrap();
     up.release();
     let resp = inflight.await.unwrap();
     assert_eq!(resp.status(), 200);

@@ -133,7 +133,19 @@ enum Armed {
     Uncertain,
 }
 
+/// A bundle the manager read or committed, with the lineage it belongs to: the holder's incarnation and lifecycle
+/// generation beside the bundle's own generation, since a recreated id and a reconnected slot both restart the
+/// generation at 1 and a figure read alone would match the old holder's bundle.
+struct BundleEntry {
+    incarnation: u64,
+    lifecycle_generation: u64,
+    generation: u64,
+    bundle: Arc<CredentialBundle>,
+}
+
 struct Inner {
+    /// The bundle each account's acquisitions answer from while its lineage holds, so a leg pays no registry read.
+    bundles: Mutex<HashMap<String, BundleEntry>>,
     clock: Clock,
     control: Arc<ControlClient>,
     inflight: Mutex<HashMap<String, RefreshFuture>>,
@@ -175,6 +187,7 @@ impl CredentialManager {
     ) -> Self {
         CredentialManager {
             inner: Arc::new(Inner {
+                bundles: Mutex::new(HashMap::new()),
                 clock,
                 control,
                 inflight: Mutex::new(HashMap::new()),
@@ -187,17 +200,32 @@ impl CredentialManager {
         }
     }
 
-    /// Returns the stored access token while it is valid beyond the refresh margin, otherwise joins or
-    /// starts the account's one refresh.
+    /// The token for the row the selection chose, under the generation the router's snapshot read: the cached
+    /// bundle answers when its incarnation and lifecycle generation match the row's and its generation is at or
+    /// above the expectation, else the store is read once. The row's `state` answers the three refusals, so a leg
+    /// pays no registry read while the snapshot lineage holds. A bundle ahead of the expectation is a refresh the
+    /// router's reload has not caught up with, and it serves; one behind it is a cache a rotation outran.
     ///
-    /// `enabled` is never read here. Whether a request may be served is an admission question the relay
-    /// answers before it asks for a credential, and a paused account still has to keep its tokens alive
-    /// for the admin views.
-    pub async fn acquire(&self, account_id: &str) -> Result<AccessToken, AcquireError> {
-        let (account, bundle) = self.inner.ready_account(account_id)?;
+    /// A token valid beyond the refresh margin is answered as it is, otherwise the account's one refresh is
+    /// joined or started. `enabled` is never read here. Whether a request may be served is an admission question
+    /// the relay answers before it asks for a credential, and a paused account still has to keep its tokens
+    /// alive for the admin views.
+    pub async fn acquire_for(
+        &self,
+        account: &AccountRow,
+        expected_generation: Option<u64>,
+    ) -> Result<AccessToken, AcquireError> {
+        match account.state {
+            AccountState::Disconnected => return Err(AcquireError::Disconnected),
+            AccountState::ReauthRequired => return Err(AcquireError::ReauthRequired),
+            AccountState::Unpaired => return Err(AcquireError::Unpaired),
+            _ => {}
+        }
+        let bundle = self.inner.bundle(account, expected_generation).await?;
+        let account_id = account.id.as_str();
         let now = (self.inner.clock)();
         if bundle.expires_at - now > refresh_margin(&bundle) {
-            return Ok(access_token(&account, &bundle));
+            return Ok(access_token(account, &bundle));
         }
         match self.join_or_start(account_id, bundle.generation).await {
             Ok(token) => Ok(token),
@@ -233,6 +261,31 @@ impl CredentialManager {
                 Err(failure)
             }
         }
+    }
+
+    /// `acquire_for` over the row read from the store, for a caller that holds an id alone (the usage service).
+    pub async fn acquire(&self, account_id: &str) -> Result<AccessToken, AcquireError> {
+        let store = self.inner.store.clone();
+        let id = account_id.to_string();
+        let account = tokio::task::spawn_blocking(move || store.account(&id))
+            .await
+            .map_err(|error| {
+                AcquireError::Unavailable(format!("the account read failed: {error}"))
+            })??
+            .ok_or_else(|| {
+                AcquireError::Store(StoreError::AccountNotFound(account_id.to_string()))
+            })?;
+        self.acquire_for(&account, None).await
+    }
+
+    /// Drops the account's cached bundle: a credential committed from outside the manager (a pairing, a
+    /// disconnect) is served on the next call rather than after the cached one expires.
+    pub fn invalidate(&self, account_id: &str) {
+        self.inner
+            .bundles
+            .lock()
+            .expect(LOCK_POISONED)
+            .remove(account_id);
     }
 
     /// Forces the refresh path for a token the upstream has just rejected.
@@ -412,6 +465,66 @@ impl CredentialManager {
 }
 
 impl Inner {
+    /// The account's bundle: the cached one while its lineage is the row's and its generation is at or above
+    /// `expected`, else one store read on a blocking thread, which replaces the entry.
+    async fn bundle(
+        &self,
+        account: &AccountRow,
+        expected: Option<u64>,
+    ) -> Result<Arc<CredentialBundle>, AcquireError> {
+        let cached = self
+            .bundles
+            .lock()
+            .expect(LOCK_POISONED)
+            .get(&account.id)
+            .filter(|entry| {
+                entry.incarnation == account.incarnation
+                    && entry.lifecycle_generation == account.lifecycle_generation
+                    && expected.is_none_or(|expected| entry.generation >= expected)
+            })
+            .map(|entry| entry.bundle.clone());
+        if let Some(bundle) = cached {
+            return Ok(bundle);
+        }
+        let store = self.store.clone();
+        let id = account.id.clone();
+        let bundle = tokio::task::spawn_blocking(move || store.credentials(&id))
+            .await
+            .map_err(|error| {
+                AcquireError::Unavailable(format!("the credential read failed: {error}"))
+            })??
+            .ok_or(AcquireError::Unpaired)?;
+        let bundle = Arc::new(bundle);
+        self.remember(account, bundle.clone());
+        Ok(bundle)
+    }
+
+    /// Keeps `bundle` as the account's entry under the row's incarnation. A bundle of another lifecycle than the
+    /// row's is left out, since its lineage is not the row's to vouch for; and an entry the same lineage holds at a
+    /// newer generation stays, since a read that lost a race to a refresh commit would put the older one back.
+    fn remember(&self, account: &AccountRow, bundle: Arc<CredentialBundle>) {
+        if bundle.lifecycle_generation != account.lifecycle_generation {
+            return;
+        }
+        let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
+        let newer = bundles.get(&account.id).is_some_and(|entry| {
+            entry.incarnation == account.incarnation
+                && entry.lifecycle_generation == bundle.lifecycle_generation
+                && entry.generation > bundle.generation
+        });
+        if !newer {
+            bundles.insert(
+                account.id.clone(),
+                BundleEntry {
+                    incarnation: account.incarnation,
+                    lifecycle_generation: bundle.lifecycle_generation,
+                    generation: bundle.generation,
+                    bundle,
+                },
+            );
+        }
+    }
+
     /// Loads an account that is allowed to hand out a credential, with its current bundle.
     fn ready_account(
         &self,
@@ -474,9 +587,11 @@ impl Inner {
 
         // Someone else finished a refresh between the caller's read and this job winning the slot, so the
         // stored bundle is already the answer; rotating again would spend a refresh token that has just
-        // been replaced.
+        // been replaced. It replaces the entry the caller read too, or every later call would come back here.
         if bundle.generation != observed_generation {
-            return Ok(access_token(&account, &bundle));
+            let token = access_token(&account, &bundle);
+            self.remember(&account, Arc::new(bundle));
+            return Ok(token);
         }
 
         if let Some(failure) = self.holding_off(account_id) {
@@ -639,11 +754,32 @@ impl Inner {
             Some(attempt),
             &fresh,
         ) {
-            Ok(generation) => Ok(AccessToken {
-                secret: Secret::new(fresh.access_token.expose()),
-                generation,
-                account_uuid: account_uuid(&account),
-            }),
+            Ok(generation) => {
+                // The one write that moves the generation without a reload, so the entry moves with it. A response
+                // without a refresh token keeps the stored one, as the commit does.
+                self.remember(
+                    &account,
+                    Arc::new(CredentialBundle {
+                        access_token: Secret::new(fresh.access_token.expose()),
+                        refresh_token: fresh
+                            .refresh_token
+                            .as_ref()
+                            .or(bundle.refresh_token.as_ref())
+                            .map(|token| Secret::new(token.expose())),
+                        issued_at: fresh.issued_at,
+                        expires_at: fresh.expires_at,
+                        refresh_expires_at: fresh.refresh_expires_at,
+                        scopes: fresh.scopes.clone(),
+                        generation,
+                        lifecycle_generation: account.lifecycle_generation,
+                    }),
+                );
+                Ok(AccessToken {
+                    secret: Secret::new(fresh.access_token.expose()),
+                    generation,
+                    account_uuid: account_uuid(&account),
+                })
+            }
             // The lifecycle or the incarnation moved while this refresh was in flight, so the slot was
             // disconnected or replaced; a generation race between two commits reads the same to a refresh,
             // since either way the bundle this refresh held no longer names the account's current state.

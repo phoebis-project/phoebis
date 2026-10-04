@@ -319,6 +319,55 @@ async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
 }
 
 #[tokio::test]
+async fn a_pairing_commit_replaces_the_bundle_the_manager_had_cached() {
+    use common::{json, login, post};
+    let (app, _up, _store, manager) = common::paired_parts().await;
+    let cached = manager.acquire("business").await.unwrap();
+    assert_eq!(cached.generation, 1);
+    let cookie = login(&app, "admin-secret").await;
+    let started = post(
+        &app,
+        "/admin/oauth/sessions",
+        r#"{"account_id":"business","login":"claude_ai"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(started.status(), 201);
+    let started = json(started).await;
+    let id = started["id"].as_str().unwrap().to_string();
+    let redirect = started["redirect_uri"].as_str().unwrap().to_string();
+    let state = started["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_string();
+    let callback = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/callback"),
+        &format!(r#"{{"url":"{redirect}?code=CODE123&state={state}"}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(callback.status(), 200);
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 200);
+    // The cached bundle is far from its expiry, so only the confirm's own drop of it brings the new one.
+    let paired = manager.acquire("business").await.unwrap();
+    assert_eq!(
+        paired.generation, 2,
+        "the confirmed bundle, not the cached one"
+    );
+}
+
+#[tokio::test]
 async fn a_confirmed_pairing_stores_the_plan_and_the_start_at_once() {
     use common::{get, json, login, post};
     let (app, up) = common::admin_app().await;

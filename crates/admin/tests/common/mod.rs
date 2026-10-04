@@ -238,6 +238,13 @@ pub async fn admin_parts_on(store: Arc<Store>) -> (Router, FakeUpstream, Arc<Sto
     (parts.app, parts.up, parts.store, parts.router)
 }
 
+/// A paired slot with the store and the manager behind it, for a test that reads what a confirmation did to the
+/// bundle the manager hands out.
+pub async fn paired_parts() -> (Router, FakeUpstream, Arc<Store>, Arc<CredentialManager>) {
+    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
+    (parts.app, parts.up, parts.store, parts.manager)
+}
+
 /// The same slot with the store and the manager behind it, for the tests that have to look past the HTTP
 /// surface at what a confirmation did to the account's bookkeeping.
 pub async fn quarantined_parts(

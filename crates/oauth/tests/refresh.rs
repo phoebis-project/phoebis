@@ -198,6 +198,105 @@ async fn concurrent_acquires_coalesce_into_one_refresh() {
     up.shutdown().await;
 }
 
+/// An expired bundle at generation 1 under `a`, and a manager whose token endpoint answers the fixture, so the first
+/// acquisition refreshes it to generation 2.
+async fn refreshed_once() -> (CredentialManager, Arc<Store>, FakeUpstream, AccountRow) {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let token_rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Token).to_vec(),
+        },
+    };
+    let (mgr, store, up) = manager_with(vec![token_rule], now).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let row = store.account("a").unwrap().unwrap();
+    let token = mgr.acquire_for(&row, Some(1)).await.unwrap();
+    assert_eq!(
+        (token.secret.expose(), token.generation),
+        ("sk-ant-oat01-PLACEHOLDER", 2)
+    );
+    (mgr, store, up, row)
+}
+
+#[tokio::test]
+async fn a_refresh_commit_replaces_the_cached_bundle_so_the_next_acquisition_reads_no_store() {
+    let (mgr, store, up, row) = refreshed_once().await;
+    let before = store.debug_lock_count();
+    let token = mgr.acquire_for(&row, Some(2)).await.unwrap();
+    assert_eq!(
+        (token.secret.expose(), token.generation),
+        ("sk-ant-oat01-PLACEHOLDER", 2)
+    );
+    assert_eq!(store.debug_lock_count(), before, "no store read");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_refreshed_bundle_serves_an_older_expectation_without_a_store_read() {
+    let (mgr, store, up, row) = refreshed_once().await;
+    let before = store.debug_lock_count();
+    // The router's snapshot still names the generation it loaded before the refresh committed.
+    let token = mgr.acquire_for(&row, Some(1)).await.unwrap();
+    assert_eq!(
+        (token.secret.expose(), token.generation),
+        ("sk-ant-oat01-PLACEHOLDER", 2)
+    );
+    assert_eq!(store.debug_lock_count(), before, "no store read");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_reconnected_slot_answers_its_new_bundle_under_the_restarted_generation() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let (mgr, store, up) = manager_with(vec![], now).await;
+    let bundle = |token: &str| NewBundle {
+        access_token: Secret::new(token),
+        refresh_token: Some(Secret::new("rt")),
+        issued_at: 1_000_000,
+        expires_at: 1_000_000 + 3_600_000,
+        refresh_expires_at: None,
+        scopes: "user:profile user:inference".into(),
+    };
+    store
+        .commit_credentials("a", 1, 1, None, None, &bundle("before"))
+        .unwrap();
+    let row = store.account("a").unwrap().unwrap();
+    let token = mgr.acquire_for(&row, Some(1)).await.unwrap();
+    assert_eq!((token.secret.expose(), token.generation), ("before", 1));
+    let lifecycle = store.bump_lifecycle("a").unwrap();
+    store.set_state("a", AccountState::Ready).unwrap();
+    store
+        .commit_credentials("a", 1, lifecycle, None, None, &bundle("after"))
+        .unwrap();
+    let row = store.account("a").unwrap().unwrap();
+    let token = mgr.acquire_for(&row, Some(1)).await.unwrap();
+    assert_eq!(
+        (token.secret.expose(), token.generation),
+        ("after", 1),
+        "the generation restarted under the new lifecycle, so the old bundle's figure matches it"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn invalid_grant_marks_reauth_required_and_stops_retrying() {
     let now = Arc::new(AtomicI64::new(1_000_000));
@@ -709,7 +808,8 @@ async fn an_unreachable_upstream_does_not_quarantine() {
     );
 
     // Past the backoff the first failure armed, with 100 ms left of a 210 s lifetime, so the refresh runs
-    // again and still cannot reach anything.
+    // again and still cannot reach anything. The bundle is committed from outside the manager, which drops the
+    // cached one as a pairing confirm does, or the call would answer the newer generation without a refresh.
     now.store(1_010_000, Ordering::SeqCst);
     store
         .commit_credentials(
@@ -728,6 +828,7 @@ async fn an_unreachable_upstream_does_not_quarantine() {
             },
         )
         .unwrap();
+    mgr.invalidate("a");
     assert_eq!(
         mgr.acquire("a").await.unwrap().secret.expose(),
         "still-good"
