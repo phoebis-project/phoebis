@@ -912,6 +912,19 @@ async fn every_route_is_captured_and_holds_its_shape() {
             message_id: None,
             finished_at: now,
         }));
+    // One priced record parked on the harness's pool, so the attention capture carries the parked item beside the
+    // exhaustion. Its record is not JSON, so the ledger's start pass, which lands every parked row whose record
+    // parses, never takes it out from under the capture.
+    parts
+        .db
+        .write(|c| {
+            c.execute_batch(&format!(
+                "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+                 VALUES ({now}, {now}, 'r-parked', 'main', 'business', 'not json', 'refused by test');"
+            ))?;
+            Ok(())
+        })
+        .unwrap();
     // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
     parts.usage.poll("business").await.unwrap();
     for (name, route) in [

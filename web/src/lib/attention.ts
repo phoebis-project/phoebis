@@ -4,18 +4,22 @@ import { fmtAbsolute, fmtRelative } from './format';
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   client_drift: 'Client drift',
   funding_required: 'Funding required',
+  ledger_record_parked: 'Priced record parked',
   poll_backoff: 'Usage poll backing off',
   pool_exhausted: 'Pool exhausted',
   reauth_required: 'Re-auth required',
   refresh_failed: 'Credential refresh failed',
+  writer_degraded: 'State writer degraded',
 };
 export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'warning'> = {
   client_drift: 'serious',
   funding_required: 'serious',
+  ledger_record_parked: 'serious',
   poll_backoff: 'warning',
   pool_exhausted: 'critical',
   reauth_required: 'critical',
   refresh_failed: 'critical',
+  writer_degraded: 'serious',
 };
 
 /** How often a page with a reader open asks the route again, so an exhaustion or a cleared failure shows unprompted. */
@@ -55,6 +59,8 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       const key = text(d.key);
       return `${what} differs from the pinned build${key ? `, newest refusal from key ${key}` : ''}`;
     }
+    case 'writer_degraded':
+      return d.component === 'ledger' ? 'ledger batches are being retried; budgeted members are held back until a batch lands' : 'routing state is kept in memory until the registry file takes writes again';
     case 'reauth_required':
       return 'serves nothing until its credential is renewed';
     case 'funding_required':
@@ -62,6 +68,11 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     case 'refresh_failed': {
       const error = text(d.last_error);
       return `${count(d.failures)} refreshes failed in a row${error ? `: ${error}` : ''}`;
+    }
+    case 'ledger_record_parked': {
+      const n = count(d.count);
+      const accounts = Array.isArray(d.accounts) ? d.accounts.filter((a): a is string => typeof a === 'string') : [];
+      return `${n} priced ${n === 1 ? 'record' : 'records'} parked, landing at the next start${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
     }
     case 'poll_backoff': {
       const n = count(d.rate_limited_in_a_row);

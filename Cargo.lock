@@ -1590,6 +1590,7 @@ dependencies = [
  "phoebis-store",
  "phoebis-transport",
  "serde_json",
+ "thiserror",
  "tokio",
  "tokio-util",
  "tower",

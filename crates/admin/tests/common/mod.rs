@@ -824,6 +824,7 @@ async fn build_app(
     let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
         bus: bus.clone(),
         clock: clock.clone(),
+        ledger: Some(ledger.clone()),
         router: router_handle.clone(),
         store: store.clone(),
         usage: Some(usage.clone()),

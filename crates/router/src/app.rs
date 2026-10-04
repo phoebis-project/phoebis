@@ -309,6 +309,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         phoebis_attention::spawn(phoebis_attention::AttentionParts {
             bus: bus.clone(),
             clock: clock.clone(),
+            ledger: Some(ledger.clone()),
             router: router_task.clone(),
             store: store.clone(),
             usage: Some(usage.clone()),

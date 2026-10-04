@@ -4,18 +4,22 @@
 use std::sync::Arc;
 
 use axum::extract::State;
+use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use serde_json::json;
 
-use crate::routes::store_failure;
+use crate::routes::failure;
 use crate::AdminState;
 
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     // A failed read answers 500 and never an empty list, which the dashboard would draw as the quiet state.
     let mut held: Vec<_> = match state.attention.conditions((state.clock)()) {
         Ok(conditions) => conditions.into_iter().filter(|c| c.holds).collect(),
-        Err(error) => return store_failure(error),
+        Err(error) => {
+            tracing::warn!(%error, "the attention read failed; the route answers 500");
+            return failure(StatusCode::INTERNAL_SERVER_ERROR, "storage failure");
+        }
     };
     held.sort_by(|a, b| (a.kind, a.since, &a.subject.id).cmp(&(b.kind, b.since, &b.subject.id)));
     let items: Vec<_> = held

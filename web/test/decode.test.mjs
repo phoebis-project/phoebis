@@ -1284,6 +1284,20 @@ test("an attention item decodes the route's shape, its start an instant and its 
   assert.deepEqual([drift.kind, drift.link, drift.pools, drift.subject.type], ['client_drift', null, [], 'client'], 'a drift refusal that carried no key links nowhere');
 });
 
+test("an attention item of a state writer or a parked record decodes under its own kind, and a router subject as itself", () => {
+  const parked = fixture('attention').items.find((i) => i.kind === 'ledger_record_parked');
+  assert.deepEqual(d.decodeAttention(parked), {
+    detail: { accounts: ['business'], count: 1, pool: 'main' },
+    kind: 'ledger_record_parked',
+    link: { id: 'main', page: 'pools' },
+    pools: ['main'],
+    since: new Date(1_000_000).toISOString(),
+    subject: { id: 'main', label: 'Main', type: 'pool' },
+  });
+  const writer = d.decodeAttention({ detail: { component: 'routing' }, kind: 'writer_degraded', link: null, pools: [], since: 1_000_000, subject: { id: 'routing', label: 'routing', type: 'router' } });
+  assert.deepEqual([writer.kind, writer.link, writer.pools, writer.subject], ['writer_degraded', null, [], { id: 'routing', label: 'routing', type: 'router' }], "the router's own component opens nothing and belongs to no pool");
+});
+
 test('an attention item with a spelling the console does not know reads the worst kind, a pool subject and the pools page', () => {
   const odd = d.decodeAttention({ detail: 'text', kind: 'cache_cold', link: { id: 'r1', page: 'requests' }, pools: ['all', 3], since: 'yesterday', subject: { id: 'x', label: 'x', type: 'key' } });
   assert.deepEqual(

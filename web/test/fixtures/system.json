@@ -20,7 +20,7 @@
       "behind_refusals": 0,
       "degraded": false,
       "retrying": 0,
-      "parked_priced": 0
+      "parked_priced": 1
     },
     "router": {
       "command_depth": 4096,

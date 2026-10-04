@@ -675,7 +675,7 @@ async fn an_attention_read_that_fails_answers_the_scrape_500_with_no_family() {
         "{text}"
     );
     let (status, text) = scrape(Arc::new(|| {
-        Err(StoreError::Io(std::io::Error::other("disk gone")))
+        Err(Box::new(StoreError::Io(std::io::Error::other("disk gone"))))
     }))
     .await;
     assert_eq!(

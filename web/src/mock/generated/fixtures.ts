@@ -3797,6 +3797,29 @@ export const FIXTURES: Record<string, Fixture> = {
             "key": "desktop",
             "pool": "main"
           }
+        },
+        {
+          "kind": "ledger_record_parked",
+          "subject": {
+            "type": "pool",
+            "id": "main",
+            "label": "Main"
+          },
+          "link": {
+            "page": "pools",
+            "id": "main"
+          },
+          "pools": [
+            "main"
+          ],
+          "since": 1000000,
+          "detail": {
+            "accounts": [
+              "business"
+            ],
+            "count": 1,
+            "pool": "main"
+          }
         }
       ]
     }
@@ -8187,7 +8210,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "behind_refusals": 0,
         "degraded": false,
         "retrying": 0,
-        "parked_priced": 0
+        "parked_priced": 1
       },
       "router": {
         "command_depth": 4096,

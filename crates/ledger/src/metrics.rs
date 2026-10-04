@@ -13,7 +13,6 @@ use axum::Router;
 use phoebis_bus::{Bus, SubscriberStats};
 use phoebis_oauth::Clock;
 use phoebis_routing::{RouterHandle, WriterStatus};
-use phoebis_store::StoreError;
 
 use crate::histogram::{bucket_edges, bucket_index, top_edge, BUCKET_COUNT};
 use crate::pricing::{PriceTable, Pricing};
@@ -461,8 +460,11 @@ pub struct AttentionGauges {
 }
 
 /// A closure over the attention reader, read fresh on every scrape: the attention crate depends on this one for these
-/// types, so the binary supplies the closure rather than a type the ledger could name.
-pub type AttentionGaugeSource = Arc<dyn Fn() -> Result<AttentionGauges, StoreError> + Send + Sync>;
+/// types, so the binary supplies the closure rather than a type the ledger could name, and the reader's error crosses
+/// boxed for the same reason.
+pub type AttentionGaugeSource = Arc<
+    dyn Fn() -> Result<AttentionGauges, Box<dyn std::error::Error + Send + Sync>> + Send + Sync,
+>;
 
 #[derive(Clone, Debug, Default)]
 pub struct RoutingGauges {
@@ -590,7 +592,7 @@ pub fn metrics_router(
                 async move {
                     // A scrape answered without the conditions would read 0 for a held one and clear the alarm a
                     // rule fires on, so the scraper records a failed scrape instead. The listener asks for no
-                    // credential, so the store's words stay in the log.
+                    // credential, so the store's or the ledger's words stay in the log.
                     let attention = match attention.map(|a| a()).transpose() {
                         Ok(attention) => attention.unwrap_or_default(),
                         Err(error) => {

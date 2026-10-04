@@ -8,19 +8,21 @@ const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], si
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test('the attention kinds rank worst first, the order the route answers in', () => {
-  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'reauth_required', 'funding_required', 'refresh_failed', 'poll_backoff']);
+  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'reauth_required', 'funding_required', 'refresh_failed', 'ledger_record_parked', 'poll_backoff']);
 });
 
 test('each attention kind has its word and its tone, a client drift serious', () => {
   assert.deepEqual(ATTENTION_LABEL, {
     client_drift: 'Client drift',
     funding_required: 'Funding required',
+    ledger_record_parked: 'Priced record parked',
     poll_backoff: 'Usage poll backing off',
     pool_exhausted: 'Pool exhausted',
     reauth_required: 'Re-auth required',
     refresh_failed: 'Credential refresh failed',
+    writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'critical', 'serious', 'critical', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'critical', 'serious', 'critical', 'serious', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {
@@ -29,6 +31,7 @@ test('an item opens the page where its condition is fixed, and an item without a
   assert.equal(attentionHref(item('client_drift', { link: { id: 'laptop', page: 'keys' } })), '/keys#laptop');
   assert.equal(attentionHref(item('client_drift', { link: { id: 'a b#c', page: 'keys' } })), '/keys#a%20b%23c', 'an id travels encoded');
   assert.equal(attentionHref(item('client_drift')), null, 'a drift refusal that carried no key has nothing to open');
+  assert.equal(attentionHref(item('writer_degraded', { subject: { id: 'routing', label: 'routing', type: 'router' } })), null, "the router's own component has nothing to open");
 });
 
 test("a row reads each kind's detail as one sentence", () => {
@@ -43,6 +46,11 @@ test("a row reads each kind's detail as one sentence", () => {
   assert.equal(sentence('refresh_failed', { account: 'team', failures: 2, last_error: null, outcome: 'uncertain' }), '2 refreshes failed in a row');
   assert.equal(sentence('poll_backoff', { account: 'mail', backoff_since: NOW - 42 * 60_000, next_attempt_at: NOW + 4 * 60_000, rate_limited_in_a_row: 6 }), '6 rate-limited answers in a row, next attempt in 4m');
   assert.equal(sentence('poll_backoff', { account: 'mail', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 1 }), '1 rate-limited answer in a row');
+  assert.equal(sentence('writer_degraded', { component: 'ledger' }), 'ledger batches are being retried; budgeted members are held back until a batch lands');
+  assert.equal(sentence('writer_degraded', { component: 'routing' }), 'routing state is kept in memory until the registry file takes writes again');
+  assert.equal(sentence('ledger_record_parked', { accounts: ['evals'], count: 1, pool: 'codex' }), '1 priced record parked, landing at the next start (evals)');
+  assert.equal(sentence('ledger_record_parked', { accounts: ['business', 'direct'], count: 3, pool: null }), '3 priced records parked, landing at the next start (business, direct)');
+  assert.equal(sentence('ledger_record_parked', { accounts: [], count: 2, pool: 'codex' }), '2 priced records parked, landing at the next start', 'a record that names no account adds none');
 });
 
 test("a badge's title lists the detail's members, an instant read as one, then the age", () => {
