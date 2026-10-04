@@ -467,6 +467,16 @@ async fn a_request_that_reads_no_cache_after_a_covering_probe_settles_the_probe_
         (r.status("main").probes, r.status("main").unanswered),
         (1, 1)
     );
+    // A request the router refused before any upstream read nothing either way, so it leaves the probe kept for the
+    // request after it.
+    r.engine.observe(r.observed("refused", "main", &body));
+    r.engine
+        .observe(r.complete("refused", phoebis_bus::Outcome::Rejected, None));
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "a refused request decides nothing"
+    );
     r.advance(60_000);
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     let returned = r.observe_with("main", &body).await;
@@ -483,6 +493,154 @@ async fn a_request_that_reads_no_cache_after_a_covering_probe_settles_the_probe_
         "{probe:?}"
     );
     assert_eq!(r.status("main").unanswered, 0);
+}
+
+/// The two halves of a request the tests below drive on the engine's side alone: its observation and selection on
+/// `a`, then the first stream event, which arms the schedule from the request's start with the cache it read and
+/// wrote.
+fn open_request(r: &Rig, id: &str, read: u64, write: u64) {
+    r.engine.observe(r.observed(id, "main", BODY));
+    r.engine.observe(r.selected(id, "a"));
+    r.engine.observe(phoebis_bus::Event::ResponseChunk(
+        phoebis_bus::ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index: 0,
+            body: Default::default(),
+            phase: Some(phoebis_bus::Phase::MessageStart {
+                usage: phoebis_bus::Usage {
+                    cache_read_tokens: Some(read),
+                    cache_write_5m_tokens: Some(write),
+                    ..Default::default()
+                },
+            }),
+        },
+    ));
+}
+
+fn completed(r: &Rig, id: &str, read: u64) -> phoebis_bus::Event {
+    r.complete(
+        id,
+        phoebis_bus::Outcome::Succeeded,
+        Some(phoebis_bus::Usage {
+            cache_read_tokens: Some(read),
+            cache_write_5m_tokens: Some(if read == 0 { 2_000 } else { 0 }),
+            ..Default::default()
+        }),
+    )
+}
+
+/// A probe sent while a request streams pays for the request after it, so that request's own completion decides
+/// nothing about it, whatever it read: the probe waits for the next request, or settles under the recipe's stop.
+#[tokio::test]
+async fn a_probe_sent_while_a_request_is_open_waits_for_the_request_after_it() {
+    for read in [0, 2_000] {
+        let mut r = rig(RigSpec {
+            accounts: vec![api_key("a", A, 0)],
+            ..RigSpec::default()
+        })
+        .await;
+        open_request(&r, "first", 0, 2_000);
+        r.engine.observe(completed(&r, "first", 0));
+        r.advance_attended(60_000);
+        open_request(&r, "second", read, 2_000 - read);
+        r.advance_attended(270_000);
+        r.step().await;
+        assert_eq!(
+            (r.status("main").probes, r.status("main").unanswered),
+            (1, 1),
+            "read {read}: the probe landed while the second request streamed"
+        );
+        r.engine.observe(completed(&r, "second", read));
+        assert_eq!(
+            r.status("main").unanswered,
+            1,
+            "read {read}: the second request's completion left the probe alone"
+        );
+        r.event(Event {
+            event: "session_end".into(),
+            ..Default::default()
+        })
+        .unwrap();
+        let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes > 0).await;
+        assert_eq!(
+            probe_rows(&rows).wasted_probe_reasons,
+            BTreeMap::from([("session_ended".to_string(), 1)]),
+            "read {read}"
+        );
+    }
+}
+
+/// An entry that expires while the request it serves is still open is not lapsed under that request: the completion
+/// earns its credit and decides the probes it kept, and the next tick lapses the recipe.
+#[tokio::test]
+async fn a_request_open_past_its_entry_keeps_its_credit_and_the_recipe_lapses_after_it() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+    r.advance(60_000);
+    open_request(&r, "second", 2_000, 0);
+    // The second request's entry expires 300 s after it started, with the request still open.
+    r.advance(300_000);
+    r.step().await;
+    r.engine.observe(completed(&r, "second", 2_000));
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::Expired);
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+            .unwrap();
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the request earned its credit and the probe it kept was answered"
+    );
+}
+
+/// A return inside the TTL that reads the cache earns no credit, the gap being too short to need the probe, but it
+/// answers the probe all the same: nothing is settled wasted.
+#[tokio::test]
+async fn a_warm_return_without_the_credit_answers_the_probes_it_kept() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1);
+    r.advance_attended(10_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+            .unwrap();
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probes
+        ),
+        (0, 0)
+    );
 }
 
 /// A migrated probe settles at its own cost in the unit its serving attempt was funded in: dollars on an

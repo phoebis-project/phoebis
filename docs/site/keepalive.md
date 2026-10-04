@@ -237,7 +237,7 @@ probe that made its net negative, not a contradiction.
 | `budget` | at budget | The pinned member is at its spend budget until the period ends or the budget is raised. |
 | `cap_reached` | cap reached | The pool spent its daily probe cap, or a subscription account its 5-hour window share. |
 | `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
-| `cooled` | cooled down | The pinned account is under a cooldown; the probe waits for it to end. |
+| `cooled` | cooled down | The pinned account is under a cooldown; the probe waits it out while the entry lasts. |
 | `evicted` | evicted | The engine reached its retained-bytes cap and this recipe was the oldest idle one. |
 | `expired` | entry expired | The cache entry expired before its probe was due; no probe was sent. |
 | `idle_limit` | idle limit | The pool's idle time or idle probe budget ran out since the last real request. |
@@ -257,12 +257,14 @@ the lead: the session could move away from the account the probe would warm, so 
 that. A five-minute recipe needs about four minutes of pin and a one-hour recipe about fifty-four; the 300-second floor
 that `keepalive.enabled` asks of the pool when it is saved stays the one refusal.
 
-An entry the engine knows has expired is never probed: the recipe is held under `expired`, its unanswered probes are
-settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. At the
-retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then
-attended sessions' idle agents, never one with a probe in flight. A lapsed or evicted recipe leaves the recipe list, as
-one stopped under `idle_limit` or `storage_limit` does, and shows on the wasted counter; a lapse also shows in that log
-line.
+An entry the engine knows has expired is never probed: its recipe ends under `expired`, its unanswered probes are
+settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. A recipe
+held under another reason, a cooldown, a budget, the daily cap or keepalive off, leaves as `expired` once its entry has
+expired; the next real request starts a new one. While the request a recipe follows is still open, the lapse waits for
+its completion. At the retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first,
+oldest activity first, then attended sessions' idle agents, never one with a probe or a request in flight. A lapsed or
+evicted recipe leaves the recipe list, as one stopped under `idle_limit` or `storage_limit` does, and shows on the
+wasted counter; a lapse also shows in that log line.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and holds the recipe under `unsupported_shape`: a probe built from it

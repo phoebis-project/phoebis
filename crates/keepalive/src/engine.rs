@@ -376,9 +376,10 @@ pub(crate) struct Agent {
     pub net: Net,
     pub grace_left: u32,
     pub unanswered: Vec<f64>,
-    /// Where the unanswered probes were paid, taken when a real request's discard kept them: that request moves
-    /// the agent's model, account, pool and key generation before its completion decides them.
-    pub unanswered_under: Option<PaidUnder>,
+    /// The probes a superseding real request took over from `unanswered`, with the keys they were paid under: the
+    /// request moves the agent's model, account, pool and key generation before its completion decides them. A
+    /// probe sent while it is open lands on `unanswered`, for the request after it.
+    pub kept: Vec<Kept>,
     pub covered_since_real: bool,
     /// The account the covering probe warmed. The credit binds to it: a later request that fails over reads
     /// a prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
@@ -429,7 +430,7 @@ impl Agent {
             net: Net::default(),
             grace_left: 0,
             unanswered: Vec::new(),
-            unanswered_under: None,
+            kept: Vec::new(),
             covered_since_real: false,
             covered_account: None,
             covered_unit: None,
@@ -526,28 +527,30 @@ struct Skipped {
     fast: bool,
 }
 
-/// The rollup keys unanswered probes settle under: the ones they were paid under.
+/// Unanswered probes with the rollup keys they were paid under, which their settlement files under.
 #[derive(Clone, Debug, PartialEq)]
-pub(crate) struct PaidUnder {
+pub(crate) struct Kept {
     pub key_generation: i64,
     pub pool_id: String,
     pub canonical_model: String,
     pub account: Option<String>,
     pub fast: bool,
+    pub costs: Vec<f64>,
 }
 
-impl PaidUnder {
-    fn of(agent: &Agent, fast: bool) -> PaidUnder {
-        PaidUnder {
+impl Kept {
+    fn of(agent: &Agent, fast: bool, costs: Vec<f64>) -> Kept {
+        Kept {
             key_generation: agent.key_generation,
             pool_id: agent.pool_id.clone(),
             canonical_model: agent.canonical_model.clone(),
             account: agent.account.clone(),
             fast,
+            costs,
         }
     }
 
-    fn settle(self, key: &SessionKey, label: Wasted, costs: Vec<f64>) -> Settlement {
+    fn settle(self, key: &SessionKey, label: Wasted) -> Settlement {
         Settlement {
             key: key.clone(),
             key_generation: self.key_generation,
@@ -555,10 +558,23 @@ impl PaidUnder {
             canonical_model: self.canonical_model,
             account: self.account,
             label,
-            costs,
+            costs: self.costs,
             fast: self.fast,
         }
     }
+}
+
+/// What ending an observation does with the probes the recipe leaves unanswered.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Unanswered {
+    /// A labelled stop settles them and the kept ones under its label; a stop with no label drops them and leaves
+    /// the kept ones for whatever decides them.
+    Settle,
+    /// A real request supersedes the recipe and keeps them until its completion decides them.
+    Keep,
+    /// A bus gap ends the observation without its completion: the probes its request kept and those sent while it
+    /// was open wait where they are for the next request.
+    Leave,
 }
 
 pub(crate) struct Inner {
@@ -751,30 +767,31 @@ impl Inner {
         reason: Reason,
         wasted: Option<Wasted>,
     ) {
-        self.end_observation(key, agent_id, wasted, false);
+        self.end_observation(key, agent_id, wasted, Unanswered::Settle);
         self.set_reason(key, agent_id, reason);
     }
 
-    /// `discard` for a real request that supersedes the recipe, or for that request's observation a bus gap ends:
-    /// the probes the recipe leaves unanswered were paying for the request, so they stay on the agent until the
-    /// first of these decides them: the request's completion (a warm return on the lineage they kept clears them;
-    /// any other return, on another lineage, with no read or past the entry, settles them under `cold_return`), a
-    /// labelled discard (under its label), or the agent's lapse or eviction. A request the engine takes no
-    /// observation of leaves them kept for whichever comes next.
+    /// `discard` for a real request that supersedes the recipe: the probes the recipe leaves unanswered were paying
+    /// for that request, so it keeps them until the first of these decides them: its completion, once it reached
+    /// the upstream (a warm return on the lineage they kept clears them; any other return, on another lineage, with
+    /// no read or past the entry, settles them under `cold_return`), a labelled discard (under its label), or the
+    /// agent's lapse or eviction. A request the engine takes no observation of, or one refused or cancelled before
+    /// the upstream answered, leaves them kept for whichever comes next.
     pub(crate) fn discard_keeping_unanswered(
         &mut self,
         key: &SessionKey,
         agent_id: &str,
         reason: Reason,
     ) {
-        self.end_observation(key, agent_id, None, true);
+        self.end_observation(key, agent_id, None, Unanswered::Keep);
         self.set_reason(key, agent_id, reason);
     }
 
     /// The decision `discard_keeping_unanswered` defers, taken by the completion of the request that kept the
     /// probes: `read` is what the completion read from the cache, and `credited` whether it earned the kept-warm
     /// credit. A warm return is one on the model, speed and account the probes ran on, inside the entry they
-    /// kept, that read the cache; the model is the previous recipe's as resolutions followed it.
+    /// kept, that read the cache; the model is the previous recipe's as resolutions followed it. A probe sent
+    /// while the request was open is not among them: it pays for the request after this one.
     pub(crate) fn decide_unanswered(
         &mut self,
         key: &SessionKey,
@@ -790,10 +807,6 @@ impl Inner {
             return;
         };
         let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
-        let paid = agent
-            .unanswered_under
-            .take()
-            .unwrap_or_else(|| PaidUnder::of(agent, fast));
         let inside_on_its_model = agent
             .current
             .as_ref()
@@ -802,15 +815,15 @@ impl Inner {
             .is_some_and(|(prior, real_at)| {
                 real_at < prior.entry_expires && prior.model == agent.canonical_model
             });
-        let warm = credited
-            || read > 0
-                && inside_on_its_model
-                && paid.fast == fast
-                && paid.account == agent.account;
-        let costs = std::mem::take(&mut agent.unanswered);
-        if !warm && !costs.is_empty() {
-            self.settlements
-                .push(paid.settle(key, Wasted::ColdReturn, costs));
+        for kept in std::mem::take(&mut agent.kept) {
+            let warm = credited
+                || read > 0
+                    && inside_on_its_model
+                    && kept.fast == fast
+                    && kept.account == agent.account;
+            if !warm {
+                self.settlements.push(kept.settle(key, Wasted::ColdReturn));
+            }
         }
     }
 
@@ -821,7 +834,7 @@ impl Inner {
         key: &SessionKey,
         agent_id: &str,
         wasted: Option<Wasted>,
-        keep_unanswered: bool,
+        unanswered: Unanswered,
     ) {
         let Some(agent) = self
             .sessions
@@ -841,19 +854,28 @@ impl Inner {
         agent.generation += 1;
         agent.paused = false;
         agent.last_stop = wasted;
-        let paid = agent
-            .unanswered_under
-            .take()
-            .unwrap_or_else(|| PaidUnder::of(agent, fast));
-        if keep_unanswered {
-            if !agent.unanswered.is_empty() {
-                agent.unanswered_under = Some(paid);
-            }
+        if unanswered == Unanswered::Leave {
             return;
         }
         let costs = std::mem::take(&mut agent.unanswered);
-        if let (Some(label), false) = (wasted, costs.is_empty()) {
-            self.settlements.push(paid.settle(key, label, costs));
+        if unanswered == Unanswered::Keep {
+            // A batch apiece: a request whose completion never came leaves its batch for the next one, which may
+            // keep probes paid under other keys.
+            if !costs.is_empty() {
+                let batch = Kept::of(agent, fast, costs);
+                agent.kept.push(batch);
+            }
+            return;
+        }
+        let Some(label) = wasted else {
+            return;
+        };
+        if !costs.is_empty() {
+            self.settlements
+                .push(Kept::of(agent, fast, costs).settle(key, label));
+        }
+        for kept in std::mem::take(&mut agent.kept) {
+            self.settlements.push(kept.settle(key, label));
         }
     }
 
@@ -906,9 +928,9 @@ impl Inner {
                         prior.model = dated.clone();
                     }
                 }
-                if let Some(paid) = agent.unanswered_under.as_mut() {
-                    if let Some(dated) = canonical.get(&paid.canonical_model) {
-                        paid.canonical_model = dated.clone();
+                for kept in &mut agent.kept {
+                    if let Some(dated) = canonical.get(&kept.canonical_model) {
+                        kept.canonical_model = dated.clone();
                     }
                 }
             }
@@ -1155,7 +1177,8 @@ impl Engine {
         );
         let open: Vec<(SessionKey, String)> = inner.pending.values().cloned().collect();
         for (key, agent_id) in open {
-            inner.discard_keeping_unanswered(&key, &agent_id, Reason::BusGap);
+            inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
+            inner.set_reason(&key, &agent_id, Reason::BusGap);
         }
     }
 
@@ -1196,7 +1219,12 @@ impl Engine {
             reason: agent.reason,
             request_generation: agent.generation,
             state: agent.state,
-            unanswered: agent.unanswered.len(),
+            unanswered: agent.unanswered.len()
+                + agent
+                    .kept
+                    .iter()
+                    .map(|kept| kept.costs.len())
+                    .sum::<usize>(),
         })
     }
 
@@ -1551,7 +1579,11 @@ impl Engine {
             Outcome::Rejected => Some(Reason::RequestRejected),
         };
         if let Some(reason) = reason {
-            inner.decide_unanswered(&key, &agent_id, read, false);
+            // Only an answer from the upstream says anything about the cache the kept probes held; a request
+            // refused or cancelled before one arrived leaves them for the next request.
+            if complete.ttfb_ms.is_some() {
+                inner.decide_unanswered(&key, &agent_id, read, false);
+            }
             inner.discard(&key, &agent_id, reason, None);
             return;
         }
@@ -1704,7 +1736,7 @@ impl Engine {
                     Some(
                         Reason::KeepaliveOff | Reason::OptedOut | Reason::IneligibleCredential,
                     ) if !ready => {
-                        inner.end_observation(&key, &agent_id, None, false);
+                        inner.end_observation(&key, &agent_id, None, Unanswered::Settle);
                     }
                     _ => inner.discard(&key, &agent_id, Reason::NoCacheEvidence, None),
                 }
@@ -1852,15 +1884,25 @@ impl Engine {
                     continue;
                 }
                 // The entry is dead at its expiry and the lead already places the due time ahead of it, so a
-                // probe past it warms nothing: the agent is held rather than probed, its unanswered probes
-                // wasted, and the next real request re-arms it. A probe already in flight was sent in time and
-                // settles on its own answer; a hold that already ledgered the probe it withheld is not counted
-                // again; and the skip takes the recipe's speed before the discard drops the recipe.
+                // probe past it warms nothing: the recipe ends under `expired` rather than being probed, its
+                // unanswered probes wasted, and the next real request re-arms it. A probe already in flight was
+                // sent in time and settles on its own answer; a hold that already ledgered the probe it withheld
+                // is not counted again; and the skip takes the recipe's speed before the discard drops the
+                // recipe. While the request the observation follows is still open, the recipe is held unprobed
+                // instead: its completion earns its credit and decides the probes it kept, and the next tick
+                // lapses it.
                 let agent = &inner.sessions[&key].agents[&agent_id];
                 if let Some(expires) = agent
                     .expires
                     .filter(|expires| !agent.in_flight && now >= *expires)
                 {
+                    if agent
+                        .current
+                        .as_ref()
+                        .is_some_and(|o| inner.pending.contains_key(&o.id))
+                    {
+                        continue;
+                    }
                     tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
                         "a keepalive recipe lapsed before its probe; the probe was skipped");
                     if !agent.hold_counted {

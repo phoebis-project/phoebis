@@ -571,6 +571,103 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     );
 }
 
+/// A recipe of about `bytes` bytes armed on the engine's side alone, for `agent` of `session`, on account `a`.
+fn arm(r: &Rig, id: &str, session: &str, agent: &str, bytes: usize) {
+    let body = format!(
+        r#"{{"model":"claude-sonnet-4-5","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
+        "y".repeat(bytes)
+    );
+    let BusEvent::RequestObserved(mut observed) = r.observed(id, agent, &body) else {
+        unreachable!("observed builds an observation")
+    };
+    observed.session_id = Some(session.into());
+    r.engine.observe(BusEvent::RequestObserved(observed));
+    r.engine.observe(r.selected(id, "a"));
+    r.engine
+        .observe(r.complete(id, Outcome::Succeeded, Some(usage(0, 2_000))));
+}
+
+fn start_agent(r: &mut Rig, agent: &str) {
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some(agent.into()),
+        ..Default::default()
+    })
+    .unwrap();
+}
+
+/// With room for two recipes and a half, a third evicts one: the oldest idle recipe before a newer one, an unattended
+/// session's before an older idle one of an attended session, and none at all when evicting every candidate would
+/// still leave the newest without room, which is then refused.
+#[tokio::test]
+async fn eviction_takes_unattended_then_the_oldest_idle_and_nothing_when_it_cannot_make_room() {
+    let spec = || RigSpec {
+        limits: KeepaliveLimits {
+            max_retained_bytes: 25_000,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    };
+    let mut r = rig(spec()).await;
+    for agent in ["older", "newer", "third"] {
+        start_agent(&mut r, agent);
+    }
+    arm(&r, "older", "session", "older", 10_000);
+    r.state("older", "idle");
+    r.advance_attended(10_000);
+    arm(&r, "newer", "session", "newer", 10_000);
+    r.state("newer", "idle");
+    r.advance_attended(10_000);
+    arm(&r, "third", "session", "third", 10_000);
+    let mut kept = r.engine.recipes_for("desktop", "session");
+    kept.sort();
+    assert_eq!(
+        (r.status("older").reason, kept),
+        (
+            Reason::Evicted,
+            vec!["newer".to_string(), "third".to_string()]
+        ),
+        "the oldest idle recipe goes, the newer one stays"
+    );
+
+    let mut r = rig(spec()).await;
+    r.event(session_start_as("other", "second", None)).unwrap();
+    for agent in ["idle", "newest"] {
+        start_agent(&mut r, agent);
+    }
+    arm(&r, "idle", "session", "idle", 10_000);
+    r.state("idle", "idle");
+    // Past the lease of `other`, which no heartbeat renews, while `session` stays attended.
+    r.advance_attended(100_000);
+    arm(&r, "unattended", "other", "main", 10_000);
+    arm(&r, "newest", "session", "newest", 10_000);
+    let unattended = r.engine.agent_status("desktop", "other", "main").unwrap();
+    assert_eq!(
+        (unattended.reason, r.status("idle").reason),
+        (Reason::Evicted, Reason::Scheduled),
+        "the unattended recipe goes before the older idle one of the attended session"
+    );
+
+    let mut r = rig(spec()).await;
+    for agent in ["busy", "idle", "large"] {
+        start_agent(&mut r, agent);
+    }
+    arm(&r, "busy", "session", "busy", 10_000);
+    arm(&r, "idle", "session", "idle", 10_000);
+    r.state("idle", "idle");
+    arm(&r, "large", "session", "large", 16_000);
+    let mut kept = r.engine.recipes_for("desktop", "session");
+    kept.sort();
+    assert_eq!(
+        (r.status("large").reason, kept),
+        (
+            Reason::StorageLimit,
+            vec!["busy".to_string(), "idle".to_string()]
+        ),
+        "evicting the idle recipe would not make room, so nothing is evicted"
+    );
+}
+
 #[tokio::test]
 async fn an_oversized_request_invalidates_only_its_own_agent() {
     for child in [false, true] {

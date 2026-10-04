@@ -120,6 +120,42 @@ async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() 
     })
     .await;
     assert_eq!(wasted, 1, "the unanswered probe carries the lapse's label");
+    // Drained rather than polled: a second skip row landing late must not read as one.
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+            .unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.probes_skipped).sum::<u64>(),
+        1,
+        "the lapse counts the probe it withheld, with no hold behind it"
+    );
+    // A fast recipe's skip files under the speed it was retained with, read before the lapse drops the recipe.
+    let mut r = rig(RigSpec::default()).await;
+    let fast = BODY.replacen('{', r#"{"speed":"fast","#, 1);
+    r.engine.observe(r.observed("fast", "main", &fast));
+    r.engine.observe(r.selected("fast", "a"));
+    r.engine.observe(r.complete(
+        "fast",
+        phoebis_bus::Outcome::Succeeded,
+        Some(phoebis_bus::Usage {
+            cache_write_5m_tokens: Some(2_000),
+            ..Default::default()
+        }),
+    ));
+    r.advance(20 * MINUTE);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::Expired);
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
+            .unwrap();
+    let skipped: Vec<(&str, u64)> = rows
+        .iter()
+        .filter(|row| row.probes_skipped > 0)
+        .map(|row| (row.speed.as_str(), row.probes_skipped))
+        .collect();
+    assert_eq!(skipped, [("fast", 1)]);
 }
 
 /// A hold that outlasts the entry never ends in a probe: once the entry has expired the recipe is held under
