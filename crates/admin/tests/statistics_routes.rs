@@ -166,8 +166,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(26), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that counts an incomplete answer and keeps the upstream message id"
+        (Some(27), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that indexes the bodies' expiry and adds the parked records"
     );
     assert_eq!(system["router"]["command_depth"].as_u64(), Some(4_096));
     let dropped = system["router"]["dropped_reports"].as_object().unwrap();

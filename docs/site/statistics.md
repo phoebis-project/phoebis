@@ -21,6 +21,7 @@ A `ledger_gap` event names one of these reasons:
 | `capture_budget` | Past the 64 MiB capture budget; the largest capture, oldest among equals, gave up its bodies. |
 | `chunk_dropped` | The completion counted more published chunks than arrived; the tail was dropped at the bus. |
 | `chunk_skipped` | An interior chunk of a capture was dropped at the bus; the capture is truncated from there on. |
+| `expired` | The completion never reached the ledger within the in-flight window; the live table shows it lost. |
 | `in_flight_cap` | The 16,384 requests in flight was reached; the oldest entry was evicted to make room. |
 
 The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the call; the
@@ -174,8 +175,9 @@ included, whether or not the router dropped it on the way upstream.
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
 
-The purge that enforces these runs once an hour. Every five-minute poll's reading is kept for
-`stats.retention_days`, so an idle account adds 288 quota rows per window per day.
+The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction, so
+the writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute
+poll's reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per day.
 
 ## Metrics
 

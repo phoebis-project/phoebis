@@ -1080,6 +1080,57 @@ async fn a_short_capture_reads_back_truncated_through_the_database() {
     up.shutdown().await;
 }
 
+#[tokio::test]
+async fn a_request_whose_completion_never_arrives_lands_an_expired_gap_naming_it_and_counts_a_drop()
+{
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        LedgerConfig {
+            expire_interval: Duration::from_millis(5),
+            ..LedgerConfig::default()
+        },
+    )
+    .await;
+    h.bus.publish(observed_event("silent"));
+    // The assembler takes events in publish order, so once this later request has landed the silent one was
+    // observed under the clock as it stands, and the step below ages it rather than stamping its arrival.
+    h.bus.publish(observed_event("landed"));
+    h.bus.publish(complete_event("landed"));
+    ledgered(&h, "landed").await;
+    h.clock
+        .fetch_add(phoebis_ledger::IN_FLIGHT_TTL_MS, Ordering::SeqCst);
+    let gap = wait_for_async(Duration::from_secs(5), || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| {
+                e.kind == "ledger_gap" && e.detail.as_deref().is_some_and(|d| d.contains("silent"))
+            })
+    })
+    .await;
+    let detail: serde_json::Value = serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        detail,
+        serde_json::json!({ "request_id": "silent", "reason": "expired" })
+    );
+    assert_eq!(
+        h.ledger.dropped(),
+        1,
+        "the expired request counts as a drop"
+    );
+    assert!(
+        h.metrics
+            .render(&phoebis_ledger::RoutingGauges::default(), &[], 0)
+            .contains(r#"phoebis_ledger_dropped_total{table="requests"} 1"#),
+        "charged to the requests table"
+    );
+    up.shutdown().await;
+}
+
 fn auto_mode_observed(id: &str, auto_mode: Option<AutoMode>) -> BusEvent {
     let BusEvent::RequestObserved(mut observed) = observed_event(id) else {
         unreachable!()
@@ -1723,11 +1774,11 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     let path = dir.path().join("ledger.sqlite");
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
-        // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table and
-        // the columns migrations 21, 25 and 26 add, each dropped back out so the replay below has to add them
-        // again; `rollups_hourly` keeps the shape the class dimension joins, since a primary-key column cannot
-        // be dropped in place and the rebuild names its own columns regardless of what the source table still
-        // carries.
+        // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table, the
+        // columns migrations 21, 25 and 26 add and migration 27's table and index, each dropped back out so the
+        // replay below has to add them again; `rollups_hourly` keeps the shape the class dimension joins, since a
+        // primary-key column cannot be dropped in place and the rebuild names its own columns regardless of what
+        // the source table still carries.
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN request_class; \
@@ -1742,7 +1793,8 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE quota_samples DROP COLUMN observed_at; \
                  ALTER TABLE requests DROP COLUMN auto_mode; \
                  ALTER TABLE requests DROP COLUMN held; \
-                 ALTER TABLE attempts DROP COLUMN upstream_message_id;",
+                 ALTER TABLE attempts DROP COLUMN upstream_message_id; \
+                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires;",
             )?;
             Ok(())
         })
@@ -1767,7 +1819,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 26);
+    assert_eq!(db.schema_version().await.unwrap(), 27);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -1858,6 +1910,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
                  ALTER TABLE requests DROP COLUMN auto_mode; \
                  ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
+                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
                  UPDATE meta SET value = '18' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -1865,7 +1918,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 26);
+    assert_eq!(db.schema_version().await.unwrap(), 27);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -1911,6 +1964,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
                 "ALTER TABLE requests DROP COLUMN auto_mode; ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  {RECREATE_DROPPED_TABLE}\n\
+                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
                  UPDATE meta SET value = '20' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -1918,7 +1972,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 26);
+    assert_eq!(db.schema_version().await.unwrap(), 27);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1989,6 +2043,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
                  ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
                  ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; {RECREATE_DROPPED_TABLE}\n\
+                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
                  UPDATE meta SET value = '21' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -1996,7 +2051,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 26);
+    assert_eq!(db.schema_version().await.unwrap(), 27);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -2061,6 +2116,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
                  ALTER TABLE rollups_hourly_prev RENAME TO rollups_hourly; \
                  ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
+                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
                  UPDATE meta SET value = '23' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -2068,7 +2124,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 26);
+    assert_eq!(db.schema_version().await.unwrap(), 27);
     let mut rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap()
@@ -2125,6 +2181,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
                 "ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
+                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
                  UPDATE meta SET value = '24' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -2132,7 +2189,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 26);
+    assert_eq!(db.schema_version().await.unwrap(), 27);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -2177,6 +2234,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
             c.execute_batch(
                 "ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
+                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
                  UPDATE meta SET value = '25' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -2184,7 +2242,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 26);
+    assert_eq!(db.schema_version().await.unwrap(), 27);
     let rows = db
         .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
         .unwrap();
@@ -3043,8 +3101,10 @@ async fn the_period_boundary_tick_refreshes_the_spend_without_traffic() {
         &up,
         &[oauth("a", A, 0)],
         (0, None),
+        // The writer re-arms its boundary tick from the clock on every wake, and a stepped clock reaches it only
+        // through one; the revision poll at this cadence is the wake the test can count on.
         LedgerConfig {
-            purge_interval: Duration::from_millis(20),
+            event_poll: Duration::from_millis(20),
             ..LedgerConfig::default()
         },
     )

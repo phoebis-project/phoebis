@@ -5,11 +5,11 @@ use std::collections::{BTreeMap, HashMap};
 use phoebis_ledger::{
     apply_filter, breakdown, bucket_index, burn_rows, burn_series, burn_series_over, delta_of,
     fold_account, fold_event, fold_keepalive, key_request_totals, list_requests, member_spends,
-    moves_by_reason, placements, read_account_rollups, read_rollups, rewrite_series, run_retention,
-    session_identities, AttemptRecord, BudgetedMember, EventRecord, Histogram, KeepaliveDelta,
-    LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable, RequestFilter,
-    RequestRecord, RollupFilter, RollupRow, SeriesFilter, Tiers, FAST_FUNDING, NO_CLASS,
-    PLAN_FUNDING, UNATTRIBUTED,
+    moves_by_reason, placements, read_account_rollups, read_rollups, rewrite_series,
+    run_retention_blocking, session_identities, AttemptRecord, BudgetedMember, EventRecord,
+    Histogram, KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables,
+    PriceTable, RequestFilter, RequestRecord, RollupFilter, RollupRow, SeriesFilter, Tiers,
+    FAST_FUNDING, NO_CLASS, PLAN_FUNDING, UNATTRIBUTED,
 };
 use phoebis_routing::{PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR};
 use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
@@ -2309,7 +2309,7 @@ fn a_purge_of_the_periods_raw_requests_leaves_the_members_spend_in_force() {
 
     // A retention window shorter than the month purges the raw request and its attempt; the rollup that
     // folded them keeps its default 400-day life, so the query still answers the same spend.
-    let purged = run_retention(
+    let purged = run_retention_blocking(
         &db,
         &LedgerConfig {
             retention_days: 5,
@@ -2382,7 +2382,7 @@ fn the_rollup_retention_keeps_the_rows_of_a_budgeted_members_active_period() {
         budgeted("p", "a", BudgetPeriod::Month),
         budgeted("p", "c", BudgetPeriod::Day),
     ];
-    run_retention(
+    run_retention_blocking(
         &db,
         &LedgerConfig {
             retention_days: 5,

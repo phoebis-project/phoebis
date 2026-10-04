@@ -1,10 +1,16 @@
-//! The ledger's SQLite file: one writer connection the ledger task owns through `write`, one read-only
-//! connection the admin routes share through `read`, WAL so the two never wait on each other.
+//! The ledger's SQLite file: one writer connection the ledger task owns through `write`, one connection the
+//! retention purge owns through `purge`, and one read-only connection the admin routes share through `read`. WAL
+//! lets a read run beside either writer; the two writers take SQLite's one write lock in turn, each waiting for
+//! the other's transaction under the busy timeout.
 
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
-use rusqlite::{params, Connection, OpenFlags, OptionalExtension, Transaction};
+use rusqlite::{
+    params, Connection, OpenFlags, OptionalExtension, Transaction, TransactionBehavior,
+};
 
 use crate::query::request_by_id;
 use crate::record::{
@@ -13,12 +19,37 @@ use crate::record::{
 };
 use crate::{schema, LedgerError};
 
-const LOCK_POISONED: &str = "ledger connection mutex poisoned by a prior panic";
+/// How long a writing connection waits for the write lock while the other holds it. A slice or a batch holds it
+/// for milliseconds, so the margin is for a slow disk; the registry waits as long.
+const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 pub struct LedgerDb {
     writer: Mutex<Connection>,
-    /// `None` for an in-memory ledger, whose one connection serves both roles.
+    /// `None` for an in-memory ledger, whose one connection serves every role.
     reader: Option<Mutex<Connection>>,
+    /// The retention purge's own connection, so a slice never holds the writer's lock or turn; `None` in memory.
+    purger: Option<Mutex<Connection>>,
+    /// The writes begun and ended through `write`, which `purge` reads to let a waiting write go first.
+    writes: Writes,
+}
+
+/// SQLite's busy handler retries a waiting write on a backoff that grows to 100 ms, while back-to-back slices free
+/// the lock for microseconds between them: a write left to the handler alone waits out most of a pass, and past the
+/// busy timeout its batch is lost. So a slice starts only once every write begun before it has ended, and a batch
+/// waits one slice at most.
+#[derive(Default)]
+struct Writes {
+    begun: AtomicU64,
+    ended: AtomicU64,
+}
+
+/// Counts its write as ended when dropped, so a closure that panicked still lets the purge go on.
+struct Ended<'a>(&'a AtomicU64);
+
+impl Drop for Ended<'_> {
+    fn drop(&mut self) {
+        self.0.fetch_add(1, Ordering::SeqCst);
+    }
 }
 
 impl LedgerDb {
@@ -42,27 +73,36 @@ impl LedgerDb {
                 .open(path)?;
         }
         let mut writer = Connection::open(path)?;
+        writer.busy_timeout(BUSY_TIMEOUT)?;
         writer.pragma_update(None, "journal_mode", "WAL")?;
         // A power loss may lose the last transactions before a checkpoint, which the spec accepts for a
         // best-effort ledger; `FULL` would fsync on every request.
         writer.pragma_update(None, "synchronous", "NORMAL")?;
-        prepare(&mut writer)?;
+        prepare(&mut writer, path)?;
         let reader = Connection::open_with_flags(
             path,
             OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
         )?;
+        // The journal mode is the file's, which the writer set; `synchronous` is the connection's own.
+        let purger = Connection::open(path)?;
+        purger.busy_timeout(BUSY_TIMEOUT)?;
+        purger.pragma_update(None, "synchronous", "NORMAL")?;
         Ok(LedgerDb {
             writer: Mutex::new(writer),
             reader: Some(Mutex::new(reader)),
+            purger: Some(Mutex::new(purger)),
+            writes: Writes::default(),
         })
     }
 
     pub fn open_in_memory() -> Result<LedgerDb, LedgerError> {
         let mut writer = Connection::open_in_memory()?;
-        prepare(&mut writer)?;
+        prepare(&mut writer, Path::new(":memory:"))?;
         Ok(LedgerDb {
             writer: Mutex::new(writer),
             reader: None,
+            purger: None,
+            writes: Writes::default(),
         })
     }
 
@@ -74,7 +114,28 @@ impl LedgerDb {
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, LedgerError>,
     ) -> Result<T, LedgerError> {
-        let mut conn = self.writer.lock().expect(LOCK_POISONED);
+        self.writes.begun.fetch_add(1, Ordering::SeqCst);
+        let _ended = Ended(&self.writes.ended);
+        // A panic inside a closure rolls its transaction back when the guard drops, so the connection is
+        // consistent and the next batch lands; refusing every later write for one bug would stall the ledger for
+        // good.
+        let mut conn = self.writer.lock().unwrap_or_else(PoisonError::into_inner);
+        f(&mut conn)
+    }
+
+    /// Runs `f` under the purger connection (the writer's in memory). A poisoned guard is recovered as
+    /// `read_blocking` recovers its own: a rolled-back transaction leaves the connection consistent.
+    pub fn purge<T>(
+        &self,
+        f: impl FnOnce(&mut Connection) -> Result<T, LedgerError>,
+    ) -> Result<T, LedgerError> {
+        // A write that met the previous slice's lock goes first; see `Writes`.
+        let begun = self.writes.begun.load(Ordering::SeqCst);
+        while self.writes.ended.load(Ordering::SeqCst) < begun {
+            std::thread::sleep(Duration::from_millis(1));
+        }
+        let purger = self.purger.as_ref().unwrap_or(&self.writer);
+        let mut conn = purger.lock().unwrap_or_else(PoisonError::into_inner);
         f(&mut conn)
     }
 
@@ -112,7 +173,7 @@ impl LedgerDb {
         bodies: Option<&BodyRecord>,
     ) -> Result<(), LedgerError> {
         self.write(|conn| {
-            let tx = conn.transaction()?;
+            let tx = begin_write(conn)?;
             let previous = insert_request_in(&tx, request, attempts, bodies)?;
             crate::rollup::fold_request(
                 &tx,
@@ -234,6 +295,13 @@ impl LedgerDb {
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
+}
+
+/// A transaction that takes SQLite's write lock at `BEGIN`, where the busy timeout applies. A deferred one that
+/// reads before it writes is refused at once with `SQLITE_BUSY` while the other writing connection holds the lock,
+/// or once that one committed past its snapshot, and its batch would be lost rather than wait.
+pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
+    conn.transaction_with_behavior(TransactionBehavior::Immediate)
 }
 
 pub(crate) fn insert_samples_in(
@@ -488,10 +556,19 @@ pub(crate) fn row_to_attempt(r: &rusqlite::Row<'_>) -> rusqlite::Result<AttemptR
     })
 }
 
-/// The store's rule: the v1 schema, then every migration above the stored version, each in its own transaction.
-fn prepare(conn: &mut Connection) -> Result<(), LedgerError> {
-    conn.execute_batch(schema::SCHEMA)?;
+/// The store's rule: a file a newer build wrote is refused before the schema or a migration runs over it; then the
+/// v1 schema, then every migration above the stored version, each in its own transaction.
+fn prepare(conn: &mut Connection, path: &Path) -> Result<(), LedgerError> {
     let current = read_version(conn)?;
+    let supported = latest_version();
+    if current > supported {
+        return Err(LedgerError::SchemaTooNew {
+            path: path.to_path_buf(),
+            found: current,
+            supported,
+        });
+    }
+    conn.execute_batch(schema::SCHEMA)?;
     if current == 0 {
         conn.execute(
             "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
@@ -510,7 +587,24 @@ fn prepare(conn: &mut Connection) -> Result<(), LedgerError> {
     Ok(())
 }
 
+fn latest_version() -> u32 {
+    schema::MIGRATIONS.last().map_or(1, |(version, _)| *version)
+}
+
+/// A file that has never run `prepare` has no `meta` table yet, which reads as version 0, so the refusal of a
+/// newer file runs before `schema::SCHEMA` creates the table.
 pub(crate) fn read_version(conn: &Connection) -> Result<u32, LedgerError> {
+    let has_meta = conn
+        .query_row(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'meta'",
+            [],
+            |_| Ok(()),
+        )
+        .optional()?
+        .is_some();
+    if !has_meta {
+        return Ok(0);
+    }
     let stored: Option<String> = conn
         .query_row(
             "SELECT value FROM meta WHERE key = 'schema_version'",
@@ -624,7 +718,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 26);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 27);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -710,7 +804,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 26, "and answered what the connection holds");
+        assert_eq!(version, 27, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -725,8 +819,141 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            26,
+            27,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_panic_inside_a_write_closure_leaves_the_writer_usable() {
+        let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+        let poisoned = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            db.write(|_| -> Result<(), LedgerError> { panic!("a bug inside the closure") })
+        }));
+        assert!(poisoned.is_err());
+        db.write(|c| {
+            c.execute("INSERT INTO meta (key, value) VALUES ('probe', '1')", [])?;
+            Ok(())
+        })
+        .expect("the next write lands");
+    }
+
+    /// The plan lines SQLite reads for `sql` with `args` bound.
+    fn plan(conn: &Connection, sql: &str, args: impl rusqlite::Params) -> Vec<String> {
+        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
+        stmt.query_map(args, |r| r.get::<_, String>(3))
+            .unwrap()
+            .collect::<rusqlite::Result<Vec<_>>>()
+            .unwrap()
+    }
+
+    #[test]
+    fn the_bodies_slice_seeks_the_expiry_index_rather_than_scanning_the_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+        let lines = db
+            .read_blocking(|c| {
+                Ok(plan(
+                    c,
+                    "SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2",
+                    params![0, 1_000],
+                ))
+            })
+            .unwrap();
+        assert!(
+            lines.iter().any(|l| l.starts_with("SEARCH bodies USING")
+                && l.contains("INDEX bodies_expires")),
+            "the slice seeks the expiry index: {lines:?}"
+        );
+        assert!(
+            !lines
+                .iter()
+                .any(|l| l.contains("SCAN") || l.contains("TEMP B-TREE")),
+            "and neither walks nor sorts the table: {lines:?}"
+        );
+    }
+
+    #[test]
+    fn an_older_build_refuses_a_ledger_a_newer_build_wrote_and_leaves_it_untouched() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        LedgerDb::open(&path)
+            .unwrap()
+            .write(|c| {
+                c.execute(
+                    "UPDATE meta SET value = '99' WHERE key = 'schema_version'",
+                    [],
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        let refused = LedgerDb::open(&path)
+            .err()
+            .expect("the newer file is refused");
+        assert!(
+            matches!(
+                refused,
+                LedgerError::SchemaTooNew {
+                    found: 99,
+                    supported: 27,
+                    ..
+                }
+            ),
+            "{refused}"
+        );
+        let message = refused.to_string();
+        assert!(
+            message.contains(&path.display().to_string()) && message.contains("99"),
+            "the refusal names the file and the version it found: {message}"
+        );
+        let stored: String = Connection::open(&path)
+            .unwrap()
+            .query_row(
+                "SELECT value FROM meta WHERE key = 'schema_version'",
+                [],
+                |r| r.get(0),
+            )
+            .unwrap();
+        assert_eq!(stored, "99", "no migration ran over the newer file");
+    }
+
+    #[tokio::test]
+    async fn a_batch_waits_for_a_purge_slice_holding_the_write_lock_and_lands() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = Arc::new(LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap());
+        let (held_tx, held_rx) = std::sync::mpsc::channel();
+        let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+        let slice = std::thread::spawn({
+            let db = db.clone();
+            move || {
+                db.purge(|conn| {
+                    let tx = begin_write(conn)?;
+                    tx.execute("DELETE FROM bodies WHERE expires_at <= 0", [])?;
+                    held_tx.send(()).unwrap();
+                    release_rx.recv().unwrap();
+                    tx.commit()?;
+                    Ok(())
+                })
+            }
+        });
+        held_rx.recv().unwrap();
+        let batch = std::thread::spawn({
+            let db = db.clone();
+            move || db.insert_request(&request("r1"), &[attempt("r1", 1, "a", "succeeded")], None)
+        });
+        fake_upstream::stays_for(std::time::Duration::from_millis(200), || {
+            !batch.is_finished()
+        })
+        .await;
+        release_tx.send(()).unwrap();
+        slice.join().unwrap().unwrap();
+        batch
+            .join()
+            .unwrap()
+            .expect("the batch waited for the slice's commit rather than failing at once");
+        assert!(
+            db.request("r1").await.unwrap().is_some(),
+            "and its row is there"
         );
     }
 }

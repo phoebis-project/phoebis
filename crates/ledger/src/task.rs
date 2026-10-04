@@ -13,7 +13,7 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
 use crate::bodies::run_retention;
-use crate::db::{insert_event_in, insert_request_in, insert_samples_in};
+use crate::db::{begin_write, insert_event_in, insert_request_in, insert_samples_in};
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
@@ -197,6 +197,22 @@ pub fn spawn(
             assembler_stop,
         )
     });
+    // The purge has its own task and connection so a pass never takes the writer's lock or turn: the cut runs
+    // in slices, so a write waits behind one slice at most and never on a whole day's deletion.
+    let purging = ledger.clone();
+    let purge_router = router.clone();
+    let purge_clock = clock.clone();
+    let purge_config = config.clone();
+    let purge = tokio::spawn(async move {
+        let mut tick = tokio::time::interval(purge_config.purge_interval);
+        tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        tick.tick().await;
+        loop {
+            tick.tick().await;
+            run_purge(purging.db(), &purge_config, &purge_router, purge_clock()).await;
+        }
+    });
+    ledger.track(purge);
     tokio::spawn(writer(
         db.clone(),
         pricing,
@@ -250,7 +266,14 @@ async fn assemble(
                 None => break,
             },
             _ = expire.tick() => {
-                assembler.expire(clock());
+                let now = clock();
+                for id in assembler.expire(now).ids {
+                    // The live table ends the same request as `lost`; the ledger names it so the system page's
+                    // gap list has a row for it rather than a count with nothing behind it.
+                    ledger.stats.dropped.fetch_add(1, Ordering::Relaxed);
+                    ledger.metrics.observe_drop("requests");
+                    ledger.record(crate::assemble::gap(&id, "expired", now));
+                }
             }
             _ = stop_requested(&mut stopped) => {
                 while let Ok(event) = subscriber.events.try_recv() {
@@ -291,12 +314,9 @@ async fn writer(
     // The assembler's handle once the stop was seen: the writer keeps reading while it waits for the
     // assembler to end, since the assembler may be waiting on this very channel for room.
     let mut ending: Option<tokio::task::JoinHandle<()>> = None;
-    let mut purge = tokio::time::interval(config.purge_interval);
-    purge.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    purge.tick().await;
     // A registry change wakes the writer through the mirror's own `registry_changed` record; when that record
     // lands ahead of `router.reload()` publishing the new revision, the top-of-loop check sees the old one and
-    // nothing else wakes the loop again until the next record, the hourly purge, or a boundary tick days out.
+    // nothing else wakes the loop again until the next record or a boundary tick days out.
     // This arm re-checks the revision at the mirror's own cadence regardless, at the cost of one extra
     // `router.snapshot()` per poll.
     let mut revision_poll = tokio::time::interval(config.event_poll);
@@ -335,10 +355,6 @@ async fn writer(
             // it, and the arm above lands what is left.
             _ = ended(&mut ending) => {
                 rx.close();
-                continue;
-            }
-            _ = purge.tick() => {
-                run_purge(&db, &config, &router, clock()).await;
                 continue;
             }
             // Nothing but the top-of-loop check runs here; see the arm's own comment above.
@@ -509,7 +525,7 @@ async fn land(
     let written = tokio::task::spawn_blocking(move || {
         let mut observations = Vec::new();
         let result = db.write(|conn| {
-            let tx = conn.transaction()?;
+            let tx = begin_write(conn)?;
             for record in &batch {
                 match record {
                     Record::Event(event) => {
@@ -596,12 +612,10 @@ async fn land(
 }
 
 async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, router: &RouterHandle, now: i64) {
-    let (db, config) = (db.clone(), config.clone());
     let budgeted = budgeted_members(&router.snapshot());
-    match tokio::task::spawn_blocking(move || run_retention(&db, &config, now, &budgeted)).await {
-        Ok(Ok(purged)) => tracing::debug!(?purged, "ledger retention ran"),
-        Ok(Err(error)) => tracing::warn!(%error, "ledger retention failed"),
-        Err(error) => tracing::error!(%error, "ledger retention panicked"),
+    match run_retention(db.clone(), config.clone(), now, budgeted).await {
+        Ok(purged) => tracing::debug!(?purged, "ledger retention ran"),
+        Err(error) => tracing::warn!(%error, "ledger retention failed"),
     }
 }
 

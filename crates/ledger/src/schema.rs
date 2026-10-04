@@ -1,6 +1,6 @@
 //! The ledger schema: `requests`, `attempts`, `bodies`, `quota_samples`, `extra_usage_samples`,
-//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `cooldown_segments`, `kept_warm_marks`, and
-//! `events`, plus `meta` for the schema marker.
+//! `rollups_hourly`, `account_rollups_hourly`, `cooldown_spans`, `cooldown_segments`, `kept_warm_marks`, `events`,
+//! and `parked_records`, plus `meta` for the schema marker.
 
 pub const SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
@@ -283,6 +283,11 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// Version 26: a committed answer whose body ended before its end counts in its own rollup column, so a cut is
 /// neither a success nor a failure in the charts; and the attempt row carries the `id` of the message the answer
 /// named, the join to a client transcript. A row from before reads 0 and NULL.
+///
+/// Version 27: the retention purge cuts captured bodies in slices of the oldest expiries, which without an index
+/// on `expires_at` read the whole table for every slice; and a priced record the writer could not land keeps its
+/// raw facts, the error that refused it, its pool and account and when it was parked and last tried, so the next
+/// start can try it again rather than lose the money it carries.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -813,5 +818,19 @@ CREATE INDEX IF NOT EXISTS rollups_hourly_member ON rollups_hourly (pool_id, acc
         26,
         "ALTER TABLE rollups_hourly ADD COLUMN incomplete INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE attempts ADD COLUMN upstream_message_id TEXT;",
+    ),
+    (
+        27,
+        "CREATE INDEX IF NOT EXISTS bodies_expires ON bodies (expires_at);
+CREATE TABLE parked_records (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  parked_at INTEGER NOT NULL,
+  last_tried_at INTEGER NOT NULL,
+  request_id TEXT NOT NULL,
+  pool_id TEXT,
+  account_id TEXT,
+  record TEXT NOT NULL,
+  error TEXT NOT NULL
+);",
     ),
 ];

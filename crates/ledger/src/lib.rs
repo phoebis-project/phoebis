@@ -20,7 +20,7 @@ mod task;
 mod usage;
 
 pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
-pub use bodies::{run_retention, Purged, MAX_CAPTURED_BODY};
+pub use bodies::{run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE};
 pub use db::LedgerDb;
 pub use events::{event_of, spawn_event_mirror};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
@@ -79,4 +79,11 @@ pub enum LedgerError {
     Plan(String),
     #[error("pricing table: {0}")]
     Yaml(String),
+    /// A file a newer build wrote: opening it would run no migration and read columns this build does not know.
+    #[error("the ledger at {} is at schema {found}, newer than the {supported} this build reads", path.display())]
+    SchemaTooNew {
+        path: std::path::PathBuf,
+        found: u32,
+        supported: u32,
+    },
 }
