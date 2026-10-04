@@ -653,6 +653,10 @@ impl Drop for AccountTicket {
 type ShedRound = (i64, HashSet<PinKey>);
 
 pub struct RoutingState {
+    /// The ledger's standing from its last `Report::Accounting`: while it is degraded a budgeted member's spend rows
+    /// may lack a batch the writer still holds. Memory only, so a restart starts clear until the ledger's first
+    /// refresh reports again.
+    accounting_degraded: bool,
     /// Shared with the handle the way `in_flight` is, so a lookup never waits on a command round trip.
     affinity: Arc<RwLock<AffinityMap>>,
     /// The router's own requests since each account's readings, what `predicted` adds to them. Memory only: a
@@ -706,6 +710,7 @@ impl RoutingState {
             );
         }
         RoutingState {
+            accounting_degraded: false,
             affinity: Arc::new(RwLock::new(affinity_map)),
             charges: HashMap::new(),
             cooldowns: load
@@ -1289,6 +1294,15 @@ impl RoutingState {
     /// Set by the task at spawn from its config, and by a test that prices a round through its own tables.
     pub fn set_rates(&mut self, rates: BurnRates) {
         self.rates = rates;
+    }
+
+    /// Set by the task from the ledger's `Report::Accounting`, and by a test that selects under a degraded ledger.
+    pub fn set_accounting_degraded(&mut self, degraded: bool) {
+        self.accounting_degraded = degraded;
+    }
+
+    pub(crate) fn accounting_degraded(&self) -> bool {
+        self.accounting_degraded
     }
 
     /// The shared affinity map: the same one the handle's `ConversationLookup` reads without a command round

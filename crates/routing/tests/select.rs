@@ -3303,6 +3303,136 @@ fn a_probe_on_a_pin_whose_member_is_at_its_budget_answers_the_periods_end_and_mo
     );
 }
 
+/// Members `a` (priority 0, a monthly budget) and `b` (priority 1, none), and a state whose session `s1` is pinned to
+/// `a` by a first selection while the ledger was current.
+fn pinned_to_a_budgeted_member() -> (RegistrySnapshot, RoutingState) {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        }),
+        "a",
+        None,
+        Some(5.0),
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    assert_eq!(
+        picked(
+            &select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+                &mut rng(),
+            )
+            .0
+        ),
+        "a",
+        "a serves while the ledger is current"
+    );
+    (s, st)
+}
+
+#[test]
+fn a_degraded_ledger_moves_a_budgeted_members_session_to_its_unbudgeted_sibling() {
+    let (s, mut st) = pinned_to_a_budgeted_member();
+    let pin = st
+        .pin(&pin_key("s1"))
+        .cloned()
+        .expect("the first select pinned a");
+    st.set_accounting_degraded(true);
+    let degraded = request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000);
+    assert_eq!(
+        release_reasons(&st, &s, &pin, &degraded),
+        ["budget_unknown"],
+        "the member's spend may be stale, so the pin releases under that reason alone"
+    );
+    let result = select(&mut st, &s, &degraded, &mut rng()).0;
+    assert_eq!(
+        picked(&result),
+        "b",
+        "the session moves to the sibling without a budget"
+    );
+    assert_eq!(skipped_as(&result), [("a", "budget_unknown")]);
+}
+
+#[test]
+fn a_pool_of_budgeted_members_alone_answers_untimed_while_the_ledger_is_degraded() {
+    let s = with_member_budget(
+        &with_member_budget(
+            &snapshot(Pool {
+                members: vec![("a", 0), ("b", 1)],
+                ..Pool::default()
+            }),
+            "a",
+            None,
+            Some(5.0),
+        ),
+        "b",
+        Some(5.0),
+        None,
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_member_spend(
+        &s,
+        vec![
+            MemberSpend {
+                pool_id: "p".into(),
+                account_id: "a".into(),
+                period: BudgetPeriod::Month,
+                period_start: 0,
+                period_end: 10_000,
+                spent_usd: 0.0,
+                observed_at: 1_000,
+            },
+            MemberSpend {
+                pool_id: "p".into(),
+                account_id: "b".into(),
+                period: BudgetPeriod::Day,
+                period_start: 0,
+                period_end: 8_000,
+                spent_usd: 0.0,
+                observed_at: 1_000,
+            },
+        ],
+    );
+    st.set_accounting_degraded(true);
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+            &mut rng(),
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Untimed),
+        "whatever the spend rows say, no budgeted member is placed on and no deadline dates the answer"
+    );
+}
+
+#[test]
+fn a_probe_on_a_pin_whose_member_spend_is_unknown_answers_the_obstacle_and_moves_nothing() {
+    let (s, mut st) = pinned_to_a_budgeted_member();
+    st.set_accounting_degraded(true);
+    let probe = SelectRequest {
+        probe: true,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], 2_000)
+    };
+    let (result, writes) = select(&mut st, &s, &probe, &mut rng());
+    assert_eq!(
+        result,
+        SelectResult::Exhausted(Exhaustion::Pinned {
+            obstacle: "budget_unknown",
+        }),
+        "the probe answers the untimed obstacle rather than a budget's deadline or a sibling"
+    );
+    assert_eq!(
+        st.pin(&pin_key("s1")).map(|p| p.account_id.as_str()),
+        Some("a"),
+        "the pin still names a after the probe"
+    );
+    assert!(writes.is_empty(), "the probe moves no pin: {writes:?}");
+}
+
 /// A pin on `a` written by a request under `before`, then a probe of that session under `at_probe` at a later
 /// instant, `attempted` naming the accounts the probe already tried: the probe's answer, its writes, and the
 /// account the session's pin names afterwards.

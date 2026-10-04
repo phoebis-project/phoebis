@@ -263,6 +263,29 @@ fn the_ledger_writers_backlog_and_its_admission_refusals_render_as_their_own_fam
     }
 }
 
+#[test]
+fn the_ledgers_degraded_state_and_its_parked_priced_records_render_as_their_own_families() {
+    let gauges = RoutingGauges {
+        ledger_degraded: true,
+        ledger_parked_priced: 2,
+        ..RoutingGauges::default()
+    };
+    let text = Metrics::new().render(&gauges, &[], 0);
+    for line in [
+        "# TYPE phoebis_ledger_degraded gauge",
+        "# TYPE phoebis_ledger_parked_priced_total counter",
+        "phoebis_ledger_degraded 1",
+        "phoebis_ledger_parked_priced_total 2",
+    ] {
+        assert!(text.contains(line), "missing {line} in:\n{text}");
+    }
+    let clear = Metrics::new().render(&RoutingGauges::default(), &[], 0);
+    assert!(
+        clear.contains("phoebis_ledger_degraded 0\n"),
+        "a ledger that writes every batch reads 0: {clear}"
+    );
+}
+
 #[tokio::test]
 async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
     use phoebis_store::{StorageKey, Store};

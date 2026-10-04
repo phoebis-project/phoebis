@@ -220,6 +220,18 @@ impl Metrics {
                         gauges.ledger_behind_refusals
                     ));
                 }
+                "phoebis_ledger_degraded" => {
+                    out.push_str(&format!(
+                        "phoebis_ledger_degraded {}\n",
+                        u8::from(gauges.ledger_degraded)
+                    ));
+                }
+                "phoebis_ledger_parked_priced_total" => {
+                    out.push_str(&format!(
+                        "phoebis_ledger_parked_priced_total {}\n",
+                        gauges.ledger_parked_priced
+                    ));
+                }
                 "phoebis_ledger_queued" => {
                     out.push_str(&format!("phoebis_ledger_queued {}\n", gauges.ledger_queued));
                 }
@@ -405,7 +417,9 @@ pub const FAMILIES: &[(&str, &str)] = &[
     ("phoebis_keepalive_probes_total", "counter"),
     ("phoebis_keepalive_saved_usd_total", "counter"),
     ("phoebis_ledger_behind_refusals_total", "counter"),
+    ("phoebis_ledger_degraded", "gauge"),
     ("phoebis_ledger_dropped_total", "counter"),
+    ("phoebis_ledger_parked_priced_total", "counter"),
     ("phoebis_ledger_queued", "gauge"),
     ("phoebis_pins_active", "gauge"),
     ("phoebis_pricing_unknown_model_total", "counter"),
@@ -452,6 +466,11 @@ pub struct RoutingGauges {
     pub ledger_queued: u64,
     /// Requests answered `ledger_behind` at admission, from `LedgerStats::behind_refusals`.
     pub ledger_behind_refusals: u64,
+    /// The ledger's degraded state at scrape, from `Ledger::degraded`: from a failed batch until a batch lands and
+    /// the spend is read again.
+    pub ledger_degraded: bool,
+    /// Priced records parked since start, from `Ledger::parked_priced`.
+    pub ledger_parked_priced: u64,
 }
 
 pub async fn gather(
@@ -474,6 +493,8 @@ pub async fn gather(
                 .behind_refusals
                 .load(std::sync::atomic::Ordering::Relaxed)
         }),
+        ledger_degraded: ledger.is_some_and(Ledger::degraded),
+        ledger_parked_priced: ledger.map_or(0, Ledger::parked_priced),
         ..RoutingGauges::default()
     };
     if let Ok(cooldowns) = router.cooldowns().await {

@@ -219,6 +219,11 @@ pub enum Report {
         lifecycle_generation: u64,
         credential_generation: u64,
     },
+    /// The ledger's standing: `degraded` from a failed batch until one lands and the spend is read again. A replacing
+    /// reading.
+    Accounting {
+        degraded: bool,
+    },
     Affinity(AffinityReport),
     Cooldown {
         account_id: String,
@@ -290,6 +295,7 @@ impl Report {
     /// Every kind, alphabetical, so a reader sees the whole set at zero.
     pub const KINDS: &'static [&'static str] = &[
         "account_state",
+        "accounting",
         "affinity",
         "cooldown",
         "credits",
@@ -307,6 +313,7 @@ impl Report {
         // No wildcard, so a new variant fails to compile until it is named here; `sent` expects the name in `KINDS`.
         match self {
             Report::AccountState { .. } => "account_state",
+            Report::Accounting { .. } => "accounting",
             Report::Affinity(_) => "affinity",
             Report::Cooldown { .. } => "cooldown",
             Report::Credits { .. } => "credits",
@@ -334,6 +341,9 @@ pub enum ReloadError {
 }
 
 enum Command {
+    AccountingDegraded {
+        reply: oneshot::Sender<bool>,
+    },
     Canonicals {
         models: Vec<String>,
         reply: oneshot::Sender<Vec<String>>,
@@ -633,6 +643,12 @@ impl RouterHandle {
     /// analytics route reads this rather than querying the ledger a second time.
     pub async fn member_spends(&self) -> Result<Vec<MemberSpend>, RouterGone> {
         self.ask(|reply| Command::MemberSpends { reply }).await
+    }
+    /// Whether the selector treats every budgeted member's spend as unknown, from the ledger's last
+    /// `Report::Accounting`.
+    pub async fn accounting_degraded(&self) -> Result<bool, RouterGone> {
+        self.ask(|reply| Command::AccountingDegraded { reply })
+            .await
     }
     /// One ask for the whole map: a scrape must not queue one command per account in front of selection.
     pub async fn overages(&self) -> Result<Vec<(String, OverageEvidence)>, RouterGone> {
@@ -1468,6 +1484,9 @@ impl Task {
             Command::Cooldowns { reply } => {
                 let _ = reply.send(self.state.cooldowns());
             }
+            Command::AccountingDegraded { reply } => {
+                let _ = reply.send(self.state.accounting_degraded());
+            }
             Command::MemberSpends { reply } => {
                 let snapshot = self
                     .snapshot
@@ -1585,6 +1604,7 @@ impl Task {
                     .clone();
                 self.state.record_member_spend(&snapshot, rows);
             }
+            Report::Accounting { degraded } => self.state.set_accounting_degraded(degraded),
             Report::Cooldown {
                 account_id,
                 mut row,

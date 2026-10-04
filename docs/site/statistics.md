@@ -23,6 +23,7 @@ A `ledger_gap` event names one of these reasons:
 | `chunk_skipped` | An interior chunk of a capture was dropped at the bus; the capture is truncated from there on. |
 | `expired` | The completion never reached the ledger within the in-flight window; the live table shows it lost. |
 | `in_flight_cap` | The 16,384 requests in flight was reached; the oldest entry was evicted to make room. |
+| `poison` | A record failed alone after its batch's retries; a priced one is parked (`parked_priced`). |
 
 The request row names the key, the pool, the session, the agent, and the model; the kind and transport of the call; the
 status and outcome (`canceled`, `exhausted`, `failed`, `incomplete` for a 200 answer whose body ended before its end,
@@ -166,6 +167,16 @@ captured body in the request drawer, with a control to copy it. A captured reque
 client sent it, so a session in auto mode shows its `safeguards` member whole, the machine's permission rules and paths
 included, whether or not the router dropped it on the way upstream.
 
+## The ledger writer
+
+A batch the ledger cannot write is retried in place after 1, 2, 4 and 8 seconds, then one record at a time; a record
+the file as a whole refuses (a full disk, an I/O error) is held and retried every 10 seconds until it lands; a record
+that fails on its own is dropped with a `ledger_gap` when it carries no money and parked in the ledger file when it
+does, and every parked record is tried again once at the next start. A parked record keeps its request and attempt rows
+and not its captured bodies, so the capture of a parked request is gone while its cost is kept. While a batch is under
+retry the ledger is degraded: the system page shows it, `phoebis_ledger_degraded` reads 1, and routing treats every
+budgeted member's spend as unknown until a batch lands and the spend is read again.
+
 ## Retention
 
 | Data | Kept for |
@@ -177,12 +188,14 @@ included, whether or not the router dropped it on the way upstream.
 
 The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction, so
 the writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute
-poll's reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per day.
+poll's reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per day. A parked
+record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while
+its cost is kept.
 
 ## Metrics
 
 `stats.metrics_listen` serves `/metrics` in Prometheus text format and nothing else; it speaks plain HTTP and
-asks for no credential, so it belongs behind a network only the scraper can reach. Nineteen families are
+asks for no credential, so it belongs behind a network only the scraper can reach. Twenty-one families are
 rendered:
 
 | Metric | Type | Labels |
@@ -198,7 +211,9 @@ rendered:
 | `phoebis_keepalive_probes_total` | counter | `account`, `outcome` |
 | `phoebis_keepalive_saved_usd_total` | counter | `pool` |
 | `phoebis_ledger_behind_refusals_total` | counter | none |
+| `phoebis_ledger_degraded` | gauge | none |
 | `phoebis_ledger_dropped_total` | counter | `table` |
+| `phoebis_ledger_parked_priced_total` | counter | none |
 | `phoebis_ledger_queued` | gauge | none |
 | `phoebis_pins_active` | gauge | `pool` |
 | `phoebis_pricing_unknown_model_total` | counter | none |
@@ -218,6 +233,9 @@ scrape rather than accumulated between them.
 `phoebis_ledger_queued` reads the records waiting in the ledger's writer channel at the scrape, and
 `phoebis_ledger_behind_refusals_total` counts the requests answered `ledger_behind` while it was at least half full
 ([run the container](installation.md#run-the-container)).
+`phoebis_ledger_degraded` reads 1 from a batch the ledger could not write until a batch lands and the spend is read
+again, and `phoebis_ledger_parked_priced_total` counts the priced records parked since start
+([the ledger writer](#the-ledger-writer)).
 
 ## The live feed
 

@@ -1,7 +1,7 @@
 //! Reads for the admin routes: the request log with its filters and cursor, the rollup series and breakdown
 //! with merged histograms, the dashboard's day, and the newest quota sample per window.
 
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 
 use phoebis_routing::{MemberSpend, PinUsage, FIVE_HOUR, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod};
@@ -1419,6 +1419,52 @@ pub fn member_spends(
         });
     }
     Ok(out)
+}
+
+/// One pool's (or the pool-less records') parked rows: the accounts named, the count and the oldest `parked_at`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ParkedSummary {
+    pub pool_id: Option<String>,
+    pub account_ids: Vec<String>,
+    pub count: u64,
+    pub oldest_at: i64,
+}
+
+/// Every pool's parked rows, the pool-less records first and the pools in id order, each pool's accounts in id order.
+/// Parked rows are rare, so the table is read whole rather than aggregated in SQL.
+pub fn parked_summary(conn: &Connection) -> Result<Vec<ParkedSummary>, LedgerError> {
+    let mut stmt = conn.prepare("SELECT pool_id, account_id, parked_at FROM parked_records")?;
+    let rows = stmt.query_map([], |r| {
+        Ok((
+            r.get::<_, Option<String>>(0)?,
+            r.get::<_, Option<String>>(1)?,
+            r.get::<_, i64>(2)?,
+        ))
+    })?;
+    let mut pools: BTreeMap<Option<String>, (BTreeSet<String>, u64, i64)> = BTreeMap::new();
+    for row in rows {
+        let (pool_id, account_id, parked_at) = row?;
+        let (accounts, count, oldest_at) = pools
+            .entry(pool_id)
+            .or_insert_with(|| (BTreeSet::new(), 0, parked_at));
+        accounts.extend(account_id);
+        *count += 1;
+        *oldest_at = (*oldest_at).min(parked_at);
+    }
+    Ok(pools
+        .into_iter()
+        .map(|(pool_id, (accounts, count, oldest_at))| ParkedSummary {
+            pool_id,
+            account_ids: accounts.into_iter().collect(),
+            count,
+            oldest_at,
+        })
+        .collect())
+}
+
+pub fn parked_count(conn: &Connection) -> Result<u64, LedgerError> {
+    let count: i64 = conn.query_row("SELECT COUNT(*) FROM parked_records", [], |r| r.get(0))?;
+    Ok(count as u64)
 }
 
 /// Placements by rung over `[since, until)`: `rung`, `placements`, `hits`, `cache_read_tokens`, `promised_tokens`.

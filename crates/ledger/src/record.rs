@@ -1,6 +1,6 @@
 //! One struct per ledger table, field order matching the table's column order.
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct RequestRecord {
     pub id: String,
     pub received_at: i64,
@@ -79,7 +79,7 @@ pub struct RequestRecord {
     pub held: Option<String>,
 }
 
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 pub struct AttemptRecord {
     pub request_id: String,
     pub attempt: u32,
@@ -145,6 +145,22 @@ impl AttemptRecord {
             || self.cache_write_5m_tokens.is_some()
             || self.cache_write_1h_tokens.is_some()
     }
+}
+
+/// What `parked_records.record` holds: a priced request the database refused on its own row, its request row and its
+/// attempts serialized whole. A parked record keeps its money and not its capture, so the captured bodies have no
+/// member to land in.
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct ParkedRecord {
+    pub request: RequestRecord,
+    pub attempts: Vec<AttemptRecord>,
+}
+
+/// `ParkedRecord`'s shape over rows the writer still holds, so a record is parked without a copy of it.
+#[derive(serde::Serialize)]
+pub(crate) struct ParkedRows<'a> {
+    pub request: &'a RequestRecord,
+    pub attempts: &'a [AttemptRecord],
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -4,6 +4,8 @@
 //! the other's transaction under the busy timeout.
 
 use std::path::Path;
+#[cfg(any(test, feature = "debug-hooks"))]
+use std::sync::atomic::AtomicBool;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
@@ -31,12 +33,22 @@ pub struct LedgerDb {
     purger: Option<Mutex<Connection>>,
     /// The writes begun and ended through `write`, which `purge` reads to let a waiting write go first.
     writes: Writes,
+    #[cfg(any(test, feature = "debug-hooks"))]
+    fail_next_read: AtomicBool,
+}
+
+/// One `parked_records` row as the start reads it: the row's id and the serialized `ParkedRecord`.
+pub(crate) struct ParkedRow {
+    pub id: i64,
+    pub record: String,
 }
 
 /// SQLite's busy handler retries a waiting write on a backoff that grows to 100 ms, while back-to-back slices free
 /// the lock for microseconds between them: a write left to the handler alone waits out most of a pass, and past the
-/// busy timeout its batch is lost. So a slice starts only once every write begun before it has ended, and a batch
-/// waits one slice at most.
+/// busy timeout its batch fails into the writer's retries. So a slice starts only once every write begun before it
+/// has ended, and a batch waits one slice at most. The handoff works in one direction: after its wait the purge's
+/// `BEGIN IMMEDIATE` competes with the next batch under SQLite's busy backoff, so a writer landing batches back to
+/// back can push a slice past the 5 s busy timeout, and the pass ends logged until the next hour.
 #[derive(Default)]
 struct Writes {
     begun: AtomicU64,
@@ -92,6 +104,8 @@ impl LedgerDb {
             reader: Some(Mutex::new(reader)),
             purger: Some(Mutex::new(purger)),
             writes: Writes::default(),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_read: AtomicBool::new(false),
         })
     }
 
@@ -103,6 +117,8 @@ impl LedgerDb {
             reader: None,
             purger: None,
             writes: Writes::default(),
+            #[cfg(any(test, feature = "debug-hooks"))]
+            fail_next_read: AtomicBool::new(false),
         })
     }
 
@@ -157,6 +173,12 @@ impl LedgerDb {
         &self,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError>,
     ) -> Result<T, LedgerError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        if self.fail_next_read.swap(false, Ordering::SeqCst) {
+            return Err(LedgerError::Io(std::io::Error::other(
+                "injected ledger read failure",
+            )));
+        }
         // A read never opens a transaction, so a closure that panics mid-row leaves the connection exactly as
         // consistent as it was before the call; recovering the guard here, rather than propagating the
         // poisoning, keeps one panicked read from turning every later read into a `ReadCancelled`.
@@ -182,6 +204,67 @@ impl LedgerDb {
                 previous.as_ref().map(|(r, a)| (r, a.as_slice())),
             )?;
             tx.commit()?;
+            Ok(())
+        })
+    }
+
+    /// The next `read` or `read_blocking` answers an injected failure, so the writer's failed spend refresh has a
+    /// test.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_fail_next_read(&self) {
+        self.fail_next_read.store(true, Ordering::SeqCst);
+    }
+
+    /// Parks one priced record the writer could not land, `parked_at` and `last_tried_at` both `at`.
+    pub(crate) fn insert_parked(
+        &self,
+        at: i64,
+        request_id: &str,
+        pool_id: Option<&str>,
+        account_id: Option<&str>,
+        record: &str,
+        error: &str,
+    ) -> Result<(), LedgerError> {
+        self.write(|conn| {
+            conn.execute(
+                "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) VALUES (?1, ?1, ?2, ?3, ?4, ?5, ?6)",
+                params![at, request_id, pool_id, account_id, record, error],
+            )?;
+            Ok(())
+        })
+    }
+
+    /// Every parked row in the order it was parked, on the writer's connection, which the start runs on.
+    pub(crate) fn parked_rows(&self) -> Result<Vec<ParkedRow>, LedgerError> {
+        self.write(|conn| {
+            let mut stmt = conn.prepare("SELECT id, record FROM parked_records ORDER BY id")?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok(ParkedRow {
+                        id: r.get(0)?,
+                        record: r.get(1)?,
+                    })
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+    }
+
+    pub(crate) fn delete_parked(&self, id: i64) -> Result<(), LedgerError> {
+        self.write(|conn| {
+            conn.execute("DELETE FROM parked_records WHERE id = ?1", params![id])?;
+            Ok(())
+        })
+    }
+
+    /// Records the failure a parked row met at this start's try.
+    pub(crate) fn update_parked(&self, id: i64, error: &str, at: i64) -> Result<(), LedgerError> {
+        self.write(|conn| {
+            conn.execute(
+                "UPDATE parked_records SET error = ?2, last_tried_at = ?3 WHERE id = ?1",
+                params![id, error, at],
+            )?;
             Ok(())
         })
     }

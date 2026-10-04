@@ -1658,6 +1658,7 @@ dependencies = [
  "jiff",
  "phoebis-bus",
  "phoebis-cch",
+ "phoebis-ledger",
  "phoebis-oauth",
  "phoebis-profile",
  "phoebis-relay",

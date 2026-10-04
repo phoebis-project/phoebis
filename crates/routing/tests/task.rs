@@ -544,6 +544,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             lifecycle_generation: 1,
             credential_generation: 1,
         },
+        Report::Accounting { degraded: true },
         Report::Affinity(affinity_report(&handle, "a", 1_000)),
         model_cooldown("a", "model:claude-sonnet-5", 1_000),
         credits_at(true, None, None, 1_000),
@@ -582,6 +583,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
         // name in `KINDS`.
         match report {
             Report::AccountState { .. }
+            | Report::Accounting { .. }
             | Report::Affinity(_)
             | Report::Cooldown { .. }
             | Report::Credits { .. }
@@ -4526,6 +4528,55 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
     assert!(
         store.load_routing().unwrap().affinity.is_empty(),
         "a report under the old incarnation writes nothing"
+    );
+}
+
+/// The ledger's standing is a replacing reading: a degraded report keeps a budgeted member out of the set whatever
+/// its spend, and the next report puts it back.
+#[tokio::test]
+async fn the_accounting_report_flips_the_degraded_state_both_ways() {
+    let store = seeded(&["a"]);
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(10.0),
+            }],
+            "test",
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store, clock(&now), RouterConfig::default()).unwrap();
+    assert!(
+        !handle.accounting_degraded().await.unwrap(),
+        "a router starts with the ledger current"
+    );
+
+    handle.report(Report::Accounting { degraded: true });
+    assert!(handle.accounting_degraded().await.unwrap());
+    let answer = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Exhausted(Exhaustion::Untimed)),
+        "the pool's one member carries a budget, so nothing is placed until the ledger catches up: {:?}",
+        answer.result
+    );
+
+    handle.report(Report::Accounting { degraded: false });
+    assert!(!handle.accounting_degraded().await.unwrap());
+    let answer = handle
+        .select(request(&handle, Some("s1"), 1_001))
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, SelectResult::Selected(_)),
+        "the member serves again once the ledger reads current: {:?}",
+        answer.result
     );
 }
 

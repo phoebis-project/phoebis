@@ -38,20 +38,20 @@ pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Spe
 pub use query::{
     apply_filter, breakdown, bucket_seconds, burn_rows, burn_series, burn_series_over, dashboard,
     group_of, hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests,
-    member_spends, moves_by_reason, parse_range, pin_migrations_by_reason, placements,
-    pool_traffic, recent_events_of_kind, request_by_id, request_events, request_totals,
-    rewrite_series, series,
-    session_activity, session_burn_series, session_identities, BudgetedMember, BurnPoint,
-    Dashboard, GroupRow, LiveKeys, PlacementRow, ProbeCounts, RequestFilter, RollupFilter,
-    SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, Tiers, Totals, TrafficBucket,
-    GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
+    member_spends, moves_by_reason, parked_count, parked_summary, parse_range,
+    pin_migrations_by_reason, placements, pool_traffic, recent_events_of_kind, request_by_id,
+    request_events, request_totals, rewrite_series,
+    series, session_activity, session_burn_series, session_identities,
+    BudgetedMember, BurnPoint, Dashboard, GroupRow, LiveKeys, ParkedSummary, PlacementRow,
+    ProbeCounts, RequestFilter, RollupFilter, SeriesFilter, SeriesPoint, SessionActivity,
+    SessionIdentity, Tiers, Totals, TrafficBucket, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
 };
 pub use quota::{
     polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
     PROFILE_EVERY_POLLS,
 };
 pub use record::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta,
+    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta, ParkedRecord,
     QuotaSampleRecord, RequestRecord,
 };
 pub use rollup::{
@@ -60,8 +60,8 @@ pub use rollup::{
     KEY_RANGE_PREDICATE, NO_CLASS, OVERAGE_FUNDING, PLAN_FUNDING, UNATTRIBUTED,
 };
 pub use task::{
-    spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, CHANNEL_DEPTH,
-    LEDGER_BEHIND_DEPTH,
+    spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, BATCH_RETRY_DELAYS,
+    BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,
 };
 pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};
 
@@ -89,4 +89,22 @@ pub enum LedgerError {
         found: u32,
         supported: u32,
     },
+}
+
+impl LedgerError {
+    /// Whether the failure is the database's rather than one row's, the store's reading of the same codes: a lock
+    /// held past the busy timeout, a full disk, an I/O error, a closed handle; every write after it meets it too.
+    pub fn is_database_wide(&self) -> bool {
+        matches!(
+            self,
+            LedgerError::Sqlite(rusqlite::Error::SqliteFailure(failure, _))
+                if matches!(
+                    failure.code,
+                    rusqlite::ErrorCode::ApiMisuse
+                        | rusqlite::ErrorCode::DatabaseBusy
+                        | rusqlite::ErrorCode::DiskFull
+                        | rusqlite::ErrorCode::SystemIoFailure
+                )
+        )
+    }
 }

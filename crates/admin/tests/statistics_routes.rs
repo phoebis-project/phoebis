@@ -180,12 +180,22 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         (Some(0), Some(false), Some(0)),
         "a writer that keeps up holds nothing back and has refused nothing: {system}"
     );
+    assert_eq!(
+        (
+            system["ledger"]["degraded"].as_bool(),
+            system["ledger"]["retrying"].as_u64(),
+            system["ledger"]["parked_priced"].as_u64()
+        ),
+        (Some(false), Some(0), Some(0)),
+        "a ledger that lands every batch is current, retries nothing and parks nothing: {system}"
+    );
     assert_eq!(system["router"]["command_depth"].as_u64(), Some(4_096));
     let dropped = system["router"]["dropped_reports"].as_object().unwrap();
     assert_eq!(
         dropped.keys().map(String::as_str).collect::<Vec<_>>(),
         [
             "account_state",
+            "accounting",
             "affinity",
             "cooldown",
             "credits",

@@ -108,7 +108,10 @@ member whose spend reaches either budget is skipped for requests until that peri
 monthly budget is reached, and a keepalive probe pinned to it waits rather than moving the pin. A pool whose every
 member is at its budget answers `429` with the `overage` claim, the same one an account in overage carries. The spend
 sums the member's hourly rollups, and the rows of an active budget period outlive `stats.rollup_retention_days` until
-that period ends.
+that period ends. While the ledger is degraded (a batch of records failed to land and is being retried), a member with a
+budget reads `budget_unknown`: it is not placed on, a session pinned to it moves to a sibling without a budget, and a
+pool whose members all carry budgets answers `accounts_unavailable` until the writer catches up and reads the spend
+afresh. No operator action is needed; the state clears on the next landed batch.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
 Anthropic keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
@@ -458,16 +461,17 @@ Any move records a `pin_migrated` event with reason `cooldown`, `drain`, `fast_l
 `return_to_plan`, `shed`, or `spent`: `cooldown` and `mark` when a failover or a credential mark moved the session,
 `fast_lane` when a fast-mode rejection moved the session, the others after the rule above that moved it. A pin released
 without a move records `pin_expired` with `reasons`, every fact the selection found against the account: `attempted`,
-`budget` (the pinned member has reached one of its spend budgets), `cooldown`, `deleted`, `expired`, `fast_credits` (a
-fast request's pinned account whose `fast_credits` row stands or whose usage credits the poll reads as unavailable) and
-`fast_rate_limit` (one whose `fast` row is the blocking row that stands latest), `overage`, `paused`, `spent`,
-`subscription_ended`, `unserved`, the account's state when it cannot serve (`disconnected`, `funding_required`,
-`reauth_required`, `unpaired`), or `released` when the selection found nothing else against the account, as with a move
-whose destination emptied. A pin whose creating request was answered 400, 403, or 404, or was bound to its account and
-ended at an authentication failure that marked nothing, with no cooldown or mark on the account and no other turn of the
-session renewing it meanwhile, records the single reason `client_error`: it never served, so the session's next request
-is placed afresh rather than moved. Releasing a session by hand, from the Sessions view or
-`POST /admin/sessions/{key}/{session}/release`, expires its pin the same way.
+`budget` (the pinned member has reached one of its spend budgets), `budget_unknown` (the ledger is degraded and the
+pinned member carries a budget), `cooldown`, `deleted`, `expired`, `fast_credits` (a fast request's pinned account whose
+`fast_credits` row stands or whose usage credits the poll reads as unavailable) and `fast_rate_limit` (one whose `fast`
+row is the blocking row that stands latest), `overage`, `paused`, `spent`, `subscription_ended`, `unserved`, the
+account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`), or `released`
+when the selection found nothing else against the account, as with a move whose destination emptied. A pin whose
+creating request was answered 400, 403, or 404, or was bound to its account and ended at an authentication failure that
+marked nothing, with no cooldown or mark on the account and no other turn of the session renewing it meanwhile, records
+the single reason `client_error`: it never served, so the session's next request is placed afresh rather than moved.
+Releasing a session by hand, from the Sessions view or `POST /admin/sessions/{key}/{session}/release`, expires its pin
+the same way.
 
 ## Cooldowns and failover
 
@@ -661,12 +665,12 @@ again under its id, before it was routed is refused with the `401` admission ans
 (see [What the proxy accepts](client.md#what-the-proxy-accepts)). A pool whose every member has reached its spend budget
 answers `429` with the `overage` claim, the same one an account in overage carries (see [Pools](#pools)), and a probe
 pinned to a member at its budget is answered with the end of the latest period whose budget is reached as its reset,
-whatever its siblings hold. A probe whose pinned account is disabled or past its subscription's end is answered `503`
-`accounts_unavailable` whatever its siblings hold, and so is one that already tried its pinned account while a sibling
-could take it, where moving would otherwise land the pin on that sibling; such a probe never moves the pin, and its
-request row reads rejected rather than exhausted, so the `pool_exhausted` condition of the `phoebis_attention` gauge
-does not count it. A probe that already tried its pinned account with no sibling to take it gets the pool's own answer
-above.
+whatever its siblings hold. A probe whose pinned account is disabled, past its subscription's end, or a member with a
+budget while the ledger is degraded is answered `503` `accounts_unavailable` whatever its siblings hold, and so is one
+that already tried its pinned account while a sibling could take it, where moving would otherwise land the pin on that
+sibling; such a probe never moves the pin, and its request row reads rejected rather than exhausted, so the
+`pool_exhausted` condition of the `phoebis_attention` gauge does not count it. A probe that already tried its pinned
+account with no sibling to take it gets the pool's own answer above.
 
 Every answer the router commits loses the upstream's rate-limit headers, the `anthropic-ratelimit-*` families and the
 `anthropic-fast-*` token family, so an organization's standing never reads as the key holder's own and a client sees

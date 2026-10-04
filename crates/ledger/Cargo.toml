@@ -5,6 +5,11 @@ license.workspace = true
 rust-version.workspace = true
 version.workspace = true
 
+[features]
+# The read-failure test seam, see `LedgerDb::debug_fail_next_read`. This crate's own dev-dependency below turns it
+# on for a test build, so a release build carries no way to fail a ledger read on purpose.
+debug-hooks = []
+
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
@@ -27,6 +32,8 @@ tracing = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
 phoebis-cch = { path = "../cch" }
+# An integration test builds the library without `cfg(test)`, so the seam it reaches needs the feature on.
+phoebis-ledger = { path = ".", features = ["debug-hooks"] }
 phoebis-profile = { path = "../profile" }
 rand = { workspace = true }
 tempfile = { workspace = true }

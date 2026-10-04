@@ -919,6 +919,13 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             Vec::new()
         }
     };
+    let parked = match state.ledger.db().read(phoebis_ledger::parked_count).await {
+        Ok(parked) => parked,
+        Err(error) => {
+            tracing::warn!(%error, "the ledger's parked records could not be counted");
+            0
+        }
+    };
     let keepalive_stats = state.keepalive.stats();
     let dead = state.readiness.dead();
     let dropped = state
@@ -942,6 +949,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
             "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
             "queued": state.ledger.queued(), "behind": state.ledger.behind(),
             "behind_refusals": load(&stats.behind_refusals),
+            "degraded": state.ledger.degraded(), "retrying": load(&stats.retrying), "parked_priced": parked,
         },
         "router": { "command_depth": phoebis_routing::COMMANDS, "dropped_reports": dropped },
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),

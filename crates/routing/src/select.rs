@@ -4,7 +4,8 @@ use std::cmp::Ordering;
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, CooldownRow, OveragePolicy, PinBurn,
-    PinKey, PinRow, PoolRow, SessionPlacement, Strategy, SubagentPlacement, WarmSessions,
+    PinKey, PinRow, PoolMember, PoolRow, SessionPlacement, Strategy, SubagentPlacement,
+    WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -286,7 +287,7 @@ pub struct SelectionTrace {
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Skipped {
     pub account_id: String,
-    /// A step-2 obstacle (`attempted`, `budget`, `cooldown`, `credits`, `operator`, `overage`,
+    /// A step-2 obstacle (`attempted`, `budget`, `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`,
     /// `subscription_ended`), or a partition's name: `above_ceiling`, `at_cap`, `floor`, `spent`, `winding_down`,
     /// or `ranked` for an eligible sibling the strategy did not pick.
     pub obstacle: &'static str,
@@ -341,9 +342,9 @@ pub enum Exhaustion {
         reason: String,
     },
     /// A probe whose pinned member cannot serve it for an obstacle no wait clears (`attempted` while a sibling
-    /// could take the probe, `operator` for an account the operator disabled, `subscription_ended`): answered as
-    /// the untimed exhaustion and placed nowhere, so a probe never moves the session's pin; the name reaches the
-    /// keepalive, which holds the agent under it.
+    /// could take the probe, `budget_unknown` for a budgeted member while the ledger is degraded, `operator` for an
+    /// account the operator disabled, `subscription_ended`): answered as the untimed exhaustion and placed nowhere,
+    /// so a probe never moves the session's pin; the name reaches the keepalive, which holds the agent under it.
     Pinned {
         obstacle: &'static str,
     },
@@ -380,6 +381,9 @@ enum Obstacle {
     Budget {
         until: i64,
     },
+    /// The ledger is degraded, so the member's spend rows may be stale; a budgeted member is not placed on until
+    /// the writer catches up and the spend is read afresh. Untimed: no deadline clears it.
+    BudgetUnknown,
     Cooldown {
         reason: String,
         until: i64,
@@ -394,12 +398,13 @@ enum Obstacle {
     Operator,
 }
 
-/// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`, `cooldown`,
-/// `credits`, `operator`, `overage`, or `subscription_ended`.
+/// The step-2 name `release_reasons` and the trace report for an obstacle: `attempted`, `budget`,
+/// `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, or `subscription_ended`.
 fn obstacle_name(obstacle: &Obstacle) -> &'static str {
     match obstacle {
         Obstacle::Attempted => "attempted",
         Obstacle::Budget { .. } => "budget",
+        Obstacle::BudgetUnknown => "budget_unknown",
         Obstacle::Cooldown { reason, .. } if reason == "overage" => "overage",
         Obstacle::Cooldown { .. } => "cooldown",
         Obstacle::Credits { .. } => "credits",
@@ -418,15 +423,35 @@ fn budget_exhausted(
     account_id: &str,
     now: i64,
 ) -> Option<i64> {
-    let member = snapshot
-        .members(pool_id)
-        .iter()
-        .find(|m| m.account_id == account_id)
-        .filter(|m| m.budgeted())?;
+    let member = budgeted_member(snapshot, pool_id, account_id)?;
     let spends = state
         .member_spends_of(pool_id, account_id)
         .collect::<Vec<_>>();
     budget_deadline(member, &spends, now)
+}
+
+/// The pool's member for `account_id` while it carries a budget; `None` for a member without one.
+fn budgeted_member<'a>(
+    snapshot: &'a RegistrySnapshot,
+    pool_id: &str,
+    account_id: &str,
+) -> Option<&'a PoolMember> {
+    snapshot
+        .members(pool_id)
+        .iter()
+        .find(|m| m.account_id == account_id)
+        .filter(|m| m.budgeted())
+}
+
+/// A budgeted member while the ledger is degraded: its spend rows may lack a batch the writer still holds, so what
+/// they say about the budget is not trusted either way.
+fn budget_unknown(
+    state: &RoutingState,
+    snapshot: &RegistrySnapshot,
+    pool_id: &str,
+    account_id: &str,
+) -> bool {
+    state.accounting_degraded() && budgeted_member(snapshot, pool_id, account_id).is_some()
 }
 
 /// Whether an account can still serve a request whose allowance is judged in `window`: the model's own weekly
@@ -472,11 +497,12 @@ fn state_name(state: AccountState) -> Option<&'static str> {
 /// account's state when it cannot serve (`disconnected`, `funding_required`, `reauth_required`, `unpaired`),
 /// `subscription_ended` (cancelled and past its saved end), `cooldown` (a live row blocks the model on the
 /// account), `fast_rate_limit` or `fast_credits` for a fast request (one of the fast lane's two rows, or the
-/// poll's credits state, blocks it), `budget` (the member's spend is at or above its configured budget),
-/// `overage` (in overage under a policy other than `allow`), `attempted` (this request already tried it), and
-/// `spent` (no allowance left in the request's window); a fast request draws no plan window, so neither
-/// `overage` nor `spent` stands against it. Never empty: a pin released by a move whose destination then
-/// answered nothing carries `released`, the one fact the list above does not evaluate.
+/// poll's credits state, blocks it), `budget_unknown` (the member carries a budget while the ledger is degraded) or
+/// else `budget` (the member's spend is at or above its configured budget), `overage` (in overage under a policy
+/// other than `allow`), `attempted` (this request already tried it), and `spent` (no allowance left in the request's
+/// window); a fast request draws no plan window, so neither `overage` nor `spent` stands against it. Never empty: a
+/// pin released by a move whose destination then answered nothing carries `released`, the one fact the list above
+/// does not evaluate.
 pub fn release_reasons(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -544,7 +570,9 @@ pub fn release_reasons(
     {
         reasons.push(FAST_CREDITS_REASON);
     }
-    if pool.is_some_and(|p| {
+    if pool.is_some_and(|p| budget_unknown(state, snapshot, &p.id, &pin.account_id)) {
+        reasons.push("budget_unknown");
+    } else if pool.is_some_and(|p| {
         budget_exhausted(state, snapshot, &p.id, &pin.account_id, request.now).is_some()
     }) {
         reasons.push("budget");
@@ -671,6 +699,16 @@ pub fn select(
                         SelectResult::Exhausted(Exhaustion::Timed {
                             deadline: *until,
                             window: BUDGET_WINDOW.into(),
+                        }),
+                        writes,
+                    );
+                }
+                // A probe warms the pin it was sent for; with the member's spend unknown nothing is placed and
+                // nothing moves, and no deadline dates the answer.
+                Some(o @ Obstacle::BudgetUnknown) => {
+                    return (
+                        SelectResult::Exhausted(Exhaustion::Pinned {
+                            obstacle: obstacle_name(o),
                         }),
                         writes,
                     );
@@ -1514,6 +1552,9 @@ fn obstacle(
             });
         }
     }
+    if budget_unknown(state, snapshot, &pool.id, &candidate.account_id) {
+        return Some(Obstacle::BudgetUnknown);
+    }
     if let Some(until) = budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now) {
         return Some(Obstacle::Budget { until });
     }
@@ -1973,7 +2014,7 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
                 Some((reason == FAST_CREDITS_REASON).then_some(window.as_str()))
             }
             Obstacle::Credits { reason } => Some(Some(reason.as_str())),
-            Obstacle::Budget { .. } => Some(None),
+            Obstacle::Budget { .. } | Obstacle::BudgetUnknown => Some(None),
             _ => None,
         })
         .collect();
