@@ -625,7 +625,8 @@ CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id) WHERE eve
 // the whole conversation climb, so the key's cap and its affinity source go the same way. Nothing configures, delivers or
 // records an alert, so its three tables go, the deliveries first since they reference the events and the events the
 // rules. The attention reader reads every account's newest settled attempts on each scrape, and the resolved index
-// leads with the time, so the holder's own index keeps that read off a table nothing prunes.
+// leads with the time, so the holder's own index keeps that read off a table the history purge cuts only at the
+// retention, keeping each holder's newest two.
 const V43: &str = r#"
 ALTER TABLE pools DROP COLUMN quota_headers;
 UPDATE pools SET cache_diagnostics = 0 WHERE cache_diagnostics IS NULL;

@@ -122,6 +122,7 @@ async fn the_listing_answers_the_callers_key_with_each_list_level_applied() {
                 secret_digest: h.store.api_key_digest("phoebis-wide").to_vec(),
                 prefix: phoebis_store::key_prefix("phoebis-wide"),
                 created_at: NOW,
+                updated_at: 0,
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,

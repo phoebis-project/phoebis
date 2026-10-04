@@ -934,6 +934,65 @@ async fn a_server_error_from_the_token_endpoint_backs_off_a_minute() {
 }
 
 #[tokio::test]
+async fn a_refresh_still_running_at_shutdown_is_drained_and_commits_with_no_pending_row() {
+    let now = Arc::new(AtomicI64::new(1_000_000));
+    let rule = Rule {
+        path_prefix: "/v1/oauth/token".into(),
+        respond: Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: control_response(ControlFixture::Token).to_vec(),
+        })),
+    };
+    let (mgr, store, up) = manager_with(vec![rule], now.clone()).await;
+    store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            None,
+            None,
+            &NewBundle {
+                access_token: Secret::new("old"),
+                refresh_token: Some(Secret::new("sk-ant-ort01-PLACEHOLDER")),
+                issued_at: 0,
+                expires_at: 1,
+                refresh_expires_at: None,
+                scopes: "user:profile user:inference".into(),
+            },
+        )
+        .unwrap();
+    let mgr = Arc::new(mgr);
+    // The caller goes away with the token request in flight, as a usage poll or a catalog retry does when the
+    // process winds down; the refresh itself runs on.
+    let caller = tokio::spawn({
+        let mgr = mgr.clone();
+        async move { mgr.acquire("a").await }
+    });
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (!up.requests().is_empty()).then_some(())
+    })
+    .await;
+    caller.abort();
+    tokio::join!(mgr.drain(), async { up.release() });
+    assert_eq!(
+        store
+            .credentials("a")
+            .unwrap()
+            .unwrap()
+            .access_token
+            .expose(),
+        "sk-ant-oat01-PLACEHOLDER",
+        "the rotated token is stored before the drain returns"
+    );
+    assert!(
+        store.pending_refresh_attempts().unwrap().is_empty(),
+        "the attempt resolved, so the next start finds nothing to quarantine"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_late_invalid_grant_leaves_the_re_paired_slot_alone() {
     let now = Arc::new(AtomicI64::new(1_000_000));
     let rule = Rule {

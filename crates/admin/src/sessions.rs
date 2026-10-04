@@ -45,7 +45,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         Err(e) => return Err(crate::routes::store_failure(e)),
     };
     let overages = state.router.overages().await.unwrap_or_default();
-    let fallback_ms = (state.settings.cooldown_fallback_seconds * 1_000) as i64;
+    let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
     let activity = match state
         .ledger

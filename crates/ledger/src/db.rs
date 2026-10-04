@@ -126,6 +126,25 @@ impl LedgerDb {
         self.read(read_version).await
     }
 
+    /// The ledger's `meta.schema_version` through a read-only connection, taking no lock and creating nothing;
+    /// `None` for an absent file or one without the table, which the next start creates or migrates.
+    pub fn read_schema_version(path: &Path) -> Result<Option<u32>, LedgerError> {
+        if !path.try_exists()? {
+            return Ok(None);
+        }
+        let conn = Connection::open_with_flags(
+            path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
+    }
+
+    /// The newest schema this build reads, which `open` refuses a file past.
+    pub fn supported_schema_version() -> u32 {
+        latest_version()
+    }
+
     pub fn write<T>(
         &self,
         f: impl FnOnce(&mut Connection) -> Result<T, LedgerError>,

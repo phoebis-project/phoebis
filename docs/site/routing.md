@@ -579,8 +579,10 @@ A response head also lands a selection sample on the account it answered for, wh
 OAuth head's unified `5h` and `7d` windows, and its `7d_oi` utilization when the response reports one; an api_key head's
 `anthropic-ratelimit-{requests,input-tokens,output-tokens}-{limit,remaining,reset}` headers, one bucket per canonical
 model. A later head for another model adds that model's buckets beside the ones already on file rather than replacing
-them. A head's readings are one of the two sources of the windows the router works from (see above); the poll is the
-other.
+them. A bucket reading, an api_key head's or the fast lane's, leaves the account's map ten minutes after it was read,
+and an account holds at most 64 of them, the oldest leaving first, so a model nobody asks for any more leaves no
+buckets behind; the plan windows are never cut. A head's readings are one of the two sources of the windows the router
+works from (see above); the poll is the other.
 
 A 404 whose message names the model the body carried is the upstream's answer that it does not serve that model:
 the account is skipped for that model for `routing.model_rejection_seconds` (an hour by default), the request goes

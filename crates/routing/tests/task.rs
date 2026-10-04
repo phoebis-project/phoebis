@@ -113,6 +113,7 @@ fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 secret_digest: store.api_key_digest("phoebis-secret").to_vec(),
                 prefix: "secret00".into(),
                 created_at: 0,
+                updated_at: 0,
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,
@@ -141,6 +142,7 @@ fn request(
         agent_id: "main".into(),
         session_id: session.map(String::from),
         canonical_model: "claude-sonnet-5".into(),
+        folded_model: "claude-sonnet-5".into(),
         candidates: resolve(
             &s,
             s.key("k").unwrap(),
@@ -382,6 +384,66 @@ async fn a_request_admitted_under_a_key_deleted_before_selection_is_refused_as_u
     assert!(
         handle.pins().await.unwrap().is_empty(),
         "no pin was written under the deleted key"
+    );
+}
+
+#[tokio::test]
+async fn a_pool_with_no_member_at_admission_and_one_added_before_the_selection_sends_the_clients_spelling(
+) {
+    let store = seeded(&[]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // The client asked for the alias and the catalog resolved it to a dated id; the body carries the alias.
+    let (canonical, folded) = ("claude-opus-5-5-20260901", "claude-opus-5-5");
+    let s = handle.snapshot();
+    let admitted = SelectRequest {
+        canonical_model: canonical.into(),
+        folded_model: folded.into(),
+        candidates: resolve(&s, s.key("k").unwrap(), canonical, folded).unwrap(),
+        lane: lane_key(canonical, "standard", "none", "-"),
+        ..request(&handle, Some("s1"), 1_000)
+    };
+    assert!(
+        admitted.candidates.is_empty(),
+        "the pool had no member at admission"
+    );
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::ApiKey,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    let answer = handle.select(stale(admitted)).await.unwrap();
+    let SelectResult::Selected(selection) = answer.result else {
+        panic!(
+            "the member added since admission serves: {:?}",
+            answer.result
+        );
+    };
+    assert_eq!(selection.account.id, "a");
+    assert_eq!(
+        selection.upstream_model, folded,
+        "the re-resolve sends the client's spelling as every other path does, never the canonical id"
     );
 }
 
@@ -910,6 +972,7 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
             agent_id: "main".into(),
             session_id: Some("s1".into()),
             canonical_model: "claude-sonnet-4-5".into(),
+            folded_model: "claude-sonnet-4-5".into(),
             candidates: resolve(
                 &s,
                 s.key("k").unwrap(),
@@ -1039,6 +1102,7 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
             agent_id: "main".into(),
             session_id: Some("s1".into()),
             canonical_model: "claude-sonnet-4-5".into(),
+            folded_model: "claude-sonnet-4-5".into(),
             candidates: resolve(
                 &s,
                 s.key("k").unwrap(),
@@ -1991,6 +2055,7 @@ fn insert_key_k(store: &Store) {
                 secret_digest: store.api_key_digest("phoebis-reissued").to_vec(),
                 prefix: key_prefix("phoebis-reissued"),
                 created_at: 0,
+                updated_at: 0,
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,

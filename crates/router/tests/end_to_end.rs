@@ -2810,6 +2810,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     secret_digest: store.api_key_digest(KEY_SECRET).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY_SECRET),
                     created_at: 0,
+                    updated_at: 0,
                     rotated_at: None,
                     last_used_at: None,
                     retired_secret_last_used_at: None,

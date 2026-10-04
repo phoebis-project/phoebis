@@ -46,6 +46,7 @@ pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
     RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, WindowRow,
 };
+pub use schema::SCHEMA_VERSION;
 
 /// The wait on another writer of the registry file (a backup, an operator's `sqlite3`) before a write fails
 /// `SQLITE_BUSY`: rusqlite's own default, named so the registry rides no library default.
@@ -61,6 +62,33 @@ const LOCK_POISONED: &str = "store connection mutex poisoned by a prior panic";
 // quarantine that reads it, and `resolve_refresh_attempt`. An `uncertain` row does not block a new refresh:
 // `open_refresh_attempt`'s gate reads an attempt in flight alone, and the refresh manager's floor spaces the retry.
 const PENDING_WHERE: &str = "resolved_at IS NULL OR outcome = 'uncertain'";
+
+// One transaction of the history purge, so a writer of the registry waits behind a slice rather than the pass.
+const HISTORY_SLICE: usize = 1_000;
+
+// A resolved attempt under the cutoff, ordered along `refresh_attempts_resolved`. An `uncertain` row stays, since the
+// startup quarantine still reads it as open, and so does each holder's newest two settled rows, whatever their age:
+// the account view's last attempt and the attention reader's run of failures read them for a holder no refresh
+// touched within the retention.
+const PURGE_ATTEMPTS: &str = "DELETE FROM refresh_attempts WHERE id IN ( \
+     SELECT r.id FROM refresh_attempts r \
+     WHERE r.outcome IS NOT NULL AND r.outcome <> 'uncertain' AND r.resolved_at < ?1 \
+       AND r.id NOT IN (SELECT k.id FROM refresh_attempts k \
+                        WHERE k.account_id = r.account_id AND k.incarnation = r.incarnation \
+                          AND k.outcome IS NOT NULL \
+                        ORDER BY k.resolved_at DESC, k.id DESC LIMIT 2) \
+     ORDER BY r.resolved_at, r.id LIMIT ?2)";
+
+// A change under the cutoff, oldest id first: no index leads with `at`, and the ids follow it. Each key id keeps its
+// newest `key_created` and `key_deleted`, whatever their age: the registry load tells a reused id by a delete before
+// the newest create, and `insert_api_key` stamps a re-created key past the newest create.
+const PURGE_CHANGES: &str = "DELETE FROM registry_changes WHERE id IN ( \
+     SELECT c.id FROM registry_changes c \
+     WHERE c.at < ?1 \
+       AND NOT (c.kind IN ('key_created', 'key_deleted') \
+                AND c.id = (SELECT MAX(n.id) FROM registry_changes n \
+                            WHERE n.target = c.target AND n.kind = c.kind)) \
+     ORDER BY c.id LIMIT ?2)";
 
 // A known plaintext under its own associated data: the row proves which key sealed the registry without opening a
 // credential, and AES-GCM gives a reader of the plaintext nothing toward the key.
@@ -136,6 +164,13 @@ impl StoreError {
                 )
         )
     }
+}
+
+/// What one `Store::purge_history` call deleted.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct PurgedHistory {
+    pub attempts: u64,
+    pub changes: u64,
 }
 
 /// What `check-config` learns about a registry file without opening it as the router does.
@@ -431,6 +466,43 @@ impl Store {
         }
     }
 
+    /// The registry's `meta.schema_version` through a read-only connection, taking no lock, as `read_canary`
+    /// reads; `None` for an absent file or one without the table, which the next start creates or migrates.
+    pub fn read_schema_version(db_path: &Path) -> Result<Option<u32>, StoreError> {
+        if !db_path.try_exists()? {
+            return Ok(None);
+        }
+        let conn = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
+    }
+
+    /// Resolved refresh attempts and registry changes older than `before_ms`, but for the rows their readers need
+    /// whatever their age, in rowid slices of 1,000, one transaction per slice; the ledger's purge pass calls it
+    /// once with the request cutoff.
+    pub fn purge_history(&self, before_ms: i64) -> Result<PurgedHistory, StoreError> {
+        let mut purged = PurgedHistory::default();
+        for (sql, count) in [
+            (PURGE_ATTEMPTS, &mut purged.attempts),
+            (PURGE_CHANGES, &mut purged.changes),
+        ] {
+            loop {
+                let mut conn = self.conn.lock().expect(LOCK_POISONED);
+                let tx = conn.transaction_with_behavior(TransactionBehavior::Immediate)?;
+                let deleted = tx.execute(sql, params![before_ms, HISTORY_SLICE as i64])?;
+                tx.commit()?;
+                *count += deleted as u64;
+                if deleted < HISTORY_SLICE {
+                    break;
+                }
+            }
+        }
+        Ok(purged)
+    }
+
     /// Transactions committed through `write_routing` and autocommits of the per-write methods since the
     /// store opened; the proof that a burst of reports lands in one commit.
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -514,6 +586,17 @@ impl Store {
     fn enter_load(&self) {
         self.loads.fetch_add(1, Ordering::SeqCst);
         park_on(&self.load_hold);
+    }
+
+    /// Stamps `meta.schema_version`, so a test can stand for a registry a newer build wrote.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_set_schema_version(&self, version: u32) -> Result<(), StoreError> {
+        self.conn.lock().expect(LOCK_POISONED).execute(
+            "UPDATE meta SET value = ?1 WHERE key = 'schema_version'",
+            params![version.to_string()],
+        )?;
+        Ok(())
     }
 
     /// Test support: drops the canary row, the shape of a registry sealed before the canary existed.

@@ -25,6 +25,7 @@
         "effective_auto_mode_server": true,
         "prefix": "LGWWN5RB",
         "created_at": 1790987341276,
+        "updated_at": 1790987341276,
         "rotated_at": null,
         "last_used_at": null,
         "retired_secret_last_used_at": null,

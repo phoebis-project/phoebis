@@ -46,6 +46,10 @@ pub struct SelectRequest {
     pub agent_id: String,
     pub session_id: Option<String>,
     pub canonical_model: String,
+    /// The client's spelling with the `[1m]` suffix removed and ASCII lowercased, the relay's own folded id, so
+    /// the stale-revision re-resolve keeps the client's spelling rather than the canonical id, also when the
+    /// admission resolved no candidate to copy it from.
+    pub folded_model: String,
     pub candidates: Vec<Candidate>,
     pub portable: bool,
     pub attempted: Vec<String>,
@@ -1188,7 +1192,8 @@ fn fenced(
     exhaustion_of(own.into_iter().collect())
 }
 
-fn seconds_ms(seconds: u64) -> i64 {
+/// Seconds as milliseconds, saturating at `i64::MAX`, so no product depends on a setting's bound.
+pub fn seconds_ms(seconds: u64) -> i64 {
     i64::try_from(seconds)
         .ok()
         .and_then(|s| s.checked_mul(1_000))

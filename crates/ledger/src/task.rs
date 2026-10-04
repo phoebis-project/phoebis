@@ -51,6 +51,8 @@ pub const BATCH_RETRY_HOLD: Duration = Duration::from_secs(10);
 /// production time passes as it does.
 const CLOCK_TICK: Duration = Duration::from_millis(250);
 
+const DAY_MS: i64 = 86_400_000;
+
 /// How often the assembler ages out entries without a completion, unless the configuration says otherwise.
 const EXPIRE_INTERVAL: Duration = Duration::from_secs(60);
 
@@ -246,6 +248,7 @@ pub fn spawn(
         done: Arc::new(Mutex::new(Some(done_rx))),
         tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
     };
+    let purge_store = store.clone();
     let mirror = spawn_event_mirror(
         db.clone(),
         ledger.clone(),
@@ -281,7 +284,14 @@ pub fn spawn(
         tick.tick().await;
         loop {
             tick.tick().await;
-            run_purge(purging.db(), &purge_config, &purge_router, purge_clock()).await;
+            run_purge(
+                purging.db(),
+                &purge_store,
+                &purge_config,
+                &purge_router,
+                purge_clock(),
+            )
+            .await;
         }
     });
     ledger.track(purge);
@@ -1109,11 +1119,39 @@ async fn land(
     }
 }
 
-async fn run_purge(db: &Arc<LedgerDb>, config: &LedgerConfig, router: &RouterHandle, now: i64) {
+async fn run_purge(
+    db: &Arc<LedgerDb>,
+    store: &Arc<Store>,
+    config: &LedgerConfig,
+    router: &RouterHandle,
+    now: i64,
+) {
     let budgeted = budgeted_members(&router.snapshot());
-    match run_retention(db.clone(), config.clone(), now, budgeted).await {
-        Ok(purged) => tracing::debug!(?purged, "ledger retention ran"),
-        Err(error) => tracing::warn!(%error, "ledger retention failed"),
+    let purged = run_retention(db.clone(), config.clone(), now, budgeted).await;
+    // The registry's settled refresh attempts and its change log follow the requests' cutoff, so a zero
+    // `retention_days` keeps them as it keeps the requests.
+    let history = match (config.retention_days != 0)
+        .then(|| now - i64::from(config.retention_days) * DAY_MS)
+    {
+        None => None,
+        Some(cutoff) => {
+            let store = store.clone();
+            match tokio::task::spawn_blocking(move || store.purge_history(cutoff)).await {
+                Ok(Ok(history)) => Some(history),
+                Ok(Err(error)) => {
+                    tracing::warn!(%error, "registry history retention failed");
+                    None
+                }
+                Err(error) => {
+                    tracing::warn!(%error, "registry history retention did not finish");
+                    None
+                }
+            }
+        }
+    };
+    match purged {
+        Ok(purged) => tracing::debug!(?purged, ?history, "ledger retention ran"),
+        Err(error) => tracing::warn!(%error, ?history, "ledger retention failed"),
     }
 }
 

@@ -7,6 +7,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use futures::future::{BoxFuture, FutureExt, Shared};
+use futures::stream::{FuturesUnordered, StreamExt};
 use phoebis_profile::Profile;
 use phoebis_store::{
     AccountRow, AccountState, AttemptOutcome, CredentialBundle, NewBundle, Secret, Store,
@@ -430,6 +431,33 @@ impl CredentialManager {
     /// generations without opening a second handle to the same database.
     pub fn store(&self) -> &Arc<Store> {
         &self.inner.store
+    }
+
+    /// Awaits every in-flight refresh up to `REFRESH_TIMEOUT`, the longest a refresh's token request may take;
+    /// one still running then keeps its pending row, its mark at the next start and its log line, as an unjoined
+    /// refresh does. Called once nothing can start another, so the set it takes is the whole set.
+    pub async fn drain(&self) {
+        let mut running: FuturesUnordered<RefreshFuture> = self
+            .inner
+            .inflight
+            .lock()
+            .expect(LOCK_POISONED)
+            .values()
+            .cloned()
+            .collect();
+        if running.is_empty() {
+            return;
+        }
+        let joined = tokio::time::timeout(REFRESH_TIMEOUT, async {
+            while running.next().await.is_some() {}
+        })
+        .await;
+        if joined.is_err() {
+            tracing::warn!(
+                unjoined = running.len(),
+                "credential refreshes still running at shutdown; the next start quarantines their accounts"
+            );
+        }
     }
 
     /// Joins the account's refresh, or starts one. `observed_generation` is the generation the caller read

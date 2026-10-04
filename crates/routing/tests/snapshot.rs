@@ -26,6 +26,7 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             secret_digest: digest_with(&DIGEST_KEY, b"two").to_vec(),
             prefix: "00000000".into(),
             created_at: 0,
+            updated_at: 0,
             rotated_at: None,
             last_used_at: None,
             retired_secret_last_used_at: None,

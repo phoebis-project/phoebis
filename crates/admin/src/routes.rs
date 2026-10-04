@@ -855,12 +855,11 @@ async fn pairing_confirm(
     // counts, and it has to be checked against what the pairing started from, not against a read this same
     // request just took, or a disconnect that landed before this call would pass its own fresh state back
     // to itself.
-    if let Err(error) = state.store.commit_credentials(
+    if let Err(error) = state.store.commit_pairing(
         &row.id,
         row.incarnation,
         pending.lifecycle_generation,
         expected,
-        None,
         &pending.bundle,
     ) {
         return match error {

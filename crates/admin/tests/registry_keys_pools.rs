@@ -954,6 +954,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 secret_digest: store.api_key_digest(secret).to_vec(),
                 prefix: phoebis_store::key_prefix(secret),
                 created_at: common::NOW,
+                updated_at: 0,
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,

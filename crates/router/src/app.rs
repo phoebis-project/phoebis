@@ -320,6 +320,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // on the keepalive crate.
     let keepalive_gauge_source = keepalive.gauge_source();
     let vault = Arc::new(PairingVault::new());
+    // The admin state takes the manager; the shutdown drains its refreshes after the admin listener is gone.
+    let refreshes = manager.clone();
     let admin = Arc::new(AdminState {
         store,
         manager,
@@ -612,6 +614,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // A retry sleeping its backoff would otherwise hold the store past this function's return.
     catalog.shutdown().await;
     drop(catalog);
+    // A refresh the usage service or the catalog started dies with the runtime otherwise, and the next start
+    // quarantines the account for a lost answer that was only unjoined. Both are stopped above and the listeners
+    // drained, so no refresh starts after the drain takes its set.
+    refreshes.drain().await;
     // The last Bus handle on the normal path: the relay's, the admin state's, and the metrics router's
     // clones went with their tasks, so the subscribers' queues close here. The ledger then drains off its
     // stop watch before the router task, the last writer of the registry, shuts down.

@@ -118,6 +118,7 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 secret_digest: parts.store.api_key_digest(secret).to_vec(),
                 prefix: phoebis_store::key_prefix(secret),
                 created_at: NOW,
+                updated_at: 0,
                 rotated_at: None,
                 last_used_at: None,
                 retired_secret_last_used_at: None,

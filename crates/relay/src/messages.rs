@@ -1640,6 +1640,7 @@ impl Relay {
                     agent_id: identity.agent_id.clone(),
                     session_id: identity.session_id.clone(),
                     canonical_model: identity.canonical_model.clone(),
+                    folded_model: identity.folded_model.clone(),
                     candidates: candidates.clone(),
                     portable,
                     attempted: attempted.clone(),

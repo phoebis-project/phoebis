@@ -76,6 +76,7 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
             agent_id: "main".into(),
             session_id: Some(session.into()),
             canonical_model: canonical,
+            folded_model: MODEL.into(),
             candidates,
             portable: true,
             attempted: Vec::new(),

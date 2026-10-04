@@ -1580,18 +1580,11 @@ impl Task {
                         });
                         return;
                     }
-                    // The relay's `SelectRequest` carries no folded spelling of its own; the first admitted
-                    // candidate's is the closest thing on hand, since every candidate carries the same one.
-                    let folded = request
-                        .candidates
-                        .first()
-                        .map(|c| c.upstream_model.clone())
-                        .unwrap_or_else(|| request.canonical_model.clone());
                     match resolve(
                         &snapshot,
                         key,
                         &request.canonical_model,
-                        &folded,
+                        &request.folded_model,
                     ) {
                         Ok(candidates) => request.candidates = candidates,
                         Err(refusal) => {
