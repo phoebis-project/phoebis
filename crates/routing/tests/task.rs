@@ -13,9 +13,9 @@ use phoebis_routing::{
     FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow,
-    CooldownRow, Failover, MemberWrite, ModelRule, OveragePolicy, PinBurn, PoolRow, RoutingLoad,
-    RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
+    MemberWrite, ModelRule, PinBurn, PoolRow, RoutingLoad, RulesMode, StorageKey, Store, Strategy,
+    SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -57,26 +57,9 @@ fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     store
         .insert_pool(
             &PoolRow {
-                id: "p".into(),
-                label: "p".into(),
-                enabled: true,
                 strategy: Strategy::Priority,
-                affinity_ttl_seconds: 3600,
-                overage_policy: OveragePolicy::PreferPlan,
-                migrate_above_utilization: None,
-                select_below_utilization: None,
-                model_rules: Vec::new(),
-                keepalive_json: "{}".into(),
-                body_capture_hours: 0,
                 prefer_subscription: false,
-                shedding: Shedding::default(),
-                failover: Failover::default(),
-                cache_ttl_json: "{}".into(),
-                cache_diagnostics: false,
-                auto_mode_server: true,
-                affinity: Affinity::default(),
-                created_at: 0,
-                updated_at: 0,
+                ..PoolRow::for_tests("p")
             },
             "test",
         )

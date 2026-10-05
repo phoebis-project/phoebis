@@ -1446,26 +1446,9 @@ mod tests {
 
     fn pool(id: &str) -> PoolRow {
         PoolRow {
-            id: id.into(),
-            label: id.into(),
-            enabled: true,
             strategy: Strategy::Priority,
-            affinity_ttl_seconds: 3600,
-            overage_policy: OveragePolicy::PreferPlan,
-            migrate_above_utilization: None,
-            select_below_utilization: None,
-            model_rules: Vec::new(),
-            keepalive_json: "{}".into(),
-            body_capture_hours: 0,
             prefer_subscription: false,
-            shedding: Shedding::default(),
-            failover: Failover::default(),
-            cache_ttl_json: "{}".into(),
-            cache_diagnostics: false,
-            auto_mode_server: true,
-            affinity: Affinity::default(),
-            created_at: 0,
-            updated_at: 0,
+            ..PoolRow::for_tests(id)
         }
     }
 

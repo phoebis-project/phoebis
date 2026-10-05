@@ -2767,26 +2767,9 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
         store
             .insert_pool(
                 &phoebis_store::PoolRow {
-                    id: "main".into(),
                     label: "Main".into(),
-                    enabled: true,
-                    strategy: phoebis_store::Strategy::Pace,
-                    affinity_ttl_seconds: 3600,
-                    overage_policy: phoebis_store::OveragePolicy::PreferPlan,
-                    migrate_above_utilization: None,
-                    select_below_utilization: None,
-                    model_rules: Vec::new(),
-                    keepalive_json: "{}".into(),
-                    body_capture_hours: 0,
                     prefer_subscription: false,
-                    shedding: phoebis_store::Shedding::default(),
-                    failover: phoebis_store::Failover::default(),
-                    cache_ttl_json: "{}".into(),
-                    cache_diagnostics: false,
-                    auto_mode_server: true,
-                    affinity: phoebis_store::Affinity::default(),
-                    created_at: 0,
-                    updated_at: 0,
+                    ..phoebis_store::PoolRow::for_tests("main")
                 },
                 "test",
             )

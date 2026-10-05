@@ -48,7 +48,7 @@ phoebis-ledger = { path = "../ledger" }
 phoebis-relay = { path = ".", features = ["debug-hooks"] }
 # The router task's report hold, which the conversation climb's wait tests park a report behind.
 phoebis-routing = { path = "../routing", features = ["debug-hooks"] }
-phoebis-store = { path = "../store", features = ["debug-hooks"] }
+phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

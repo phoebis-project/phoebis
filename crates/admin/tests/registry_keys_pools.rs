@@ -1,6 +1,5 @@
 mod common;
 use common::{delete, get, json, login, patch, post, put};
-use phoebis_store::Affinity;
 
 #[tokio::test]
 async fn pools_are_created_edited_and_deleted_with_their_members_and_validation() {
@@ -912,26 +911,13 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
     store
         .insert_pool(
             &phoebis_store::PoolRow {
-                id: "main".into(),
                 label: "Main".into(),
-                enabled: true,
                 strategy: phoebis_store::Strategy::Priority,
-                affinity_ttl_seconds: 3_600,
                 overage_policy: phoebis_store::OveragePolicy::Allow,
-                migrate_above_utilization: None,
-                select_below_utilization: None,
-                model_rules: Vec::new(),
-                keepalive_json: "{}".into(),
-                body_capture_hours: 0,
                 prefer_subscription: false,
-                shedding: phoebis_store::Shedding::default(),
-                failover: phoebis_store::Failover::default(),
-                cache_ttl_json: "{}".into(),
-                cache_diagnostics: false,
-                auto_mode_server: true,
-                affinity: Affinity::default(),
                 created_at: common::NOW,
                 updated_at: common::NOW,
+                ..phoebis_store::PoolRow::for_tests("main")
             },
             "test",
         )

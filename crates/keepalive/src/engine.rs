@@ -2519,26 +2519,11 @@ mod tests {
             }],
             members: vec![member("a"), member("o")],
             pools: vec![phoebis_store::PoolRow {
-                id: "main".into(),
-                label: "main".into(),
-                enabled: true,
-                strategy: phoebis_store::Strategy::default(),
-                affinity_ttl_seconds: 3_600,
                 overage_policy,
-                migrate_above_utilization: None,
-                select_below_utilization: None,
-                model_rules: Vec::new(),
                 keepalive_json: serde_json::to_string(&policy).unwrap(),
-                body_capture_hours: 0,
                 prefer_subscription: false,
-                shedding: phoebis_store::Shedding::default(),
-                failover: phoebis_store::Failover::default(),
                 cache_ttl_json: cache_ttl_json.into(),
-                cache_diagnostics: false,
-                auto_mode_server: true,
-                affinity: phoebis_store::Affinity::default(),
-                created_at: 0,
-                updated_at: 0,
+                ..phoebis_store::PoolRow::for_tests("main")
             }],
             ..phoebis_store::RegistryLoad::default()
         };

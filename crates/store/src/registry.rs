@@ -416,6 +416,34 @@ impl PoolRow {
     pub fn kind_ordered(&self) -> bool {
         self.prefer_subscription
     }
+
+    /// The shipped defaults with `id` and `label` set: a test overrides the fields its case is about, so a field
+    /// added to or removed from the row touches this one site.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests(id: &str) -> PoolRow {
+        PoolRow {
+            id: id.into(),
+            label: id.into(),
+            enabled: true,
+            strategy: Strategy::Pace,
+            affinity_ttl_seconds: 3600,
+            overage_policy: OveragePolicy::PreferPlan,
+            migrate_above_utilization: None,
+            select_below_utilization: None,
+            model_rules: Vec::new(),
+            keepalive_json: "{}".into(),
+            body_capture_hours: 0,
+            prefer_subscription: true,
+            shedding: Shedding::default(),
+            failover: Failover::default(),
+            cache_ttl_json: "{}".into(),
+            cache_diagnostics: false,
+            auto_mode_server: true,
+            affinity: Affinity::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]

@@ -1850,30 +1850,16 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
     r.h.store
         .insert_pool(
             &phoebis_store::PoolRow {
-                id: "warm".into(),
-                label: "warm".into(),
-                enabled: true,
                 strategy: phoebis_store::Strategy::Priority,
-                affinity_ttl_seconds: 3_600,
-                overage_policy: phoebis_store::OveragePolicy::PreferPlan,
-                migrate_above_utilization: None,
-                select_below_utilization: None,
-                model_rules: Vec::new(),
                 keepalive_json: serde_json::to_string(&KeepalivePolicy {
                     probe_cost_cap_usd_per_day: Some(0.0003),
                     ..RigSpec::default().policy
                 })
                 .unwrap(),
-                body_capture_hours: 0,
                 prefer_subscription: false,
-                shedding: phoebis_store::Shedding::default(),
-                failover: phoebis_store::Failover::default(),
-                cache_ttl_json: "{}".into(),
-                cache_diagnostics: false,
-                auto_mode_server: true,
-                affinity: phoebis_store::Affinity::default(),
                 created_at: NOW,
                 updated_at: NOW,
+                ..phoebis_store::PoolRow::for_tests("warm")
             },
             "test",
         )

@@ -24,9 +24,9 @@ use phoebis_relay::{
 };
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
-    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding,
-    StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, Failover, Identity,
+    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey,
+    Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use tower::ServiceExt;
@@ -700,26 +700,19 @@ async fn build(
         store
             .insert_pool(
                 &PoolRow {
-                    id: "main".into(),
-                    label: "main".into(),
-                    enabled: true,
                     strategy: pool.strategy,
                     affinity_ttl_seconds: pool.affinity_ttl_seconds,
                     overage_policy: pool.overage_policy,
                     migrate_above_utilization: pool.migrate_above_utilization,
-                    select_below_utilization: None,
                     model_rules: pool.model_rules,
-                    keepalive_json: "{}".into(),
-                    body_capture_hours: 0,
                     prefer_subscription: false,
-                    shedding: Shedding::default(),
                     failover: pool.failover,
                     cache_ttl_json: pool.cache_ttl.into(),
                     cache_diagnostics: pool.cache_diagnostics,
                     auto_mode_server: pool.auto_mode_server,
-                    affinity: Affinity::default(),
                     created_at: NOW,
                     updated_at: NOW,
+                    ..PoolRow::for_tests("main")
                 },
                 "test",
             )

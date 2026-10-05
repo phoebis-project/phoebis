@@ -25,6 +25,6 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
 phoebis-profile = { path = "../profile" }
 phoebis-routing = { path = "../routing" }
-phoebis-store = { path = "../store" }
+phoebis-store = { path = "../store", features = ["test-support"] }
 tokio-tungstenite = { workspace = true }
 tower = { workspace = true }

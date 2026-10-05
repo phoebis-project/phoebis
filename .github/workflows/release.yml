@@ -19,9 +19,9 @@ on:
     types: [published]
   # The dry run: every platform is built and smoked, nothing is pushed.
   workflow_dispatch:
+# Read-only by default; each job that reaches the registry names the scope it needs.
 permissions:
   contents: read
-  packages: write
 concurrency:
   group: release-${{ github.event.release.tag_name || github.ref }}
   cancel-in-progress: false
@@ -86,6 +86,11 @@ jobs:
       matrix:
         include: ${{ fromJSON(needs.guard.outputs.matrix) }}
     runs-on: ${{ matrix.runner }}
+    # A release pushes each platform's image by digest from here. A job's permissions cannot follow the event, so a
+    # pull request's build holds the scope on a path that never pushes.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
@@ -135,6 +140,10 @@ jobs:
   smoke:
     needs: [guard, build]
     runs-on: ubuntu-24.04
+    # A release smokes the digest the build pushed, pulled from the registry.
+    permissions:
+      contents: read
+      packages: read
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - if: needs.guard.outputs.push == 'true'
@@ -212,6 +221,9 @@ jobs:
     if: needs.guard.outputs.push == 'true'
     needs: [guard, smoke]
     runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+      packages: write
     env:
       IMAGE: ${{ needs.guard.outputs.registry_image }}
       VERSION: ${{ needs.guard.outputs.version }}

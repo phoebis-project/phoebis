@@ -1,7 +1,7 @@
 use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, ModelRule,
-    OveragePolicy, PoolMember, PoolRow, RegistryLoad, RulesMode, Shedding, Strategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, PoolMember, PoolRow,
+    RegistryLoad, RulesMode, Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -26,26 +26,12 @@ fn account(id: &str) -> AccountRow {
 
 fn pool(id: &str, enabled: bool, rules: Vec<ModelRule>, body_capture_hours: u32) -> PoolRow {
     PoolRow {
-        id: id.into(),
-        label: id.into(),
         enabled,
         strategy: Strategy::Priority,
-        affinity_ttl_seconds: 3600,
-        overage_policy: OveragePolicy::PreferPlan,
-        migrate_above_utilization: None,
-        select_below_utilization: None,
         model_rules: rules,
-        keepalive_json: "{}".into(),
         body_capture_hours,
         prefer_subscription: false,
-        shedding: Shedding::default(),
-        failover: Failover::default(),
-        cache_ttl_json: "{}".into(),
-        cache_diagnostics: false,
-        auto_mode_server: true,
-        affinity: Affinity::default(),
-        created_at: 0,
-        updated_at: 0,
+        ..PoolRow::for_tests(id)
     }
 }
 
