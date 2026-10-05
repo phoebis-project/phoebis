@@ -23,14 +23,14 @@ pub use record::{
     BudgetFacts, By, CandidateFacts, ChainFacts, CooldownFacts, CreditsFacts, DecisionRecord,
     DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
     LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts, PinEventFacts, PinFacts,
-    PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts, RequestFacts,
-    RequestFlags, Score, Settings, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts,
-    RECORD_VERSION,
+    PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts, RefusedRequest,
+    RequestFacts, RequestFlags, Score, Settings, SummaryFact, TermFacts, WalkStep, WarmthFacts,
+    WindowFacts, RECORD_VERSION,
 };
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{
-    cohort_hold, effective_warm, lane_key, release_reasons, seconds_ms, select, warmth_of,
-    ClientClass, CohortHold, Exhaustion, HoldFacts, MigrateReason,
+    cohort_hold, decide, effective_warm, lane_key, release_reasons, seconds_ms, select, warmth_of,
+    ClientClass, CohortHold, Decided, Exhaustion, HoldFacts, MigrateReason,
     Placement, Refusal, SelectRequest, SelectResult, Selection, SelectionTrace, Skipped, Warmth,
     WarmthCause, BUDGET_WINDOW, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, MIGRATE_BAND,
     MODEL_REJECTED_REASON, REFRESHING_CLASSES,

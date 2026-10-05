@@ -5,8 +5,11 @@
 
 use std::collections::BTreeMap;
 
-use crate::select::{CohortHold, HoldFacts, Placement};
+use phoebis_store::PoolRow;
+
+use crate::select::{ClientClass, CohortHold, HoldFacts, Placement, SelectRequest, MIGRATE_BAND};
 use crate::state::Tier;
+use crate::RegistrySnapshot;
 
 pub const RECORD_VERSION: u32 = 1;
 
@@ -183,13 +186,15 @@ pub struct WindowFacts {
     pub ahead: Option<f64>,
 }
 
+/// `end`, `deadline` and `hours` are `None` for an api_key member, which Pace scores by its remaining share alone;
+/// a subscription member with neither a reset nor an end reads a week of hours.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PaceFacts {
     pub remaining: f64,
     pub reset: Option<i64>,
-    pub end: i64,
-    pub deadline: i64,
-    pub hours: f64,
+    pub end: Option<i64>,
+    pub deadline: Option<i64>,
+    pub hours: Option<f64>,
     pub score: f64,
 }
 
@@ -223,7 +228,7 @@ pub struct CreditsFacts {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct TermFacts {
-    pub since: i64,
+    pub since: Option<i64>,
     pub trial_ends_at: Option<i64>,
     pub cancelled: bool,
     pub ends_at: Option<i64>,
@@ -280,6 +285,56 @@ pub struct Fact {
     pub value: FactValue,
     pub account_id: Option<String>,
     pub unit: Option<&'static str>,
+}
+
+impl Fact {
+    fn of(key: &'static str, value: FactValue) -> Fact {
+        Fact {
+            key,
+            value,
+            account_id: None,
+            unit: None,
+        }
+    }
+
+    pub(crate) fn bool(key: &'static str, value: bool) -> Fact {
+        Fact::of(key, FactValue::Bool(value))
+    }
+
+    pub(crate) fn int(key: &'static str, value: i64) -> Fact {
+        Fact::of(key, FactValue::Int(value))
+    }
+
+    /// A count or a size the engine holds unsigned, saturating at `i64::MAX`.
+    pub(crate) fn count(key: &'static str, value: u64) -> Fact {
+        Fact::int(key, i64::try_from(value).unwrap_or(i64::MAX))
+    }
+
+    pub(crate) fn number(key: &'static str, value: f64) -> Fact {
+        Fact::of(key, FactValue::Number(value))
+    }
+
+    pub(crate) fn text(key: &'static str, value: impl Into<String>) -> Fact {
+        Fact::of(key, FactValue::Text(value.into()))
+    }
+
+    pub(crate) fn list(key: &'static str, value: Vec<String>) -> Fact {
+        Fact::of(key, FactValue::List(value))
+    }
+
+    pub(crate) fn unit(self, unit: &'static str) -> Fact {
+        Fact {
+            unit: Some(unit),
+            ..self
+        }
+    }
+
+    pub(crate) fn about(self, account_id: &str) -> Fact {
+        Fact {
+            account_id: Some(account_id.to_string()),
+            ..self
+        }
+    }
 }
 
 /// A fact's value as its bare JSON form, so a reader takes the number, the word or the list without a tag.
@@ -422,6 +477,206 @@ pub struct Score {
 pub struct WarmthFacts {
     pub verdict: &'static str,
     pub cause: &'static str,
+}
+
+/// The identity a refused request has before any selection: what the relay holds at its own refusal site and what
+/// the task reads off a `SelectRequest` at its three. `attempt` and `seq` are 1 for the relay's refusal, the
+/// request's one decision; `at` and the client's version as the relay read them.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RefusedRequest {
+    pub request_id: String,
+    pub attempt: u32,
+    pub seq: u32,
+    pub at: i64,
+    pub key_id: String,
+    pub key_generation: i64,
+    pub agent_id: String,
+    pub session_id: Option<String>,
+    pub canonical_model: String,
+    pub client: ClientClass,
+    pub client_version: Option<String>,
+}
+
+impl From<&SelectRequest> for RefusedRequest {
+    fn from(request: &SelectRequest) -> RefusedRequest {
+        RefusedRequest {
+            request_id: request.request_id.clone(),
+            attempt: request.attempt,
+            seq: request.seq,
+            at: request.now,
+            key_id: request.key_id.clone(),
+            key_generation: request.key_generation,
+            agent_id: request.agent_id.clone(),
+            session_id: request.session_id.clone(),
+            canonical_model: request.canonical_model.clone(),
+            client: request.client,
+            client_version: None,
+        }
+    }
+}
+
+impl DecisionRecord {
+    /// The record of a request refused before the engine ran: the request block from the identity, no pin block
+    /// (`pin_reason` `not_looked_up`), the settings when the key and its pool are still in the snapshot and `None`
+    /// otherwise, no candidate, a two-line walk (`admission` `refused` with the reason, `selection` `not_run`) and
+    /// a `refused` outcome carrying `refusal`; with its summary (`by` `refusal`, `fact` the reason's key: `client`
+    /// for a drift refusal, whose reason names the trigger and the client version, `key` for a key or a resolve
+    /// refusal, whose reason is the refusal's `Display`).
+    pub fn refused(
+        request: &RefusedRequest,
+        snapshot: &RegistrySnapshot,
+        refusal: &RefusalFacts,
+    ) -> (DecisionRecord, DecisionSummary) {
+        let key = snapshot.key(&request.key_id);
+        let pool = key.and_then(|key| snapshot.pool(&key.pool_id));
+        let strategy = pool.map_or("", |pool| pool.strategy.as_str());
+        let record = DecisionRecord {
+            version: RECORD_VERSION,
+            request: RequestFacts {
+                request_id: request.request_id.clone(),
+                attempt: request.attempt,
+                seq: request.seq,
+                at: request.at,
+                key_id: request.key_id.clone(),
+                key_generation: request.key_generation,
+                pool_id: key.map(|key| key.pool_id.clone()).unwrap_or_default(),
+                agent_id: request.agent_id.clone(),
+                parent_agent_id: None,
+                client_class: request.client.as_str(),
+                request_class: None,
+                canonical_model: request.canonical_model.clone(),
+                lane: LaneFacts {
+                    speed: String::new(),
+                    thinking: String::new(),
+                    effort: String::new(),
+                },
+                flags: RequestFlags {
+                    fast: false,
+                    count: false,
+                    probe: false,
+                    portable: false,
+                    marker: false,
+                    context_compacted: false,
+                },
+                chain: ChainFacts {
+                    static_boundaries: 0,
+                    boundaries: 0,
+                    static_hash: false,
+                },
+                attempted: Vec::new(),
+                holds: Vec::new(),
+                registry_revision: snapshot.revision,
+            },
+            pin: None,
+            pin_reason: Some("not_looked_up"),
+            settings: key.zip(pool).map(|(_, pool)| settings_of(pool)),
+            candidates: Vec::new(),
+            walk: vec![
+                WalkStep {
+                    step: "admission",
+                    verdict: "refused",
+                    facts: vec![Fact::text("reason", refusal.reason.as_str())],
+                },
+                WalkStep {
+                    step: "selection",
+                    verdict: "not_run",
+                    facts: Vec::new(),
+                },
+            ],
+            outcome: Outcome {
+                kind: "refused",
+                account_id: None,
+                from_account_id: None,
+                upstream_model: None,
+                tier: None,
+                strategy,
+                rule: None,
+                rung: None,
+                in_overage: false,
+                pin_written: None,
+                pin_events: Vec::new(),
+                hold: None,
+                exhaustion: None,
+                refusal: Some(refusal.clone()),
+                cohort_hold: None,
+                shed_marks: None,
+            },
+        };
+        let fact = if refusal.kind == "client" {
+            SummaryFact {
+                key: "client",
+                value: FactValue::Text(
+                    request
+                        .client_version
+                        .clone()
+                        .unwrap_or_else(|| "unknown".into()),
+                ),
+                unit: Some("text"),
+                entity: None,
+            }
+        } else {
+            SummaryFact {
+                key: "key",
+                value: FactValue::Text(request.key_id.clone()),
+                unit: None,
+                entity: Some(FactEntity {
+                    kind: "key",
+                    id: request.key_id.clone(),
+                }),
+            }
+        };
+        let summary = DecisionSummary {
+            kind: "refused",
+            probe: false,
+            by: By {
+                kind: "refusal",
+                value: refusal.kind.to_string(),
+                tier: None,
+            },
+            fact: vec![fact],
+            rule: None,
+            strategy,
+            tier: None,
+            rung: None,
+            score: None,
+            runner_up: None,
+            skipped: 0,
+            warmth: None,
+            hold: None,
+            exhaustion: None,
+            refusal: Some(refusal.clone()),
+            fast: false,
+        };
+        (record, summary)
+    }
+}
+
+/// The settings block as the pool reads when the decision ran.
+pub(crate) fn settings_of(pool: &PoolRow) -> Settings {
+    Settings {
+        strategy: pool.strategy.as_str(),
+        prefer_subscription: pool.prefer_subscription,
+        overage_policy: pool.overage_policy.as_str(),
+        affinity_ttl_seconds: pool.affinity_ttl_seconds,
+        affinity_mode: pool.affinity.mode.as_str(),
+        session_placement: pool.affinity.session_placement.as_str(),
+        min_shared_prefix_tokens: pool.affinity.min_shared_prefix_tokens,
+        subagent_placement: pool.affinity.subagent_placement.as_str(),
+        select_below_utilization: pool.select_below_utilization,
+        migrate_above_utilization: pool.migrate_above_utilization,
+        migrate_when_spent: pool.shedding.migrate_when_spent,
+        overage_move_grace_minutes: pool.failover.overage_move_grace_minutes,
+        wind_down_minutes: pool.failover.wind_down_minutes,
+        shed_share: pool.shedding.shed_share,
+        burn_window_seconds: pool.shedding.burn_window_seconds,
+        source_dwell_seconds: pool.shedding.source_dwell_seconds,
+        warm_sessions: pool.shedding.warm_sessions.as_str(),
+        in_flight_cap: pool.failover.in_flight_cap,
+        retry_in_place_seconds: pool.failover.retry_in_place_seconds,
+        pace_floor: pool.failover.pace_floor,
+        migrate_band: MIGRATE_BAND,
+        pool_updated_at: pool.updated_at,
+    }
 }
 
 #[cfg(test)]

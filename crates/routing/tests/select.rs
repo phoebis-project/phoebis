@@ -1,11 +1,13 @@
 use phoebis_routing::{
-    cohort_hold, effective_warm, lane_key, release_reasons, resolve, select, warm, warmth_of,
-    AffinityChain, AffinityMap, AffinityRow, BurnRates, BurnUnit, ClientClass, CohortHold,
-    CreditsState, EvidenceSource, Exhaustion, HoldFacts, MemberSpend,
-    MigrateReason, OverageEvidence, PinRef, Placement, RateTable, Rates, RegistrySnapshot,
-    RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample, Warmth, WarmthCause,
-    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
-    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, warm,
+    warmth_of, AffinityChain, AffinityMap, AffinityRow, BudgetFacts, BurnRates, BurnUnit,
+    CandidateFacts, ClientClass, CohortHold, CreditsState, DecisionRecord, EvidenceSource,
+    Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome, MemberSpend,
+    MigrateReason, OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
+    RefusedRequest, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
+    UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
+    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -10966,4 +10968,940 @@ fn a_lane_changed_pin_sorts_among_the_cold_ones_in_the_shed_round() {
         ("b".into(), Some(MigrateReason::Shed)),
         "on another lane it is cold on this request, first in the order, and moves on it"
     );
+}
+
+/// The walk's steps and verdicts in the order the engine appended them.
+fn steps(record: &DecisionRecord) -> Vec<(&str, &str)> {
+    record.walk.iter().map(|w| (w.step, w.verdict)).collect()
+}
+
+fn line<'a>(record: &'a DecisionRecord, step: &str) -> &'a WalkStep {
+    record
+        .walk
+        .iter()
+        .find(|w| w.step == step)
+        .unwrap_or_else(|| panic!("no {step} line in {:?}", steps(record)))
+}
+
+/// The first fact under `key` on the line.
+fn fact<'a>(step: &'a WalkStep, key: &str) -> &'a FactValue {
+    &step
+        .facts
+        .iter()
+        .find(|f| f.key == key)
+        .unwrap_or_else(|| panic!("no {key} fact on {}: {:?}", step.step, step.facts))
+        .value
+}
+
+fn fact_of<'a>(step: &'a WalkStep, key: &str, account: &str) -> &'a FactValue {
+    &step
+        .facts
+        .iter()
+        .find(|f| f.key == key && f.account_id.as_deref() == Some(account))
+        .unwrap_or_else(|| {
+            panic!(
+                "no {key} fact on {} for {account}: {:?}",
+                step.step, step.facts
+            )
+        })
+        .value
+}
+
+fn number(value: &FactValue) -> f64 {
+    match value {
+        FactValue::Number(n) => *n,
+        FactValue::Int(n) => *n as f64,
+        other => panic!("expected a number, got {other:?}"),
+    }
+}
+
+fn candidate<'a>(record: &'a DecisionRecord, account: &str) -> &'a CandidateFacts {
+    record
+        .candidates
+        .iter()
+        .find(|c| c.account_id == account)
+        .unwrap_or_else(|| panic!("no candidate {account}"))
+}
+
+/// `pool` over `a`, `b`, `c` and the further OAuth accounts `extra`, each like the three, for a pool wider than
+/// the builder's.
+fn snapshot_over(pool: Pool, extra: &[&str]) -> RegistrySnapshot {
+    let mut load = load_of(pool, &[]);
+    let template = load.accounts[0].clone();
+    for id in extra {
+        load.accounts.push(AccountRow {
+            id: (*id).into(),
+            label: (*id).into(),
+            ..template.clone()
+        });
+    }
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
+/// A static entry of `account` at `hash`, live from 1,000 for five minutes, promising `prefix_tokens`.
+fn static_row(s: &RegistrySnapshot, hash: &str, account: &str, prefix_tokens: u64) -> AffinityRow {
+    affinity_row(
+        s,
+        "claude-sonnet-5",
+        hash,
+        AffinityChain::Static,
+        account,
+        1_000,
+        300_000,
+        prefix_tokens,
+        "root",
+    )
+}
+
+/// A subagent's marked request at 2,000 carrying `static_boundaries` and no message chain, so the static rung
+/// runs under the default by-cohort placement with no size floor.
+fn static_req(s: &RegistrySnapshot, static_boundaries: &[&str]) -> SelectRequest {
+    subagent(
+        placement_req(
+            request(s, Some("s1"), "claude-sonnet-5", true, &[], 2_000),
+            &[],
+            static_boundaries,
+            true,
+        ),
+        "sub-1",
+    )
+}
+
+#[test]
+fn a_renewal_records_five_no_move_lines_and_their_facts() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "a");
+    assert_eq!(
+        steps(&d.record),
+        vec![
+            ("pin", "match"),
+            ("eligible", "match"),
+            ("move:spent", "no"),
+            ("move:overage", "no"),
+            ("move:return_to_plan", "no"),
+            ("move:drain", "no"),
+            ("move:shed", "no"),
+            ("renew", "renewed"),
+        ]
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:spent"), "holds_allowance"),
+        &FactValue::Bool(true)
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:overage"), "in_overage"),
+        &FactValue::Bool(false)
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:return_to_plan"), "kind"),
+        &FactValue::Text("oauth".into())
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:drain"), "cold"),
+        &FactValue::Bool(false)
+    );
+    assert_eq!(
+        fact(line(&d.record, "move:shed"), "threshold"),
+        &FactValue::Text("off".into())
+    );
+    let pin = d.record.pin.as_ref().expect("the live pin's block");
+    assert_eq!(
+        (pin.found, pin.warmth, pin.warmth_cause, pin.idle_ms),
+        ("live", Some("refresh"), Some("chainless"), Some(1_000))
+    );
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        d.record.outcome.pin_written.as_ref().map(|p| p.action),
+        Some("renewed")
+    );
+    assert_eq!(candidate(&d.record, "a").verdict, "renewed");
+    assert_eq!(candidate(&d.record, "b").verdict, "not_needed");
+    assert_eq!(d.summary.by.kind, "none");
+    assert_eq!(d.summary.fact.len(), 1, "{:?}", d.summary.fact);
+    assert_eq!(
+        (
+            d.summary.fact[0].key,
+            &d.summary.fact[0].value,
+            d.summary.fact[0].unit
+        ),
+        ("idle", &FactValue::Int(1_000), Some("ms")),
+        "a warm renewal on an account under no threshold names the pin's idle age"
+    );
+}
+
+#[test]
+fn a_spent_move_records_the_cool_reading_and_the_cap_filter() {
+    let s = snapshot(cool_preference_pool(vec![]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    hot_b_cool_c(&mut st, T + 500);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("c".into(), Some(MigrateReason::Spent))
+    );
+    assert_eq!(
+        &steps(&d.record)[2..9],
+        &[
+            ("move:spent", "fired"),
+            ("move:overage", "not_run"),
+            ("move:return_to_plan", "not_run"),
+            ("move:drain", "not_run"),
+            ("move:shed", "not_run"),
+            ("cool", "preferred"),
+            ("cap_filter", "passed"),
+        ]
+    );
+    let spent = line(&d.record, "move:spent");
+    assert_eq!(fact(spent, "holds_allowance"), &FactValue::Bool(false));
+    assert_eq!(
+        fact(spent, "destinations"),
+        &FactValue::List(vec!["c".into()])
+    );
+    let cool = line(&d.record, "cool");
+    assert_eq!(fact_of(cool, "cool", "b"), &FactValue::Bool(false));
+    assert_eq!(fact_of(cool, "cool", "c"), &FactValue::Bool(true));
+    assert!(
+        (number(fact_of(cool, "ahead_five_hour", "b")) - 0.9).abs() < 1e-9,
+        "b's 5-hour lead with no reset is its reading"
+    );
+    assert!(
+        (number(fact_of(cool, "margin", "b")) - 0.15).abs() < 1e-9,
+        "b's larger lead runs past the band"
+    );
+    assert!((number(fact_of(cool, "band", "c")) - 0.75).abs() < 1e-9);
+    assert_eq!(
+        fact_of(line(&d.record, "cap_filter"), "in_flight", "c"),
+        &FactValue::Text("0/16".into())
+    );
+    assert_eq!(d.record.outcome.kind, "moved");
+    assert_eq!(d.record.outcome.rule, Some("spent"));
+    assert_eq!(d.record.outcome.from_account_id.as_deref(), Some("a"));
+    assert_eq!(
+        d.record.outcome.pin_written.as_ref().map(|p| p.action),
+        Some("moved")
+    );
+    assert_eq!(candidate(&d.record, "a").verdict, "source");
+    assert_eq!(candidate(&d.record, "c").verdict, "chosen");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("rule", "spent")
+    );
+}
+
+#[test]
+fn a_shed_move_records_the_round_and_its_marks() {
+    let s = snapshot(pace_pool());
+    let mut st = two_pins_on_a();
+    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+    st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed))
+    );
+    for rule in [
+        "move:spent",
+        "move:overage",
+        "move:return_to_plan",
+        "move:drain",
+    ] {
+        assert_eq!(line(&d.record, rule).verdict, "no", "{rule}");
+    }
+    let shed = line(&d.record, "move:shed");
+    assert_eq!(shed.verdict, "fired");
+    assert_eq!(fact(shed, "round"), &FactValue::Text("ran".into()));
+    assert_eq!(
+        fact(shed, "marks"),
+        &FactValue::List(vec!["k/s1/main/claude-sonnet-5".into()])
+    );
+    assert!((number(fact(shed, "ahead_seven_day")) - 0.4).abs() < 1e-9);
+    assert!((number(fact(shed, "elapsed_seven_day")) - 0.1).abs() < 1e-9);
+    assert!((number(fact(shed, "ahead_five_hour")) - 0.1).abs() < 1e-9);
+    assert!((number(fact(shed, "threshold")) - 0.2).abs() < 1e-9);
+    assert!(
+        (number(fact(shed, "margin")) - 0.2).abs() < 1e-9,
+        "the larger lead less the threshold"
+    );
+    assert_eq!(fact(shed, "marked"), &FactValue::Bool(true));
+    assert_eq!(
+        d.record.outcome.shed_marks,
+        Some(vec![PinKeyFacts {
+            key_id: "k".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+        }])
+    );
+    assert_eq!(d.record.outcome.rule, Some("shed"));
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("rule", "shed")
+    );
+}
+
+#[test]
+fn a_static_placement_records_the_three_rung_lines_and_the_partitions() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![
+            static_row(&s, "s1", "a", 900),
+            static_row(&s, "s2", "b", 900),
+        ],
+    );
+    let _busy = st.in_flight().dispatched("b", 1_000);
+    let d = decide(&mut st, &s, &static_req(&s, &["s1", "s2"]), &mut rng());
+    assert_eq!(picked(&d.result), "a");
+    let content = line(&d.record, "rung:content");
+    assert_eq!(
+        (content.verdict, fact(content, "reason")),
+        ("none", &FactValue::Text("no_entry".into()))
+    );
+    let with_main = line(&d.record, "rung:with_main");
+    assert_eq!(
+        (with_main.verdict, fact(with_main, "reason")),
+        ("none", &FactValue::Text("policy_off".into()))
+    );
+    let rung = line(&d.record, "rung:static");
+    assert_eq!(rung.verdict, "match");
+    assert_eq!(fact(rung, "hash"), &FactValue::Text("s1".into()));
+    assert_eq!(fact(rung, "depth"), &FactValue::Int(1));
+    assert_eq!(fact(rung, "prefix_tokens"), &FactValue::Int(900));
+    let partitions = line(&d.record, "partitions");
+    assert_eq!(partitions.verdict, "match");
+    assert_eq!(
+        partitions.facts.iter().map(|f| f.key).collect::<Vec<_>>(),
+        vec!["spent", "at_cap", "above_ceiling", "winding_down", "floor"]
+    );
+    assert_eq!(
+        fact(partitions, "at_cap"),
+        &FactValue::Int(1),
+        "the sibling at its cap is the one the partition drops"
+    );
+    assert_eq!(fact(partitions, "spent"), &FactValue::Text("off".into()));
+    assert_eq!(fact(partitions, "winding_down"), &FactValue::Int(0));
+    let chosen = &candidate(&d.record, "a").prefix;
+    assert_eq!(chosen.static_.as_ref().map(|e| e.refused_by), Some(None));
+    assert_eq!(chosen.static_match, chosen.static_);
+    let sibling = candidate(&d.record, "b");
+    assert_eq!(
+        sibling.prefix.static_.as_ref().map(|e| e.refused_by),
+        Some(Some("at_cap"))
+    );
+    assert_eq!(sibling.partition, Some("at_cap"));
+    assert_eq!(sibling.verdict, "out");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("rung", "static")
+    );
+    assert_eq!(
+        d.summary
+            .fact
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.unit))
+            .collect::<Vec<_>>(),
+        vec![
+            ("prefix", FactValue::Int(900), Some("tokens")),
+            ("depth", FactValue::Int(1), Some("count")),
+        ]
+    );
+}
+
+#[test]
+fn a_hold_records_its_place_and_bound() {
+    let s = snapshot(Pool {
+        members: vec![("a", 1), ("b", 0), ("c", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let _tickets: Vec<_> = ["a", "b", "c"]
+        .into_iter()
+        .map(|id| st.in_flight().dispatched(id, 1_000))
+        .collect();
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], 1_000),
+        &mut rng(),
+    );
+    assert!(matches!(d.result, SelectResult::Held { .. }));
+    assert_eq!(
+        fact(line(&d.record, "partitions"), "at_cap"),
+        &FactValue::Text("held".into())
+    );
+    let hold = line(&d.record, "hold");
+    assert_eq!(hold.verdict, "held");
+    assert_eq!(
+        fact(hold, "place"),
+        &FactValue::Text("strategy_pick".into())
+    );
+    assert_eq!(fact(hold, "account_id"), &FactValue::Text("b".into()));
+    assert_eq!(fact(hold, "bound_ms"), &FactValue::Int(10_000));
+    assert_eq!(d.record.outcome.kind, "held");
+    assert_eq!(
+        d.record.outcome.hold,
+        Some(HoldOutcome {
+            account_id: "b".into(),
+            cohort: None,
+            bound_ms: 10_000,
+        })
+    );
+    assert_eq!(candidate(&d.record, "b").verdict, "held_on");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "strategy_pick")
+    );
+    assert_eq!(
+        d.summary
+            .fact
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.unit))
+            .collect::<Vec<_>>(),
+        vec![("in_flight", FactValue::Text("1/1".into()), Some("text"))]
+    );
+}
+
+#[test]
+fn an_exhaustion_records_the_obstacles_in_the_order_weighed() {
+    let s = snapshot(Pool::default());
+    let mut st = loaded(vec![seeded_pin("s1", "c", T)]);
+    st.record_cooldown(cooled(
+        "a",
+        "account",
+        T + 5 * MINUTE,
+        "five_hour",
+        "rate_limit",
+    ));
+    st.record_cooldown(cooled(
+        "b",
+        "account",
+        T + 4 * MINUTE,
+        "seven_day",
+        "rate_limit",
+    ));
+    st.record_cooldown(cooled(
+        "c",
+        "account",
+        T + 6 * MINUTE,
+        "five_hour",
+        "rate_limit",
+    ));
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert!(matches!(
+        d.result,
+        SelectResult::Exhausted(Exhaustion::Timed { deadline, .. }) if deadline == T + 4 * MINUTE
+    ));
+    assert_eq!(line(&d.record, "pick").verdict, "none");
+    let exhausted = line(&d.record, "exhausted");
+    assert_eq!(exhausted.verdict, "exhausted");
+    assert_eq!(
+        fact(exhausted, "obstacles"),
+        &FactValue::List(vec![
+            "c:cooldown".into(),
+            "a:cooldown".into(),
+            "b:cooldown".into(),
+        ]),
+        "the pinned account's obstacle is weighed first"
+    );
+    assert_eq!(fact(exhausted, "kind"), &FactValue::Text("timed".into()));
+    assert_eq!(
+        fact(exhausted, "window"),
+        &FactValue::Text("seven_day".into())
+    );
+    assert_eq!(
+        d.record
+            .outcome
+            .exhaustion
+            .as_ref()
+            .map(|e| (e.kind, e.deadline)),
+        Some(("timed", Some(T + 4 * MINUTE)))
+    );
+    for id in ["a", "b", "c"] {
+        let member = candidate(&d.record, id);
+        assert_eq!(
+            (member.verdict, member.obstacle.as_ref().map(|o| o.name)),
+            ("out", Some("cooldown")),
+            "{id}"
+        );
+    }
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("exhaustion", "timed")
+    );
+    assert_eq!(
+        d.summary
+            .fact
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.unit))
+            .collect::<Vec<_>>(),
+        vec![("retry", FactValue::Int(T + 4 * MINUTE), Some("time"))]
+    );
+}
+
+#[test]
+fn a_refusal_records_two_lines() {
+    let s = snapshot(Pool::default());
+    let req = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let revoked = RefusalFacts {
+        kind: "key",
+        reason: "the key was revoked".into(),
+    };
+    let (record, summary) = DecisionRecord::refused(&RefusedRequest::from(&req), &s, &revoked);
+    assert_eq!(
+        steps(&record),
+        vec![("admission", "refused"), ("selection", "not_run")]
+    );
+    assert_eq!(
+        fact(line(&record, "admission"), "reason"),
+        &FactValue::Text("the key was revoked".into())
+    );
+    assert_eq!(
+        (record.pin.is_none(), record.pin_reason),
+        (true, Some("not_looked_up"))
+    );
+    assert!(record.candidates.is_empty());
+    assert_eq!(
+        (
+            record.request.request_id.as_str(),
+            record.request.attempt,
+            record.request.seq,
+            record.request.at,
+            record.request.client_class,
+            record.request.pool_id.as_str(),
+        ),
+        ("r-1", 1, 1, T, "claude_code", "p")
+    );
+    assert!(
+        record.settings.is_some(),
+        "the key and its pool are still in the snapshot"
+    );
+    assert_eq!(record.outcome.kind, "refused");
+    assert_eq!(record.outcome.refusal, Some(revoked.clone()));
+    assert_eq!(
+        (summary.by.kind, summary.by.value.as_str()),
+        ("refusal", "key")
+    );
+    assert_eq!(summary.fact.len(), 1);
+    assert_eq!(
+        (
+            summary.fact[0].key,
+            &summary.fact[0].value,
+            &summary.fact[0].entity
+        ),
+        (
+            "key",
+            &FactValue::Text("k".into()),
+            &Some(FactEntity {
+                kind: "key",
+                id: "k".into(),
+            })
+        )
+    );
+    let mut gone = load_of(Pool::default(), &[]);
+    gone.keys.clear();
+    let gone = RegistrySnapshot::from_load(gone, [0; 32], 0, 1);
+    let (record, _) = DecisionRecord::refused(&RefusedRequest::from(&req), &gone, &revoked);
+    assert_eq!(
+        (record.settings, record.request.pool_id.as_str()),
+        (None, ""),
+        "a key the snapshot no longer holds names no settings"
+    );
+}
+
+#[test]
+fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
+    let s = with_member_budget(
+        &snapshot_over(
+            Pool {
+                strategy: Strategy::Pace,
+                members: vec![("a", 0), ("b", 0), ("c", 1), ("d", 1)],
+                ..Pool::default()
+            },
+            &["d"],
+        ),
+        "c",
+        None,
+        Some(5.0),
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    for (id, five_hour) in [("a", 0.2), ("b", 0.4), ("c", 0.1), ("d", 0.3)] {
+        st.record_sample(
+            id,
+            refreshing(five_hour, T + 2 * HOUR, T + 72 * HOUR, T - 500),
+        );
+    }
+    st.record_member_spend(
+        &s,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "c".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: T + 24 * HOUR,
+            spent_usd: 1.5,
+            observed_at: T - 500,
+        }],
+    );
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(d.record.candidates.len(), 4);
+    for member in &d.record.candidates {
+        let pace = member
+            .pace
+            .as_ref()
+            .unwrap_or_else(|| panic!("{} has no pace", member.account_id));
+        assert!(
+            (pace.remaining - 0.9).abs() < 1e-9,
+            "{} reads its seven-day window",
+            member.account_id
+        );
+        assert!(member.windows.contains_key(FIVE_HOUR));
+        assert!(member.windows.contains_key(SEVEN_DAY));
+    }
+    assert_eq!(
+        d.record
+            .candidates
+            .iter()
+            .map(|c| (c.account_id.as_str(), c.tier))
+            .collect::<Vec<_>>(),
+        vec![
+            ("a", (0, 0, 0)),
+            ("b", (0, 0, 0)),
+            ("c", (0, 1, 0)),
+            ("d", (0, 1, 0)),
+        ]
+    );
+    assert_eq!(
+        candidate(&d.record, "c").budget,
+        vec![BudgetFacts {
+            period: "month",
+            budget_usd: 5.0,
+            spent_usd: 1.5,
+            period_start: 0,
+            period_end: T + 24 * HOUR,
+            observed_at: T - 500,
+        }]
+    );
+    assert!(candidate(&d.record, "a").budget.is_empty());
+    let chosen = picked(&d.result).to_string();
+    assert_eq!(candidate(&d.record, &chosen).rank, Some(1));
+    assert_eq!(candidate(&d.record, &chosen).verdict, "chosen");
+    let other = if chosen == "a" { "b" } else { "a" };
+    assert_eq!(candidate(&d.record, other).rank, Some(2));
+    assert_eq!(candidate(&d.record, other).verdict, "ranked");
+    assert_eq!(candidate(&d.record, "c").verdict, "eligible");
+    let pick = line(&d.record, "pick");
+    assert_eq!(fact(pick, "drawn"), &FactValue::Bool(true));
+    assert_eq!(
+        pick.facts
+            .iter()
+            .filter(|f| f.key == "score")
+            .map(|f| (f.account_id.clone(), f.unit))
+            .collect::<Vec<_>>(),
+        vec![
+            (Some("a".to_string()), Some("percent_per_hour")),
+            (Some("b".to_string()), Some("percent_per_hour")),
+        ]
+    );
+}
+
+#[test]
+fn a_spent_model_member_s_tier_reads_the_partition_beside_a_plan_funded_sibling() {
+    for prefer_subscription in [false, true] {
+        let s = snapshot(Pool {
+            policy: OveragePolicy::Allow,
+            members: vec![("a", 0), ("b", 1)],
+            prefer_subscription,
+            ..Pool::default()
+        });
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        st.record_sample(
+            "a",
+            with_fable(sample(0.2, 0.1, 1_000), 1.0, Some(9 * HOUR)),
+        );
+        st.record_sample(
+            "b",
+            with_fable(sample(0.3, 0.1, 1_000), 0.5, Some(9 * HOUR)),
+        );
+        st.record_credits("a", credits(true, None, Some(0.2), 1_000));
+        let d = decide(
+            &mut st,
+            &s,
+            &request(&s, None, "claude-fable-5-1", true, &[], 2_000),
+            &mut rng(),
+        );
+        assert_eq!(picked(&d.result), "b");
+        assert_eq!(
+            candidate(&d.record, "a").tier,
+            (1, 0, 1),
+            "the spent week's member reads the overage group and bit, kind order {prefer_subscription}"
+        );
+        assert_eq!(
+            candidate(&d.record, "b").tier,
+            (0, 1, 0),
+            "kind order {prefer_subscription}"
+        );
+        assert_eq!(d.record.outcome.tier, Some((0, 1, 0)));
+        assert_eq!(
+            fact(line(&d.record, "partitions"), "spent"),
+            &FactValue::Int(0),
+            "a member kept on extra usage is not dropped"
+        );
+    }
+}
+
+#[test]
+fn the_prefix_lookup_names_the_gate_that_refused_each_entry() {
+    let s = snapshot_over(
+        Pool {
+            members: vec![("a", 0), ("b", 0), ("c", 0), ("d", 0), ("e", 0)],
+            failover: Failover {
+                in_flight_cap: 1,
+                ..Failover::default()
+            },
+            ..Pool::default()
+        },
+        &["d", "e"],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![
+            AffinityRow {
+                lane: lane_key("claude-sonnet-5", "fast", "none", "-"),
+                ..static_row(&s, "s1", "a", 900)
+            },
+            AffinityRow {
+                ttl_ms: 500,
+                ..static_row(&s, "s2", "b", 900)
+            },
+            AffinityRow {
+                incarnation: 0,
+                ..static_row(&s, "s3", "c", 900)
+            },
+            static_row(&s, "s4", "d", 900),
+            static_row(&s, "s5", "e", 900),
+        ],
+    );
+    let _busy = st.in_flight().dispatched("d", 1_000);
+    let d = decide(
+        &mut st,
+        &s,
+        &static_req(&s, &["s1", "s2", "s3", "s4", "s5"]),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "e");
+    for (id, gate) in [
+        ("a", "lane"),
+        ("b", "expired"),
+        ("c", "incarnation"),
+        ("d", "at_cap"),
+    ] {
+        let lookup = &candidate(&d.record, id).prefix;
+        assert_eq!(
+            lookup.static_.as_ref().map(|e| e.refused_by),
+            Some(Some(gate)),
+            "{id}"
+        );
+        assert_eq!(lookup.static_match, None, "{id}");
+    }
+    let accepted = &candidate(&d.record, "e").prefix;
+    assert_eq!(
+        accepted
+            .static_
+            .as_ref()
+            .map(|e| (e.hash.as_str(), e.depth, e.refused_by)),
+        Some(("s5", 5, None))
+    );
+    assert_eq!(accepted.static_match, accepted.static_);
+}
+
+#[test]
+fn a_deeper_refusal_and_a_shallower_acceptance_on_one_member_fill_both_entries() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(
+        &st,
+        vec![
+            AffinityRow {
+                written_at: 1_500,
+                ..static_row(&s, "s1", "a", 900)
+            },
+            AffinityRow {
+                ttl_ms: 500,
+                prefix_tokens: 1_800,
+                ..static_row(&s, "s2", "a", 900)
+            },
+        ],
+    );
+    let d = decide(&mut st, &s, &static_req(&s, &["s1", "s2"]), &mut rng());
+    assert_eq!(picked(&d.result), "a");
+    let lookup = &candidate(&d.record, "a").prefix;
+    assert_eq!(
+        lookup
+            .static_
+            .as_ref()
+            .map(|e| (e.hash.as_str(), e.depth, e.refused_by)),
+        Some(("s2", 2, Some("expired")))
+    );
+    let matched = lookup
+        .static_match
+        .as_ref()
+        .expect("the shallower entry the rung took");
+    assert_eq!(
+        (
+            matched.hash.as_str(),
+            matched.depth,
+            matched.refused_by,
+            matched.written_at,
+            matched.ttl_ms,
+            matched.prefix_tokens,
+        ),
+        ("s1", 1, None, 1_500, 300_000, 900)
+    );
+    let rung = line(&d.record, "rung:static");
+    assert_eq!(
+        (fact(rung, "hash"), fact(rung, "depth")),
+        (&FactValue::Text("s1".into()), &FactValue::Int(1))
+    );
+    assert_eq!(d.record.outcome.rung.as_ref().map(|r| r.depth), Some(1));
+    let json = serde_json::to_value(&d.record).unwrap();
+    let prefix = &json["candidates"][0]["prefix"];
+    assert_eq!(prefix["static"]["hash"], "s2");
+    assert_eq!(prefix["static"]["refused_by"], "expired");
+    assert_eq!(prefix["static_match"]["hash"], "s1");
+    assert!(prefix["static_match"]["refused_by"].is_null());
+}
+
+#[test]
+fn a_four_member_record_serializes_under_nine_kilobytes() {
+    let s = with_member_budget(
+        &snapshot_over(
+            Pool {
+                strategy: Strategy::Pace,
+                migrate: Some(0.8),
+                select_below: Some(0.9),
+                members: vec![("a", 0), ("b", 0), ("c", 1), ("d", 1)],
+                failover: Failover {
+                    in_flight_cap: 1,
+                    ..Failover::default()
+                },
+                ..Pool::default()
+            },
+            &["d"],
+        ),
+        "c",
+        Some(2.0),
+        Some(40.0),
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    for (id, five_hour) in [("a", 0.2), ("b", 0.4), ("c", 0.1), ("d", 0.3)] {
+        st.record_sample(
+            id,
+            with_fable(
+                refreshing(five_hour, T + 2 * HOUR, T + 72 * HOUR, T - 500),
+                0.3,
+                Some(T + 96 * HOUR),
+            ),
+        );
+    }
+    st.record_member_spend(
+        &s,
+        [BudgetPeriod::Day, BudgetPeriod::Month]
+            .into_iter()
+            .map(|period| MemberSpend {
+                pool_id: "p".into(),
+                account_id: "c".into(),
+                period,
+                period_start: 0,
+                period_end: T + 24 * HOUR,
+                spent_usd: 1.5,
+                observed_at: T - 500,
+            })
+            .collect(),
+    );
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-opus-5",
+        T + HOUR,
+        "seven_day",
+        "rate_limit",
+    ));
+    let hashes: Vec<String> = ["1", "2", "3", "4"].map(|d| d.repeat(64)).to_vec();
+    seed_affinity(
+        &st,
+        ["a", "b", "c", "d"]
+            .iter()
+            .zip(&hashes)
+            .map(|(account, hash)| AffinityRow {
+                written_at: T - 1_000,
+                ..static_row(&s, hash, account, 31_200)
+            })
+            .collect(),
+    );
+    let _busy = st.in_flight().dispatched("d", T - 1_000);
+    let boundaries: Vec<&str> = hashes.iter().map(String::as_str).collect();
+    let req = SelectRequest {
+        now: T,
+        ..static_req(&s, &boundaries)
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        d.record.outcome.rung.as_ref().map(|r| r.rung),
+        Some("static")
+    );
+    let size = serde_json::to_vec(&d.record).unwrap().len();
+    assert!(size < 9_216, "{size} bytes");
 }
