@@ -267,7 +267,8 @@ fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
     pin.tail_hash = request.boundaries.last().cloned();
 }
 
-/// The hysteresis band under the migrate margin: a destination counts only below `margin - MIGRATE_BAND`.
+/// The hysteresis band under the shedding margin (`shed_ahead_of_pace`): a destination counts only below
+/// `margin - MIGRATE_BAND`.
 pub const MIGRATE_BAND: f64 = 0.05;
 
 /// Why a selection landed where it did, for the attempt row and the request drawer. `Serialize` here, so the
@@ -1242,10 +1243,10 @@ fn ahead_under(state: &RoutingState, account_id: &str, window: &str, t: f64, now
     ahead(state, account_id, window, now).is_none_or(|lead| lead < t)
 }
 
-/// Whether `account_id` reads under `migrate_above_utilization` minus the hysteresis band: how far each shared plan
-/// window runs ahead of its pace for a subscription account, the worst standing bucket for an api_key one. No
-/// threshold configured, or no reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a
-/// migration destination, so the arithmetic lives once.
+/// Whether `account_id` reads under `shed_ahead_of_pace` minus the hysteresis band: how far each shared plan window
+/// runs ahead of its pace for a subscription account, the worst standing bucket for an api_key one. No threshold
+/// configured, or no reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a migration
+/// destination, so the arithmetic lives once.
 fn under_band(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1253,7 +1254,7 @@ fn under_band(
     account_id: &str,
     now: i64,
 ) -> bool {
-    let Some(threshold) = pool.migrate_above_utilization else {
+    let Some(threshold) = pool.shed_ahead_of_pace else {
         return true;
     };
     let band = threshold - MIGRATE_BAND;
@@ -1332,7 +1333,7 @@ fn move_of<'a>(
         // A hot destination would shed the session again at its next round, so every move prefers a cool
         // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
         // hot sibling still answers, which staying put does not.
-        if pool.migrate_above_utilization.is_none() {
+        if pool.shed_ahead_of_pace.is_none() {
             return set;
         }
         let preferred: Vec<&'a Candidate> =
@@ -1423,7 +1424,7 @@ fn move_of<'a>(
     // The trigger reads how far the prediction runs ahead of the window's pace, as the ceiling reads the
     // prediction itself: a week at 0.5 ten percent in is a session worth shedding, the same week at 0.5 sixty
     // percent in is not, and a refunded window reads zero at its reset.
-    let threshold = pool.migrate_above_utilization?;
+    let threshold = pool.shed_ahead_of_pace?;
     let hot = ahead_at_least(state, &current.account_id, FIVE_HOUR, threshold, now)
         || ahead_at_least(state, &current.account_id, SEVEN_DAY, threshold, now);
     if !hot {

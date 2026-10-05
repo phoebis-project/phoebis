@@ -43,7 +43,7 @@ const isPoolGroup = (value: string | null): value is PoolGroup => value !== null
 /** The strip: a feature the pool has on, in the rail's order, each opening the dialog on the group that edits it. */
 const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: string }[] = [
   { group: 'autoMode', on: (p) => !p.autoModeServer, word: 'server-side auto mode off' },
-  { group: 'shedding', on: (p) => p.migrateAboveUtilization !== null, word: 'load shedding' },
+  { group: 'shedding', on: (p) => p.shedAheadOfPace !== null, word: 'load shedding' },
   { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: 'cache TTL' },
   { group: 'keepalive', on: (p) => p.keepalive.enabled, word: 'keepalive' },
 ];
@@ -771,9 +771,6 @@ interface PoolForm {
   failoverCustom: boolean;
   keepalive: boolean;
   members: Record<string, number>;
-  /** The margin in percent; null while the field is empty, which a switched-on save refuses. */
-  migrate: number | null;
-  migrateOn: boolean;
   modelRules: ModelRule[];
   name: string;
   overage: OveragePolicy;
@@ -783,6 +780,9 @@ interface PoolForm {
   selectBelow: number;
   selectBelowOn: boolean;
   sessionPlacement: SessionPlacement;
+  /** The lead over pace in percent; null while the field is empty, which a switched-on save refuses. */
+  shedAhead: number | null;
+  shedAheadOn: boolean;
   sheddingCustom: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
@@ -809,8 +809,6 @@ const blankForm = (): PoolForm => ({
   failoverCustom: false,
   keepalive: true,
   members: {},
-  migrate: null,
-  migrateOn: false,
   modelRules: [],
   name: '',
   overage: 'prefer_plan',
@@ -819,6 +817,8 @@ const blankForm = (): PoolForm => ({
   selectBelow: 80,
   selectBelowOn: false,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
+  shedAhead: null,
+  shedAheadOn: false,
   sheddingCustom: false,
   status: 'active',
   strategy: 'pace',
@@ -858,9 +858,6 @@ const formFrom = (pool: Pool): PoolForm => ({
   failoverCustom: failoverPresetOf(pool) === 'custom',
   keepalive: pool.keepalive.enabled,
   members: Object.fromEntries(pool.members.map((m) => [m.accountId, m.priority])),
-  // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
-  migrate: pool.migrateAboveUtilization === null ? null : Math.round(pool.migrateAboveUtilization * 10_000) / 100,
-  migrateOn: pool.migrateAboveUtilization !== null,
   modelRules: pool.modelRules,
   name: pool.name,
   overage: pool.overagePolicy,
@@ -871,6 +868,9 @@ const formFrom = (pool: Pool): PoolForm => ({
   selectBelow: pool.selectBelowUtilization === null ? 80 : Math.round(pool.selectBelowUtilization * 10_000) / 100,
   selectBelowOn: pool.selectBelowUtilization !== null,
   sessionPlacement: pool.sessionPlacement,
+  // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
+  shedAhead: pool.shedAheadOfPace === null ? null : Math.round(pool.shedAheadOfPace * 10_000) / 100,
+  shedAheadOn: pool.shedAheadOfPace !== null,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
   status: pool.status === 'disabled' ? 'disabled' : 'active',
@@ -981,7 +981,7 @@ export function PoolDialog({
   }, [open, accounts]);
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
-  const setMigrate = (value: number | null) => set('migrate', value);
+  const setShedAhead = (value: number | null) => set('shedAhead', value);
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
   const otherPools = pools.filter((p) => p.id !== pool?.id);
   // The id the create call derives from the name, which keys created before the pool is saved use too.
@@ -1023,10 +1023,6 @@ export function PoolDialog({
       const usd = (typed: string) => (typed.trim() === '' ? null : Number(typed));
       return { accountId, budgetDailyUsd: usd(budget.daily), budgetMonthlyUsd: usd(budget.monthly), priority };
     }),
-    // Through whole hundredths of a percent, so a stored four-decimal threshold saves back as stored: the two-decimal
-    // percent divided by 100 lands an ulp off for about a quarter of them. An empty field goes on as NaN, which the
-    // refusals below hold the save for.
-    migrateAboveUtilization: form.migrateOn ? (form.migrate === null ? Number.NaN : Math.round(form.migrate * 100) / 10_000) : null,
     // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
     minSharedPrefixTokens: prefixEnabled
       ? form.prefixTokens.trim() === '' ? Number.NaN : Number(form.prefixTokens)
@@ -1037,6 +1033,10 @@ export function PoolDialog({
     preferSubscription: form.preferSubscription,
     selectBelowUtilization: form.selectBelowOn ? form.selectBelow / 100 : null,
     sessionPlacement: form.sessionPlacement,
+    // Through whole hundredths of a percent, so a stored four-decimal threshold saves back as stored: the two-decimal
+    // percent divided by 100 lands an ulp off for about a quarter of them. An empty field goes on as NaN, which the
+    // refusals below hold the save for.
+    shedAheadOfPace: form.shedAheadOn ? (form.shedAhead === null ? Number.NaN : Math.round(form.shedAhead * 100) / 10_000) : null,
     status: form.status,
     strategy: form.strategy,
     subagentPlacement: form.subagentPlacement,
@@ -1560,11 +1560,11 @@ export function PoolDialog({
       <div className="cells">
         <div className="cell--half">
           <SwitchedNumber
-            label="Migrate above utilization"
-            numberLabel="Utilization (%)"
-            checked={form.migrateOn}
-            onChange={(v) => set('migrateOn', v)}
-            input={{ min: 0, max: 100, value: form.migrate ?? '', onChange: (e) => setMigrate(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Migrate above utilization (%)', 'aria-invalid': invalid('Migrate above utilization (%)') }}
+            label="Shed ahead of pace"
+            numberLabel="Lead over pace (%)"
+            checked={form.shedAheadOn}
+            onChange={(v) => set('shedAheadOn', v)}
+            input={{ min: 0, max: 100, value: form.shedAhead ?? '', onChange: (e) => setShedAhead(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Shed ahead of pace (%)', 'aria-invalid': invalid('Shed ahead of pace (%)') }}
             hint={
               <>
                 A member whose 5-hour or 7-day window runs ahead of pace by this much starts a <GroupLink id="shedding">shedding round</GroupLink>; a sibling counts as cool under the line minus 5%.
@@ -1609,7 +1609,7 @@ export function PoolDialog({
     shedding: (
       <>
         <p className="dialog-group__intro">
-          A member ahead of its pace by the <GroupLink id="utilization">migrate margin</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
+          A member ahead of its pace by the <GroupLink id="utilization">shedding margin</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
         </p>
         <div className="cells">
           <Expert>
@@ -1678,11 +1678,11 @@ export function PoolDialog({
           <Expert>
             <Field label="Preview" plain>
               <p className="shed-preview num" role="status">
-                {form.migrateOn ? (
+                {form.shedAheadOn ? (
                   shedPreviewLine(preview, true, settings.data ? 'ready' : settings.error ? 'missing' : 'loading')
                 ) : (
                   <>
-                    No round runs while <GroupLink id="utilization">migrate above utilization</GroupLink> is off.
+                    No round runs while <GroupLink id="utilization">shed ahead of pace</GroupLink> is off.
                   </>
                 )}
               </p>

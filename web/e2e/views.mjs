@@ -730,7 +730,7 @@ async function poolSelectBelow(theme) {
     await expertView(false).catch(() => {});
     return;
   }
-  for (const label of ['Migrate above utilization', 'Select below utilization']) {
+  for (const label of ['Shed ahead of pace', 'Select below utilization']) {
     const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
@@ -751,14 +751,14 @@ async function poolSelectBelow(theme) {
         switch: `${box.width} ${box.height}`,
       };
     };
-    const migrate = read('Migrate above utilization');
+    const migrate = read('Shed ahead of pace');
     const select = read('Select below utilization');
     return migrate && select ? { migrate, select } : null;
   });
   if (!pair) {
     say('the migration and select-below switches are not both drawn to compare');
   } else {
-    measurements.push(`${theme} /pools migrate above ${JSON.stringify(pair.migrate)}`);
+    measurements.push(`${theme} /pools shed ahead of pace ${JSON.stringify(pair.migrate)}`);
     measurements.push(`${theme} /pools select below ${JSON.stringify(pair.select)}`);
     const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.migrate[key]);
     if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the migration control's`);
@@ -789,7 +789,7 @@ async function poolRoutingCards(theme) {
     await expertView(false).catch(() => {});
     return;
   }
-  for (const label of ['Migrate above utilization', 'Select below utilization']) {
+  for (const label of ['Shed ahead of pace', 'Select below utilization']) {
     const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
@@ -822,7 +822,7 @@ async function poolRoutingCards(theme) {
         affinityPill: box(idlePill('Session affinity')),
         failoverPill: box(idlePill('Failover preset')),
         handle: handle && knob && track ? { inside: knob.left + knob.width / 2 >= track.left - 1 && knob.right - knob.width / 2 <= track.right + 1, value: handle.getAttribute('aria-valuenow'), width: knob.width } : null,
-        migrateField: box(el.querySelector('input[aria-label="Migrate above utilization (%)"]')),
+        migrateField: box(el.querySelector('input[aria-label="Shed ahead of pace (%)"]')),
         overageChoice: box(idleChoice('Overage policy')),
         overageField: box(el.querySelector('input[aria-label="Overage grace (min)"]') ?? [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Overage grace (min)')?.querySelector('input')),
         preview: preview ? (preview.textContent ?? '').trim() : null,
@@ -959,7 +959,7 @@ const POOL_DEPENDENTS = {
   // The switch sits in another group, which is chosen to turn it off and back.
   'Probe tuning': [{ switch: 'Keep prompt caches warm', in: 'Keepalive', controls: ['input[type="number"]'] }],
   'Utilization thresholds': [
-    { switch: 'Migrate above utilization', controls: ['input[aria-label="Migrate above utilization (%)"]'] },
+    { switch: 'Shed ahead of pace', controls: ['input[aria-label="Shed ahead of pace (%)"]'] },
     { switch: 'Select below utilization', controls: ['input[aria-label="Select below utilization (%)"]'], expert: true },
   ],
 };

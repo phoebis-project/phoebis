@@ -1875,7 +1875,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -1975,7 +1975,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const sw = (label) => dlg?.querySelector(`button[role="switch"][aria-label="${label}"]`);
     const num = (label) => dlg?.querySelector(`input[aria-label="${label}"]`);
     const switched = [
-      ['Migrate above utilization', 'Migrate above utilization (%)'],
+      ['Shed ahead of pace', 'Shed ahead of pace (%)'],
       ['Select below utilization', 'Select below utilization (%)'],
       ['Daily probe cost cap ($)', 'Daily probe cost cap in dollars'],
     ];
@@ -2062,8 +2062,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
 
   // Migration is off by default; its switch enables the percent input, which is drawn either way.
-  const migrateSwitch = dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]');
-  const migratePercent = () => dlg?.querySelector('input[aria-label="Migrate above utilization (%)"]');
+  const migrateSwitch = dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]');
+  const migratePercent = () => dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
   results.push({ name: '/pools migrate starts off', ok: migrateSwitch?.getAttribute('aria-checked') === 'false' && migratePercent()?.disabled === true, missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled)] });
   {
     const card = (label) => group(dlg, label);
@@ -2091,7 +2091,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'Never:',
       'When needed:',
       'Always:',
-      'No round runs while migrate above utilization is off.',
+      'No round runs while shed ahead of pace is off.',
       'Failover',
       'Overage grace',
       'Wind down',
@@ -2181,7 +2181,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const percent = () => dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
     results.push({
       name: '/pools select-below starts off beside migration',
-      ok: selectSwitch?.getAttribute('aria-checked') === 'false' && percent()?.disabled === true && !!util?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]'),
+      ok: selectSwitch?.getAttribute('aria-checked') === 'false' && percent()?.disabled === true && !!util?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]'),
       missing: [String(selectSwitch?.getAttribute('aria-checked')), String(percent()?.disabled)],
     });
     selectSwitch?.click();
@@ -3043,10 +3043,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool studio')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
   // business leads its 5-hour pace by about 0.07 at the mock's clock, so a margin of 5 % makes it the one hot member.
-  const percent = dlg?.querySelector('input[aria-label="Migrate above utilization (%)"]');
+  const percent = dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
   if (percent) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(percent, '5');
   percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
@@ -3072,7 +3072,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(300);
     return [...m.container.querySelectorAll('dialog[open]')].pop();
   };
-  const percent = (dlg) => dlg?.querySelector('input[aria-label="Migrate above utilization (%)"]');
+  const percent = (dlg) => dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
   const footButton = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   // An edit of another field, so the threshold goes out as the dialog read it from the stored pool.
   const disable = async (dlg) => {
@@ -3086,11 +3086,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     footButton(dlg, 'Save pool')?.click();
     await m.settle(700);
     spy.restore();
-    return spy.calls[0]?.[1]?.migrateAboveUtilization;
+    return spy.calls[0]?.[1]?.shedAheadOfPace;
   };
 
   // The page reads the pools once at mount, so a pool written through the API reaches the card after a remount.
-  await api.updatePool('all', { ...written, migrateAboveUtilization: 0.875 });
+  await api.updatePool('all', { ...written, shedAheadOfPace: 0.875 });
   m.unmount();
   m = await mount('/pools');
   let dlg = await openAll();
@@ -3104,7 +3104,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 
   // Four decimals, which the two-decimal percent divided by 100 would send back one ulp off.
-  await api.updatePool('all', { ...written, migrateAboveUtilization: 0.8333 });
+  await api.updatePool('all', { ...written, shedAheadOfPace: 0.8333 });
   m.unmount();
   m = await mount('/pools');
   dlg = await openAll();
@@ -3117,7 +3117,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [String(finer), String(finerSaved), m.container.querySelector('dialog[open] .dialog__status')?.textContent ?? 'closed'],
   });
 
-  await api.updatePool('all', { ...written, migrateAboveUtilization: 0.3 });
+  await api.updatePool('all', { ...written, shedAheadOfPace: 0.3 });
   m.unmount();
   m = await mount('/pools');
   dlg = await openAll();
@@ -3148,7 +3148,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   dlg = await openAll();
   rail(dlg, 'utilization')?.click();
   await m.settle(120);
-  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
   const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes(
     'A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.',
@@ -3160,7 +3160,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const fifth = await savedMigrate(dlg);
   results.push({
     name: '/pools a margin of 20 % saves as 0.2 once typed into a field that opened empty',
-    ok: hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Migrate above utilization needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
+    ok: hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Shed ahead of pace needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
     missing: [hint ? 'hint' : 'no hint', ...empty.map(String), String(fifth)],
   });
   // The story's pool back, so the checks below read the pool the fixture holds.
@@ -3282,7 +3282,7 @@ m.unmount();
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
   rail(dlg, 'shedding')?.click();
   await m.settle(120);
@@ -3308,7 +3308,7 @@ m.unmount();
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
   await m.settle(120);
   rail(dlg, 'shedding')?.click();
   await m.settle(120);
@@ -3721,7 +3721,7 @@ localStorage.removeItem('phoebis.expertView');
     Models: [['Model rules'], null],
     Selection: [['Strategy', 'Prioritize subscription accounts'], null],
     Pinning: [['Session affinity'], '1 more setting in the '],
-    'Utilization thresholds': [['Migrate above utilization', 'Utilization (%)', 'Member utilization'], '1 more setting in the '],
+    'Utilization thresholds': [['Shed ahead of pace', 'Lead over pace (%)', 'Member utilization'], '1 more setting in the '],
     'Overage and plan end': [['Overage policy'], '2 more settings in the '],
     'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
     Keepalive: [KEEPALIVE, null],
@@ -3733,7 +3733,7 @@ localStorage.removeItem('phoebis.expertView');
     'Auto mode': ['Support server-side auto mode'],
     Placement: ['Subagent placement', 'Session placement', 'Minimum shared prefix, tokens'],
     Pinning: ['Session affinity', 'Pin sessions'],
-    'Utilization thresholds': ['Migrate above utilization', 'Utilization (%)', 'Select below utilization', 'Utilization (%)', 'Member utilization'],
+    'Utilization thresholds': ['Shed ahead of pace', 'Lead over pace (%)', 'Select below utilization', 'Utilization (%)', 'Member utilization'],
     'Load shedding': ['Preset', 'Share (%)', 'Burn window (s)', 'Source dwell (s)', 'Migrate when spent', 'Warm sessions', 'Preview'],
     Failover: ['Preset', 'In flight', 'Retry in place (s)', 'Pace floor (%)'],
     'Overage and plan end': ['Overage policy', 'Overage grace (min)', 'Wind down (min)'],

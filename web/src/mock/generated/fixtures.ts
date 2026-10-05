@@ -6335,7 +6335,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "subagent_placement": "by_cohort",
           "session_placement": "by_strategy",
           "min_shared_prefix_tokens": 20000,
-          "migrate_above_utilization": null,
+          "shed_ahead_of_pace": null,
           "select_below_utilization": null,
           "model_rules": [
             {
@@ -6390,8 +6390,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1791197141940,
-          "updated_at": 1791197141940,
+          "created_at": 1791199175055,
+          "updated_at": 1791199175055,
           "members": [
             {
               "account_id": "business",
@@ -6430,7 +6430,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "I7TnkZN0",
+              "prefix": "QLU16leo",
               "enabled": true
             }
           ],

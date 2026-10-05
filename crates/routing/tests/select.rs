@@ -82,7 +82,7 @@ struct Pool {
     subagent_placement: SubagentPlacement,
     session_placement: SessionPlacement,
     min_shared_prefix_tokens: u64,
-    migrate: Option<f64>,
+    shed_ahead: Option<f64>,
     select_below: Option<f64>,
     members: Vec<(&'static str, u32)>,
     prefer_subscription: bool,
@@ -101,7 +101,7 @@ impl Default for Pool {
             subagent_placement: SubagentPlacement::ByCohort,
             session_placement: SessionPlacement::ByStrategy,
             min_shared_prefix_tokens: 20_000,
-            migrate: None,
+            shed_ahead: None,
             select_below: None,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
             prefer_subscription: false,
@@ -194,7 +194,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             strategy: pool.strategy,
             affinity_ttl_seconds: pool.affinity,
             overage_policy: pool.policy,
-            migrate_above_utilization: pool.migrate,
+            shed_ahead_of_pace: pool.shed_ahead,
             select_below_utilization: pool.select_below,
             prefer_subscription: pool.prefer_subscription,
             shedding: pool.shedding,
@@ -919,7 +919,7 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
 #[test]
 fn a_marked_pin_moves_to_a_cooler_sibling_and_stays_when_none_exists() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -2555,7 +2555,7 @@ fn an_explicitly_chosen_strategy_orders_the_api_key_group_itself() {
 #[test]
 fn a_marked_pin_moves_only_to_a_destination_under_the_band() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -3016,7 +3016,7 @@ fn an_unknown_seven_day_reading_drops_nothing() {
 #[test]
 fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -3042,7 +3042,7 @@ fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell(
 #[test]
 fn a_spent_pin_moves_to_a_sibling_the_band_would_refuse() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -4562,7 +4562,7 @@ fn shared_account(dwells: [u64; 2], d_in: Option<&str>) -> RegistrySnapshot {
     let pool = |id: &str, source_dwell_seconds: u64| PoolRow {
         strategy: Strategy::Priority,
         prefer_subscription: false,
-        migrate_above_utilization: Some(0.8),
+        shed_ahead_of_pace: Some(0.8),
         shedding: Shedding {
             source_dwell_seconds,
             ..Shedding::default()
@@ -4879,11 +4879,11 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
         );
         assert_eq!(sel.trace.placement, None);
     };
-    // At or above `migrate_above_utilization` minus the band on the 5-hour window.
+    // At or above `shed_ahead_of_pace` minus the band on the 5-hour window.
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
-            migrate: Some(0.8),
+            shed_ahead: Some(0.8),
             ..Pool::default()
         },
         &|st| {
@@ -10057,7 +10057,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
 /// below would land on `b`.
 fn cool_preference_pool(kinds: Vec<(&'static str, AccountKind)>) -> Pool {
     Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         kinds,
         ..Pool::default()
@@ -10164,7 +10164,7 @@ fn a_drain_move_prefers_a_cool_sibling() {
 #[test]
 fn a_spent_move_lands_on_a_hot_sibling_when_no_cool_one_exists() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -10327,7 +10327,7 @@ fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed()
 /// A pool whose round runs on `a` at 0.8, with `b` a cool destination.
 fn shedding_pool(shedding: Shedding) -> Pool {
     Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         shedding,
         ..Pool::default()
@@ -10342,7 +10342,7 @@ fn hot_a_cool_b(st: &mut RoutingState, at: i64) {
 /// A margin of 0.2 over pace on the shedding pool, where the cool line sits at 0.15.
 fn pace_pool() -> Pool {
     Pool {
-        migrate: Some(0.2),
+        shed_ahead: Some(0.2),
         ..shedding_pool(Shedding::default())
     }
 }
@@ -10656,7 +10656,7 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
 #[test]
 fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
@@ -10690,7 +10690,7 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
 #[test]
 fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });

@@ -21,7 +21,7 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
   fast: { inFlightCap: 8, paceFloor: 0.1, retryInPlaceSeconds: 5 },
 };
 
-/** The hysteresis band under the migrate margin: a shed session lands only on a member below `margin - MIGRATE_BAND`. */
+/** The hysteresis band under the shedding margin: a shed session lands only on a member below `margin - MIGRATE_BAND`. */
 export const MIGRATE_BAND = 0.05;
 
 /** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
@@ -94,7 +94,7 @@ export interface ShedPreview {
    * from within the dwell, which the pool view does not carry.
    */
   cool: boolean;
-  /** Members whose 5-hour or 7-day window runs ahead of its pace by the migrate margin, each of which runs a round. */
+  /** Members whose 5-hour or 7-day window runs ahead of its pace by the shedding margin, each of which runs a round. */
   members: number;
   sessions: number;
   /** The unit every replayed member's burn is in; null when none has a pin or two members differ. */
@@ -106,7 +106,7 @@ export interface ShedPreview {
 
 /**
  * The shedding round's dry run: how many pins would be marked, how many of them warm, and their share of the burn.
- * Each member ahead of its pace by the migrate margin replays its round over the pool's pins on it: `sessions` is the
+ * Each member ahead of its pace by the shedding margin replays its round over the pool's pins on it: `sessions` is the
  * pool's slice, the sessions under its keys, which the caller filters, since the router's round marks the triggering
  * pool's pins alone. The round decays each burn to `now`, as the router's `burn_decayed` does, and orders cold pins
  * first by burn, then warm ones by burn over their last input size, bounded by the warm-sessions mode. A member's
@@ -115,13 +115,13 @@ export interface ShedPreview {
  * `sized` names the accounts whose tier the cost table sizes.
  */
 export function shedPreview(
-  pool: Pick<Pool, 'burnWindowSeconds' | 'migrateAboveUtilization' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
+  pool: Pick<Pool, 'burnWindowSeconds' | 'shedAheadOfPace' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
   accounts: Account[],
   sessions: Session[],
   now: number,
   sized: ReadonlySet<string>,
 ): ShedPreview {
-  const threshold = pool.migrateAboveUtilization;
+  const threshold = pool.shedAheadOfPace;
   if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const band = threshold - MIGRATE_BAND;
@@ -204,8 +204,8 @@ export function shedPreview(
  * The shedding card's dry run in one sentence, naming the unit its share was taken in. Until the cost table is read no
  * window-share pin enters the round, so a count then would read short; `table` says whether it has been read.
  */
-export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
-  if (!migrateOn) return 'No round runs while migrate above utilization is off.';
+export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
+  if (!shedAheadOn) return 'No round runs while shed ahead of pace is off.';
   if (table === 'loading') return 'The cost table is loading; window-share pins are counted once it is read.';
   if (table === 'missing') return 'The cost table did not load, so window-share pins cannot be counted.';
   if (preview.members === 0) return 'No member is ahead of pace by the margin.';

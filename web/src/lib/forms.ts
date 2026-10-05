@@ -170,8 +170,8 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('pinning', 'Pin sessions', AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) ? null : listed('Pin sessions'));
 
   // NaN is a switched-on field left empty, held here so a save never reads it as a margin of 0.
-  const migrate = input.migrateAboveUtilization;
-  refuse('utilization', 'Migrate above utilization (%)', Number.isNaN(migrate) ? 'Migrate above utilization needs a value from 0 to 100.' : ratio(migrate, 0) ? null : 'Migrate above utilization is from 0 to 100.');
+  const shedAhead = input.shedAheadOfPace;
+  refuse('utilization', 'Shed ahead of pace (%)', Number.isNaN(shedAhead) ? 'Shed ahead of pace needs a value from 0 to 100.' : ratio(shedAhead, 0) ? null : 'Shed ahead of pace is from 0 to 100.');
   refuse('utilization', 'Select below utilization (%)', ratio(input.selectBelowUtilization, 0) ? null : 'Select below utilization is from 0 to 100.');
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>

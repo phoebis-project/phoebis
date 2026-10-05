@@ -43,7 +43,7 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'pace',
     preferSubscription: true,
     overagePolicy: 'prefer_plan',
-    migrateAboveUtilization: null,
+    shedAheadOfPace: null,
     selectBelowUtilization: null,
     affinityTtlSeconds: 600,
     // Pins only for a request that caches, and a fresh session placed where its static prefix is warm.
@@ -106,7 +106,7 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'round_robin',
     preferSubscription: false,
     overagePolicy: 'allow',
-    migrateAboveUtilization: 0.85,
+    shedAheadOfPace: 0.85,
     selectBelowUtilization: null,
     // A batch pool tuned by hand, so neither setting group matches a preset and both read custom.
     shedShare: 0.4,
@@ -144,7 +144,7 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'priority',
     preferSubscription: true,
     overagePolicy: 'prefer_plan',
-    migrateAboveUtilization: null,
+    shedAheadOfPace: null,
     selectBelowUtilization: null,
     affinityTtlSeconds: 3_600,
     movesPerHour: {},

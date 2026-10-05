@@ -114,9 +114,9 @@ pub struct PoolSpec {
     pub failover: Failover,
     /// The harness key's own override of `auto_mode_server`; `None` inherits the pool's.
     pub key_auto_mode_server: Option<bool>,
-    pub migrate_above_utilization: Option<f64>,
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
+    pub shed_ahead_of_pace: Option<f64>,
     pub strategy: Strategy,
 }
 
@@ -129,9 +129,9 @@ impl Default for PoolSpec {
             cache_ttl: "{}",
             failover: Failover::default(),
             key_auto_mode_server: None,
-            migrate_above_utilization: None,
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
+            shed_ahead_of_pace: None,
             strategy: Strategy::Priority,
         }
     }
@@ -703,7 +703,7 @@ async fn build(
                     strategy: pool.strategy,
                     affinity_ttl_seconds: pool.affinity_ttl_seconds,
                     overage_policy: pool.overage_policy,
-                    migrate_above_utilization: pool.migrate_above_utilization,
+                    shed_ahead_of_pace: pool.shed_ahead_of_pace,
                     model_rules: pool.model_rules,
                     prefer_subscription: false,
                     failover: pool.failover,

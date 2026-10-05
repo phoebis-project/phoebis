@@ -127,13 +127,14 @@ export interface PoolInput extends PoolEngineFields, PoolAffinityFields {
   keepalive: PoolKeepalive;
   /** A member list replaces the pool's whole membership, so a member sent without a budget clears its budget. */
   members: { accountId: string; budgetDailyUsd: number | null; budgetMonthlyUsd: number | null; priority: number }[];
-  migrateAboveUtilization: number | null;
   modelRules: ModelRule[];
   name: string;
   overagePolicy: OveragePolicy;
   /** Order the selection set by account kind before priority; the operator's answer alone. */
   preferSubscription: boolean;
   selectBelowUtilization: number | null;
+  /** Null disables the shedding round. */
+  shedAheadOfPace: number | null;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
 }

@@ -379,8 +379,6 @@ export interface Pool {
   keepalive: PoolKeepalive;
   keys: PoolKey[];
   members: PoolMember[];
-  /** Null disables the shedding round. */
-  migrateAboveUtilization: number | null;
   /** Whether a pin moves off a member whose window for its model is spent while a sibling has allowance left. */
   migrateWhenSpent: boolean;
   /** Under `by_warm_prefix`, the smallest estimated static prefix, in tokens, that places a fresh session. */
@@ -402,6 +400,8 @@ export interface Pool {
   /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
   selectBelowUtilization: number | null;
   sessionPlacement: SessionPlacement;
+  /** Null disables the shedding round. */
+  shedAheadOfPace: number | null;
   /** The share of a hot member's burn one shedding round moves. */
   shedShare: number;
   /** Seconds a member that shed waits before its next round, and a session shed off it stays away. */

@@ -93,7 +93,7 @@ struct PoolInput {
     #[serde(default)]
     overage_policy: Option<String>,
     #[serde(default, deserialize_with = "double_option")]
-    migrate_above_utilization: Option<Option<f64>>,
+    shed_ahead_of_pace: Option<Option<f64>>,
     #[serde(default, deserialize_with = "double_option")]
     select_below_utilization: Option<Option<f64>>,
     #[serde(default)]
@@ -246,14 +246,14 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             }
         };
     }
-    if let Some(threshold) = input.migrate_above_utilization {
+    if let Some(threshold) = input.shed_ahead_of_pace {
         if threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
             return Err(failure(
                 StatusCode::BAD_REQUEST,
-                "migrate_above_utilization is between 0 and 1",
+                "shed_ahead_of_pace is between 0 and 1",
             ));
         }
-        row.migrate_above_utilization = threshold;
+        row.shed_ahead_of_pace = threshold;
     }
     if let Some(threshold) = input.select_below_utilization {
         if threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
@@ -500,7 +500,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         strategy: Strategy::Pace,
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
-        migrate_above_utilization: None,
+        shed_ahead_of_pace: None,
         select_below_utilization: None,
         model_rules: Vec::new(),
         keepalive_json: "{}".into(),
@@ -845,7 +845,7 @@ pub(crate) async fn pool_json_from(
         "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
         "affinity_mode": row.affinity.mode.as_str(), "subagent_placement": row.affinity.subagent_placement.as_str(),
         "session_placement": row.affinity.session_placement.as_str(), "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
-        "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
+        "shed_ahead_of_pace": row.shed_ahead_of_pace, "select_below_utilization": row.select_below_utilization,
         "model_rules": row.model_rules,
         "shed_share": row.shedding.shed_share, "burn_window_seconds": row.shedding.burn_window_seconds,
         "source_dwell_seconds": row.shedding.source_dwell_seconds, "migrate_when_spent": row.shedding.migrate_when_spent,

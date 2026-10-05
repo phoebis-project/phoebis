@@ -18,7 +18,6 @@ const input = {
   inFlightCap: pool.inFlightCap,
   keepalive: pool.keepalive,
   members: pool.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })),
-  migrateAboveUtilization: pool.migrateAboveUtilization,
   migrateWhenSpent: pool.migrateWhenSpent,
   minSharedPrefixTokens: pool.minSharedPrefixTokens,
   modelRules: pool.modelRules,
@@ -30,6 +29,7 @@ const input = {
   retryInPlaceSeconds: pool.retryInPlaceSeconds,
   selectBelowUtilization: pool.selectBelowUtilization,
   sessionPlacement: pool.sessionPlacement,
+  shedAheadOfPace: pool.shedAheadOfPace,
   shedShare: pool.shedShare,
   sourceDwellSeconds: pool.sourceDwellSeconds,
   status: 'active',
@@ -118,12 +118,12 @@ test('a pool input refuses thresholds outside their range and an empty name', ()
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: -0.1 }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 0 }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0 }, accounts), true, 'a margin over pace runs from 0 %');
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.2 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: -0.1 }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: Number.NaN }, accounts), false, 'a switched-on field left empty holds the save');
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 1.2 }, accounts), false, 'the route bounds every value to 0 to 1');
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.9 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0 }, accounts), true, 'a margin over pace runs from 0 %');
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0.2 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: -0.1 }, accounts), false);
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: Number.NaN }, accounts), false, 'a switched-on field left empty holds the save');
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 1.2 }, accounts), false, 'the route bounds every value to 0 to 1');
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0.9 }, accounts), true);
 });
 
 test('a pool input holds every engine bound', () => {
@@ -330,8 +330,8 @@ test('a pool refusal names the group its control sits in', () => {
       ],
     ],
     [{ affinityMode: 'sometimes' }, refused('Pin sessions', 'pinning', 'Pin sessions is one of its listed choices.')],
-    [{ migrateAboveUtilization: 1.2 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 0 to 100.')],
-    [{ migrateAboveUtilization: Number.NaN }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization needs a value from 0 to 100.')],
+    [{ shedAheadOfPace: 1.2 }, refused('Shed ahead of pace (%)', 'utilization', 'Shed ahead of pace is from 0 to 100.')],
+    [{ shedAheadOfPace: Number.NaN }, refused('Shed ahead of pace (%)', 'utilization', 'Shed ahead of pace needs a value from 0 to 100.')],
     [{ selectBelowUtilization: 1.2 }, refused('Select below utilization (%)', 'utilization', 'Select below utilization is from 0 to 100.')],
     [{ shedShare: 1.2 }, refused('Share (%)', 'shedding', 'Share (%) is from 0 to 100.')],
     [{ burnWindowSeconds: 59 }, refused('Burn window (s)', 'shedding', 'Burn window (s) is a whole number of at least 60.')],

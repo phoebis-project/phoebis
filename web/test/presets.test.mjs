@@ -54,7 +54,7 @@ const pool = (over = {}) => ({
     { accountId: 'hot', eligible: 'eligible', priority: 0 },
     { accountId: 'cool', eligible: 'eligible', priority: 0 },
   ],
-  migrateAboveUtilization: 0.8,
+  shedAheadOfPace: 0.8,
   shedShare: 0.5,
   warmSessions: 'when_needed',
   ...over,
@@ -80,7 +80,7 @@ test('a window leads its pace by its utilization less the share of it that has e
 
 test('a member at half its week counts as hot at a margin of a fifth ten percent in and not sixty percent in', () => {
   const halfway = (elapsed) => ({ ...account('halfway', 0.1), windows: [reading('5h', 0.1), { ...reading('7d', 0.5), resetsAt: at(NOW + WEEK * (1 - elapsed)) }] });
-  const members = (elapsed) => replay([halfway(elapsed)], [], { migrateAboveUtilization: 0.2 }).members;
+  const members = (elapsed) => replay([halfway(elapsed)], [], { shedAheadOfPace: 0.2 }).members;
   assert.deepEqual([members(0.1), members(0.6)], [1, 0], '0.4 ahead of pace runs a round, 0.1 behind it does not');
 });
 
@@ -120,7 +120,7 @@ test('the preview orders cold pins first, stops at the share, and never marks th
   assert.equal(preview(four, { shedShare: 0 }).sessions, 0, 'a share of 0 marks nothing');
   const never = preview(four, { warmSessions: 'never' });
   assert.deepEqual([never.sessions, never.warm, never.burnShare.toFixed(2)], [1, 0, '0.30'], 'never stops after the cold pins');
-  assert.deepEqual([preview(four, { migrateAboveUtilization: 0.95 }).members, preview(four, { migrateAboveUtilization: null }).members], [0, 0], 'no member at the threshold, or no threshold, replays no round');
+  assert.deepEqual([preview(four, { shedAheadOfPace: 0.95 }).members, preview(four, { shedAheadOfPace: null }).members], [0, 0], 'no member at the threshold, or no threshold, replays no round');
   // Folded one burn window ago, 10 has decayed to 10/e, under the 5 folded now; a burn never folded reads as stored.
   const decayed = preview([pin('old', 10, false, { burnAt: at(NOW - 600_000) }), pin('new', 5, false), pin('unfolded', 1, false, { burnAt: null })]);
   assert.deepEqual([decayed.sessions, decayed.burnShare.toFixed(3)], [1, (5 / (10 / Math.E + 5 + 1)).toFixed(3)], 'the order and the share read each burn decayed to now');
@@ -207,7 +207,7 @@ test('with no member under the band the preview marks sessions it cannot move', 
   assert.equal(cooling.cool, false, 'a member the router skips is no destination');
   const open = replay([hot, near, cool], four);
   assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in window share.']);
-  assert.equal(d.shedPreviewLine(open, false), 'No round runs while migrate above utilization is off.');
+  assert.equal(d.shedPreviewLine(open, false), 'No round runs while shed ahead of pace is off.');
   assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is ahead of pace by the margin.');
 });
 
@@ -216,5 +216,5 @@ test('while the cost table is loading or did not load the preview names the tabl
   assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost table is loading; window-share pins are counted once it is read.');
   assert.equal(d.shedPreviewLine(round, true, 'missing'), 'The cost table did not load, so window-share pins cannot be counted.');
   assert.equal(d.shedPreviewLine(round, true, 'ready'), 'Would move 2 sessions, 1 warm, 70% of the burn in window share.', 'a read table counts as before');
-  assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while migrate above utilization is off.', 'with migrate off no round runs, table or not');
+  assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while shed ahead of pace is off.', 'with shed ahead of pace off no round runs, table or not');
 });

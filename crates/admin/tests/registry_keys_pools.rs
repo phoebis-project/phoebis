@@ -58,7 +58,7 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         post(
             &app,
             "/admin/pools",
-            r#"{"id":"p2","label":"x","strategy":"pace","migrate_above_utilization":1.5}"#,
+            r#"{"id":"p2","label":"x","strategy":"pace","shed_ahead_of_pace":1.5}"#,
             Some(&cookie)
         )
         .await
