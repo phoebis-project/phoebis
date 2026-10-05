@@ -235,12 +235,18 @@ fn a_removed_key_fails_check_config_as_invalid_yaml() {
             "admin" => config_file_with_admin(dir.path(), &name, lines),
             _ => config_file(dir.path(), &name, &format!("{block}:\n{lines}")),
         };
+        let key = lines
+            .lines()
+            .next()
+            .and_then(|line| line.split_once(':'))
+            .map(|(key, _)| key.trim())
+            .unwrap();
         let out = check_config(&mut phoebis(), &config);
         assert!(!out.status.success(), "{block}: {lines}{}", printed(&out));
         let stderr = String::from_utf8_lossy(&out.stderr);
         assert!(
             stderr.contains("the configuration is not valid YAML")
-                && stderr.contains("unknown field"),
+                && stderr.contains(&format!("unknown field `{key}`")),
             "{block}: {lines}{}",
             printed(&out)
         );
