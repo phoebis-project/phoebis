@@ -3,7 +3,7 @@
 //! that fails part way removes what it wrote.
 
 use std::ffi::{CStr, CString};
-use std::fs::DirBuilder;
+use std::fs::{DirBuilder, File};
 use std::io::{BufRead, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
 use std::os::unix::fs::{DirBuilderExt, MetadataExt};
@@ -735,8 +735,8 @@ fn write(
         create_missing(dir, written)?;
     }
 
-    let key = StorageKey::generate().to_hex();
-    write_file(&plan.key_file, 0o600, &[key.as_bytes(), b"\n"], written)?;
+    let hex = StorageKey::generate().to_hex();
+    let key_file = write_file(&plan.key_file, 0o600, &[hex.as_bytes(), b"\n"], written)?;
     if let Some(env_file) = &plan.env_file {
         let lines = format!("{}={secret}\nRUST_LOG=info\n", plan.secret_env);
         write_file(env_file, 0o600, &[lines.as_bytes()], written)?;
@@ -761,7 +761,7 @@ fn write(
     crate::config::load_unresolved(&plan.config_path)
         .map_err(|error| InitError::Written { error })?;
     if let Some((uid, gid)) = owner {
-        hand_over(plan, uid, gid, written)?;
+        hand_over(plan, &key_file, uid, gid, written)?;
     }
     Ok(())
 }
@@ -792,7 +792,7 @@ fn write_file(
     mode: u32,
     parts: &[&[u8]],
     written: &mut Vec<Landed>,
-) -> Result<(), InitError> {
+) -> Result<File, InitError> {
     let mut file = create_private_file(path, mode)
         .map_err(io_error(format!("creating {}", path.display())))?;
     written.push(Landed {
@@ -804,18 +804,27 @@ fn write_file(
             .map_err(io_error(format!("writing {}", path.display())))?;
     }
     file.sync_all()
-        .map_err(io_error(format!("writing {}", path.display())))
+        .map_err(io_error(format!("writing {}", path.display())))?;
+    Ok(file)
 }
 
-/// The key file, then the data directory and every other directory this run created, go to the owner and its primary
-/// group, since the service must traverse them. A directory that existed keeps its owner, so a `--data-dir` naming a
-/// directory the host already uses is never handed over, and the configuration and environment files stay the
-/// caller's.
-fn hand_over(plan: &Plan, uid: u32, gid: u32, written: &[Landed]) -> Result<(), InitError> {
-    let paths = std::iter::once(plan.key_file.as_path()).chain(owned_dirs(plan, written));
-    for path in paths {
-        std::os::unix::fs::chown(path, Some(uid), Some(gid))
-            .map_err(io_error(format!("handing {} to the owner", path.display())))?;
+/// The key file, then the directories `owned_dirs` names, go to the owner and its primary group, since the service
+/// reads through them. A directory that existed keeps its owner, so a `--data-dir` naming a directory the host already
+/// uses is never handed over, and the configuration and environment files stay the caller's.
+///
+/// The key file goes over through the descriptor `create_new` opened and each directory through `lchown`, so a link
+/// swapped in by name, in a parent someone else may write, cannot carry the change of owner to another file.
+fn hand_over(
+    plan: &Plan,
+    key_file: &File,
+    uid: u32,
+    gid: u32,
+    written: &[Landed],
+) -> Result<(), InitError> {
+    let handed = |path: &Path| io_error(format!("handing {} to the owner", path.display()));
+    std::os::unix::fs::fchown(key_file, Some(uid), Some(gid)).map_err(handed(&plan.key_file))?;
+    for dir in owned_dirs(plan, written) {
+        std::os::unix::fs::lchown(dir, Some(uid), Some(gid)).map_err(handed(dir))?;
     }
     Ok(())
 }
