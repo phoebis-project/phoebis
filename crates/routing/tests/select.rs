@@ -5646,6 +5646,7 @@ fn a_held_subagent_is_held_on_its_cohorts_account() {
             account_id: "b".into(),
             cohort: Some("b".into()),
             held_ms: 0,
+            attempt: 1,
         },
     );
 }
@@ -5982,6 +5983,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
                 account_id: "a".into(),
                 cohort: Some("a".into()),
                 held_ms: 1_000,
+                attempt: 1,
             }],
             ..subagent(
                 request(&s, Some("session"), "claude-sonnet-5", true, &["a"], 1_500),
@@ -6006,6 +6008,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
             account_id: "b".into(),
             cohort: None,
             held_ms: 0,
+            attempt: 1,
         },
     );
 
@@ -6035,6 +6038,7 @@ fn a_cohort_hold_names_every_account_waited_on_the_last_cohort_and_the_waits_sum
         account_id: account.into(),
         cohort: cohort.map(String::from),
         held_ms,
+        attempt: 1,
     };
     assert_eq!(
         cohort_hold(&[]),
@@ -7458,6 +7462,7 @@ fn every_candidate_at_its_cap_answers_held_with_the_best_of_them() {
                 account_id: "b".into(),
                 cohort: None,
                 held_ms: 0,
+                attempt: 1,
             },
         },
         "b is the one priority would have chosen"
@@ -7503,6 +7508,7 @@ fn a_held_round_robin_selection_leaves_the_turn_with_the_account_it_named() {
                 account_id: "a".into(),
                 cohort: None,
                 held_ms: 0,
+                attempt: 1,
             },
         },
         "the round starts at a"
@@ -7560,6 +7566,7 @@ fn the_cap_binds_before_the_ceiling_so_a_free_account_above_it_takes_the_placeme
                 account_id: "a".into(),
                 cohort: None,
                 held_ms: 0,
+                attempt: 1,
             },
         },
         "with both at their cap the request is held on the one the ceiling prefers"
@@ -12029,6 +12036,7 @@ fn a_placement_after_a_cohort_hold_reads_by_cohort_and_the_wait() {
             account_id: "b".into(),
             cohort: Some("b".into()),
             held_ms: 2_000,
+            attempt: 1,
         }],
         ..static_req(&s, &["s1"])
     };

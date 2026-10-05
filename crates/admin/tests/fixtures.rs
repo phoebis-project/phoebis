@@ -475,6 +475,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cache_write_5m_tokens: None,
                 cache_write_1h_tokens: None,
                 uniform_ttl_ms: None,
+                request_id: "r-0".into(),
+                seq: 1,
+                attempt: 1,
             },
         ))
         .await;
@@ -517,6 +520,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 account_id: "direct".into(),
                 cohort: Some("direct".into()),
                 held_ms: 1_250,
+                attempt: 1,
             }],
             lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             fast: false,

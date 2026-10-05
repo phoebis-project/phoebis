@@ -13,7 +13,9 @@ use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_profile::fixtures::{body, inference_head, BodyFixture, FixtureKind};
+use phoebis_routing::{DecisionRecord, DecisionSummary, RouterEvent};
 use phoebis_store::Failover;
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -268,6 +270,95 @@ async fn a_hold_followed_by_a_dispatch_names_the_hold_in_the_attempts_trace() {
         serde_json::to_value(outcome(&held).held).unwrap(),
         selection["cohort_hold"],
         "the request's own summary is the attempt's entry"
+    );
+    drop(first);
+    up.release();
+    up.shutdown().await;
+}
+
+/// The router's events up to and including the first one `last` accepts, under a five-second bound.
+async fn router_events_until(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    last: impl Fn(&RouterEvent) -> bool,
+) -> Vec<RouterEvent> {
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the router's event arrives")
+            .expect("not lagged");
+        let done = last(&event);
+        seen.push(event);
+        if done {
+            return seen;
+        }
+    }
+}
+
+/// The decisions among `events` for `request_id`, in the order the router made them.
+fn decisions_of(
+    events: &[RouterEvent],
+    request_id: &str,
+) -> Vec<(DecisionSummary, DecisionRecord)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::Decision {
+                summary, record, ..
+            } if record.request.request_id == request_id => {
+                Some(((**summary).clone(), (**record).clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_hold_and_the_placement_after_it_are_the_request_s_first_and_second_decision() {
+    let up = FakeUpstream::start(messages(held_stream())).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0)],
+        PoolSpec {
+            failover: account_cap(1, 10),
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let mut events = h.router.subscribe_events();
+    let first = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    let app = h.app.clone();
+    let held =
+        tokio::spawn(async move { app.oneshot(request_for(KEY, MODEL, "s2")).await.unwrap() });
+    let mut seen = router_events_until(
+        &mut events,
+        |event| matches!(event, RouterEvent::Decision { summary, .. } if summary.kind == "held"),
+    )
+    .await;
+    up.release_one().await;
+    let held = tokio::time::timeout(Duration::from_secs(5), held)
+        .await
+        .expect("a freed slot ends the hold")
+        .unwrap();
+    assert_eq!(held.status().as_u16(), 200);
+    // The placement's decision went out before its answer reached the relay.
+    seen.extend(std::iter::from_fn(|| events.try_recv().ok()));
+    let facts = |request_id: &str| {
+        decisions_of(&seen, request_id)
+            .into_iter()
+            .map(|(summary, record)| (record.request.seq, record.request.attempt, summary.kind))
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(facts(&outcome(&first).request_id), [(1, 1, "placed")]);
+    assert_eq!(
+        facts(&outcome(&held).request_id),
+        [(1, 1, "held"), (2, 1, "placed")],
+        "a hold and the placement after it are two decisions of one wire attempt"
     );
     drop(first);
     up.release();

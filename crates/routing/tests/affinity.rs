@@ -34,6 +34,9 @@ fn report(key_id: &str, account_id: &str, message_boundaries: &[&str], now: i64)
         cache_write_5m_tokens: None,
         cache_write_1h_tokens: None,
         uniform_ttl_ms: None,
+        request_id: "r-1".into(),
+        seq: 1,
+        attempt: 1,
     }
 }
 

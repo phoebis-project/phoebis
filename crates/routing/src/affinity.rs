@@ -89,6 +89,11 @@ pub struct AffinityReport {
     /// The TTL every `cache_control` marker of the dispatched body carries, when they all carry one; `None` for a
     /// body without a marker or with markers at both TTLs.
     pub uniform_ttl_ms: Option<i64>,
+    /// The request whose answer this is, the decision that selected the account (`seq`) and the wire attempt that
+    /// completed (`attempt`), so the rows it writes reach the selecting decision's row whichever pass answered.
+    pub request_id: String,
+    pub seq: u32,
+    pub attempt: u32,
 }
 
 pub struct ConversationQuery<'a> {
@@ -474,6 +479,9 @@ mod tests {
             cache_write_5m_tokens: None,
             cache_write_1h_tokens: None,
             uniform_ttl_ms: None,
+            request_id: "r-1".into(),
+            seq: 1,
+            attempt: 1,
         }
     }
 

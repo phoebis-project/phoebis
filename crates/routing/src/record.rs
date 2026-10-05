@@ -481,6 +481,18 @@ pub struct WarmthFacts {
     pub cause: &'static str,
 }
 
+/// One row the affinity map persisted for a completed answer, for the `cache_map` of the decision that selected it.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct CacheMapEntry {
+    /// `message` or `static`, the chain the row belongs to.
+    pub tier: &'static str,
+    /// The boundary's place in its chain, counted from 1.
+    pub depth: u32,
+    pub prefix_tokens: u64,
+    pub ttl_ms: i64,
+    pub account_id: String,
+}
+
 /// The identity a refused request has before any selection: what the relay holds at its own refusal site and what
 /// the task reads off a `SelectRequest` at its three. `attempt` and `seq` are 1 for the relay's refusal, the
 /// request's one decision; `at` and the client's version as the relay read them.

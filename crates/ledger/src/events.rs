@@ -19,9 +19,11 @@ use crate::LedgerDb;
 /// Rows read per mirror tick; a registry busier than this per tick is caught up on the next.
 const MIRROR_BATCH: usize = 500;
 
-pub fn event_of(event: &RouterEvent) -> EventRecord {
+/// `None` for a variant the mirror consumes itself rather than as an event row: a `Decision` or a
+/// `CacheMapWritten`, the ledger's own records.
+pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
     let model_of = |scope: &str| scope.strip_prefix("model:").map(str::to_string);
-    match event {
+    let row = match event {
         RouterEvent::CooldownCleared {
             account_id,
             scope,
@@ -147,7 +149,9 @@ pub fn event_of(event: &RouterEvent) -> EventRecord {
             detail: Some(json!({ "agent_id": agent_id }).to_string()),
             ..Default::default()
         },
-    }
+        RouterEvent::Decision { .. } | RouterEvent::CacheMapWritten { .. } => return None,
+    };
+    Some(row)
 }
 
 pub fn spawn_event_mirror(
@@ -183,7 +187,11 @@ pub fn spawn_event_mirror(
         loop {
             tokio::select! {
                 received = events.recv() => match received {
-                    Ok(event) => ledger.record(Record::Event(event_of(&event))),
+                    Ok(event) => {
+                        if let Some(row) = event_of(&event) {
+                            ledger.record(Record::Event(row));
+                        }
+                    }
                     Err(RecvError::Lagged(n)) => tracing::warn!(lost = n, "the ledger fell behind the router's events"),
                     Err(RecvError::Closed) => break,
                 },
@@ -261,7 +269,8 @@ mod tests {
             epoch: 7,
             reason: "cooldown".into(),
             at: 5,
-        });
+        })
+        .expect("a pin row");
         assert_eq!(
             (
                 e.at,
@@ -298,7 +307,8 @@ mod tests {
             window: "five_hour".into(),
             source_request_id: None,
             at: 1,
-        });
+        })
+        .expect("a cooldown row");
         assert_eq!(
             (e.kind.as_str(), e.account_id.as_deref(), e.model.as_deref()),
             ("cooldown_set", Some("a"), Some("m"))
@@ -308,7 +318,8 @@ mod tests {
             scope: "model:m".into(),
             cause: "recovered",
             at: 1,
-        });
+        })
+        .expect("a cooldown row");
         assert_eq!(
             (e.kind.as_str(), e.account_id.as_deref(), e.model.as_deref()),
             ("cooldown_cleared", Some("a"), Some("m"))
@@ -380,7 +391,7 @@ mod tests {
                 "pin_released",
             ),
         ] {
-            assert_eq!(event_of(&event).kind, kind);
+            assert_eq!(event_of(&event).map(|row| row.kind), Some(kind.to_string()));
         }
         let row = event_of(&RouterEvent::PinExpired {
             key_id: "k".into(),
@@ -390,11 +401,66 @@ mod tests {
             account_id: "a".into(),
             reasons: vec!["cooldown", "spent"],
             at: 1,
-        });
+        })
+        .expect("a pin row");
         assert_eq!(
             row.detail.as_deref(),
             Some(r#"{"agent_id":"main","reasons":["cooldown","spent"]}"#),
             "the facts travel in the selection's order"
+        );
+    }
+
+    #[test]
+    fn a_decision_and_a_cache_map_map_to_no_event_row() {
+        use phoebis_routing::{
+            CacheMapEntry, ClientClass, DecisionRecord, RefusalFacts, RefusedRequest,
+            RegistrySnapshot,
+        };
+        let snapshot =
+            RegistrySnapshot::from_load(phoebis_store::RegistryLoad::default(), [0; 32], 0, 1);
+        let (record, summary) = DecisionRecord::refused(
+            &RefusedRequest {
+                request_id: "r".into(),
+                attempt: 1,
+                seq: 1,
+                at: 1,
+                key_id: "k".into(),
+                key_generation: 0,
+                agent_id: "main".into(),
+                session_id: None,
+                canonical_model: "m".into(),
+                client: ClientClass::ClaudeCode,
+                client_version: None,
+            },
+            &snapshot,
+            &RefusalFacts {
+                kind: "client",
+                reason: "hash; client unknown".into(),
+            },
+        );
+        assert_eq!(
+            event_of(&RouterEvent::Decision {
+                summary: Box::new(summary),
+                record: Box::new(record),
+                at: 1,
+            }),
+            None
+        );
+        assert_eq!(
+            event_of(&RouterEvent::CacheMapWritten {
+                request_id: "r".into(),
+                seq: 1,
+                attempt: 1,
+                entries: vec![CacheMapEntry {
+                    tier: "message",
+                    depth: 1,
+                    prefix_tokens: 1_200,
+                    ttl_ms: 300_000,
+                    account_id: "a".into(),
+                }],
+                at: 1,
+            }),
+            None
         );
     }
 }

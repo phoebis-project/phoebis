@@ -17,9 +17,15 @@ use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::affinity::{
-    AffinityMap, AffinityReport, ConversationLookup, ConversationMatch, ConversationQuery,
+    AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup, ConversationMatch,
+    ConversationQuery,
 };
-use crate::select::{release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult};
+use crate::record::{
+    CacheMapEntry, DecisionRecord, DecisionSummary, PinEventFacts, RefusalFacts, RefusedRequest,
+};
+use crate::select::{
+    decide, release_reasons, Decided, MigrateReason, Refusal, SelectRequest, SelectResult,
+};
 use crate::state::{
     burn_folded, is_plan_window, AccountTicket, CreditsState, EvidenceSource, InFlight,
     MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
@@ -123,6 +129,23 @@ pub enum RouterEvent {
         agent_id: String,
         model: String,
         account_id: String,
+        at: i64,
+    },
+    /// One decision as the engine made it; the ledger stores the summary as the list row and the record as the
+    /// frame. Boxed so the enum stays the size of its other variants on the broadcast.
+    Decision {
+        summary: Box<DecisionSummary>,
+        record: Box<DecisionRecord>,
+        at: i64,
+    },
+    /// The cache-map rows a completed answer wrote, for the `cache_map` column of the decision that selected it:
+    /// `seq` names that decision, `attempt` the wire attempt that completed (the decision's own, or a later pass of
+    /// a retry in place, the refresh ladder or the strip retry).
+    CacheMapWritten {
+        request_id: String,
+        seq: u32,
+        attempt: u32,
+        entries: Vec<CacheMapEntry>,
         at: i64,
     },
 }
@@ -548,6 +571,11 @@ enum Command {
     PinsByPool {
         reply: oneshot::Sender<Vec<(String, u64)>>,
     },
+    /// A request the relay refused before asking for a selection; the loop records it as the request's decision.
+    RecordRefusal {
+        request: RefusedRequest,
+        refusal: RefusalFacts,
+    },
     ReleaseSession {
         key_id: String,
         session_id: String,
@@ -635,6 +663,8 @@ pub struct RouterHandle {
     /// The reports the closed queue refused, one counter per kind at its position in `Report::KINDS`; the
     /// process's alone, zero at start.
     dropped: Arc<[AtomicU64; Report::KINDS.len()]>,
+    /// The refusal records a full or closed mailbox refused; the process's alone, zero at start.
+    dropped_refusals: Arc<AtomicU64>,
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
     /// The replacing readings the loop has not drained yet, shared with the task.
@@ -674,6 +704,32 @@ impl RouterHandle {
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
         self.ask(|reply| Command::Select { request, reply }).await
+    }
+
+    /// A request the relay refused before asking for a selection, recorded as the request's one decision: sends
+    /// `Command::RecordRefusal { request, refusal }` through `try_send` and never waits for mailbox room, so the
+    /// 400 toward the client is not delayed by a full router queue; a full or closed mailbox drops the record,
+    /// counted in `dropped_refusals` beside a warn. The loop's arm builds `DecisionRecord::refused` on its snapshot
+    /// and emits the `Decision`.
+    pub fn record_refusal(&self, request: RefusedRequest, refusal: RefusalFacts) {
+        let request_id = request.request_id.clone();
+        if self
+            .tx
+            .try_send(Command::RecordRefusal { request, refusal })
+            .is_err()
+        {
+            self.dropped_refusals.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                request = %request_id,
+                "the router's mailbox could not take a refusal's record, which is dropped"
+            );
+        }
+    }
+
+    /// The refusal records a full or closed mailbox refused, beside `dropped_reports`; the process's alone, zero at
+    /// start.
+    pub fn dropped_refusals(&self) -> u64 {
+        self.dropped_refusals.load(Ordering::Relaxed)
     }
 
     /// Waits for a mailbox slot: a report is a fact about the past that must land. The relay's end-of-answer
@@ -1124,6 +1180,7 @@ pub fn spawn(
     let handle = RouterHandle {
         affinity,
         dropped: Arc::default(),
+        dropped_refusals: Arc::default(),
         events: events.clone(),
         in_flight,
         pending: pending.clone(),
@@ -1214,6 +1271,10 @@ pub fn spawn(
                                 Command::Resolve { spelling, dated_id, at, reply } => {
                                     task.resolve(&spelling, &dated_id, at);
                                     let _ = reply.send(());
+                                }
+                                // The mailbox took it, so it is emitted rather than lost uncounted.
+                                Command::RecordRefusal { request, refusal } => {
+                                    task.record_refusal(&request, &refusal);
                                 }
                                 _ => {}
                             }
@@ -1578,10 +1639,104 @@ fn take_final(pending: &Pending) -> BTreeMap<CoalesceKey, Report> {
     std::mem::take(&mut pending.readings)
 }
 
+/// The rows a completed answer wrote, for the decision that selected it. `record` answers its rows in chain order,
+/// so one pass over each chain finds every row's depth.
+fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEvent {
+    let mut message = report.message_boundaries.iter().enumerate();
+    let mut static_ = report.static_boundaries.iter().enumerate();
+    let entries = rows
+        .iter()
+        .map(|row| {
+            let chain = match row.chain {
+                AffinityChain::Message => &mut message,
+                AffinityChain::Static => &mut static_,
+            };
+            let depth = chain
+                .find(|(_, hash)| **hash == row.hash)
+                .map_or(0, |(index, _)| u32::try_from(index + 1).unwrap_or(u32::MAX));
+            CacheMapEntry {
+                tier: row.chain.as_str(),
+                depth,
+                prefix_tokens: row.prefix_tokens,
+                ttl_ms: row.ttl_ms,
+                account_id: row.account_id.clone(),
+            }
+        })
+        .collect();
+    RouterEvent::CacheMapWritten {
+        request_id: report.request_id.clone(),
+        seq: report.seq,
+        attempt: report.attempt,
+        entries,
+        at: report.now,
+    }
+}
+
+/// A pin event as the decision names it: a move with its reason, an expiry with the first reason the task read
+/// against the pin.
+fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
+    let (kind, reason) = match event {
+        RouterEvent::PinCreated { .. } => ("pin_created", None),
+        RouterEvent::PinMigrated { reason, .. } => ("pin_migrated", Some(reason.clone())),
+        RouterEvent::PinExpired { reasons, .. } => {
+            ("pin_expired", reasons.first().map(|r| r.to_string()))
+        }
+        _ => return None,
+    };
+    Some(PinEventFacts { kind, reason })
+}
+
 impl Task {
     /// A send with no receiver is an error and means nothing: the loop must never depend on anyone listening.
     fn emit(&self, event: RouterEvent) {
         let _ = self.events.send(event);
+    }
+
+    /// The decision of a request the relay refused before asking for a selection, built on the current snapshot.
+    fn record_refusal(&self, request: &RefusedRequest, refusal: &RefusalFacts) {
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("snapshot lock poisoned")
+            .clone();
+        let (record, summary) = DecisionRecord::refused(request, &snapshot, refusal);
+        self.emit(RouterEvent::Decision {
+            summary: Box::new(summary),
+            record: Box::new(record),
+            at: request.at,
+        });
+    }
+
+    /// Answers a request the current registry refuses before the engine runs, its decision emitted first.
+    fn refuse(
+        &self,
+        request: &SelectRequest,
+        snapshot: &RegistrySnapshot,
+        refusal: Refusal,
+        reply: oneshot::Sender<SelectAnswer>,
+    ) {
+        let reason = match &refusal {
+            Refusal::Key(refusal) => refusal.to_string(),
+            Refusal::Resolve(refusal) => refusal.to_string(),
+        };
+        let (record, summary) = DecisionRecord::refused(
+            &RefusedRequest::from(request),
+            snapshot,
+            &RefusalFacts {
+                kind: "key",
+                reason,
+            },
+        );
+        self.emit(RouterEvent::Decision {
+            summary: Box::new(summary),
+            record: Box::new(record),
+            at: request.now,
+        });
+        let _ = reply.send(SelectAnswer {
+            result: SelectResult::Refused(refusal),
+            cancel: CancellationToken::new(),
+            ticket: None,
+        });
     }
 
     /// Dropping the sender ends the writer's loop; waiting on `writer_done` is what makes an acknowledged pin or
@@ -1641,22 +1796,19 @@ impl Task {
                     let key = match snapshot.authenticate_id(&request.key_id, now) {
                         Ok(key) => key,
                         Err(refusal) => {
-                            let _ = reply.send(SelectAnswer {
-                                result: SelectResult::Refused(Refusal::Key(refusal)),
-                                cancel: CancellationToken::new(),
-                                ticket: None,
-                            });
+                            self.refuse(&request, &snapshot, Refusal::Key(refusal), reply);
                             return;
                         }
                     };
                     // The id is reusable, so the lifetime is the identity: a key created again under the id
                     // since admission is another key, and the request is refused as a refused id is.
                     if key.created_at != request.key_generation {
-                        let _ = reply.send(SelectAnswer {
-                            result: SelectResult::Refused(Refusal::Key(KeyRefusal::Replaced)),
-                            cancel: CancellationToken::new(),
-                            ticket: None,
-                        });
+                        self.refuse(
+                            &request,
+                            &snapshot,
+                            Refusal::Key(KeyRefusal::Replaced),
+                            reply,
+                        );
                         return;
                     }
                     match resolve(
@@ -1667,11 +1819,7 @@ impl Task {
                     ) {
                         Ok(candidates) => request.candidates = candidates,
                         Err(refusal) => {
-                            let _ = reply.send(SelectAnswer {
-                                result: SelectResult::Refused(Refusal::Resolve(refusal)),
-                                cancel: CancellationToken::new(),
-                                ticket: None,
-                            });
+                            self.refuse(&request, &snapshot, Refusal::Resolve(refusal), reply);
                             return;
                         }
                     }
@@ -1691,9 +1839,19 @@ impl Task {
                     .as_ref()
                     .map(|old| release_reasons(&self.state, &snapshot, old, &request))
                     .unwrap_or_default();
-                let (mut result, writes) =
-                    select(&mut self.state, &snapshot, &request, &mut rand::rng());
+                let Decided {
+                    mut result,
+                    writes,
+                    mut record,
+                    mut summary,
+                } = decide(&mut self.state, &snapshot, &request, &mut rand::rng());
                 self.write(writes);
+                if let Some(pin) = record.pin.as_mut() {
+                    pin.released = released.clone();
+                }
+                // Collected rather than emitted, so the decision naming them goes out first and the ledger lands
+                // its row and its pin events in one tick.
+                let mut pin_events = Vec::new();
                 if let Some(key) = &pin_key {
                     let (k, s, ag, m) = (&key.key_id, &key.session_id, &key.agent_id, &key.model);
                     let after = self.state.pin(key).cloned();
@@ -1712,7 +1870,9 @@ impl Task {
                                     if let SelectResult::Selected(selection) = &mut result {
                                         selection.trace.moved = Some(reason);
                                     }
-                                    self.emit(RouterEvent::PinMigrated {
+                                    record.outcome.rule = Some(reason);
+                                    summary.rule = Some(reason);
+                                    pin_events.push(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
                                         agent_id: ag.clone(),
@@ -1724,7 +1884,7 @@ impl Task {
                                         at: now,
                                     });
                                 }
-                                None => self.emit(RouterEvent::PinCreated {
+                                None => pin_events.push(RouterEvent::PinCreated {
                                     key_id: k.clone(),
                                     session_id: s.clone(),
                                     agent_id: ag.clone(),
@@ -1742,7 +1902,7 @@ impl Task {
                                     .map(MigrateReason::as_str)
                                     .unwrap_or("expired");
                                 if reason == "expired" {
-                                    self.emit(RouterEvent::PinExpired {
+                                    pin_events.push(RouterEvent::PinExpired {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
                                         agent_id: ag.clone(),
@@ -1751,7 +1911,7 @@ impl Task {
                                         reasons: released.clone(),
                                         at: now,
                                     });
-                                    self.emit(RouterEvent::PinCreated {
+                                    pin_events.push(RouterEvent::PinCreated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
                                         agent_id: ag.clone(),
@@ -1761,7 +1921,7 @@ impl Task {
                                         at: now,
                                     });
                                 } else {
-                                    self.emit(RouterEvent::PinMigrated {
+                                    pin_events.push(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
                                         agent_id: ag.clone(),
@@ -1775,7 +1935,7 @@ impl Task {
                                 }
                             }
                         }
-                        (Some(old), None) => self.emit(RouterEvent::PinExpired {
+                        (Some(old), None) => pin_events.push(RouterEvent::PinExpired {
                             key_id: k.clone(),
                             session_id: s.clone(),
                             agent_id: ag.clone(),
@@ -1786,6 +1946,15 @@ impl Task {
                         }),
                         _ => {}
                     }
+                }
+                record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
+                self.emit(RouterEvent::Decision {
+                    summary: Box::new(summary),
+                    record: Box::new(record),
+                    at: request.now,
+                });
+                for event in pin_events {
+                    self.emit(event);
                 }
                 let (cancel, ticket) = match &result {
                     // Charged here, in the one place selections are serialized, so the count the next selection
@@ -1811,6 +1980,7 @@ impl Task {
                 });
             }
             Command::Report(report, seq) => self.numbered_report(report, seq),
+            Command::RecordRefusal { request, refusal } => self.record_refusal(&request, &refusal),
             // The top of this turn drained the map already.
             Command::Coalesced => {}
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -2044,7 +2214,10 @@ impl Task {
     fn report(&mut self, report: Report) {
         match report {
             Report::Affinity(mut report) => {
+                // The account's next holder passes the report over, so it writes no row and its decision's cache map
+                // reads empty, as an answer's that wrote none does.
                 if self.moved_past(&report.account_id, report.incarnation) {
+                    self.emit(cache_map_written(&report, &[]));
                     return;
                 }
                 // The map files the entry under the resolved model, so its lane names that model too: an answer
@@ -2056,6 +2229,7 @@ impl Task {
                     .write()
                     .expect("affinity lock poisoned")
                     .record(&report);
+                self.emit(cache_map_written(&report, &rows));
                 if !rows.is_empty() {
                     self.write(vec![StateWrite::UpsertAffinity(rows)]);
                 }
@@ -3135,6 +3309,7 @@ mod tests {
         RouterHandle {
             affinity: Arc::default(),
             dropped: Arc::default(),
+            dropped_refusals: Arc::default(),
             events: broadcast::channel(1).0,
             in_flight: InFlight::default(),
             pending: Pending::default(),

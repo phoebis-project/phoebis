@@ -6,11 +6,12 @@ use fake_upstream::{stays_for, wait_for, wait_for_async};
 use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
-    BurnRates, ClientClass, CreditsState, Exhaustion, KeyRefusal, MemberSpend, PinRef,
-    PinUsage, Presented, RateTable, Rates, Refusal, ReloadError, Report, ResolveError,
-    RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
-    UtilizationSample, WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
-    FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
+    BurnRates, ClientClass, CreditsState, DecisionRecord, DecisionSummary, Exhaustion,
+    KeyRefusal, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates, Refusal, RefusalFacts,
+    RefusedRequest, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
+    SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource,
+    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
@@ -201,6 +202,9 @@ fn affinity_report(
         cache_write_5m_tokens: None,
         cache_write_1h_tokens: None,
         uniform_ttl_ms: None,
+        request_id: "r-1".into(),
+        seq: 1,
+        attempt: 1,
     }
 }
 
@@ -631,6 +635,41 @@ async fn a_report_the_stopped_task_cannot_take_counts_one_drop_under_its_kind_an
         None
     );
     assert_dropped(&handle, "cooldown", 1);
+}
+
+#[tokio::test]
+async fn a_refusal_the_stopped_task_cannot_take_counts_one_drop() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    assert_eq!(handle.dropped_refusals(), 0);
+    handle.shutdown().await.unwrap();
+    let (refused, refusal) = drift_refusal();
+    handle.record_refusal(refused, refusal);
+    assert_eq!(handle.dropped_refusals(), 1);
+    assert_dropped(&handle, "cooldown", 0);
+}
+
+#[tokio::test]
+async fn a_refusal_queued_behind_the_shutdown_lands_with_the_drain() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let park = handle.park_loop().await;
+    let stopping = tokio::spawn({
+        let handle = handle.clone();
+        async move { handle.shutdown().await }
+    });
+    wait_for(WRITTEN, || (handle.queued() == 1).then_some(())).await;
+    let (refused, refusal) = drift_refusal();
+    handle.record_refusal(refused, refusal);
+    drop(park);
+    stopping.await.unwrap().unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (summary.kind, record.request.request_id.as_str()),
+        ("refused", "r-drift")
+    );
+    assert_eq!(handle.dropped_refusals(), 0, "the mailbox took it");
 }
 
 #[tokio::test]
@@ -2783,6 +2822,274 @@ async fn next_event(
         .expect("not lagged")
 }
 
+/// The next event, which has to be a decision: its summary and its record.
+async fn next_decision(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> (DecisionSummary, DecisionRecord) {
+    match next_event(events).await {
+        phoebis_routing::RouterEvent::Decision {
+            summary, record, ..
+        } => (*summary, *record),
+        other => panic!("the decision comes first, not {other:?}"),
+    }
+}
+
+/// A decision's pin events as the task emits them after it, `(kind, reason)` in order.
+fn pin_events_of(record: &DecisionRecord) -> Vec<(&'static str, Option<&str>)> {
+    record
+        .outcome
+        .pin_events
+        .iter()
+        .map(|event| (event.kind, event.reason.as_deref()))
+        .collect()
+}
+
+#[tokio::test]
+async fn a_selection_emits_its_decision_before_its_pin_event() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "placed");
+    assert_eq!(pin_events_of(&record), [("pin_created", None)]);
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, .. } if session_id == "s1" && account_id == "a"),
+        "the pin event the record names follows the decision"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_idle_pin_the_selection_replaces_emits_the_decision_then_both_pin_events() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let mut events = handle.subscribe_events();
+    // One millisecond past the pool's hour-long affinity TTL.
+    handle
+        .select(request(&handle, Some("s1"), 1_000 + HOUR + 1))
+        .await
+        .unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "placed");
+    assert_eq!(
+        record
+            .pin
+            .as_ref()
+            .map(|pin| (pin.found, pin.released.clone())),
+        Some(("expired_idle", vec!["expired"])),
+        "the reasons the task read before the selection join the pin block"
+    );
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_expired", Some("expired")), ("pin_created", None)]
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { session_id, reasons, .. } if session_id == "s1" && reasons == vec!["expired"])
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, .. } if session_id == "s1" && account_id == "a")
+    );
+}
+
+#[tokio::test]
+async fn a_pin_whose_account_left_the_pool_is_replaced_with_both_events_in_order() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a", "b"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let first = handle
+        .select(request(&handle, Some("s1"), 1_000))
+        .await
+        .unwrap();
+    let from = match &first.result {
+        SelectResult::Selected(s) => s.account.id.clone(),
+        other => panic!("{other:?}"),
+    };
+    let to = if from == "a" { "b" } else { "a" };
+    store
+        .set_pool_members(
+            "p",
+            &[MemberWrite {
+                account_id: to.into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+    handle.reload().await.unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .select(request(&handle, Some("s1"), 1_100))
+        .await
+        .unwrap();
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "placed");
+    assert_eq!(record.pin.as_ref().map(|pin| pin.found), Some("left_pool"));
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_expired", Some("unserved")), ("pin_created", None)],
+        "the expiry names the first reason the task read against the pin"
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == from && reasons == vec!["unserved"])
+    );
+    assert!(
+        matches!(next_event(&mut events).await, RouterEvent::PinCreated { account_id, .. } if account_id == to)
+    );
+}
+
+#[tokio::test]
+async fn a_refusal_emits_a_decision_with_a_two_line_walk() {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let admitted = request(&handle, Some("s1"), 1_000);
+    store.revoke_api_key("k", 2, "test").unwrap();
+    handle.reload().await.unwrap();
+    let mut events = handle.subscribe_events();
+    let answer = handle.select(admitted).await.unwrap();
+    assert!(matches!(
+        answer.result,
+        SelectResult::Refused(Refusal::Key(KeyRefusal::Revoked))
+    ));
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (summary.kind, summary.by.kind, summary.by.value.as_str()),
+        ("refused", "refusal", "key")
+    );
+    assert_eq!(
+        record
+            .walk
+            .iter()
+            .map(|step| (step.step, step.verdict))
+            .collect::<Vec<_>>(),
+        [("admission", "refused"), ("selection", "not_run")]
+    );
+    assert!(record.candidates.is_empty(), "the engine never ran");
+    assert_eq!(
+        (
+            record.request.request_id.as_str(),
+            record.request.attempt,
+            record.request.seq
+        ),
+        ("r-1", 1, 1)
+    );
+}
+
+/// A drifted client's refusal as the relay records it: the request's one decision.
+fn drift_refusal() -> (RefusedRequest, RefusalFacts) {
+    (
+        RefusedRequest {
+            request_id: "r-drift".into(),
+            attempt: 1,
+            seq: 1,
+            at: 1_000,
+            key_id: "k".into(),
+            key_generation: 0,
+            agent_id: "main".into(),
+            session_id: Some("s1".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            client: ClientClass::ClaudeCode,
+            client_version: Some("2.1.274".into()),
+        },
+        RefusalFacts {
+            kind: "client",
+            reason: "hash; client 2.1.274".into(),
+        },
+    )
+}
+
+#[tokio::test]
+async fn a_relay_refusal_recorded_through_the_handle_emits_a_client_decision() {
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    let (refused, refusal) = drift_refusal();
+    handle.record_refusal(refused, refusal.clone());
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (
+            summary.kind,
+            summary.by.value.as_str(),
+            summary.refusal.as_ref()
+        ),
+        ("refused", "client", Some(&refusal))
+    );
+    assert_eq!(record.outcome.refusal.as_ref(), Some(&refusal));
+    assert_eq!(
+        (
+            record.request.request_id.as_str(),
+            record.request.seq,
+            record.request.attempt,
+            record.request.at
+        ),
+        ("r-drift", 1, 1, 1_000)
+    );
+    assert_eq!(handle.dropped_refusals(), 0);
+}
+
+#[tokio::test]
+async fn a_completed_answer_emits_the_cache_map_it_wrote() {
+    use phoebis_routing::RouterEvent;
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(seeded(&["a"]), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(Report::Affinity(AffinityReport {
+            message_boundaries: Arc::from(["b1".to_string(), "b2".to_string()]),
+            message_ttl_ms: Some(300_000),
+            cache_touched: true,
+            prefix_tokens: 1_200,
+            request_id: "r-7".into(),
+            seq: 2,
+            attempt: 3,
+            ..affinity_report(&handle, "a", 1_000)
+        }))
+        .await;
+    match next_event(&mut events).await {
+        RouterEvent::CacheMapWritten {
+            request_id,
+            seq,
+            attempt,
+            entries,
+            at,
+        } => {
+            assert_eq!(
+                (request_id.as_str(), seq, attempt, at),
+                ("r-7", 2, 3, 1_000)
+            );
+            assert_eq!(
+                entries
+                    .iter()
+                    .map(|e| (
+                        e.tier,
+                        e.depth,
+                        e.prefix_tokens,
+                        e.ttl_ms,
+                        e.account_id.as_str()
+                    ))
+                    .collect::<Vec<_>>(),
+                [
+                    ("message", 1, 1_200, 300_000, "a"),
+                    ("message", 2, 1_200, 300_000, "a")
+                ]
+            );
+        }
+        other => panic!("the cache map, not {other:?}"),
+    }
+}
+
 #[tokio::test]
 async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
     use phoebis_routing::RouterEvent;
@@ -2807,6 +3114,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         .await
         .unwrap();
     let a = picked(&first);
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, account_id, at: 1_000, .. } if session_id == "s1" && account_id == a)
     );
@@ -2843,6 +3151,12 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         .unwrap();
     let b = picked(&second);
     assert_ne!(a, b);
+    let (moved, _) = next_decision(&mut events).await;
+    assert_eq!(
+        (moved.kind, moved.rule),
+        ("placed", Some("cooldown")),
+        "a hard failover's reason is the decision's rule"
+    );
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "cooldown")
     );
@@ -2898,6 +3212,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
         .select(request(&handle, Some("s2"), 2_000))
         .await
         .unwrap();
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinCreated { session_id, .. } if session_id == "s2")
     );
@@ -2969,6 +3284,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
         other => panic!("{other:?}"),
     };
     let b = if a == "a" { "b" } else { "a" };
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -3003,6 +3319,8 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
         .await
         .unwrap();
     assert!(matches!(&second.result, SelectResult::Selected(s) if s.account.id == b));
+    let (moved, _) = next_decision(&mut events).await;
+    assert_eq!((moved.kind, moved.rule), ("moved", Some("spent")));
     let event = next_event(&mut events).await;
     assert!(
         matches!(event, RouterEvent::PinMigrated { from_account, to_account, reason, .. } if from_account == a && to_account == b && reason == "spent")
@@ -3025,6 +3343,7 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
         other => panic!("{other:?}"),
     };
     let b = if a == "a" { "b" } else { "a" };
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -3072,6 +3391,12 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
         .await
         .unwrap();
     assert!(matches!(&second.result, SelectResult::Selected(s) if s.account.id == b));
+    let (placed, record) = next_decision(&mut events).await;
+    assert_eq!(placed.kind, "placed");
+    assert_eq!(
+        pin_events_of(&record),
+        [("pin_expired", Some("cooldown")), ("pin_created", None)]
+    );
     assert!(
         matches!(next_event(&mut events).await, RouterEvent::PinExpired { account_id, reasons, .. } if account_id == a && reasons == vec!["cooldown", "spent"]),
         "no sibling holds allowance, so the spent rule names no destination and the cooled pin expires"
@@ -3167,6 +3492,7 @@ async fn a_sample_that_shows_the_cooled_window_below_its_limit_releases_the_acco
         ),
         "the rejection is in force"
     );
+    assert_eq!(next_decision(&mut events).await.0.kind, "exhausted");
     // Anthropic moved the reset in: hours before the deadline the 429 announced, the window reads below 1.
     now.store(2_000, Ordering::SeqCst);
     handle
@@ -3744,6 +4070,7 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         SelectResult::Selected(s) => s.account.id.clone(),
         other => panic!("{other:?}"),
     };
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -3783,6 +4110,12 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         panic!("{:?}", second.result)
     };
     assert_eq!(sel.trace.moved, Some("cooldown"));
+    let (placed, record) = next_decision(&mut events).await;
+    assert_eq!(
+        (placed.kind, placed.rule, record.outcome.rule),
+        ("placed", Some("cooldown"), Some("cooldown")),
+        "the trace's move is the record's rule"
+    );
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinMigrated { reason, .. } if reason == "cooldown"
@@ -3807,6 +4140,7 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
     let from = selection.account.id.clone();
     let to = if from == "a" { "b" } else { "a" };
     let pin = selection.pin.clone().unwrap();
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -3849,6 +4183,8 @@ async fn a_fast_row_with_a_pin_invalidates_it_under_fast_lane() {
         (sel.account.id.as_str(), sel.trace.moved),
         (to, Some("fast_lane"))
     );
+    let (placed, _) = next_decision(&mut events).await;
+    assert_eq!((placed.kind, placed.rule), ("placed", Some("fast_lane")));
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinMigrated { from_account, to_account, reason, .. }
@@ -4357,6 +4693,7 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
         SelectResult::Selected(s) => s.account.id.clone(),
         other => panic!("{other:?}"),
     };
+    assert_eq!(next_decision(&mut events).await.0.kind, "placed");
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { .. }
@@ -4398,6 +4735,12 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
         .await
         .unwrap();
     assert!(matches!(&sibling.result, SelectResult::Selected(_)));
+    let (placed, _) = next_decision(&mut events).await;
+    assert_eq!(
+        (placed.kind, placed.rule),
+        ("placed", None),
+        "the sibling's placement takes no other agent's move"
+    );
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinCreated { agent_id, .. } if agent_id == "worker"
@@ -4410,6 +4753,8 @@ async fn a_siblings_fresh_placement_in_the_window_never_consumes_another_agents_
         panic!("{:?}", main_next.result)
     };
     assert_eq!(sel.trace.moved, Some("cooldown"));
+    let (placed, _) = next_decision(&mut events).await;
+    assert_eq!((placed.kind, placed.rule), ("placed", Some("cooldown")));
     assert!(matches!(
         next_event(&mut events).await,
         RouterEvent::PinMigrated { agent_id, reason, .. } if agent_id == "main" && reason == "cooldown"

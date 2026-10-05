@@ -151,6 +151,9 @@ pub struct HoldFacts {
     pub cohort: Option<String>,
     /// How long the relay waited on this hold, whether a slot freed or the bound ran out.
     pub held_ms: u64,
+    /// The wire attempt that waited: the relay keeps every hold across a failover, and only the placement of this
+    /// attempt follows the wait.
+    pub attempt: u32,
 }
 
 /// The holds before this attempt, as the trace records them.
@@ -1388,11 +1391,13 @@ fn run(
                         account_id: c.account_id.clone(),
                         cohort: Some(c.account_id.clone()),
                         held_ms: 0,
+                        attempt: request.attempt,
                     },
                     None => HoldFacts {
                         account_id: strategy_choice.account_id.clone(),
                         cohort: None,
                         held_ms: 0,
+                        attempt: request.attempt,
                     },
                 };
                 let place = *rec.hold_place.get_or_insert("strategy_pick");
@@ -3601,9 +3606,14 @@ impl Readings<'_> {
             "placed" if self.hold_place == Some("session_pin") => {
                 (by("hold", "session_pin"), self.in_flight_fact())
             }
-            "placed" => match self.request.holds.last() {
+            "placed" => match self
+                .request
+                .holds
+                .last()
+                .filter(|hold| hold.attempt == self.request.attempt)
+            {
                 // The wait explains the placement more than where it landed: the row names the hold it followed
-                // and how long it lasted.
+                // and how long it lasted. A failover's later attempt took its own placement.
                 Some(hold) => {
                     let place = if hold.cohort.is_some() {
                         "cohort"

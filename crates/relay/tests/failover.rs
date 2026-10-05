@@ -7,7 +7,9 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_oauth::AcquireError;
-use phoebis_store::AccountState;
+use phoebis_routing::{DecisionRecord, DecisionSummary, RouterEvent};
+use phoebis_store::{AccountState, Failover};
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -22,6 +24,166 @@ async fn two_accounts(up: &FakeUpstream) -> Harness {
         PoolSpec::default(),
     )
     .await
+}
+
+/// The router's events up to and including the first one `last` accepts, under a five-second bound.
+async fn router_events_until(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    last: impl Fn(&RouterEvent) -> bool,
+) -> Vec<RouterEvent> {
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the router's event arrives")
+            .expect("not lagged");
+        let done = last(&event);
+        seen.push(event);
+        if done {
+            return seen;
+        }
+    }
+}
+
+/// The decisions among `events` for `request_id`, in the order the router made them.
+fn decisions_of(
+    events: &[RouterEvent],
+    request_id: &str,
+) -> Vec<(DecisionSummary, DecisionRecord)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::Decision {
+                summary, record, ..
+            } if record.request.request_id == request_id => {
+                Some(((**summary).clone(), (**record).clone()))
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+/// Every event already on the broadcast: a selection's decision goes out before its answer reaches the relay.
+fn already_sent(events: &mut broadcast::Receiver<RouterEvent>) -> Vec<RouterEvent> {
+    std::iter::from_fn(|| events.try_recv().ok()).collect()
+}
+
+#[tokio::test]
+async fn a_failover_s_second_decision_names_attempt_two_and_seq_two() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    let h = two_accounts(&up).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 2)
+    );
+    let decisions = decisions_of(&already_sent(&mut events), &o.request_id);
+    assert_eq!(
+        decisions
+            .iter()
+            .map(|(_, record)| (
+                record.request.attempt,
+                record.request.seq,
+                record.outcome.account_id.as_deref()
+            ))
+            .collect::<Vec<_>>(),
+        [(1, 1, Some("a")), (2, 2, Some("b"))]
+    );
+    resp.into_body().collect().await.unwrap();
+    let written = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::CacheMapWritten { request_id, .. } if *request_id == o.request_id)
+    })
+    .await;
+    assert!(
+        matches!(
+            written.last(),
+            Some(RouterEvent::CacheMapWritten {
+                seq: 2,
+                attempt: 2,
+                ..
+            })
+        ),
+        "the answer's rows reach the decision that selected b"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_failover_after_a_hold_names_the_hold_on_the_attempt_that_waited_alone() {
+    let up = FakeUpstream::start(vec![]).await;
+    up.add_credential_rule(A, "/v1/messages", json_429_unified(RESET, "five_hour"));
+    up.add_credential_rule(B, "/v1/messages", json_200());
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        PoolSpec {
+            failover: Failover {
+                in_flight_cap: 1,
+                retry_in_place_seconds: 10,
+                ..Failover::default()
+            },
+            ..PoolSpec::default()
+        },
+    )
+    .await;
+    let mut events = h.router.subscribe_events();
+    // Both members at their cap of one, so the selection holds the request on the strategy's pick.
+    let a_busy = h.router.in_flight().dispatched("a", NOW);
+    let b_busy = h.router.in_flight().dispatched("b", NOW);
+    let app = h.app.clone();
+    let request = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    let mut seen = router_events_until(
+        &mut events,
+        |event| matches!(event, RouterEvent::Decision { summary, .. } if summary.kind == "held"),
+    )
+    .await;
+    drop(b_busy);
+    drop(a_busy);
+    let resp = tokio::time::timeout(Duration::from_secs(5), request)
+        .await
+        .expect("a freed slot ends the hold")
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "b", 2)
+    );
+    seen.extend(already_sent(&mut events));
+    assert_eq!(
+        decisions_of(&seen, &o.request_id)
+            .iter()
+            .map(|(summary, record)| (
+                record.request.seq,
+                record.request.attempt,
+                summary.kind,
+                summary.by.kind,
+                summary.by.value.as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (1, 1, "held", "hold", "strategy_pick"),
+            (2, 1, "placed", "hold", "strategy_pick"),
+            (3, 2, "placed", "strategy", "priority")
+        ],
+        "the wait explains the attempt that waited; the failover's attempt takes its own placement's By"
+    );
+    up.shutdown().await;
 }
 
 #[tokio::test]
@@ -2423,6 +2585,78 @@ async fn a_drifted_stamp_is_refused_at_admission_before_any_account_is_selected(
             )
         );
         assert!(up.requests().is_empty(), "{trigger}: nothing was dialled");
+        up.shutdown().await;
+    }
+}
+
+#[tokio::test]
+async fn a_drift_refusal_emits_one_decision_with_the_client_trigger_and_version() {
+    use phoebis_profile::fixtures::{inference_head, FixtureKind};
+    for (drifted, trigger) in drifted_first_party_bodies() {
+        let up = FakeUpstream::start(vec![Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: json_200(),
+        }])
+        .await;
+        let bus = Bus::new();
+        let mut sub = bus.subscribe("test", Delivery::Durable);
+        let h = harness_with_bus(
+            &up,
+            &[oauth("a", A, 0), oauth("b", B, 1)],
+            PoolSpec::default(),
+            bus,
+        )
+        .await;
+        let mut events = h.router.subscribe_events();
+        let resp = h
+            .app
+            .clone()
+            .oneshot(request_from_fixture(
+                inference_head(FixtureKind::OauthFirstParty),
+                &drifted,
+                KEY,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(resp.status().as_u16(), 400, "{trigger}");
+        let id = outcome(&resp).request_id;
+        // The record is try-sent ahead of the answer and lands on the loop's next turn.
+        let mut seen = router_events_until(&mut events, |event| {
+            matches!(event, RouterEvent::Decision { record, .. } if record.request.request_id == id)
+        })
+        .await;
+        let bus_events = drain_until_complete(&mut sub).await;
+        seen.extend(already_sent(&mut events));
+        let decisions = decisions_of(&seen, &id);
+        assert_eq!(decisions.len(), 1, "{trigger}: the request's one decision");
+        let (summary, record) = &decisions[0];
+        assert_eq!(
+            (
+                summary.kind,
+                summary
+                    .refusal
+                    .as_ref()
+                    .map(|r| (r.kind, r.reason.as_str()))
+            ),
+            (
+                "refused",
+                Some(("client", format!("{trigger}; client 2.1.269").as_str()))
+            )
+        );
+        assert_eq!(
+            (
+                record.request.request_id.as_str(),
+                record.request.seq,
+                record.request.attempt
+            ),
+            (id.as_str(), 1, 1)
+        );
+        assert!(
+            !bus_events
+                .iter()
+                .any(|event| matches!(event, phoebis_bus::Event::AccountSelected(_))),
+            "{trigger}: no account was selected"
+        );
         up.shutdown().await;
     }
 }

@@ -26,8 +26,8 @@ use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
     cohort_hold, resolve, AccountTicket, ClientClass, CohortHold, EvidenceSource, Exhaustion,
     HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented, Refusal,
-    Report, ResolveError, RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace,
-    BUDGET_WINDOW,
+    RefusalFacts, RefusedRequest, Report, ResolveError, RouterHandle, SelectRequest, SelectResult,
+    Selection, SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -1513,7 +1513,14 @@ impl Relay {
         // stamped line is judged for its suffix; a reduced-shape line has its missing fields restored instead.
         let stamp = match crate::body::drift(&raw) {
             Ok(None) => None,
-            Ok(Some(kind)) => Some(self.drift_refusal(kind, &parts.headers)),
+            Ok(Some(kind)) => Some(self.drift_refusal(
+                kind,
+                &parts.headers,
+                &trace,
+                &key,
+                &identity,
+                client_version.as_deref(),
+            )),
             Err(error) => Some(LocalRefusal::from(relay_failure(&error))),
         };
         if let Some(refusal) = stamp {
@@ -1535,7 +1542,14 @@ impl Relay {
             };
             if matches!(crate::body::carries_a_stamp(&raw), Ok(true)) {
                 if let Some(kind) = crate::body::version_drift(&raw, check) {
-                    let refusal = self.drift_refusal(kind, &parts.headers);
+                    let refusal = self.drift_refusal(
+                        kind,
+                        &parts.headers,
+                        &trace,
+                        &key,
+                        &identity,
+                        client_version.as_deref(),
+                    );
                     return self
                         .refused(
                             &trace,
@@ -1794,6 +1808,7 @@ impl Relay {
                 .dispatch_to(
                     &admitted,
                     &selection,
+                    selections,
                     &answer.cancel,
                     answer.ticket,
                     &mut attempt,
@@ -1916,18 +1931,21 @@ impl Relay {
     }
 
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
-    /// carries. `key_permit` is the request's own, which a committed stream takes into its body; `selected` is the
-    /// ticket the selection charged for the leg's first pass.
+    /// carries; `seq` is the selecting decision's, which every pass of the leg reports its cache map under.
+    /// `key_permit` is the request's own, which a committed stream takes into its body; `selected` is the ticket the
+    /// selection charged for the leg's first pass.
     ///
     /// An OAuth 401 runs the refresh ladder on this account: a refresh, and after one that failed without a
     /// conclusive answer a second once the account's backoff clears, the key's permit and the ticket held through
     /// the wait. The token endpoint's floor is waited out once per request, through `Admitted::floor_held`, since a
     /// second account's bad minute is the same minute. Every wait ends at `Admitted::deadline`, past which the
     /// attempt loop answers the exhaustion.
+    #[allow(clippy::too_many_arguments)]
     async fn dispatch_to(
         &self,
         admitted: &Admitted<'_>,
         selection: &Selection,
+        seq: u32,
         cancel: &CancellationToken,
         mut selected: Option<AccountTicket>,
         attempt: &mut u8,
@@ -2249,6 +2267,7 @@ impl Relay {
                 replayed,
                 request_id: admitted.request_id,
                 retry_in_place: admitted.retry_in_place,
+                seq,
                 ticket,
                 tier_ttls: tier_ttls(&edited),
                 trace: admitted.trace,
@@ -3064,6 +3083,9 @@ impl Relay {
             static_ttl_ms: ctx.tier_ttls.0,
             message_ttl_ms: ctx.tier_ttls.1,
             uniform_ttl_ms: ctx.uniform_ttl_ms,
+            request_id: ctx.trace.request_id.clone(),
+            seq: ctx.seq,
+            attempt: u32::from(ctx.attempt),
         })
     }
 
@@ -3313,13 +3335,42 @@ impl Relay {
         .await
     }
 
-    /// A client-drift refusal with its trigger, and the warn that tells the operator which client to re-pin to.
-    fn drift_refusal(&self, kind: &'static str, headers: &HeaderMap) -> LocalRefusal {
+    /// A client-drift refusal with its trigger, the warn that tells the operator which client to re-pin to, and the
+    /// refusal's record as the request's one decision. The record is try-sent, so a full router queue drops it
+    /// rather than delaying the 400.
+    fn drift_refusal(
+        &self,
+        kind: &'static str,
+        headers: &HeaderMap,
+        trace: &Trace,
+        key: &ApiKeyRow,
+        identity: &RequestIdentity,
+        client_version: Option<&str>,
+    ) -> LocalRefusal {
         tracing::warn!(
             drift = %kind,
             user_agent = %user_agent(headers),
             profile = %self.profile_name,
             "a caller stamped a billing line this build cannot reproduce; re-pin the router to that client",
+        );
+        self.router.record_refusal(
+            RefusedRequest {
+                request_id: trace.request_id.clone(),
+                attempt: 1,
+                seq: 1,
+                at: (self.clock)(),
+                key_id: key.id.clone(),
+                key_generation: key.created_at,
+                agent_id: identity.agent_id.clone(),
+                session_id: identity.session_id.clone(),
+                canonical_model: identity.canonical_model.clone(),
+                client: identity.class,
+                client_version: client_version.map(str::to_string),
+            },
+            RefusalFacts {
+                kind: "client",
+                reason: format!("{kind}; client {}", client_version.unwrap_or("unknown")),
+            },
         );
         LocalRefusal {
             failure: relay_failure(&RelayError::ClientDrift { kind }),
@@ -3887,6 +3938,9 @@ struct Responding<'a> {
     replayed: bool,
     request_id: &'a str,
     retry_in_place: Duration,
+    /// The decision that selected this leg's account, its `seq` among the request's selections; every pass of the
+    /// leg answers under it.
+    seq: u32,
     /// This pass's account ticket, which a committed stream takes into its body.
     ticket: Option<AccountTicket>,
     /// `tier_ttls` of the body as this pass sends it upstream, after the TTL rewrite.

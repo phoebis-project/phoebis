@@ -20,12 +20,12 @@ pub use affinity::{
 };
 pub use phoebis_store::canonical_id as canonical_model;
 pub use record::{
-    BudgetFacts, By, CandidateFacts, ChainFacts, CooldownFacts, CreditsFacts, DecisionRecord,
-    DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
-    LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts, PinEventFacts, PinFacts,
-    PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts, RefusedRequest,
-    RequestFacts, RequestFlags, Score, Settings, SummaryFact, TermFacts, WalkStep, WarmthFacts,
-    WindowFacts, RECORD_VERSION,
+    BudgetFacts, By, CacheMapEntry, CandidateFacts, ChainFacts, CooldownFacts, CreditsFacts,
+    DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
+    LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts, PinEventFacts,
+    PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
+    RefusedRequest, RequestFacts, RequestFlags, Score, Settings, SummaryFact, TermFacts, WalkStep,
+    WarmthFacts, WindowFacts, RECORD_VERSION,
 };
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{

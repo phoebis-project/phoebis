@@ -317,8 +317,8 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
         at: 1,
     };
     let (main_row, sibling_row) = (
-        event_of(&pin_created("main")),
-        event_of(&pin_created("worker")),
+        event_of(&pin_created("main")).expect("a pin row"),
+        event_of(&pin_created("worker")).expect("a pin row"),
     );
     assert_ne!(main_row.detail, sibling_row.detail);
     let main_detail: serde_json::Value =
