@@ -662,6 +662,10 @@ fn the_owner_receives_the_key_file_the_data_directory_and_the_created_parents() 
 
 #[test]
 fn owner_off_root_refuses() {
+    // Under root `--owner` is allowed, which the ignored root case proves in this same binary.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
     let dir = tempfile::tempdir().unwrap();
     let config: PathBuf = dir.path().join("config.yaml");
     let out = init(
