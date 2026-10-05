@@ -632,7 +632,7 @@ fn now_ms() -> i64 {
 /// The stamp a fenced row takes on its next write: one past `previous` when the clock has not moved, so a write
 /// inside the millisecond of the stamp it fenced on still moves it, and an edit read before it cannot pass.
 fn stamp_past(previous: i64) -> i64 {
-    now_ms().max(previous + 1)
+    now_ms().max(previous.saturating_add(1))
 }
 
 fn rules_json(rules: &[ModelRule]) -> Result<String, StoreError> {

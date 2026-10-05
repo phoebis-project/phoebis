@@ -2703,23 +2703,25 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(200);
 }
 {
-  // A save refused because the pool changed while it was edited means the lists the dialog read are out of date: a
-  // dialog closed after a refused save reads the lists again, and one closed after no save reads nothing.
+  // A refused save may come from lists that are out of date: a dialog closed after a refused save reads the lists
+  // again, and one closed after no save reads nothing. A save over a pool written since the dialog read it is refused
+  // as stale, and its Reload closes the dialog and reads the lists, so the operator re-applies the edit over them.
   const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const openAll = async () => {
     [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
     await m.settle(300);
     return [...m.container.querySelectorAll('dialog[open]')].pop();
   };
-  const readsOnCancel = async (dialog) => {
+  const readsOn = async (click) => {
     const pools = countCalls('listPools');
     const keys = countCalls('listKeys');
-    footButton(dialog, 'Cancel')?.click();
+    click();
     await m.settle(400);
     pools.restore();
     keys.restore();
     return [pools.calls.length, keys.calls.length];
   };
+  const readsOnCancel = (dialog) => readsOn(() => footButton(dialog, 'Cancel')?.click());
   const quiet = await readsOnCancel(await openAll());
   results.push({ name: '/pools Cancel without a refused save reloads nothing', ok: JSON.stringify(quiet) === '[0,0]', missing: quiet.map(String) });
   const dlg = await openAll();
@@ -2735,17 +2737,46 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok: repeat[0] && repeat[1].startsWith(twice),
     missing: repeat.map(String),
   });
-  const sentence = 'the pool changed while it was being edited; reload and try again';
-  failNextCall('updatePool', '/admin/pools/all', sentence, { status: 409 });
-  footButton(dlg, 'Save pool')?.click();
-  await m.settle(600);
-  const stayed = dlg?.hasAttribute('open') === true;
-  const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
   const reads = await readsOnCancel(dlg);
   results.push({
-    name: '/pools Cancel after a save refused as stale reloads the pools and keys',
-    ok: stayed && status.startsWith(sentence) && JSON.stringify(reads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
-    missing: [stayed ? 'open' : 'closed', status, ...reads.map(String)],
+    name: '/pools Cancel after a refused save reloads the pools and keys',
+    ok: JSON.stringify(reads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
+    missing: reads.map(String),
+  });
+  const story = (await api.listPools()).find((p) => p.id === 'all');
+  const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
+  const shedChip = () => m.container.querySelector('.pool__features a[href="/pools?edit=all&group=shedding"]') !== null;
+  const stale = await openAll();
+  // Through the API, which the mock stamps later than the row the dialog opened with.
+  await api.updatePool('all', { ...written, shedAheadOfPace: 0.3 });
+  footButton(stale, 'Save pool')?.click();
+  await m.settle(600);
+  const sentence = 'the pool changed while it was being edited; reload and try again';
+  const callout = stale?.querySelector('.dialog__body--grouped [role="alert"]');
+  const reload = [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');
+  const refused = [stale?.hasAttribute('open') === true, callout?.textContent ?? '', !!reload, shedChip()];
+  results.push({
+    name: '/pools a save over a pool written since the dialog opened is refused as stale with a Reload in the callout',
+    ok: story.shedAheadOfPace === null && refused[0] && refused[1] === `${sentence} Reload` && refused[2] && !refused[3],
+    missing: [String(story.shedAheadOfPace), ...refused.map(String)],
+  });
+  const reloaded = await readsOn(() => reload?.click());
+  results.push({
+    name: '/pools Reload closes the dialog and reads the pools and keys once each, and the card shows the written value',
+    ok: JSON.stringify(reloaded) === '[1,1]' && m.container.querySelector('dialog[open]') === null && shedChip(),
+    missing: [...reloaded.map(String), String(shedChip())],
+  });
+  // The fresh edit turns the written margin off again, which puts the story's pool back for the checks below.
+  const fresh = await openAll();
+  fresh?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
+  await m.settle(150);
+  footButton(fresh, 'Save pool')?.click();
+  await m.settle(700);
+  const saved = (await api.listPools()).find((p) => p.id === 'all');
+  results.push({
+    name: '/pools an edit opened after Reload saves over the fresh row',
+    ok: m.container.querySelector('dialog[open]') === null && saved?.shedAheadOfPace === null && !shedChip(),
+    missing: [String(saved?.shedAheadOfPace), String(shedChip())],
   });
 }
 {
@@ -4556,6 +4587,60 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
   foot(dlg, 'Cancel')?.click();
   await m.settle(200);
+}
+{
+  // The key written through the API after its dialog opened: the save is refused as stale, the callout's Reload closes
+  // the dialog and reads the keys, the row reads the written label, and an edit opened after it saves.
+  const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
+  const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const labelled = (name) => rows().some((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name);
+  const edit = async (name) => {
+    rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name)?.querySelector('.menu__trigger')?.click();
+    await m.settle(120);
+    [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+    await m.settle(400);
+    return [...m.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
+  const input = { autoModeServer: laptop.autoModeServer, bodyCaptureHours: laptop.bodyCaptureHours, enabled: laptop.enabled, keepaliveOptOut: laptop.keepaliveOptOut, longContextTwins: laptop.longContextTwins, modelRules: laptop.modelRules, modelRulesMode: laptop.modelRulesMode, name: 'laptop (written)', notes: laptop.notes, poolId: laptop.poolId };
+  const stale = await edit('laptop');
+  // Through the API, which the mock stamps later than the row the dialog opened with.
+  await api.updateKey('laptop', input);
+  foot(stale, 'Save')?.click();
+  await m.settle(600);
+  const sentence = 'the key changed while it was being edited; reload and try again';
+  const callout = stale?.querySelector('.dialog__body--grouped [role="alert"]');
+  const reload = [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');
+  const refused = [stale?.hasAttribute('open') === true, callout?.textContent ?? '', !!reload, labelled('laptop (written)')];
+  results.push({
+    name: '/keys a save over a key written since the dialog opened is refused as stale with a Reload in the callout',
+    ok: laptop.name === 'laptop' && refused[0] && refused[1] === `${sentence} Reload` && refused[2] && !refused[3],
+    missing: [laptop.name, ...refused.map(String)],
+  });
+  const keys = countCalls('listKeys');
+  reload?.click();
+  await m.settle(400);
+  keys.restore();
+  results.push({
+    name: '/keys Reload closes the dialog, reads the keys once, and the row reads the written label',
+    ok: keys.calls.length === 1 && m.container.querySelector('dialog[open]') === null && labelled('laptop (written)'),
+    missing: [String(keys.calls.length), String(labelled('laptop (written)'))],
+  });
+  // The fresh edit puts the story's label back, so the checks below find laptop under its own name.
+  const fresh = await edit('laptop (written)');
+  const name = fresh?.querySelector('input[placeholder="workstation"]');
+  if (name) {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(name, 'laptop');
+    name.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(150);
+  }
+  foot(fresh, 'Save')?.click();
+  await m.settle(700);
+  results.push({
+    name: '/keys an edit opened after Reload saves over the fresh row',
+    ok: m.container.querySelector('dialog[open]') === null && labelled('laptop') && (await api.listKeys()).find((k) => k.id === 'laptop')?.name === 'laptop',
+    missing: [String(labelled('laptop'))],
+  });
 }
 {
   const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];

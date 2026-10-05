@@ -18,7 +18,10 @@ use phoebis_store::{
 };
 use serde_json::{json, Value};
 
-use crate::routes::{double_option, failure, reload_or_refuse, store_failure, CreatedId};
+use crate::routes::{
+    double_option, failure, failure_with_code, fence_stamp, present, reload_or_refuse,
+    store_failure, CreatedId,
+};
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
@@ -140,6 +143,11 @@ struct PoolInput {
     session_placement: Option<String>,
     #[serde(default)]
     min_shared_prefix_tokens: Option<u64>,
+    /// The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
+    /// its own sentence rather than read as "not sent" or refused with the body's. A create reads nothing of it,
+    /// since there is no row to fence on.
+    #[serde(default, deserialize_with = "present")]
+    expected_revision: Option<Value>,
 }
 
 /// A PATCH's `keepalive` names only the fields the operator touched, and the struct fills the rest with
@@ -568,7 +576,10 @@ pub(crate) async fn patch(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
         Err(e) => return store_failure(e),
     };
-    let read_at = row.updated_at;
+    let read_at = match fence_stamp(input.expected_revision.as_ref(), row.updated_at) {
+        Ok(stamp) => stamp,
+        Err(refusal) => return refusal,
+    };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
@@ -585,8 +596,9 @@ pub(crate) async fn patch(
     {
         Ok(at) => row.updated_at = at,
         Err(StoreError::Stale) => {
-            return failure(
+            return failure_with_code(
                 StatusCode::CONFLICT,
+                "stale_edit",
                 "the pool changed while it was being edited; reload and try again",
             )
         }

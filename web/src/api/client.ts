@@ -204,7 +204,8 @@ export interface Api {
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
   updateAccount(accountId: string, patch: AccountPatch): Promise<Account>;
-  updateKey(id: string, input: KeyInput): Promise<ApiKey>;
-  updatePool(id: string, input: PoolInput): Promise<Pool>;
+  /** `updatedAt` is the stamp the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
+  updateKey(id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey>;
+  updatePool(id: string, input: PoolInput, updatedAt?: string): Promise<Pool>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;
 }

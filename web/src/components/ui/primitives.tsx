@@ -494,6 +494,7 @@ export function GroupedDialog({
   held = hold !== null,
   initialGroup = null,
   footer,
+  notice,
   width = 1040,
 }: {
   /** The id of the group shown; the page owns it and resets it on open. */
@@ -510,6 +511,8 @@ export function GroupedDialog({
    * reset has chosen it. Null (Edit, Create) leaves focus where the browser's dialog focusing put it.
    */
   initialGroup?: string | null;
+  /** Shown above whichever group is open: a refusal that is about the whole save, not one group's field. */
+  notice?: ReactNode;
   /** The rail, a hint link and Go to call it; the page stores the id. */
   onChoose: (id: string) => void;
   onClose: () => void;
@@ -671,6 +674,7 @@ export function GroupedDialog({
               <span className="dialog-rail__break" aria-hidden />
             </nav>
             <div className="dialog__body dialog__body--grouped" ref={bodyRef}>
+              {notice && <div style={{ paddingTop: 18 }}>{notice}</div>}
               {shown.map((g) => (
                 <DialogGroupPanel key={g.id} chosen={current} group={g} on={expertView} register={register} turnOn={() => setExpertView(true)} />
               ))}

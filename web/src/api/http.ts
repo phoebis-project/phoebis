@@ -134,6 +134,18 @@ export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[
   return [...out.values()].sort((x, y) => x.id.localeCompare(y.id));
 };
 
+/** The fence the edit routes read: the millisecond stamp of the row the dialog opened with, when one was given. */
+function fenced(body: Record<string, unknown>, updatedAt?: string): Record<string, unknown> {
+  if (updatedAt === undefined) return body;
+  const stamp = Date.parse(updatedAt);
+  // A stamp the dialog cannot read is a view it cannot vouch for: refused as the route refuses a stale one, so the
+  // dialog offers Reload rather than sending null, which the route refuses with a sentence about the stamp.
+  if (Number.isNaN(stamp)) {
+    throw new ApiError(409, "the row's stamp could not be read; reload and try again", 'stale_edit');
+  }
+  return { ...body, expected_revision: stamp };
+}
+
 export class HttpApi implements Api {
   analyticsBudgets = async () => (await call<{ members: unknown[] }>('GET', '/admin/analytics/budgets')).members.map(d.decodeMemberBudget);
   analyticsPlacements = async (q: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>) => (await call<{ rows: unknown[] }>('GET', `/admin/analytics/placements${qs({ keys: q.keyIds, pools: q.poolIds, range: range(q.from, q.to) })}`)).rows.map(d.decodePlacementRow);
@@ -299,11 +311,10 @@ export class HttpApi implements Api {
     };
   };
   updateAccount = async (accountId: string, patch: AccountPatch) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, d.encodeAccountPatch(patch)));
-  updateKey = async (id: string, input: KeyInput): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, d.encodeKey(input)));
-  // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409 that the
-  // pool changed while it was edited means the lists the dialog read are out of date, so it reloads them when it
-  // closes after a refusal.
-  updatePool = async (id: string, input: PoolInput) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, d.encodePool(input)));
+  updateKey = async (id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, fenced(d.encodeKey(input), updatedAt)));
+  // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409
+  // `stale_edit` means the row moved since the dialog read it, which the dialog answers with Reload.
+  updatePool = async (id: string, input: PoolInput, updatedAt?: string) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, fenced(d.encodePool(input), updatedAt)));
   verifyAccount = (accountId: string) => call<{ ok: boolean; status: number }>('POST', `/admin/accounts/${enc(accountId)}/verify`);
 }
 

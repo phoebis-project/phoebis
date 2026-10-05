@@ -919,7 +919,7 @@ export function PoolDialog({
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];
   models: { label: string; value: string }[];
-  /** `reload` is true after a save the route answered with a refusal: one saying the pool changed while it was edited means the lists are out of date. */
+  /** `reload` is true from the stale save's Reload, and on a close after any other refusal, whose cause may be lists that are out of date. */
   onClose: (reload: boolean) => void;
   onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;
@@ -937,6 +937,7 @@ export function PoolDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
+  const [stale, setStale] = useState<string | null>(null);
   const [chosen, setChosen] = useState<PoolGroup>('identity');
   const settings = useAsync(() => api.getSettings(), []);
   const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
@@ -965,6 +966,7 @@ export function PoolDialog({
     setBusy(false);
     setError(null);
     setAttempted(false);
+    setStale(null);
     setChosen(initialGroup ?? 'identity');
     // `accounts` is read but not tracked: the parent hands down a fresh array on every render, and reacting to
     // that would wipe the form mid-edit.
@@ -1110,7 +1112,7 @@ export function PoolDialog({
         name: moving.name,
         notes: moving.notes,
         poolId: moveTo,
-      });
+      }, moving.updatedAt);
       setMoved((prev) => new Set(prev).add(moving.id));
       setMoving(null);
       onKeysChanged();
@@ -1135,12 +1137,18 @@ export function PoolDialog({
     setBusy(true);
     setError(null);
     try {
-      if (pool) await api.updatePool(pool.id, input);
+      if (pool) await api.updatePool(pool.id, input, pool.updatedAt);
       else await api.createPool(input);
     } catch (e) {
       // Stated inside the dialog, which stays open: it sits in the browser's top layer, where a toast raised
       // behind its backdrop would never be seen, and the edit that was refused is still on screen.
       setBusy(false);
+      if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') {
+        // The row moved under the dialog: the edit is about values that are gone, so the operator reloads and
+        // re-applies it rather than saving over what someone else wrote.
+        setStale(e.message);
+        return;
+      }
       setError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.status >= 400) setAttempted(true);
       return;
@@ -2025,6 +2033,17 @@ export function PoolDialog({
         status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
         hold={first?.group ?? null}
         held={first !== null || error !== null}
+        notice={
+          stale &&
+          refusalCallout(
+            <>
+              {stale}{' '}
+              <Button variant="ghost" onClick={() => onClose(true)}>
+                Reload
+              </Button>
+            </>,
+          )
+        }
         footer={
           <>
             <Button variant="ghost" onClick={() => onClose(attempted)}>

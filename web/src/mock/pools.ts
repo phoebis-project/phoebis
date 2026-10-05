@@ -93,6 +93,8 @@ const POOL_ROWS: PoolSeed[] = [
     requests24h: ALL_TRAFFIC.reduce((s, b) => s + b.requests, 0),
     cost24h: 38.72,
     activePins: 10,
+    // A pool carries no creation date, so its last write is a stamp of its own.
+    updatedAt: daysAgo(2),
     // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both.
     // With migration off no round runs, so every move comes from the rules that need no threshold.
     movesPerHour: { overage: 1, spent: 2 },
@@ -135,6 +137,7 @@ const POOL_ROWS: PoolSeed[] = [
     requests24h: CODEX_TRAFFIC.reduce((s, b) => s + b.requests, 0),
     cost24h: 2.14,
     activePins: 2,
+    updatedAt: daysAgo(12),
   },
   {
     ...POOL_SAMPLE,
@@ -160,6 +163,7 @@ const POOL_ROWS: PoolSeed[] = [
     requests24h: 0,
     cost24h: 0,
     activePins: 0,
+    updatedAt: daysAgo(40),
   },
 ];
 
@@ -181,6 +185,8 @@ export const KEYS: ApiKey[] = [
     enabled: true,
     status: 'active',
     createdAt: daysAgo(91),
+    // Its rotation, the key's last write.
+    updatedAt: ago(12 * MINUTE),
     expiresAt: null,
     lastUsedAt: ago(3 * MINUTE),
     // Rotated inside the last 15 minutes, which is the only window in which the route reports a session still
@@ -210,6 +216,7 @@ export const KEYS: ApiKey[] = [
     enabled: true,
     status: 'active',
     createdAt: daysAgo(34),
+    updatedAt: daysAgo(5),
     expiresAt: ahead(60 * DAY),
     lastUsedAt: ago(18 * MINUTE),
     retiredSecretLastUsedAt: null,
@@ -233,6 +240,8 @@ export const KEYS: ApiKey[] = [
     enabled: false,
     status: 'disabled',
     createdAt: daysAgo(58),
+    // When it was switched off.
+    updatedAt: daysAgo(20),
     expiresAt: null,
     lastUsedAt: daysAgo(9),
     retiredSecretLastUsedAt: null,
@@ -260,6 +269,8 @@ export const KEYS: ApiKey[] = [
     enabled: false,
     status: 'revoked',
     createdAt: daysAgo(120),
+    // Its revocation.
+    updatedAt: daysAgo(2),
     expiresAt: null,
     lastUsedAt: daysAgo(2),
     retiredSecretLastUsedAt: null,
@@ -284,6 +295,7 @@ export const KEYS: ApiKey[] = [
     enabled: true,
     status: 'active',
     createdAt: daysAgo(3),
+    updatedAt: daysAgo(3),
     expiresAt: null,
     // The request log's one notebook row sets the last use and the usage below, since its time and cost are drawn.
     lastUsedAt: null,

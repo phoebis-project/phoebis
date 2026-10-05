@@ -347,6 +347,14 @@ test('a pool decodes its shedding margin and encodes it back', () => {
   assert.equal(d.encodePool({ ...p, name: p.name, shedAheadOfPace: null, status: 'active' }).shed_ahead_of_pace, null, 'null clears it rather than leaving it alone');
 });
 
+test('a pool and a key decode the stamp of their last write, which an edit sends back', () => {
+  const pool = fixture('pools').pools[0];
+  const key = fixture('keys').keys[0];
+  const [p, k] = [d.decodePool(pool), d.decodeKey(key)];
+  assert.ok(isIso(p.updatedAt) && isIso(k.updatedAt));
+  assert.deepEqual([p.updatedAt, k.updatedAt], [new Date(pool.updated_at).toISOString(), new Date(key.updated_at).toISOString()]);
+});
+
 test('a pool decodes the three strategies and the flag, and encodes the stored flag back', () => {
   const row = fixture('pools').pools[0];
   assert.equal(d.decodePool({ ...row, strategy: 'pace' }).strategy, 'pace');

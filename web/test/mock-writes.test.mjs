@@ -140,6 +140,38 @@ test('a pool answers its keys from the key registry', async () => {
   assert.ok((await keysOf('studio')).some(([id]) => id === 'laptop') && !(await keysOf('all')).some(([id]) => id === 'laptop'), 'a moved key answers under its new pool alone');
 });
 
+const staleAs = (message) => (e) => e instanceof d.ApiError && e.status === 409 && e.message === message && e.code === 'stale_edit';
+const POOL_STALE = 'the pool changed while it was being edited; reload and try again';
+const KEY_STALE = 'the key changed while it was being edited; reload and try again';
+const storyKey = async (api, id) => (await api.listKeys()).find((k) => k.id === id);
+
+test('a pool or key save over a stamp the row no longer carries is refused as stale and stores nothing, and one over its own stamp moves it', async () => {
+  const api = await signedIn();
+  const pool = (await api.listPools()).find((p) => p.id === 'all');
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, '2020-01-01T00:00:00.000Z'), staleAs(POOL_STALE));
+  assert.deepEqual((await api.listPools()).find((p) => p.id === 'all'), pool);
+  const savedPool = await api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.updatedAt);
+  assert.equal(savedPool.name, 'moved');
+  assert.ok(Date.parse(savedPool.updatedAt) > Date.parse(pool.updatedAt), 'the save moves the stamp past the one it was read at');
+  const key = await storyKey(api, 'laptop');
+  const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
+  await assert.rejects(() => api.updateKey('laptop', edit, '2020-01-01T00:00:00.000Z'), staleAs(KEY_STALE));
+  assert.deepEqual(await storyKey(api, 'laptop'), key);
+  const savedKey = await api.updateKey('laptop', edit, key.updatedAt);
+  assert.equal(savedKey.name, 'moved');
+  assert.ok(Date.parse(savedKey.updatedAt) > Date.parse(key.updatedAt), 'the save moves the stamp past the one it was read at');
+});
+
+test('a rotation or a revocation moves the key\'s stamp, so an edit read before it is refused as stale', async () => {
+  const api = await signedIn();
+  for (const [id, write] of [['laptop', (a) => a.rotateKey('laptop')], ['batch', (a) => a.revokeKey('batch')]]) {
+    const before = await storyKey(api, id);
+    await write(api);
+    await assert.rejects(() => api.updateKey(id, { ...keyInput, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.updatedAt), staleAs(KEY_STALE), id);
+    assert.equal((await storyKey(api, id)).name, before.name, id);
+  }
+});
+
 test("a key write stores the server-side auto mode override and a pool write stores the switch", async () => {
   const api = await signedIn();
   const { key: inheriting } = await api.createKey({ ...keyInput, name: 'inheriting' });

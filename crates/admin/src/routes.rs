@@ -1584,6 +1584,33 @@ pub(crate) fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deseriali
     Option::<T>::deserialize(d).map(Some)
 }
 
+/// A field that is there, whatever it holds: `Option` alone folds a present `null` into an absent field.
+pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(d).map(Some)
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+/// The stamp an edit fences on: the row's own when the body sent none, else the body's integer, refused when it
+/// is not one or lies more than a day past the row's stamp, which no row the client read can carry.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn fence_stamp(sent: Option<&serde_json::Value>, current: i64) -> Result<i64, Response> {
+    let Some(value) = sent else {
+        return Ok(current);
+    };
+    match value.as_i64() {
+        Some(stamp) if stamp <= current.saturating_add(DAY_MS) => Ok(stamp),
+        _ => Err(failure(
+            StatusCode::BAD_REQUEST,
+            "expected_revision is the updated_at the row was read at",
+        )),
+    }
+}
+
 /// A refusal an operator console can branch on without reading the prose, in the same header slot the relay
 /// puts its own codes.
 pub(crate) fn failure_with_code(status: StatusCode, code: &'static str, message: &str) -> Response {

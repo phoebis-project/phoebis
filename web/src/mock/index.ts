@@ -31,6 +31,10 @@ const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) =>
 const KEY_TAKEN = 'a key with this id exists';
 const POOL_TAKEN = 'a pool with this id exists';
 
+/** Strictly later than the stamp it replaces, as the route's fence stamps, so a save inside one millisecond still
+ * moves it and an edit read before it cannot pass. */
+const stamped = (previous: string) => iso(Math.max(Date.now(), Date.parse(previous) + 1));
+
 /**
  * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
  * drifts from the route is refused here rather than agreed with.
@@ -480,6 +484,7 @@ export class MockApi implements Api {
       modelRulesMode: input.modelRulesMode ?? 'extend',
       status: 'active',
       createdAt: iso(NOW),
+      updatedAt: iso(NOW),
       expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
       keepaliveOptOut: input.keepaliveOptOut,
       lastUsedAt: null,
@@ -517,6 +522,7 @@ export class MockApi implements Api {
       movesPerHour: {},
       requests24h: 0,
       traffic24h: [],
+      updatedAt: iso(NOW),
     };
     this.pools = [...this.pools, pool];
     return latency(this.poolView(pool), 300);
@@ -784,7 +790,7 @@ export class MockApi implements Api {
 
   async revokeKey(id: string) {
     // The route switches a revoked key off in the same write, and an edit sends that flag back.
-    this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const } : k));
+    this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const, updatedAt: stamped(k.updatedAt) } : k));
     return latency(undefined, 250);
   }
 
@@ -792,7 +798,7 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
-    const next: ApiKey = { ...key, prefix: secret.slice(0, 12), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2 };
+    const next: ApiKey = { ...key, prefix: secret.slice(0, 12), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, updatedAt: stamped(key.updatedAt) };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: next, secret }, 300);
   }
@@ -842,22 +848,23 @@ export class MockApi implements Api {
     return latency(this.putAccount({ ...a, cancelled: patch.cancelled, subscription }), 250);
   }
 
-  async updateKey(id: string, input: KeyInput): Promise<ApiKey> {
+  async updateKey(id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey> {
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
     const refusal = keyRulesRefusal(input);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     const { expiresAt: expiry, ...rest } = input;
     const current = this.keys[idx];
+    if (updatedAt !== undefined && updatedAt !== current.updatedAt) return Promise.reject(new ApiError(409, 'the key changed while it was being edited; reload and try again', 'stale_edit'));
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
     const status = current.status === 'revoked' ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= Date.now() ? 'expired' : rest.enabled ? 'active' : 'disabled';
-    const next: ApiKey = { ...current, ...rest, expiresAt, status };
+    const next: ApiKey = { ...current, ...rest, expiresAt, status, updatedAt: stamped(current.updatedAt) };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
     return latency(next, 250);
   }
 
-  async updatePool(id: string, input: PoolInput): Promise<Pool> {
+  async updatePool(id: string, input: PoolInput, updatedAt?: string): Promise<Pool> {
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
     const refusal = poolRefusal(input);
@@ -874,6 +881,7 @@ export class MockApi implements Api {
     const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
     if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
     const current = this.pools[idx];
+    if (updatedAt !== undefined && updatedAt !== current.updatedAt) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited; reload and try again', 'stale_edit'));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
     const next: Omit<Pool, 'keys'> = {
       ...current,
@@ -885,6 +893,7 @@ export class MockApi implements Api {
         const kept = verdict.get(m.accountId) ?? 'eligible';
         return writtenMember(m, account, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept));
       }),
+      updatedAt: stamped(current.updatedAt),
     };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     return latency(this.poolView(next), 250);

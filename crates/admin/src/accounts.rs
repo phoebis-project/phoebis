@@ -14,7 +14,8 @@ use phoebis_store::{AccountKind, AccountRow, AccountState, AccountUpdate, Secret
 use serde_json::{json, Value};
 
 use crate::routes::{
-    account, account_json, double_option, failure, reload_or_refuse, store_failure, CreatedId,
+    account, account_json, double_option, failure, failure_with_code, reload_or_refuse,
+    store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -271,8 +272,9 @@ pub(crate) async fn patch(
         match state.store.commit_account_update(&update) {
             Ok(()) => {}
             Err(StoreError::Stale) => {
-                return failure(
+                return failure_with_code(
                     StatusCode::CONFLICT,
+                    "stale_edit",
                     "the account changed while the edit was being saved",
                 )
             }

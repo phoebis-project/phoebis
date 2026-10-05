@@ -1275,6 +1275,10 @@ async fn two_account_editors_from_one_read_meet_one_409() {
     let first = first.await.unwrap();
     assert_eq!(first.status(), 409);
     assert_eq!(
+        first.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
         json(first).await["error"],
         "the account changed while the edit was being saved"
     );
