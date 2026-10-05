@@ -293,8 +293,9 @@ is the trail.
 | `secret_env` | required | the variable holding the admin secret |
 | `tls` | unset on loopback, required off it | `plain_http`, or `{cert_file, key_file}` |
 
-On a loopback listener the `tls` key is optional and the cookie travels without `Secure`, which costs nothing behind an
-SSH tunnel. Off loopback the key is required: a certificate pair terminates TLS on the listener and the cookie carries
+On a loopback listener the `tls` key is optional. Plain HTTP there issues the cookie without `Secure`, which costs
+nothing behind an SSH tunnel; a front's `X-Forwarded-Proto: https`, below, is the one exception. Off loopback the key is
+required. A certificate pair terminates TLS on the listener on any address, loopback included, and the cookie carries
 `Secure`; `plain_http` is the operator's trust decision for that network, as it is for the proxy listener. Every
 mutation and every WebSocket upgrade that carries an `Origin` must name the request's own `Host` with it; a request with
 no `Origin` is admitted. A front that terminates TLS forwards to a loopback listener over plain HTTP, passes `Host`
