@@ -12,6 +12,7 @@ on:
       - Dockerfile
       - crates/**
       - deploy/**
+      - rust-toolchain.toml
       - web/**
       - "!web/e2e/**"
       - "!web/smoke/**"
@@ -285,7 +286,7 @@ jobs:
           curl -fsSo /dev/null "http://127.0.0.1:18081$asset" || { echo "console asset $asset was not served"; exit 1; }
           # The container's environment carries the secret, so this smokes the bearer path, the five reads and the screen.
           docker exec phoebis-smoke phoebis status > "$tmp/status.txt" || { cat "$tmp/status.txt"; echo "status exited non-zero"; exit 1; }
-          head -n 1 "$tmp/status.txt" | grep -q ' ready$' || { cat "$tmp/status.txt"; echo "status's first line does not end in ready"; exit 1; }
+          head -n 1 "$tmp/status.txt" | grep -q ', ready$' || { cat "$tmp/status.txt"; echo "status's first line does not end in ready"; exit 1; }
           # The two copies and the manifest land on the volume; backup creates the missing parent.
           docker exec phoebis-smoke phoebis backup --to /var/lib/phoebis/backups/smoke
           # A second, short container with a certificate pair on the admin listener, generated here: the image must
