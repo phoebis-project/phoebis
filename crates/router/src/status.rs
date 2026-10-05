@@ -136,14 +136,10 @@ impl Reader<'_> {
                 Err(line)
             }
             Ok(Err(error)) => Err(error.to_string()),
-            Err(_) => {
-                let base = self.client.base();
-                Err(format!(
-                    "the admin listener did not answer on {}://{}: the call did not finish within {deadline:?}",
-                    base.scheme_str().unwrap_or_default(),
-                    base.authority().map(|a| a.as_str()).unwrap_or_default()
-                ))
-            }
+            Err(_) => Err(format!(
+                "the admin listener did not answer on {}: the call did not finish within {deadline:?}",
+                self.client.url()
+            )),
         }
     }
 }

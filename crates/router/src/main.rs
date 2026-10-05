@@ -319,12 +319,7 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
             }),
         )
     };
-    let base = client.base();
-    let called = format!(
-        "{}://{}",
-        base.scheme_str().unwrap_or_default(),
-        base.authority().map(|a| a.as_str()).unwrap_or_default()
-    );
+    let called = client.url();
     let listeners = match &file {
         Some(config) => {
             let self_signed = [&config.proxy.tls, &config.admin.tls]

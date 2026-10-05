@@ -273,8 +273,8 @@ impl AdminClient {
             .unwrap_or_default()
     }
 
-    /// The base a `Transport` line names: scheme and authority, without the path `Uri` prints.
-    fn url(&self) -> String {
+    /// The base as every line names it: scheme and authority, without the path `Uri` prints.
+    pub fn url(&self) -> String {
         format!(
             "{}://{}",
             self.base.scheme_str().unwrap_or_default(),
