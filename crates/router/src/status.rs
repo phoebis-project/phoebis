@@ -926,7 +926,20 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let ca = dir.path().join("ca.pem");
         std::fs::write(&ca, "").unwrap();
-        let reads = fixture_reads();
+        // A second pool after `main` in the answer that sorts before it by id, its two members on one priority and
+        // out of id order, so the screen's own ordering is what the test reads.
+        let mut pools_answer = fixture("pools");
+        pools_answer["pools"].as_array_mut().unwrap().push(json!({
+            "id": "lab", "status": "degraded", "keys": [], "active_pins": 0, "requests_24h": 0,
+            "members": [
+                {"account_id": "direct", "priority": 0, "eligible": "eligible"},
+                {"account_id": "business", "priority": 0, "eligible": "cooldown"},
+            ],
+        }));
+        let reads = Reads {
+            pools: Ok(pools_answer.clone()),
+            ..fixture_reads()
+        };
         let screen = render(
             &reads,
             &listeners(Some(ca.clone())),
@@ -997,8 +1010,15 @@ mod tests {
                 .map(|a| a["label"].as_str().unwrap().to_owned())
                 .unwrap()
         };
-        let mut pools = fixture("pools")["pools"].as_array().unwrap().clone();
+        let mut pools = pools_answer["pools"].as_array().unwrap().clone();
         pools.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
+        assert_eq!(
+            pools
+                .iter()
+                .map(|p| p["id"].as_str().unwrap())
+                .collect::<Vec<_>>(),
+            ["lab", "main"]
+        );
         let mut at = 0;
         for pool in &pools {
             let header = pools_block[at];
@@ -1008,7 +1028,10 @@ mod tests {
                 "{screen}"
             );
             let mut members = pool["members"].as_array().unwrap().clone();
-            members.sort_by_key(|m| m["priority"].as_i64());
+            members.sort_by(|a, b| {
+                (a["priority"].as_i64(), a["account_id"].as_str())
+                    .cmp(&(b["priority"].as_i64(), b["account_id"].as_str()))
+            });
             for (offset, member) in members.iter().enumerate() {
                 let line = pools_block[at + 1 + offset];
                 assert!(
@@ -1024,18 +1047,25 @@ mod tests {
             pools_block.len(),
             "one line per pool and member: {screen}"
         );
-        // The windows and the cooldown of the first member, cut at the width, and the dashes of a member with no
+        assert!(
+            pools_block[0].starts_with("  lab ")
+                && pools_block[1].starts_with("    Business ")
+                && pools_block[2].starts_with("    Direct ")
+                && pools_block[3].starts_with("  main "),
+            "the pools by id, a priority's members by account id: {screen}"
+        );
+        // The windows and the cooldown of `main`'s first member, cut at the width, and the dashes of a member with no
         // sample.
         assert!(
-            pools_block[1].contains("5h 62%")
-                && pools_block[1].contains("7d 41%")
-                && pools_block[1].contains("fable 12%")
-                && pools_block[1].contains("until 00:46 model:")
-                && pools_block[1].ends_with('…'),
+            pools_block[4].contains("5h 62%")
+                && pools_block[4].contains("7d 41%")
+                && pools_block[4].contains("fable 12%")
+                && pools_block[4].contains("until 00:46 model:")
+                && pools_block[4].ends_with('…'),
             "{screen}"
         );
         assert!(
-            pools_block[2].contains("5h -") && pools_block[2].contains("7d -"),
+            pools_block[5].contains("5h -") && pools_block[5].contains("7d -"),
             "{screen}"
         );
 
@@ -1166,9 +1196,10 @@ mod tests {
             json["health"],
             json!({"ready": true, "addr": "127.0.0.1:8317", "reason": null})
         );
-        for name in ["system", "attention", "pools", "accounts", "sessions"] {
+        for name in ["system", "attention", "accounts", "sessions"] {
             assert_eq!(json[name], fixture(name), "{name}");
         }
+        assert_eq!(json["pools"], pools_answer);
         assert_eq!(json["errors"], json!({}));
     }
 
