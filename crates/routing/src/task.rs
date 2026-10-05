@@ -241,6 +241,10 @@ pub struct RouterConfig {
     /// The meter's peak band at a renewal's instant: a pin's banded copy folds its tokens times it, the plain
     /// copy does not.
     pub band: BandWeight,
+    /// Whether the loop's first purge waits for `RouterHandle::release_purge`. The purge tick fires at once, before
+    /// the spawner can subscribe to the broadcast, and the first purge after a start announces the downtime's clock
+    /// resets and wind-downs; the router's start holds it until the ledger subscribed and holds the start row.
+    pub hold_first_purge: bool,
     pub purge_interval: Duration,
     /// The dollar table and the cost table's 5-hour share table the shedding round prices each pin's burn
     /// through when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by. The
@@ -255,6 +259,7 @@ impl Default for RouterConfig {
     fn default() -> Self {
         RouterConfig {
             band: BandWeight::default(),
+            hold_first_purge: false,
             purge_interval: Duration::from_secs(60),
             rates: BurnRates::default(),
             share: SharePricer::default(),
@@ -670,6 +675,7 @@ enum Command {
         request: RefusedRequest,
         refusal: RefusalFacts,
     },
+    ReleasePurge,
     ReleaseSession {
         key_id: String,
         session_id: String,
@@ -790,8 +796,6 @@ pub struct RouterHandle {
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
     load_counts: LoadCounts,
-    /// A receiver opened before the loop's first turn, taken by `subscribe_from_start`.
-    start_events: Arc<Mutex<Option<broadcast::Receiver<RouterEvent>>>>,
     /// The replacing readings the loop has not drained yet, shared with the task.
     pending: Pending,
     reports: Arc<ReportSequence>,
@@ -825,22 +829,15 @@ impl RouterHandle {
         self.load_counts
     }
 
+    /// Lets the first purge run, under `RouterConfig::hold_first_purge`; a stopped task takes nothing.
+    pub async fn release_purge(&self) {
+        let _ = self.tx.send(Command::ReleasePurge).await;
+    }
+
     /// What changed in the routing state, as it changes. A receiver that falls behind loses the oldest
     /// events and is told so; the task never waits on a receiver.
     pub fn subscribe_events(&self) -> broadcast::Receiver<RouterEvent> {
         self.events.subscribe()
-    }
-
-    /// `subscribe_events` for the one subscriber that must also see what the loop broadcast before its spawner could
-    /// subscribe: the purge tick fires at once, so the first purge after a start announces the clock resets and the
-    /// wind-downs of the downtime ahead of every other subscriber. The first call takes the receiver opened before
-    /// the loop's first turn; a later one subscribes now.
-    pub fn subscribe_from_start(&self) -> broadcast::Receiver<RouterEvent> {
-        self.start_events
-            .lock()
-            .expect("start receiver lock poisoned")
-            .take()
-            .unwrap_or_else(|| self.events.subscribe())
     }
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
@@ -1269,6 +1266,8 @@ struct Task {
     invalidated: HashMap<PinKey, (String, &'static str, i64)>,
     /// The reloads the running load answers: those that were waiting when it started.
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
+    /// The first purge waits while set; `Command::ReleasePurge` clears it.
+    purge_held: bool,
     /// Whether a registry load runs; at most one does.
     loading: bool,
     /// The affinity reports a test's hold keeps unapplied, in queue order; `None` while no hold is on.
@@ -1328,7 +1327,7 @@ pub fn spawn(
     // `deferred`, coalesced by row, which the state's own caps bound.
     let (writer, mut writes) = mpsc::channel::<Vec<StateWrite>>(WRITER_DEPTH);
     let (done_tx, done_rx) = oneshot::channel();
-    let (events, start_events) = broadcast::channel(EVENTS);
+    let (events, _) = broadcast::channel(EVENTS);
     let reports = Arc::new(ReportSequence::default());
     let pending = Pending::default();
     let writer_status = Arc::new(WriterShared::default());
@@ -1339,7 +1338,6 @@ pub fn spawn(
         events: events.clone(),
         in_flight,
         load_counts,
-        start_events: Arc::new(Mutex::new(Some(start_events))),
         pending: pending.clone(),
         reports: reports.clone(),
         snapshot: snapshot.clone(),
@@ -1386,6 +1384,7 @@ pub fn spawn(
         writer.retry().await;
         let _ = done_tx.send(());
     });
+    let purge_held = config.hold_first_purge;
     let mut task = Task {
         cancel: HashMap::new(),
         clock,
@@ -1398,6 +1397,7 @@ pub fn spawn(
         loading: false,
         #[cfg(any(test, feature = "debug-hooks"))]
         parked: None,
+        purge_held,
         pending,
         reload_waiters: Vec::new(),
         reports,
@@ -1467,7 +1467,7 @@ pub fn spawn(
                         break;
                     }
                 },
-                _ = purge.tick() => task.purge(),
+                _ = purge.tick(), if !task.purge_held => task.purge(),
                 // A slot the writer frees takes the backlog at the top of the next turn, so a store that recovers
                 // clears `degraded` without waiting on a command or the purge tick.
                 _ = task.writer_room(), if task.has_deferred() => {}
@@ -2266,6 +2266,8 @@ impl Task {
                 self.resolve(&spelling, &dated_id, at);
                 let _ = reply.send(());
             }
+            // The purge tick held since the start is still due, so the loop's next turn runs the first purge.
+            Command::ReleasePurge => self.purge_held = false,
             Command::Canonicals { models, reply } => {
                 let _ = reply.send(
                     models
@@ -3803,7 +3805,6 @@ mod tests {
             events: broadcast::channel(1).0,
             in_flight: InFlight::default(),
             load_counts: LoadCounts::default(),
-            start_events: Arc::default(),
             pending: Pending::default(),
             reports: Arc::default(),
             snapshot: Arc::new(RwLock::new(Arc::new(RegistrySnapshot::from_load(

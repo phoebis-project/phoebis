@@ -727,41 +727,66 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
         ..Default::default()
     })
     .unwrap();
+    // The router's start: the loop runs while the first purge waits for the ledger and the start row.
     let clock: phoebis_oauth::Clock = Arc::new(|| NOW);
-    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
-    // The loop's first purge runs at once, before the ledger is spawned over the router, as at the router's start.
+    let router = phoebis_routing::spawn(
+        store.clone(),
+        clock.clone(),
+        phoebis_routing::RouterConfig {
+            hold_first_purge: true,
+            ..Default::default()
+        },
+    )
+    .unwrap();
     let mut early = router.subscribe_events();
-    let first = tokio::time::timeout(Duration::from_secs(5), early.recv())
-        .await
-        .expect("the first purge's event")
-        .unwrap();
-    assert!(
-        matches!(first, RouterEvent::WindowReset { observed: "clock", reset_at: at, .. } if at == reset_at),
-        "{first:?}"
-    );
-    let _ledger = phoebis_ledger::spawn(
+    // A round trip through the loop: it turns, and its purge tick waits.
+    router.pins().await.unwrap();
+    stays_for(Duration::from_millis(200), || early.try_recv().is_err()).await;
+    let ledger = phoebis_ledger::spawn(
         db.clone(),
         Arc::new(phoebis_ledger::Pricing::new(
             phoebis_ledger::PriceTable::shipped(),
         )),
         store,
         &phoebis_bus::Bus::new(),
-        router,
+        router.clone(),
         clock,
         Arc::new(phoebis_ledger::Metrics::new()),
         polled_every_50_ms(),
     );
-    let resets = || async {
+    ledger.record(phoebis_ledger::Record::RouterStarted {
+        version: "0.1.0".into(),
+        counts: phoebis_routing::LoadCounts::default(),
+        at: NOW,
+    });
+    router.release_purge().await;
+    let rows = || async {
         db.events(0, i64::MAX, 100)
             .await
             .unwrap()
             .into_iter()
-            .filter(|e| e.kind == "window_reset")
-            .count()
+            .map(|e| (e.kind, e.detail))
+            .collect::<Vec<_>>()
     };
-    wait_for_async(Duration::from_secs(5), || async {
-        (resets().await == 1).then_some(())
+    let landed = wait_for_async(Duration::from_secs(5), || async {
+        let rows = rows().await;
+        rows.iter()
+            .any(|(kind, _)| kind == "window_reset")
+            .then_some(rows)
     })
     .await;
-    stays_for_async(Duration::from_millis(200), || async { resets().await == 1 }).await;
+    assert_eq!(
+        landed
+            .iter()
+            .map(|(kind, _)| kind.as_str())
+            .collect::<Vec<_>>(),
+        ["pin_created", "router_started", "window_reset"],
+        "the downtime's reset lands behind the start row"
+    );
+    let start: serde_json::Value = serde_json::from_str(landed[1].1.as_deref().unwrap()).unwrap();
+    assert_eq!(start["down_since"], serde_json::json!(down_since));
+    stays_for_async(Duration::from_millis(200), || async {
+        rows().await.len() == 3
+    })
+    .await;
 }

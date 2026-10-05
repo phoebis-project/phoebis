@@ -220,6 +220,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         counts: router_task.load_counts(),
         at: clock(),
     });
+    // The first purge announces the downtime's clock resets and wind-downs: held until here, its rows reach the
+    // mirror and land behind the start row, whose gap they would otherwise date.
+    router_task.release_purge().await;
     // Moved into the admin state below rather than kept here: a local holding its `Bus` clone to the end of
     // `run` would keep the subscribers' queues open past the shutdown's `drop(bus)`.
     let readiness = Arc::new(Readiness {
@@ -686,6 +689,8 @@ fn router_config(
             },
         )
         .with_measured(move |window| measured.measured(window)),
+        // Released once the ledger's mirror subscribed and the start row is recorded, below.
+        hold_first_purge: true,
         ..phoebis_routing::RouterConfig::default()
     }
 }
