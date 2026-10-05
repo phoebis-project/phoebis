@@ -940,41 +940,6 @@ mod tests {
         .expect("the next write lands");
     }
 
-    /// The plan lines SQLite reads for `sql` with `args` bound.
-    fn plan(conn: &Connection, sql: &str, args: impl rusqlite::Params) -> Vec<String> {
-        let mut stmt = conn.prepare(&format!("EXPLAIN QUERY PLAN {sql}")).unwrap();
-        stmt.query_map(args, |r| r.get::<_, String>(3))
-            .unwrap()
-            .collect::<rusqlite::Result<Vec<_>>>()
-            .unwrap()
-    }
-
-    #[test]
-    fn the_bodies_slice_seeks_the_expiry_index_rather_than_scanning_the_table() {
-        let dir = tempfile::tempdir().unwrap();
-        let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
-        let lines = db
-            .read_blocking(|c| {
-                Ok(plan(
-                    c,
-                    "SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2",
-                    params![0, 1_000],
-                ))
-            })
-            .unwrap();
-        assert!(
-            lines.iter().any(|l| l.starts_with("SEARCH bodies USING")
-                && l.contains("INDEX bodies_expires")),
-            "the slice seeks the expiry index: {lines:?}"
-        );
-        assert!(
-            !lines
-                .iter()
-                .any(|l| l.contains("SCAN") || l.contains("TEMP B-TREE")),
-            "and neither walks nor sorts the table: {lines:?}"
-        );
-    }
-
     #[test]
     fn an_older_build_refuses_a_ledger_a_newer_build_wrote_and_leaves_it_untouched() {
         let dir = tempfile::tempdir().unwrap();
@@ -1005,8 +970,13 @@ mod tests {
         );
         let message = refused.to_string();
         assert!(
-            message.contains(&path.display().to_string()) && message.contains("99"),
-            "the refusal names the file and the version it found: {message}"
+            message.contains("99")
+                && message.contains("restore the backup taken before the upgrade"),
+            "the refusal names the version it found and the remedy: {message}"
+        );
+        assert!(
+            !message.contains(&path.display().to_string()),
+            "the path is the caller's to name, as the start's wrap does: {message}"
         );
         let stored: String = Connection::open(&path)
             .unwrap()

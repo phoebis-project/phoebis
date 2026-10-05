@@ -3717,6 +3717,35 @@ fn a_pool_of_budgeted_members_alone_answers_untimed_while_the_ledger_is_degraded
     );
 }
 
+/// A member whose spend is unknown could still serve once the ledger catches up, so a fast request that finds it
+/// beside a credits-blocked member answers untimed rather than a credits block the whole pool does not share.
+#[test]
+fn a_fast_request_answers_untimed_while_a_member_beside_the_credits_blocked_one_has_unknown_spend()
+{
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        }),
+        "b",
+        None,
+        Some(5.0),
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_credits("a", credits(false, Some("org_level_disabled"), None, 500));
+    st.set_accounting_degraded(true);
+    assert_eq!(
+        select(
+            &mut st,
+            &s,
+            &fast(request(&s, None, "claude-opus-5", true, &[], 1_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Untimed)
+    );
+}
+
 #[test]
 fn a_probe_on_a_pin_whose_member_spend_is_unknown_answers_the_obstacle_and_moves_nothing() {
     let (s, mut st) = pinned_to_a_budgeted_member();

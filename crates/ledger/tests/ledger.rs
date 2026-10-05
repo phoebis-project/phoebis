@@ -1625,8 +1625,8 @@ async fn a_request_record_waits_for_the_writer_rather_than_dropping() {
     up.shutdown().await;
 }
 
-/// Holds the writer at a blocked `land` and queues request records until the channel is past its mark; sending on
-/// the answered sender and joining the thread releases it.
+/// Holds the writer at a blocked `land` and queues request records until the channel is past its mark. A send on the
+/// returned sender releases the hold, and joining the returned thread waits for the held write to end.
 async fn hold_the_writer_past_its_mark(
     h: &Harness,
 ) -> (std::sync::mpsc::Sender<()>, std::thread::JoinHandle<()>) {
@@ -3740,7 +3740,8 @@ fn quick() -> LedgerConfig {
 }
 
 /// Puts a monthly budget on member `a` and waits for the ledger's first report of its spend, so a later charge is
-/// read by the refresh the test means to pin.
+/// read by the refresh the test means to pin, and for the mirror's record of the edit, so no event of it reaches the
+/// writer behind the batch the test means to refuse.
 async fn budget_member_a(h: &Harness) {
     h.store
         .set_pool_members(
@@ -3762,6 +3763,18 @@ async fn budget_member_a(h: &Harness) {
             .unwrap()
             .into_iter()
             .find(|r| r.pool_id == "main" && r.account_id == "a")
+    })
+    .await;
+    wait_for_async(Duration::from_secs(5), || async {
+        h.db.read(|c| phoebis_ledger::recent_events_of_kind(c, "registry_changed", 5))
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| {
+                e.detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("pool_members_set"))
+            })
     })
     .await;
 }
@@ -4212,7 +4225,7 @@ async fn a_parked_record_keeps_its_money_and_not_its_capture() {
         (parked_rows(&h).await == 0).then_some(())
     })
     .await;
-    let (_, attempts) =
+    let (request, attempts) =
         h.db.request("poison")
             .await
             .unwrap()
@@ -4225,6 +4238,10 @@ async fn a_parked_record_keeps_its_money_and_not_its_capture() {
     assert!(
         h.db.bodies("poison").await.unwrap().is_none(),
         "its capture is gone"
+    );
+    assert!(
+        !request.bodies_captured,
+        "the row claims no capture, so the drawer does not read the gone bodies as aged out"
     );
     up.shutdown().await;
 }
@@ -4276,5 +4293,142 @@ async fn a_landing_batch_whose_spend_read_fails_keeps_the_degradation() {
         spent_by_a(&h).await > 0.0,
         "the retried read reports the charge"
     );
+    up.shutdown().await;
+}
+
+/// Parks the priced record `finished(id, true)` straight into the file at `path`, as a writer that met a poison row
+/// would have, with `error` and `at` as its last try.
+fn park_in_file(path: &std::path::Path, id: &str, error: &str, at: i64) {
+    let record = serde_json::to_string(&phoebis_ledger::ParkedRecord {
+        request: finished_row(id),
+        attempts: vec![serving_attempt(id, true)],
+    })
+    .unwrap();
+    LedgerDb::open(path)
+        .unwrap()
+        .write(|c| {
+            c.execute(
+                "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+                 VALUES (?1, ?1, ?2, 'main', 'a', ?3, ?4)",
+                rusqlite::params![at, id, record, error],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// A stop while a batch waits out its hold gives the batch the drain's one try; what the database still refuses then
+/// is lost and counted, the one thing a stop may lose.
+#[tokio::test]
+async fn a_stop_during_a_hold_tries_the_batch_once_more_and_counts_what_is_still_refused() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    fill_the_disk(&h.db);
+    h.ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..finished_row("r1")
+            },
+            attempts: vec![serving_attempt("r1", true)],
+            bodies: None,
+        })
+        .await;
+    through_the_retries(&h).await;
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 6).then_some(())
+    })
+    .await;
+    assert_eq!(h.ledger.dropped(), 0, "the held batch waits out its hold");
+    h.ledger.clone().shutdown().await.unwrap();
+    assert!(
+        write_failures(&h) >= 7,
+        "the stop gave the batch one more try"
+    );
+    assert_eq!(
+        h.ledger.dropped(),
+        1,
+        "the record the full disk still refused is lost and counted"
+    );
+    assert_eq!(retrying(&h), 0);
+    up.shutdown().await;
+}
+
+/// A parked record the database still refuses at the start keeps its row, with the error it met this time and the
+/// start's instant as its last try.
+#[tokio::test]
+async fn a_parked_record_refused_again_at_the_start_keeps_its_row_with_this_starts_error() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    park_in_file(&path, "poison", "an earlier error", 0);
+    refuse_requests(&LedgerDb::open(&path).unwrap(), Some("poison"));
+    let h = on_disk(&up, fresh_store(), &path, quick()).await;
+    let row = wait_for_async(Duration::from_secs(5), || async {
+        h.db.read(|c| {
+            Ok(c.query_row(
+                "SELECT error, last_tried_at, parked_at FROM parked_records",
+                [],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, i64>(1)?,
+                        r.get::<_, i64>(2)?,
+                    ))
+                },
+            )?)
+        })
+        .await
+        .ok()
+        .filter(|(error, _, _)| error != "an earlier error")
+    })
+    .await;
+    assert!(row.0.contains("refused by test"), "{row:?}");
+    assert_eq!(
+        (row.1, row.2),
+        (NOW, 0),
+        "tried at the start, parked when it was"
+    );
+    assert_eq!(parked_rows(&h).await, 1);
+    assert!(h.db.request("poison").await.unwrap().is_none());
+    up.shutdown().await;
+}
+
+/// The start lands its parked records before it reads the members' spend, so a parked charge is in the first report
+/// rather than waiting for the next flush or period boundary.
+#[tokio::test]
+async fn a_parked_charge_landed_at_the_start_is_in_the_first_spend_report() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let store = fresh_store();
+    let h = on_disk(&up, store.clone(), &path, quick()).await;
+    budget_member_a(&h).await;
+    assert_eq!(spent_by_a(&h).await, 0.0);
+    h.ledger.clone().shutdown().await.unwrap();
+    drop(h);
+    park_in_file(&path, "parked", "refused by test", NOW);
+    let h = on_disk(&up, store, &path, quick()).await;
+    let first = wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.pool_id == "main" && r.account_id == "a")
+    })
+    .await;
+    assert!(
+        first.spent_usd > 0.0,
+        "the first report carries the parked charge: {first:?}"
+    );
+    assert_eq!(parked_rows(&h).await, 0);
     up.shutdown().await;
 }

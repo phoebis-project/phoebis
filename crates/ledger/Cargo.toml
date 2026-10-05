@@ -9,6 +9,9 @@ version.workspace = true
 # The read-failure test seam, see `LedgerDb::debug_fail_next_read`. This crate's own dev-dependency below turns it
 # on for a test build, so a release build carries no way to fail a ledger read on purpose.
 debug-hooks = []
+# The analytics folds only the tests call (`apply_filter`, `breakdown`, `burn_rows`, `burn_series`, `series` and
+# `LiveKeys::selects`), turned on by the dev-dependency below so a release build carries none of them.
+test-support = []
 
 [dependencies]
 axum = { workspace = true }
@@ -33,7 +36,7 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 http-body-util = { workspace = true }
 phoebis-cch = { path = "../cch" }
 # An integration test builds the library without `cfg(test)`, so the seam it reaches needs the feature on.
-phoebis-ledger = { path = ".", features = ["debug-hooks"] }
+phoebis-ledger = { path = ".", features = ["debug-hooks", "test-support"] }
 phoebis-profile = { path = "../profile" }
 # The test builders of the registry's rows, kept off the dependency above so a release build carries none.
 phoebis-store = { path = "../store", features = ["test-support"] }

@@ -17,9 +17,11 @@ use crate::pricing::{PriceTable, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
 };
+#[cfg(any(test, feature = "test-support"))]
+use crate::rollup::read_rollups;
 use crate::rollup::{
-    hour_of, read_account_rollups, read_rollups, read_rollups_paged, KeySelector, RollupRow,
-    RollupSelect, UNATTRIBUTED,
+    hour_of, read_account_rollups, read_rollups_paged, KeySelector, RollupRow, RollupSelect,
+    FAST_FUNDING, UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -786,6 +788,7 @@ impl LiveKeys {
 
     /// Whether a `keys=` selector names the row: the lifetime `lifetime_of` answers, or every row of the
     /// reserved id for a bare `-`, whatever its generation.
+    #[cfg(any(test, feature = "test-support"))]
     pub fn selects(&self, selector: &str, row: &RollupRow) -> bool {
         // The reserved id has no lifetime: what the router never attributed is one group whatever the
         // generation column says.
@@ -862,6 +865,7 @@ fn passes_patterns(r: &RollupRow, f: &RollupFilter) -> bool {
 /// The rows of a read the fixed filters already narrowed (`RollupFilter::rollup_select`) that the pattern filters
 /// keep, probe rows among them: whether those count as requests is `probes_counted`, which the sums take, so a
 /// probe's cost reaches the savings panel under every filter.
+#[cfg(any(test, feature = "test-support"))]
 pub fn apply_filter(rows: Vec<RollupRow>, f: &RollupFilter) -> Vec<RollupRow> {
     rows.into_iter().filter(|r| passes_patterns(r, f)).collect()
 }
@@ -1006,6 +1010,7 @@ impl GroupSums {
     }
 }
 
+#[cfg(any(test, feature = "test-support"))]
 fn sum_groups(
     rows: &[&RollupRow],
     group_by: &str,
@@ -1020,6 +1025,7 @@ fn sum_groups(
     sums.finish(group_by, probes_counted, live)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 #[allow(clippy::too_many_arguments)]
 pub fn series(
     rows: &[RollupRow],
@@ -1055,6 +1061,7 @@ pub fn series(
     Ok(points)
 }
 
+#[cfg(any(test, feature = "test-support"))]
 pub fn breakdown(
     rows: &[RollupRow],
     group_by: &str,
@@ -1864,7 +1871,8 @@ struct UsageRow<'a> {
     /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
     /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
     at: i64,
-    /// The row's rollup speed, or the attempt's, read `fast`.
+    /// A rollup row funded by fast mode, or an attempt the answer served fast. Never the rollup's speed, which also
+    /// files a request that asked for fast mode and was served without it.
     fast: bool,
 }
 
@@ -1945,12 +1953,14 @@ fn price_usage(
 /// The rollup rows `burn_series` prices for `filter`: every hour of its bucket range, whatever its scopes, so one
 /// read serves `burn_series_over` for every scope over the same range and bucket. The burn route reads through
 /// `burn_groups_paged` instead, which holds a page at a time.
+#[cfg(any(test, feature = "test-support"))]
 pub fn burn_rows(conn: &Connection, filter: &SeriesFilter) -> Result<Vec<RollupRow>, LedgerError> {
     let (first, last) = bucket_range(filter)?;
     read_rollups(conn, first, last, &RollupSelect::default())
 }
 
 /// `burn_series_over` on the rows `burn_rows` reads for `filter`.
+#[cfg(any(test, feature = "test-support"))]
 pub fn burn_series(
     conn: &Connection,
     tables: &PlanTables,
@@ -2039,7 +2049,7 @@ fn price_burn_row(
             output_tokens: row.output_tokens,
             estimated_usd: row.estimated_usd,
             at: row.hour * 1_000,
-            fast: row.speed == "fast",
+            fast: row.funding == FAST_FUNDING,
         },
     );
 }

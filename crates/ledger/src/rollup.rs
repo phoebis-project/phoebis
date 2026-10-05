@@ -564,8 +564,10 @@ pub fn fold_request(
 ) -> Result<(), LedgerError> {
     // A replaced request first leaves the row it was folded into, under the key it had then: the same id can
     // land under another account or hour once its attempts are known. A request folded under its raw dimensions by
-    // an earlier build and replaced after the upgrade finds no row under its folded key and counts in both rows,
-    // accepted for a record replaced across one restart.
+    // an earlier build and replaced after the upgrade keeps its old contribution in the raw row, while the
+    // subtraction lands on whatever row the folded key names: none while no request wrote it, so the request counts
+    // in both rows, and a later request's row otherwise, where the counters saturate at zero and the dollar columns
+    // can go below zero while the totals still balance. Accepted for a record replaced across one restart.
     if let Some((old_request, old_attempts)) = previous {
         let old = delta_of(old_request, old_attempts);
         if let Some(mut row) = read_rollup(tx, &old)? {

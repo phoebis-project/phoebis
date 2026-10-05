@@ -1,6 +1,8 @@
 //! One struct per ledger table, field order matching the table's column order.
 
+// A parked row outlives the build that wrote it, so a field a later build adds reads at its default.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct RequestRecord {
     pub id: String,
     pub received_at: i64,
@@ -80,6 +82,7 @@ pub struct RequestRecord {
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(default)]
 pub struct AttemptRecord {
     pub request_id: String,
     pub attempt: u32,
@@ -240,4 +243,35 @@ pub struct KeepaliveDelta {
     /// The recipe's speed, which keys the credit row: `fast` for `Some(Speed::Fast)`, `standard` otherwise, so
     /// the derived `Default`'s `None` files standard.
     pub speed: Option<crate::pricing::Speed>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A parked row outlives the build that wrote it: one written before a field joined the record still reads, the
+    /// field at its default, so the start lands it rather than keeping it parked for good.
+    #[test]
+    fn a_parked_record_missing_a_field_reads_with_that_field_at_its_default() {
+        let parked: ParkedRecord = serde_json::from_str(
+            r#"{"request":{"id":"r1","received_at":5},"attempts":[{"request_id":"r1","account_id":"a"}]}"#,
+        )
+        .expect("a record with fields missing still reads");
+        assert_eq!(
+            parked.request,
+            RequestRecord {
+                id: "r1".into(),
+                received_at: 5,
+                ..RequestRecord::default()
+            }
+        );
+        assert_eq!(
+            parked.attempts,
+            [AttemptRecord {
+                request_id: "r1".into(),
+                account_id: "a".into(),
+                ..AttemptRecord::default()
+            }]
+        );
+    }
 }

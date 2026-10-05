@@ -112,35 +112,21 @@ impl Cutoffs {
     }
 }
 
-/// The pass: every family in slices on `spawn_blocking`, a family repeated while a slice came up full; the sum.
-/// `budgeted` is every budgeted period of every pool member with a spend budget, as `member_spends` takes them.
+/// `run_retention_blocking` on a blocking worker. The writer still waits for one slice at most, since each slice is
+/// its own transaction under the purger's lock. `budgeted` is every budgeted period of every pool member with a spend
+/// budget, as `member_spends` takes them.
 pub async fn run_retention(
     db: Arc<LedgerDb>,
     config: LedgerConfig,
     now: i64,
     budgeted: Vec<BudgetedMember>,
 ) -> Result<Purged, LedgerError> {
-    let cutoffs = Cutoffs::of(&config, now);
-    let budgeted: Arc<[BudgetedMember]> = budgeted.into();
-    let mut purged = Purged::default();
-    for family in Family::ALL {
-        loop {
-            let (db, budgeted) = (db.clone(), budgeted.clone());
-            let slice = tokio::task::spawn_blocking(move || {
-                purge_slice(&db, family, &cutoffs, &budgeted, now)
-            })
-            .await
-            .map_err(|e| LedgerError::Io(std::io::Error::other(e)))??;
-            purged.add(&slice);
-            if family.selected(&slice) < PURGE_SLICE {
-                break;
-            }
-        }
-    }
-    Ok(purged)
+    tokio::task::spawn_blocking(move || run_retention_blocking(&db, &config, now, &budgeted))
+        .await
+        .map_err(|e| LedgerError::Io(std::io::Error::other(e)))?
 }
 
-/// The same pass on the calling thread, for a caller that holds no runtime worker to spare.
+/// The pass on the calling thread: every family in slices, a family repeated while a slice came up full; the sum.
 pub fn run_retention_blocking(
     db: &LedgerDb,
     config: &LedgerConfig,
@@ -161,6 +147,17 @@ pub fn run_retention_blocking(
     Ok(purged)
 }
 
+/// The bodies slice, ordered by the cutoff column the expiry index covers with `rowid` breaking ties: `ORDER BY rowid`
+/// alone plans as a scan of the table whatever index the filter has, and the slice would walk every row for its
+/// oldest thousand.
+const PURGE_BODIES: &str = "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2)";
+
+/// The attempts of the requests `PURGE_REQUESTS` selects next in the same transaction, so a request row never
+/// outlives its attempts or the other way round. Ordered as the bodies slice is, by the received index.
+const PURGE_ATTEMPTS: &str = "DELETE FROM attempts WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
+
+const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
+
 /// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid.
 fn purge_slice(
     db: &LedgerDb,
@@ -179,29 +176,15 @@ fn purge_slice(
             }
         };
         let deleted = match family {
-            // Ordered by the cutoff column the index covers, `rowid` breaking ties: `ORDER BY rowid` alone plans
-            // as a scan of the table whatever index the filter has, and the slice would walk every row for its
-            // oldest thousand.
             Family::Bodies => Purged {
-                bodies: tx.execute(
-                    "DELETE FROM bodies WHERE rowid IN (SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2)",
-                    params![now, slice],
-                )?,
+                bodies: tx.execute(PURGE_BODIES, params![now, slice])?,
                 ..Purged::default()
             },
             Family::Requests => match cutoffs.request {
                 None => Purged::default(),
                 Some(at) => {
-                    // The attempts go with the requests the slice selected, in the same transaction, so a
-                    // request row never outlives its attempts or the other way round.
-                    let attempts = tx.execute(
-                        "DELETE FROM attempts WHERE request_id IN (SELECT id FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)",
-                        params![at, slice],
-                    )?;
-                    let requests = tx.execute(
-                        "DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)",
-                        params![at, slice],
-                    )?;
+                    let attempts = tx.execute(PURGE_ATTEMPTS, params![at, slice])?;
+                    let requests = tx.execute(PURGE_REQUESTS, params![at, slice])?;
                     Purged {
                         attempts,
                         requests,
@@ -297,4 +280,44 @@ fn purge_hourly_rollups(
         values.join(", ")
     );
     Ok(tx.execute(&sql, params_from_iter(args.iter().map(|a| a.as_ref())))?)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// The plan lines SQLite reads for `sql` with both parameters bound.
+    fn plan(db: &LedgerDb, sql: &str) -> Vec<String> {
+        db.read_blocking(|c| {
+            let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+            let lines = stmt
+                .query_map(params![0, 1_000], |r| r.get::<_, String>(3))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(lines)
+        })
+        .unwrap()
+    }
+
+    #[test]
+    fn each_slice_seeks_its_cutoff_index_and_neither_walks_nor_sorts_a_table() {
+        let dir = tempfile::tempdir().unwrap();
+        let db = LedgerDb::open(&dir.path().join("ledger.sqlite")).unwrap();
+        for (sql, index) in [
+            (PURGE_BODIES, "INDEX bodies_expires"),
+            (PURGE_ATTEMPTS, "INDEX requests_received"),
+            (PURGE_REQUESTS, "INDEX requests_received"),
+        ] {
+            let lines = plan(&db, sql);
+            assert!(
+                lines.iter().any(|l| l.contains(index)),
+                "{sql} seeks {index}: {lines:?}"
+            );
+            assert!(
+                !lines
+                    .iter()
+                    .any(|l| l.contains("SCAN") || l.contains("TEMP B-TREE")),
+                "{sql}: {lines:?}"
+            );
+        }
+    }
 }

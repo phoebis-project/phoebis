@@ -169,7 +169,7 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["channel_depth"].as_u64()
         ),
         (Some(28), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that indexes the bodies' expiry and adds the parked records"
+        "the ledger schema is at the migration that spells every quota window by the endpoint's key"
     );
     assert_eq!(
         (
@@ -261,6 +261,40 @@ async fn a_stopped_ledger_reads_not_ready_on_the_system_document() {
             &serde_json::json!(true)
         ),
         "the writer closed its channel while the router task and the store still answer: {system}"
+    );
+}
+
+/// A batch the file refuses holds the ledger degraded under retry, and a parked record counts until a start lands it:
+/// the system document reads all three away from their idle values.
+#[tokio::test]
+async fn the_system_document_reads_a_degraded_ledger_its_retry_and_its_parked_records() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    common::park_unreadable(&parts.db, "main", "business", common::NOW);
+    parts
+        .db
+        .write(|c| {
+            c.execute_batch(
+                "CREATE TRIGGER refuse BEFORE INSERT ON requests BEGIN SELECT RAISE(ABORT, 'refused by test'); END;",
+            )?;
+            Ok(())
+        })
+        .unwrap();
+    parts
+        .ledger
+        .record(record("r1", common::NOW, "claude-sonnet-5", "s1"));
+    let system = wait_json(&parts.app, "/admin/system", &cookie, |system| {
+        system["ledger"]["retrying"].as_u64() == Some(1)
+    })
+    .await;
+    assert_eq!(
+        (
+            system["ledger"]["degraded"].as_bool(),
+            system["ledger"]["retrying"].as_u64(),
+            system["ledger"]["parked_priced"].as_u64()
+        ),
+        (Some(true), Some(1), Some(1)),
+        "{system}"
     );
 }
 
@@ -387,7 +421,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket,
-                    window: "5h".into(),
+                    window: "five_hour".into(),
                     utilization: Some(0.4),
                     reset_at: Some(now + HOUR),
                     source: "header".into(),
@@ -396,7 +430,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket: bucket + 300,
-                    window: "5h".into(),
+                    window: "five_hour".into(),
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
                     source: "poll".into(),
@@ -405,7 +439,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket,
-                    window: "fable".into(),
+                    window: "seven_day_fable".into(),
                     utilization: Some(0.1),
                     reset_at: None,
                     source: "poll".into(),
@@ -442,7 +476,7 @@ async fn quota_history_pool_traffic_and_sessions_read_the_ledger() {
             .iter()
             .map(|w| w["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["5h", "fable"]
+        ["five_hour", "seven_day_fable"]
     );
     assert_eq!(windows[0]["samples"].as_array().unwrap().len(), 2);
     assert_eq!(

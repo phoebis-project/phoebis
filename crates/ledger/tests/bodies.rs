@@ -278,7 +278,7 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
             phoebis_ledger::QuotaSampleRecord {
                 account_id: "a".into(),
                 bucket: 0,
-                window: "5h".into(),
+                window: "five_hour".into(),
                 source: "poll".into(),
                 ..Default::default()
             },
@@ -286,7 +286,7 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
             phoebis_ledger::QuotaSampleRecord {
                 account_id: "a".into(),
                 bucket: 30 * 86_400,
-                window: "5h".into(),
+                window: "five_hour".into(),
                 source: "poll".into(),
                 ..Default::default()
             },
@@ -414,7 +414,7 @@ async fn a_zero_retention_keeps_the_raw_rows_and_a_zero_rollup_retention_keeps_t
         &[phoebis_ledger::QuotaSampleRecord {
             account_id: "a".into(),
             bucket: 0,
-            window: "5h".into(),
+            window: "five_hour".into(),
             source: "poll".into(),
             ..Default::default()
         }],
@@ -599,66 +599,6 @@ async fn a_sliced_pass_sums_its_slices_and_keeps_a_budgeted_members_period_acros
         (rollup_rows_of(&h.db, "a"), rollup_rows_of(&h.db, "b")),
         (1_200, 0),
         "the budgeted member's period stays whole across the slices that cut around it"
-    );
-    up.shutdown().await;
-}
-
-/// The plan lines SQLite reads for `sql` with `args` bound.
-fn plan(db: &phoebis_ledger::LedgerDb, sql: &str, args: [i64; 2]) -> Vec<String> {
-    db.read_blocking(|c| {
-        let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
-        let lines = stmt
-            .query_map(args, |r| r.get::<_, String>(3))?
-            .collect::<rusqlite::Result<Vec<_>>>()?;
-        Ok(lines)
-    })
-    .unwrap()
-}
-
-#[tokio::test]
-async fn the_bodies_slice_reads_the_expiry_index_rather_than_the_table() {
-    let up = FakeUpstream::start(vec![]).await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let lines = plan(
-        &h.db,
-        "SELECT rowid FROM bodies WHERE expires_at <= ?1 ORDER BY expires_at, rowid LIMIT ?2",
-        [0, 1_000],
-    );
-    assert!(
-        lines
-            .iter()
-            .any(|l| l.starts_with("SEARCH bodies USING") && l.contains("INDEX bodies_expires")),
-        "{lines:?}"
-    );
-    assert!(
-        !lines
-            .iter()
-            .any(|l| l.contains("SCAN") || l.contains("TEMP B-TREE")),
-        "{lines:?}"
-    );
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn the_requests_slice_reads_the_received_index_rather_than_the_table() {
-    let up = FakeUpstream::start(vec![]).await;
-    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
-    let lines = plan(
-        &h.db,
-        "SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2",
-        [0, 1_000],
-    );
-    assert!(
-        lines.iter().any(
-            |l| l.starts_with("SEARCH requests USING") && l.contains("INDEX requests_received")
-        ),
-        "{lines:?}"
-    );
-    assert!(
-        !lines
-            .iter()
-            .any(|l| l.contains("SCAN") || l.contains("TEMP B-TREE")),
-        "{lines:?}"
     );
     up.shutdown().await;
 }

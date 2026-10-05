@@ -806,7 +806,12 @@ mod tests {
                 tables.share(window, tier, "claude-opus-5-5", usage),
                 "{window}"
             );
+            assert!(config.share.measured(window), "{window}");
         }
+        assert!(
+            !config.share.measured("seven_day_opus"),
+            "the router reads the tables' own answer on a model week they do not measure"
+        );
         assert!(config
             .share
             .price(

@@ -185,7 +185,7 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
     metrics.observe_samples(&[phoebis_ledger::QuotaSampleRecord {
         account_id: "a".into(),
         bucket: 0,
-        window: "5h".into(),
+        window: "five_hour".into(),
         utilization: Some(0.42),
         reset_at: None,
         source: "header".into(),
@@ -209,7 +209,7 @@ fn gauges_come_from_the_routing_state_and_drops_are_counted_per_table() {
         r#"phoebis_account_cooldown_seconds{account="a",scope="model:other"} 5"#,
         r#"phoebis_account_overage_in_use{account="a"} 1"#,
         r#"phoebis_account_overage_in_use{account="b"} 0"#,
-        r#"phoebis_account_ratelimit_utilization{account="a",window="5h"} 0.42"#,
+        r#"phoebis_account_ratelimit_utilization{account="a",window="five_hour"} 0.42"#,
         r#"phoebis_pins_active{pool="main"} 7"#,
     ] {
         assert!(text.contains(line), "missing {line} in:\n{text}");
@@ -635,13 +635,13 @@ fn a_deleted_accounts_utilization_series_leaves_the_gauge() {
     metrics.observe_samples(&[
         QuotaSampleRecord {
             account_id: "a".into(),
-            window: "5h".into(),
+            window: "five_hour".into(),
             utilization: Some(0.4),
             ..Default::default()
         },
         QuotaSampleRecord {
             account_id: "b".into(),
-            window: "5h".into(),
+            window: "five_hour".into(),
             utilization: Some(0.9),
             ..Default::default()
         },
@@ -652,7 +652,9 @@ fn a_deleted_accounts_utilization_series_leaves_the_gauge() {
     };
     let text = metrics.render(&gauges, &[], 0);
     assert!(
-        text.contains(r#"phoebis_account_ratelimit_utilization{account="a",window="5h"} 0.4"#),
+        text.contains(
+            r#"phoebis_account_ratelimit_utilization{account="a",window="five_hour"} 0.4"#
+        ),
         "{text}"
     );
     assert!(

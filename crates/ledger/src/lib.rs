@@ -35,17 +35,19 @@ pub use pattern::{
 };
 pub use plan::{Band, CostTable, Factors, ModelCells, PlanTables};
 pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Speed};
+#[cfg(any(test, feature = "test-support"))]
+pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
 pub use query::{
-    apply_filter, breakdown, breakdown_paged, bucket_seconds, burn_groups_paged, burn_rows,
-    burn_series, burn_series_over, dashboard, group_of, hour_ceil, key_request_totals,
-    latest_extra_usage, latest_quota, list_requests, literal_like, member_spends, moves_by_reason,
-    parked_count, parked_summary, parse_range, pin_migrations_by_reason, placements, pool_traffic,
-    recent_events_of_kind, recent_gaps, request_by_id, request_events, request_totals,
-    rewrite_series, series, series_paged,
-    session_activity, session_burn_series, session_identities, BudgetedMember, BurnPoint,
-    Dashboard, GroupRow, LiveKeys, ParkedSummary, PlacementRow, ProbeCounts, RequestFilter,
-    RollupFilter, SeriesFilter, SeriesPoint, SessionActivity, SessionIdentity, Tiers, Totals,
-    TrafficBucket, GROUP_BYS, MAX_POINTS, MAX_RANGE_MS,
+    breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard, group_of,
+    hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests, literal_like,
+    member_spends, moves_by_reason, parked_count, parked_summary, parse_range,
+    pin_migrations_by_reason, placements, pool_traffic, recent_events_of_kind, recent_gaps,
+    request_by_id, request_events, request_totals, rewrite_series,
+    series_paged, session_activity, session_burn_series,
+    session_identities, BudgetedMember, BurnPoint, Dashboard, GroupRow, LiveKeys, ParkedSummary,
+    PlacementRow, ProbeCounts, RequestFilter, RollupFilter, SeriesFilter, SeriesPoint,
+    SessionActivity, SessionIdentity, Tiers, Totals, TrafficBucket, GROUP_BYS, MAX_POINTS,
+    MAX_RANGE_MS,
 };
 pub use quota::{
     polled, samples_from_head, samples_from_poll, QuotaPoll, Sampled, POLL_INTERVAL,
@@ -85,8 +87,12 @@ pub enum LedgerError {
     Plan(String),
     #[error("pricing table: {0}")]
     Yaml(String),
-    /// A file a newer build wrote: opening it would run no migration and read columns this build does not know.
-    #[error("the ledger at {} is at schema {found}, newer than the {supported} this build reads", path.display())]
+    /// A file a newer build wrote: opening it would run no migration and read columns this build does not know. The
+    /// message leaves `path` to the caller, whose context names the file.
+    #[error(
+        "the ledger's schema version {found} is newer than this build supports ({supported}); \
+         restore the backup taken before the upgrade"
+    )]
     SchemaTooNew {
         path: std::path::PathBuf,
         found: u32,
@@ -95,8 +101,10 @@ pub enum LedgerError {
 }
 
 impl LedgerError {
-    /// Whether the failure is the database's rather than one row's, the store's reading of the same codes: a lock
-    /// held past the busy timeout, a full disk, an I/O error, a closed handle; every write after it meets it too.
+    /// Whether the failure is the database's rather than one row's: a lock held past the busy timeout, a full disk,
+    /// an I/O error, a closed handle, or a file that cannot be opened, is read-only (moved or deleted under the
+    /// router among them), corrupt or no database at all. Every write after it meets it too, so the record is held
+    /// rather than read as a poison row.
     pub fn is_database_wide(&self) -> bool {
         matches!(
             self,
@@ -104,10 +112,52 @@ impl LedgerError {
                 if matches!(
                     failure.code,
                     rusqlite::ErrorCode::ApiMisuse
+                        | rusqlite::ErrorCode::CannotOpen
                         | rusqlite::ErrorCode::DatabaseBusy
+                        | rusqlite::ErrorCode::DatabaseCorrupt
                         | rusqlite::ErrorCode::DiskFull
+                        | rusqlite::ErrorCode::NotADatabase
+                        | rusqlite::ErrorCode::ReadOnly
                         | rusqlite::ErrorCode::SystemIoFailure
                 )
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::LedgerError;
+
+    fn failure(code: std::ffi::c_int) -> LedgerError {
+        LedgerError::Sqlite(rusqlite::Error::SqliteFailure(
+            rusqlite::ffi::Error::new(code),
+            None,
+        ))
+    }
+
+    #[test]
+    fn a_file_the_database_cannot_read_or_write_is_database_wide_and_a_refused_row_is_not() {
+        for code in [
+            rusqlite::ffi::SQLITE_BUSY,
+            rusqlite::ffi::SQLITE_CANTOPEN,
+            rusqlite::ffi::SQLITE_CORRUPT,
+            rusqlite::ffi::SQLITE_FULL,
+            rusqlite::ffi::SQLITE_IOERR_WRITE,
+            rusqlite::ffi::SQLITE_MISUSE,
+            rusqlite::ffi::SQLITE_NOTADB,
+            rusqlite::ffi::SQLITE_READONLY,
+            rusqlite::ffi::SQLITE_READONLY_DBMOVED,
+        ] {
+            let error = failure(code);
+            assert!(error.is_database_wide(), "{code}: {error}");
+        }
+        for code in [
+            rusqlite::ffi::SQLITE_CONSTRAINT_TRIGGER,
+            rusqlite::ffi::SQLITE_CONSTRAINT_UNIQUE,
+            rusqlite::ffi::SQLITE_TOOBIG,
+        ] {
+            let error = failure(code);
+            assert!(!error.is_database_wide(), "{code}: {error}");
+        }
     }
 }

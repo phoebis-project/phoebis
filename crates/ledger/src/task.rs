@@ -803,8 +803,13 @@ async fn land_parked(
     for row in rows {
         let outcome = match serde_json::from_str::<ParkedRecord>(&row.record) {
             Ok(parked) => {
+                // The capture was not parked, so the row claims none: the drawer would read a captured request
+                // whose bodies are gone as one whose bodies aged out.
                 let batch = Arc::new(vec![Record::Request {
-                    request: parked.request,
+                    request: RequestRecord {
+                        bodies_captured: false,
+                        ..parked.request
+                    },
                     attempts: parked.attempts,
                     bodies: None,
                 }]);
@@ -911,10 +916,10 @@ async fn refresh(
 /// Answers the earliest `period_end` among the rows read, to arm the next boundary tick; `None` while no member
 /// carries a budget, since a pool whose every member is excluded still refreshes on the revision and boundary arms
 /// alone, without traffic, and there is truly nothing to arm a tick for, and nothing to read is a read that
-/// succeeded. On a read error, keeps `current` while it is still ahead
-/// of `now` (a transient failure leaves an armed tick where it was rather than disarming it), otherwise arms a retry
-/// at `now + event_poll`: a tick that had already reached its deadline would otherwise re-fire at once on every
-/// following timer tick, repeating the failing read and its warning for as long as the error lasts.
+/// succeeded. On a read error, keeps `current` while it is still ahead of `now` (a transient failure leaves an armed
+/// tick where it was rather than disarming it), otherwise arms a retry at `now + event_poll`: a tick that had already
+/// reached its deadline would otherwise re-fire at once on every following timer tick, repeating the failing read
+/// and its warning for as long as the error lasts.
 async fn refresh_member_spends(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,

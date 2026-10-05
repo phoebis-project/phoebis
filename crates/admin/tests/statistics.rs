@@ -1443,7 +1443,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket: phoebis_ledger::bucket_of(now - 2 * HOUR),
-                    window: "5h".into(),
+                    window: "five_hour".into(),
                     utilization: Some(0.5),
                     reset_at: Some(now + HOUR),
                     source: "header".into(),
@@ -1452,7 +1452,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket: phoebis_ledger::bucket_of(now - HOUR),
-                    window: "5h".into(),
+                    window: "five_hour".into(),
                     utilization: Some(0.6),
                     reset_at: Some(now + HOUR),
                     source: "poll".into(),
@@ -1461,7 +1461,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
                 phoebis_ledger::QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket: phoebis_ledger::bucket_of(now - HOUR),
-                    window: "7d".into(),
+                    window: "seven_day".into(),
                     utilization: Some(0.2),
                     reset_at: None,
                     source: "poll".into(),
@@ -1501,7 +1501,7 @@ async fn the_dashboard_reads_the_last_day_the_latest_quota_and_the_live_pins() {
         .as_array()
         .unwrap()
         .iter()
-        .find(|w| w["id"] == "5h")
+        .find(|w| w["id"] == "five_hour")
         .unwrap();
     assert_eq!(
         five["utilization"].as_f64(),

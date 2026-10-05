@@ -152,6 +152,19 @@ fn full_from(parts: Parts) -> Full {
     }
 }
 
+/// Parks one priced record of `pool` on `account` at `at`. Its record is not JSON, so the ledger's start pass, which
+/// lands every parked row whose record parses, never takes it out from under the read.
+pub fn park_unreadable(db: &LedgerDb, pool: &str, account: &str, at: i64) {
+    db.write(|c| {
+        c.execute_batch(&format!(
+            "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+             VALUES ({at}, {at}, 'parked-{at}', '{pool}', '{account}', 'not json', 'refused by test');"
+        ))?;
+        Ok(())
+    })
+    .unwrap();
+}
+
 /// The generation the store stamped for `key_id`. A companion session belongs to the key and the generation
 /// that registered it, so every engine call names the pair.
 pub fn generation(store: &Store, key_id: &str) -> i64 {

@@ -706,7 +706,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
                 QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket,
-                    window: "5h".into(),
+                    window: "five_hour".into(),
                     utilization: Some(0.62),
                     reset_at: Some(now + 3_600_000),
                     source: "poll".into(),
@@ -715,7 +715,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
                 QuotaSampleRecord {
                     account_id: "business".into(),
                     bucket,
-                    window: "fable".into(),
+                    window: "seven_day_fable".into(),
                     utilization: Some(0.1),
                     reset_at: None,
                     source: "poll".into(),
@@ -807,7 +807,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
             .iter()
             .map(|w| w["id"].as_str().unwrap())
             .collect::<Vec<_>>(),
-        ["5h", "fable"],
+        ["five_hour", "seven_day_fable"],
         "sorted by id"
     );
     assert_eq!(listed["windows"][0]["utilization"].as_f64(), Some(0.62));

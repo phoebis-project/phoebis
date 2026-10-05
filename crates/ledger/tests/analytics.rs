@@ -1218,6 +1218,57 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
     );
 }
 
+/// A request that asked for fast mode and was answered without it files under the fast speed while its funding reads
+/// the served answer: the burn prices it at the plan cells it drew from, as a standard row of the same usage.
+#[test]
+fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_at_the_plan_cells() {
+    let tables = PlanTables::shipped();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
+    let filter = SeriesFilter {
+        from: 0,
+        to: 7_200_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let point = |speed: &str| {
+        let row = RollupRow {
+            input_tokens: 1_000,
+            output_tokens: 100,
+            ..RollupRow::key(
+                3_600,
+                "k",
+                0,
+                "p",
+                "a",
+                "claude-opus-5-5",
+                "inference",
+                UNATTRIBUTED,
+                UNATTRIBUTED,
+                "none",
+                NO_CLASS,
+                speed,
+                PLAN_FUNDING,
+            )
+        };
+        burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.at == 3_600_000)
+            .unwrap()
+    };
+    let standard = point("standard");
+    assert!(
+        standard.five_hour_share.is_some_and(|share| share > 0.0),
+        "{standard:?}"
+    );
+    assert_eq!(
+        point("fast"),
+        standard,
+        "an asked speed never prices as a served one"
+    );
+}
+
 #[test]
 fn fast_traffic_alone_on_a_model_without_plan_cells_reads_a_zero_share_on_a_sized_tier() {
     let tables = PlanTables::shipped();

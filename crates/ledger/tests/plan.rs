@@ -521,6 +521,33 @@ fn a_fable_requests_week_share_is_twice_its_seven_day_share() {
     }
 }
 
+/// A model week the table does not measure prices as the 7-day share once and reads unmeasured; the 5-hour, the 7-day
+/// and the Fable week read measured, and a window that is no week prices nothing.
+#[test]
+fn an_unmeasured_model_week_prices_the_seven_day_share_once_and_reads_unmeasured() {
+    let priced = priced_seven_day();
+    let seven = priced
+        .share(SEVEN_DAY, MAX_20X, "claude-opus-5-5", million_input())
+        .unwrap();
+    assert_eq!(
+        priced.share(
+            "seven_day_opus",
+            MAX_20X,
+            "claude-opus-5-5",
+            million_input()
+        ),
+        Some(seven)
+    );
+    assert_eq!(
+        priced.share("one_hour", MAX_20X, "claude-opus-5-5", million_input()),
+        None
+    );
+    for window in [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE] {
+        assert!(priced.measured(window), "{window}");
+    }
+    assert!(!priced.measured("seven_day_opus"));
+}
+
 #[test]
 fn the_band_weighs_a_five_hour_charge_at_completion_and_never_a_seven_day_one() {
     let tables = PlanTables::shipped();
