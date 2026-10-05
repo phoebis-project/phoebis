@@ -58,19 +58,19 @@ pub enum TlsError {
         path: PathBuf,
         date: String,
     },
-    #[error("{key}: {source}")]
+    // The two variants below carry their cause in the line rather than as the error's source, so a chain printer
+    // such as `main`'s prints the cause once, in the refusal line.
+    #[error("{key}: {error}")]
     Stack {
         key: &'static str,
-        #[source]
-        source: boring::error::ErrorStack,
+        error: boring::error::ErrorStack,
     },
-    #[error("{key}.{file} {path}: {source}")]
+    #[error("{key}.{file} {path}: {error}")]
     Unreadable {
         key: &'static str,
         file: &'static str,
         path: PathBuf,
-        #[source]
-        source: std::io::Error,
+        error: std::io::Error,
     },
 }
 
@@ -79,11 +79,11 @@ pub enum TlsError {
 /// dates. `key` is `proxy.tls` or `admin.tls`, the prefix of every refusal.
 pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result<Loaded, TlsError> {
     let read = |file: &'static str, path: &Path| {
-        std::fs::read(path).map_err(|source| TlsError::Unreadable {
+        std::fs::read(path).map_err(|error| TlsError::Unreadable {
             key,
             file,
             path: path.to_path_buf(),
-            source,
+            error,
         })
     };
     let cert_pem = read("cert_file", cert_file)?;
@@ -184,7 +184,7 @@ pub fn scheme(tls: &Option<ListenerTls>) -> &'static str {
 }
 
 fn stack(key: &'static str) -> impl Fn(ErrorStack) -> TlsError {
-    move |source| TlsError::Stack { key, source }
+    move |error| TlsError::Stack { key, error }
 }
 
 /// A SAN's address octets as text: four for IPv4, sixteen for IPv6, anything else is no address at all.
@@ -267,6 +267,10 @@ mod tests {
                 .to_string()
                 .starts_with(&format!("proxy.tls.cert_file {}: ", missing.display())),
             "{error}"
+        );
+        assert!(
+            std::error::Error::source(&error).is_none(),
+            "the OS error sits in the one refusal line, so no chain repeats it under the line"
         );
     }
 
