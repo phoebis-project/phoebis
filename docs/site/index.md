@@ -2,11 +2,11 @@
 
 A router for Claude Code.
 
-Every request lands on the right account. Phoebis is a genus of sulphur butterflies, migrants of the Americas that
-land on the right flower. A client points at `phoebis` with a key the router issued; the router puts each request
-on the wire to Anthropic, under the credentials of an account it holds itself, and
-picks that account from a pool. Three listeners make up one process: the proxy that relays `/v1/messages`, the admin
-API with the embedded console, and a metrics endpoint in Prometheus text format.
+Every request lands on the right account. Phoebis is a genus of sulphur butterflies, migrants of the Americas that land
+on the right flower. A client points at `phoebis` with a key the router issued; the router puts each request back on the
+wire in the shape Claude Code 2.1.269 sends it, under the credentials of an account it holds itself, and picks that
+account from a pool. Three listeners make up one process: the proxy that relays `/v1/messages`, the admin API with the
+embedded console, and a metrics endpoint in Prometheus text format.
 
 | Page | What it covers |
 | --- | --- |
@@ -69,7 +69,7 @@ The sidebar shows the views in this order:
 | Settings | Client setup, the price table, and the router's version and paths (see [Installation](installation.md)). |
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
-issues a key. The console and this site call the account kind whose credential is an Anthropic API key an Anthropic key;
+issues a key. The console and this site call the account kind whose credential is an Anthropic API key "Anthropic key";
 the API's kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the
 bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the `upstream_message_id`,
 `upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
