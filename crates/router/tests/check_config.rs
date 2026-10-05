@@ -649,6 +649,16 @@ fn a_pair_prints_over_tls_with_its_certificate_and_expiry() {
         "{}",
         printed(&out)
     );
+    // A key at 0600 and a leaf decades from expiry earn neither TLS warning. The storage key is written at the umask,
+    // so its own warning may stand.
+    let key = key.display().to_string();
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.contains(&key) || line.contains("expires in")),
+        "{}",
+        printed(&out)
+    );
 }
 
 #[test]
@@ -668,13 +678,16 @@ fn a_pair_within_thirty_days_of_expiry_warns_and_passes() {
         "warning: proxy.tls.cert_file {} expires in ",
         cert.display()
     );
-    // Midnight UTC ten days on is nine whole days and some hours from any moment of today.
+    // Midnight UTC ten days on is nine whole days and some hours from any moment of today, and eight when the check
+    // runs past the midnight that followed the date's reading.
     let days = stdout
         .lines()
         .find_map(|line| line.strip_prefix(&prefix))
         .unwrap_or_else(|| panic!("no expiry warning: {}", printed(&out)));
     assert!(
-        days.starts_with("9 days (") || days.starts_with("10 days ("),
+        ["8 days (", "9 days (", "10 days ("]
+            .iter()
+            .any(|count| days.starts_with(count)),
         "{}",
         printed(&out)
     );
@@ -722,7 +735,7 @@ fn a_refused_pair_fails_check_config_with_the_loaders_line() {
     let (early, early_key) = pair_files(
         early_dir.path(),
         &["localhost"],
-        days_from_today(1),
+        days_from_today(2),
         (2100, 1, 1),
     );
     let cases = [
