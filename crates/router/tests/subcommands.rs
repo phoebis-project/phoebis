@@ -1,6 +1,7 @@
 //! `account add`, `account clear-cooldown`, `pool create` and `key create` from the outside: the binary against a
 //! router started in-process on loopback, over plain HTTP and over TLS, with the file, without it, and with a refused
-//! secret; and `clear-cooldown` against a scripted admin listener for the account revision it sends.
+//! secret; and `clear-cooldown` and `key create` against a scripted admin listener for the one request each sends and
+//! the answer each cannot print.
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -353,6 +354,46 @@ async fn key_create_prints_the_secret_once_and_the_key_lists_without_it() {
     running.stop().await;
 }
 
+/// `/dev/full` answers every write with "no space left", the full disk under `key create ... > laptop.secret`.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn key_create_exits_one_naming_the_rotate_route_when_stdout_takes_no_secret() {
+    let running = start(None, "TEST_SUB_KEY_FULL").await;
+    assert_exit(&running.run(&["pool", "create", "work"]).await, 0);
+    let full = std::fs::OpenOptions::new()
+        .write(true)
+        .open("/dev/full")
+        .unwrap();
+    let created = tokio::process::Command::new(env!("CARGO_BIN_EXE_phoebis"))
+        .env_remove("PHOEBIS_CONFIG")
+        .env("TEST_SUB_KEY_FULL", ADMIN_SECRET)
+        .args(["key", "create", "laptop", "--pool", "work", "--config"])
+        .arg(&running.config)
+        .stdin(Stdio::null())
+        .stdout(Stdio::from(full))
+        .stderr(Stdio::piped())
+        // `output()` would pipe stdout over the file, so the child is spawned and waited on.
+        .spawn()
+        .unwrap()
+        .wait_with_output()
+        .await
+        .unwrap();
+    assert_exit(&created, 1);
+    let stderr = String::from_utf8(created.stderr.clone()).unwrap();
+    let last = stderr.lines().last().unwrap_or_default();
+    assert!(
+        last.starts_with("the secret of key laptop did not reach stdout")
+            && last.ends_with("POST /admin/keys/laptop/rotate issues a new one"),
+        "{stderr}"
+    );
+    let keys = running.get("/admin/keys").await;
+    assert!(
+        entry(&keys, "keys", "laptop").is_some(),
+        "the key exists: {keys}"
+    );
+    running.stop().await;
+}
+
 #[tokio::test]
 async fn clear_cooldown_on_a_bare_account_is_404() {
     let running = start(None, "TEST_SUB_CLEAR").await;
@@ -377,6 +418,11 @@ async fn json_prints_the_routes_answer() {
     assert_exit(&created, 0);
     let (stdout, stderr) = text(&created);
     assert_eq!(stderr, "", "nothing but errors on stderr under --json");
+    assert_eq!(
+        (stdout.matches('\n').count(), stdout.ends_with('\n')),
+        (1, true),
+        "the answer is one line, as the route wrote it: {stdout:?}"
+    );
     let answer: Value = serde_json::from_str(&stdout).unwrap();
     assert_eq!(answer["id"], "home");
     assert_eq!(answer["label"], "home", "the label defaults to the id");
@@ -577,7 +623,7 @@ struct Seen {
 }
 
 /// An admin listener on loopback that answers each connection with the next scripted response and records the
-/// request, standing in for a router whose account answer carries a field this branch's routes do not.
+/// request, so a case sees exactly what a subcommand sent and can answer what no router on this branch answers.
 struct ScriptedAdmin {
     url: String,
     seen: Arc<Mutex<Vec<Seen>>>,
@@ -634,30 +680,24 @@ impl ScriptedAdmin {
     }
 }
 
-/// A JSON answer with `status` and its reason phrase, plus any `extra` header lines.
-fn json_response(status: &str, extra: &str, body: &str) -> String {
+/// A JSON answer with `status` and its reason phrase.
+fn json_response(status: &str, body: &str) -> String {
     format!(
         "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\
-         Connection: close\r\n{extra}\r\n{body}",
+         Connection: close\r\n\r\n{body}",
         body.len()
     )
 }
 
 const NO_CONTENT: &str = "HTTP/1.1 204 No Content\r\nConnection: close\r\n\r\n";
 
-/// `account clear-cooldown alice` against `admin`, with no configuration file.
-async fn clear_against(admin: &ScriptedAdmin) -> Output {
+/// `phoebis <args>` against `admin`, with no configuration file.
+async fn against(admin: &ScriptedAdmin, args: &[&str]) -> Output {
     let dir = tempfile::tempdir().unwrap();
+    let mut args = args.to_vec();
+    args.extend(["--url", &admin.url, "--secret-env", "TEST_SUB_SCRIPTED"]);
     phoebis(
-        &[
-            "account",
-            "clear-cooldown",
-            "alice",
-            "--url",
-            &admin.url,
-            "--secret-env",
-            "TEST_SUB_SCRIPTED",
-        ],
+        &args,
         &dir.path().join("absent.yaml"),
         &[("TEST_SUB_SCRIPTED", ADMIN_SECRET)],
         &[],
@@ -667,89 +707,53 @@ async fn clear_against(admin: &ScriptedAdmin) -> Output {
 }
 
 #[tokio::test]
-async fn clear_cooldown_sends_the_revision_the_account_answer_carries_and_nothing_without_one() {
-    let with = ScriptedAdmin::start(vec![
-        json_response(
-            "200 OK",
-            "",
-            r#"{"id":"alice","kind":"oauth","revision":7}"#,
-        ),
-        NO_CONTENT.to_owned(),
-    ])
+async fn clear_cooldown_sends_one_delete_for_the_named_scope_and_no_body() {
+    let admin = ScriptedAdmin::start(vec![NO_CONTENT.to_owned()]).await;
+    let cleared = against(
+        &admin,
+        &[
+            "account",
+            "clear-cooldown",
+            "alice",
+            "--scope",
+            "model:claude-sonnet-4-5",
+        ],
+    )
     .await;
-    let cleared = clear_against(&with).await;
     assert_exit(&cleared, 0);
     assert_eq!(
         text(&cleared),
-        (String::new(), "cleared account on alice\n".to_owned())
+        (
+            String::new(),
+            "cleared model:claude-sonnet-4-5 on alice\n".to_owned()
+        )
     );
-    let seen = with.seen();
-    assert_eq!(seen.len(), 2, "{seen:?}");
-    assert!(
-        seen[0].line.starts_with("GET /admin/accounts/alice "),
-        "{seen:?}"
+    let seen = admin.seen();
+    assert_eq!(seen.len(), 1, "{seen:?}");
+    assert_eq!(
+        seen[0].line,
+        "DELETE /admin/accounts/alice/cooldowns/model:claude-sonnet-4-5 HTTP/1.1"
     );
-    assert!(
-        seen[1]
-            .line
-            .starts_with("DELETE /admin/accounts/alice/cooldowns/account "),
-        "{seen:?}"
-    );
-    assert_eq!(seen[1].content_type.as_deref(), Some("application/json"));
-    let sent: Value = serde_json::from_slice(&seen[1].body).unwrap();
-    assert_eq!(sent, serde_json::json!({"expected_revision": 7}));
-
-    let without = ScriptedAdmin::start(vec![
-        json_response("200 OK", "", r#"{"id":"alice","kind":"oauth"}"#),
-        NO_CONTENT.to_owned(),
-    ])
-    .await;
-    let cleared = clear_against(&without).await;
-    assert_exit(&cleared, 0);
-    let seen = without.seen();
-    assert_eq!(seen.len(), 2, "{seen:?}");
-    assert!(
-        seen[1]
-            .line
-            .starts_with("DELETE /admin/accounts/alice/cooldowns/account "),
-        "{seen:?}"
-    );
-    assert!(
-        seen[1].body.is_empty(),
-        "nothing is sent without a revision: {seen:?}"
-    );
-    assert_eq!(seen[1].content_type, None);
+    assert!(seen[0].body.is_empty(), "{seen:?}");
+    assert_eq!(seen[0].content_type, None);
 }
 
 #[tokio::test]
-async fn a_stale_revision_prints_the_refusal_and_says_to_read_the_account_again() {
-    let stale = ScriptedAdmin::start(vec![
-        json_response(
-            "200 OK",
-            "",
-            r#"{"id":"alice","kind":"oauth","revision":7}"#,
-        ),
-        json_response(
-            "409 Conflict",
-            "x-phoebis-error-code: stale_edit\r\n",
-            r#"{"error":"the account changed while the edit was being saved"}"#,
-        ),
-    ])
+async fn key_create_exits_one_naming_the_rotate_route_when_the_answer_carries_no_secret() {
+    let admin = ScriptedAdmin::start(vec![json_response(
+        "201 Created",
+        r#"{"id":"laptop","label":"Laptop","pool_id":"work"}"#,
+    )])
     .await;
-    let refused = clear_against(&stale).await;
-    assert_exit(&refused, 1);
-    let (stdout, stderr) = text(&refused);
-    assert_eq!(stdout, "");
-    let lines: Vec<&str> = stderr.lines().collect();
+    let created = against(&admin, &["key", "create", "laptop", "--pool", "work"]).await;
+    assert_exit(&created, 1);
+    let (stdout, stderr) = text(&created);
+    assert_eq!(stdout, "", "no empty line stands in for the secret");
     assert_eq!(
-        lines.first().copied(),
-        Some("409 the account changed while the edit was being saved"),
+        stderr.lines().last(),
+        Some(
+            "the secret of key laptop is not in the answer; POST /admin/keys/laptop/rotate issues a new one"
+        ),
         "{stderr}"
     );
-    assert_eq!(
-        lines.get(1).copied(),
-        Some("the account changed after this command read it; run the command again to read it afresh"),
-        "{stderr}"
-    );
-    assert_eq!(lines.len(), 2, "{stderr}");
 }

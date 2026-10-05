@@ -138,10 +138,6 @@ pub enum SubcommandError {
     SecretUnset { what: String },
 }
 
-/// The second line of a refusal to an account write sent with the revision this run read: the account moved since.
-const READ_AGAIN: &str =
-    "the account changed after this command read it; run the command again to read it afresh";
-
 /// `--body`'s object (a file, or `-` for stdin) with `flags` merged over it, the flags winning, and then `defaults`
 /// filling the keys neither the body nor a flag named, so a body's `label` or `members` survives an absent flag.
 pub fn merged_body(
@@ -251,7 +247,7 @@ pub fn print_answer(
     // A reader that went away does not undo what the route did, so a failed write leaves the exit code the route's.
     if json {
         if !answer.body.is_null() {
-            let printed = serde_json::to_string_pretty(&answer.body).unwrap_or_default();
+            let printed = serde_json::to_string(&answer.body).unwrap_or_default();
             let _ = writeln!(out, "{printed}");
         }
         return;
@@ -276,8 +272,11 @@ pub fn print_answer(
 /// Why a subcommand stopped, kept apart from its printing so each step can use `?`.
 enum Failed {
     Runtime(std::io::Error),
-    /// An account write sent with the revision this run read was refused with a conflict: the account moved since.
-    Stale(ClientError),
+    /// A created key whose secret never reached stdout; `reason` says why, and the secret itself is never in it.
+    SecretLost {
+        id: String,
+        reason: String,
+    },
     Subcommand(SubcommandError),
 }
 
@@ -285,7 +284,10 @@ impl Failed {
     fn print(self, err: &mut dyn Write) -> i32 {
         let _ = match self {
             Failed::Runtime(error) => writeln!(err, "cannot start the runtime: {error}"),
-            Failed::Stale(error) => writeln!(err, "{error}\n{READ_AGAIN}"),
+            Failed::SecretLost { id, reason } => writeln!(
+                err,
+                "the secret of key {id} {reason}; POST /admin/keys/{id}/rotate issues a new one"
+            ),
             Failed::Subcommand(error) => writeln!(err, "{error}"),
         };
         1
@@ -346,34 +348,16 @@ fn clear_cooldown(
     err: &mut dyn Write,
 ) -> Result<(), Failed> {
     let client = AdminClient::from_flags(common, config_path)?;
-    let account = format!("/admin/accounts/{}", segment(id));
-    let cooldown = format!("{account}/cooldowns/{}", segment(scope));
-    let (fenced, cleared) = block_on(async {
-        let read = client.expect(Method::GET, &account, None).await?;
-        // The revision this run read travels with the write, so a route that fences account writes on it refuses one
-        // built on a stale read; an answer without `revision` comes from a router that takes no fence, so none is sent.
-        let fence = read
-            .body
-            .get("revision")
-            .filter(|revision| revision.is_u64())
-            .map(|revision| json!({ "expected_revision": revision }));
-        let cleared = client
-            .expect(Method::DELETE, &cooldown, fence.as_ref())
-            .await;
-        Ok::<_, ClientError>((fence.is_some(), cleared))
-    })??;
-    match cleared {
-        Err(error @ ClientError::Refused { status: 409, .. }) if fenced => {
-            Err(Failed::Stale(error))
-        }
-        Err(error) => Err(error.into()),
-        Ok(_) => {
-            if !common.json {
-                let _ = writeln!(err, "cleared {scope} on {id}");
-            }
-            Ok(())
-        }
+    let path = format!(
+        "/admin/accounts/{}/cooldowns/{}",
+        segment(id),
+        segment(scope)
+    );
+    block_on(client.expect(Method::DELETE, &path, None))??;
+    if !common.json {
+        let _ = writeln!(err, "cleared {scope} on {id}");
     }
+    Ok(())
 }
 
 fn create_key(
@@ -400,9 +384,52 @@ fn create_key(
     let defaults = Map::from_iter([("label".to_owned(), json!(id))]);
     let body = merged_body(body.as_deref(), stdin, flags, defaults)?;
     let answer = block_on(client.expect(Method::POST, "/admin/keys", Some(&body)))??;
-    let secret = answer.body["secret"].as_str().unwrap_or_default();
-    print_answer(&answer, secret, &["secret"], common.json, out, err);
-    Ok(())
+    let lost = |reason: String| Failed::SecretLost {
+        id: answer.body["id"].as_str().unwrap_or(&id).to_owned(),
+        reason,
+    };
+    let Some(secret) = answer.body["secret"].as_str() else {
+        return Err(lost("is not in the answer".to_owned()));
+    };
+    // The secret is printed once and the router keeps only its digest, so stdout taking it is the command's result:
+    // a write that fails there loses the key's one copy, unlike an id or a field, which the router still answers.
+    let mut checked = Checked {
+        inner: out,
+        failed: None,
+    };
+    print_answer(&answer, secret, &["secret"], common.json, &mut checked, err);
+    let flushed = checked.flush();
+    match checked.failed.take().map_or(flushed, Err) {
+        Ok(()) => Ok(()),
+        Err(error) => Err(lost(format!("did not reach stdout ({error})"))),
+    }
+}
+
+/// A writer that keeps its first error, so a caller of `print_answer`, which goes on past a failed write, can still
+/// tell whether stdout took what was printed.
+struct Checked<'a> {
+    inner: &'a mut dyn Write,
+    failed: Option<std::io::Error>,
+}
+
+impl Write for Checked<'_> {
+    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
+        let written = self.inner.write(buf);
+        match &written {
+            // `write_all` retries an interrupted write, so only a failure it cannot retry costs the reader its copy.
+            Err(error)
+                if error.kind() != std::io::ErrorKind::Interrupted && self.failed.is_none() =>
+            {
+                self.failed = Some(std::io::Error::new(error.kind(), error.to_string()));
+            }
+            _ => {}
+        }
+        written
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        self.inner.flush()
+    }
 }
 
 fn create_pool(
@@ -687,8 +714,12 @@ mod tests {
 
         let (mut out, mut err) = (Vec::new(), Vec::new());
         print_answer(&answer, "ignored", &["secret"], true, &mut out, &mut err);
-        let printed: Value = serde_json::from_slice(&out).unwrap();
-        assert_eq!(printed, answer.body, "--json prints the answer whole");
+        let printed = String::from_utf8(out).unwrap();
+        assert_eq!(
+            printed,
+            format!("{}\n", answer.body),
+            "--json prints the answer whole, on one line"
+        );
         assert!(err.is_empty());
     }
 

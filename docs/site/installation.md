@@ -317,12 +317,9 @@ process list nor the shell history carries it; `--secret-env` stays the admin se
 key against the upstream before it creates the account. Stdout carries the account's id, and stderr its fields, one
 `field: value` line each, sorted by field.
 
-`account clear-cooldown` reads the account through `GET /admin/accounts/{id}`, then clears one cooldown through `DELETE
-/admin/accounts/{id}/cooldowns/{scope}`. `--scope` is `account` (the default), `fast`, `fast_credits` or
-`model:<canonical>`. It prints `cleared {scope} on {id}` on stderr, and a cooldown the account does not hold answers
-`404 no such cooldown`. When the account's answer carries `revision`, the clear sends it back as `expected_revision`,
-and a `409` refusal of that clear prints a second line saying the account changed after the command read it, so the next
-run reads it afresh.
+`account clear-cooldown` clears one cooldown through `DELETE /admin/accounts/{id}/cooldowns/{scope}`, one call with no
+body. `--scope` is `account` (the default), `fast`, `fast_credits` or `model:<canonical>`. It prints `cleared {scope} on
+{id}` on stderr, and a cooldown the account does not hold answers `404 no such cooldown`.
 
 `pool create` creates a pool through `POST /admin/pools`. `--label` defaults to the id, `--member
 <account>[:<priority>]` adds a member at that priority (`0` without the colon) and repeats, and `--strategy` is `pace`,
@@ -330,7 +327,10 @@ run reads it afresh.
 
 `key create` creates a key in the pool `--pool` names through `POST /admin/keys`, and `--label` defaults to the id.
 Stdout carries the key's secret as its one line, printed once and nowhere else, so `phoebis key create laptop --pool
-home --label Laptop > laptop.secret` captures the secret alone; stderr carries the key's other fields.
+home --label Laptop > laptop.secret` captures the secret alone; stderr carries the key's other fields. When stdout
+cannot take the secret, a full disk under that redirect among them, or the answer carries none, `key create` exits 1
+with `the secret of key {id} {reason}; POST /admin/keys/{id}/rotate issues a new one` on stderr, since the router keeps
+no copy to print again.
 
 `--body PATH` on `pool create` and `key create` reads a JSON object from the file, or from stdin for `-`, and sends it
 merged under the flags: a flag wins where both name a field, and a default (the label from the id, an empty member list)
@@ -338,11 +338,13 @@ fills only a field neither names, so every field [the pool route](api.md#post-ad
 route](api.md#post-adminkeys) accept is reachable without a flag of its own. The subcommand validates no field, and the
 route's `400` prints as it comes.
 
-These four commands take the shared flags above. Under `--json` each prints the route's answer on stdout as it came and
-nothing on stderr but errors. A refused call prints `{status} {message}` from the route's answer on stderr and exits 1,
-a refused secret as `the admin secret was refused`; a call that does not reach the listener prints one line naming the
-URL and exits 1. Each exits 0 when the route accepts the call, and 2 for a usage error. No output carries the admin
-secret or an upstream key.
+These four commands take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line
+the route wrote and nothing on stderr but errors. A refused call prints `{status} {message}` from the route's answer on
+stderr and exits 1, a refused secret as `the admin secret was refused`; a call that does not reach the listener prints
+one line naming the URL and exits 1. The commands' own refusals exit 1 before any call: `an api_key account needs
+--api-key-env or --secret-stdin`, `environment variable {name} is unset or empty` for `--api-key-env`, `--secret-stdin
+read no secret from stdin`, and `--body {path}: {reason}` or `--member {member}: {reason}`. Each exits 0 when the route
+accepts the call, and 2 for a usage error. No output carries the admin secret or an upstream key.
 
 ## Environment variables
 
