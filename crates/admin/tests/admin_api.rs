@@ -222,7 +222,8 @@ async fn a_body_carrying_mutation_needs_the_json_content_type() {
     );
 }
 
-/// A scripted call: `Authorization: Bearer <bearer>`, no cookie, and the `Origin` and body given.
+/// A scripted call: `Authorization: Bearer <bearer>`, no cookie, and the `Origin` and body given, a body typed
+/// `application/json`.
 async fn with_bearer(
     app: &axum::Router,
     method: &str,
@@ -231,18 +232,43 @@ async fn with_bearer(
     origin: Option<&str>,
     body: &str,
 ) -> axum::http::Response<axum::body::Body> {
+    let content_type = (!body.is_empty()).then_some("application/json");
+    let authorization = format!("Bearer {bearer}");
+    authorized(
+        app,
+        method,
+        path,
+        &authorization,
+        origin,
+        content_type,
+        body,
+    )
+    .await
+}
+
+/// A call carrying the `Authorization` value given whole, no cookie, and the `Origin` and `Content-Type` given.
+async fn authorized(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    authorization: &str,
+    origin: Option<&str>,
+    content_type: Option<&str>,
+    body: &str,
+) -> axum::http::Response<axum::body::Body> {
     use tower::ServiceExt;
     let mut request = axum::http::Request::builder()
         .method(method)
         .uri(path)
-        .header("authorization", format!("Bearer {bearer}"));
+        .header("authorization", authorization);
     if let Some(origin) = origin {
         request = request.header("origin", origin);
     }
+    if let Some(content_type) = content_type {
+        request = request.header("content-type", content_type);
+    }
     if !body.is_empty() {
-        request = request
-            .header("content-type", "application/json")
-            .header("content-length", body.len().to_string());
+        request = request.header("content-length", body.len().to_string());
     }
     app.clone()
         .oneshot(
@@ -278,31 +304,32 @@ async fn a_bearer_admits_a_read_and_a_mutation_without_a_cookie_or_an_origin() {
         serde_json::json!({"session_id": "bearer"})
     );
     // The scheme word is matched ignoring case, and the JSON rule still holds under a bearer.
-    let lower = {
-        use tower::ServiceExt;
-        let request = axum::http::Request::builder()
-            .method("GET")
-            .uri("/admin/system")
-            .header("authorization", "bearer admin-secret")
-            .body(axum::body::Body::empty())
-            .unwrap();
-        app.clone().oneshot(request).await.unwrap()
-    };
+    let lower = authorized(
+        &app,
+        "GET",
+        "/admin/system",
+        "bearer admin-secret",
+        None,
+        None,
+        "",
+    )
+    .await;
     assert_eq!(lower.status(), 200);
-    let untyped = {
-        use tower::ServiceExt;
-        let body = r#"{"id":"k","label":"K","pool_id":"main"}"#;
-        let request = axum::http::Request::builder()
-            .method("POST")
-            .uri("/admin/keys")
-            .header("authorization", "Bearer admin-secret")
-            .header("content-type", "text/plain")
-            .header("content-length", body.len().to_string())
-            .body(axum::body::Body::from(body))
-            .unwrap();
-        app.clone().oneshot(request).await.unwrap()
-    };
+    let untyped = authorized(
+        &app,
+        "POST",
+        "/admin/keys",
+        "Bearer admin-secret",
+        None,
+        Some("text/plain"),
+        r#"{"id":"k","label":"K","pool_id":"main"}"#,
+    )
+    .await;
     assert_eq!(untyped.status(), 415);
+    assert_eq!(
+        json(untyped).await["error"],
+        "content type must be application/json"
+    );
 }
 
 #[tokio::test]
