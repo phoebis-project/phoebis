@@ -237,10 +237,10 @@ A request body whose top-level object carries `metadata`, `model`, `stream` or `
 server-side auto mode is off (carried twice, or spelled with an escape), whose `cache_control` marker the pool's cache
 TTL policy cannot reach (a key on the marker's path spelled with an escape), or whose billing stamp the router can
 neither check nor restamp (a key on its path, the billing line's header name or its `cch=` spelled with an escape, or a
-second stamp in the billing block), whether or not the request needs an edit, is refused before anything reaches the
-upstream: `400` with the error code `body_shape` and a message naming the member. A `metadata` object that names
-`user_id` twice, raw or escaped, is refused the same way, since the router splices the account into one spelling and a
-last-wins parser upstream would read the other. A body whose top-level object nests deeper than the relay reads is
+second stamped `text` in the first `system` block), whether or not the request needs an edit, is refused before anything
+reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A `metadata` object that
+names `user_id` twice, raw or escaped, is refused the same way, since the router splices the account into one spelling
+and a last-wins parser upstream would read the other. A body whose top-level object nests deeper than the relay reads is
 refused `400` with the error code `invalid_body`.
 
 A request body that does not finish arriving within `proxy.body_read_seconds` (60 by default) after authentication is
