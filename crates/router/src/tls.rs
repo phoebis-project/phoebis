@@ -2,7 +2,7 @@
 //! the checks the start and `check-config` share, so both refuse a pair with the same line.
 
 use std::cmp::Ordering;
-use std::net::IpAddr;
+use std::net::{IpAddr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
@@ -16,6 +16,9 @@ use crate::config::ListenerTls;
 
 /// The acceptor an accept loop takes: `None` is plain HTTP.
 pub type Acceptor = Option<Arc<SslAcceptor>>;
+
+/// A leaf this close to `not_after` earns a warning in `check-config` and a line in `status`, and starts.
+pub const EXPIRY_WARNING_DAYS: i32 = 30;
 
 /// A loaded listener: the acceptor, and the leaf's facts the start logs and `check-config` prints.
 pub struct Loaded {
@@ -181,6 +184,58 @@ pub fn scheme(tls: &Option<ListenerTls>) -> &'static str {
     } else {
         "http"
     }
+}
+
+/// The `check-config` line for one listener: `{listener} listens on {listen} over plain HTTP`, or
+/// `over TLS (certificate {cert_file}, expires {not_after})` for a loaded pair. `loaded` is `load`'s answer for the
+/// same `tls`.
+pub fn describe(
+    listener: &str,
+    listen: SocketAddr,
+    tls: &Option<ListenerTls>,
+    loaded: Option<&Loaded>,
+) -> String {
+    match (ListenerTls::effective(tls), loaded) {
+        (ListenerTls::Pair { cert_file, .. }, Some(loaded)) => format!(
+            "{listener} listens on {listen} over TLS (certificate {}, expires {})",
+            cert_file.display(),
+            loaded.leaf.not_after
+        ),
+        _ => format!("{listener} listens on {listen} over plain HTTP"),
+    }
+}
+
+/// The `warning:` lines for a loaded pair, without the `warning: ` prefix: the leaf within `EXPIRY_WARNING_DAYS`,
+/// and `permissions::check_private_file(key_file, 0o600)`'s lines for the key file.
+pub fn warnings(
+    key: &'static str,
+    tls: &Option<ListenerTls>,
+    loaded: Option<&Loaded>,
+) -> Vec<String> {
+    let (
+        ListenerTls::Pair {
+            cert_file,
+            key_file,
+        },
+        Some(loaded),
+    ) = (ListenerTls::effective(tls), loaded)
+    else {
+        return Vec::new();
+    };
+    let mut warnings = Vec::new();
+    // A negative count never reaches here: `load_pair` refuses an expired leaf.
+    if (0..EXPIRY_WARNING_DAYS).contains(&loaded.leaf.days_left) {
+        warnings.push(format!(
+            "{key}.cert_file {} expires in {} days ({})",
+            cert_file.display(),
+            loaded.leaf.days_left,
+            loaded.leaf.not_after
+        ));
+    }
+    warnings.extend(phoebis_store::permissions::check_private_file(
+        key_file, 0o600,
+    ));
+    warnings
 }
 
 fn stack(key: &'static str) -> impl Fn(ErrorStack) -> TlsError {

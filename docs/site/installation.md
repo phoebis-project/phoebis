@@ -110,7 +110,8 @@ docker compose down          # SIGTERM, then up to 40 seconds for the 30-second 
 The health check runs `phoebis health`, which loads and validates the configuration, secrets included, from the
 container's own environment and then asks the proxy listener whether the router is ready: a file it cannot read, a value
 it refuses, an unset secret variable, or a router loop, ledger consumer or store that died therefore reads as
-`unhealthy` rather than as a passing check, with the reason in `docker inspect`.
+`unhealthy` rather than as a passing check, with the reason in `docker inspect`. `health` speaks TLS to a proxy listener
+that terminates it.
 
 A ledger writer that stops draining fills its queue. Once the queue is half full (2,048 of 4,096 records) the router
 refuses new inference, token-count and keepalive probe requests with its own 503 `ledger_behind` and `Retry-After: 5`
@@ -140,18 +141,21 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | Command | Effect |
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
-| `phoebis check-config --config ./config.yaml` | Validates the file, key file, key canary and both schema versions. |
+| `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
 that path instead, and the flag wins when both are given. `check-config` takes no lock, runs no migration and opens
-no socket; it reads the key file, the registry's canary and the registry's and the ledger's schema versions read-only,
-so it is safe to run against a production file while the router is up. It prints, in order:
+no socket; it reads the key file, the registry's canary, the registry's and the ledger's schema versions and each
+listener's certificate pair read-only, so it is safe to run against a production file while the router is up. It
+prints, in order:
 
 1. `{config path} is valid`
-2. `proxy listens on {config.proxy.listen}`
-3. `admin listens on {config.admin.listen}`
+2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {addr} over TLS (certificate
+   {cert_file}, expires {date})` for a certificate pair
+3. `admin listens on {config.admin.listen} over plain HTTP`, or `admin listens on {addr} over TLS (certificate
+   {cert_file}, expires {date})` for a certificate pair
 4. `metrics listens on {config.stats.metrics_listen}`
 5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
    {on|off}, upstream gzip {auto|on|off}`
@@ -165,12 +169,16 @@ so it is safe to run against a production file while the router is up. It prints
     the key, and the next start seals one` for a registry from before the canary
 12. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
 
-Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
-expects; the router starts either way and logs the same warnings.
+Further warning lines name a storage key file, data directory, database or TLS key file whose mode or owner is wider
+than the router expects, and a certificate that expires within 30 days (`warning: proxy.tls.cert_file {path} expires in
+{n} days ({date})`); the router starts either way and logs the same warnings.
 
 A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and `the registry at
 {config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at
 {config.stats.ledger_path}`, since the start refuses either file the same way.
+
+An unreadable, mismatched, expired or not-yet-valid certificate pair fails the check with exit 1 and the line the start
+prints, naming the key and the path ([TLS on the listeners](#tls-on-the-listeners)).
 
 On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds and then ends whatever is
 still running. That 30 seconds also covers the keepalive shutdown ahead of it, so a slow keepalive shutdown leaves the
@@ -179,9 +187,11 @@ credential refresh still in flight is waited for up to its own 30-second timeout
 rotated is stored rather than lost to the next start's quarantine.
 
 `health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
-the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, and
-prints `proxy answers on {addr}` on a `200` or one line saying why not (`proxy on {addr} answered 503, not 200` when the
-router loop, the ledger consumer or the store is dead); the whole probe, connect included, is bounded by three seconds.
+the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, over
+TLS when `proxy.tls` terminates it, without checking the certificate (the probe dials its own process and asks whether
+`/api/ready` answers, not who answers), and prints `proxy answers on {addr}` on a `200` or one line saying why not
+(`proxy on {addr} answered 503, not 200` when the router loop, the ledger consumer or the store is dead); the whole
+probe, connect included, is bounded by three seconds.
 `/api/hello` stays the liveness answer the client itself probes. The container image runs `health` as its health check
 every 30 seconds ([the container](#run-the-container)).
 
@@ -423,7 +433,8 @@ shapes, with:
 - `proxy.tls: must be plain_http or a mapping with cert_file and key_file`, under `the configuration is not valid YAML`,
   for any other word, a third key, or a mapping that lacks one of the two
 
-The start reads the pair before it binds a port and refuses it with one line naming the key and the path:
+The start reads the pair before it binds a port, and `check-config` reads it the same way; both refuse it with one line
+naming the key and the path:
 
 - `proxy.tls.cert_file {path}: {OS error}` or `proxy.tls.key_file {path}: {OS error}` for a file it cannot read
 - `proxy.tls.cert_file {path}: holds no PEM certificate`

@@ -416,9 +416,15 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken.
     let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
     let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
-    for (listener, loaded) in [("proxy", &proxy_tls), ("admin", &admin_tls)] {
+    for (listener, key, value, loaded) in [
+        ("proxy", "proxy.tls", &config.proxy.tls, &proxy_tls),
+        ("admin", "admin.tls", &config.admin.tls, &admin_tls),
+    ] {
         if let Some(loaded) = loaded {
             tracing::info!(listener, names = ?loaded.leaf.names, not_after = %loaded.leaf.not_after, "serving TLS");
+        }
+        for warning in tls::warnings(key, value, loaded.as_ref()) {
+            tracing::warn!("{warning}");
         }
     }
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)

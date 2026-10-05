@@ -5,6 +5,8 @@ use std::path::PathBuf;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
+use phoebis_router::config::ListenerTls;
+use phoebis_router::tls;
 
 #[derive(Parser)]
 #[command(
@@ -28,8 +30,8 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Command {
-    /// Validate the configuration, the key file, the registry's key canary and the registry's and the ledger's
-    /// schema versions, taking no lock and opening no socket.
+    /// Validate the configuration, the key file, the registry's key canary, the registry's and the ledger's schema
+    /// versions and the certificate pairs, taking no lock and opening no socket.
     CheckConfig,
     /// Probe the proxy listener's `/api/ready`: exit 0 when it answers 200, 1 otherwise.
     Health,
@@ -43,9 +45,28 @@ fn main() -> anyhow::Result<()> {
     };
     match cli.command {
         Some(Command::CheckConfig) => {
+            // Read before the first line, so a pair the start would refuse is the one line the check prints.
+            let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
+            let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
             println!("{} is valid", cli.config.display());
-            println!("proxy listens on {}", config.proxy.listen);
-            println!("admin listens on {}", config.admin.listen);
+            println!(
+                "{}",
+                tls::describe(
+                    "proxy",
+                    config.proxy.listen,
+                    &config.proxy.tls,
+                    proxy_tls.as_ref()
+                )
+            );
+            println!(
+                "{}",
+                tls::describe(
+                    "admin",
+                    config.admin.listen,
+                    &config.admin.tls,
+                    admin_tls.as_ref()
+                )
+            );
             println!("metrics listens on {}", config.stats.metrics_listen);
             println!(
                 "proxy: body budget {} bytes, body read {}s, key body reads {}, max request {} bytes, \
@@ -151,6 +172,12 @@ fn main() -> anyhow::Result<()> {
             for warning in phoebis_store::permissions::check_private_file(&config.storage.encryption_key_file, 0o600) {
                 println!("warning: {warning}");
             }
+            for warning in tls::warnings("proxy.tls", &config.proxy.tls, proxy_tls.as_ref())
+                .into_iter()
+                .chain(tls::warnings("admin.tls", &config.admin.tls, admin_tls.as_ref()))
+            {
+                println!("warning: {warning}");
+            }
             let data_dir = phoebis_store::permissions::data_dir_of(&config.storage.path);
             for warning in phoebis_store::permissions::check_private_dir(data_dir) {
                 println!("warning: {warning}");
@@ -160,7 +187,11 @@ fn main() -> anyhow::Result<()> {
             }
             Ok(())
         }
-        Some(Command::Health) => match phoebis_router::health::probe(config.proxy.listen, phoebis_router::health::TIMEOUT) {
+        Some(Command::Health) => match phoebis_router::health::probe(
+            config.proxy.listen,
+            ListenerTls::effective(&config.proxy.tls).terminates_tls(),
+            phoebis_router::health::TIMEOUT,
+        ) {
             Ok(addr) => {
                 println!("proxy answers on {addr}");
                 Ok(())

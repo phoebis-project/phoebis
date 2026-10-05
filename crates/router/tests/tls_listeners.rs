@@ -1,6 +1,6 @@
 //! Both public listeners terminate TLS from an operator's certificate pair: the router started in-process with a
-//! pair the test generates and trusts from its own clients alone, and a pair the start cannot serve refused before
-//! any port is taken.
+//! pair the test generates and trusts from its own clients alone, `phoebis health` probing its proxy listener over
+//! TLS, and a pair the start cannot serve refused before any port is taken.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -172,6 +172,48 @@ async fn both_listeners_serve_an_operators_pair_and_a_plain_request_gets_no_http
             String::from_utf8_lossy(&buf[..n])
         );
     }
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_health_subcommand_speaks_tls_to_a_proxy_listener_serving_a_pair() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let (cert, key) = generate_pair(&["localhost", "127.0.0.1"]).write_to(dir.path(), "proxy");
+    let (proxy_port, admin_port) = (free_port(), free_port());
+    let config = configured(dir.path(), &up, (proxy_port, admin_port), &cert, &key);
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    fake_upstream::wait_for_async(SETTLE, || async {
+        TcpStream::connect(("127.0.0.1", proxy_port)).await.ok()
+    })
+    .await;
+
+    // The subcommand is a child process, so the runtime keeps serving the router while it probes.
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_phoebis"))
+        .args(["health", "--config"])
+        .arg(dir.path().join("config.yaml"))
+        .env("TEST_ADMIN_SECRET", "admin-secret-001")
+        .env_remove("PHOEBIS_CONFIG")
+        .output()
+        .await
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert_eq!(
+        out.status.code(),
+        Some(0),
+        "{stdout}{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert_eq!(
+        stdout.trim(),
+        format!("proxy answers on 127.0.0.1:{proxy_port}")
+    );
 
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();
