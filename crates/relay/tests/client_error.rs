@@ -1015,7 +1015,7 @@ async fn a_stale_model_refusal_after_an_attempt_still_reads_rejected() {
     .await;
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.model_rules = rules(&["NOT *"]);
-    h.store.update_pool(&pool, "test").unwrap();
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
     h.router.reload().await.unwrap();
     up.release();
     let resp = pending.await.unwrap();

@@ -2149,50 +2149,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
     const util = card('Utilization thresholds');
     results.push({
-      name: '/pools migrate on enables its percent field',
-      ok: migrateSwitch?.getAttribute('aria-checked') === 'true' && migratePercent()?.disabled === false && (util?.textContent ?? '').includes('A member at or above this line on its 5-hour or 7-day window starts a shedding round; a sibling counts as cool below the line minus 5%.'),
-      missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled)],
+      name: '/pools migrate on enables its percent field, empty until a margin is typed',
+      ok:
+        migrateSwitch?.getAttribute('aria-checked') === 'true' &&
+        migratePercent()?.disabled === false &&
+        migratePercent()?.value === '' &&
+        (util?.textContent ?? '').includes('A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.'),
+      missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled), JSON.stringify(migratePercent()?.value)],
     });
-    const handle = () => util?.querySelector('[role="slider"][aria-label="Migrate threshold"]');
     const percent = migratePercent();
-    const before = [handle()?.getAttribute('aria-valuenow'), percent?.value];
-    handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowLeft', bubbles: true }));
-    await m.settle(120);
-    const after = [handle()?.getAttribute('aria-valuenow'), percent?.value];
-    handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'ArrowRight', bubbles: true }));
+    if (percent) setter.call(percent, '50');
+    percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
     const ticks = [...(util?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
     results.push({
-      name: '/pools the bar draws each member reading and the migrate handle, which the arrow keys step and the percent field follows',
-      ok: JSON.stringify(before) === '["90","90"]' && JSON.stringify(after) === '["89","89"]' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('.ubar__band') !== null,
-      missing: [JSON.stringify(before), JSON.stringify(after), ...ticks],
+      name: '/pools the bar draws each member reading with no migrate handle, and the percent field holds the typed margin',
+      ok: percent?.value === '50' && ticks.length === 6 && ticks.includes('business: 5-hour 62%') && util?.querySelector('[role="slider"][aria-label="Migrate threshold"]') === null && util?.querySelector('.ubar__band') === null,
+      missing: [String(percent?.value), ...ticks],
     });
+    // At the mock's clock personal's 5-hour window leads its pace by about 0.71 and mail's 7-day window by about 0.61,
+    // both over the typed 50 %; business leads by under 0.1 and is the cool destination.
     expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the table cannot price stay.']);
-
-    // Select-below inside the band under the migrate threshold holds the save and says why.
-    const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
-    const selectSwitch = dlg?.querySelector('button[role="switch"][aria-label="Select below utilization"]');
-    selectSwitch?.click();
-    await m.settle(120);
-    const selectPercent = dlg?.querySelector('input[aria-label="Select below utilization (%)"]');
-    if (selectPercent) setter.call(selectPercent, '88');
-    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    const inBand = [util?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled, util?.querySelector('[role="slider"][aria-label="Select-below threshold"]')?.getAttribute('aria-valuenow'), selectPercent?.getAttribute('aria-invalid')];
-    if (selectPercent) setter.call(selectPercent, '85');
-    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    const atEdge = [util?.querySelector('.callout--critical')?.textContent ?? '', save()?.disabled];
-    results.push({
-      name: '/pools select-below inside the band holds the save and names the band',
-      ok: inBand[0] === 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.' && inBand[1] === true && inBand[2] === '88' && inBand[3] === 'true' && atEdge[0] === '' && atEdge[1] === false,
-      missing: [...inBand.map(String), ...atEdge.map(String)],
-    });
-    if (selectPercent) setter.call(selectPercent, '80');
-    selectPercent?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    await m.settle(120);
-    selectSwitch?.click();
-    await m.settle(120);
   }
   migrateSwitch?.click();
   await m.settle(120);
@@ -2216,10 +2193,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
         percent()?.disabled === false &&
         percent()?.getAttribute('min') === '0' &&
         percent()?.getAttribute('max') === '100' &&
-        (util?.textContent ?? '').includes('A fresh pick passes over members at or above this 5-hour utilization, unless every member is. With both lines on, it sits at least 5% under the migrate line.'),
+        (util?.textContent ?? '').includes('A fresh pick passes over members at or above this 5-hour utilization, unless every member is.') &&
+        !(util?.textContent ?? '').includes('migrate line'),
       missing: [percent()?.value ?? 'absent', String(percent()?.disabled), percent()?.getAttribute('min') ?? '', percent()?.getAttribute('max') ?? ''],
     });
-    // The callout under the bar is the band's; a select-below out of its range reads in the footer and on the rail.
+    // A select-below out of its range reads in the footer and on the rail, with no callout under the bar.
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
     const type = async (value) => {
       if (!percent()) return;
@@ -2232,7 +2210,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const outOfRange = [util?.querySelector('.callout--critical')?.textContent ?? null, status, !!rail(dlg, 'utilization')?.querySelector('.dialog-rail__dot')];
     await type('80');
     results.push({
-      name: '/pools a select-below out of range holds the save from the footer and leaves the band callout to the band',
+      name: '/pools a select-below out of range holds the save from the footer and the rail',
       ok: outOfRange[0] === null && outOfRange[1] === 'Save is held: Select below utilization is from 0 to 100.Go to Utilization thresholds' && outOfRange[2] === true,
       missing: outOfRange.map(String),
     });
@@ -2725,8 +2703,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(200);
 }
 {
-  // The route stores a pool's settings before its members, so a save it refused may have changed the pool after all:
-  // a dialog closed after a refused save reads the lists again, and one closed after no save reads nothing.
+  // A save refused because the pool changed while it was edited means the lists the dialog read are out of date: a
+  // dialog closed after a refused save reads the lists again, and one closed after no save reads nothing.
   const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const openAll = async () => {
     [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
@@ -2745,7 +2723,19 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const quiet = await readsOnCancel(await openAll());
   results.push({ name: '/pools Cancel without a refused save reloads nothing', ok: JSON.stringify(quiet) === '[0,0]', missing: quiet.map(String) });
   const dlg = await openAll();
-  const sentence = "the pool's settings were saved; its members were not: account ghost not found";
+  // The dialog keys its members by account, so it cannot send a repeat itself; the route's 409 is stubbed to prove the
+  // refusal reaches the footer line as the route words it, with the dialog left open.
+  const twice = 'members name account console twice';
+  failNextCall('updatePool', '/admin/pools/all', twice, { status: 409 });
+  footButton(dlg, 'Save pool')?.click();
+  await m.settle(600);
+  const repeat = [dlg?.hasAttribute('open') === true, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
+  results.push({
+    name: '/pools a member list the route refuses as naming an account twice keeps the dialog open with its words',
+    ok: repeat[0] && repeat[1].startsWith(twice),
+    missing: repeat.map(String),
+  });
+  const sentence = 'the pool changed while it was being edited; reload and try again';
   failNextCall('updatePool', '/admin/pools/all', sentence, { status: 409 });
   footButton(dlg, 'Save pool')?.click();
   await m.settle(600);
@@ -2753,7 +2743,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const status = dlg?.querySelector('.dialog__status')?.textContent ?? '';
   const reads = await readsOnCancel(dlg);
   results.push({
-    name: '/pools Cancel after a refused save reloads the pools and keys',
+    name: '/pools Cancel after a save refused as stale reloads the pools and keys',
     ok: stayed && status.startsWith(sentence) && JSON.stringify(reads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
     missing: [stayed ? 'open' : 'closed', status, ...reads.map(String)],
   });
@@ -3029,8 +3019,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await api.updatePool('studio', studio);
 }
 {
-  // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and the
-  // form's floor of 50 % binds a value typed in this dialog alone, so a stored 0.3 saves as the route took it.
+  // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and a
+  // margin over pace under 50 % saves whether stored or typed.
   const story = (await api.listPools()).find((p) => p.id === 'all');
   const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   const openAll = async () => {
@@ -3100,13 +3090,35 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
   }
   const typed = [footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? '', percent(dlg)?.getAttribute('aria-invalid')];
+  const typedSaved = await savedMigrate(dlg);
   results.push({
-    name: '/pools a stored migrate of 0.3 saves untouched and is refused once typed to 30',
-    ok: low === '30' && lowSaved === 0.3 && closed && typed[0] === true && typed[1] === 'Save is held: Migrate above utilization is from 50 to 100.Go to Utilization thresholds' && typed[2] === 'true',
-    missing: [String(low), String(lowSaved), closed ? 'closed' : 'open', ...typed.map(String)],
+    name: '/pools a stored migrate of 0.3 saves untouched and saves again once typed to 30',
+    ok: low === '30' && lowSaved === 0.3 && closed && typed[0] === false && typed[1] === 'Every group saves together.' && typed[2] !== 'true' && typedSaved === 0.3 && !m.container.querySelector('dialog[open]'),
+    missing: [String(low), String(lowSaved), closed ? 'closed' : 'open', ...typed.map(String), String(typedSaved)],
   });
-  footButton(dlg, 'Cancel')?.click();
-  await m.settle(200);
+
+  // A pool storing no margin opens with the field empty, holds the save until one is typed, and saves 20 % as 0.2.
+  await api.updatePool('all', written);
+  m.unmount();
+  m = await mount('/pools');
+  dlg = await openAll();
+  rail(dlg, 'utilization')?.click();
+  await m.settle(120);
+  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  await m.settle(120);
+  const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes(
+    'A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.',
+  );
+  const empty = [percent(dlg)?.value, footButton(dlg, 'Save pool')?.disabled, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
+  setter.call(percent(dlg), '20');
+  percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(120);
+  const fifth = await savedMigrate(dlg);
+  results.push({
+    name: '/pools a margin of 20 % saves as 0.2 once typed into a field that opened empty',
+    ok: hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Migrate above utilization needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
+    missing: [hint ? 'hint' : 'no hint', ...empty.map(String), String(fifth)],
+  });
   // The story's pool back, so the checks below read the pool the fixture holds.
   await api.updatePool('all', written);
 }
@@ -3238,7 +3250,7 @@ m.unmount();
   api.getSettings = getSettings;
   results.push({
     name: '/pools the preview says the cost table is loading while the settings read is held',
-    ok: loading === 'The cost table is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is above the threshold)/.test(landed),
+    ok: loading === 'The cost table is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
     missing: [loading, landed],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -4819,7 +4831,7 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   agentType?.querySelector('.mselect__trigger')?.click();
   await m.settle(700);
 
-  const speedCheck = '/requests the speed filter keeps the requests whose serving attempt answered fast';
+  const speedCheck = '/requests the speed filter keeps the requests whose serving attempt answered fast or that asked for fast and made no attempt';
   const speed = [...m.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Speed'));
   if (!speed) controlMissing(speedCheck, 'Speed');
   speed?.querySelector('.mselect__trigger')?.click();
@@ -4830,13 +4842,16 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await m.settle(700);
   speed?.querySelector('.mselect__trigger')?.click();
   await m.settle(150);
-  // Each row opens its drawer in turn, so the check reads the serving attempt's own line rather than the story's rule.
+  // Each row opens its drawer in turn, so the check reads the serving attempt's own line rather than the story's rule;
+  // a request refused before any attempt shows none and files under the speed its shape asked for.
   const servedAs = [];
   for (const tr of [...m.container.querySelectorAll('.requests__table tbody tr')]) {
     tr.click();
     await m.settle(300);
     const lines = [...m.container.querySelectorAll('.drawer .attempt .attempt__response')];
-    servedAs.push([...(lines.at(-1)?.children ?? [])].map((span) => span.textContent?.trim()).includes('fast') ? 'fast' : (lines.at(-1)?.textContent ?? 'no response line'));
+    const asked = [...m.container.querySelectorAll('.drawer .kv__row')].find((row) => row.querySelector('dt')?.textContent?.trim() === 'Speed, service tier')?.querySelector('dd')?.textContent?.trim() ?? '';
+    const attempted = m.container.querySelectorAll('.drawer .attempt').length > 0;
+    servedAs.push([...(lines.at(-1)?.children ?? [])].map((span) => span.textContent?.trim()).includes('fast') ? 'fast' : !attempted && asked.startsWith('fast,') ? 'fast' : (lines.at(-1)?.textContent ?? `no response line, asked ${asked}`));
   }
   const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
   results.push({ name: speedCheck, ok: servedAs.length > 0 && servedAs.length === fastDay && servedAs.every((s) => s === 'fast'), missing: [`${servedAs.length} rows against ${fastDay}`, ...new Set(servedAs)] });
@@ -6271,7 +6286,7 @@ expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share',
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Gross saved', 'Probe cost', 'Net saved', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.", 'Cache warming by pool']);
 await tab(m, 'Accounts');
 expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilization', 'Accounts in range', 'Peak Fable 7d', 'Time in overage', 'Time in cooldown', 'Pins created', 'Migrated in', 'Migrated out']);
 {
@@ -6561,7 +6576,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard()?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache') === null, missing: [wasteCard()?.closest('.analytics-section')?.id ?? 'no card', `cache mounted ${m.container.querySelector('#cache') !== null}`] });
   {
     const reasonRows = [...(wasteCard()?.querySelectorAll('.hbars--reasons li') ?? [])];
-    results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 4 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
+    results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 7 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
   }
   {
     const group = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
@@ -6612,6 +6627,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     results.push({ name: '/analytics the page groups by request class, a classless row as unattributed', ok: ['main', 'subagent', 'unattributed'].every((c) => requestClasses.includes(c)), missing: requestClasses });
 
     await groupBy('User agent');
+    const tokens = trafficRows('user agent').map((row) => row[0]);
+    results.push({
+      name: '/analytics the user agent grouping lists each agent by its product token, as the rollups key it',
+      ok: tokens.includes('claude-cli/2.1.269') && tokens.every((t) => !t.includes(' (')),
+      missing: tokens,
+    });
     const listCheck = '/analytics a user agent pattern list names the groups and gathers the rest';
     await typeGroups(listCheck, 'claude-cli/2.1.*\nphoebis-batch/*');
     const named = trafficRows('user agent').map((row) => row[0]);
@@ -6741,14 +6762,29 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     // claims to be.
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
     results.push({ name: '/analytics the week the wasted-probe checks read is reachable', ok: range('7d') !== undefined, missing: [...m.container.querySelectorAll('.segmented button')].map((b) => b.textContent?.trim() ?? '') });
+    // The mock's own answer for the week, read as the page reads it, is what the cold return row has to show.
+    const { getAnalyticsBreakdown } = api;
+    let weekGroups = [];
+    api.getAnalyticsBreakdown = async (query) => {
+      const groups = await getAnalyticsBreakdown(query);
+      weekGroups = groups;
+      return groups;
+    };
     range('7d')?.click();
     await m.settle(700);
+    api.getAnalyticsBreakdown = getAnalyticsBreakdown;
     const weekCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes');
     const wasteBars = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
-    const labels = ['Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended'];
-    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 4 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
+    const labels = ['Entry expired', 'Evicted at the byte cap', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Returned cold', 'Session ended'];
+    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 7 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
     const wasteCounts = [...(weekCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
-    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 4 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
+    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 7 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
+    {
+      const coldRow = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Returned cold');
+      const drawn = Number(coldRow?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? -1);
+      const mocked = weekGroups.reduce((n, g) => n + (g.savings?.wastedProbeReasons.cold_return ?? 0), 0);
+      results.push({ name: "/analytics wasted probes draws the cold return row with the mock's count", ok: coldRow !== undefined && weekGroups.length > 0 && drawn === mocked, missing: [`drawn ${drawn}`, `mock ${mocked}`, `groups ${weekGroups.length}`] });
+    }
     const idleShare = Number([...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Idle limit ran out')?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? 0);
     results.push({ name: '/analytics idle limit dominates the wasted probes', ok: wasteBars[0] === 'Idle limit ran out' && idleShare > wasteCounts.reduce((n, v) => n + v, 0) / 2, missing: [String(idleShare), String(wasteCounts.reduce((n, v) => n + v, 0))] });
     const tiles = [...(weekCard?.querySelectorAll('.stat--compact .stat__label') ?? [])].map((l) => l.textContent?.trim());
@@ -7297,6 +7333,28 @@ m.unmount();
     name: '/sessions the bus gaps tile reads the overview\'s count and warns once the keepalive engine missed events',
     ok: overview.busGaps === 0 && quiet.value === '0' && !quiet.warn && quiet.note === 'times the keepalive engine missed bus events' && gapped.value === '2' && gapped.warn,
     missing: [`mock ${overview.busGaps}`, JSON.stringify(quiet), JSON.stringify(gapped)],
+  });
+}
+{
+  // A recipe that lapsed or was evicted leaves the route's list, so the mock holds none under either reason; the
+  // stub hands the page one held under `expired` for its label and hint to be read.
+  const { listKeepaliveRecipes } = api;
+  api.listKeepaliveRecipes = async () => {
+    const [first, ...rest] = await listKeepaliveRecipes();
+    return [{ ...first, reason: 'expired', state: 'held' }, ...rest];
+  };
+  const page = await mount('/sessions');
+  await page.settle();
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Expand all')?.click();
+  await page.settle(250);
+  const expired = [...page.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'entry expired');
+  const hint = expired?.getAttribute('title') ?? null;
+  page.unmount();
+  api.listKeepaliveRecipes = listKeepaliveRecipes;
+  results.push({
+    name: '/sessions a recipe held under expired reads entry expired with its hint',
+    ok: hint === 'The cache entry expired before its probe was due, so no probe was sent; the next real request starts a new recipe.',
+    missing: [hint ?? 'no entry expired badge'],
   });
 }
 {

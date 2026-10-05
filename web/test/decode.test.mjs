@@ -911,6 +911,17 @@ test('a session fold marks what request rows cannot supply and a sum carries the
   assert.ok(bucket.groups.every((g) => g.savings === null && g.cost.cacheRead === null), 'every folded bucket marks the same gaps');
 });
 
+test('a recipe evicted at the byte cap or lapsed past its entry keeps that reason, and the wasted probes their labels', () => {
+  const [wire] = fixture('keepalive_recipes').recipes;
+  for (const reason of ['evicted', 'expired']) {
+    const recipe = d.decodeRecipe({ ...wire, reason, state: 'held' });
+    assert.equal(recipe.reason, reason);
+  }
+  const row = fixture('analytics_breakdown').rows[0];
+  const group = d.decodeAnalyticsGroup({ ...row, savings: { ...row.savings, wasted_probe_reasons: { cold_return: 3, evicted: 2, expired: 1 }, wasted_probes: 6 } });
+  assert.deepEqual([group.savings.wastedProbeReasons.cold_return, group.savings.wastedProbeReasons.evicted, group.savings.wastedProbeReasons.expired], [3, 2, 1]);
+});
+
 test('a recipe held because every account of its pool was exhausted keeps that reason', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
   const recipe = d.decodeRecipe({ ...wire, reason: 'pool_exhausted', state: 'held' });
@@ -928,7 +939,7 @@ test('a session fold groups on the client each row named', () => {
   assert.equal(captured.userAgent, 'claude-cli/2.1.269 (external, cli)', 'the row carries the agent the route answers');
   const rows = [captured, { ...failed, userAgent: 'phoebis-batch/0.9 (external, ci)' }, { ...failed, id: 'r-none', userAgent: null }];
   const groups = d.foldGroups(rows, 'user_agent');
-  assert.deepEqual(groups.map((g) => g.key).sort(), ['-', 'claude-cli/2.1.269 (external, cli)', 'phoebis-batch/0.9 (external, ci)'], 'a row that named no client falls under the marker the rollups file it as');
+  assert.deepEqual(groups.map((g) => g.key).sort(), ['-', 'claude-cli/2.1.269', 'phoebis-batch/0.9'], 'a row that named no client falls under the marker the rollups file it as');
   assert.equal(groups.find((g) => g.key === '-').label, 'unattributed', 'which every route answers as unattributed');
   assert.deepEqual(groups.map((g) => g.requests), [1, 1, 1]);
   const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.*', 'phoebis-batch/*'] });

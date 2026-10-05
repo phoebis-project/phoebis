@@ -1730,6 +1730,9 @@ dependencies = [
 [[package]]
 name = "phoebis-profile"
 version = "0.1.0"
+dependencies = [
+ "sha2 0.10.9",
+]
 
 [[package]]
 name = "phoebis-relay"

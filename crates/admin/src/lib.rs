@@ -147,6 +147,8 @@ struct PairingRecord {
     /// issued for a slot that has since been disconnected.
     lifecycle_generation: u64,
     status: VaultStatus,
+    /// When `status` last moved; an ended record leaves one pairing lifetime after it.
+    status_at: i64,
 }
 
 struct Exchange {
@@ -175,6 +177,7 @@ impl PairingVault {
         admin_session_id: &str,
         lifecycle_generation: u64,
         deadline: i64,
+        now: i64,
     ) {
         self.records.lock().expect(LOCK_POISONED).insert(
             session_id.to_string(),
@@ -185,6 +188,7 @@ impl PairingVault {
                 exchange: None,
                 lifecycle_generation,
                 status: VaultStatus::Started,
+                status_at: now,
             },
         );
     }
@@ -197,6 +201,7 @@ impl PairingVault {
         identity: PendingIdentity,
         bundle: NewBundle,
         profile: ProfileResponse,
+        now: i64,
     ) -> bool {
         let mut records = self.records.lock().expect(LOCK_POISONED);
         let Some(record) = records.get_mut(session_id) else {
@@ -207,18 +212,18 @@ impl PairingVault {
             identity,
             profile,
         });
-        record.status = VaultStatus::Exchanged;
+        record.move_to(VaultStatus::Exchanged, now);
         true
     }
 
     /// Removes the bundle from memory and marks the record `Discarded`. Confirmation turns that into
     /// `Confirmed` once every check has passed, so a check that fails anywhere in between leaves nothing
     /// behind to commit later.
-    pub fn take_exchange(&self, session_id: &str) -> Option<TakenExchange> {
+    pub fn take_exchange(&self, session_id: &str, now: i64) -> Option<TakenExchange> {
         let mut records = self.records.lock().expect(LOCK_POISONED);
         let record = records.get_mut(session_id)?;
         let exchange = record.exchange.take();
-        record.status = VaultStatus::Discarded;
+        record.move_to(VaultStatus::Discarded, now);
         let exchange = exchange?;
         Some(TakenExchange {
             account_id: record.account_id.clone(),
@@ -229,18 +234,18 @@ impl PairingVault {
         })
     }
 
-    pub fn mark_confirmed(&self, session_id: &str) {
+    pub fn mark_confirmed(&self, session_id: &str, now: i64) {
         if let Some(record) = self
             .records
             .lock()
             .expect(LOCK_POISONED)
             .get_mut(session_id)
         {
-            record.status = VaultStatus::Confirmed;
+            record.move_to(VaultStatus::Confirmed, now);
         }
     }
 
-    pub fn discard(&self, session_id: &str) {
+    pub fn discard(&self, session_id: &str, now: i64) {
         if let Some(record) = self
             .records
             .lock()
@@ -248,14 +253,14 @@ impl PairingVault {
             .get_mut(session_id)
         {
             record.exchange = None;
-            record.status = VaultStatus::Discarded;
+            record.move_to(VaultStatus::Discarded, now);
         }
     }
 
     /// Drops every bundle held for an account and returns the pairing sessions to cancel, each with the
     /// admin session that owns it. Cancelling is left to the caller so no pairing lock is ever taken
     /// while this one is held.
-    pub fn discard_for_account(&self, account_id: &str) -> Vec<(String, String)> {
+    pub fn discard_for_account(&self, account_id: &str, now: i64) -> Vec<(String, String)> {
         let mut records = self.records.lock().expect(LOCK_POISONED);
         let mut cancelled = Vec::new();
         for (session_id, record) in records.iter_mut() {
@@ -264,7 +269,7 @@ impl PairingVault {
             }
             if matches!(record.status, VaultStatus::Started | VaultStatus::Exchanged) {
                 record.exchange = None;
-                record.status = VaultStatus::Discarded;
+                record.move_to(VaultStatus::Discarded, now);
                 cancelled.push((session_id.clone(), record.admin_session_id.clone()));
             }
         }
@@ -274,14 +279,24 @@ impl PairingVault {
     /// Drops every pairing whose session has run out: the bundle it may hold can never be confirmed, and
     /// nothing else would free it before the process ends. The record goes with the bundle, so the vault does
     /// not keep an entry per pairing ever started, and an exchange that lands afterwards cannot revive it:
-    /// `record_exchange` fails for a record that is gone, and its caller drops what it fetched.
+    /// `record_exchange` fails for a record that is gone, and its caller drops what it fetched. A confirmed or
+    /// discarded record holds no bundle and leaves one pairing lifetime after its status moved.
     pub fn sweep(&self, now: i64) -> usize {
         let mut records = self.records.lock().expect(LOCK_POISONED);
         let before = records.len();
-        records.retain(|_, record| {
-            !matches!(record.status, VaultStatus::Started | VaultStatus::Exchanged)
-                || now <= record.deadline
+        records.retain(|_, record| match record.status {
+            VaultStatus::Started | VaultStatus::Exchanged => now <= record.deadline,
+            VaultStatus::Confirmed | VaultStatus::Discarded => {
+                now < record.status_at + phoebis_oauth::SESSION_TTL_MS
+            }
         });
         before - records.len()
+    }
+}
+
+impl PairingRecord {
+    fn move_to(&mut self, status: VaultStatus, now: i64) {
+        self.status = status;
+        self.status_at = now;
     }
 }

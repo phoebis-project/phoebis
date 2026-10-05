@@ -8,7 +8,7 @@ use common::*;
 use fake_upstream::FakeUpstream;
 use phoebis_ledger::{
     fold_keepalive, hour_of, read_rollups, AttemptRecord, KeepaliveDelta, LedgerConfig, LedgerDb,
-    LiveKeys, Record, RequestRecord, Speed,
+    LiveKeys, Record, RequestRecord, RollupSelect, Speed,
 };
 
 fn delta(at: i64, kind: &str) -> KeepaliveDelta {
@@ -107,7 +107,14 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     })
     .unwrap();
     let rows = db
-        .read_blocking(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .read_blocking(|c| {
+            read_rollups(
+                c,
+                hour_of(at),
+                hour_of(at) + 3_600,
+                &RollupSelect::default(),
+            )
+        })
         .unwrap();
     let inference = rows
         .iter()
@@ -225,7 +232,14 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     )
     .unwrap();
     let rows = db
-        .read_blocking(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .read_blocking(|c| {
+            read_rollups(
+                c,
+                hour_of(at),
+                hour_of(at) + 3_600,
+                &RollupSelect::default(),
+            )
+        })
         .unwrap();
     let with_probes = phoebis_ledger::RollupFilter {
         include_probes: true,
@@ -234,7 +248,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     // The rows above carry the generation a record defaults to, so that is what holds the id here.
     let live = LiveKeys(BTreeMap::from([("desktop".to_string(), 0)]));
     let groups = phoebis_ledger::breakdown(
-        &phoebis_ledger::apply_filter(rows.clone(), &with_probes, &live),
+        &phoebis_ledger::apply_filter(rows.clone(), &with_probes),
         "key",
         with_probes.probes_counted(),
         &live,
@@ -256,7 +270,7 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     );
     let default = phoebis_ledger::RollupFilter::default();
     let without = phoebis_ledger::breakdown(
-        &phoebis_ledger::apply_filter(rows, &default, &live),
+        &phoebis_ledger::apply_filter(rows, &default),
         "key",
         default.probes_counted(),
         &live,
@@ -367,7 +381,14 @@ async fn a_keepalive_delta_lands_on_its_own_row_and_marks_the_request() {
     )
     .unwrap();
     let rows = db
-        .read_blocking(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .read_blocking(|c| {
+            read_rollups(
+                c,
+                hour_of(at),
+                hour_of(at) + 3_600,
+                &RollupSelect::default(),
+            )
+        })
         .unwrap();
     let credited = rows
         .iter()
@@ -520,7 +541,9 @@ async fn migration_five_adds_the_skipped_column_and_the_marks_table_to_a_version
     })
     .unwrap();
     assert_eq!(
-        db.read_blocking(|c| read_rollups(c, 0, 3_600)).unwrap()[0].probes_skipped,
+        db.read_blocking(|c| read_rollups(c, 0, 3_600, &RollupSelect::default()))
+            .unwrap()[0]
+            .probes_skipped,
         1
     );
 }
@@ -535,7 +558,7 @@ async fn the_writer_lands_a_keepalive_record_in_its_batch() {
     }));
     let rows = wait_for(Duration::from_secs(5), || {
         let rows =
-            h.db.read_blocking(|c| read_rollups(c, 0, i64::MAX))
+            h.db.read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
                 .unwrap();
         (!rows.is_empty()).then_some(rows)
     })
@@ -574,7 +597,14 @@ fn a_fast_recipes_credit_files_under_speed_fast() {
     })
     .unwrap();
     let rows = db
-        .read_blocking(|c| read_rollups(c, hour_of(at), hour_of(at) + 3_600))
+        .read_blocking(|c| {
+            read_rollups(
+                c,
+                hour_of(at),
+                hour_of(at) + 3_600,
+                &RollupSelect::default(),
+            )
+        })
         .unwrap();
     let mut by_speed: Vec<(&str, f64)> = rows
         .iter()

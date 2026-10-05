@@ -517,6 +517,61 @@ async fn a_landed_request_reaches_the_request_and_attempt_series() {
     up.shutdown().await;
 }
 
+/// The routing loop counts its pins per pool, so a scrape copies one count per pool rather than the pin table; a
+/// selection's pin counts under its key's pool.
+#[tokio::test]
+async fn the_pin_gauge_reads_the_routing_loops_count_per_pool() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        h.router.pins().await.unwrap().len(),
+        1,
+        "the selection pinned"
+    );
+    assert_eq!(
+        h.router.pins_by_pool().await.unwrap(),
+        vec![("main".to_string(), 1)]
+    );
+    let gauges = phoebis_ledger::gather(
+        &h.router,
+        &PriceTable::shipped(),
+        0,
+        60_000,
+        None,
+        AttentionGauges::default(),
+        None,
+    )
+    .await;
+    assert_eq!(gauges.pins_by_pool, vec![("main".to_string(), 1)]);
+    let text = Metrics::new().render(&gauges, &[], 0);
+    assert!(
+        text.contains(r#"phoebis_pins_active{pool="main"} 1"#),
+        "{text}"
+    );
+    up.shutdown().await;
+}
+
+/// The routing crate cannot name the ledger's reserved id, so it spells its own; the two must agree, or a pin of a
+/// deleted key would count under a pool label no rollup row uses.
+#[test]
+fn the_routing_loops_reserved_pool_label_is_the_ledgers_reserved_id() {
+    assert_eq!(
+        phoebis_routing::UNATTRIBUTED_POOL,
+        phoebis_ledger::UNATTRIBUTED
+    );
+}
+
 /// The renderer's family list and its registry cannot drift apart: every family in `FAMILIES` renders its TYPE
 /// line, and every TYPE line rendered is in `FAMILIES`.
 #[test]

@@ -7,6 +7,8 @@ export const REASON_LABEL: Record<RecipeReason, string> = {
   cap_reached: 'cap reached',
   cold_probes: 'paused: cold probes',
   cooled: 'cooled down',
+  evicted: 'evicted',
+  expired: 'entry expired',
   idle_limit: 'idle limit',
   net_negative: 'net negative',
   overage: 'overage',
@@ -21,12 +23,14 @@ export const REASON_LABEL: Record<RecipeReason, string> = {
 };
 
 export const REASON_HINT: Record<RecipeReason, string> = {
-  affinity_too_short: "The pool's session affinity expires before the cache this probe would warm, so the session could move away from it.",
+  affinity_too_short: "The pool's session affinity ends before this recipe's probe is due (the cache TTL less the lead), so the session could move away from the account the probe would warm.",
   awaiting_cache_evidence: "The agent's request went out and its stream has not yet reported cache usage. The first stream event carries it, within seconds; the probe timer arms from that event and probes then run while the response is still streaming, so a long turn does not go cold.",
-  budget: "The pinned member's spend reached its budget; probes wait for the period to end or the budget to change.",
-  cap_reached: 'The pool spent its daily probe cap, or a subscription account spent its share of the 5-hour window; probes resume at midnight UTC.',
+  budget: "The pinned member's spend reached its budget; probes wait for the period to end or the budget to change while the entry lasts.",
+  cap_reached: 'The pool spent its daily probe cap, or a subscription account spent its share of the 5-hour window; probes wait for midnight UTC while the entry lasts.',
   cold_probes: "The probe read no cache for the prefix it was meant to keep warm, so that entry had already expired and the next turn writes regardless. Consecutive cold probes past the pool's cold probe limit pause the recipe until the next real request.",
-  cooled: 'The account the session is pinned to is under a cooldown; the probe waits for it to end.',
+  cooled: 'The account the session is pinned to is under a cooldown; the probe waits for it to end while the entry lasts.',
+  evicted: 'The engine was at its retained-bytes cap and this recipe was the oldest idle one; the next real request starts a new recipe.',
+  expired: 'The cache entry expired before its probe was due, so no probe was sent; the next real request starts a new recipe.',
   idle_limit: "The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded. The next real request starts a new recipe.",
   net_negative: "Probes on this session have cost more than the cache reads they bought. The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again.",
   overage: 'The account is on extra usage and the pool policy skips probes there.',
@@ -40,4 +44,4 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   unsupported_shape: 'The last request had no cacheable prefix the probe could replay.',
 };
 
-export const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'budget', 'cap_reached', 'idle_limit', 'net_negative', 'storage_limit', 'unsupported_shape'];
+export const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'budget', 'cap_reached', 'evicted', 'expired', 'idle_limit', 'net_negative', 'storage_limit', 'unsupported_shape'];

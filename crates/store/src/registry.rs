@@ -416,6 +416,34 @@ impl PoolRow {
     pub fn kind_ordered(&self) -> bool {
         self.prefer_subscription
     }
+
+    /// The shipped defaults with `id` and `label` set: a test overrides the fields its case is about, so a field
+    /// added to or removed from the row touches this one site.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn for_tests(id: &str) -> PoolRow {
+        PoolRow {
+            id: id.into(),
+            label: id.into(),
+            enabled: true,
+            strategy: Strategy::Pace,
+            affinity_ttl_seconds: 3600,
+            overage_policy: OveragePolicy::PreferPlan,
+            migrate_above_utilization: None,
+            select_below_utilization: None,
+            model_rules: Vec::new(),
+            keepalive_json: "{}".into(),
+            body_capture_hours: 0,
+            prefer_subscription: true,
+            shedding: Shedding::default(),
+            failover: Failover::default(),
+            cache_ttl_json: "{}".into(),
+            cache_diagnostics: false,
+            auto_mode_server: true,
+            affinity: Affinity::default(),
+            created_at: 0,
+            updated_at: 0,
+        }
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -477,7 +505,9 @@ pub struct ApiKeyRow {
     pub secret_digest: Vec<u8>,
     pub prefix: String,
     pub created_at: i64,
-    /// The row's last write: the create, an edit, a rotation or a revocation, never a use's `last_used_at`.
+    /// The row's last write: the create, an edit, a rotation or a revocation, never a use's `last_used_at`. The
+    /// create stamps `created_at`; every later write stamps the clock or one past the stored stamp, whichever is
+    /// later, so two writes inside one millisecond never share a stamp and an edit fenced on it is exact.
     pub updated_at: i64,
     pub rotated_at: Option<i64>,
     pub last_used_at: Option<i64>,
@@ -542,19 +572,25 @@ pub struct RegistryLoad {
     pub terms: Vec<SubscriptionTerm>,
 }
 
-/// Everything a verified edit changes. Borrowed so the admin route can stage it, run discovery, and commit.
+/// Everything an account edit changes, staged so the admin route can run discovery and then commit every field in
+/// one transaction.
 #[derive(Clone, Copy, Debug)]
 pub struct AccountUpdate<'a> {
     pub id: &'a str,
-    /// The revision the discovery ran against. The commit only lands while the row still carries it, so two
-    /// edits verified in parallel cannot combine into an endpoint and a secret nothing ever checked together.
+    /// The revision the edit was built from. The commit only lands while the row still carries it, so two edits
+    /// built from one read cannot both land, and an endpoint and a secret nothing checked together never combine.
     pub expected_revision: u64,
     pub lifecycle_generation: u64,
     pub label: &'a str,
     pub secret: Option<&'a Secret>,
-    pub state: AccountState,
+    /// The staged state; `None` leaves it.
+    pub state: Option<AccountState>,
     pub at: i64,
     pub actor: &'a str,
+    /// The staged `enabled` flag; `None` leaves it.
+    pub enabled: Option<bool>,
+    /// The staged cancellation, the flag with its end; `None` leaves both.
+    pub cancellation: Option<(bool, Option<i64>)>,
 }
 
 /// The routing key of a served model: lowercase with one trailing `[1m]` removed, the same fold the relay applies
@@ -591,6 +627,12 @@ pub(crate) fn record_change(
 
 fn now_ms() -> i64 {
     jiff::Timestamp::now().as_millisecond()
+}
+
+/// The stamp a fenced row takes on its next write: one past `previous` when the clock has not moved, so a write
+/// inside the millisecond of the stamp it fenced on still moves it, and an edit read before it cannot pass.
+fn stamp_past(previous: i64) -> i64 {
+    now_ms().max(previous + 1)
 }
 
 fn rules_json(rules: &[ModelRule]) -> Result<String, StoreError> {
@@ -705,6 +747,17 @@ impl Store {
     }
 
     pub fn insert_pool(&self, row: &PoolRow, actor: &str) -> Result<(), StoreError> {
+        self.insert_pool_with_members(row, None, actor)
+    }
+
+    /// The pool row and its members under one `BEGIN IMMEDIATE`: a refused member (a duplicate, an unknown
+    /// account) leaves no row.
+    pub fn insert_pool_with_members(
+        &self,
+        row: &PoolRow,
+        members: Option<&[MemberWrite]>,
+        actor: &str,
+    ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
@@ -745,16 +798,38 @@ impl Store {
             ],
         )?;
         record_change(&tx, now, actor, "pool_created", &row.id, &pool_diff(row))?;
+        if let Some(members) = members {
+            set_pool_members_in(&tx, &row.id, members, now, actor)?;
+        }
         tx.commit()?;
         Ok(())
     }
 
-    pub fn update_pool(&self, row: &PoolRow, actor: &str) -> Result<(), StoreError> {
+    /// The policy write fenced on the `updated_at` the caller read: `Stale` when another write moved the row since.
+    pub fn update_pool(
+        &self,
+        row: &PoolRow,
+        expected_updated_at: i64,
+        actor: &str,
+    ) -> Result<(), StoreError> {
+        self.update_pool_with_members(row, expected_updated_at, None, actor)
+    }
+
+    /// The policy and the members under one transaction, fenced on the `updated_at` the handler read.
+    pub fn update_pool_with_members(
+        &self,
+        row: &PoolRow,
+        expected_updated_at: i64,
+        members: Option<&[MemberWrite]>,
+        actor: &str,
+    ) -> Result<(), StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.park_on_pool_write_hold();
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = now_ms();
+        let at = stamp_past(expected_updated_at);
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, auto_mode_server = ?29, updated_at = ?30 WHERE id = ?1",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, auto_mode_server = ?29, updated_at = ?30 WHERE id = ?1 AND updated_at = ?31",
             params![
                 row.id,
                 row.label,
@@ -785,13 +860,26 @@ impl Store {
                 row.affinity.session_placement,
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.auto_mode_server,
-                now
+                at,
+                expected_updated_at
             ],
         )?;
         if updated == 0 {
-            return Err(StoreError::PoolNotFound(row.id.clone()));
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM pools WHERE id = ?1",
+                params![row.id],
+                |r| r.get(0),
+            )?;
+            return Err(if exists > 0 {
+                StoreError::Stale
+            } else {
+                StoreError::PoolNotFound(row.id.clone())
+            });
         }
-        record_change(&tx, now, actor, "pool_updated", &row.id, &pool_diff(row))?;
+        record_change(&tx, at, actor, "pool_updated", &row.id, &pool_diff(row))?;
+        if let Some(members) = members {
+            set_pool_members_in(&tx, &row.id, members, at, actor)?;
+        }
         tx.commit()?;
         Ok(())
     }
@@ -841,40 +929,17 @@ impl Store {
     ) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if tx.query_row(
-            "SELECT COUNT(*) FROM pools WHERE id = ?1",
-            params![pool_id],
-            |r| r.get::<_, i64>(0),
-        )? == 0
-        {
+        let current: Option<i64> = tx
+            .query_row(
+                "SELECT updated_at FROM pools WHERE id = ?1",
+                params![pool_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let Some(current) = current else {
             return Err(StoreError::PoolNotFound(pool_id.to_string()));
-        }
-        for member in members {
-            if tx.query_row(
-                "SELECT COUNT(*) FROM accounts WHERE id = ?1",
-                params![member.account_id],
-                |r| r.get::<_, i64>(0),
-            )? == 0
-            {
-                return Err(StoreError::AccountNotFound(member.account_id.clone()));
-            }
-        }
-        tx.execute(
-            "DELETE FROM pool_members WHERE pool_id = ?1",
-            params![pool_id],
-        )?;
-        for member in members {
-            tx.execute(
-                "INSERT INTO pool_members (pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd) VALUES (?1, ?2, ?3, ?4, ?5)",
-                params![pool_id, member.account_id, member.priority as i64, member.budget_daily_usd, member.budget_monthly_usd],
-            )?;
-        }
-        let diff = serde_json::json!({ "members": members.iter().map(|m| serde_json::json!({
-            "account_id": m.account_id, "priority": m.priority,
-            "budget_daily_usd": m.budget_daily_usd, "budget_monthly_usd": m.budget_monthly_usd,
-        })).collect::<Vec<_>>() })
-        .to_string();
-        record_change(&tx, now_ms(), actor, "pool_members_set", pool_id, &diff)?;
+        };
+        set_pool_members_in(&tx, pool_id, members, stamp_past(current), actor)?;
         tx.commit()?;
         Ok(())
     }
@@ -945,8 +1010,16 @@ impl Store {
         Ok(now)
     }
 
+    /// The edit fenced on the `updated_at` the caller read: `Stale` when another write moved the row since.
     /// Answers the `updated_at` it stamped, which a response built from `row` carries.
-    pub fn update_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<i64, StoreError> {
+    pub fn update_api_key(
+        &self,
+        row: &ApiKeyRow,
+        expected_updated_at: i64,
+        actor: &str,
+    ) -> Result<i64, StoreError> {
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.park_on_key_write_hold();
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if tx.query_row(
@@ -957,9 +1030,9 @@ impl Store {
         {
             return Err(StoreError::PoolNotFound(row.pool_id.clone()));
         }
-        let now = now_ms();
+        let at = stamp_past(expected_updated_at);
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14",
             params![
                 row.id,
                 row.label,
@@ -973,15 +1046,25 @@ impl Store {
                 row.keepalive_opt_out,
                 row.body_capture_hours.map(|h| h as i64),
                 row.auto_mode_server,
-                now
+                at,
+                expected_updated_at
             ],
         )?;
         if updated == 0 {
-            return Err(StoreError::KeyNotFound(row.id.clone()));
+            let exists: i64 = tx.query_row(
+                "SELECT COUNT(*) FROM api_keys WHERE id = ?1",
+                params![row.id],
+                |r| r.get(0),
+            )?;
+            return Err(if exists > 0 {
+                StoreError::Stale
+            } else {
+                StoreError::KeyNotFound(row.id.clone())
+            });
         }
-        record_change(&tx, now, actor, "key_updated", &row.id, &key_diff(row))?;
+        record_change(&tx, at, actor, "key_updated", &row.id, &key_diff(row))?;
         tx.commit()?;
-        Ok(now)
+        Ok(at)
     }
 
     pub fn rotate_api_key(
@@ -1016,7 +1099,7 @@ impl Store {
         // A new grace starts unpresented: a stamp under the retired secret this rotation just replaced would
         // otherwise read as if it belonged to the one this rotation creates.
         tx.execute(
-            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL, updated_at = ?5 WHERE id = ?1",
+            "UPDATE api_keys SET secret_digest = ?2, prefix = ?3, rotated_at = ?4, retired_secret_last_used_at = NULL, updated_at = MAX(?5, updated_at + 1) WHERE id = ?1",
             params![id, digest, prefix, at, now_ms()],
         )?;
         record_change(
@@ -1038,8 +1121,10 @@ impl Store {
             "DELETE FROM api_key_retired_secrets WHERE key_id = ?1",
             params![id],
         )?;
+        // The stamp moves too, so an edit read before the revocation cannot write `enabled` back on.
         let updated = tx.execute(
-            "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?2), enabled = 0, updated_at = ?3 WHERE id = ?1",
+            "UPDATE api_keys SET revoked_at = COALESCE(revoked_at, ?2), enabled = 0, \
+             updated_at = MAX(?3, updated_at + 1) WHERE id = ?1",
             params![id, at, now_ms()],
         )?;
         if updated == 0 {
@@ -1135,13 +1220,19 @@ impl Store {
         Ok(())
     }
 
-    /// A verified edit lands whole: discovery ran against the staged secret, and the row moving underneath
-    /// (a disconnect, a deletion) means the verdict is about a slot that no longer exists.
+    /// An edit lands whole, in one revision: every staged field or none. Discovery ran against the staged secret,
+    /// and the row moving underneath (another edit, a disconnect, a deletion) means the edit is about a row that
+    /// no longer exists as it was read.
     pub fn commit_account_update(&self, u: &AccountUpdate<'_>) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
+        let cancelled = u.cancellation.map(|(cancelled, _)| cancelled);
+        let ends_at = u.cancellation.and_then(|(_, ends_at)| ends_at);
+        // The end goes with the flag, as `set_cancelled` writes them: dropped the moment the flag is off.
         let updated = tx.execute(
-            "UPDATE accounts SET label = ?2, state = ?3, \
+            "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), enabled = COALESCE(?7, enabled), \
+             cancelled = COALESCE(?8, cancelled), \
+             subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at WHEN ?8 THEN ?9 ELSE NULL END, \
              revision = revision + 1, updated_at = ?4 \
              WHERE id = ?1 AND lifecycle_generation = ?5 AND revision = ?6",
             params![
@@ -1151,6 +1242,9 @@ impl Store {
                 u.at,
                 u.lifecycle_generation as i64,
                 u.expected_revision as i64,
+                u.enabled,
+                cancelled,
+                ends_at,
             ],
         )?;
         if updated == 0 {
@@ -1177,7 +1271,10 @@ impl Store {
             &serde_json::json!({
                 "label": u.label,
                 "secret": u.secret.is_some(),
-                "state": u.state.as_str(),
+                "state": u.state.map(AccountState::as_str),
+                "enabled": u.enabled,
+                "cancelled": cancelled,
+                "subscription_ends_at": ends_at,
             })
             .to_string(),
         )?;
@@ -1216,6 +1313,52 @@ impl Store {
         rows.collect::<rusqlite::Result<Vec<_>>>()
             .map_err(StoreError::from)
     }
+}
+
+/// The member half of a pool write on the caller's transaction: every named account checked, the list replaced
+/// whole, and the pool's `updated_at` moved to `at`, so an edit fenced on the stamp it read before this write is
+/// refused rather than landing over it.
+fn set_pool_members_in(
+    tx: &Transaction<'_>,
+    pool_id: &str,
+    members: &[MemberWrite],
+    at: i64,
+    actor: &str,
+) -> Result<(), StoreError> {
+    if tx.execute(
+        "UPDATE pools SET updated_at = ?2 WHERE id = ?1",
+        params![pool_id, at],
+    )? == 0
+    {
+        return Err(StoreError::PoolNotFound(pool_id.to_string()));
+    }
+    for member in members {
+        if tx.query_row(
+            "SELECT COUNT(*) FROM accounts WHERE id = ?1",
+            params![member.account_id],
+            |r| r.get::<_, i64>(0),
+        )? == 0
+        {
+            return Err(StoreError::AccountNotFound(member.account_id.clone()));
+        }
+    }
+    tx.execute(
+        "DELETE FROM pool_members WHERE pool_id = ?1",
+        params![pool_id],
+    )?;
+    for member in members {
+        tx.execute(
+            "INSERT INTO pool_members (pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![pool_id, member.account_id, member.priority as i64, member.budget_daily_usd, member.budget_monthly_usd],
+        )?;
+    }
+    let diff = serde_json::json!({ "members": members.iter().map(|m| serde_json::json!({
+        "account_id": m.account_id, "priority": m.priority,
+        "budget_daily_usd": m.budget_daily_usd, "budget_monthly_usd": m.budget_monthly_usd,
+    })).collect::<Vec<_>>() })
+    .to_string();
+    record_change(tx, at, actor, "pool_members_set", pool_id, &diff)?;
+    Ok(())
 }
 
 const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server FROM pools";

@@ -24,9 +24,8 @@ use phoebis_profile::{
 use phoebis_relay::{router, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
-    MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store,
-    Strategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, MemberWrite,
+    NewBundle, PoolRow, RulesMode, Secret, StorageKey, Store, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -93,26 +92,12 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
     store
         .insert_pool(
             &PoolRow {
-                id: "main".into(),
-                label: "main".into(),
-                enabled: true,
                 strategy: Strategy::Priority,
-                affinity_ttl_seconds: 3600,
-                overage_policy: OveragePolicy::PreferPlan,
-                migrate_above_utilization: None,
-                select_below_utilization: None,
-                model_rules: Vec::new(),
-                keepalive_json: "{}".into(),
                 body_capture_hours: capture_hours,
                 prefer_subscription: false,
-                shedding: Shedding::default(),
-                failover: Failover::default(),
-                cache_ttl_json: "{}".into(),
-                cache_diagnostics: false,
-                auto_mode_server: true,
-                affinity: Affinity::default(),
                 created_at: NOW,
                 updated_at: NOW,
+                ..PoolRow::for_tests("main")
             },
             "test",
         )
@@ -218,6 +203,7 @@ pub async fn harness(up: &FakeUpstream, capture_hours: u32) -> Harness {
         body_budget_bytes: 512 << 20,
         body_capture_max_hours: 72,
         body_read_timeout: Duration::from_secs(60),
+        connect_timeout: Duration::from_secs(10),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),

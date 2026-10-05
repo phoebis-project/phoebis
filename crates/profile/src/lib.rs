@@ -96,23 +96,70 @@ pub fn by_name(name: &str) -> Option<&'static Profile> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use sha2::{Digest, Sha256};
+    use std::collections::BTreeMap;
+    use std::path::Path;
 
     #[test]
-    fn pinned_profile_matches_measured_constants() {
+    fn by_name_finds_the_pinned_profile_and_nothing_else() {
         let p = claude_code_2_1_269_linux_x64();
-        assert_eq!(p.cli_version, "2.1.269");
-        assert_eq!(
-            p.user_agent_sdk_cli,
-            "claude-cli/2.1.269 (external, sdk-cli)"
-        );
-        assert_eq!(p.stainless.runtime_version, "v26.3.0");
-        assert_eq!(p.betas.oauth_non_first_party, "claude-code-20250219,oauth-2025-04-20,interleaved-thinking-2025-05-14,thinking-token-count-2026-05-13,context-management-2025-06-27,prompt-caching-scope-2026-01-05,extended-cache-ttl-2025-04-11");
-        assert_eq!(p.control.client_id, "9d1c250a-e61b-44d9-88ed-5944d1962f5e");
         assert_eq!(
             by_name("claude-code-2.1.269-linux-x64").map(|x| x.name),
             Some(p.name)
         );
         assert!(by_name("claude-code-9.9.9").is_none());
+    }
+
+    /// Every file under `dir`, keyed by its path below `root`, to the lower-hex SHA-256 of its bytes.
+    fn walk(root: &Path, dir: &Path, files: &mut BTreeMap<String, String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                walk(root, &path, files);
+            } else {
+                let relative = path
+                    .strip_prefix(root)
+                    .unwrap()
+                    .to_str()
+                    .unwrap()
+                    .to_string();
+                let digest = format!("{:x}", Sha256::digest(std::fs::read(&path).unwrap()));
+                files.insert(relative, digest);
+            }
+        }
+    }
+
+    /// The fixtures are redacted client captures that are never edited by hand; a changed byte, a missing row or an
+    /// extra file fails here rather than at the next capture comparison.
+    #[test]
+    fn every_fixture_matches_the_release_evidence_manifest() {
+        let manifest = std::fs::read_to_string(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+        ))
+        .unwrap();
+        let rows: BTreeMap<String, String> = manifest
+            .lines()
+            .filter_map(|line| {
+                let cells: Vec<&str> = line.split('|').map(str::trim).collect();
+                (cells.len() == 4 && cells[1].starts_with('`') && cells[2].len() == 66).then(|| {
+                    (
+                        cells[1].trim_matches('`').to_string(),
+                        cells[2].trim_matches('`').to_string(),
+                    )
+                })
+            })
+            .collect();
+        let dir = Path::new(concat!(env!("CARGO_MANIFEST_DIR"), "/fixtures"));
+        let mut files = BTreeMap::new();
+        walk(dir, dir, &mut files);
+        assert_eq!(
+            files.keys().collect::<Vec<_>>(),
+            rows.keys().collect::<Vec<_>>(),
+            "the manifest names every fixture and nothing else"
+        );
+        for (file, digest) in &files {
+            assert_eq!(digest, &rows[file], "{file} differs from the manifest");
+        }
     }
 
     #[test]

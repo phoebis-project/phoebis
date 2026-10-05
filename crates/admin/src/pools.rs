@@ -1,6 +1,6 @@
 //! Pool routes: the record every field of which the spec's pool table names, and its membership.
 
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::Arc;
 
 use axum::body::Bytes;
@@ -10,9 +10,11 @@ use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::CacheTtlPolicy;
+use phoebis_routing::{MemberSpend, OverageEvidence, RegistrySnapshot};
 use phoebis_store::{
-    Affinity, AffinityMode, Failover, MemberWrite, OveragePolicy, PoolMember, PoolRow,
-    SessionPlacement, Shedding, StoreError, Strategy, SubagentPlacement, WarmSessions,
+    AccountRow, Affinity, AffinityMode, ApiKeyRow, CooldownRow, Failover, MemberWrite,
+    OveragePolicy, PinRow, PoolMember, PoolRow, SessionPlacement, Shedding, StoreError, Strategy,
+    SubagentPlacement, WarmSessions,
 };
 use serde_json::{json, Value};
 
@@ -34,13 +36,22 @@ struct MemberInput {
     budget_monthly_usd: Option<f64>,
 }
 
-/// Turns the wire members into store writes, refusing a non-positive budget before any write lands; a member list
-/// replaces the pool's whole membership, so an absent budget clears it. A subscription member's budgets bound its
-/// metered spend, the only spend of its that costs money.
+/// Turns the wire members into store writes, refusing an account named twice and a non-positive budget before any
+/// write lands; a member list replaces the pool's whole membership, so an absent budget clears it. A subscription
+/// member's budgets bound its metered spend, the only spend of its that costs money.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
 fn member_writes(members: &[MemberInput]) -> Result<Vec<MemberWrite>, Response> {
+    // Ahead of every other check, the store's existence check included, so a list naming an unknown account
+    // twice is refused for the repeat.
+    let mut seen = HashSet::new();
+    if let Some(repeat) = members.iter().find(|m| !seen.insert(m.account_id.as_str())) {
+        return Err(failure(
+            StatusCode::CONFLICT,
+            &format!("members name account {} twice", repeat.account_id),
+        ));
+    }
     members
         .iter()
         .map(|m| {
@@ -454,19 +465,15 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
 }
 
 pub(crate) async fn list(State(state): State<Arc<AdminState>>) -> Response {
-    match state.store.pools() {
-        Ok(rows) => {
-            let mut out = Vec::new();
-            for row in rows {
-                match pool_json(&state, &row).await {
-                    Ok(v) => out.push(v),
-                    Err(e) => return store_failure(e),
-                }
-            }
-            Json(json!({ "pools": out })).into_response()
-        }
-        Err(error) => store_failure(error),
+    let context = match pool_context(&state).await {
+        Ok(context) => context,
+        Err(error) => return store_failure(error),
+    };
+    let mut out = Vec::with_capacity(context.pools.len());
+    for row in &context.pools {
+        out.push(pool_json_from(&state, &context, row).await);
     }
+    Json(json!({ "pools": out })).into_response()
 }
 
 pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
@@ -518,37 +525,24 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         },
         None => None,
     };
-    if let Err(error) = state.store.insert_pool(&row, ACTOR) {
-        return store_failure(error);
+    match state
+        .store
+        .insert_pool_with_members(&row, writes.as_deref(), ACTOR)
+    {
+        Ok(()) => {}
+        // The row and its members are one transaction, so a refused member leaves no pool to name.
+        Err(StoreError::AccountNotFound(id)) => {
+            return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
+        }
+        Err(error) => return store_failure(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
-    let mut response = publish_created(&state, &row, writes.as_deref()).await;
+    let mut response = publish_created(&state, &row).await;
     response.extensions_mut().insert(CreatedId(row.id));
     response
 }
 
-async fn publish_created(
-    state: &AdminState,
-    row: &PoolRow,
-    writes: Option<&[MemberWrite]>,
-) -> Response {
-    if let Some(writes) = writes {
-        match state.store.set_pool_members(&row.id, writes, ACTOR) {
-            Ok(()) => {}
-            Err(StoreError::AccountNotFound(id)) => {
-                // The pool was never published, so nothing needs a reload here; but a rollback that fails
-                // leaves an orphan row that only a later, unrelated reload would surface.
-                match state.store.delete_pool(&row.id, ACTOR) {
-                    Ok(()) => {}
-                    Err(error) => {
-                        tracing::warn!(pool = %row.id, %error, "a pool created for a missing member could not be rolled back")
-                    }
-                }
-                return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"));
-            }
-            Err(error) => return store_failure(error),
-        }
-    }
+async fn publish_created(state: &AdminState, row: &PoolRow) -> Response {
     if let Err(refusal) = reload_or_refuse(state).await {
         return refusal;
     }
@@ -571,51 +565,35 @@ pub(crate) async fn patch(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
         Err(e) => return store_failure(e),
     };
+    let read_at = row.updated_at;
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
     let writes = match &input.members {
-        Some(members) => {
-            for member in members {
-                match state.store.account(&member.account_id) {
-                    Ok(Some(_)) => {}
-                    Ok(None) => {
-                        return failure(
-                            StatusCode::NOT_FOUND,
-                            &format!("account {} not found", member.account_id),
-                        )
-                    }
-                    Err(error) => return store_failure(error),
-                }
-            }
-            match member_writes(members) {
-                Ok(writes) => Some(writes),
-                Err(refusal) => return refusal,
-            }
-        }
+        Some(members) => match member_writes(members) {
+            Ok(writes) => Some(writes),
+            Err(refusal) => return refusal,
+        },
         None => None,
     };
-    if let Err(error) = state.store.update_pool(&row, ACTOR) {
-        return store_failure(error);
-    }
-    if let Some(writes) = &writes {
-        if let Err(error) = state.store.set_pool_members(&row.id, writes, ACTOR) {
-            let reason = match error {
-                StoreError::AccountNotFound(id) => format!("account {id} not found"),
-                error => {
-                    tracing::warn!(pool = %row.id, %error, "a pool's members could not be replaced");
-                    "storage failure".to_string()
-                }
-            };
-            // Routing should run on the settings the store now holds; a refused reload has logged itself and
-            // the next successful one publishes them.
-            let _ = reload_or_refuse(&state).await;
-            // The policy landed; saying so is what lets the operator retry the member half alone.
+    match state
+        .store
+        .update_pool_with_members(&row, read_at, writes.as_deref(), ACTOR)
+    {
+        Ok(()) => {}
+        Err(StoreError::Stale) => {
             return failure(
                 StatusCode::CONFLICT,
-                &format!("the pool's settings were saved; its members were not: {reason}"),
-            );
+                "the pool changed while it was being edited; reload and try again",
+            )
         }
+        Err(StoreError::PoolNotFound(_)) => {
+            return failure(StatusCode::NOT_FOUND, "pool not found")
+        }
+        Err(StoreError::AccountNotFound(id)) => {
+            return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
+        }
+        Err(error) => return store_failure(error),
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
@@ -707,29 +685,87 @@ fn member_json(
     })
 }
 
+/// What every pool row reads from the registry, the ledger and the router, fetched once per list call.
+pub(crate) struct PoolContext {
+    accounts: Vec<AccountRow>,
+    cooldowns: Vec<CooldownRow>,
+    /// The day's request totals per pool.
+    day: BTreeMap<String, phoebis_ledger::Totals>,
+    keys: Vec<ApiKeyRow>,
+    members: Vec<PoolMember>,
+    now: i64,
+    overages: Vec<(String, OverageEvidence)>,
+    pins: Vec<PinRow>,
+    pools: Vec<PoolRow>,
+    snapshot: Arc<RegistrySnapshot>,
+    spends: Vec<MemberSpend>,
+}
+
+/// One registry read for the pools, members, keys and accounts, one ledger read for the day's totals and one ask
+/// of the router for each of its tables, in the shape of the account list's context.
+pub(crate) async fn pool_context(state: &AdminState) -> Result<PoolContext, StoreError> {
+    let registry = state.store.load_registry()?;
+    let now = (state.clock)();
+    let hour = phoebis_ledger::hour_of(now);
+    let day = state
+        .ledger
+        .db()
+        .read(move |c| phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600))
+        .await
+        .unwrap_or_default();
+    Ok(PoolContext {
+        accounts: registry.accounts,
+        cooldowns: state.router.cooldowns().await.unwrap_or_default(),
+        day,
+        keys: registry.keys,
+        members: registry.members,
+        now,
+        overages: state.router.overages().await.unwrap_or_default(),
+        pins: state.router.pins().await.unwrap_or_default(),
+        pools: registry.pools,
+        snapshot: state.router.snapshot(),
+        spends: state.router.member_spends().await.unwrap_or_default(),
+    })
+}
+
+/// One pool over a context built for it alone, for the routes that answer a single pool.
 pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value, StoreError> {
-    let members = state.store.pool_members(&row.id)?;
-    let keys: Vec<Value> = state
-        .store
-        .api_keys()?
-        .into_iter()
+    let context = pool_context(state).await?;
+    Ok(pool_json_from(state, &context, row).await)
+}
+
+/// One pool row from the shared context; the traffic and the moves stay per pool, since they are ledger reads over
+/// that pool's own id and accounts and take no store lock.
+pub(crate) async fn pool_json_from(
+    state: &AdminState,
+    context: &PoolContext,
+    row: &PoolRow,
+) -> Value {
+    let mut members: Vec<PoolMember> = context
+        .members
+        .iter()
+        .filter(|m| m.pool_id == row.id)
+        .cloned()
+        .collect();
+    members.sort_by(|a, b| (a.priority, &a.account_id).cmp(&(b.priority, &b.account_id)));
+    let keys: Vec<Value> = context
+        .keys
+        .iter()
         .filter(|k| k.pool_id == row.id)
         .map(|k| json!({ "id": k.id, "label": k.label, "prefix": k.prefix, "enabled": k.enabled }))
         .collect();
-    let now = (state.clock)();
+    let now = context.now;
     let hour = phoebis_ledger::hour_of(now);
-    let pool_id = row.id.clone();
-    let (day, traffic) = state
-        .ledger
-        .db()
-        .read(move |c| {
-            Ok((
-                phoebis_ledger::request_totals(c, "pool_id", hour - 24 * 3_600)?,
-                phoebis_ledger::pool_traffic(c, &pool_id, hour - 23 * 3_600, hour + 3_600, 3_600)?,
-            ))
-        })
-        .await
-        .unwrap_or_default();
+    let day = &context.day;
+    let traffic = phoebis_ledger::pool_traffic(
+        state.ledger.db(),
+        &row.id,
+        hour - 23 * 3_600,
+        hour + 3_600,
+        3_600,
+    )
+    .await
+    .unwrap_or_default();
     // A memberless pool has no account to attribute a move against, so this skips the read outright rather
     // than spend one on a query `pin_migrations_by_reason` would answer empty anyway.
     let account_ids: Vec<String> = members.iter().map(|m| m.account_id.clone()).collect();
@@ -745,17 +781,15 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
             .await
             .unwrap_or_default()
     };
-    let cooldowns = state.router.cooldowns().await.unwrap_or_default();
-    let overages = state.router.overages().await.unwrap_or_default();
-    let pins = state.router.pins().await.unwrap_or_default();
+    let (cooldowns, overages, pins) = (&context.cooldowns, &context.overages, &context.pins);
     let key_ids: Vec<String> = keys
         .iter()
         .map(|k| k["id"].as_str().unwrap_or_default().to_string())
         .collect();
     let active_pins = pins.iter().filter(|p| key_ids.contains(&p.key_id)).count();
-    let accounts = state.store.accounts()?;
-    let spends = state.router.member_spends().await.unwrap_or_default();
-    let snapshot = state.router.snapshot();
+    let accounts = &context.accounts;
+    let spends = &context.spends;
+    let snapshot = &context.snapshot;
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     // Why routing would refuse a member, mirroring the selector's `obstacle` in the order it checks them: not
     // enabled or not ready, a subscription past its saved end, an account-wide cooldown, a budget the member's
@@ -778,7 +812,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         {
             return Some("cooldown");
         }
-        let rows = crate::routes::spend_rows(&spends, &row.id, &m.account_id);
+        let rows = crate::routes::spend_rows(spends, &row.id, &m.account_id);
         if phoebis_routing::budget_deadline(m, &rows, now).is_some() {
             return Some("budget");
         }
@@ -801,7 +835,7 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
     } else {
         "active"
     };
-    Ok(json!({
+    json!({
         "id": row.id, "label": row.label, "enabled": row.enabled,
         "strategy": row.strategy.as_str(),
         "prefer_subscription": row.prefer_subscription,
@@ -821,14 +855,14 @@ pub(crate) async fn pool_json(state: &AdminState, row: &PoolRow) -> Result<Value
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "auto_mode_server": row.auto_mode_server,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
-        "members": members.iter().map(|m| member_json(m, &accounts, &spends, ineligible(m).unwrap_or("eligible"), now)).collect::<Vec<_>>(),
+        "members": members.iter().map(|m| member_json(m, accounts, spends, ineligible(m).unwrap_or("eligible"), now)).collect::<Vec<_>>(),
         "keys": keys,
         "status": status,
         "requests_24h": day.get(&row.id).map_or(0, |t| t.requests),
         "cost_24h": day.get(&row.id).map_or(0.0, |t| t.cost_usd),
         "active_pins": active_pins,
         "traffic_24h": traffic,
-    }))
+    })
 }
 
 pub(crate) async fn traffic(
@@ -847,20 +881,14 @@ pub(crate) async fn traffic(
         Err(m) => return failure(StatusCode::BAD_REQUEST, &m),
     };
     let bucket = phoebis_ledger::bucket_seconds(from, to);
-    let pool_id = id.clone();
-    match state
-        .ledger
-        .db()
-        .read(move |c| {
-            phoebis_ledger::pool_traffic(
-                c,
-                &pool_id,
-                phoebis_ledger::hour_of(from),
-                phoebis_ledger::hour_ceil(to),
-                bucket,
-            )
-        })
-        .await
+    match phoebis_ledger::pool_traffic(
+        state.ledger.db(),
+        &id,
+        phoebis_ledger::hour_of(from),
+        phoebis_ledger::hour_ceil(to),
+        bucket,
+    )
+    .await
     {
         Ok(buckets) => Json(json!({ "pool_id": id, "from": from, "to": to, "bucket_seconds": bucket, "buckets": buckets })).into_response(),
         Err(e) => crate::analytics::ledger_failure(e),

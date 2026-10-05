@@ -34,7 +34,7 @@ url = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 futures = { workspace = true }
 http-body-util = { workspace = true }
-phoebis-store = { path = "../store", features = ["debug-hooks"] }
+phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
 tokio-tungstenite = { workspace = true }

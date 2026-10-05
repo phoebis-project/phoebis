@@ -5,8 +5,7 @@ use common::{get, json, login, NOW};
 use phoebis_ledger::EventRecord;
 use phoebis_routing::{Report, MODEL_REJECTED_REASON};
 use phoebis_store::{
-    Affinity, ApiKeyRow, CooldownRow, Failover, MemberWrite, ModelRule,
-    OveragePolicy, PoolRow, RulesMode, Shedding, Strategy,
+    ApiKeyRow, CooldownRow, MemberWrite, ModelRule, OveragePolicy, PoolRow, RulesMode, Strategy,
 };
 use serde_json::json as j;
 
@@ -41,14 +40,9 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
         .store
         .insert_pool(
             &PoolRow {
-                id: "main".into(),
                 label: "Main".into(),
-                enabled: true,
                 strategy: Strategy::Priority,
-                affinity_ttl_seconds: 3_600,
                 overage_policy: OveragePolicy::Allow,
-                migrate_above_utilization: None,
-                select_below_utilization: None,
                 model_rules: vec![
                     ModelRule {
                         pattern: "claude-haiku-*".into(),
@@ -59,17 +53,10 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                         not: true,
                     },
                 ],
-                keepalive_json: "{}".into(),
-                body_capture_hours: 0,
                 prefer_subscription: false,
-                shedding: Shedding::default(),
-                failover: Failover::default(),
-                cache_ttl_json: "{}".into(),
-                cache_diagnostics: false,
-                auto_mode_server: true,
-                affinity: Affinity::default(),
                 created_at: NOW,
                 updated_at: NOW,
+                ..PoolRow::for_tests("main")
             },
             "test",
         )

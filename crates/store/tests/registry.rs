@@ -1,8 +1,8 @@
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, Affinity, AffinityChain, ApiKeyRow,
     CanaryRead, Failover, Identity, MemberWrite, MemoryKey, MemoryRecord,
-    MemoryStore, ModelRule, NewBundle, OveragePolicy, PinBurn, PoolRow, RulesMode, Secret,
-    Shedding, StorageKey, Store, StoreError, Strategy, SubscriptionRow,
+    MemoryStore, ModelRule, NewBundle, PinBurn, PoolRow, RulesMode, Secret, Shedding, StorageKey,
+    Store, StoreError, Strategy, SubscriptionRow,
 };
 
 // Read by both the roll-back chains below and the standalone direct-open test further down.
@@ -176,26 +176,11 @@ fn account(id: &str, kind: AccountKind) -> AccountRow {
 
 fn pool(id: &str) -> PoolRow {
     PoolRow {
-        id: id.into(),
-        label: id.into(),
-        enabled: true,
         strategy: Strategy::Priority,
-        affinity_ttl_seconds: 3600,
-        overage_policy: OveragePolicy::PreferPlan,
-        migrate_above_utilization: None,
-        select_below_utilization: None,
-        model_rules: Vec::new(),
-        keepalive_json: "{}".into(),
-        body_capture_hours: 0,
         prefer_subscription: false,
-        shedding: Shedding::default(),
-        failover: Failover::default(),
-        cache_ttl_json: "{}".into(),
-        cache_diagnostics: false,
-        auto_mode_server: true,
-        affinity: Affinity::default(),
         created_at: 1,
         updated_at: 1,
+        ..PoolRow::for_tests(id)
     }
 }
 
@@ -1274,7 +1259,9 @@ fn a_pool_reopens_on_and_a_key_reopens_inheriting_until_set_off() {
     let mut read = store.api_key("desktop").unwrap().unwrap();
     assert_eq!(read.auto_mode_server, None, "a new key inherits the pool's");
     read.auto_mode_server = Some(false);
-    store.update_api_key(&read, "test").unwrap();
+    store
+        .update_api_key(&read, read.updated_at, "test")
+        .unwrap();
     drop(store);
     let store = Store::open(&path, &key_store).unwrap();
     assert_eq!(
@@ -1693,6 +1680,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
                 model_rules: pool_rules.clone(),
                 ..pool("main")
             },
+            store.pool("main").unwrap().unwrap().updated_at,
             "test",
         )
         .unwrap();
@@ -1705,6 +1693,7 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
                 long_context_twins: false,
                 ..k.clone()
             },
+            store.api_key("desktop").unwrap().unwrap().updated_at,
             "test",
         )
         .unwrap();
@@ -1808,6 +1797,193 @@ fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
         .unwrap());
 }
 
+#[test]
+fn two_pool_edits_from_one_read_answer_stale_on_the_second() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::ApiKey))
+        .unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let read = store.pool("main").unwrap().unwrap();
+    store
+        .update_pool(
+            &PoolRow {
+                label: "First".into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.update_pool(
+            &PoolRow {
+                label: "Second".into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test"
+        ),
+        Err(StoreError::Stale)
+    ));
+    let first = store.pool("main").unwrap().unwrap();
+    assert_eq!(first.label, "First", "the stale edit wrote nothing");
+    assert!(
+        first.updated_at > read.updated_at,
+        "a write inside the stamp's own millisecond still moves it"
+    );
+    store
+        .set_pool_members("main", &[member("a", 0)], "test")
+        .unwrap();
+    assert!(
+        matches!(
+            store.update_pool_with_members(
+                &PoolRow {
+                    label: "Third".into(),
+                    ..first.clone()
+                },
+                first.updated_at,
+                Some(&[]),
+                "test"
+            ),
+            Err(StoreError::Stale)
+        ),
+        "a member write moves the stamp, so an edit read before it cannot land over it"
+    );
+    assert_eq!(
+        (
+            store.pool("main").unwrap().unwrap().label,
+            store.pool_members("main").unwrap().len()
+        ),
+        ("First".to_string(), 1),
+        "neither half of the stale edit landed"
+    );
+    assert!(matches!(
+        store.update_pool(&pool("ghost"), 1, "test"),
+        Err(StoreError::PoolNotFound(_))
+    ));
+}
+
+#[test]
+fn two_key_edits_from_one_read_answer_stale_on_the_second() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    store
+        .insert_api_key(
+            &key(&store, "desktop", "main", "phoebis-0123456789abcdef"),
+            "test",
+        )
+        .unwrap();
+    let read = store.api_key("desktop").unwrap().unwrap();
+    store
+        .update_api_key(
+            &ApiKeyRow {
+                label: "First".into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert!(matches!(
+        store.update_api_key(
+            &ApiKeyRow {
+                label: "Second".into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test"
+        ),
+        Err(StoreError::Stale)
+    ));
+    let first = store.api_key("desktop").unwrap().unwrap();
+    assert_eq!(first.label, "First", "the stale edit wrote nothing");
+    assert!(
+        first.updated_at > read.updated_at,
+        "a write inside the stamp's own millisecond still moves it"
+    );
+    store.revoke_api_key("desktop", 5, "test").unwrap();
+    assert!(
+        matches!(
+            store.update_api_key(&first, first.updated_at, "test"),
+            Err(StoreError::Stale)
+        ),
+        "an edit read before the revocation cannot switch the revoked key back on"
+    );
+    assert!(!store.api_key("desktop").unwrap().unwrap().enabled);
+    assert!(matches!(
+        store.update_api_key(&key(&store, "ghost", "main", "phoebis-ghost"), 0, "test"),
+        Err(StoreError::KeyNotFound(_))
+    ));
+}
+
+#[test]
+fn a_stale_account_update_carrying_enabled_and_a_cancellation_writes_nothing() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    let read = store.account("a").unwrap().unwrap();
+    store
+        .update_account("a", read.revision, "Moved", "admin")
+        .unwrap();
+    let stale = AccountUpdate {
+        id: "a",
+        expected_revision: read.revision,
+        lifecycle_generation: read.lifecycle_generation,
+        label: "Stale",
+        secret: None,
+        state: None,
+        at: 5,
+        actor: "admin",
+        enabled: Some(false),
+        cancellation: Some((true, Some(9_000))),
+    };
+    assert!(matches!(
+        store.commit_account_update(&stale),
+        Err(StoreError::Stale)
+    ));
+    let row = store.account("a").unwrap().unwrap();
+    let term = store.subscription_term("a").unwrap().unwrap();
+    assert_eq!(
+        (
+            row.label.as_str(),
+            row.enabled,
+            term.cancelled,
+            term.ends_at
+        ),
+        ("Moved", true, false, None),
+        "no staged field of the stale edit landed"
+    );
+    store
+        .commit_account_update(&AccountUpdate {
+            expected_revision: row.revision,
+            ..stale
+        })
+        .unwrap();
+    let landed = store.account("a").unwrap().unwrap();
+    let term = store.subscription_term("a").unwrap().unwrap();
+    assert_eq!(
+        (
+            landed.label.as_str(),
+            landed.enabled,
+            landed.state,
+            term.cancelled,
+            term.ends_at,
+            landed.revision
+        ),
+        (
+            "Stale",
+            false,
+            AccountState::Ready,
+            true,
+            Some(9_000),
+            row.revision + 1
+        ),
+        "the same edit built from the moved row lands every staged field in one revision"
+    );
+}
+
 /// An api-key account holding a secret at generation 1, as every fresh slot under an id does.
 fn insert_ready_api_key_account(store: &Store, id: &str) {
     store
@@ -1868,9 +2044,11 @@ fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
         lifecycle_generation: 1,
         label: "Renamed",
         secret: Some(&Secret::new("k2")),
-        state: AccountState::Ready,
+        state: Some(AccountState::Ready),
         at: 5,
         actor: "admin",
+        enabled: None,
+        cancellation: None,
     };
     store.commit_account_update(&update).unwrap();
     let row = store.account("a").unwrap().unwrap();
@@ -2006,12 +2184,14 @@ fn every_key_write_stamps_updated_at_and_a_use_leaves_it() {
     store.touch_api_key("k", 5, false, None).unwrap();
     assert_eq!(stamped(), 0, "a use is no change to the row");
     let row = store.api_key("k").unwrap().unwrap();
+    let read_at = row.updated_at;
     let answered = store
         .update_api_key(
             &ApiKeyRow {
                 label: "renamed".into(),
                 ..row
             },
+            read_at,
             "test",
         )
         .unwrap();
@@ -2031,6 +2211,79 @@ fn every_key_write_stamps_updated_at_and_a_use_leaves_it() {
     clear();
     store.revoke_api_key("k", 9, "test").unwrap();
     assert_ne!(stamped(), 0, "a revocation stamps the row");
+}
+
+#[test]
+fn two_key_updates_inside_one_millisecond_read_two_different_stamps() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("p"), "test").unwrap();
+    let created_at = store
+        .insert_api_key(&key(&store, "k", "p", "secret-one"), "test")
+        .unwrap();
+    // A stored stamp an hour past the clock is the state several writes inside one millisecond leave: the clock
+    // has not moved past the newest stamp, so each write has to step past it to read as a change.
+    let ahead = created_at + 3_600_000;
+    rusqlite::Connection::open(&path)
+        .unwrap()
+        .execute("UPDATE api_keys SET updated_at = ?1", [ahead])
+        .unwrap();
+    let read = store.api_key("k").unwrap().unwrap();
+    let first = store
+        .update_api_key(
+            &ApiKeyRow {
+                label: "first".into(),
+                ..read.clone()
+            },
+            read.updated_at,
+            "test",
+        )
+        .unwrap();
+    let moved = store.api_key("k").unwrap().unwrap();
+    let second = store
+        .update_api_key(
+            &ApiKeyRow {
+                label: "second".into(),
+                ..moved.clone()
+            },
+            moved.updated_at,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        (first, second),
+        (ahead + 1, ahead + 2),
+        "each update steps one past the stamp it fenced on"
+    );
+    assert_eq!(store.api_key("k").unwrap().unwrap().updated_at, second);
+    assert!(
+        matches!(
+            store.update_api_key(&moved, moved.updated_at, "test"),
+            Err(StoreError::Stale)
+        ),
+        "an edit read between the two cannot pass the fence"
+    );
+    store
+        .rotate_api_key(
+            "k",
+            &store.api_key_digest("secret-two"),
+            &phoebis_store::key_prefix("secret-two"),
+            7,
+            "test",
+        )
+        .unwrap();
+    assert_eq!(
+        store.api_key("k").unwrap().unwrap().updated_at,
+        ahead + 3,
+        "a rotation steps the same way"
+    );
+    store.revoke_api_key("k", 9, "test").unwrap();
+    assert_eq!(
+        store.api_key("k").unwrap().unwrap().updated_at,
+        ahead + 4,
+        "and so does a revocation"
+    );
 }
 
 #[test]
@@ -2188,7 +2441,7 @@ fn a_pool_stores_round_robin_and_the_subscription_preference_is_the_operators_al
         (Strategy::RoundRobin, true)
     );
     row.prefer_subscription = false;
-    store.update_pool(&row, "test").unwrap();
+    store.update_pool(&row, read.updated_at, "test").unwrap();
     let read = store.pool("rr").unwrap().unwrap();
     assert!(
         !read.prefer_subscription && !read.kind_ordered(),

@@ -680,6 +680,43 @@ async fn a_timeout_with_the_request_in_the_socket_is_not_retried() {
 }
 
 #[tokio::test]
+async fn a_stalled_handshake_answers_502_within_two_connect_bounds() {
+    // The listener accepts and never answers the ClientHello. Real time rather than the test clock: the bound
+    // under test is a timer racing a socket, and a paused clock would jump straight past the socket wait.
+    let up = FakeUpstream::start_silent().await;
+    let app = common::relay_with_limits(
+        phoebis_store::AccountKind::ApiKey,
+        &up,
+        phoebis_relay::Limits {
+            connect_timeout: Duration::from_secs(1),
+            head_timeout: Duration::from_secs(60),
+            ..common::default_limits()
+        },
+    )
+    .await;
+    let started = Instant::now();
+    let resp = tokio::time::timeout(
+        Duration::from_secs(5),
+        app.oneshot(common::stream_request("phoebis-testkey")),
+    )
+    .await
+    .expect("two connect bounds end the request long before the head timeout")
+    .unwrap();
+    eprintln!("a stalled handshake answered after {:?}", started.elapsed());
+    assert_eq!(resp.status(), 502);
+    assert_eq!(
+        resp.headers().get("x-phoebis-error-code").unwrap(),
+        "upstream_unreachable"
+    );
+    assert_eq!(
+        up.connections(),
+        2,
+        "the first dial and the one retry on a fresh connection"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_upstreams_request_id_rides_on_the_outcome_of_the_committed_attempt() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

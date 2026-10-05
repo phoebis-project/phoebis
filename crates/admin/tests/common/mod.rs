@@ -76,10 +76,12 @@ struct Parts {
     ledger: Ledger,
     live: LiveFeed,
     manager: Arc<CredentialManager>,
+    pairing: Arc<PairingSessions>,
     pricing: Arc<Pricing>,
     relay: Arc<Relay>,
     resolver: Resolver,
     router: RouterHandle,
+    sessions: Arc<Sessions>,
     store: Arc<Store>,
     up: FakeUpstream,
     usage: Arc<UsageService>,
@@ -229,6 +231,27 @@ pub async fn admin_parts_with_vault() -> (
 ) {
     let parts = app_with(None, ACCOUNT_UUID, None, None).await;
     (parts.app, parts.up, parts.store, parts.router, parts.vault)
+}
+
+/// The unpaired app with what the router's sweeper sweeps, and the clock the routes read, for the tests that
+/// step time past a pairing's end and sweep as the sweeper would.
+pub struct Sweepable {
+    pub app: Router,
+    pub clock_cell: Arc<AtomicI64>,
+    pub pairing: Arc<PairingSessions>,
+    pub sessions: Arc<Sessions>,
+    pub vault: Arc<PairingVault>,
+}
+
+pub async fn admin_parts_sweepable() -> Sweepable {
+    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    Sweepable {
+        app: parts.app,
+        clock_cell: parts.clock_cell,
+        pairing: parts.pairing,
+        sessions: parts.sessions,
+        vault: parts.vault,
+    }
 }
 
 /// A second app over a store another `Parts` already opened, so its router task loads whatever the store
@@ -782,6 +805,7 @@ async fn build_app(
         body_budget_bytes: 512 << 20,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
         body_read_timeout: Duration::from_secs(60),
+        connect_timeout: Duration::from_secs(10),
         cooldown_fallback: Duration::from_secs(60),
         head_timeout: Duration::from_secs(10),
         hold_timeout: Duration::from_secs(30),
@@ -843,17 +867,19 @@ async fn build_app(
         usage_cache_ttl_seconds: 60,
     });
     let vault = Arc::new(PairingVault::new());
+    let pairing = Arc::new(PairingSessions::new());
+    let sessions = Arc::new(Sessions::new(
+        Duration::from_secs(900),
+        Duration::from_secs(43_200),
+    ));
     let state = Arc::new(AdminState {
         store: store.clone(),
         manager: manager.clone(),
         usage: usage.clone(),
-        pairing: Arc::new(PairingSessions::new()),
+        pairing: pairing.clone(),
         control,
         profile: p,
-        sessions: Arc::new(Sessions::new(
-            Duration::from_secs(900),
-            Duration::from_secs(43_200),
-        )),
+        sessions: sessions.clone(),
         secrets: AdminSecrets {
             admin: Secret::new("admin-secret"),
         },
@@ -893,10 +919,12 @@ async fn build_app(
         ledger,
         live,
         manager,
+        pairing,
         pricing,
         relay,
         resolver,
         router: router_handle,
+        sessions,
         store,
         up,
         usage,

@@ -13,9 +13,9 @@ use phoebis_routing::{
     FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
-    key_prefix, AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow,
-    CooldownRow, Failover, MemberWrite, ModelRule, OveragePolicy, PinBurn, PoolRow, RoutingLoad,
-    RulesMode, Shedding, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
+    MemberWrite, ModelRule, PinBurn, PoolRow, RoutingLoad, RulesMode, StorageKey, Store, Strategy,
+    SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -57,26 +57,9 @@ fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
     store
         .insert_pool(
             &PoolRow {
-                id: "p".into(),
-                label: "p".into(),
-                enabled: true,
                 strategy: Strategy::Priority,
-                affinity_ttl_seconds: 3600,
-                overage_policy: OveragePolicy::PreferPlan,
-                migrate_above_utilization: None,
-                select_below_utilization: None,
-                model_rules: Vec::new(),
-                keepalive_json: "{}".into(),
-                body_capture_hours: 0,
                 prefer_subscription: false,
-                shedding: Shedding::default(),
-                failover: Failover::default(),
-                cache_ttl_json: "{}".into(),
-                cache_diagnostics: false,
-                auto_mode_server: true,
-                affinity: Affinity::default(),
-                created_at: 0,
-                updated_at: 0,
+                ..PoolRow::for_tests("p")
             },
             "test",
         )
@@ -312,7 +295,7 @@ async fn a_request_admitted_under_an_older_registry_is_re_resolved_against_the_c
             not: true,
         },
     ];
-    store.update_pool(&pool, "test").unwrap();
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     handle.reload().await.unwrap();
     let answer = handle.select(stale(admitted.clone())).await.unwrap();
     assert!(matches!(
@@ -2380,7 +2363,7 @@ async fn a_restart_loads_the_persisted_windows_and_the_first_selection_ranks_by_
     let store = seeded_oauth(&["a", "b"]);
     let mut pool = store.pool("p").unwrap().unwrap();
     pool.strategy = Strategy::Pace;
-    store.update_pool(&pool, "test").unwrap();
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     let reset = Some(1_000 + 3 * HOUR);
     for (account, utilization) in [("a", 0.9), ("b", 0.1)] {
         for window in [FIVE_HOUR, SEVEN_DAY] {
@@ -5083,7 +5066,7 @@ async fn the_purge_tick_deletes_an_aged_entry_from_the_store() {
     // Short enough for the entry to age inside the test's own window, rather than the hour-scale default.
     let mut pool = store.pool("p").unwrap().unwrap();
     pool.affinity_ttl_seconds = 1;
-    store.update_pool(&pool, "test").unwrap();
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(
         store.clone(),

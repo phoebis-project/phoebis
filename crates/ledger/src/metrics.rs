@@ -548,16 +548,8 @@ pub async fn gather(
         gauges.overage.push((id.clone(), in_use));
     }
     gauges.live_accounts = live_accounts;
-    if let Ok(pins) = router.pins().await {
-        let mut by_pool: BTreeMap<String, u64> = BTreeMap::new();
-        for pin in pins {
-            let pool = snapshot
-                .key(&pin.key_id)
-                .map(|k| k.pool_id.clone())
-                .unwrap_or_else(|| UNATTRIBUTED.into());
-            *by_pool.entry(pool).or_default() += 1;
-        }
-        gauges.pins_by_pool = by_pool.into_iter().collect();
+    if let Ok(pins_by_pool) = router.pins_by_pool().await {
+        gauges.pins_by_pool = pins_by_pool;
     }
     gauges
 }

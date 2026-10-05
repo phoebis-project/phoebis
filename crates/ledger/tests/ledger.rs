@@ -156,6 +156,7 @@ async fn an_unknown_key_401_a_policy_404_and_an_exhaustion_have_a_row_and_no_att
     }])
     .await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let desktop = h.store.api_key("desktop").unwrap().unwrap();
     h.store
         .update_api_key(
             &phoebis_store::ApiKeyRow {
@@ -169,8 +170,9 @@ async fn an_unknown_key_401_a_policy_404_and_an_exhaustion_have_a_row_and_no_att
                         not: true,
                     },
                 ],
-                ..h.store.api_key("desktop").unwrap().unwrap()
+                ..desktop
             },
+            desktop.updated_at,
             "test",
         )
         .unwrap();
@@ -513,9 +515,11 @@ async fn the_row_carries_the_client_class_the_hints_and_the_turn_origin_and_the_
         "a caller outside Claude Code carries the other label"
     );
     let rollups =
-        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
-            .await
-            .unwrap();
+        h.db.read(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .await
+        .unwrap();
     let by_client: std::collections::BTreeMap<&str, u64> =
         rollups
             .iter()
@@ -636,6 +640,97 @@ async fn text_matches_an_upstream_message_id_and_an_upstream_request_id() {
     up.shutdown().await;
 }
 
+#[test]
+fn the_recent_gaps_are_the_newest_gap_events_at_or_after_the_cutoff() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (at, kind) in [
+        (100, "ledger_gap"),
+        (200, "ledger_gap"),
+        (300, "registry_changed"),
+        (400, "ledger_gap"),
+    ] {
+        db.insert_event(&EventRecord {
+            at,
+            kind: kind.into(),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    let since = db
+        .read_blocking(|c| phoebis_ledger::recent_gaps(c, 200, 50))
+        .unwrap();
+    assert_eq!(
+        since.iter().map(|g| g.at).collect::<Vec<_>>(),
+        [400, 200],
+        "newest first, the cutoff itself included, no other kind"
+    );
+    let newest = db
+        .read_blocking(|c| phoebis_ledger::recent_gaps(c, 0, 1))
+        .unwrap();
+    assert_eq!(newest.iter().map(|g| g.at).collect::<Vec<_>>(), [400]);
+}
+
+/// The search matches what was typed character for character: `_`, `%` and `\` are characters, not wildcards or an
+/// escape, so an id with an underscore never matches one with any other character in its place.
+#[test]
+fn the_search_matches_its_text_literally() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let plant = |id: &str, message_id: &str, error_code: &str| {
+        let request = RequestRecord {
+            id: id.into(),
+            received_at: 1_000,
+            model: "m".into(),
+            canonical_model: "m".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(500),
+            outcome: "failed".into(),
+            attempts: 1,
+            error_code: Some(error_code.into()),
+            ..Default::default()
+        };
+        let attempt = AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            started_at: 1_000,
+            outcome: "failed".into(),
+            upstream_message_id: Some(message_id.into()),
+            ..Default::default()
+        };
+        db.insert_request(&request, &[attempt], None).unwrap();
+    };
+    plant("r1", "msg_01abc", "e1");
+    plant("r2", "msgx01abc", "e2");
+    plant("r3", "msg_03", "100%");
+    plant("r4", "msg_04", "1000");
+    plant("r5", "msg_05", "x\\_y");
+    plant("r6", "msg_06", "x\\zy");
+    let listed = |text: &str| {
+        let filter = RequestFilter {
+            text: Some(text.into()),
+            ..Default::default()
+        };
+        let mut ids: Vec<String> = db
+            .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .unwrap()
+            .0
+            .iter()
+            .map(|(row, _)| row.id.clone())
+            .collect();
+        ids.sort();
+        ids
+    };
+    assert_eq!(listed("msg_01abc"), ["r1"], "`_` matches itself alone");
+    assert_eq!(listed("100%"), ["r3"], "`%` matches itself alone");
+    assert_eq!(
+        listed("x\\_"),
+        ["r5"],
+        "a backslash is a character, not an escape"
+    );
+}
+
 /// The answer's own counts and facts reach the attempt row and the three counts reach the hour's rollup; the
 /// served model is recorded only when it is not the one the router resolved.
 #[tokio::test]
@@ -687,9 +782,11 @@ async fn the_answers_thinking_tool_counts_and_facts_reach_the_attempt_row_and_th
         (None, None, None)
     );
     let rows =
-        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
-            .await
-            .unwrap();
+        h.db.read(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .await
+        .unwrap();
     let row = rows.iter().find(|r| r.kind == "inference").unwrap();
     assert_eq!(
         (
@@ -793,9 +890,11 @@ async fn the_recorded_first_party_fixtures_shape_reaches_the_row_and_its_effort_
     assert_eq!(row2.effort.as_deref(), Some("high"));
 
     let rollups =
-        h.db.read(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
-            .await
-            .unwrap();
+        h.db.read(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .await
+        .unwrap();
     assert!(
         rollups.iter().any(|r| r.effort == "high"),
         "the second request's effort lands in a rollup row keyed on it"
@@ -1431,6 +1530,46 @@ fn a_page_with_one_row_beyond_it_answers_a_cursor_whose_next_page_holds_that_row
     assert_eq!(next, None);
 }
 
+/// A fast request the router refused before any attempt served lists under the speed it asked for, and one that
+/// sent any other text as its speed under `standard`, as the rollups file them.
+#[test]
+fn a_fast_request_refused_before_any_attempt_is_listed_under_the_fast_speed_filter() {
+    let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
+    let refused = |id: &str, received_at: i64, speed: String| RequestRecord {
+        id: id.into(),
+        received_at,
+        canonical_model: "claude-opus-5".into(),
+        model: "claude-opus-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        status: Some(429),
+        outcome: "exhausted".into(),
+        error_code: Some("fast_lane_exhausted".into()),
+        requested_speed: Some(speed),
+        ..Default::default()
+    };
+    db.insert_request(&refused("asked-fast", 1, "fast".into()), &[], None)
+        .unwrap();
+    db.insert_request(&refused("asked-other", 2, "x".repeat(300)), &[], None)
+        .unwrap();
+    let listed = |speed: &str| {
+        let filter = RequestFilter {
+            speeds: vec![speed.into()],
+            ..Default::default()
+        };
+        let (rows, _) = db
+            .read_blocking(|c| list_requests(c, &filter, &LiveKeys::default(), None, 10))
+            .unwrap();
+        rows.into_iter().map(|(r, _)| r.id).collect::<Vec<_>>()
+    };
+    assert_eq!(listed("fast"), ["asked-fast"]);
+    assert_eq!(
+        listed("standard"),
+        ["asked-other"],
+        "the fast request is not standard, and the other text lists under standard alone"
+    );
+}
+
 /// Held on a slow `land`, `CHANNEL_DEPTH + 8` requests offered through `record_request` all wait for room
 /// rather than dropping.
 #[tokio::test]
@@ -1772,8 +1911,10 @@ async fn a_probe_through_the_relay_is_ledgered_with_kind_probe_and_origin_keepal
         ("probe", "keepalive", Some("desktop"), 1)
     );
     let rollups =
-        h.db.read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
-            .unwrap();
+        h.db.read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .unwrap();
     assert!(
         rollups.iter().any(|r| r.kind == "probe" && r.requests == 1),
         "the rollup row is keyed kind = probe"
@@ -1937,7 +2078,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
             c.execute(
                 &format!(
                     "INSERT INTO rollups_hourly ({columns}) VALUES \
-                     (3600, 'k', 0, 'p', 'a', 'm', 'inference', 'ua', 'claude-code/cli', 'none', 5, 5, 0, 0, \
+                     (3600, 'k', 0, 'p', 'a', 'm', 'inference', 'ua/1', 'claude-code/cli', 'none', 5, 5, 0, 0, \
                      0, 0, 5, 0, 0, 0, 5, 1, 2, 3, 4, 6, 0, 0, 0, 0.5, 0.1, 0.1, 0.1, 0.2, 0, 0, 0.0, 0.0, 0, \
                      0, 0.0, '{{}}', 0, x'', x'', x'', x'', '{{}}', '{{}}')"
                 ),
@@ -1954,7 +2095,9 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
     assert_eq!(db.schema_version().await.unwrap(), 28);
     let rows = db
-        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
         .unwrap();
     assert_eq!(rows.len(), 1);
     assert_eq!(
@@ -1978,7 +2121,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                 canonical_model: "m".into(),
                 kind: "inference".into(),
                 outcome: "succeeded".into(),
-                user_agent: Some("ua".into()),
+                user_agent: Some("ua/1".into()),
                 client: Some("claude-code/cli".into()),
                 ..Default::default()
             },
@@ -1998,7 +2141,9 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     })
     .unwrap();
     let rows = db
-        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
         .unwrap();
     assert_eq!(
         rows.len(),
@@ -2259,7 +2404,9 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
     assert_eq!(db.schema_version().await.unwrap(), 28);
     let mut rows = db
-        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
         .unwrap()
         .into_iter()
         .map(|r| (r.speed, r.funding, r.requests))
@@ -2377,7 +2524,9 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
     assert_eq!(db.schema_version().await.unwrap(), 28);
     let rows = db
-        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
         .unwrap();
     assert_eq!(
         rows.iter()
@@ -2495,7 +2644,9 @@ fn an_incomplete_request_counts_in_the_rollups_incomplete_column_and_nowhere_els
     )
     .unwrap();
     let rows = db
-        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
         .unwrap();
     assert_eq!(
         rows.iter()
@@ -2560,7 +2711,9 @@ fn a_request_folds_under_its_class_and_a_classless_one_under_the_reserved_value(
     plant("r1", Some("main"));
     plant("r2", None);
     let rows = db
-        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
         .unwrap();
     let classes: Vec<&str> = rows.iter().map(|r| r.request_class.as_str()).collect();
     assert_eq!(
@@ -2988,7 +3141,9 @@ fn an_attempt_folds_under_fast_overage_or_plan_funding() {
     let db = phoebis_ledger::LedgerDb::open_in_memory().unwrap();
     plant_every_funding(&db, ("a", "oauth"));
     let mut rows = db
-        .read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
         .unwrap()
         .into_iter()
         .map(|r| (r.funding, r.speed, r.requests))

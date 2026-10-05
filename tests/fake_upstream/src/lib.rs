@@ -193,6 +193,13 @@ impl FakeUpstream {
         Self::spawn(rules, Wire::Plain, String::new()).await
     }
 
+    /// A listener the relay dials as a TLS host (its CA trusted as `start`'s is) that accepts and never answers the
+    /// ClientHello, reading nothing, so the handshake is what the connect bound times out.
+    pub async fn start_silent() -> FakeUpstream {
+        let tls = generate_tls(&["api.anthropic.com", "platform.claude.com"]);
+        Self::spawn(Vec::new(), Wire::Silent, tls.ca_pem).await
+    }
+
     async fn spawn(rules: Vec<Rule>, wire: Wire, ca_pem: String) -> FakeUpstream {
         let listener = TcpListener::bind("127.0.0.1:0")
             .await
@@ -206,15 +213,22 @@ impl FakeUpstream {
             gate: Notify::new(),
             held: Mutex::new(VecDeque::new()),
             released: AtomicBool::new(false),
+            written: Mutex::new(HashMap::new()),
         });
         let wire = Arc::new(wire);
         let accept_shared = shared.clone();
         let task = tokio::spawn(async move {
+            // Held by this task, so a silent listener's sockets stay open until `shutdown` aborts it.
+            let mut silent = Vec::new();
             loop {
                 let Ok((sock, _)) = listener.accept().await else {
                     break;
                 };
                 let conn_id = accept_shared.accept_connection();
+                if matches!(*wire, Wire::Silent) {
+                    silent.push(sock);
+                    continue;
+                }
                 // Decided before any byte is read: the only information a `CloseImmediately` connection ever
                 // gets to act on is its own ordinal among accepted connections.
                 if accept_shared.should_close_immediately() {
@@ -337,6 +351,14 @@ impl FakeUpstream {
         }
     }
 
+    /// Resolves once the `n`th scripted response (zero-based, in arrival order) has been written out whole, so
+    /// a test can assert on what a slow subscriber did after the stream ended rather than sleep past it.
+    pub async fn written(&self, n: usize) {
+        let mut done = self.shared.written_signal(n).subscribe();
+        // The sender lives in `Shared` for the fake's lifetime, so the wait ends only on the write.
+        let _ = done.wait_for(|whole| *whole).await;
+    }
+
     /// Answers only the requests that carry `credential`, ahead of every prefix-only rule, so several accounts
     /// can be scripted independently against one listener.
     pub fn add_credential_rule(&self, credential: &str, path_prefix: &str, respond: Respond) {
@@ -427,6 +449,8 @@ impl FakeUpstream {
 enum Wire {
     Tls(SslAcceptor),
     Plain,
+    /// Accepts and reads nothing.
+    Silent,
 }
 
 struct Shared {
@@ -438,6 +462,9 @@ struct Shared {
     /// One opener per responder parked at its gate, oldest first, for `release_one`.
     held: Mutex<VecDeque<oneshot::Sender<()>>>,
     released: AtomicBool,
+    /// One latch per recorded request, by its index in `requests`, made by whichever of the responder and a
+    /// `written` waiter comes first, so neither a waiter that comes late nor a second one can miss the write.
+    written: Mutex<HashMap<usize, watch::Sender<bool>>>,
 }
 
 /// What `close_idle` needs about a live connection: whether it is busy, and a way to wake its serve loop.
@@ -486,8 +513,24 @@ enum SwitchKind {
 }
 
 impl Shared {
-    fn record(&self, req: RecordedRequest) {
-        self.requests.lock().unwrap().push(req);
+    /// The request's index in arrival order, which `written` names its response by.
+    fn record(&self, req: RecordedRequest) -> usize {
+        let mut requests = self.requests.lock().unwrap();
+        requests.push(req);
+        requests.len() - 1
+    }
+
+    fn written_signal(&self, n: usize) -> watch::Sender<bool> {
+        self.written
+            .lock()
+            .unwrap()
+            .entry(n)
+            .or_insert_with(|| watch::channel(false).0)
+            .clone()
+    }
+
+    fn mark_written(&self, n: usize) {
+        self.written_signal(n).send_replace(true);
     }
 
     fn register_connection(&self, conn_id: u64) -> (watch::Receiver<bool>, Arc<AtomicBool>) {
@@ -645,6 +688,7 @@ async fn handle_connection(shared: Arc<Shared>, sock: TcpStream, conn_id: u64, w
             }
         }
         Wire::Plain => serve(shared, sock, conn_id).await,
+        Wire::Silent => unreachable!("the accept task keeps a silent listener's sockets"),
     }
 }
 
@@ -680,7 +724,7 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
         let close_after = wants_close(&recorded.headers);
         // Read before the record takes ownership: the credential decides which rule answers.
         let headers = recorded.headers.clone();
-        shared.record(recorded);
+        let index = shared.record(recorded);
         // Unwrapped before the match rather than inside it, so the gate costs the responders nothing and no
         // arm has to be written twice.
         let mut respond = shared.resolve(&path, &headers);
@@ -700,11 +744,18 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 {
                     return;
                 }
+                shared.mark_written(index);
             }
-            Respond::CloseImmediately | Respond::CloseAfterRequest => return,
+            // The close is the whole of what these script, so a waiter on it resolves rather than hangs.
+            Respond::CloseImmediately | Respond::CloseAfterRequest => {
+                shared.mark_written(index);
+                return;
+            }
             Respond::Gated(_) => unreachable!("the loop above unwraps every gate"),
             Respond::DropAfterHead => {
-                let _ = write_drop_head(&mut stream).await;
+                if write_drop_head(&mut stream).await.is_ok() {
+                    shared.mark_written(index);
+                }
                 return;
             }
             Respond::Json {
@@ -718,6 +769,7 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 {
                     return;
                 }
+                shared.mark_written(index);
             }
             Respond::Sse {
                 status,
@@ -725,7 +777,12 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 events,
                 delay_between,
             } => {
-                let _ = write_sse(&mut stream, status, headers, events, delay_between).await;
+                if write_sse(&mut stream, status, headers, events, delay_between)
+                    .await
+                    .is_ok()
+                {
+                    shared.mark_written(index);
+                }
                 return;
             }
             Respond::SseCut {
@@ -747,6 +804,7 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                         return;
                     }
                 }
+                shared.mark_written(index);
                 return;
             }
             Respond::SseGated {
@@ -754,7 +812,12 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                 headers,
                 events,
             } => {
-                let _ = write_sse_gated(shared, &mut stream, status, headers, events).await;
+                if write_sse_gated(shared, &mut stream, status, headers, events)
+                    .await
+                    .is_ok()
+                {
+                    shared.mark_written(index);
+                }
                 return;
             }
             Respond::Stall {
@@ -777,7 +840,9 @@ async fn serve_requests<S: AsyncRead + AsyncWrite + Unpin>(
                         return;
                     }
                 }
-                let _ = write_chunk_terminator(&mut stream).await;
+                if write_chunk_terminator(&mut stream).await.is_ok() {
+                    shared.mark_written(index);
+                }
                 return;
             }
         }

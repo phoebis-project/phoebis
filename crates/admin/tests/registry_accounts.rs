@@ -1147,3 +1147,149 @@ async fn a_backoff_that_opened_no_attempt_shows_up_as_the_credentials_last_error
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_combined_account_patch_lands_whole_in_one_revision() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts",
+            r#"{"id":"team","kind":"oauth","label":"Team"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let revision = |id: &str| store.account(id).unwrap().unwrap().revision;
+
+    let before = revision("business");
+    let labelled = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"label":"Renamed","enabled":false}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(labelled.status(), 200);
+    let row = store.account("business").unwrap().unwrap();
+    assert_eq!(
+        (row.label.as_str(), row.enabled, row.revision),
+        ("Renamed", false, before + 1),
+        "a label with enabled"
+    );
+
+    let before = revision("direct");
+    let keyed = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"secret":"sk-ant-api03-REPLACED","enabled":false}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(keyed.status(), 200);
+    let row = store.account("direct").unwrap().unwrap();
+    assert_eq!(
+        (
+            store
+                .api_key_credential("direct")
+                .unwrap()
+                .unwrap()
+                .0
+                .expose()
+                .to_string(),
+            row.enabled,
+            row.revision
+        ),
+        ("sk-ant-api03-REPLACED".to_string(), false, before + 1),
+        "a verified secret with enabled"
+    );
+
+    let before = revision("team");
+    let cancelled = patch(
+        &app,
+        "/admin/accounts/team",
+        r#"{"enabled":false,"cancelled":true,"subscription_ends_at":2000000}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(cancelled.status(), 200);
+    let row = store.account("team").unwrap().unwrap();
+    let term = store.subscription_term("team").unwrap().unwrap();
+    assert_eq!(
+        (row.enabled, term.cancelled, term.ends_at, row.revision),
+        (false, true, Some(2_000_000), before + 1),
+        "enabled with a cancellation and its end"
+    );
+}
+
+#[tokio::test]
+async fn two_account_editors_from_one_read_meet_one_409() {
+    let (app, up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.add_credential_rule(
+        "sk-ant-api03-HELD",
+        "/v1/models",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[]}"#.to_vec(),
+        })),
+    );
+    // The first edit reads the row, then waits at discovery while the second reads the same row and lands.
+    let first = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            patch(
+                &app,
+                "/admin/accounts/direct",
+                r#"{"label":"First","secret":"sk-ant-api03-HELD"}"#,
+                Some(&cookie),
+            )
+            .await
+        }
+    });
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !up.requests().iter().any(|r| {
+        r.headers
+            .iter()
+            .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-HELD")
+    }) {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the first edit never reached discovery"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let second = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"label":"Second"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(second.status(), 200);
+    up.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.status(), 409);
+    assert_eq!(
+        json(first).await["error"],
+        "the account changed while the edit was being saved"
+    );
+    assert_eq!(
+        (
+            store.account("direct").unwrap().unwrap().label,
+            store
+                .api_key_credential("direct")
+                .unwrap()
+                .unwrap()
+                .0
+                .expose()
+                .to_string()
+        ),
+        ("Second".to_string(), common::API_KEY.to_string()),
+        "the edit read before the other landed wrote nothing"
+    );
+}

@@ -190,18 +190,21 @@ test('a pool save naming an unknown member answers the route\'s 404 and stores n
   assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
 });
 
-test('a member write that fails after the settings are stored answers the partial-save 409 with the settings kept', async () => {
+test('a pool save naming an account twice answers the route\'s 409 ahead of every other member refusal and stores nothing', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
-  const stored = (await api.listPools()).find((p) => p.id === 'all');
-  const members = all.members.filter((m) => m.accountId !== 'mail');
-  api.failMemberWriteOnce('storage failure');
-  await assert.rejects(() => api.updatePool('all', { ...all, members, name: 'everything' }), refusedAs(409, "the pool's settings were saved; its members were not: storage failure"));
-  const after = (await api.listPools()).find((p) => p.id === 'all');
-  assert.equal(after.name, 'everything', 'the settings were stored');
-  assert.deepEqual(after.members, stored.members, 'the members were not');
-  const retried = await api.updatePool('all', { ...all, members, name: 'everything' });
-  assert.deepEqual(retried.members.map((m) => m.accountId), members.map((m) => m.accountId), 'the failure is injected once, so the retry writes the members');
+  const before = await api.listPools();
+  const member = (accountId, budgetDailyUsd = null) => ({ accountId, budgetDailyUsd, budgetMonthlyUsd: null, priority: 0 });
+  const lists = [
+    [[...all.members, { ...all.members[0], priority: 9 }], `members name account ${all.members[0].accountId} twice`],
+    [[member('ghost'), member('ghost')], 'members name account ghost twice'],
+    [[member('console', 0), member('console')], 'members name account console twice'],
+  ];
+  for (const [members, message] of lists) {
+    await assert.rejects(() => api.updatePool('all', { ...all, members, name: 'everything' }), refusedAs(409, message), message);
+    await assert.rejects(() => api.createPool({ ...all, members, name: 'twice' }), refusedAs(409, message), `${message} on create`);
+  }
+  assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
 });
 
 test('a model rule list the route refuses is refused on every pool and key write, with the route\'s text', async () => {
@@ -317,10 +320,12 @@ test('the mock answers each captured bound probe with the route\'s status and se
   const base = await storyPool(api);
   const probes = fixture('bound_refusals').probes.filter((p) => p.field !== 'model_rules');
   const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
-  // The capture sends each of the retry pair with the other at its widest setting, as the route's pair rule asks.
-  const pair = { 'keepalive.retry_max_seconds': { retrySeconds: 1 }, 'keepalive.retry_seconds': { retryMaxSeconds: 604_800 } };
-  const replay = ({ field, value }) => {
-    if (field.startsWith('keepalive.')) return api.updatePool('all', { ...base, keepalive: { ...base.keepalive, ...pair[field], [camel(field.slice('keepalive.'.length))]: value } });
+  const keepalive = (field) => camel(field.slice('keepalive.'.length));
+  // The capture names under `with` what it sent beside the probed field, a retry ceiling at its base or a lead beside
+  // its jitter, and the replay sends the same.
+  const replay = ({ field, value, with: fields = {} }) => {
+    const beside = Object.fromEntries(Object.entries(fields).map(([other, setting]) => [keepalive(other), setting]));
+    if (field.startsWith('keepalive.')) return api.updatePool('all', { ...base, keepalive: { ...base.keepalive, ...beside, [keepalive(field)]: value } });
     return api.updatePool('all', { ...base, [camel(field)]: value });
   };
   // Every write waits out the mock's latency, so the probes run side by side; each sends a whole input, so none

@@ -5,7 +5,7 @@ use phoebis_routing::{
     MigrateReason, OverageEvidence, PinRef, Placement, RateTable, Rates, RegistrySnapshot,
     RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample, Warmth,
     WindowReading, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON,
-    SEVEN_DAY, SEVEN_DAY_FABLE,
+    SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -191,31 +191,21 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             })
             .collect(),
         pools: vec![PoolRow {
-            id: "p".into(),
-            label: "p".into(),
-            enabled: true,
             strategy: pool.strategy,
             affinity_ttl_seconds: pool.affinity,
             overage_policy: pool.policy,
             migrate_above_utilization: pool.migrate,
             select_below_utilization: pool.select_below,
-            model_rules: Vec::new(),
-            keepalive_json: "{}".into(),
-            body_capture_hours: 0,
             prefer_subscription: pool.prefer_subscription,
             shedding: pool.shedding,
             failover: pool.failover,
-            cache_ttl_json: "{}".into(),
-            cache_diagnostics: false,
-            auto_mode_server: true,
             affinity: Affinity {
                 mode: pool.mode,
                 subagent_placement: pool.subagent_placement,
                 session_placement: pool.session_placement,
                 min_shared_prefix_tokens: pool.min_shared_prefix_tokens,
             },
-            created_at: 0,
-            updated_at: 0,
+            ..PoolRow::for_tests("p")
         }],
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
@@ -4379,26 +4369,9 @@ fn two_pools_sharing_an_account_share_its_entries() {
         auto_mode_server: None,
     };
     let pool = |id: &str| PoolRow {
-        id: id.into(),
-        label: id.into(),
-        enabled: true,
         strategy: Strategy::Priority,
-        affinity_ttl_seconds: 3_600,
-        overage_policy: OveragePolicy::PreferPlan,
-        migrate_above_utilization: None,
-        select_below_utilization: None,
-        model_rules: Vec::new(),
-        keepalive_json: "{}".into(),
-        body_capture_hours: 0,
         prefer_subscription: false,
-        shedding: Shedding::default(),
-        failover: Failover::default(),
-        cache_ttl_json: "{}".into(),
-        cache_diagnostics: false,
-        auto_mode_server: true,
-        affinity: Affinity::default(),
-        created_at: 0,
-        updated_at: 0,
+        ..PoolRow::for_tests(id)
     };
     let member = |pool_id: &str, account_id: &str, priority: u32| PoolMember {
         pool_id: pool_id.into(),
@@ -10006,6 +9979,118 @@ fn shedding_pool(shedding: Shedding) -> Pool {
 fn hot_a_cool_b(st: &mut RoutingState, at: i64) {
     st.record_sample("a", sample(0.9, 0.3, at));
     st.record_sample("b", sample(0.1, 0.1, at));
+}
+
+/// A margin of 0.2 over pace on the shedding pool, where the cool line sits at 0.15.
+fn pace_pool() -> Pool {
+    Pool {
+        migrate: Some(0.2),
+        ..shedding_pool(Shedding::default())
+    }
+}
+
+/// Two cold pins on `a`, so a round there marks `s1`, the heavier, and leaves `s0`.
+fn two_pins_on_a() -> RoutingState {
+    loaded(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ])
+}
+
+/// A 5-hour reading with no reset, so its lead is its utilization, and a 7-day reading whose reset sits
+/// `remaining_tenths` tenths of a week after `T`, so the rest of the week has elapsed.
+fn weekly(
+    five_hour: f64,
+    seven_day: f64,
+    remaining_tenths: i64,
+    observed_at: i64,
+) -> UtilizationSample {
+    sample(five_hour, seven_day, observed_at).with(
+        SEVEN_DAY,
+        WindowReading {
+            utilization: seven_day,
+            reset: Some(T + WEEK_MS * remaining_tenths / 10),
+            observed_at,
+        },
+    )
+}
+
+#[test]
+fn a_pin_half_through_a_week_ten_percent_elapsed_sheds_at_a_margin_of_a_fifth() {
+    let s = snapshot(pace_pool());
+    let mut st = two_pins_on_a();
+    // 0.5 with a tenth of the week gone runs 0.4 ahead of pace; the 5-hour window leads by 0.1.
+    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+    // 0.3 with six tenths gone runs 0.3 behind pace, so b is cool on both windows though it reads over 0.15.
+    st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the week's lead of 0.4 starts a round and the marked pin moves to the sibling behind its pace"
+    );
+    assert_eq!(st.last_shed("a"), Some(T));
+}
+
+#[test]
+fn the_same_reading_sixty_percent_elapsed_does_not_shed() {
+    let s = snapshot(pace_pool());
+    let mut st = two_pins_on_a();
+    // 0.5 with six tenths of the week gone runs 0.1 behind pace; the 5-hour window leads by 0.1.
+    st.record_sample("a", weekly(0.1, 0.5, 4, T - 500));
+    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("a".into(), None),
+        "a week behind its pace runs no round, so the pin renews in place"
+    );
+    assert_eq!(st.last_shed("a"), None);
+}
+
+#[test]
+fn a_five_hour_window_at_nine_tenths_eighty_percent_elapsed_does_not_shed() {
+    let s = snapshot(pace_pool());
+    let mut st = two_pins_on_a();
+    // An hour left of five puts 0.9 at 0.1 ahead of pace; the week reads 0.1 with no reset, 0.1 ahead.
+    st.record_sample(
+        "a",
+        sample(0.9, 0.1, T - 500).with(
+            FIVE_HOUR,
+            WindowReading {
+                utilization: 0.9,
+                reset: Some(T + HOUR),
+                observed_at: T - 500,
+            },
+        ),
+    );
+    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("a".into(), None),
+        "a 5-hour lead of 0.1 sits under the margin of 0.2"
+    );
+    assert_eq!(st.last_shed("a"), None);
+}
+
+#[test]
+fn a_destination_at_four_tenths_twenty_percent_elapsed_is_not_cool_and_one_at_three_tenths_is() {
+    let s = snapshot(pace_pool());
+    let mut st = two_pins_on_a();
+    // The 5-hour window with no reset leads by its whole 0.9, so a round runs on a and marks s1.
+    st.record_sample("a", sample(0.9, 0.1, T - 500));
+    // 0.4 with two tenths of the week gone runs 0.2 ahead, at or over the cool line of 0.15.
+    st.record_sample("b", weekly(0.1, 0.4, 8, T - 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng()).0),
+        ("a".into(), None),
+        "b's week leads by 0.2, so b is no destination and the mark stands"
+    );
+    // 0.3 at the same point of the week runs 0.1 ahead, under the line.
+    st.record_sample("b", weekly(0.1, 0.3, 8, T + 500));
+    assert_eq!(
+        landed(select(&mut st, &s, &auxiliary(&s, "s1", T + 1_000), &mut rng()).0),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "b's week leads by 0.1, so b is cool and takes the marked pin"
+    );
 }
 
 #[test]

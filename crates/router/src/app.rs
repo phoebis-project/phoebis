@@ -31,6 +31,9 @@ use crate::listen;
 /// going to end sooner because the process keeps waiting.
 const DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
+/// A first TLS handshake on a cold host runs well under this; a stalled one costs at most twice it before the 502.
+const CONNECT_TIMEOUT: Duration = Duration::from_secs(10);
+
 /// The native client gives a request ten minutes (`X-Stainless-Timeout: 600`), so neither the wait for the
 /// response head nor the wait between stream events gives up before the caller itself would.
 const HEAD_TIMEOUT: Duration = Duration::from_secs(600);
@@ -242,6 +245,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
                 body_budget_bytes: config.proxy.body_budget_bytes,
                 body_capture_max_hours: config.stats.body_capture_max_hours,
                 body_read_timeout: Duration::from_secs(config.proxy.body_read_seconds),
+                connect_timeout: CONNECT_TIMEOUT,
                 cooldown_fallback: Duration::from_secs(config.routing.cooldown_fallback_seconds),
                 head_timeout: HEAD_TIMEOUT,
                 hold_timeout: HOLD_TIMEOUT,
@@ -320,16 +324,18 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     // on the keepalive crate.
     let keepalive_gauge_source = keepalive.gauge_source();
     let vault = Arc::new(PairingVault::new());
+    let pairing = Arc::new(PairingSessions::new());
+    let sessions = Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE));
     // The admin state takes the manager; the shutdown drains its refreshes after the admin listener is gone.
     let refreshes = manager.clone();
     let admin = Arc::new(AdminState {
         store,
         manager,
         usage,
-        pairing: Arc::new(PairingSessions::new()),
+        pairing: pairing.clone(),
         control,
         profile,
-        sessions: Arc::new(Sessions::new(SESSION_IDLE, SESSION_ABSOLUTE)),
+        sessions: sessions.clone(),
         secrets: AdminSecrets {
             admin: Secret::new(config.admin.secret.expose()),
         },
@@ -440,16 +446,25 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         .merge(phoebis_admin::router(admin))
         .merge(phoebis_ui::router());
     // An exchange nobody confirms holds a credential bundle in memory, and only this sweep frees one whose
-    // pairing session has run out.
+    // pairing session has run out; an ended pairing and an expired admin session would otherwise stay in their
+    // maps until the process ends.
     let sweeper = {
         let clock = clock.clone();
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(SWEEP_INTERVAL);
             loop {
                 tick.tick().await;
-                let swept = vault.sweep(clock());
-                if swept > 0 {
-                    tracing::debug!(swept, "abandoned pairing exchanges dropped");
+                let now = clock();
+                let exchanges = vault.sweep(now);
+                let pairings = pairing.sweep(now);
+                let admin_sessions = sessions.sweep(now);
+                if exchanges + pairings + admin_sessions > 0 {
+                    tracing::debug!(
+                        exchanges,
+                        pairings,
+                        admin_sessions,
+                        "ended pairings and expired admin sessions dropped"
+                    );
                 }
             }
         })

@@ -510,6 +510,7 @@ pub const HEADER_DENYLIST: &[&str] = &[
     "connection",
     "content-length",
     "cookie",
+    "expect",
     "forwarded",
     "host",
     "keep-alive",

@@ -129,3 +129,43 @@ async fn a_release_before_any_connection_still_opens_the_gate() {
 
     up.shutdown().await;
 }
+
+/// A waiter that comes before the request, one that comes after the write and a second one for the same response
+/// all resolve, and none of them before the response is whole: the signal latches rather than waking only the
+/// waiters that happen to be parked.
+#[tokio::test]
+async fn written_holds_until_the_response_is_whole_and_latches_for_every_later_waiter() {
+    let up = FakeUpstream::start_plain(vec![gated_rule()]).await;
+    {
+        let early = up.written(0);
+        tokio::pin!(early);
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut early)
+                .await
+                .is_err(),
+            "no request has arrived"
+        );
+
+        let mut conn = open_gated(up.addr()).await;
+        read_until_contains(&mut conn, rendered_chunk(&events()[0]).as_bytes()).await;
+        assert!(
+            tokio::time::timeout(Duration::from_millis(50), &mut early)
+                .await
+                .is_err(),
+            "the gate still holds the rest of the response"
+        );
+
+        up.release();
+        read_to_close(&mut conn).await;
+        tokio::time::timeout(Duration::from_secs(5), early)
+            .await
+            .expect("the waiter that came first sees the write");
+    }
+    for _ in 0..2 {
+        tokio::time::timeout(Duration::from_secs(5), up.written(0))
+            .await
+            .expect("a waiter after the write resolves at once");
+    }
+
+    up.shutdown().await;
+}

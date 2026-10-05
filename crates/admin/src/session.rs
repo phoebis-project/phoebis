@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
-use phoebis_store::Secret;
+use phoebis_store::{digest_with, Secret};
 use rand::Rng;
 use subtle::ConstantTimeEq;
 
@@ -51,14 +51,19 @@ struct State {
 
 pub struct Sessions {
     absolute: Duration,
+    /// Keys the digests the login compares, drawn per process: the compare needs equal lengths, not a secret key.
+    compare_key: [u8; 32],
     idle: Duration,
     state: Mutex<State>,
 }
 
 impl Sessions {
     pub fn new(idle: Duration, absolute: Duration) -> Self {
+        let mut compare_key = [0u8; 32];
+        rand::rng().fill_bytes(&mut compare_key);
         Sessions {
             absolute,
+            compare_key,
             idle,
             state: Mutex::new(State {
                 failures: Vec::new(),
@@ -79,13 +84,10 @@ impl Sessions {
         if state.failures.len() >= MAX_FAILURES {
             return Err(LoginError::Throttled);
         }
-        if !bool::from(
-            secrets
-                .admin
-                .expose()
-                .as_bytes()
-                .ct_eq(presented.as_bytes()),
-        ) {
+        // Digests of one length on both sides, so how long the compare runs says nothing about the secret's length.
+        let expected = digest_with(&self.compare_key, secrets.admin.expose().as_bytes());
+        let offered = digest_with(&self.compare_key, presented.as_bytes());
+        if !bool::from(expected.ct_eq(&offered)) {
             state.failures.push(now);
             return Err(LoginError::Invalid);
         }
@@ -102,14 +104,11 @@ impl Sessions {
     }
 
     /// Resolves a cookie into the session id, renewing the idle deadline. A session past either deadline is
-    /// dropped here rather than swept, so an idle process keeps no live sessions.
+    /// dropped here as well as by the sweep, so a dead cookie never resolves between two sweeps.
     pub fn authenticate(&self, cookie: &str, now: i64) -> Option<String> {
         let mut state = self.state.lock().expect(LOCK_POISONED);
         let session = state.sessions.get_mut(cookie)?;
-        let idle_over = now.saturating_sub(session.last_seen) > self.idle.as_millis() as i64;
-        let absolute_over =
-            now.saturating_sub(session.created_at) > self.absolute.as_millis() as i64;
-        if idle_over || absolute_over {
+        if self.ended(session, now) {
             state.sessions.remove(cookie);
             return None;
         }
@@ -121,11 +120,25 @@ impl Sessions {
     /// every message it sends, and a socket is not the activity the idle deadline measures.
     pub fn is_live(&self, session_id: &str, now: i64) -> bool {
         let state = self.state.lock().expect(LOCK_POISONED);
-        state.sessions.values().any(|s| {
-            s.id == session_id
-                && now.saturating_sub(s.last_seen) <= self.idle.as_millis() as i64
-                && now.saturating_sub(s.created_at) <= self.absolute.as_millis() as i64
-        })
+        state
+            .sessions
+            .values()
+            .any(|s| s.id == session_id && !self.ended(s, now))
+    }
+
+    /// Drops every session past its idle or absolute deadline, so the map `is_live` scans holds live sessions
+    /// rather than every one a browser never presented again. Answers how many it dropped.
+    pub fn sweep(&self, now: i64) -> usize {
+        let mut state = self.state.lock().expect(LOCK_POISONED);
+        let before = state.sessions.len();
+        state.sessions.retain(|_, s| !self.ended(s, now));
+        before - state.sessions.len()
+    }
+
+    /// Past either deadline; a session exactly at one still stands.
+    fn ended(&self, session: &SessionRec, now: i64) -> bool {
+        now.saturating_sub(session.last_seen) > self.idle.as_millis() as i64
+            || now.saturating_sub(session.created_at) > self.absolute.as_millis() as i64
     }
 
     pub fn logout(&self, cookie: &str) {
@@ -200,5 +213,36 @@ mod tests {
         let cookie = sessions.login("admin-secret", &secrets(), 0).unwrap();
         sessions.logout(&cookie);
         assert!(sessions.authenticate(&cookie, 1).is_none());
+    }
+
+    #[test]
+    fn an_expired_admin_session_is_swept_rather_than_kept_until_presented() {
+        let sessions = Sessions::new(Duration::from_secs(900), Duration::from_secs(43_200));
+        let _idle = sessions.login("admin-secret", &secrets(), 0).unwrap();
+        let busy = sessions.login("admin-secret", &secrets(), 0).unwrap();
+        let busy_id = sessions.authenticate(&busy, 600_000).unwrap();
+        assert_eq!(
+            sessions.sweep(900_000),
+            0,
+            "a session at its idle deadline still stands"
+        );
+        assert_eq!(
+            sessions.sweep(900_001),
+            1,
+            "the idle one leaves without ever being presented again"
+        );
+        assert_eq!(sessions.state.lock().unwrap().sessions.len(), 1);
+        assert!(sessions.is_live(&busy_id, 900_001));
+        let mut at = 600_000;
+        while at + 600_000 < 43_200_000 {
+            at += 600_000;
+            assert!(sessions.authenticate(&busy, at).is_some());
+        }
+        assert_eq!(
+            sessions.sweep(43_200_001),
+            1,
+            "the absolute deadline sweeps a session in constant use"
+        );
+        assert!(sessions.state.lock().unwrap().sessions.is_empty());
     }
 }

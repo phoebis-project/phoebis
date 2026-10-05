@@ -132,14 +132,17 @@ for three fields with their own message: `probe_cap_window_share_per_day` answer
 "keepalive.probe_cost_cap_usd_per_day must be null or a positive number," and `retry_max_seconds` answers
 "keepalive.retry_max_seconds must be at least keepalive.retry_seconds." The lead and jitter bounds stop short of
 their cache TTL because a lead or jitter at or past the TTL would put a probe's due time before the cache was
-even written. `GET /admin/pools` answers the full policy with every default filled in, so a pool created with
-`{}` shows every value above.
+even written, and a lead plus its jitter must stay under that TTL, refused as `keepalive.lead_seconds_5m plus
+keepalive.jitter_seconds_5m must stay under the cache TTL they apply to` (the 1h pair the same). A lead of 0 with a
+jitter of 0 never probes: the due time falls on the expiry, and the entry is dead at its expiry. `GET /admin/pools`
+answers the full policy with every default filled in, so a pool created with `{}` shows every value above.
 
 Both daily caps count per UTC day and are kept in `router.sqlite` as each probe settles, so a restart resumes them
 where they stood. A probe settled in dollars counts toward its pool's `probe_cost_cap_usd_per_day`: one on an api_key
 account or a subscription account in overage, a plan-funded one the cost table cannot price (see [The cost
 reference](#the-cost-reference)), and a fast-mode session's whatever the account's funding. A probe settled in the
-window share counts toward its account's `probe_cap_window_share_per_day`, and a migrated probe toward neither.
+window share counts toward its account's `probe_cap_window_share_per_day`. A migrated probe is priced from its usage
+like any other and counts against the daily caps.
 
 ## The cost reference
 
@@ -216,7 +219,7 @@ over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight; or `held`, with no probe scheduled and one of eighteen reasons attached.
+`probing`, with a probe in flight; or `held`, with no probe scheduled and one of nineteen reasons attached.
 
 ### The guard field
 
@@ -229,12 +232,14 @@ probe that made its net negative, not a contradiction.
 
 | Reason | Console label | What it means |
 | --- | --- | --- |
-| `affinity_too_short` | affinity too short | The pool's affinity expires before the cache this probe would warm. |
+| `affinity_too_short` | affinity too short | The pool's affinity ends before this recipe's probe is due (see below). |
 | `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
 | `budget` | at budget | The pinned member is at its spend budget until the period ends or the budget is raised. |
 | `cap_reached` | cap reached | The pool spent its daily probe cap, or a subscription account its 5-hour window share. |
 | `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
-| `cooled` | cooled down | The pinned account is under a cooldown; the probe waits for it to end. |
+| `cooled` | cooled down | The pinned account is under a cooldown; the probe waits it out while the entry lasts. |
+| `evicted` | evicted | The engine reached its retained-bytes cap and this recipe was the oldest idle one. |
+| `expired` | entry expired | The cache entry expired before its probe was due; no probe was sent. |
 | `idle_limit` | idle limit | The pool's idle time or idle probe budget ran out since the last real request. |
 | `net_negative` | net negative | Probes have cost more than they saved; held until a request lands warm. |
 | `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
@@ -247,6 +252,20 @@ probe that made its net negative, not a contradiction.
 | `storage_limit` | storage limit | The engine is at its retained-request or session limit. |
 | `unsupported_shape` | unsupported shape | The last request had no cacheable prefix the probe could replay. |
 
+A recipe holds under `affinity_too_short` while the pool's affinity ends before its probe is due, the entry's TTL less
+the lead: the session could move away from the account the probe would warm, so raise `affinity_ttl_seconds` past
+that. A five-minute recipe needs about four minutes of pin and a one-hour recipe about fifty-four; the 300-second floor
+that `keepalive.enabled` asks of the pool when it is saved stays the one refusal.
+
+An entry the engine knows has expired is never probed: its recipe ends under `expired`, its unanswered probes are
+settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. A recipe
+held under another reason, a cooldown, a budget, the daily cap or keepalive off, leaves as `expired` once its entry has
+expired; the next real request starts a new one. While the request a recipe follows is still open, the lapse waits for
+its completion. At the retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first,
+oldest activity first, then attended sessions' idle agents, never one with a probe or a request in flight. A lapsed or
+evicted recipe leaves the recipe list, as one stopped under `idle_limit` or `storage_limit` does, and shows on the
+wasted counter; a lapse also shows in that log line.
+
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and holds the recipe under `unsupported_shape`: a probe built from it
 would travel with a stale stamp or a doubled member.
@@ -256,11 +275,14 @@ under `quota_exhausted`: its next attempt waits out that answer's `Retry-After` 
 frees within seconds. A probe answered `503 accounts_unavailable` because its key moved to another pool while it was in
 flight is `retrying` rather than paused under `pool_exhausted`: its next attempt admits under the new pool.
 
-A wasted probe settles with one of four reasons of its own, counted when the recipe stops with one already sent
-and unanswered:
+A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
+lapses or is evicted, or when the next request after the probe reads no cache:
 
 | Reason | What settles it |
 | --- | --- |
+| `cold_return` | The request after a covering probe read no cache, so the probe kept nothing. |
+| `evicted` | The engine evicted the recipe at its retained-bytes cap. |
+| `expired` | The recipe's cache entry expired before its probe was due. |
 | `idle_limit` | The pool's idle limits ran out before a real request answered the probe. |
 | `released` | By an operator's release, a key's opt-out, or the companion reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
@@ -276,9 +298,9 @@ Per pool and per hour, the ledger's rollup carries the keepalive fields the cons
 `saved_usd_gross`, what those kept-warm tokens saved against paying them as uncached input every turn; `probe_cost_usd`,
 what sending the probes cost; both at the dearest listed cells for a model the price table does not know;
 `probe_migrated`, a probe that landed on a different account than the recipe's; `wasted_probes` and `wasted_probe_usd`,
-probes still unanswered when the recipe was discarded, and what they cost; `wasted_probe_reasons`, those wasted probes
-counted by the reason above; and `probes_skipped`, a due probe a gate withheld rather than sending, for example because
-the cost cap or a cooldown already held the recipe.
+probes settled wasted by one of the reasons above, and what they cost; `wasted_probe_reasons`, those wasted probes
+counted by the reason; and `probes_skipped`, a due probe a gate or a lapsed entry withheld rather than sending, for
+example because the cost cap or a cooldown already held the recipe.
 
 `GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost),
 `probes_24h` (`ok`, `failed`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap. Its `bus_gaps`

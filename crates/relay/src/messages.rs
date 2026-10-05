@@ -79,8 +79,8 @@ use crate::stream::{
     STREAM_STALLED,
 };
 use crate::{
-    edit_body, is_portable, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy,
-    DriftGuard, Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip,
+    edit_body, presented_key, BodyEdits, BodyMember, CacheTtl, CacheTtlPolicy, DriftGuard,
+    Markerless, NativeEdit, RelayError, SafeguardsEdit, TtlBranch, UpstreamGzip,
     DANGEROUS_TOOL_USE_BETA, EXTENDED_TTL_BETA,
 };
 
@@ -136,6 +136,8 @@ pub struct Limits {
     pub body_capture_max_hours: u32,
     /// How long a request body may take to arrive after authentication.
     pub body_read_timeout: Duration,
+    /// The bound on a connection's checkout, the connect and the TLS handshake; its timeout is `Unsent`.
+    pub connect_timeout: Duration,
     /// How long an account is cooled when the upstream rejected it without saying for how long.
     pub cooldown_fallback: Duration,
     pub head_timeout: Duration,
@@ -817,6 +819,7 @@ fn restore_with<'a>(
         prev_req: previous.request_id.as_deref(),
         restore_cch: true,
         skip: skip.iter().copied().collect(),
+        system_is_array: r.system_is_array,
     })
 }
 
@@ -1285,8 +1288,9 @@ impl Relay {
         // Admission and the body edit both act on the first spelling of a member; a second one would reach
         // the wire untouched and a last-wins parser upstream would act on it instead. The billing line's path
         // counts as well: the drift check and its placeholder exemption read the first `system` and the first
-        // `text` of its first block, so a second spelling would carry a hash nothing verified. Refused whole
-        // rather than repaired: the caller's body is not edited on its way through. A scan that could not
+        // `text` of its first block, so a second spelling would carry a hash nothing verified. So does
+        // `metadata.user_id`, the one `metadata` member the relay reads and splices the account into. Refused
+        // whole rather than repaired: the caller's body is not edited on its way through. A scan that could not
         // finish proves nothing about the members past where it stopped, so it refuses as well.
         let repeated = phoebis_cch::repeated_top_level_member(
             &raw,
@@ -1296,6 +1300,11 @@ impl Relay {
             Some(name) => Ok(Some(name)),
             None => phoebis_cch::first_system_block_member_count(&raw, "text")
                 .map(|texts| (texts > 1).then_some(BILLING_LINE_PATH)),
+        })
+        .and_then(|repeated| match repeated {
+            Some(name) => Ok(Some(name)),
+            None => phoebis_cch::repeated_member_within(&raw, "metadata", &["user_id"])
+                .map(|repeated| repeated.map(|_| "metadata.user_id")),
         });
         let refusal = if behind {
             Some(RelayError::LedgerBehind)
@@ -1492,6 +1501,7 @@ impl Relay {
                             received_at,
                         )
                     }),
+                    system_is_array: facts.system_is_array,
                 })
             }
             _ => None,
@@ -1549,7 +1559,7 @@ impl Relay {
             .pool(&key.pool_id)
             .map(|p| CacheTtlPolicy::from_json(&p.cache_ttl_json))
             .unwrap_or_default();
-        let portable = is_portable(&raw);
+        let portable = facts.portable;
         let target = parts
             .uri
             .path_and_query()
@@ -3923,12 +3933,14 @@ impl From<Failure> for LocalRefusal {
 }
 
 /// The restoration facts computed once at admission: the client version the wire already named, the
-/// version-suffix code units, and the prompt id this turn carries. The previous request id is not here because
-/// it is per-account, looked up in the failover loop against the account each attempt actually tries.
+/// version-suffix code units, the prompt id this turn carries, and whether `system` is an array. The previous
+/// request id is not here because it is per-account, looked up in the failover loop against the account each
+/// attempt actually tries.
 struct RestoreContext {
     cli_version: String,
     prompt_units: [u16; 3],
     prompt_id: Option<String>,
+    system_is_array: bool,
 }
 
 /// What the same-account leg reads about the request it is part of: fixed at admission and shared by every

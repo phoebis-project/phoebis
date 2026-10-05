@@ -8,6 +8,7 @@ use phoebis_bus::{Event as BusEvent, Kind, Outcome, Phase, ResponseChunk, Usage}
 use phoebis_keepalive::{
     AgentState, Event, Guard, KeepaliveLimits, KeepalivePolicy, Reason, RecipeState,
 };
+use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 
 /// The ledger row for a request, once the writer has landed it.
 async fn landed(r: &Rig, id: &str) {
@@ -120,7 +121,9 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
     );
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&RigSpec::default().policy).unwrap();
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.observe("main").await;
     assert_eq!(
@@ -130,7 +133,9 @@ async fn admission_needs_the_pool_toggle_and_no_key_opt_out() {
     );
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.observe("main").await;
     assert_eq!(
@@ -168,7 +173,9 @@ async fn a_title_request_between_an_opted_out_selection_and_its_completion_leave
     let r = rig(RigSpec::default()).await;
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.engine.observe(r.observed("req", "main", BODY));
     r.engine.observe(r.selected("req", "a"));
@@ -511,7 +518,161 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     assert_eq!(
         r2.status("main").reason,
         Reason::AwaitingSelection,
-        "at the bound the newest recipe is refused and the one already held stays"
+        "a busy agent's recipe is never evicted, so at the bound the newest one is refused"
+    );
+    // Room for two recipes: the third evicts the oldest idle one, whose unanswered probe settles under the
+    // eviction, and keeps the active agent's.
+    let one = {
+        let mut sized = rig(RigSpec::default()).await;
+        sized.observe("main").await;
+        sized.engine.stats().retained_bytes
+    };
+    let mut r3 = rig(RigSpec {
+        limits: KeepaliveLimits {
+            max_retained_bytes: one * 5 / 2,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    for agent in ["active", "newest"] {
+        r3.event(Event {
+            event: "agent_start".into(),
+            agent_id: Some(agent.into()),
+            ..Default::default()
+        })
+        .unwrap();
+    }
+    r3.observe("main").await;
+    r3.state("main", "idle");
+    r3.advance_attended(270_000);
+    r3.step().await;
+    assert_eq!(
+        r3.status("main").unanswered,
+        1,
+        "one probe nobody came back for"
+    );
+    r3.observe("active").await;
+    r3.observe("newest").await;
+    assert_eq!(r3.status("main").reason, Reason::Evicted);
+    assert_eq!(r3.status("newest").reason, Reason::Scheduled);
+    let mut kept = r3.engine.recipes_for("desktop", "session");
+    kept.sort();
+    assert_eq!(kept, ["active", "newest"]);
+    let evicted = fake_upstream::wait_for(Duration::from_secs(5), || {
+        let rows = r3
+            .db
+            .read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let evicted: u64 = rows
+            .iter()
+            .filter_map(|row| row.wasted_probe_reasons.get("evicted"))
+            .sum();
+        (evicted > 0).then_some(evicted)
+    })
+    .await;
+    assert_eq!(
+        evicted, 1,
+        "the evicted recipe's probe is wasted under the eviction"
+    );
+}
+
+/// A recipe of about `bytes` bytes armed on the engine's side alone, for `agent` of `session`, on account `a`.
+fn arm(r: &Rig, id: &str, session: &str, agent: &str, bytes: usize) {
+    let body = format!(
+        r#"{{"model":"claude-sonnet-4-5","max_tokens":10,"messages":[{{"role":"user","content":"{}"}}]}}"#,
+        "y".repeat(bytes)
+    );
+    let BusEvent::RequestObserved(mut observed) = r.observed(id, agent, &body) else {
+        unreachable!("observed builds an observation")
+    };
+    observed.session_id = Some(session.into());
+    r.engine.observe(BusEvent::RequestObserved(observed));
+    r.engine.observe(r.selected(id, "a"));
+    r.engine
+        .observe(r.complete(id, Outcome::Succeeded, Some(usage(0, 2_000))));
+}
+
+fn start_agent(r: &mut Rig, agent: &str) {
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some(agent.into()),
+        ..Default::default()
+    })
+    .unwrap();
+}
+
+/// With room for two recipes and a half, a third evicts one: the oldest idle recipe before a newer one, an unattended
+/// session's before an older idle one of an attended session, and none at all when evicting every candidate would
+/// still leave the newest without room, which is then refused.
+#[tokio::test]
+async fn eviction_takes_unattended_then_the_oldest_idle_and_nothing_when_it_cannot_make_room() {
+    let spec = || RigSpec {
+        limits: KeepaliveLimits {
+            max_retained_bytes: 25_000,
+            ..KeepaliveLimits::default()
+        },
+        ..RigSpec::default()
+    };
+    let mut r = rig(spec()).await;
+    for agent in ["older", "newer", "third"] {
+        start_agent(&mut r, agent);
+    }
+    arm(&r, "older", "session", "older", 10_000);
+    r.state("older", "idle");
+    r.advance_attended(10_000);
+    arm(&r, "newer", "session", "newer", 10_000);
+    r.state("newer", "idle");
+    r.advance_attended(10_000);
+    arm(&r, "third", "session", "third", 10_000);
+    let mut kept = r.engine.recipes_for("desktop", "session");
+    kept.sort();
+    assert_eq!(
+        (r.status("older").reason, kept),
+        (
+            Reason::Evicted,
+            vec!["newer".to_string(), "third".to_string()]
+        ),
+        "the oldest idle recipe goes, the newer one stays"
+    );
+
+    let mut r = rig(spec()).await;
+    r.event(session_start_as("other", "second", None)).unwrap();
+    for agent in ["idle", "newest"] {
+        start_agent(&mut r, agent);
+    }
+    arm(&r, "idle", "session", "idle", 10_000);
+    r.state("idle", "idle");
+    // Past the lease of `other`, which no heartbeat renews, while `session` stays attended.
+    r.advance_attended(100_000);
+    arm(&r, "unattended", "other", "main", 10_000);
+    arm(&r, "newest", "session", "newest", 10_000);
+    let unattended = r.engine.agent_status("desktop", "other", "main").unwrap();
+    assert_eq!(
+        (unattended.reason, r.status("idle").reason),
+        (Reason::Evicted, Reason::Scheduled),
+        "the unattended recipe goes before the older idle one of the attended session"
+    );
+
+    let mut r = rig(spec()).await;
+    for agent in ["busy", "idle", "large"] {
+        start_agent(&mut r, agent);
+    }
+    arm(&r, "busy", "session", "busy", 10_000);
+    arm(&r, "idle", "session", "idle", 10_000);
+    r.state("idle", "idle");
+    arm(&r, "large", "session", "large", 16_000);
+    let mut kept = r.engine.recipes_for("desktop", "session");
+    kept.sort();
+    assert_eq!(
+        (r.status("large").reason, kept),
+        (
+            Reason::StorageLimit,
+            vec!["busy".to_string(), "idle".to_string()]
+        ),
+        "evicting the idle recipe would not make room, so nothing is evicted"
     );
 }
 

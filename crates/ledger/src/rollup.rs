@@ -2,9 +2,12 @@
 //! the same transaction as its raw rows, so a rollup never disagrees with the requests it summarises.
 
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
-use rusqlite::{params, Connection, OptionalExtension, Transaction};
+use rusqlite::types::Value;
+use rusqlite::{params, params_from_iter, Connection, OptionalExtension, Transaction};
 
+use crate::db::LedgerDb;
 #[cfg(test)]
 use crate::histogram::bucket_index;
 use crate::histogram::Histogram;
@@ -23,7 +26,8 @@ pub const NO_EFFORT: &str = "none";
 /// The value a request with no `x-claude-code-request-class` header files under, and a keepalive delta's own.
 pub const NO_CLASS: &str = "-";
 
-/// The value a request the answer named no `usage.speed` for files under; `fast` is the other value.
+/// The value a request files under when its answer named no `usage.speed` and it did not ask for `fast`; `fast`
+/// is the other value.
 pub const STANDARD_SPEED: &str = "standard";
 
 /// The funding of an attempt the plan paid for: neither served fast nor reported in overage.
@@ -32,6 +36,68 @@ pub const PLAN_FUNDING: &str = "plan";
 pub const OVERAGE_FUNDING: &str = "overage";
 /// The funding of an attempt served fast, whose answer draws usage credits in dollars.
 pub const FAST_FUNDING: &str = "fast";
+
+/// The folded vocabulary the hour row is keyed on; the request row keeps the raw values. A caller picks its user
+/// agent, its effort and its class, and the client is derived from both headers, so an unbounded value would grow
+/// `rollups_hourly` by a row per request for as long as the rollups are kept.
+pub const OTHER_DIMENSION: &str = phoebis_bus::OTHER_CLIENT;
+/// The longest identifier or user-agent token the hour row keeps.
+pub const DIMENSION_MAX_BYTES: usize = 64;
+/// The API's five effort levels and `NO_EFFORT`; any other effort files under `OTHER_DIMENSION`.
+pub const EFFORTS: &[&str] = &["high", "low", "max", "medium", "none", "xhigh"];
+
+/// The charset the relay reads a request class and a client hint with.
+fn identifier_byte(b: u8) -> bool {
+    b.is_ascii_alphanumeric() || matches!(b, b'-' | b'.' | b'/' | b':' | b'_')
+}
+
+/// The header's first product token (`name/version`, up to the first space), cut to `DIMENSION_MAX_BYTES`, else
+/// `OTHER_DIMENSION`: the build of a client is in the token, and the comment after it is free text.
+pub fn fold_user_agent(raw: &str) -> String {
+    let token = raw.split(' ').next().unwrap_or_default();
+    let part = |s: &str| !s.is_empty() && s.bytes().all(|b| b != b'/' && identifier_byte(b));
+    match token.split_once('/') {
+        Some((name, version)) if part(name) && part(version) => {
+            let mut end = token.len().min(DIMENSION_MAX_BYTES);
+            while !token.is_char_boundary(end) {
+                end -= 1;
+            }
+            token[..end].to_string()
+        }
+        _ => OTHER_DIMENSION.into(),
+    }
+}
+
+/// `fast` for a request that asked for it, else `STANDARD_SPEED`: the request row keeps the body's `speed` text as
+/// sent, and any other value would key a row of its own.
+fn fold_speed(raw: Option<&str>) -> &'static str {
+    if raw == Some("fast") {
+        "fast"
+    } else {
+        STANDARD_SPEED
+    }
+}
+
+/// One of `EFFORTS`, `NO_EFFORT` for a request that asked for none, else `OTHER_DIMENSION`.
+pub fn fold_effort(raw: Option<&str>) -> &'static str {
+    match raw {
+        None => NO_EFFORT,
+        Some(effort) => EFFORTS
+            .iter()
+            .find(|level| **level == effort)
+            .copied()
+            .unwrap_or(OTHER_DIMENSION),
+    }
+}
+
+/// The value itself while it holds to the identifier charset and `DIMENSION_MAX_BYTES`, else `OTHER_DIMENSION`.
+pub fn fold_identifier(raw: &str) -> String {
+    if (1..=DIMENSION_MAX_BYTES).contains(&raw.len()) && raw.bytes().all(identifier_byte) {
+        raw.into()
+    } else {
+        OTHER_DIMENSION.into()
+    }
+}
 
 /// How far past its announcement a cooldown is booked. The deadline is the upstream's to set, and the
 /// classifier saturates an absurd `Retry-After` to `i64::MAX`, so booking every hour up to it would hold the
@@ -94,7 +160,8 @@ pub struct RollupRow {
     /// The class the client named, `NO_CLASS` for a classless request and for a keepalive credit; a dimension,
     /// so it sits in the key.
     pub request_class: String,
-    /// The speed the answer reported, `STANDARD_SPEED` when it reported none; a dimension, so it sits in the key.
+    /// The speed the last attempt's answer reported, else `fast` when the request asked for it, else
+    /// `STANDARD_SPEED`; a dimension, so it sits in the key.
     pub speed: String,
     /// Who paid for the attempt: `fast` when it was served fast, whose answer draws usage credits in dollars
     /// whatever the overage flag; else `overage` when the head's unified headers said overage was in use; else
@@ -341,12 +408,24 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         last.map(|a| a.account_id.as_str()).unwrap_or(UNATTRIBUTED),
         &request.canonical_model,
         &request.kind,
-        request.user_agent.as_deref().unwrap_or(UNATTRIBUTED),
-        request.client.as_deref().unwrap_or(UNATTRIBUTED),
-        request.effort.as_deref().unwrap_or(NO_EFFORT),
-        request.request_class.as_deref().unwrap_or(NO_CLASS),
+        &request
+            .user_agent
+            .as_deref()
+            .map_or_else(|| UNATTRIBUTED.into(), fold_user_agent),
+        &request
+            .client
+            .as_deref()
+            .map_or_else(|| UNATTRIBUTED.into(), fold_identifier),
+        fold_effort(request.effort.as_deref()),
+        &request
+            .request_class
+            .as_deref()
+            .map_or_else(|| NO_CLASS.into(), fold_identifier),
+        // A fast request refused before any attempt served (the fast lane spent, the credits unavailable, a local
+        // refusal) still asked for fast: it files under that speed, while its funding reads the served answer,
+        // which spent nothing.
         last.and_then(|a| a.speed.as_deref())
-            .unwrap_or(STANDARD_SPEED),
+            .unwrap_or_else(|| fold_speed(request.requested_speed.as_deref())),
         // A fast answer draws usage credits in dollars whatever the overage flag, so it is metered on a plan
         // account too.
         match last {
@@ -484,7 +563,9 @@ pub fn fold_request(
     previous: Option<(&RequestRecord, &[AttemptRecord])>,
 ) -> Result<(), LedgerError> {
     // A replaced request first leaves the row it was folded into, under the key it had then: the same id can
-    // land under another account or hour once its attempts are known.
+    // land under another account or hour once its attempts are known. A request folded under its raw dimensions by
+    // an earlier build and replaced after the upgrade finds no row under its folded key and counts in both rows,
+    // accepted for a record replaced across one restart.
     if let Some((old_request, old_attempts)) = previous {
         let old = delta_of(old_request, old_attempts);
         if let Some(mut row) = read_rollup(tx, &old)? {
@@ -1077,14 +1158,110 @@ fn row_to_account(r: &rusqlite::Row<'_>) -> rusqlite::Result<AccountRollupRow> {
     })
 }
 
+/// One key's rows: the pair `KEY_RANGE_PREDICATE` binds, or every generation of the id where a reader matches the
+/// id alone (the reserved key, which has no lifetime of its own, and a series scope).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct KeySelector {
+    pub key_id: String,
+    pub key_generation: Option<i64>,
+}
+
+/// The fixed filters the read narrows by in SQL: every list empty selects all.
+#[derive(Clone, Debug, Default)]
+pub struct RollupSelect {
+    pub pools: Vec<String>,
+    pub accounts: Vec<String>,
+    pub kinds: Vec<String>,
+    /// Canonical ids, which the rows carry lowercased.
+    pub models: Vec<String>,
+    pub keys: Vec<KeySelector>,
+}
+
+/// The range in pages of `PAGE_HOURS`, each page its own read, folded into the accumulators as it arrives: a long
+/// range holds one page in memory and releases the reader connection between pages.
+pub const PAGE_HOURS: i64 = 24;
+
+/// The selecting statement and its binds, spelled once so the plan test explains the statement the read runs.
+fn select_statement(from_hour: i64, to_hour: i64, select: &RollupSelect) -> (String, Vec<Value>) {
+    fn in_list(column: &str, values: &[String], binds: &mut Vec<Value>, clauses: &mut Vec<String>) {
+        if values.is_empty() {
+            return;
+        }
+        let marks: Vec<String> = values
+            .iter()
+            .map(|v| {
+                binds.push(Value::Text(v.clone()));
+                format!("?{}", binds.len())
+            })
+            .collect();
+        clauses.push(format!("{column} IN ({})", marks.join(", ")));
+    }
+    let mut binds = vec![Value::Integer(from_hour), Value::Integer(to_hour)];
+    let mut clauses = vec!["hour >= ?1 AND hour < ?2".to_string()];
+    in_list("pool_id", &select.pools, &mut binds, &mut clauses);
+    in_list("account_id", &select.accounts, &mut binds, &mut clauses);
+    in_list("kind", &select.kinds, &mut binds, &mut clauses);
+    in_list("canonical_model", &select.models, &mut binds, &mut clauses);
+    if !select.keys.is_empty() {
+        let parts: Vec<String> = select
+            .keys
+            .iter()
+            .map(|k| {
+                binds.push(Value::Text(k.key_id.clone()));
+                let at_id = binds.len();
+                match k.key_generation {
+                    Some(generation) => {
+                        binds.push(Value::Integer(generation));
+                        format!("(key_id = ?{at_id} AND key_generation = ?{})", at_id + 1)
+                    }
+                    None => format!("key_id = ?{at_id}"),
+                }
+            })
+            .collect();
+        clauses.push(format!("({})", parts.join(" OR ")));
+    }
+    (
+        format!(
+            "SELECT {COLUMNS} FROM rollups_hourly WHERE {} ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding",
+            clauses.join(" AND ")
+        ),
+        binds,
+    )
+}
+
 pub fn read_rollups(
     conn: &Connection,
     from_hour: i64,
     to_hour: i64,
+    select: &RollupSelect,
 ) -> Result<Vec<RollupRow>, LedgerError> {
-    let mut stmt = conn.prepare(&format!("SELECT {COLUMNS} FROM rollups_hourly WHERE hour >= ?1 AND hour < ?2 ORDER BY hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding"))?;
-    let rows = stmt.query_map(params![from_hour, to_hour], row_to_rollup)?;
+    let (sql, binds) = select_statement(from_hour, to_hour, select);
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(binds), row_to_rollup)?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// The rows of `[from_hour, to_hour)` under `select`, one `PAGE_HOURS` page per `read`, handed to `visit` in the
+/// order one read of the whole range would answer them.
+pub async fn read_rollups_paged(
+    db: &Arc<LedgerDb>,
+    select: &RollupSelect,
+    from_hour: i64,
+    to_hour: i64,
+    mut visit: impl FnMut(&RollupRow),
+) -> Result<(), LedgerError> {
+    let select = Arc::new(select.clone());
+    let mut page = from_hour;
+    while page < to_hour {
+        let end = page.saturating_add(PAGE_HOURS * 3_600).min(to_hour);
+        let select = Arc::clone(&select);
+        let rows = db
+            .read(move |c| read_rollups(c, page, end, &select))
+            .await?;
+        rows.iter().for_each(&mut visit);
+        page = end;
+    }
+    Ok(())
 }
 
 /// One page of one key's rows at one generation, for the startup stamp that moves the unstamped rows of a
@@ -1177,6 +1354,102 @@ mod tests {
          1, 2, 3, 4, 6, 0.5, 0.1, 0.1, 0.1, 0.2, 0, 0, 0.0, 0.0, 0, 0, 0.0, '{}', \
          x'', x'', x'', x'', '{}', '{}'";
 
+    /// The tables a connection holds, and the columns of `attempts` and `rollups_hourly`, each sorted.
+    fn shape(conn: &Connection) -> (Vec<String>, Vec<String>, Vec<String>) {
+        let names = |sql: &str| -> Vec<String> {
+            let mut stmt = conn.prepare(sql).unwrap();
+            let mut names: Vec<String> = stmt
+                .query_map([], |r| r.get::<_, String>(0))
+                .unwrap()
+                .collect::<rusqlite::Result<Vec<_>>>()
+                .unwrap();
+            names.sort();
+            names
+        };
+        (
+            names("SELECT name FROM sqlite_master WHERE type = 'table' AND name NOT LIKE 'sqlite\\_%' ESCAPE '\\'"),
+            names("SELECT name FROM pragma_table_info('attempts')"),
+            names("SELECT name FROM pragma_table_info('rollups_hourly')"),
+        )
+    }
+
+    /// Every table of the newest schema, sorted.
+    const FINAL_TABLES: &[&str] = &[
+        "account_rollups_hourly",
+        "attempts",
+        "bodies",
+        "cooldown_segments",
+        "cooldown_spans",
+        "events",
+        "extra_usage_samples",
+        "kept_warm_marks",
+        "meta",
+        "parked_records",
+        "quota_samples",
+        "requests",
+        "rollups_hourly",
+    ];
+
+    /// What a migration added since version 1 is the migration's alone: a column it adds that `SCHEMA` already
+    /// carried would fail a fresh file with a duplicate column, and a column it drops that `SCHEMA` lacked with a
+    /// missing one.
+    #[test]
+    fn the_bootstrap_schema_is_the_version_one_ddl_the_chain_builds_on() {
+        let conn = Connection::open_in_memory().unwrap();
+        conn.execute_batch(crate::schema::SCHEMA).unwrap();
+        let (tables, attempts, rollups) = shape(&conn);
+        for later in ["cooldown_segments", "cooldown_spans", "kept_warm_marks"] {
+            assert!(
+                !tables.iter().any(|t| t == later),
+                "{later} is a migration's table: {tables:?}"
+            );
+        }
+        assert!(
+            !rollups.iter().any(|c| c == "probes_skipped"),
+            "probes_skipped is migration 5's column: {rollups:?}"
+        );
+    }
+
+    /// A file holding exactly what version 1 created reaches the newest version with the newest shape.
+    #[test]
+    fn a_ledger_built_from_the_frozen_version_one_schema_upgrades_through_the_whole_chain() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        {
+            let conn = Connection::open(&path).unwrap();
+            conn.execute_batch(crate::schema::SCHEMA).unwrap();
+            conn.execute(
+                "INSERT INTO meta (key, value) VALUES ('schema_version', '1')",
+                [],
+            )
+            .unwrap();
+        }
+        let db = crate::LedgerDb::open(&path).unwrap();
+        assert_eq!(
+            db.read_blocking(read_version).unwrap(),
+            crate::schema::MIGRATIONS.last().unwrap().0
+        );
+        let (tables, attempts, _) = db.read_blocking(|c| Ok(shape(c))).unwrap();
+        assert_eq!(tables, FINAL_TABLES);
+    }
+
+    /// The fresh path is the upgrade path from version 1, so a file that did not exist reads the same version and
+    /// the same tables as one upgraded from version 1.
+    #[test]
+    fn a_fresh_ledger_runs_the_whole_chain_from_an_empty_file() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("ledger.sqlite");
+        assert!(!path.exists());
+        let db = crate::LedgerDb::open(&path).unwrap();
+        assert_eq!(
+            db.read_blocking(read_version).unwrap(),
+            crate::schema::MIGRATIONS.last().unwrap().0
+        );
+        let (tables, attempts, rollups) = db.read_blocking(|c| Ok(shape(c))).unwrap();
+        assert_eq!(tables, FINAL_TABLES);
+        assert!(rollups.iter().any(|c| c == "probes_skipped"));
+    }
+
     /// A stored ledger has rollup rows under the six-part key, and SQLite cannot add a seventh to a primary
     /// key in place, so the migration rebuilds the table. What it copies has to survive that.
     #[test]
@@ -1205,7 +1478,9 @@ mod tests {
         }
         let db = crate::LedgerDb::open(&path).unwrap();
         assert_eq!(db.read_blocking(read_version).unwrap(), 28);
-        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
         assert_eq!(rows.len(), 1, "the row survived the rebuild");
         assert_eq!(
             (
@@ -1243,7 +1518,7 @@ mod tests {
             tx.execute(
                 &format!(
                     "INSERT INTO rollups_hourly ({}) VALUES \
-                     (3600, 'k', 0, 'p', 'a', 'm', 'inference', 'ua', 'none', 5, 5, 0, 0, 0, 0, 5, 0, 0, 0, 5, \
+                     (3600, 'k', 0, 'p', 'a', 'm', 'inference', 'ua/1', 'none', 5, 5, 0, 0, 0, 0, 5, 0, 0, 0, 5, \
                      1, 2, 3, 4, 6, 0, 0, 0, 0.5, 0.1, 0.1, 0.1, 0.2, 0, 0, 0.0, 0.0, 0, 0, 0.0, '{{}}', 0, \
                      x'', x'', x'', x'', '{{}}', '{{}}')",
                     COLUMNS
@@ -1282,7 +1557,9 @@ mod tests {
                 "requests names {column}"
             );
         }
-        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(
             (
@@ -1305,7 +1582,7 @@ mod tests {
                     canonical_model: "m".into(),
                     kind: "inference".into(),
                     outcome: "succeeded".into(),
-                    user_agent: Some("ua".into()),
+                    user_agent: Some("ua/1".into()),
                     client: Some("claude-code/cli".into()),
                     ..Default::default()
                 },
@@ -1316,7 +1593,9 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
         let clients: Vec<&str> = rows.iter().map(|r| r.client.as_str()).collect();
         assert_eq!(
             rows.len(),
@@ -1342,7 +1621,6 @@ mod tests {
             for (_, sql) in crate::schema::MIGRATIONS.iter().filter(|(v, _)| *v <= 3) {
                 tx.execute_batch(sql).unwrap();
             }
-            tx.execute_batch("DROP TABLE cooldown_spans;").unwrap();
             tx.execute(
                 "INSERT INTO meta (key, value) VALUES ('schema_version', '3')",
                 [],
@@ -1413,6 +1691,143 @@ mod tests {
             ratelimit_5h_utilization: Some(0.5),
             ..Default::default()
         }
+    }
+
+    /// A caller picks its user agent, client hints, effort and class, so each reaches the hour row's key folded to
+    /// a bounded vocabulary; an absent one keeps the reserved id, which the agent shares with its key's keepalive
+    /// credits.
+    #[test]
+    fn the_rollup_key_folds_each_caller_controlled_dimension_to_a_bounded_vocabulary() {
+        let long = "x".repeat(300);
+        assert_eq!(fold_effort(Some(&long)), OTHER_DIMENSION);
+        assert_eq!(fold_effort(Some("HIGH")), OTHER_DIMENSION);
+        for level in EFFORTS {
+            assert_eq!(fold_effort(Some(level)), *level);
+        }
+        assert_eq!(fold_effort(None), NO_EFFORT);
+        assert_eq!(fold_identifier(&long), OTHER_DIMENSION);
+        assert_eq!(fold_identifier(&"a".repeat(64)), "a".repeat(64));
+        assert_eq!(fold_identifier(&"a".repeat(65)), OTHER_DIMENSION);
+        assert_eq!(fold_identifier("main thread"), OTHER_DIMENSION);
+        assert_eq!(
+            fold_identifier("claude-code/sdk-cli"),
+            "claude-code/sdk-cli"
+        );
+        assert_eq!(fold_identifier(UNATTRIBUTED), UNATTRIBUTED);
+        assert_eq!(
+            fold_user_agent("claude-cli/2.1.286 (external, cli)"),
+            "claude-cli/2.1.286"
+        );
+        assert_eq!(fold_user_agent("curl"), OTHER_DIMENSION);
+        assert_eq!(fold_user_agent("(external, cli)"), OTHER_DIMENSION);
+        assert_eq!(fold_user_agent("a/b/c"), OTHER_DIMENSION);
+        assert_eq!(fold_user_agent("/2.1"), OTHER_DIMENSION);
+        assert_eq!(fold_user_agent("claude-cli/"), OTHER_DIMENSION);
+        assert_eq!(fold_user_agent(UNATTRIBUTED), OTHER_DIMENSION);
+        assert_eq!(
+            fold_user_agent(&format!("{}/1.0 (x)", "n".repeat(100))),
+            "n".repeat(64)
+        );
+        let mut r = request("succeeded", Some(200), Some("k"));
+        r.user_agent = Some("claude-cli/2.1.286 (external, cli)".into());
+        r.client = Some(long.clone());
+        r.effort = Some(long.clone());
+        r.request_class = Some(long.clone());
+        let d = delta_of(&r, &[]);
+        assert_eq!(
+            (
+                d.user_agent.as_str(),
+                d.client.as_str(),
+                d.effort.as_str(),
+                d.request_class.as_str()
+            ),
+            (
+                "claude-cli/2.1.286",
+                OTHER_DIMENSION,
+                OTHER_DIMENSION,
+                OTHER_DIMENSION
+            ),
+            "the key files the folded values"
+        );
+        r.user_agent = Some("no product token".into());
+        assert_eq!(delta_of(&r, &[]).user_agent, OTHER_DIMENSION);
+        r.user_agent = None;
+        r.client = None;
+        r.effort = None;
+        r.request_class = None;
+        let d = delta_of(&r, &[]);
+        assert_eq!(
+            (
+                d.user_agent.as_str(),
+                d.client.as_str(),
+                d.effort.as_str(),
+                d.request_class.as_str()
+            ),
+            (UNATTRIBUTED, UNATTRIBUTED, NO_EFFORT, NO_CLASS),
+            "an absent value keeps the reserved id it always filed under"
+        );
+    }
+
+    /// A fast request refused before any attempt served files under the speed it asked for, and its funding under
+    /// `plan`, since nothing was spent; any other text the caller sent as its speed files under `standard`, and
+    /// an answer's own speed outranks the one asked for.
+    #[test]
+    fn a_request_with_no_served_speed_files_under_fast_only_when_it_asked_for_fast() {
+        let refused = RequestRecord {
+            requested_speed: Some("fast".into()),
+            ..request("exhausted", Some(429), Some("k"))
+        };
+        let d = delta_of(&refused, &[]);
+        assert_eq!(
+            (d.speed.as_str(), d.funding.as_str()),
+            ("fast", PLAN_FUNDING),
+            "the refused fast request files under fast and spent nothing"
+        );
+        let caller_text = RequestRecord {
+            requested_speed: Some("s".repeat(300)),
+            ..refused.clone()
+        };
+        assert_eq!(
+            delta_of(&caller_text, &[]).speed,
+            STANDARD_SPEED,
+            "the caller's text never keys a row"
+        );
+        let mut served = attempt(1, "a", None, None, Some(5), None);
+        served.speed = Some(STANDARD_SPEED.into());
+        assert_eq!(
+            delta_of(&refused, &[served]).speed,
+            STANDARD_SPEED,
+            "the speed the answer reported outranks the one the request asked for"
+        );
+    }
+
+    /// The fixed filters narrow the read in SQL: with a pool and an account named, the planner seeks the member
+    /// index on both rather than walking every row of the range.
+    #[test]
+    fn the_selecting_read_binds_the_pool_and_account_filters() {
+        let db = crate::LedgerDb::open_in_memory().unwrap();
+        let select = RollupSelect {
+            pools: vec!["p".into()],
+            accounts: vec!["a".into(), "b".into()],
+            ..RollupSelect::default()
+        };
+        let (sql, binds) = select_statement(0, 3_600, &select);
+        let plan: Vec<String> = db
+            .read_blocking(|c| {
+                let mut stmt = c.prepare(&format!("EXPLAIN QUERY PLAN {sql}"))?;
+                let rows = stmt
+                    .query_map(rusqlite::params_from_iter(binds), |r| r.get::<_, String>(3))?
+                    .collect::<rusqlite::Result<Vec<_>>>()?;
+                Ok(rows)
+            })
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|step| step.starts_with("SEARCH rollups_hourly")
+                    && step.contains("pool_id=?")
+                    && step.contains("account_id=?")),
+            "{plan:?}"
+        );
     }
 
     #[test]
@@ -1798,7 +2213,9 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
         assert_eq!(rows.len(), 1);
         let mut expected = delta_of(&req, &attempts);
         expected.add(&delta_of(&req2, &attempts2));
@@ -1832,7 +2249,9 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
         let mut expected = delta_of(&req2, &attempts2);
         expected.add(&delta_of(&req, &more));
         assert_eq!(
@@ -2007,7 +2426,9 @@ mod tests {
             Ok(())
         })
         .unwrap();
-        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(
             (
@@ -2120,7 +2541,9 @@ mod tests {
         }
         let db = crate::LedgerDb::open(&path).unwrap();
         assert_eq!(db.read_blocking(read_version).unwrap(), 28);
-        let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+        let rows = db
+            .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+            .unwrap();
         assert_eq!(rows.len(), 1);
         let mut expected = old;
         expected.client = UNATTRIBUTED.into();

@@ -1617,6 +1617,11 @@ impl RoutingState {
         v
     }
 
+    /// Every pin's key id, in no order: the per-pool count reads these and skips the clone and sort `pins()` pays.
+    pub(crate) fn pin_key_ids(&self) -> impl Iterator<Item = &str> + '_ {
+        self.pins.values().map(|p| p.key_id.as_str())
+    }
+
     /// Every pin of one key, session and model, under any agent: the cohort-aware hold's own lookup, which
     /// runs per held selection and so skips the clone and sort a listing pays for in `pins()`.
     pub(crate) fn session_pins<'a>(

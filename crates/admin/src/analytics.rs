@@ -8,9 +8,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    apply_filter, bucket_seconds, burn_rows, burn_series_over, hour_ceil, hour_of, moves_by_reason,
-    parse_range, read_account_rollups, read_rollups, rewrite_series, session_burn_series,
-    AccountRollupRow, LiveKeys, RollupFilter, RollupRow, SeriesFilter, Tiers, GROUP_BYS,
+    breakdown_paged, bucket_seconds, burn_groups_paged, hour_ceil, hour_of, moves_by_reason,
+    parse_range, read_account_rollups, rewrite_series, series_paged, session_burn_series,
+    AccountRollupRow, LedgerError, LiveKeys, RollupFilter, SeriesFilter, Tiers, GROUP_BYS,
 };
 use phoebis_store::AccountKind;
 use serde_json::{json, Value};
@@ -32,8 +32,9 @@ fn list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
         .unwrap_or_default()
 }
 
-/// The same list, split on newlines instead of commas: every measured client agent carries a comma
-/// (`claude-cli/2.1.269 (external, sdk-cli)`), and a pattern of the wildcard grammar carries no newline either.
+/// The same list, split on newlines instead of commas: a pattern of the wildcard grammar carries no newline, and the
+/// request log's raw agents carry a comma (`claude-cli/2.1.269 (external, sdk-cli)`) that a pattern written against
+/// them keeps.
 fn agent_list(q: &HashMap<String, String>, name: &str) -> Vec<String> {
     q.get(name)
         .map(|v| {
@@ -63,22 +64,15 @@ fn filter_of(q: &HashMap<String, String>) -> RollupFilter {
     }
 }
 
-/// The range in Unix milliseconds, the group-by, whether probe rows count as requests, the rows under the
-/// filter, the live keys' generations the key dimension is read against, and the agent pattern groups.
-type Selection = (
-    (i64, i64),
-    String,
-    bool,
-    Vec<RollupRow>,
-    LiveKeys,
-    Vec<String>,
-);
+/// The range in Unix milliseconds, the group-by, the filter, and the live keys' generations the key dimension is
+/// read against.
+type Selection = ((i64, i64), String, RollupFilter, LiveKeys);
 
 /// Every analytics route starts here.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {
+async fn selection(state: &AdminState, q: &HashMap<String, String>) -> Result<Selection, Response> {
     let (from, to) = parse_range(q.get("range").map(String::as_str), (state.clock)())
         .map_err(|m| failure(StatusCode::BAD_REQUEST, &m))?;
     let group_by = q.get("group_by").cloned().unwrap_or_else(|| "all".into());
@@ -98,25 +92,8 @@ async fn rows_for(state: &AdminState, q: &HashMap<String, String>) -> Result<Sel
             phoebis_ledger::PATTERNS_TOO_LONG,
         ));
     }
-    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to));
-    let rows = state
-        .ledger
-        .db()
-        .read(move |c| read_rollups(c, from_hour, to_hour))
-        .await
-        .map_err(ledger_failure)?;
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
-    // Cloned rather than moved: `filter` still owes `apply_filter` a borrow below, so the group list needs
-    // its own copy to ride along as the `Selection`'s sixth member.
-    let agent_groups = filter.user_agent_groups.clone();
-    Ok((
-        (from, to),
-        group_by,
-        filter.probes_counted(),
-        apply_filter(rows, &filter, &live),
-        live,
-        agent_groups,
-    ))
+    Ok(((from, to), group_by, filter, live))
 }
 
 pub(crate) fn ledger_failure(error: phoebis_ledger::LedgerError) -> Response {
@@ -128,24 +105,26 @@ pub(crate) async fn series(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, probes_counted, rows, live, agent_groups) =
-        match rows_for(&state, &q).await {
-            Ok(x) => x,
-            Err(r) => return r,
-        };
+    let ((from, to), group_by, filter, live) = match selection(&state, &q).await {
+        Ok(x) => x,
+        Err(r) => return r,
+    };
     let bucket = bucket_seconds(from, to);
-    let points = match phoebis_ledger::series(
-        &rows,
+    let points = match series_paged(
+        state.ledger.db(),
+        &filter,
+        &live,
         from,
         to,
         bucket,
         &group_by,
-        probes_counted,
-        &live,
-        &agent_groups,
-    ) {
+    )
+    .await
+    {
         Ok(p) => p,
-        Err(e) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
+        // The range's own refusal, raised before any read.
+        Err(e @ LedgerError::Yaml(_)) => return failure(StatusCode::BAD_REQUEST, &e.to_string()),
+        Err(e) => return ledger_failure(e),
     };
     Json(json!({ "from": from, "to": to, "bucket_seconds": bucket, "group_by": group_by, "points": points })).into_response()
 }
@@ -154,12 +133,15 @@ pub(crate) async fn breakdown(
     State(state): State<Arc<AdminState>>,
     Query(q): Query<HashMap<String, String>>,
 ) -> Response {
-    let ((from, to), group_by, probes_counted, rows, live, agent_groups) =
-        match rows_for(&state, &q).await {
-            Ok(x) => x,
-            Err(r) => return r,
-        };
-    Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": phoebis_ledger::breakdown(&rows, &group_by, probes_counted, &live, &agent_groups) })).into_response()
+    let ((from, to), group_by, filter, live) = match selection(&state, &q).await {
+        Ok(x) => x,
+        Err(r) => return r,
+    };
+    let rows = match breakdown_paged(state.ledger.db(), &filter, &live, from, to, &group_by).await {
+        Ok(rows) => rows,
+        Err(e) => return ledger_failure(e),
+    };
+    Json(json!({ "from": from, "to": to, "group_by": group_by, "rows": rows })).into_response()
 }
 
 pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
@@ -323,71 +305,32 @@ pub(crate) async fn burn(
     }
     let tables = state.tables.clone();
     let bucket = bucket_seconds(from, to);
-    let (from_hour, to_hour) = (hour_of(from), hour_ceil(to));
-    let group_by_read = group_by.clone();
-    let kinds_read = kinds.clone();
-    let read = state
-        .ledger
-        .db()
-        .read(move |c| {
-            let kinds = kinds_read;
-            if group_by_read == "session" {
-                let filter = SeriesFilter {
-                    from,
-                    to,
-                    bucket_seconds: bucket,
-                    ..Default::default()
-                };
-                return session_burn_series(c, &tables, &kinds, &tiers, &filter);
-            }
-            let base = SeriesFilter {
-                from,
-                to,
-                bucket_seconds: bucket,
-                ..Default::default()
-            };
-            // One read for every group: each folds its own scope from these rows rather than reading the range
-            // again under the reader lock. The groups are the ones the range itself holds; the read reaches back
-            // to the first bucket's edge, which may start before it.
-            let rows = burn_rows(c, &base)?;
-            let mut groups: Vec<String> = rows
-                .iter()
-                .filter(|r| r.hour >= from_hour && r.hour < to_hour)
-                .map(|r| match group_by_read.as_str() {
-                    "key" => r.key_id.clone(),
-                    "request_class" => r.request_class.clone(),
-                    _ => r.account_id.clone(),
-                })
-                .collect();
-            groups.sort();
-            groups.dedup();
-            let mut out = Vec::new();
-            for group in groups {
-                let one = vec![group.clone()];
-                let filter = SeriesFilter {
-                    accounts: if group_by_read == "account" {
-                        one.clone()
-                    } else {
-                        Vec::new()
-                    },
-                    keys: if group_by_read == "key" {
-                        one.clone()
-                    } else {
-                        Vec::new()
-                    },
-                    request_classes: if group_by_read == "request_class" {
-                        one
-                    } else {
-                        Vec::new()
-                    },
-                    ..base.clone()
-                };
-                let points = burn_series_over(&rows, &tables, &kinds, &tiers, &filter)?;
-                out.push((group, points));
-            }
-            Ok(out)
-        })
-        .await;
+    let filter = SeriesFilter {
+        from,
+        to,
+        bucket_seconds: bucket,
+        ..Default::default()
+    };
+    let read = if group_by == "session" {
+        let kinds = kinds.clone();
+        state
+            .ledger
+            .db()
+            .read(move |c| session_burn_series(c, &tables, &kinds, &tiers, &filter))
+            .await
+    } else {
+        // One paged read for every group: each row is priced into its own group's buckets as its page arrives,
+        // rather than the range read again per group under the reader lock.
+        burn_groups_paged(
+            state.ledger.db(),
+            &tables,
+            &kinds,
+            &tiers,
+            &filter,
+            &group_by,
+        )
+        .await
+    };
     let series = match read {
         Ok(s) => s,
         Err(e) => return ledger_failure(e),

@@ -37,7 +37,7 @@ pub use state::{
 pub use task::{
     credits_from_usage, sample_from_usage, spawn, BandWeight, BurnRates, ReloadError, Report,
     RouterConfig, RouterEvent, RouterGone, RouterHandle, SelectAnswer, WriterStatus, COMMANDS,
-    WRITER_DEPTH,
+    UNATTRIBUTED_POOL, WRITER_DEPTH,
 };
 #[cfg(any(test, feature = "debug-hooks"))]
 pub use task::{LoopPark, ReportHold};

@@ -25,7 +25,11 @@ test('a preset is derived from the values and custom when none matches', () => {
 const NOW = Date.parse('2026-09-16T14:30:00Z');
 const MINUTE = 60_000;
 const at = (ms) => new Date(ms).toISOString();
-const reading = (id, utilization) => ({ id, label: id, observedAt: at(NOW), periodHours: id === '5h' ? 5 : 168, resetsAt: at(NOW + 60 * MINUTE), utilization });
+// Each reset a whole period out, so nothing of the window has elapsed and a reading leads its pace by its utilization.
+const reading = (id, utilization) => {
+  const periodHours = id === '5h' ? 5 : 168;
+  return { id, label: id, observedAt: at(NOW), periodHours, resetsAt: at(NOW + periodHours * 60 * MINUTE), utilization };
+};
 const account = (id, fiveHour) => ({ id, kind: 'oauth', label: id, windows: [reading('5h', fiveHour), reading('7d', 0.2)] });
 const hot = account('hot', 0.9);
 const cool = account('cool', 0.1);
@@ -62,6 +66,23 @@ const four = [pin('warm-4', 4, true), pin('cold-3', 3, false), pin('warm-2', 2, 
 const member = (accountId, eligible = 'eligible') => ({ accountId, eligible, priority: 0 });
 /** A round over `accounts`, every one of them a member, with the pool's balanced shedding settings. */
 const replay = (accounts, sessions, over = {}) => d.shedPreview(pool({ members: accounts.map((a) => member(a.id)), ...over }), accounts, sessions, NOW, SIZED);
+
+const WEEK = 168 * 60 * MINUTE;
+
+test('a window leads its pace by its utilization less the share of it that has elapsed', () => {
+  const lead = (resetsAt) => d.aheadOf({ resetsAt, utilization: 0.5 }, WEEK, NOW);
+  assert.equal(lead(at(NOW + WEEK * 0.9)).toFixed(2), '0.40', 'a tenth of the week gone');
+  assert.equal(lead(at(NOW + WEEK * 0.4)).toFixed(2), '-0.10', 'six tenths of the week gone');
+  assert.equal(lead(null), 0.5, 'a window with no reset reads nothing elapsed');
+  assert.equal(lead(at(NOW + WEEK * 2)), 0.5, 'a reset more than a window out reads nothing elapsed');
+  assert.equal(lead(at(NOW - MINUTE)), -0.5, 'a window past its reset reads fully elapsed');
+});
+
+test('a member at half its week counts as hot at a margin of a fifth ten percent in and not sixty percent in', () => {
+  const halfway = (elapsed) => ({ ...account('halfway', 0.1), windows: [reading('5h', 0.1), { ...reading('7d', 0.5), resetsAt: at(NOW + WEEK * (1 - elapsed)) }] });
+  const members = (elapsed) => replay([halfway(elapsed)], [], { migrateAboveUtilization: 0.2 }).members;
+  assert.deepEqual([members(0.1), members(0.6)], [1, 0], '0.4 ahead of pace runs a round, 0.1 behind it does not');
+});
 
 test('the preview orders cold pins first, stops at the share, and never marks the last pin', () => {
   assert.deepEqual(
@@ -177,7 +198,7 @@ test('with no member under the band the preview marks sessions it cannot move', 
   const open = replay([hot, near, cool], four);
   assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in window share.']);
   assert.equal(d.shedPreviewLine(open, false), 'No round runs while migrate above utilization is off.');
-  assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is above the threshold.');
+  assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is ahead of pace by the margin.');
 });
 
 test('while the cost table is loading or did not load the preview names the table and counts nothing', () => {

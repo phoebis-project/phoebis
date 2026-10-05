@@ -9,7 +9,7 @@ use axum::body::Bytes;
 use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::header::{
     CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
-    TRANSFER_ENCODING, UPGRADE,
+    TRANSFER_ENCODING, UPGRADE, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{from_fn_with_state, Next};
@@ -138,8 +138,8 @@ pub(crate) struct Caller {
 #[derive(Clone)]
 pub(crate) struct CreatedId(pub String);
 
-/// Authentication, the origin check, `Cache-Control` and the mutation log for every route at once, so no
-/// handler can be added that quietly skips one of them.
+/// Authentication, the origin check, `Cache-Control`, `X-Content-Type-Options` and the mutation log for every route
+/// at once, so no handler can be added that quietly skips one of them.
 async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: Next) -> Response {
     let method = request.method().clone();
     let mutation = is_mutation(&method);
@@ -169,10 +169,10 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
         }
     };
     // An admin answer describes credentials and usage; a cache between the browser and this process has
-    // no business holding any of it.
-    response
-        .headers_mut()
-        .insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    // no business holding any of it, and a browser has no business reading a body as anything but its type.
+    let headers = response.headers_mut();
+    headers.insert(CACHE_CONTROL, HeaderValue::from_static("no-store"));
+    headers.insert(X_CONTENT_TYPE_OPTIONS, HeaderValue::from_static("nosniff"));
     response
 }
 
@@ -307,14 +307,18 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         return None;
     }
 
-    let Some(cookie) = presented_cookie(request.headers()) else {
-        return Some(failure(StatusCode::UNAUTHORIZED, "no admin session"));
-    };
-    let Some(session_id) = state.sessions.authenticate(&cookie, (state.clock)()) else {
-        return Some(failure(StatusCode::UNAUTHORIZED, "no admin session"));
-    };
-    request.extensions_mut().insert(Caller { session_id });
-    None
+    let session_id = presented_cookie(request.headers())
+        .and_then(|cookie| state.sessions.authenticate(&cookie, (state.clock)()));
+    match session_id {
+        Some(session_id) => {
+            request.extensions_mut().insert(Caller { session_id });
+            None
+        }
+        // A tab holding a dead cookie still needs the browser's copy cleared, so the logout answers it rather
+        // than the gate refusing it.
+        None if method == Method::DELETE && path == LOGIN_PATH => None,
+        None => Some(failure(StatusCode::UNAUTHORIZED, "no admin session")),
+    }
 }
 
 /// `origin` names the request's own authority: its scheme stripped, the rest equals `host` ignoring case.
@@ -468,7 +472,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     }
     state.usage.invalidate(&id);
     let now = (state.clock)();
-    for (session_id, owner) in state.vault.discard_for_account(&id) {
+    for (session_id, owner) in state.vault.discard_for_account(&id, now) {
         let _ = state.pairing.cancel(&session_id, &owner, now);
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
@@ -604,19 +608,20 @@ async fn pairing_start(
     // platform.claude.com that shows the code. The loopback one keeps the browser off the provider's page: the
     // navigation to localhost fails to load and the operator pastes the URL from the address bar, or the code.
     let redirect_uri = loopback_redirect_uri(ephemeral_port());
+    let now = (state.clock)();
     let Started {
         session,
         superseded,
     } = match state
         .pairing
-        .start(&row.id, &caller.session_id, &redirect_uri, (state.clock)())
+        .start(&row.id, &caller.session_id, &redirect_uri, now)
     {
         Ok(started) => started,
         Err(error) => return pairing_failure(error),
     };
     // The replaced pairing can never be confirmed, so its bundle leaves memory now rather than at the sweep.
     if let Some(id) = superseded {
-        state.vault.discard(&id);
+        state.vault.discard(&id, now);
     }
     state.vault.open(
         &session.id,
@@ -624,6 +629,7 @@ async fn pairing_start(
         &caller.session_id,
         row.lifecycle_generation,
         session.deadline,
+        now,
     );
     let url = authorization_url(
         state.profile,
@@ -671,12 +677,10 @@ async fn pairing_cancel(
     Extension(caller): Extension<Caller>,
     Path(id): Path<String>,
 ) -> Response {
-    match state
-        .pairing
-        .cancel(&id, &caller.session_id, (state.clock)())
-    {
+    let now = (state.clock)();
+    match state.pairing.cancel(&id, &caller.session_id, now) {
         Ok(()) => {
-            state.vault.discard(&id);
+            state.vault.discard(&id, now);
             StatusCode::NO_CONTENT.into_response()
         }
         Err(error) => pairing_failure(error),
@@ -730,7 +734,7 @@ async fn pairing_callback(
         // the ten-minute deadline with nothing able to finish it. The operator is told the same thing the
         // session now records.
         Err(detail) => {
-            state.vault.discard(&id);
+            state.vault.discard(&id, now);
             let _ = state.pairing.fail(&id, &caller.session_id, &detail, now);
             return failure(StatusCode::BAD_GATEWAY, &detail);
         }
@@ -741,12 +745,12 @@ async fn pairing_callback(
         .pairing
         .mark_exchanged(&id, &caller.session_id, identity.clone(), now)
     {
-        state.vault.discard(&id);
+        state.vault.discard(&id, now);
         return pairing_failure(error);
     }
     if !state
         .vault
-        .record_exchange(&id, identity.clone(), bundle, profile)
+        .record_exchange(&id, identity.clone(), bundle, profile, now)
     {
         return failure(
             StatusCode::CONFLICT,
@@ -786,24 +790,24 @@ async fn pairing_confirm(
         // authorization code is spent, so the credential waiting on it is dropped now rather than held until
         // the process restarts.
         if matches!(error, PairingError::Expired) {
-            state.vault.discard(&id);
+            state.vault.discard(&id, now);
         }
         return pairing_failure(error);
     }
     let conflict = |state: &AdminState, message: &'static str| {
         let _ = state.pairing.fail(&id, &caller.session_id, message, now);
-        state.vault.discard(&id);
+        state.vault.discard(&id, now);
         failure(StatusCode::CONFLICT, message)
     };
     let unstored = |state: &AdminState, error: StoreError| {
         let _ = state
             .pairing
             .fail(&id, &caller.session_id, "storage failure", now);
-        state.vault.discard(&id);
+        state.vault.discard(&id, now);
         store_failure(error)
     };
 
-    let Some(pending) = state.vault.take_exchange(&id) else {
+    let Some(pending) = state.vault.take_exchange(&id, now) else {
         return conflict(&state, "pairing session has no exchanged credential");
     };
     let row = match account(&state, &pending.account_id) {
@@ -890,7 +894,7 @@ async fn pairing_confirm(
         return unstored(&state, error);
     }
     state.usage.invalidate(&row.id);
-    state.vault.mark_confirmed(&id);
+    state.vault.mark_confirmed(&id, now);
     // The credential just committed replaces whatever a slot under this id answered before, so the cached
     // list (if any) is stale from this instant; the next read fetches fresh with the new one.
     state.catalog.evict(&row.id);
@@ -911,9 +915,11 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
     let uptime = (now - state.started_at).max(0) / 1_000;
     let stats = state.ledger.stats();
     let load = |a: &std::sync::atomic::AtomicU64| a.load(std::sync::atomic::Ordering::Relaxed);
-    let read = state.ledger.db().read(move |c| Ok(c.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT 50")?
-        .query_map(rusqlite::params![now - 86_400_000], |r| Ok(phoebis_ledger::EventRecord { at: r.get(0)?, kind: r.get(1)?, account_id: r.get(2)?, key_id: r.get(3)?, session_id: r.get(4)?, model: r.get(5)?, actor: r.get(6)?, detail: r.get(7)? }))?
-        .collect::<rusqlite::Result<Vec<_>>>()?)).await;
+    let read = state
+        .ledger
+        .db()
+        .read(move |c| phoebis_ledger::recent_gaps(c, now - 86_400_000, 50))
+        .await;
     let gaps = match read {
         Ok(gaps) => gaps,
         // The gap counter in the same response is whatever the writer reached, so an empty list from a read

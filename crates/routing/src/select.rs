@@ -13,7 +13,7 @@ use rand::{Rng, RngExt};
 use crate::affinity::{AffinityEntry, AffinityMap};
 use crate::state::{
     budget_deadline, shed_marks, warm, BurnUnit, CreditsState, PinRef, RoutingState, StateWrite,
-    Tier, FIVE_HOUR, SEVEN_DAY,
+    Tier, FIVE_HOUR, SEVEN_DAY, WEEK_MS,
 };
 use crate::windows::window_for;
 use crate::{term, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
@@ -1200,35 +1200,52 @@ pub fn seconds_ms(seconds: u64) -> i64 {
         .unwrap_or(i64::MAX)
 }
 
-fn reading_at_least(
+/// The absolute prediction of `window` against `t`, which the select-below gate reads: that ceiling bounds the
+/// utilization itself, where the shedding trigger reads its lead over pace.
+fn utilization_at_least(
     state: &RoutingState,
     account_id: &str,
-    name: &str,
-    threshold: f64,
+    window: &str,
+    t: f64,
     now: i64,
 ) -> bool {
     state
-        .predicted(account_id, name, now)
-        .is_some_and(|r| r.utilization >= threshold)
+        .predicted(account_id, window, now)
+        .is_some_and(|r| r.utilization >= t)
+}
+
+const FIVE_HOUR_MS: i64 = 5 * 3_600_000;
+
+/// How far a window's prediction runs ahead of its pace: the utilization less the share of the window that has
+/// elapsed, so a reading at 0.5 ten percent into a week is 0.4 ahead and the same reading sixty percent in is
+/// behind. A prediction with no reset (a 5-hour window past its reset reads the router's own use since) is ahead
+/// by exactly its utilization. `None` without a reading, which every caller treats as under.
+fn ahead(state: &RoutingState, account_id: &str, window: &str, now: i64) -> Option<f64> {
+    let reading = state.predicted(account_id, window, now)?;
+    let length = if window.starts_with(SEVEN_DAY) {
+        WEEK_MS
+    } else {
+        FIVE_HOUR_MS
+    };
+    let elapsed = reading.reset.map_or(0.0, |reset| {
+        (length.saturating_sub(reset.saturating_sub(now)) as f64 / length as f64).clamp(0.0, 1.0)
+    });
+    Some(reading.utilization - elapsed)
+}
+
+fn ahead_at_least(state: &RoutingState, account_id: &str, window: &str, t: f64, now: i64) -> bool {
+    ahead(state, account_id, window, now).is_some_and(|lead| lead >= t)
 }
 
 /// An unsampled account, or one that never read the window, counts as under.
-fn reading_under(
-    state: &RoutingState,
-    account_id: &str,
-    name: &str,
-    threshold: f64,
-    now: i64,
-) -> bool {
-    state
-        .predicted(account_id, name, now)
-        .is_none_or(|r| r.utilization < threshold)
+fn ahead_under(state: &RoutingState, account_id: &str, window: &str, t: f64, now: i64) -> bool {
+    ahead(state, account_id, window, now).is_none_or(|lead| lead < t)
 }
 
-/// Whether `account_id` reads under `migrate_above_utilization` minus the hysteresis band: the shared plan
-/// windows' predictions for a subscription account, the worst standing bucket for an api_key one. No threshold
-/// configured, or no reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a migration
-/// destination, so the arithmetic lives once.
+/// Whether `account_id` reads under `migrate_above_utilization` minus the hysteresis band: how far each shared plan
+/// window runs ahead of its pace for a subscription account, the worst standing bucket for an api_key one. No
+/// threshold configured, or no reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a
+/// migration destination, so the arithmetic lives once.
 fn under_band(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1246,8 +1263,8 @@ fn under_band(
             .and_then(|s| s.worst_bucket(now))
             .is_none_or(|r| r.utilization < band),
         _ => {
-            reading_under(state, account_id, FIVE_HOUR, band, now)
-                && reading_under(state, account_id, SEVEN_DAY, band, now)
+            ahead_under(state, account_id, FIVE_HOUR, band, now)
+                && ahead_under(state, account_id, SEVEN_DAY, band, now)
         }
     }
 }
@@ -1290,10 +1307,10 @@ fn move_of<'a>(
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
     let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
     // A sibling the next round would not shed from again soon: every reading its sample holds under the band
-    // (the shared windows of a subscription account, the worst live bucket of an api_key one; an unsampled
-    // account reads as under), no round of its own within the dwell, and room under the cap. A full sibling
-    // counts as hot, so a move whose cool siblings are all full falls through to a free one rather than being
-    // dropped at the cap.
+    // (the shared windows' leads over their pace on a subscription account, the worst live bucket of an api_key
+    // one; an unsampled account reads as under), no round of its own within the dwell, and room under the cap. A
+    // full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one rather
+    // than being dropped at the cap.
     let cool = |state: &RoutingState, c: &Candidate| -> bool {
         under_band(state, snapshot, pool, &c.account_id, now)
             && state
@@ -1403,10 +1420,12 @@ fn move_of<'a>(
         }
     }
 
-    // The trigger reads the prediction, as the ceiling does: a refunded window reads zero at its reset.
+    // The trigger reads how far the prediction runs ahead of the window's pace, as the ceiling reads the
+    // prediction itself: a week at 0.5 ten percent in is a session worth shedding, the same week at 0.5 sixty
+    // percent in is not, and a refunded window reads zero at its reset.
     let threshold = pool.migrate_above_utilization?;
-    let hot = reading_at_least(state, &current.account_id, FIVE_HOUR, threshold, now)
-        || reading_at_least(state, &current.account_id, SEVEN_DAY, threshold, now);
+    let hot = ahead_at_least(state, &current.account_id, FIVE_HOUR, threshold, now)
+        || ahead_at_least(state, &current.account_id, SEVEN_DAY, threshold, now);
     if !hot {
         return None;
     }
@@ -1763,9 +1782,9 @@ fn blocked(
     account_id: &str,
 ) -> bool {
     state.in_flight().account(account_id) >= pool.failover.in_flight_cap
-        || pool
-            .select_below_utilization
-            .is_some_and(|threshold| reading_at_least(state, account_id, FIVE_HOUR, threshold, now))
+        || pool.select_below_utilization.is_some_and(|threshold| {
+            utilization_at_least(state, account_id, FIVE_HOUR, threshold, now)
+        })
         || snapshot
             .term(account_id)
             .is_some_and(|term| term::winding_down(term, now, pool.failover.wind_down_minutes))

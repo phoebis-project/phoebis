@@ -317,8 +317,10 @@ async fn retention_purges_requests_events_and_samples_by_the_raw_window_and_roll
     assert_eq!(h.db.events(0, i64::MAX, 10).await.unwrap().len(), 1);
     assert_eq!(h.db.quota_samples("a", 0, i64::MAX).await.unwrap().len(), 1);
     let rollups =
-        h.db.read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
-            .unwrap();
+        h.db.read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .unwrap();
     assert_eq!(rollups.len(), 2, "rollups outlive their raw rows");
     let purged = run_retention(h.db.clone(), LedgerConfig::default(), 401 * day, Vec::new())
         .await

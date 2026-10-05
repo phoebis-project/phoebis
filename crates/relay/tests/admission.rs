@@ -325,7 +325,9 @@ async fn a_key_moved_between_pools_mid_flight_is_refused_and_the_next_request_ad
     let permit = tx.reserve().await.unwrap();
     let mut desktop = h.store.api_key("desktop").unwrap().unwrap();
     desktop.pool_id = "q".into();
-    h.store.update_api_key(&desktop, "test").unwrap();
+    h.store
+        .update_api_key(&desktop, desktop.updated_at, "test")
+        .unwrap();
     h.router.reload().await.unwrap();
     permit.send(Ok(Bytes::from_static(tail.as_bytes())));
     drop(tx);

@@ -2,7 +2,7 @@
 //! by the key's own lifetime: an earlier holder's rows under a reused id stay at 0.
 use phoebis_ledger::{
     read_rollups, reconcile_key_generations, AttemptRecord, LedgerDb, LiveKeyLifetime,
-    RequestRecord, GENERATIONS_RECONCILED_KEY,
+    RequestRecord, RollupSelect, GENERATIONS_RECONCILED_KEY,
 };
 
 const HOUR_MS: i64 = 3_600_000;
@@ -71,7 +71,9 @@ fn generation_zero_rows_of_a_live_key_are_stamped_once_and_the_rest_stay() {
         .unwrap();
     let moved = reconcile_key_generations(&db, &[first("k1", 5_000)]).unwrap();
     assert_eq!(moved, 1, "one rollup row of k1 stood at generation 0");
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
     let by_key: Vec<(&str, i64, u64)> = rows
         .iter()
         .map(|r| (r.key_id.as_str(), r.key_generation, r.requests))
@@ -128,7 +130,9 @@ fn a_reused_ids_rows_before_the_live_keys_first_whole_hour_stay_the_earlier_hold
         moved, 2,
         "the two hours at or after the first whole hour of the live key's life"
     );
-    let rows = db.read_blocking(|c| read_rollups(c, 0, i64::MAX)).unwrap();
+    let rows = db
+        .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
+        .unwrap();
     let by_hour: Vec<(i64, i64)> = rows
         .iter()
         .map(|r| (r.hour / 3_600, r.key_generation))

@@ -145,7 +145,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
     .await;
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&spec.policy).unwrap();
-    h.store.update_pool(&pool, "test").unwrap();
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
     if let Some(tier) = spec.tier {
         for account in spec
             .accounts

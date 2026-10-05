@@ -17,9 +17,8 @@ use phoebis_oauth::{Clock, CredentialManager, UsageService};
 use phoebis_profile::claude_code_2_1_269_linux_x64;
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Affinity, ApiKeyRow, Failover, Identity,
-    MemberWrite, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, Shedding, StorageKey, Store,
-    Strategy,
+    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, MemberWrite,
+    NewBundle, PoolRow, RulesMode, Secret, StorageKey, Store, Strategy,
 };
 use phoebis_transport::control::{ControlClient, ResolveFuture, Resolver};
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
@@ -127,26 +126,12 @@ fn seed(store: &Store) {
     store
         .insert_pool(
             &PoolRow {
-                id: "main".into(),
                 label: "Main".into(),
-                enabled: true,
                 strategy: Strategy::Priority,
-                affinity_ttl_seconds: 3_600,
-                overage_policy: OveragePolicy::PreferPlan,
-                migrate_above_utilization: None,
-                select_below_utilization: None,
-                model_rules: Vec::new(),
-                keepalive_json: "{}".into(),
-                body_capture_hours: 0,
                 prefer_subscription: false,
-                shedding: Shedding::default(),
-                failover: Failover::default(),
-                cache_ttl_json: "{}".into(),
-                cache_diagnostics: false,
-                auto_mode_server: true,
-                affinity: Affinity::default(),
                 created_at: NOW,
                 updated_at: NOW,
+                ..PoolRow::for_tests("main")
             },
             "test",
         )

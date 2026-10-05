@@ -67,9 +67,18 @@ test('a pool input refuses every keepalive bound the policy check refuses', () =
     retryMaxSeconds: [1, 604_800],
     retrySeconds: [1, 3_600],
   };
+  // The retry ceiling sits at or above its base, and a lead and its jitter stay under their TTL together, so each of
+  // a pair is read against the other at the setting that leaves it alone.
+  const pairs = {
+    jitterSeconds1h: { leadSeconds1h: 0 },
+    jitterSeconds5m: { leadSeconds5m: 0 },
+    leadSeconds1h: { jitterSeconds1h: 0 },
+    leadSeconds5m: { jitterSeconds5m: 0 },
+    retryMaxSeconds: { retrySeconds: 1 },
+    retrySeconds: { retryMaxSeconds: 604_800 },
+  };
   for (const [key, [min, max]] of Object.entries(bounds)) {
-    // The ceiling sits at or above the base, so each is read against the other's widest setting.
-    const other = key === 'retrySeconds' ? { retryMaxSeconds: 604_800 } : key === 'retryMaxSeconds' ? { retrySeconds: 1 } : {};
+    const other = pairs[key] ?? {};
     assert.equal(d.validatePoolInput(tuned({ ...other, [key]: min }), accounts), true, `${key} ${min} is inside`);
     assert.equal(d.validatePoolInput(tuned({ ...other, [key]: max }), accounts), true, `${key} ${max} is inside`);
     assert.equal(d.validatePoolInput(tuned({ ...other, [key]: min - 1 }), accounts), false, `${key} ${min - 1} is below the floor`);
@@ -78,6 +87,9 @@ test('a pool input refuses every keepalive bound the policy check refuses', () =
   assert.equal(d.validatePoolInput(tuned({ coldProbeLimit: 2.5 }), accounts), false, 'counts are whole');
   assert.equal(d.validatePoolInput(tuned({ retryMaxSeconds: 20, retrySeconds: 30 }), accounts), false, 'the ceiling sits at or above the base');
   assert.equal(d.validatePoolInput(tuned({ retryMaxSeconds: 30, retrySeconds: 30 }), accounts), true);
+  assert.equal(d.validatePoolInput(tuned({ jitterSeconds5m: 100, leadSeconds5m: 200 }), accounts), false, 'a lead and its jitter stay under the TTL together');
+  assert.equal(d.validatePoolInput(tuned({ jitterSeconds1h: 600, leadSeconds1h: 3_000 }), accounts), false);
+  assert.equal(d.validatePoolInput(tuned({ jitterSeconds5m: 100, jitterSeconds1h: 600, leadSeconds5m: 199, leadSeconds1h: 2_999 }), accounts), true);
   assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: 0 }), accounts), false, 'a cap is positive or absent');
   assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: -1 }), accounts), false);
   assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: null }), accounts), true);
@@ -106,22 +118,15 @@ test('a pool input refuses thresholds outside their range and an empty name', ()
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: -0.1 }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 0 }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.4 }, accounts), true, 'a stored threshold under 50 % the operator left alone saves as stored');
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.4 }, accounts, { migrateChanged: true }), false, 'a typed threshold migrates from 50 %');
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0 }, accounts), true, 'a margin over pace runs from 0 %');
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.2 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: -0.1 }, accounts), false);
+  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: Number.NaN }, accounts), false, 'a switched-on field left empty holds the save');
   assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 1.2 }, accounts), false, 'the route bounds every value to 0 to 1');
   assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.9 }, accounts), true);
 });
 
-test('a pool input with select-below inside the band is refused and every engine bound holds', () => {
-  const both = (migrate, select) => d.validatePoolInput({ ...input, migrateAboveUtilization: migrate, selectBelowUtilization: select }, accounts);
-  assert.equal(both(0.9, 0.85), true, 'the band\'s lower edge is still under it');
-  assert.equal(both(0.7, 0.65), true, 'the edge holds where the subtraction rounds under it');
-  assert.equal(both(0.9, 0.86), false, 'one point inside the band');
-  assert.equal(both(0.9, 0.9), false);
-  assert.equal(both(null, 0.95), true, 'with migration off there is no band');
-  assert.equal(both(0.5, null), true);
-  assert.equal(d.bandRefusal({ migrateAboveUtilization: 0.9, selectBelowUtilization: 0.86 }), 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.');
-  assert.equal(d.bandRefusal({ migrateAboveUtilization: 0.9, selectBelowUtilization: 0.85 }), null);
+test('a pool input holds every engine bound', () => {
   const whole = {
     burnWindowSeconds: [60, null],
     inFlightCap: [1, 4_294_967_295],
@@ -325,12 +330,9 @@ test('a pool refusal names the group its control sits in', () => {
       ],
     ],
     [{ affinityMode: 'sometimes' }, refused('Pin sessions', 'pinning', 'Pin sessions is one of its listed choices.')],
-    [{ migrateAboveUtilization: 0.4 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 50 to 100.'), { migrateChanged: true }],
+    [{ migrateAboveUtilization: 1.2 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 0 to 100.')],
+    [{ migrateAboveUtilization: Number.NaN }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization needs a value from 0 to 100.')],
     [{ selectBelowUtilization: 1.2 }, refused('Select below utilization (%)', 'utilization', 'Select below utilization is from 0 to 100.')],
-    [
-      { migrateAboveUtilization: 0.9, selectBelowUtilization: 0.86 },
-      refused('Select below utilization (%)', 'utilization', 'Select below must sit at or under migrate above minus 5%, the band a shed session lands under.'),
-    ],
     [{ shedShare: 1.2 }, refused('Share (%)', 'shedding', 'Share (%) is from 0 to 100.')],
     [{ burnWindowSeconds: 59 }, refused('Burn window (s)', 'shedding', 'Burn window (s) is a whole number of at least 60.')],
     [{ sourceDwellSeconds: 59 }, refused('Source dwell (s)', 'shedding', 'Source dwell (s) is a whole number of at least 60.')],
@@ -432,20 +434,20 @@ test("the key dialog maps the server-side auto mode override to inherit, on, or 
   assert.deepEqual([sent('inherit'), sent('on'), sent('off')], [null, true, false]);
 });
 
-// The route refuses a retry ceiling under its base, which would mask either bound's own answer, so the capture sends
-// each of the pair with the other at its widest setting, and the replay does the same.
-const RETRY_PAIR = { 'keepalive.retry_max_seconds': { retrySeconds: 1 }, 'keepalive.retry_seconds': { retryMaxSeconds: 604_800 } };
 const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
+// A probe sends some fields beside the probed one, a retry ceiling at its base or a lead beside its jitter, which the
+// capture names under `with` and the replay sends the same way.
+const keepaliveWith = (fields = {}) => Object.fromEntries(Object.entries(fields).map(([field, value]) => [camel(field.slice('keepalive.'.length)), value]));
 
 test('the form admits and refuses the values the routes do', () => {
   const { probes } = fixture('bound_refusals');
   assert.ok(probes.length > 0);
-  for (const { field, route, status, value } of probes) {
+  for (const { field, route, status, value, with: fields } of probes) {
     let admitted;
     if (field.startsWith('keepalive.')) {
       const key = camel(field.slice('keepalive.'.length));
       assert.ok(key in d.KEEPALIVE_BOUNDS, `${field} is a field the form bounds`);
-      admitted = d.validatePoolInput(tuned({ ...RETRY_PAIR[field], [key]: value }), accounts);
+      admitted = d.validatePoolInput(tuned({ ...keepaliveWith(fields), [key]: value }), accounts);
     } else if (field === 'model_rules') {
       admitted = d.validatePoolInput({ ...input, modelRules: Array.from({ length: value }, () => ({ not: true, pattern: 'claude-haiku-*' })) }, accounts);
     } else {

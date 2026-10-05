@@ -15,13 +15,12 @@ use crate::AdminState;
 
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
-    let (board, quota) = match state
-        .ledger
-        .db()
-        .read(move |c| Ok((dashboard(c, now)?, latest_quota(c, now)?)))
-        .await
-    {
-        Ok(x) => x,
+    let board = match dashboard(state.ledger.db(), now).await {
+        Ok(board) => board,
+        Err(e) => return ledger_failure(e),
+    };
+    let quota = match state.ledger.db().read(move |c| latest_quota(c, now)).await {
+        Ok(quota) => quota,
         Err(e) => return ledger_failure(e),
     };
     let mut accounts: std::collections::BTreeMap<String, Vec<serde_json::Value>> =

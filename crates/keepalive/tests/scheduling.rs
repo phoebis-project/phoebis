@@ -6,7 +6,7 @@ use common::*;
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason, LEASE_MS};
 use phoebis_ledger::{
     hour_of, member_spends, read_rollups, AttemptRecord, BudgetedMember, PriceTable, Record,
-    RequestRecord,
+    RequestRecord, RollupSelect,
 };
 use phoebis_routing::{
     lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
@@ -90,6 +90,163 @@ async fn a_cooled_account_holds_the_probe_until_the_cooldown_clears() {
         (r.status("main").probes, r.status("main").reason),
         (1, Reason::Scheduled),
         "the probe ran once the account was clear"
+    );
+}
+
+/// An entry the engine knows has expired is not probed: a probe past the expiry would warm nothing. The probe the
+/// recipe already sent, which no request answered, settles wasted under the lapse.
+#[tokio::test]
+async fn a_recipe_whose_entry_lapsed_is_held_under_expired_and_sends_no_probe() {
+    let mut r = armed(RigSpec::default()).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1, "the one probe before the lapse");
+    let sent = r.up.requests().len();
+    r.advance(20 * MINUTE);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.reason, status.next_probe_at),
+        (1, Reason::Expired, None),
+        "{status:?}"
+    );
+    assert_eq!(r.up.requests().len(), sent, "no request after the lapse");
+    let wasted = wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let wasted: u64 = rows
+            .iter()
+            .filter_map(|row| row.wasted_probe_reasons.get("expired"))
+            .sum();
+        (wasted > 0).then_some(wasted)
+    })
+    .await;
+    assert_eq!(wasted, 1, "the unanswered probe carries the lapse's label");
+    // Drained rather than polled: a second skip row landing late must not read as one.
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.probes_skipped).sum::<u64>(),
+        1,
+        "the lapse counts the probe it withheld, with no hold behind it"
+    );
+    // A fast recipe's skip files under the speed it was retained with, read before the lapse drops the recipe.
+    let mut r = rig(RigSpec::default()).await;
+    let fast = BODY.replacen('{', r#"{"speed":"fast","#, 1);
+    r.engine.observe(r.observed("fast", "main", &fast));
+    r.engine.observe(r.selected("fast", "a"));
+    r.engine.observe(r.complete(
+        "fast",
+        phoebis_bus::Outcome::Succeeded,
+        Some(phoebis_bus::Usage {
+            cache_write_5m_tokens: Some(2_000),
+            ..Default::default()
+        }),
+    ));
+    r.advance(20 * MINUTE);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::Expired);
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    let skipped: Vec<(&str, u64)> = rows
+        .iter()
+        .filter(|row| row.probes_skipped > 0)
+        .map(|row| (row.speed.as_str(), row.probes_skipped))
+        .collect();
+    assert_eq!(skipped, [("fast", 1)]);
+}
+
+/// A hold that outlasts the entry never ends in a probe: once the entry has expired the recipe is held under
+/// `expired` before the gate is read, and the skip the hold already counted for its withheld probe stays one.
+#[tokio::test]
+async fn a_hold_lifted_after_the_expiry_sends_no_probe() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    cool_account(&r).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Cooled)
+    );
+    // The entry written at the start expired at 300 s; the cooldown lifts after it.
+    r.advance(60_000);
+    r.h.router.clear_cooldown("a", "account").await.unwrap();
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::Expired)
+    );
+    assert_eq!(r.up.requests().len(), 1, "only the arming request went out");
+    // Drained rather than polled: a second skip row landing late must not read as one.
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    assert_eq!(
+        rows.iter().map(|row| row.probes_skipped).sum::<u64>(),
+        1,
+        "one withheld probe, counted by the hold"
+    );
+}
+
+/// A failed probe's retry that falls past the entry's expiry is not sent: the due time is the later of the two, so
+/// the first tick at or after the expiry holds the recipe under `expired`.
+#[tokio::test]
+async fn a_retry_re_armed_past_the_expiry_is_held_under_expired_and_sends_no_probe() {
+    let mut r = armed(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            retry_seconds: 60,
+            retry_max_seconds: 60,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        fake_upstream::Respond::Json {
+            status: 503,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"api_error","message":"x"}}"#.to_vec(),
+        },
+    );
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.reason, status.next_probe_at),
+        (1, Reason::RetryableProbeError, Some(r.now() + 60_000)),
+        "the retry falls at 330 s, past the entry's expiry at 300 s"
+    );
+    r.advance(60_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (1, Reason::Expired)
+    );
+    assert_eq!(
+        r.up.requests().len(),
+        2,
+        "the arming request and the failed probe, no retry"
     );
 }
 
@@ -611,6 +768,58 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
     assert!(named_a(&r).await, "the pin still names a");
 }
 
+/// While the ledger is degraded the selector cannot trust a budgeted member's spend and refuses a probe pinned there
+/// as `budget_unknown`. That clears once the ledger recovers, so the agent retries rather than pausing as exhausted.
+#[tokio::test]
+async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers() {
+    let mut r = armed(RigSpec {
+        policy: KeepalivePolicy {
+            retry_seconds: 10,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    with_budget_member(&r).await;
+    // Waits out the writer's own spend refresh, whose standing report would otherwise land after the one below.
+    plant_spend(&r, "under-budget", 1.0).await;
+    r.h.router
+        .report(Report::Accounting { degraded: true })
+        .await;
+    settled(&r, |r| async move {
+        r.h.router.accounting_degraded().await.unwrap()
+    })
+    .await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.reason, status.next_probe_at.is_some()),
+        (1, Reason::RetryableProbeError, true),
+        "{status:?}"
+    );
+    assert_eq!(
+        r.up.requests().len(),
+        1,
+        "the refused probe reached no upstream"
+    );
+    r.h.router
+        .report(Report::Accounting { degraded: false })
+        .await;
+    settled(&r, |r| async move {
+        !r.h.router.accounting_degraded().await.unwrap()
+    })
+    .await;
+    r.advance(10_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (2, Reason::Scheduled),
+        "the retry ran once the ledger recovered"
+    );
+    assert!(named_a(&r).await, "the pin still names a");
+}
+
 #[tokio::test]
 async fn a_paused_or_reauth_marked_account_serves_no_probe() {
     let mut r = armed(RigSpec {
@@ -648,7 +857,9 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
     let mut r = armed(RigSpec::default()).await;
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.affinity_ttl_seconds = 120;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
@@ -657,12 +868,24 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
         (0, Reason::AffinityTooShort)
     );
     pool.affinity_ttl_seconds = 0;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(r.status("main").probes, 0);
     pool.affinity_ttl_seconds = 3_600;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
@@ -672,7 +895,13 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
         ..RigSpec::default().policy
     })
     .unwrap();
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
@@ -680,6 +909,72 @@ async fn affinity_off_or_short_stops_probing_until_raised() {
         (r.status("main").probes, r.status("main").reason),
         (1, Reason::KeepaliveOff)
     );
+}
+
+/// The pin a probe follows has to outlive the probe's due time, the recipe's own TTL less the lead: half an hour of
+/// pin carries a five-minute recipe's probe but not a one-hour recipe's, due 54 minutes after its request.
+#[tokio::test]
+async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin_while_a_five_minute_one_probes(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let mut pool = r.h.store.pool("main").unwrap().unwrap();
+    pool.affinity_ttl_seconds = 1_800;
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let hour = BODY.replace(
+        r#""cache_control":{"type":"ephemeral"}"#,
+        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+    );
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":2000},"output_tokens":10}}"#.to_vec(),
+        },
+    );
+    r.observe_with("main", &hour).await;
+    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000);
+    r.observe("sub").await;
+    assert_eq!(r.status("sub").cache_ttl_ms, 300_000);
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("sub").probes, r.status("sub").reason),
+        (1, Reason::Scheduled),
+        "the five-minute probe is due 270 s in, inside the pin"
+    );
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (0, Reason::AffinityTooShort),
+        "the hour recipe's probe is due 3,240 s in, past the pin"
+    );
+    // A pin as long as the hour recipe's due time carries its probe.
+    pool.affinity_ttl_seconds = 3_240;
+    r.h.store
+        .update_pool(
+            &pool,
+            r.h.store.pool("main").unwrap().unwrap().updated_at,
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    r.advance(3_240_000 - 270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
 }
 
 #[tokio::test]
@@ -699,7 +994,9 @@ async fn turning_warm_subagents_off_drops_an_armed_subagent_recipe_at_the_gate()
         ..RigSpec::default().policy
     })
     .unwrap();
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
     r.step().await;
@@ -727,7 +1024,9 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
     );
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     let sent = r.up.requests().len();
     r.advance(270_000);
@@ -749,8 +1048,10 @@ async fn opting_the_key_out_discards_an_armed_recipe_without_another_request() {
     assert!(r.engine.recipes_for("desktop", "session").is_empty());
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let rows =
-            r.db.read_blocking(|c| phoebis_ledger::read_rollups(c, 0, i64::MAX))
-                .unwrap();
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(c, 0, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
         rows.iter()
             .any(|row| row.wasted_probes == 1)
             .then_some(rows)
@@ -782,7 +1083,9 @@ async fn two_agents_of_one_session_pinned_to_two_accounts_each_probe_their_own_a
     // fixture body, so a shared static boundary would otherwise land them on one account.
     let mut pool = r.h.store.pool("main").unwrap().unwrap();
     pool.affinity.subagent_placement = phoebis_store::SubagentPlacement::ByStrategy;
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.observe("main").await;
     r.event(Event {
@@ -1018,7 +1321,9 @@ async fn the_due_time_follows_the_pools_lead_and_jitter() {
         ..RigSpec::default().policy
     })
     .unwrap();
-    r.h.store.update_pool(&pool, "test").unwrap();
+    r.h.store
+        .update_pool(&pool, pool.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     let probed_at = r.now();
     r.step().await;
@@ -1100,8 +1405,10 @@ async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
 async fn skipped(r: &Rig, want: u64) -> u64 {
     wait_for(std::time::Duration::from_secs(5), || {
         let rows =
-            r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-                .unwrap();
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
         let total: u64 = rows.iter().map(|row| row.probes_skipped).sum();
         (total >= want).then_some(total)
     })
@@ -1259,7 +1566,9 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     assert!(!r.engine.recipes_for("desktop", "session").is_empty());
     let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
     key.keepalive_opt_out = true;
-    r.h.store.update_api_key(&key, "test").unwrap();
+    r.h.store
+        .update_api_key(&key, key.updated_at, "test")
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(
@@ -1296,8 +1605,10 @@ async fn the_retention_rules_reach_a_paused_recipe() {
     );
     let rows = wait_for(std::time::Duration::from_secs(5), || {
         let rows =
-            r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-                .unwrap();
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
         rows.iter()
             .any(|row| row.wasted_probes == 1)
             .then_some(rows)
@@ -1368,8 +1679,10 @@ async fn a_hold_counts_its_skip_when_the_held_probe_comes_due() {
     // Drained rather than polled: what this half asserts is that no skipped row lands at all.
     r.ledger.clone().shutdown().await.unwrap();
     let rows =
-        r.db.read_blocking(|c| read_rollups(c, hour_of(NOW) - 3_600, i64::MAX))
-            .unwrap();
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
     assert_eq!(
         rows.iter().map(|row| row.probes_skipped).sum::<u64>(),
         0,

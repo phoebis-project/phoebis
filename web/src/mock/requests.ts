@@ -751,7 +751,10 @@ function histogramsOf(rows: RequestLog[]): LatencyHistograms {
  * purpose: that is the share the analytics panel tells the operator to act on.
  */
 const WASTE_SPLIT: { reason: WastedProbeReason; weight: number }[] = [
-  { reason: 'idle_limit', weight: 11 },
+  { reason: 'cold_return', weight: 1 },
+  { reason: 'evicted', weight: 0.5 },
+  { reason: 'expired', weight: 0.5 },
+  { reason: 'idle_limit', weight: 13 },
   { reason: 'released', weight: 1 },
   { reason: 'replaced', weight: 2 },
   { reason: 'session_ended', weight: 4 },
@@ -821,8 +824,9 @@ function rollups(): HourlyRollup[] {
       model,
       requestClass: isProbe ? '-' : classOfRows(list),
       sessionId,
-      // A lane's rows share its key, model and kind, which is what decides fast mode in this story.
-      speed: list[0].attempts[list[0].attempts.length - 1]?.response.speed === 'fast' ? 'fast' : 'standard',
+      // A lane's rows share its key, model and kind, which is what decides fast mode in this story; a row refused
+      // before any attempt files under the speed it asked for, as the ledger files it.
+      speed: (list[0].attempts[list[0].attempts.length - 1]?.response.speed ?? list[0].shape.requestedSpeed) === 'fast' ? 'fast' : 'standard',
       requests: {
         // A stream that ended short committed its 200 and still is no success, so it counts on its own.
         incomplete: list.filter((r) => r.outcome === 'incomplete').length,

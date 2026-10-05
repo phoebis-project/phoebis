@@ -737,6 +737,7 @@ async fn the_usage_page_is_html_when_accept_prefers_it_and_escapes_the_label() {
                 label: "<b>Desk</b> & \"Co\"".into(),
                 ..row
             },
+            row.updated_at,
             "test",
         )
         .unwrap();

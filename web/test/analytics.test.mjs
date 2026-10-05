@@ -333,13 +333,27 @@ test("the mock prices a fast hour and a fast answer at the model's fast cells", 
   for (const r of requests) assert.equal(r.costUsd, Math.round(priced(cells.get(r.model), r.usage) * 10_000) / 10_000, r.id);
 });
 
-test('the session fold files a request under the speed its serving attempt reported, standard when it named none', () => {
+test('the session fold files a request under the speed its serving attempt reported, else fast when it asked for fast, standard otherwise', () => {
   const rows = d.decodeRequestPage(fixture('requests')).requests;
   const served = (r) => r.attempts.at(-1)?.response.speed;
-  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', rows.filter((r) => served(r) === 'fast').length], ['standard', rows.filter((r) => served(r) !== 'fast').length]]);
+  const speedOf = (r) => served(r) ?? (r.shape.requestedSpeed === 'fast' ? 'fast' : 'standard');
+  assert.deepEqual(d.foldGroups(rows, 'speed').map((g) => [g.key, g.requests]).sort(), [['fast', rows.filter((r) => speedOf(r) === 'fast').length], ['standard', rows.filter((r) => speedOf(r) !== 'fast').length]]);
   const named = rows.find((r) => served(r) === 'fast');
   const unnamed = { ...named, attempts: named.attempts.map((a) => ({ ...a, response: { ...a.response, speed: null } })) };
   assert.deepEqual(d.foldGroups([unnamed], 'speed').map((g) => g.key), ['standard'], 'an answer that named no speed files as standard, as the rollups file it');
   // The fixture's fast request failed over: its first attempt was standard and its serving one fast.
   assert.equal(named.attempts[0].response.speed, 'standard');
+  const refused = { ...named, attempts: [], shape: { ...named.shape, requestedSpeed: 'fast' } };
+  assert.deepEqual(d.foldGroups([refused], 'speed').map((g) => g.key), ['fast'], 'a fast request refused before any attempt files under the speed it asked for');
+  const asked = { ...refused, shape: { ...refused.shape, requestedSpeed: 's'.repeat(300) } };
+  assert.deepEqual(d.foldGroups([asked], 'speed').map((g) => g.key), ['standard'], 'any other text the caller sent as its speed files under standard');
+});
+
+test('the session fold groups a user agent under its first product token, as the rollups key it', () => {
+  const [captured, failed] = d.decodeRequestPage(fixture('requests')).requests;
+  assert.equal(captured.userAgent, 'claude-cli/2.1.269 (external, cli)');
+  const rows = [captured, { ...failed, userAgent: 'claude-cli/2.1.269 (external, sdk-cli)' }, { ...failed, id: 'r-curl', userAgent: 'curl' }, { ...failed, id: 'r-none', userAgent: null }];
+  assert.deepEqual(d.foldGroups(rows, 'user_agent').map((g) => [g.key, g.requests]).sort(), [['-', 1], ['claude-cli/2.1.269', 2], ['other', 1]], 'a header without a product token files under other, and one never sent under the reserved id');
+  const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.269'] });
+  assert.deepEqual(named.map((g) => [g.key, g.requests]), [['claude-cli/2.1.269', 2], ['other', 2]], 'a pattern list names its groups by the token, as the breakdown route matches them');
 });

@@ -23,7 +23,7 @@ import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, Erro
 import { moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, bandRefusal, poolRefusals, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -771,7 +771,8 @@ interface PoolForm {
   failoverCustom: boolean;
   keepalive: boolean;
   members: Record<string, number>;
-  migrate: number;
+  /** The margin in percent; null while the field is empty, which a switched-on save refuses. */
+  migrate: number | null;
   migrateOn: boolean;
   modelRules: ModelRule[];
   name: string;
@@ -808,7 +809,7 @@ const blankForm = (): PoolForm => ({
   failoverCustom: false,
   keepalive: true,
   members: {},
-  migrate: 90,
+  migrate: null,
   migrateOn: false,
   modelRules: [],
   name: '',
@@ -858,7 +859,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   keepalive: pool.keepalive.enabled,
   members: Object.fromEntries(pool.members.map((m) => [m.accountId, m.priority])),
   // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
-  migrate: pool.migrateAboveUtilization === null ? 90 : Math.round(pool.migrateAboveUtilization * 10_000) / 100,
+  migrate: pool.migrateAboveUtilization === null ? null : Math.round(pool.migrateAboveUtilization * 10_000) / 100,
   migrateOn: pool.migrateAboveUtilization !== null,
   modelRules: pool.modelRules,
   name: pool.name,
@@ -918,7 +919,7 @@ export function PoolDialog({
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];
   models: { label: string; value: string }[];
-  /** `reload` is true after a save the route answered with a refusal: it may have stored the settings before refusing. */
+  /** `reload` is true after a save the route answered with a refusal: one saying the pool changed while it was edited means the lists are out of date. */
   onClose: (reload: boolean) => void;
   onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;
@@ -937,8 +938,6 @@ export function PoolDialog({
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
   const [chosen, setChosen] = useState<PoolGroup>('identity');
-  // Set by the percent field and the bar's handle alone, so the form's floor never holds a stored value back.
-  const [migrateChanged, setMigrateChanged] = useState(false);
   const settings = useAsync(() => api.getSettings(), []);
   const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
   const [keyOpen, setKeyOpen] = useState(false);
@@ -967,7 +966,6 @@ export function PoolDialog({
     setError(null);
     setAttempted(false);
     setChosen(initialGroup ?? 'identity');
-    setMigrateChanged(false);
     // `accounts` is read but not tracked: the parent hands down a fresh array on every render, and reacting to
     // that would wipe the form mid-edit.
   }, [open, pool, initialGroup]);
@@ -983,10 +981,7 @@ export function PoolDialog({
   }, [open, accounts]);
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
-  const setMigrate = (value: number) => {
-    set('migrate', value);
-    setMigrateChanged(true);
-  };
+  const setMigrate = (value: number | null) => set('migrate', value);
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
   const otherPools = pools.filter((p) => p.id !== pool?.id);
   // The id the create call derives from the name, which keys created before the pool is saved use too.
@@ -1029,8 +1024,9 @@ export function PoolDialog({
       return { accountId, budgetDailyUsd: usd(budget.daily), budgetMonthlyUsd: usd(budget.monthly), priority };
     }),
     // Through whole hundredths of a percent, so a stored four-decimal threshold saves back as stored: the two-decimal
-    // percent divided by 100 lands an ulp off for about a quarter of them.
-    migrateAboveUtilization: form.migrateOn ? Math.round(form.migrate * 100) / 10_000 : null,
+    // percent divided by 100 lands an ulp off for about a quarter of them. An empty field goes on as NaN, which the
+    // refusals below hold the save for.
+    migrateAboveUtilization: form.migrateOn ? (form.migrate === null ? Number.NaN : Math.round(form.migrate * 100) / 10_000) : null,
     // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
     minSharedPrefixTokens: prefixEnabled
       ? form.prefixTokens.trim() === '' ? Number.NaN : Number(form.prefixTokens)
@@ -1050,7 +1046,6 @@ export function PoolDialog({
   const refusals = poolRefusals(input, accountsFailed !== null ? null : accountsLoaded ? listed : new Set(Object.keys(form.members)), {
     capture: { maxHours: captureMaxHours, on: form.capture, typed: form.captureHours },
     identity: { isNew: pool === null, poolIds: new Set(pools.map((p) => p.id)) },
-    migrateChanged,
   });
   const refusedFields = new Set(refusals.map((r) => r.field));
   const refusedGroups = new Set<PoolGroup>(refusals.map((r) => r.group));
@@ -1073,8 +1068,6 @@ export function PoolDialog({
   const pickFailover = (name: FailoverPreset) =>
     setForm((f) => (name === 'custom' ? { ...f, failoverCustom: true } : { ...f, engine: { ...f.engine, ...FAILOVER_PRESETS[name] }, failoverCustom: false }));
   const rulesRefusal = refusalOf('Model rules');
-  // The band's own sentence alone: a select-below out of its range reads in the footer and on the rail.
-  const band = bandRefusal(input);
   const prefixRefusal = refusalOf('Minimum shared prefix, tokens');
   const budgetRefusal = refusals.find((r) => r.field.startsWith('budget_daily:') || r.field.startsWith('budget_monthly:'));
   const budgetRefused = budgetRefusal && {
@@ -1568,10 +1561,10 @@ export function PoolDialog({
             numberLabel="Utilization (%)"
             checked={form.migrateOn}
             onChange={(v) => set('migrateOn', v)}
-            input={{ min: 50, max: 100, value: form.migrate, onChange: (e) => setMigrate(Number(e.target.value)), 'aria-label': 'Migrate above utilization (%)', 'aria-invalid': invalid('Migrate above utilization (%)') }}
+            input={{ min: 0, max: 100, value: form.migrate ?? '', onChange: (e) => setMigrate(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Migrate above utilization (%)', 'aria-invalid': invalid('Migrate above utilization (%)') }}
             hint={
               <>
-                A member at or above this line on its 5-hour or 7-day window starts a <GroupLink id="shedding">shedding round</GroupLink>; a sibling counts as cool below the line minus 5%.
+                A member whose 5-hour or 7-day window runs ahead of pace by this much starts a <GroupLink id="shedding">shedding round</GroupLink>; a sibling counts as cool under the line minus 5%.
               </>
             }
           />
@@ -1586,7 +1579,7 @@ export function PoolDialog({
               input={{ min: 0, max: 100, value: form.selectBelow, onChange: (e) => set('selectBelow', Number(e.target.value)), 'aria-label': 'Select below utilization (%)', 'aria-invalid': invalid('Select below utilization (%)') }}
               hint={
                 <>
-                  A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is. With both lines on, it sits at least 5% under the migrate line.
+                  A <GroupLink id="selection">fresh pick</GroupLink> passes over members at or above this 5-hour utilization, unless every member is.
                 </>
               }
             />
@@ -1604,18 +1597,15 @@ export function PoolDialog({
           <UtilizationBar
             expert={expertView || refusedFields.has('Select below utilization (%)')}
             readings={readings}
-            migrate={form.migrateOn ? { onChange: setMigrate, value: form.migrate } : null}
-            migrateMin={50}
             selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
           />
         </Field>
-        {band && refusalCallout(band)}
       </div>
     ),
     shedding: (
       <>
         <p className="dialog-group__intro">
-          A member at or above the <GroupLink id="utilization">migrate line</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
+          A member ahead of its pace by the <GroupLink id="utilization">migrate margin</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
         </p>
         <div className="cells">
           <Expert>

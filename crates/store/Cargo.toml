@@ -10,6 +10,8 @@ version.workspace = true
 # crate's own below, turn it on for a test build, so a release build carries no way to damage a stored
 # credential.
 debug-hooks = []
+# The test builders of the registry's rows, so a release build carries none of them.
+test-support = []
 
 [dependencies]
 aes-gcm = { workspace = true }
@@ -33,7 +35,8 @@ zeroize = { workspace = true }
 phoebis-relay = { path = "../relay" }
 # A lane is built with the routing crate's one constructor, the spelling every pin and entry compares.
 phoebis-routing = { path = "../routing" }
-# An integration test builds the library without `cfg(test)`, so the seams it reaches need the feature on.
-phoebis-store = { path = ".", features = ["debug-hooks"] }
+# An integration test builds the library without `cfg(test)`, so the seams and builders it reaches need the
+# features on.
+phoebis-store = { path = ".", features = ["debug-hooks", "test-support"] }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }

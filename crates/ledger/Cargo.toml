@@ -35,6 +35,8 @@ phoebis-cch = { path = "../cch" }
 # An integration test builds the library without `cfg(test)`, so the seam it reaches needs the feature on.
 phoebis-ledger = { path = ".", features = ["debug-hooks"] }
 phoebis-profile = { path = "../profile" }
+# The test builders of the registry's rows, kept off the dependency above so a release build carries none.
+phoebis-store = { path = "../store", features = ["test-support"] }
 rand = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

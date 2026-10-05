@@ -1,7 +1,7 @@
 use phoebis_routing::{KeyRefusal, Presented, RegistrySnapshot};
 use phoebis_store::{
-    digest_with, Affinity, ApiKeyRow, Failover, OveragePolicy, PoolRow, RegistryLoad,
-    RetiredSecret, RulesMode, Shedding, Strategy, SubscriptionTerm,
+    digest_with, ApiKeyRow, PoolRow, RegistryLoad, RetiredSecret, RulesMode,
+    Strategy, SubscriptionTerm,
 };
 
 const DIGEST_KEY: [u8; 32] = [0; 32];
@@ -34,26 +34,9 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
         }],
         members: Vec::new(),
         pools: vec![PoolRow {
-            id: "p".into(),
-            label: "p".into(),
-            enabled: true,
             strategy: Strategy::Priority,
-            affinity_ttl_seconds: 3600,
-            overage_policy: OveragePolicy::PreferPlan,
-            migrate_above_utilization: None,
-            select_below_utilization: None,
-            model_rules: Vec::new(),
-            keepalive_json: "{}".into(),
-            body_capture_hours: 0,
             prefer_subscription: false,
-            shedding: Shedding::default(),
-            failover: Failover::default(),
-            cache_ttl_json: "{}".into(),
-            cache_diagnostics: false,
-            auto_mode_server: true,
-            affinity: Affinity::default(),
-            created_at: 0,
-            updated_at: 0,
+            ..PoolRow::for_tests("p")
         }],
         retired_secrets: vec![RetiredSecret {
             key_id: "k".into(),

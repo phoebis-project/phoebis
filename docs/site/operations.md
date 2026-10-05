@@ -210,6 +210,9 @@ secret `COMPANION_READ_TOKEN` holds a fine-grained token with contents read on t
 job prints a notice that the test was skipped and passes. The documentation workflow below and the release workflow are
 separate, so a failed test never blocks the site's build.
 
+The release workflow's jobs run with a read-only token except the build and publish jobs, which write packages, and the
+smoke job, which reads them.
+
 ## Publishing this site
 
 A GitHub Actions workflow builds this site on every push to `main` and every pull request: `zensical build --clean

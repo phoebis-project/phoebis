@@ -238,6 +238,45 @@ fn limits_and_policies_outside_their_bounds_are_refused() {
             ..
         })
     ));
+    // Each value sits inside its own bound; together they reach the TTL they apply to.
+    let five_minutes = policy(|p| {
+        p.lead_seconds_5m = 200;
+        p.jitter_seconds_5m = 100;
+    })
+    .validate_fields();
+    assert_eq!(
+        five_minutes,
+        Err(PolicyError::LeadPlusJitter {
+            lead: "lead_seconds_5m",
+            jitter: "jitter_seconds_5m"
+        })
+    );
+    assert_eq!(
+        five_minutes.unwrap_err().to_string(),
+        "keepalive.lead_seconds_5m plus keepalive.jitter_seconds_5m must stay under the cache TTL they apply to"
+    );
+    assert_eq!(
+        policy(|p| {
+            p.lead_seconds_1h = 3_000;
+            p.jitter_seconds_1h = 600;
+        })
+        .validate_fields(),
+        Err(PolicyError::LeadPlusJitter {
+            lead: "lead_seconds_1h",
+            jitter: "jitter_seconds_1h"
+        })
+    );
+    assert_eq!(
+        policy(|p| {
+            p.lead_seconds_5m = 199;
+            p.jitter_seconds_5m = 100;
+            p.lead_seconds_1h = 2_999;
+            p.jitter_seconds_1h = 600;
+        })
+        .validate_fields(),
+        Ok(()),
+        "a sum a second under the TTL is admitted"
+    );
     assert!(matches!(
         policy(|p| p.net_negative_grace_probes = 101).validate_fields(),
         Err(PolicyError::OutOfRange {
@@ -313,6 +352,13 @@ fn a_stored_policy_that_does_not_parse_reads_as_off() {
         KeepalivePolicy::from_json(r#"{"enabled":true,"cold_probe_limit":0}"#),
         KeepalivePolicy::default(),
         "a stored value outside its bounds turns the row off"
+    );
+    assert_eq!(
+        KeepalivePolicy::from_json(
+            r#"{"enabled":true,"lead_seconds_5m":299,"jitter_seconds_5m":5}"#
+        ),
+        KeepalivePolicy::default(),
+        "a stored lead and jitter that together reach the TTL turn the row off"
     );
     assert_eq!(
         KeepalivePolicy::from_json("not json"),

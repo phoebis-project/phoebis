@@ -28,6 +28,6 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-profile = { path = "../profile" }
 # An integration test builds the library without `cfg(test)`, so the hold it reaches needs the feature on.
 phoebis-routing = { path = ".", features = ["debug-hooks"] }
-phoebis-store = { path = "../store", features = ["debug-hooks"] }
+phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 phoebis-transport = { path = "../transport" }
 tempfile = { workspace = true }

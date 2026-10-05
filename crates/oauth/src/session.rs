@@ -9,8 +9,9 @@ use url::Url;
 
 use crate::pkce::{generate_pkce, generate_state, Pkce};
 
-/// Matches the ten-minute window Claude Code gives a pasted callback before treating it as stale.
-const SESSION_TTL_MS: i64 = 600_000;
+/// A pairing's lifetime: matches the ten-minute window Claude Code gives a pasted callback before treating it as
+/// stale, and is how long an ended pairing stays readable before the sweep drops it.
+pub const SESSION_TTL_MS: i64 = 600_000;
 
 const LOCK_POISONED: &str = "pairing sessions mutex poisoned by a prior panic";
 
@@ -24,6 +25,9 @@ pub struct PairingSession {
     pub redirect_uri: String,
     pub deadline: i64,
     pub status: PairingStatus,
+    /// When the status moved to `Confirmed`, `Cancelled`, `Expired` or `Failed`; the sweep keeps an ended session
+    /// readable for one lifetime past it.
+    pub ended_at: Option<i64>,
 }
 
 #[derive(Clone)]
@@ -172,7 +176,7 @@ impl PairingSessions {
             {
                 return Err(PairingError::Busy);
             }
-            standing.status = PairingStatus::Cancelled;
+            end(standing, PairingStatus::Cancelled, now);
             superseded = Some(standing.id.clone());
         }
         let session = PairingSession {
@@ -184,6 +188,7 @@ impl PairingSessions {
             redirect_uri: redirect_uri.to_string(),
             deadline: now + SESSION_TTL_MS,
             status: PairingStatus::Pending,
+            ended_at: None,
         };
         sessions.insert(session.id.clone(), session.clone());
         Ok(Started {
@@ -294,7 +299,7 @@ impl PairingSessions {
         if !matches!(session.status, PairingStatus::Confirming { .. }) {
             return Err(PairingError::AlreadyConsumed);
         }
-        session.status = PairingStatus::Confirmed;
+        end(session, PairingStatus::Confirmed, now);
         Ok(())
     }
 
@@ -312,7 +317,7 @@ impl PairingSessions {
         if !is_in_flight(&session.status) {
             return Err(PairingError::AlreadyConsumed);
         }
-        session.status = PairingStatus::Failed(reason.to_string());
+        end(session, PairingStatus::Failed(reason.to_string()), now);
         Ok(())
     }
 
@@ -331,8 +336,19 @@ impl PairingSessions {
         if matches!(session.status, PairingStatus::Confirming { .. }) {
             return Err(PairingError::AlreadyConsumed);
         }
-        session.status = PairingStatus::Cancelled;
+        end(session, PairingStatus::Cancelled, now);
         Ok(())
+    }
+
+    /// Drops every session one lifetime after it ended, or one lifetime past a deadline it never ended at, so the
+    /// map does not keep an entry per pairing ever started. Answers how many it dropped.
+    pub fn sweep(&self, now: i64) -> usize {
+        let mut sessions = self.sessions.lock().expect(LOCK_POISONED);
+        let before = sessions.len();
+        sessions.retain(|_, session| {
+            now < session.ended_at.unwrap_or(session.deadline) + SESSION_TTL_MS
+        });
+        before - sessions.len()
     }
 }
 
@@ -365,12 +381,17 @@ fn is_in_flight(status: &PairingStatus) -> bool {
     )
 }
 
-/// Nothing sweeps in the background, so every read or mutation re-checks the deadline against the
-/// caller's `now` and flips a stale in-flight session to `Expired` on the spot.
+/// The sweep drops sessions rather than expiring them, and only once a minute, so every read or mutation
+/// re-checks the deadline against the caller's `now` and flips a stale in-flight session to `Expired` on the spot.
 fn expire_if_stale(session: &mut PairingSession, now: i64) {
     if is_in_flight(&session.status) && now > session.deadline {
-        session.status = PairingStatus::Expired;
+        end(session, PairingStatus::Expired, now);
     }
+}
+
+fn end(session: &mut PairingSession, status: PairingStatus, now: i64) {
+    session.status = status;
+    session.ended_at = Some(now);
 }
 
 fn extract_code(url: &str, redirect_uri: &str, state: &str) -> Result<String, PairingError> {
@@ -395,4 +416,34 @@ fn extract_code(url: &str, redirect_uri: &str, state: &str) -> Result<String, Pa
         .find(|(k, _)| k == "code")
         .map(|(_, v)| v.into_owned())
         .ok_or_else(|| PairingError::Invalid("callback is missing a code parameter".to_string()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_pairing_leaves_ten_minutes_after_it_ended_or_after_a_deadline_it_never_ended_at() {
+        let sessions = PairingSessions::new();
+        let redirect = "http://localhost:1/callback";
+        let abandoned = sessions.start("a", "admin", redirect, 0).unwrap().session;
+        let cancelled = sessions.start("b", "admin", redirect, 0).unwrap().session;
+        sessions.cancel(&cancelled.id, "admin", 1_000).unwrap();
+        assert_eq!(
+            sessions.sweep(600_999),
+            0,
+            "the cancelled one stays readable for ten minutes after it ended"
+        );
+        assert_eq!(sessions.sweep(601_000), 1);
+        assert!(sessions.get(&cancelled.id, "admin", 601_000).is_none());
+        assert_eq!(
+            sessions.sweep(SESSION_TTL_MS * 2 - 1),
+            0,
+            "one never read past its deadline stays until ten minutes after it"
+        );
+        assert_eq!(sessions.sweep(SESSION_TTL_MS * 2), 1);
+        assert!(sessions
+            .get(&abandoned.id, "admin", SESSION_TTL_MS * 2)
+            .is_none());
+    }
 }

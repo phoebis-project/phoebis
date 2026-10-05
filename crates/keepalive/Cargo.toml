@@ -37,6 +37,8 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 # An integration test builds the library without `cfg(test)`, so the counter it reads needs the feature on.
 phoebis-keepalive = { path = ".", features = ["debug-hooks"] }
 phoebis-profile = { path = "../profile" }
+# The test builders of the registry's rows, kept off the dependency above so a release build carries none.
+phoebis-store = { path = "../store", features = ["test-support"] }
 phoebis-transport = { path = "../transport" }
 # The probe deadline is five minutes, so the test that waits it out moves tokio's clock instead of the wall's.
 tokio = { workspace = true, features = ["test-util"] }

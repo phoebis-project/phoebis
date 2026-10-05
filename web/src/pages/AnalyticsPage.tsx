@@ -1070,7 +1070,7 @@ function ReasonBars({ totals }: { totals: AnalyticsGroup }) {
 }
 
 const WASTED_PROBE_BLURB =
-  "Probes on recipes that no real request ever followed, settled when the recipe stopped. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.";
+  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share means the pool's max idle time is set too high for how these sessions are used.";
 
 function WastedProbes({ savings, probes }: { probes: number; savings: NonNullable<AnalyticsGroup['savings']> }) {
   const ink = useChartInk();
@@ -1305,7 +1305,10 @@ function timeAxis(bucketMs: number, ink: ChartInk): TimeAxis {
 type SpeedRow = { at: number; fast: number; standard: number };
 const requestsIn = (p: AnalyticsPoint, key: string) => p.groups.find((g) => g.key === key)?.requests ?? 0;
 
-/** Requests per bucket by the speed their answers reported, stacked as Requests by outcome stacks its outcomes. */
+/**
+ * Requests per bucket by the speed their answers reported, else `fast` for a request that asked for it, stacked as
+ * Requests by outcome stacks its outcomes.
+ */
 function SpeedCard({ axis, points, error, loading }: { axis: TimeAxis; error: string | null; loading: boolean; points: AnalyticsPoint[] }) {
   const ink = useChartInk();
   const data = useMemo(() => points.map((p): SpeedRow => ({ at: Date.parse(p.at), fast: requestsIn(p, 'fast'), standard: requestsIn(p, 'standard') })), [points]);

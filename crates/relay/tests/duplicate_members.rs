@@ -71,12 +71,53 @@ async fn a_repeated_metadata_or_stream_member_is_refused_and_a_nested_repeat_is_
         "{text}"
     );
     assert!(up.requests().is_empty());
-    // A repeat below the top level is the upstream's to judge, and the wire is unchanged for it.
+    // A repeat of a `metadata` member the relay never reads is the upstream's to judge, and the wire is unchanged
+    // for it.
     let nested = r#"{"model":"claude-sonnet-4-5","metadata":{"model":"x","model":"y"},"messages":[],"max_tokens":8}"#;
     let (status, _, _) = send(&h, "/v1/messages", nested).await;
     assert_eq!(status, 200);
     let received: serde_json::Value = serde_json::from_slice(&up.requests()[0].body).unwrap();
     assert_eq!(received["model"], "claude-sonnet-4-5");
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_repeated_metadata_user_id_is_refused_raw_or_escaped_and_a_repeat_inside_a_tool_input_is_not(
+) {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    // The account splice lands on one spelling and a last-wins parser upstream would read the other.
+    for (first, second) in [
+        ("user_id", "user_id"),
+        ("user_id", "\\u0075ser_id"),
+        ("\\u0075ser_id", "user_id"),
+    ] {
+        let body = format!(
+            r#"{{"model":"claude-sonnet-4-5","metadata":{{"{first}":"a","{second}":"b"}},"messages":[],"max_tokens":8}}"#
+        );
+        let (status, code, text) = send(&h, "/v1/messages", &body).await;
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(code, "body_shape", "{text}");
+        assert!(
+            // The wire body is JSON, so the message's own embedded quotes are backslash-escaped in it.
+            text.contains(r#"member \"metadata.user_id\" more than once"#),
+            "{text}"
+        );
+        assert!(!text.contains("top-level"), "{text}");
+    }
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    // The same object inside a tool call's input is the client's data, relayed as sent.
+    let tool_input = concat!(
+        r#"{"model":"claude-sonnet-4-5","messages":[{"role":"assistant","content":[{"type":"tool_use","#,
+        r#""id":"t1","name":"x","input":{"metadata":{"user_id":"a","user_id":"b"}}}]}],"max_tokens":8}"#
+    );
+    let (status, _, text) = send(&h, "/v1/messages", tool_input).await;
+    assert_eq!(status, 200, "{text}");
+    assert_eq!(
+        up.requests()[0].body,
+        tool_input.as_bytes(),
+        "the wire body is the one sent"
+    );
     up.shutdown().await;
 }
 

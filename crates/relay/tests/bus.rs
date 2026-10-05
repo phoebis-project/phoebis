@@ -245,7 +245,7 @@ async fn a_capture_window_past_the_running_cap_is_published_at_the_cap() {
     .await;
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.body_capture_hours = 72;
-    h.store.update_pool(&pool, "test").unwrap();
+    h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
     h.router.reload().await.unwrap();
     let resp = h
         .app
@@ -992,18 +992,21 @@ async fn a_subscriber_that_never_reads_drops_chunks_but_the_completion_waits_for
     }])
     .await;
     let bus = Bus::new();
+    let mut reader = bus.subscribe("reader", Delivery::Durable);
     let mut sleeper = bus.subscribe("sleeper", Delivery::Durable);
     let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
     let mut request = tokio::spawn(async move {
         let resp = h.app.clone().oneshot(stream_request(KEY)).await.unwrap();
         resp.into_body().collect().await.unwrap().to_bytes()
     });
-    // Past the stream's own length, so every chunk has had its chance to fill the sleeper's queue and drop.
-    tokio::time::sleep(Duration::from_secs(15)).await;
-    assert!(
-        sleeper.stats.dropped.load(Ordering::SeqCst) > 0,
-        "the queue filled and dropped"
-    );
+    // `publish_fact` walks the slots in subscribe order and awaits each, so the completion fact reaches the reader
+    // before the publisher waits on the sleeper, and every chunk went by before the completion: the drop count is
+    // settled the moment the reader holds the completion, with nothing slept. The wait is the stream's own length,
+    // its 4,097 one-millisecond gaps, which the drop needs to overfill the queue.
+    up.written(0).await;
+    drain_until_complete(&mut reader).await;
+    let dropped = sleeper.stats.dropped.load(Ordering::SeqCst);
+    assert!(dropped > 0, "the queue filled and dropped");
     assert!(
         tokio::time::timeout(Duration::from_millis(50), &mut request)
             .await

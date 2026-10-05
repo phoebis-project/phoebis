@@ -32,76 +32,112 @@
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.jitter_seconds_1h",
         "value": 0,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.lead_seconds_1h": 0
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.jitter_seconds_1h",
         "value": 3599,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.lead_seconds_1h": 0
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.jitter_seconds_1h",
         "value": 3600,
         "status": 400,
+        "with": {
+          "keepalive.lead_seconds_1h": 0
+        },
         "error": "keepalive.jitter_seconds_1h must be between 0 and 3599, not 3600"
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.jitter_seconds_5m",
         "value": 0,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.lead_seconds_5m": 0
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.jitter_seconds_5m",
         "value": 299,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.lead_seconds_5m": 0
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.jitter_seconds_5m",
         "value": 300,
         "status": 400,
+        "with": {
+          "keepalive.lead_seconds_5m": 0
+        },
         "error": "keepalive.jitter_seconds_5m must be between 0 and 299, not 300"
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.lead_seconds_1h",
         "value": 0,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.jitter_seconds_1h": 0
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.lead_seconds_1h",
         "value": 3599,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.jitter_seconds_1h": 0
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.lead_seconds_1h",
         "value": 3600,
         "status": 400,
+        "with": {
+          "keepalive.jitter_seconds_1h": 0
+        },
         "error": "keepalive.lead_seconds_1h must be between 0 and 3599, not 3600"
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.lead_seconds_5m",
         "value": 0,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.jitter_seconds_5m": 0
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.lead_seconds_5m",
         "value": 299,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.jitter_seconds_5m": 0
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.lead_seconds_5m",
         "value": 300,
         "status": 400,
+        "with": {
+          "keepalive.jitter_seconds_5m": 0
+        },
         "error": "keepalive.lead_seconds_5m must be between 0 and 299, not 300"
       },
       {
@@ -165,53 +201,97 @@
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.retry_max_seconds",
         "value": 1,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.retry_seconds": 1
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.retry_max_seconds",
         "value": 0,
         "status": 400,
+        "with": {
+          "keepalive.retry_seconds": 1
+        },
         "error": "keepalive.retry_max_seconds must be between 1 and 604800, not 0"
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.retry_max_seconds",
         "value": 604800,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.retry_seconds": 1
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.retry_max_seconds",
         "value": 604801,
         "status": 400,
+        "with": {
+          "keepalive.retry_seconds": 1
+        },
         "error": "keepalive.retry_max_seconds must be between 1 and 604800, not 604801"
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.retry_seconds",
         "value": 1,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.retry_max_seconds": 604800
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.retry_seconds",
         "value": 0,
         "status": 400,
+        "with": {
+          "keepalive.retry_max_seconds": 604800
+        },
         "error": "keepalive.retry_seconds must be between 1 and 3600, not 0"
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.retry_seconds",
         "value": 3600,
-        "status": 200
+        "status": 200,
+        "with": {
+          "keepalive.retry_max_seconds": 604800
+        }
       },
       {
         "route": "PATCH /admin/pools/{id}",
         "field": "keepalive.retry_seconds",
         "value": 3601,
         "status": 400,
+        "with": {
+          "keepalive.retry_max_seconds": 604800
+        },
         "error": "keepalive.retry_seconds must be between 1 and 3600, not 3601"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "keepalive.lead_seconds_1h",
+        "value": 1800,
+        "status": 400,
+        "with": {
+          "keepalive.jitter_seconds_1h": 1800
+        },
+        "error": "keepalive.lead_seconds_1h plus keepalive.jitter_seconds_1h must stay under the cache TTL they apply to"
+      },
+      {
+        "route": "PATCH /admin/pools/{id}",
+        "field": "keepalive.lead_seconds_5m",
+        "value": 150,
+        "status": 400,
+        "with": {
+          "keepalive.jitter_seconds_5m": 150
+        },
+        "error": "keepalive.lead_seconds_5m plus keepalive.jitter_seconds_5m must stay under the cache TTL they apply to"
       },
       {
         "route": "PATCH /admin/pools/{id}",
