@@ -897,3 +897,294 @@ fn self_signed_prints_the_pending_shape_before_the_first_start_and_the_leaf_afte
         printed(&out)
     );
 }
+
+/// `config_file`'s template with `tls: self_signed` on both listeners.
+fn self_signed_config(dir: &Path, name: &str) -> PathBuf {
+    let config = config_file_with_proxy(dir, name, "  tls: self_signed\n");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        text.replacen("admin:\n", "admin:\n  tls: self_signed\n", 1),
+    )
+    .unwrap();
+    config
+}
+
+/// A CA and both leaves under `tls_dir`, every file within its dates, as a start writes them.
+fn valid_material(tls_dir: &Path) -> phoebis_router::tls::Ca {
+    use phoebis_router::tls::{self, SanName, Validity};
+
+    let ca = tls::write_ca(
+        "proxy.tls",
+        tls_dir,
+        "localhost",
+        Validity::days_from_now(tls::CA_LIFETIME_DAYS),
+    )
+    .unwrap();
+    for (key, listener) in [("proxy.tls", "proxy"), ("admin.tls", "admin")] {
+        tls::write_leaf(
+            key,
+            tls_dir,
+            listener,
+            &ca,
+            "localhost",
+            &[SanName::Dns("localhost".to_owned())],
+            Validity::days_from_now(tls::LEAF_LIFETIME_DAYS),
+        )
+        .unwrap();
+    }
+    ca
+}
+
+/// Every file under `dir` with its bytes, so a run that writes, renames or removes anything shows as a difference.
+fn snapshot(dir: &Path) -> Vec<(PathBuf, Vec<u8>)> {
+    let mut files = Vec::new();
+    let mut pending = vec![dir.to_path_buf()];
+    while let Some(next) = pending.pop() {
+        for entry in std::fs::read_dir(&next).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                pending.push(path.clone());
+                files.push((path, Vec::new()));
+            } else {
+                let bytes = std::fs::read(&path).unwrap();
+                files.push((path, bytes));
+            }
+        }
+    }
+    files.sort();
+    files
+}
+
+#[test]
+fn self_signed_material_the_next_start_replaces_prints_why_and_passes() {
+    use phoebis_router::tls::{self, SanName, Validity};
+
+    let now = jiff::Timestamp::now().as_second();
+    let expired = Validity {
+        not_before: now - 2 * 86_400,
+        not_after: now - 86_400,
+    };
+    let leaf_line = |listener: &str, tls_dir: &Path, reason: &str| {
+        format!(
+            "{listener} listens on 127.0.0.1:0 over TLS (self-signed leaf {}, {reason}; the next start \
+             regenerates it)",
+            tls_dir.join(format!("{listener}.pem")).display()
+        )
+    };
+    let ca_line = |listener: &str, tls_dir: &Path, reason: &str| {
+        format!(
+            "{listener} listens on 127.0.0.1:0 over TLS (self-signed CA {}, {reason}; the next start \
+             regenerates it and every leaf)",
+            tls_dir.join("ca.pem").display()
+        )
+    };
+    let expires_line = |listener: &str, tls_dir: &Path| {
+        let leaf = tls_dir.join(format!("{listener}.pem"));
+        format!(
+            "{listener} listens on 127.0.0.1:0 over TLS (self-signed leaf {}, expires {})",
+            leaf.display(),
+            not_after(&leaf)
+        )
+    };
+    type Case = (&'static str, fn(&Path, &tls::Ca, Validity));
+    let cases: [Case; 8] = [
+        ("expired-leaf", |tls_dir, ca, expired| {
+            tls::write_leaf(
+                "proxy.tls",
+                tls_dir,
+                "proxy",
+                ca,
+                "localhost",
+                &[SanName::Dns("localhost".to_owned())],
+                expired,
+            )
+            .unwrap();
+        }),
+        ("half-pair", |tls_dir, _, _| {
+            std::fs::remove_file(tls_dir.join("proxy.key")).unwrap();
+        }),
+        ("mismatch", |tls_dir, ca, _| {
+            let scratch = tempfile::tempdir().unwrap();
+            tls::write_leaf(
+                "proxy.tls",
+                scratch.path(),
+                "proxy",
+                ca,
+                "localhost",
+                &[SanName::Dns("localhost".to_owned())],
+                Validity::days_from_now(30),
+            )
+            .unwrap();
+            std::fs::copy(scratch.path().join("proxy.pem"), tls_dir.join("proxy.pem")).unwrap();
+        }),
+        ("another-ca", |tls_dir, _, _| {
+            let scratch = tempfile::tempdir().unwrap();
+            let other = tls::write_ca(
+                "proxy.tls",
+                scratch.path(),
+                "localhost",
+                Validity::days_from_now(30),
+            )
+            .unwrap();
+            tls::write_leaf(
+                "proxy.tls",
+                tls_dir,
+                "proxy",
+                &other,
+                "localhost",
+                &[SanName::Dns("localhost".to_owned())],
+                Validity::days_from_now(30),
+            )
+            .unwrap();
+        }),
+        ("unparseable", |tls_dir, _, _| {
+            std::fs::write(tls_dir.join("proxy.pem"), "not a pem").unwrap();
+        }),
+        ("expired-ca", |tls_dir, _, expired| {
+            let ca = tls::write_ca("proxy.tls", tls_dir, "localhost", expired).unwrap();
+            for listener in ["proxy", "admin"] {
+                tls::write_leaf(
+                    "proxy.tls",
+                    tls_dir,
+                    listener,
+                    &ca,
+                    "localhost",
+                    &[SanName::Dns("localhost".to_owned())],
+                    Validity::days_from_now(30),
+                )
+                .unwrap();
+            }
+        }),
+        ("ca-half", |tls_dir, _, _| {
+            std::fs::remove_file(tls_dir.join("ca.key")).unwrap();
+        }),
+        ("ca-mismatch", |tls_dir, _, _| {
+            let scratch = tempfile::tempdir().unwrap();
+            tls::write_ca(
+                "proxy.tls",
+                scratch.path(),
+                "localhost",
+                Validity::days_from_now(30),
+            )
+            .unwrap();
+            std::fs::copy(scratch.path().join("ca.pem"), tls_dir.join("ca.pem")).unwrap();
+        }),
+    ];
+    for (name, change) in cases {
+        let dir = tempfile::tempdir().unwrap();
+        let config = self_signed_config(dir.path(), name);
+        let tls_dir = dir.path().join("tls");
+        let ca = valid_material(&tls_dir);
+        change(&tls_dir, &ca, expired);
+        let expected = match name {
+            "expired-leaf" => [
+                leaf_line(
+                    "proxy",
+                    &tls_dir,
+                    &format!("expired on {}", not_after(&tls_dir.join("proxy.pem"))),
+                ),
+                expires_line("admin", &tls_dir),
+            ],
+            "half-pair" => [
+                leaf_line("proxy", &tls_dir, "proxy.key is missing"),
+                expires_line("admin", &tls_dir),
+            ],
+            "mismatch" => [
+                leaf_line("proxy", &tls_dir, "the key does not match"),
+                expires_line("admin", &tls_dir),
+            ],
+            "another-ca" => [
+                leaf_line("proxy", &tls_dir, "not signed by the CA"),
+                expires_line("admin", &tls_dir),
+            ],
+            "unparseable" => [
+                leaf_line("proxy", &tls_dir, "proxy.pem does not parse"),
+                expires_line("admin", &tls_dir),
+            ],
+            "expired-ca" => {
+                let reason = format!("expired on {}", not_after(&tls_dir.join("ca.pem")));
+                [
+                    ca_line("proxy", &tls_dir, &reason),
+                    ca_line("admin", &tls_dir, &reason),
+                ]
+            }
+            "ca-half" => [
+                ca_line("proxy", &tls_dir, "ca.key is missing"),
+                ca_line("admin", &tls_dir, "ca.key is missing"),
+            ],
+            _ => [
+                ca_line("proxy", &tls_dir, "the key does not match"),
+                ca_line("admin", &tls_dir, "the key does not match"),
+            ],
+        };
+        let before = snapshot(dir.path());
+
+        let out = check_config(&mut phoebis(), &config);
+        assert!(out.status.success(), "{name}: {}", printed(&out));
+        let stdout = String::from_utf8_lossy(&out.stdout);
+        let lines: Vec<&str> = stdout.lines().collect();
+        assert_eq!(
+            lines.get(1..3),
+            Some(&[expected[0].as_str(), expected[1].as_str()][..]),
+            "{name}: {}",
+            printed(&out)
+        );
+        assert!(
+            snapshot(dir.path()) == before,
+            "{name}: check-config wrote under the data directory"
+        );
+    }
+}
+
+#[test]
+fn self_signed_material_the_start_refuses_fails_check_config() {
+    use phoebis_router::tls::{self, SanName, Validity};
+
+    let now = jiff::Timestamp::now().as_second();
+    for (name, reason) in [
+        ("early", "not valid before"),
+        ("unreadable", "Is a directory"),
+    ] {
+        let dir = tempfile::tempdir().unwrap();
+        let config = self_signed_config(dir.path(), name);
+        let tls_dir = dir.path().join("tls");
+        let ca = valid_material(&tls_dir);
+        let named = match name {
+            "early" => {
+                tls::write_leaf(
+                    "proxy.tls",
+                    &tls_dir,
+                    "proxy",
+                    &ca,
+                    "localhost",
+                    &[SanName::Dns("localhost".to_owned())],
+                    Validity {
+                        not_before: now + 2 * 86_400,
+                        not_after: now + 30 * 86_400,
+                    },
+                )
+                .unwrap();
+                format!(
+                    "proxy.tls.cert_file {}: ",
+                    tls_dir.join("proxy.pem").display()
+                )
+            }
+            _ => {
+                // A directory in the key's place fails the read with an error other than a missing file, for root too.
+                std::fs::remove_file(tls_dir.join("proxy.key")).unwrap();
+                std::fs::create_dir(tls_dir.join("proxy.key")).unwrap();
+                format!("proxy.tls: {}: ", tls_dir.join("proxy.key").display())
+            }
+        };
+        let out = check_config(&mut phoebis(), &config);
+        assert_eq!(out.status.code(), Some(1), "{name}: {}", printed(&out));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let line = stderr.lines().next().unwrap_or_default();
+        assert!(
+            line.starts_with(&format!("Error: {named}")) && line.contains(reason),
+            "{name}: {}",
+            printed(&out)
+        );
+    }
+}

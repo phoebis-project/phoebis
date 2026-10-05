@@ -374,11 +374,52 @@ pub enum Serving {
     Pending {
         leaf: PathBuf,
     },
+    /// `self_signed` whose CA the next start writes again, and every leaf with it; only `check-config` sees it.
+    StaleCa {
+        ca: PathBuf,
+        reason: Stale,
+    },
+    /// `self_signed` whose leaf the next start writes again under the CA; only `check-config` sees it.
+    StaleLeaf {
+        leaf: PathBuf,
+        reason: Stale,
+    },
+}
+
+/// Why the next start writes a self-signed CA or leaf again.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Stale {
+    Expired { date: String },
+    KeyMismatch,
+    Missing { file: String },
+    NotSignedByCa,
+    Unparseable { file: String },
+}
+
+impl fmt::Display for Stale {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Stale::Expired { date } => write!(f, "expired on {date}"),
+            Stale::KeyMismatch => f.write_str("the key does not match"),
+            Stale::Missing { file } => write!(f, "{file} is missing"),
+            Stale::NotSignedByCa => f.write_str("not signed by the CA"),
+            Stale::Unparseable { file } => write!(f, "{file} does not parse"),
+        }
+    }
+}
+
+/// A self-signed CA or leaf as the files hold it: the start writes anything but `Holds` again.
+enum Judged<T> {
+    Absent,
+    Stale(Stale),
+    Holds(T),
 }
 
 /// One call per listener. `generate` is the start's word: missing or expired material is written (the CA when
 /// `ca.pem` or `ca.key` is missing or expired, the leaf when its pair is missing, expired, or no longer signed by
-/// the CA); under `check-config` nothing is written and missing material answers `Pending`.
+/// the CA); under `check-config` nothing is written, missing material answers `Pending`, and material the next start
+/// writes again answers `StaleCa` or `StaleLeaf` with the reason. Both refuse what the start cannot serve: a file it
+/// cannot read, and a leaf that is not valid yet.
 pub fn load(
     key: &'static str,
     listener: &'static str,
@@ -409,28 +450,41 @@ fn self_signed(
     let leaf = dir.join(format!("{listener}.pem"));
     let leaf_key = dir.join(format!("{listener}.key"));
     if !generate {
-        if absent(&leaf) && absent(&leaf_key) {
-            return Ok(Serving::Pending { leaf });
-        }
-        return load_pair(key, &leaf, &leaf_key).map(Serving::Tls);
+        // The start's own judgement, read without writing, so `check-config` prints what the next start will do.
+        return Ok(match judge_ca(key, dir)? {
+            Judged::Stale(reason) => Serving::StaleCa {
+                ca: dir.join(CA_CERT),
+                reason,
+            },
+            Judged::Absent if absent(&leaf) && absent(&leaf_key) => Serving::Pending { leaf },
+            Judged::Absent => Serving::StaleCa {
+                ca: dir.join(CA_CERT),
+                reason: Stale::Missing {
+                    file: CA_CERT.to_owned(),
+                },
+            },
+            Judged::Holds(ca) => match judge_leaf(key, &leaf, &leaf_key, &ca)? {
+                Judged::Absent => Serving::Pending { leaf },
+                Judged::Stale(reason) => Serving::StaleLeaf { leaf, reason },
+                Judged::Holds(()) => Serving::Tls(load_pair(key, &leaf, &leaf_key)?),
+            },
+        });
     }
     permissions::create_private_dir(dir).map_err(material(key, dir))?;
     remove_temporaries(key, dir)?;
     let hostname = hostname();
-    let ca = match read_ca(key, dir)? {
-        Some(ca) => ca,
-        None => {
-            let ca_pem = dir.join(CA_CERT);
-            let replaced = !absent(&ca_pem) || !absent(&dir.join(CA_KEY));
+    let ca = match judge_ca(key, dir)? {
+        Judged::Holds(ca) => ca,
+        judged => {
             let ca = write_ca(
                 key,
                 dir,
                 &hostname,
                 Validity::days_from_now(CA_LIFETIME_DAYS),
             )?;
-            if replaced {
+            if !matches!(judged, Judged::Absent) {
                 tracing::warn!(
-                    ca = %ca_pem.display(),
+                    ca = %dir.join(CA_CERT).display(),
                     "the self-signed CA was replaced; the clients must trust the new ca.pem"
                 );
             }
@@ -444,7 +498,7 @@ fn self_signed(
             ca
         }
     };
-    if !leaf_holds(key, &leaf, &leaf_key, &ca)? {
+    if !matches!(judge_leaf(key, &leaf, &leaf_key, &ca)?, Judged::Holds(())) {
         let names = leaf_names(listen);
         write_leaf(
             key,
@@ -475,7 +529,8 @@ pub fn scheme(tls: &Option<ListenerTls>) -> &'static str {
 
 /// The `check-config` line for one listener: `{listener} listens on {listen} over plain HTTP`, `over TLS
 /// (certificate {cert_file}, expires {not_after})` for a loaded pair, or a self-signed leaf's `over TLS (self-signed
-/// leaf {path}, expires {not_after})` or its pending shape. `serving` is `load`'s answer for the same `tls`.
+/// leaf {path}, expires {not_after})`, its pending shape, or what the next start writes again and why. `serving` is
+/// `load`'s answer for the same `tls`.
 pub fn describe(
     listener: &str,
     listen: SocketAddr,
@@ -497,6 +552,15 @@ pub fn describe(
             "{listener} listens on {listen} over TLS (self-signed leaf {}, not generated yet; the first start \
              generates it)",
             leaf.display()
+        ),
+        (ListenerTls::SelfSigned, Serving::StaleLeaf { leaf, reason }) => format!(
+            "{listener} listens on {listen} over TLS (self-signed leaf {}, {reason}; the next start regenerates it)",
+            leaf.display()
+        ),
+        (ListenerTls::SelfSigned, Serving::StaleCa { ca, reason }) => format!(
+            "{listener} listens on {listen} over TLS (self-signed CA {}, {reason}; the next start regenerates it \
+             and every leaf)",
+            ca.display()
         ),
         _ => format!("{listener} listens on {listen} over plain HTTP"),
     }
@@ -681,50 +745,91 @@ fn read_back(
     Ok((cert, pkey))
 }
 
-/// The CA when both files hold a parseable, unexpired certificate and its own key; `None` sends the start to write
-/// a new one. A key that does not verify the certificate is what a stop between the CA's two renames leaves.
-fn read_ca(key: &'static str, dir: &Path) -> Result<Option<Ca>, TlsError> {
-    let (Some(cert_pem), Some(key_pem)) = (
-        read_if_present(key, &dir.join(CA_CERT))?,
-        read_if_present(key, &dir.join(CA_KEY))?,
-    ) else {
-        return Ok(None);
+/// The CA as `ca.pem` and `ca.key` hold it. `Holds` needs both files, both parsing, the certificate unexpired and
+/// signed by the key; a key that does not verify the certificate is what a stop between the CA's two renames leaves.
+fn judge_ca(key: &'static str, dir: &Path) -> Result<Judged<Ca>, TlsError> {
+    let (cert, pkey) = match judge_pair(key, &dir.join(CA_CERT), &dir.join(CA_KEY))? {
+        Judged::Holds(pair) => pair,
+        Judged::Absent => return Ok(Judged::Absent),
+        Judged::Stale(reason) => return Ok(Judged::Stale(reason)),
     };
-    let (Ok(cert), Ok(pkey)) = (
-        X509::from_pem(&cert_pem),
-        PKey::private_key_from_pem(&key_pem),
-    ) else {
-        return Ok(None);
-    };
-    if expired(&cert).map_err(stack(key))? || !signed_by(&cert, &pkey) {
-        return Ok(None);
+    if expired(&cert).map_err(stack(key))? {
+        return Ok(Judged::Stale(Stale::Expired {
+            date: cert.not_after().to_string(),
+        }));
     }
-    Ok(Some(Ca { cert, key: pkey }))
+    if !signed_by(&cert, &pkey) {
+        return Ok(Judged::Stale(Stale::KeyMismatch));
+    }
+    Ok(Judged::Holds(Ca { cert, key: pkey }))
 }
 
-/// Whether the listener's pair is whole, parseable, unexpired, matched, and signed by `ca`; a pair that fails any
-/// of these is written again. A mismatch is what a stop between the leaf's two renames leaves.
-fn leaf_holds(
+/// The listener's pair as its two files hold it. `Holds` needs both files, both parsing, the leaf unexpired, its key
+/// matching, and its signature by `ca`; a mismatch is what a stop between the leaf's two renames leaves.
+fn judge_leaf(
     key: &'static str,
     cert_file: &Path,
     key_file: &Path,
     ca: &Ca,
-) -> Result<bool, TlsError> {
-    let (Some(cert_pem), Some(key_pem)) = (
+) -> Result<Judged<()>, TlsError> {
+    let (cert, pkey) = match judge_pair(key, cert_file, key_file)? {
+        Judged::Holds(pair) => pair,
+        Judged::Absent => return Ok(Judged::Absent),
+        Judged::Stale(reason) => return Ok(Judged::Stale(reason)),
+    };
+    if expired(&cert).map_err(stack(key))? {
+        return Ok(Judged::Stale(Stale::Expired {
+            date: cert.not_after().to_string(),
+        }));
+    }
+    if !matches_key(&cert, &pkey) {
+        return Ok(Judged::Stale(Stale::KeyMismatch));
+    }
+    if !signed_by(&cert, &ca.key) {
+        return Ok(Judged::Stale(Stale::NotSignedByCa));
+    }
+    Ok(Judged::Holds(()))
+}
+
+/// A certificate and its key read and parsed: `Absent` when neither file exists, `Stale` naming the file that is
+/// missing or does not parse. A read that fails for any other reason refuses.
+fn judge_pair(
+    key: &'static str,
+    cert_file: &Path,
+    key_file: &Path,
+) -> Result<Judged<(X509, PKey<Private>)>, TlsError> {
+    let name = |path: &Path| {
+        path.file_name()
+            .map_or_else(String::new, |name| name.to_string_lossy().into_owned())
+    };
+    let (cert_pem, key_pem) = match (
         read_if_present(key, cert_file)?,
         read_if_present(key, key_file)?,
-    ) else {
-        return Ok(false);
+    ) {
+        (None, None) => return Ok(Judged::Absent),
+        (None, Some(_)) => {
+            return Ok(Judged::Stale(Stale::Missing {
+                file: name(cert_file),
+            }))
+        }
+        (Some(_), None) => {
+            return Ok(Judged::Stale(Stale::Missing {
+                file: name(key_file),
+            }))
+        }
+        (Some(cert_pem), Some(key_pem)) => (cert_pem, key_pem),
     };
-    let (Ok(cert), Ok(pkey)) = (
-        X509::from_pem(&cert_pem),
-        PKey::private_key_from_pem(&key_pem),
-    ) else {
-        return Ok(false);
+    let Ok(cert) = X509::from_pem(&cert_pem) else {
+        return Ok(Judged::Stale(Stale::Unparseable {
+            file: name(cert_file),
+        }));
     };
-    Ok(!expired(&cert).map_err(stack(key))?
-        && matches_key(&cert, &pkey)
-        && signed_by(&cert, &ca.key))
+    let Ok(pkey) = PKey::private_key_from_pem(&key_pem) else {
+        return Ok(Judged::Stale(Stale::Unparseable {
+            file: name(key_file),
+        }));
+    };
+    Ok(Judged::Holds((cert, pkey)))
 }
 
 /// The file's bytes, or `None` when it does not exist. Any other failure refuses the start rather than replacing

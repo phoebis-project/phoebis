@@ -714,13 +714,17 @@ fn router_config(
 }
 
 /// The accept loop's acceptor for what `tls::load` answered with `generate` set, which never leaves material
-/// pending; a pending answer refuses the start rather than serving plain HTTP on a listener the file put under TLS.
+/// pending or stale; such an answer refuses the start rather than serving plain HTTP on a listener the file put
+/// under TLS.
 fn acceptor(serving: tls::Serving) -> anyhow::Result<tls::Acceptor> {
     match serving {
         tls::Serving::Plain => Ok(None),
         tls::Serving::Tls(loaded) => Ok(Some(Arc::new(loaded.acceptor))),
-        tls::Serving::Pending { leaf } => {
+        tls::Serving::Pending { leaf } | tls::Serving::StaleLeaf { leaf, .. } => {
             anyhow::bail!("the self-signed leaf {} was not generated", leaf.display())
+        }
+        tls::Serving::StaleCa { ca, .. } => {
+            anyhow::bail!("the self-signed CA {} was not generated", ca.display())
         }
     }
 }

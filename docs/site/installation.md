@@ -154,13 +154,12 @@ prints, in order:
 
 1. `{config path} is valid`
 2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {addr} over TLS (certificate
-   {cert_file}, expires {date})` for a certificate pair, `proxy listens on {addr} over TLS (self-signed leaf {path},
-   expires {date})` under `self_signed`, or `proxy listens on {addr} over TLS (self-signed leaf {path}, not generated
-   yet; the first start generates it)` under `self_signed` before the first start
-3. `admin listens on {config.admin.listen} over plain HTTP`, or `admin listens on {addr} over TLS (certificate
-   {cert_file}, expires {date})` for a certificate pair, `admin listens on {addr} over TLS (self-signed leaf {path},
-   expires {date})` under `self_signed`, or `admin listens on {addr} over TLS (self-signed leaf {path}, not generated
-   yet; the first start generates it)` under `self_signed` before the first start
+   {cert_file}, expires {date})` for a certificate pair; under `self_signed`, `proxy listens on {addr} over TLS
+   (self-signed leaf {path}, expires {date})`, `(self-signed leaf {path}, not generated yet; the first start generates
+   it)` before the first start, or what the next start writes again and why, `(self-signed leaf {path}, {reason}; the
+   next start regenerates it)` or `(self-signed CA {path}, {reason}; the next start regenerates it and every leaf)`
+   ([TLS on the listeners](#tls-on-the-listeners))
+3. the admin line in the same shapes, with `admin` and `config.admin.listen`
 4. `metrics listens on {config.stats.metrics_listen}`
 5. `tls: CA for the clients at {data_dir}/tls/ca.pem`, when a listener is `self_signed` and the file exists
 6. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
@@ -478,11 +477,16 @@ naming the key and the path:
 - `proxy.tls.cert_file {path}: expired on {date}`
 - `proxy.tls.cert_file {path}: not valid before {date}`
 
-The admin listener's lines carry `admin.tls` in place of `proxy.tls`. Under `self_signed`, `check-config` replaces
-nothing: it refuses a half, mismatched or expired pair under `<data dir>/tls` with the same lines, and the next start
-replaces that pair. The start refuses with `proxy.tls: {path}: {OS error}` when it cannot read, write or rename a file
-there. The start logs `serving TLS` for each listener that terminates TLS, with its leaf's names and `not_after`, and
-the `listening` line names each listener's scheme.
+The admin listener's lines carry `admin.tls` in place of `proxy.tls`. The start logs `serving TLS` for each listener
+that terminates TLS, with its leaf's names and `not_after`, and the `listening` line names each listener's scheme.
+
+Under `self_signed`, `check-config` writes nothing and judges the material as the next start will. For a leaf or a CA
+the start would write again it prints the reason and passes: `proxy listens on {addr} over TLS (self-signed leaf
+{path}, {reason}; the next start regenerates it)`, or `(self-signed CA {path}, {reason}; the next start regenerates it
+and every leaf)` for the CA. The reason is `expired on {date}`, `{file} is missing`, `{file} does not parse`, `the key
+does not match`, or, for a leaf, `not signed by the CA`. Both refuse what the start cannot serve: a file under
+`<data dir>/tls` they cannot read, with `proxy.tls: {path}: {OS error}`, and a leaf not valid yet, with the `not valid
+before` line above. The start also refuses when it cannot write or rename a file there.
 
 A plain-HTTP request to a listener that terminates TLS gets no HTTP answer: the handshake fails and the connection
 closes, so `curl` reports `curl: (35)` and a Node client `ECONNRESET` or `EPROTO`. Put `https://` in the caller's URL.
