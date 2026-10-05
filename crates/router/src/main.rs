@@ -1,6 +1,6 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
-//! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins, or
-//! copy both databases into a backup.
+//! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins,
+//! copy both databases into a backup, or create an account, a pool or a key and clear a cooldown over the admin API.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -11,6 +11,7 @@ use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient};
 use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
+use phoebis_router::subcommands::{self, AccountCommand, KeyCommand, PoolCommand};
 use phoebis_router::{init, tls};
 
 #[derive(Parser)]
@@ -37,6 +38,9 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
+    /// Create an account or clear one of its cooldowns over the admin API.
+    #[command(subcommand)]
+    Account(AccountCommand),
     /// Copy both databases into a directory with a manifest that names the key file, taking no lock and opening no
     /// socket: exit 0 once the manifest is written, 1 otherwise.
     Backup(BackupArgs),
@@ -47,6 +51,12 @@ enum Command {
     Health,
     /// Write the bootstrap file, the storage key and the admin secret, once, refusing anything that exists.
     Init(init::InitArgs),
+    /// Create a key over the admin API.
+    #[command(subcommand)]
+    Key(KeyCommand),
+    /// Create a pool over the admin API.
+    #[command(subcommand)]
+    Pool(PoolCommand),
     /// Probe the proxy listener, read the admin API and print one screen of readiness, pools, accounts and live pins:
     /// exit 0 when ready, 1 otherwise.
     Status(StatusArgs),
@@ -55,6 +65,16 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Some(Command::Account(command)) => {
+            let code = subcommands::run_account(
+                command,
+                &cli.config,
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+                &mut std::io::stderr().lock(),
+            );
+            std::process::exit(code)
+        }
         Some(Command::Backup(args)) => run_backup(&cli.config, &args),
         Some(Command::CheckConfig) => {
             let mut config = phoebis_router::config::load_unresolved(&cli.config)?;
@@ -242,6 +262,26 @@ fn main() -> anyhow::Result<()> {
             )?;
             Ok(())
         }
+        Some(Command::Key(command)) => {
+            let code = subcommands::run_key(
+                command,
+                &cli.config,
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+                &mut std::io::stderr().lock(),
+            );
+            std::process::exit(code)
+        }
+        Some(Command::Pool(command)) => {
+            let code = subcommands::run_pool(
+                command,
+                &cli.config,
+                &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+                &mut std::io::stderr().lock(),
+            );
+            std::process::exit(code)
+        }
         Some(Command::Status(args)) => run_status(&cli.config, &args),
         None => {
             let config = phoebis_router::config::load(&cli.config)?;
@@ -390,4 +430,16 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
         .write_all(printed.as_bytes())
         .and_then(|()| stdout.flush());
     std::process::exit(status::exit_code(&reads))
+}
+
+#[cfg(test)]
+mod tests {
+    use clap::CommandFactory;
+
+    use super::Cli;
+
+    #[test]
+    fn the_command_tree_passes_claps_assertions() {
+        Cli::command().debug_assert();
+    }
 }

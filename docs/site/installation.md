@@ -150,6 +150,10 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
 | `phoebis backup --to <dir>` | Copies both databases into `<dir>` with a manifest; exit 0 once it is written. |
+| `phoebis account add <id> --kind oauth|api_key` | Creates an account and prints its id. |
+| `phoebis account clear-cooldown <id>` | Clears one of the account's cooldowns, the account-wide one by default. |
+| `phoebis pool create <id>` | Creates a pool and prints its id. |
+| `phoebis key create <id> --pool <id>` | Creates a key in the pool and prints its secret, once. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
@@ -305,6 +309,40 @@ directory that is not empty (`{path} is not an empty directory`), or when either
 carries both databases; {path} does not exist`). A copy that fails, a database another connection holds locked for ten
 seconds among them, removes every file and directory the run created and exits 1 with `backup failed: {reason};
 nothing was written to {dir}`. It exits 0 once the manifest is written, and 2 for a usage error.
+
+`account add` creates an account through `POST /admin/accounts`. `--kind` is `oauth`, for a subscription paired
+afterwards, or `api_key`, and `--label` defaults to the id. An `api_key` account's upstream key travels in the variable
+`--api-key-env NAME` names, or as the first line of stdin under `--secret-stdin`, and never in a flag, so neither the
+process list nor the shell history carries it; `--secret-env` stays the admin secret's variable. The router checks the
+key against the upstream before it creates the account. Stdout carries the account's id, and stderr its fields, one
+`field: value` line each, sorted by field.
+
+`account clear-cooldown` reads the account through `GET /admin/accounts/{id}`, then clears one cooldown through `DELETE
+/admin/accounts/{id}/cooldowns/{scope}`. `--scope` is `account` (the default), `fast`, `fast_credits` or
+`model:<canonical>`. It prints `cleared {scope} on {id}` on stderr, and a cooldown the account does not hold answers
+`404 no such cooldown`. When the account's answer carries `revision`, the clear sends it back as `expected_revision`,
+and a `409` refusal of that clear prints a second line saying the account changed after the command read it, so the next
+run reads it afresh.
+
+`pool create` creates a pool through `POST /admin/pools`. `--label` defaults to the id, `--member
+<account>[:<priority>]` adds a member at that priority (`0` without the colon) and repeats, and `--strategy` is `pace`,
+`priority` or `round_robin`. Stdout carries the pool's id, and stderr its fields as `account add` prints them.
+
+`key create` creates a key in the pool `--pool` names through `POST /admin/keys`, and `--label` defaults to the id.
+Stdout carries the key's secret as its one line, printed once and nowhere else, so `phoebis key create laptop --pool
+home --label Laptop > laptop.secret` captures the secret alone; stderr carries the key's other fields.
+
+`--body PATH` on `pool create` and `key create` reads a JSON object from the file, or from stdin for `-`, and sends it
+merged under the flags: a flag wins where both name a field, and a default (the label from the id, an empty member list)
+fills only a field neither names, so every field [the pool route](api.md#post-adminpools) and [the key
+route](api.md#post-adminkeys) accept is reachable without a flag of its own. The subcommand validates no field, and the
+route's `400` prints as it comes.
+
+These four commands take the shared flags above. Under `--json` each prints the route's answer on stdout as it came and
+nothing on stderr but errors. A refused call prints `{status} {message}` from the route's answer on stderr and exits 1,
+a refused secret as `the admin secret was refused`; a call that does not reach the listener prints one line naming the
+URL and exits 1. Each exits 0 when the route accepts the call, and 2 for a usage error. No output carries the admin
+secret or an upstream key.
 
 ## Environment variables
 
