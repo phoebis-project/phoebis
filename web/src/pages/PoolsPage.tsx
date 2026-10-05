@@ -1118,6 +1118,8 @@ export function PoolDialog({
       onKeysChanged();
     } catch (e) {
       setMoveError(e instanceof Error ? e.message : String(e));
+      // The key moved since the page read it, so the lists are out of date and the dialog's close reads them again.
+      if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') setAttempted(true);
     } finally {
       setMoveBusy(false);
     }
@@ -1146,8 +1148,9 @@ export function PoolDialog({
       setBusy(false);
       if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') {
         // The row moved under the dialog: the edit is about values that are gone, so the operator reloads and
-        // re-applies it rather than saving over what someone else wrote.
+        // re-applies it rather than saving over what someone else wrote. Cancel reads the lists again as well.
         setStale(e.message);
+        setAttempted(true);
         return;
       }
       setError(e instanceof Error ? e.message : String(e));

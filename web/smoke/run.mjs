@@ -2799,6 +2799,46 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok: m.container.querySelector('dialog[open]') === null && saved?.shedAheadOfPace === null && !shedChip(),
     missing: [String(saved?.shedAheadOfPace), String(shedChip())],
   });
+  // Cancel after a stale refusal reads the lists again, as after any refusal; the write through the API moves the
+  // pool's stamp alone.
+  const cancelled = await openAll();
+  await api.updatePool('all', written);
+  footButton(cancelled, 'Save pool')?.click();
+  await m.settle(600);
+  const refusedThen = cancelled?.querySelector('.dialog__body--grouped [role="alert"]')?.textContent ?? '';
+  const cancelReads = await readsOnCancel(cancelled);
+  results.push({
+    name: '/pools Cancel after a save refused as stale reads the pools and keys again',
+    ok: refusedThen === `${sentence} Reload` && JSON.stringify(cancelReads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
+    missing: [refusedThen, ...cancelReads.map(String)],
+  });
+  // A key written since the page read it: its move sends the stamp the page read, so the route refuses it as stale in
+  // the Move dialog, the key stays in its pool, and the pool dialog's Cancel reads the lists again.
+  // The key the pool dialog created in all above.
+  const mover = (await api.listKeys()).find((k) => k.id === 'from-pool' && k.poolId === 'all');
+  const holder = await openAll();
+  const moverRow = () => [...(holder?.querySelectorAll('.keys-table tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === mover?.name);
+  moverRow()?.querySelector('.menu__trigger')?.click();
+  await m.settle(120);
+  [...(moverRow()?.querySelectorAll('[role="menuitem"]') ?? [])].find((b) => b.textContent?.trim() === 'Move to…')?.click();
+  await m.settle(200);
+  const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  if (mover) {
+    const { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes, poolId } = mover;
+    await api.updateKey(mover.id, { autoModeServer, bodyCaptureHours, enabled, keepaliveOptOut, longContextTwins, modelRules, modelRulesMode, name, notes, poolId });
+  }
+  footButton(moveDlg, 'Move key')?.click();
+  await m.settle(600);
+  const moveAlert = moveDlg?.querySelector('[role="alert"]')?.textContent ?? '';
+  const stayed = (await api.listKeys()).find((k) => k.id === mover?.id)?.poolId;
+  footButton(moveDlg, 'Cancel')?.click();
+  await m.settle(200);
+  const moveReads = await readsOnCancel(holder);
+  results.push({
+    name: '/pools a key move from a stale read is refused as stale in the Move dialog, and Cancel reads the lists again',
+    ok: !!mover && moveAlert === 'the key changed while it was being edited; reload and try again' && stayed === 'all' && JSON.stringify(moveReads) === '[1,1]' && m.container.querySelector('dialog[open]') === null,
+    missing: [mover ? '' : 'from-pool is not in all', moveAlert, String(stayed), ...moveReads.map(String)],
+  });
 }
 {
   // The rule editor holds a pattern the route would refuse out of the save, in the route's words and under the
