@@ -2161,25 +2161,28 @@ fn shed_round(
     if pool.shedding.warm_sessions == WarmSessions::Never {
         marks.truncate(cold_priced);
     }
-    let pin_facts = |(p, burn): &(PinRow, Option<f64>), left: bool| ShedPinFacts {
-        key_id: p.key_id.clone(),
-        session_id: p.session_id.clone(),
-        agent_id: p.agent_id.clone(),
-        model: p.model.clone(),
-        cold: is_cold(p),
-        burn: *burn,
-        last_input_tokens: p.last_input_tokens,
-        per_rewrite: burn.map(|b| b / p.last_input_tokens.max(1) as f64),
-        marked: marks.contains(&p.key()),
-        note: if left {
-            Some("fast_lane")
-        } else if burn.is_none() {
-            Some("unpriced")
-        } else if is_current(p) {
-            Some("current")
-        } else {
-            None
-        },
+    let pin_facts = |pin: &(PinRow, Option<f64>), left: bool| {
+        let (p, burn) = pin;
+        ShedPinFacts {
+            key_id: p.key_id.clone(),
+            session_id: p.session_id.clone(),
+            agent_id: p.agent_id.clone(),
+            model: p.model.clone(),
+            cold: is_cold(p),
+            burn: *burn,
+            last_input_tokens: p.last_input_tokens,
+            per_rewrite: per_rewrite(pin),
+            marked: marks.contains(&p.key()),
+            note: if left {
+                Some("fast_lane")
+            } else if burn.is_none() {
+                Some("unpriced")
+            } else if is_current(p) {
+                Some("current")
+            } else {
+                None
+            },
+        }
     };
     let dwell_seconds = pool.shedding.source_dwell_seconds;
     let round = ShedRoundFacts {
