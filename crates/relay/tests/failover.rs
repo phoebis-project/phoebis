@@ -6,6 +6,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
+use phoebis_oauth::AcquireError;
 use phoebis_store::AccountState;
 use tower::ServiceExt;
 
@@ -1554,6 +1555,12 @@ async fn a_marked_account_is_not_dialed_again_on_its_cached_token() {
     // The first leg's 401 alone; every inference after it answers 200.
     up.set_rule_after(1, "/v1/messages", json_200());
     let h = two_accounts(&up).await;
+    // The row and generation a leg selected before the mark carries into its acquisition.
+    let before = h.router.snapshot();
+    let (row_before, generation_before) = (
+        before.account("a").unwrap().clone(),
+        before.credential_generation("a"),
+    );
     let resp = h
         .app
         .clone()
@@ -1573,6 +1580,21 @@ async fn a_marked_account_is_not_dialed_again_on_its_cached_token() {
             .then_some(())
     })
     .await;
+    // The usage poll's or the catalog's refresh lands the same mark with no relay report behind it, so the cache's
+    // own refusal is what stops a leg that still carries the pre-mark row: refused, and without reading the store.
+    let reads = h.store.debug_credential_reads();
+    assert!(
+        matches!(
+            h.manager.acquire_for(&row_before, generation_before).await,
+            Err(AcquireError::ReauthRequired)
+        ),
+        "the pre-mark row is refused by the cache"
+    );
+    assert_eq!(
+        h.store.debug_credential_reads(),
+        reads,
+        "the refusal reads nothing from the store"
+    );
     assert_eq!(credentials_seen(&up), [A, B]);
     let resp = h
         .app
