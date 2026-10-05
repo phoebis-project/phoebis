@@ -133,6 +133,28 @@ async fn both_listeners_serve_an_operators_pair_and_a_plain_request_gets_no_http
     assert_eq!(console.status(), 200);
     let shell = console.text().await.unwrap();
     assert!(shell.contains("<div id=\"root\">"), "{shell}");
+    let login = client
+        .post(format!("https://127.0.0.1:{admin_port}/admin/session"))
+        .header("content-type", "application/json")
+        .body(r#"{"secret":"admin-secret-001"}"#)
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(login.status(), 204);
+    let cookie = login
+        .headers()
+        .get("set-cookie")
+        .expect("a login sets the session cookie")
+        .to_str()
+        .unwrap();
+    // The attributes alone in the message: the value is a live session.
+    let attributes = cookie
+        .split_once(';')
+        .map_or("", |(_, attributes)| attributes);
+    assert!(
+        cookie.ends_with("; Secure"),
+        "the admin listener terminates TLS, so its cookie is Secure:{attributes}"
+    );
 
     let mut plain = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
     plain
