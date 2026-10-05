@@ -48,8 +48,13 @@ pub const BLOCK_CAP: usize = 20;
 /// The screen's width in columns; no line passes it.
 pub const WIDTH: usize = 80;
 
-/// The widest a label, an account id or a pool id prints in its column before it ends in `…`.
-const LABEL_CAP: usize = 20;
+/// The narrowest a label or pool id column gets when the row's other columns leave less; a row that still passes the
+/// width is cut at its end.
+const LABEL_FLOOR: usize = 12;
+
+/// The columns a pin line keeps for its state after the account, so `pinned` or `shedding from` and the age stay on
+/// the screen however long the label.
+const PIN_STATE_ROOM: usize = 20;
 
 /// The widest an agent id prints in the pins block.
 const AGENT_CAP: usize = 10;
@@ -258,10 +263,11 @@ pub fn render(
                 unpooled.sort();
                 screen.blank();
                 screen.push("accounts in no pool");
-                let rows: Vec<Vec<String>> = unpooled
+                let mut rows: Vec<Vec<String>> = unpooled
                     .into_iter()
-                    .map(|(label, state)| vec![cut(&label, LABEL_CAP), state.to_owned()])
+                    .map(|(label, state)| vec![label, state.to_owned()])
                     .collect();
+                fit_column(&mut rows, 0, 2, 2, 0);
                 screen.capped(table("  ", rows), all);
             }
         }
@@ -336,7 +342,7 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
     }
     pools.sort_by(|a, b| text(&a["id"]).cmp(text(&b["id"])));
     screen.push("pools");
-    let headers: Vec<Vec<String>> = pools
+    let mut headers: Vec<Vec<String>> = pools
         .iter()
         .map(|pool| {
             let members = pool["members"].as_array().map_or(0, Vec::len) as u64;
@@ -344,7 +350,7 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
             let pins = pool["active_pins"].as_u64().unwrap_or(0);
             let requests = pool["requests_24h"].as_u64().unwrap_or(0);
             vec![
-                cut(text(&pool["id"]), LABEL_CAP),
+                text(&pool["id"]).to_owned(),
                 text(&pool["status"]).to_owned(),
                 format!(
                     "{}, {}, {}, {requests} requests/24h",
@@ -355,6 +361,7 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
             ]
         })
         .collect();
+    fit_column(&mut headers, 0, 3, 2, 0);
     for (pool, header) in pools.iter().zip(table("  ", headers)) {
         screen.push(header);
         let mut members: Vec<&Value> = pool["members"].as_array().into_iter().flatten().collect();
@@ -364,31 +371,40 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
                 .cmp(&b["priority"].as_i64())
                 .then_with(|| text(&a["account_id"]).cmp(text(&b["account_id"])))
         });
-        let rows: Vec<Vec<String>> = members
+        // One Fable column for the block when any member has the window, so the resets line up beneath each other.
+        let fable = members.iter().any(|member| {
+            accounts
+                .get(text(&member["account_id"]))
+                .is_some_and(|account| windows_of(account).contains_key("fable"))
+        });
+        let mut rows: Vec<Vec<String>> = members
             .iter()
             .map(|member| {
                 let id = text(&member["account_id"]);
                 let account = accounts.get(id);
                 let mut row = vec![
-                    cut(&accounts.label(id), LABEL_CAP),
+                    accounts.label(id),
                     account.map_or("-", state_word).to_owned(),
                     text(&member["eligible"]).to_owned(),
                 ];
                 if let Some(account) = account {
-                    row.extend(windows_cells(account, clock));
+                    row.extend(windows_cells(account, clock, fable));
                 }
                 row
             })
             .collect();
+        // The label, the state, the eligibility and the windows; the reset or the cooldown after them is cut first.
+        fit_column(&mut rows, 0, 5 + usize::from(fable), 4, 0);
         for line in table("    ", rows) {
             screen.push(line);
         }
     }
 }
 
-/// `5h NN%` and `7d NN%` (`-` with no sample), `fable NN%` when the account has a Fable week, then `until HH:MM
-/// <reason>` under a cooldown or `resets HH:MM` for the nearest reset to come.
-fn windows_cells(account: &Value, clock: &Clock) -> Vec<String> {
+/// `5h NN%` and `7d NN%` (`-` with no sample), under `fable_column` `fable NN%` when the account has a Fable week and
+/// an empty cell when it has none, then `until HH:MM <reason>` under a cooldown or `resets HH:MM` for the nearest
+/// reset to come.
+fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<String> {
     let windows = windows_of(account);
     let percent = |id: &str| {
         windows
@@ -402,8 +418,12 @@ fn windows_cells(account: &Value, clock: &Clock) -> Vec<String> {
         format!("5h {}", percent("5h")),
         format!("7d {}", percent("7d")),
     ];
-    if windows.contains_key("fable") {
-        cells.push(format!("fable {}", percent("fable")));
+    if fable_column {
+        cells.push(if windows.contains_key("fable") {
+            format!("fable {}", percent("fable"))
+        } else {
+            String::new()
+        });
     }
     let now = clock.now.as_millisecond();
     // The account scope holds every request; a model or fast-lane scope holds part of them, so the account's own
@@ -500,10 +520,11 @@ fn pins_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: &
                 .take(SESSION_CHARS)
                 .collect(),
             cut(named_or(&row["agent_id"], &Value::Null), AGENT_CAP),
-            cut(&accounts.label(text(&row["account_id"])), LABEL_CAP),
+            accounts.label(text(&row["account_id"])),
             state,
         ]
     }));
+    fit_column(&mut rows, 2, 3, 2, 2 + PIN_STATE_ROOM);
     let mut lines = table("  ", rows).into_iter();
     if let Some(columns) = lines.next() {
         screen.push(columns);
@@ -567,6 +588,38 @@ impl Screen {
         self.lines.extend(lines.into_iter().take(shown));
         if hidden > 0 {
             self.push(format!("  and {hidden} more"));
+        }
+    }
+}
+
+/// Cuts `column` of `rows` to its widest cell or to the room left beside the other columns before `fixed`, at their
+/// widest and two spaces apart, after `indent` and with `reserve` columns kept for what follows, whichever is
+/// narrower, and never below `LABEL_FLOOR`. A label then prints whole wherever the row has the room, so two labels
+/// that share a long prefix stay apart.
+fn fit_column(
+    rows: &mut [Vec<String>],
+    column: usize,
+    fixed: usize,
+    indent: usize,
+    reserve: usize,
+) {
+    let widest = |i: usize| {
+        rows.iter()
+            .filter_map(|row| row.get(i))
+            .map(|cell| columns(cell))
+            .max()
+            .unwrap_or(0)
+    };
+    let others: usize = (0..fixed)
+        .filter(|i| *i != column)
+        .map(|i| widest(i) + 2)
+        .sum();
+    let room = WIDTH
+        .saturating_sub(indent + others + reserve)
+        .max(LABEL_FLOOR);
+    for row in rows.iter_mut() {
+        if let Some(cell) = row.get_mut(column) {
+            *cell = cut(cell, room);
         }
     }
 }
@@ -1111,6 +1164,65 @@ mod tests {
             assert_eq!(json[name], fixture(name), "{name}");
         }
         assert_eq!(json["errors"], json!({}));
+    }
+
+    /// The fixture reads with the two accounts' labels replaced.
+    fn labelled(business: &str, direct: &str) -> Reads {
+        let mut accounts = fixture("accounts");
+        for account in accounts["accounts"].as_array_mut().unwrap() {
+            let label = if account["id"] == "business" {
+                business
+            } else {
+                direct
+            };
+            account["label"] = json!(label);
+        }
+        Reads {
+            accounts: Ok(accounts),
+            ..fixture_reads()
+        }
+    }
+
+    #[test]
+    fn a_label_column_is_as_wide_as_its_widest_label_where_the_row_has_room() {
+        // Two labels that agree on their first twenty columns stay apart on the member lines and the pin line.
+        let one = "engineering-shared-1@corp.io";
+        let two = "engineering-shared-2@corp.io";
+        let screen = render(
+            &labelled(one, two),
+            &listeners(None),
+            "9.9.9",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
+        let lines: Vec<&str> = screen.lines().collect();
+        let members = block(&lines, "pools");
+        assert!(members[1].starts_with(&format!("    {one}  ")), "{screen}");
+        assert!(members[2].starts_with(&format!("    {two}  ")), "{screen}");
+        let pins = block(&lines, "pins (one per session, the main agent's)");
+        assert!(pins[1].contains(&format!("  {one}  pinned ")), "{screen}");
+
+        // A label past the room the other columns leave still ends in `…`, and the line stays within the width.
+        let long = "a-label-far-too-long-for-any-column-of-an-eighty-column-screen";
+        let screen = render(
+            &labelled(long, two),
+            &listeners(None),
+            "9.9.9",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
+        let lines: Vec<&str> = screen.lines().collect();
+        let members = block(&lines, "pools");
+        let cut = members[1].trim_start().split("  ").next().unwrap();
+        assert!(
+            cut.ends_with('…') && long.starts_with(cut.trim_end_matches('…')),
+            "{screen}"
+        );
+        for line in &lines {
+            assert!(line.chars().count() <= WIDTH, "{line}");
+        }
     }
 
     #[test]
