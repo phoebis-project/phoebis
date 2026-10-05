@@ -1036,6 +1036,66 @@ async fn a_spend_cap_429_on_a_fable_request_answers_the_exhausted_pool_with_the_
 }
 
 #[tokio::test]
+async fn an_api_key_401_marks_the_account_with_the_verdict_s_cause_and_the_upstream_s_message() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Json {
+            status: 401,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"authentication_error","message":"invalid x-api-key"}}"#
+                .to_vec(),
+        },
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        (resp.status().as_u16(), outcome(&resp).account_id.as_str()),
+        (200, "b")
+    );
+    // The mark travels through the router task and its writer, so its event lands after the client's response.
+    let seen = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::AccountStateChanged { .. })
+    })
+    .await;
+    match seen.last() {
+        Some(RouterEvent::AccountStateChanged {
+            account_id,
+            to,
+            cause,
+            detail,
+            ..
+        }) => assert_eq!(
+            (account_id.as_str(), *to, *cause, detail.as_deref()),
+            (
+                "k1",
+                AccountState::ReauthRequired,
+                "auth_failed",
+                Some("invalid x-api-key")
+            )
+        ),
+        other => panic!("the moved row's event, not {other:?}"),
+    }
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_credit_balance_400_marks_funding_required_and_fails_over() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
