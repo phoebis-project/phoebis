@@ -20,7 +20,7 @@ use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
     PairingError, PairingSession, PairingStatus, PendingIdentity, PollStatus, ProfileResponse,
-    Started, UsageSnapshot, UsageWindow,
+    Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
@@ -1326,10 +1326,6 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "usage": usage,
     })
 }
-
-/// The key the usage service gives the Fable week, so an answer built from the router's windows reads like
-/// one the endpoint gave.
-const FABLE_WINDOW_KEY: &str = "fable";
 
 fn has_windows(snapshot: &UsageSnapshot) -> bool {
     !snapshot.windows.is_empty() || snapshot.fable_window.is_some()

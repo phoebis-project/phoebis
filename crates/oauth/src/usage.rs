@@ -40,7 +40,9 @@ const USAGE_ENDPOINT: &str = "usage";
 /// read only when `limits[]` is absent from the response.
 const FABLE_KEY_ALIASES: &[&str] = &["cinder_cove", "iguana_necktie"];
 
-const FABLE_WINDOW_KEY: &str = "fable";
+/// The key a snapshot gives the Fable week, so an answer built from the router's windows reads like one the
+/// endpoint gave.
+pub const FABLE_WINDOW_KEY: &str = "fable";
 
 /// How an attempt at the usage or the profile endpoint ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]

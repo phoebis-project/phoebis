@@ -741,7 +741,8 @@ async fn usage_upstream(status: u16) -> fake_upstream::FakeUpstream {
 }
 
 #[tokio::test]
-async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_and_clears_on_a_clean_poll() {
+async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_through_a_failed_poll_and_clears_on_a_clean_one(
+) {
     let up = usage_upstream(429).await;
     let rig = rig().await;
     let usage = usage_over(&rig, &up);
@@ -781,15 +782,33 @@ async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_and_clears_on_a_
             })
         )
     );
-    // A threshold of 0 applies the switch at the rule's next request, whatever it has counted so far.
-    up.set_rule_after(0, "/api/oauth/usage", usage_answer(200));
+    // A threshold of 0 applies the switch at the rule's next request, whatever it has counted so far. A failed poll
+    // is no clean answer, so the run and its condition stand through it.
+    up.set_rule_after(0, "/api/oauth/usage", usage_answer(500));
     rig.at(NOW + 29 * 60_000 + 240_000);
+    usage.poll("business").await.unwrap();
+    assert_eq!(
+        usage.poll_status("business").unwrap().last_outcome,
+        PollOutcome::Failed
+    );
+    assert!(
+        find(
+            &read(&attention, NOW + 29 * 60_000 + 240_000),
+            Kind::PollBackoff,
+            "business"
+        )
+        .unwrap()
+        .holds,
+        "a 500 inside the run clears nothing"
+    );
+    up.set_rule_after(0, "/api/oauth/usage", usage_answer(200));
+    rig.at(NOW + 29 * 60_000 + 300_000);
     usage.poll("business").await.unwrap();
     assert_eq!(
         usage.poll_status("business").unwrap().last_outcome,
         PollOutcome::Clean
     );
-    let conditions = read(&attention, NOW + 29 * 60_000 + 240_000);
+    let conditions = read(&attention, NOW + 29 * 60_000 + 300_000);
     assert!(
         !find(&conditions, Kind::PollBackoff, "business")
             .unwrap()

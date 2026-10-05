@@ -488,6 +488,34 @@ fn a_window_of_another_holder_of_the_id_is_never_written_loaded_or_kept() {
     );
 }
 
+#[test]
+fn the_replacements_own_window_replaces_a_stale_row_of_another_holder_however_new_its_date() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let storage_key = StorageKey::generate();
+    let store = Store::open(&path, &storage_key).unwrap();
+    seed_accounts(&store, &["a"]);
+    store.delete_account("a", "test").unwrap();
+    seed_accounts(&store, &["a"]);
+    drop(store);
+    // A row the replacement never wrote, dated past the replacement's first reading.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO usage_windows (account_id, window, utilization, reset, observed_at, incarnation) \
+         VALUES ('a', 'five_hour', 0.9, NULL, 5000, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &storage_key).unwrap();
+    let replacement = window_row("five_hour", 0.2, 3_000, 2);
+    assert!(
+        store.upsert_window(&replacement).unwrap(),
+        "the replacement's own reading replaces the stale row rather than waiting for the purge"
+    );
+    assert_eq!(store.load_routing().unwrap().windows, [replacement]);
+}
+
 fn credits_row(enabled: bool, observed_at: i64, incarnation: u64) -> CreditsRow {
     CreditsRow {
         account_id: "a".into(),

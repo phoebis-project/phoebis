@@ -2864,6 +2864,9 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
     }
+    // With the persisted windows lost, `a` and `b` tie (one profile fixture, no reading) and Pace breaks the tie at
+    // random, so a `served_by` check alone passes half the time; the usage `GET`'s two windows are what pin the
+    // reload, and the routing task's tests pin the ranking.
     let served_by = |up: &FakeUpstream| {
         up.requests()
             .iter()

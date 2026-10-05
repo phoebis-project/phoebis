@@ -296,12 +296,15 @@ pub(crate) async fn burn(
     let kinds: HashMap<String, AccountKind> =
         accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
     let mut tiers = Tiers::new();
-    for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
-        let tier = match state.store.subscription(&account.id) {
-            Ok(row) => row.and_then(|s| s.tier),
-            Err(e) => return store_failure(e),
-        };
-        tiers.insert(account.id.clone(), tier);
+    // Only the account grouping answers a share, so no other grouping reads a tier or fails on that read.
+    if group_by == "account" {
+        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
+            let tier = match state.store.subscription(&account.id) {
+                Ok(row) => row.and_then(|s| s.tier),
+                Err(e) => return store_failure(e),
+            };
+            tiers.insert(account.id.clone(), tier);
+        }
     }
     let tables = state.tables.clone();
     let bucket = bucket_seconds(from, to);

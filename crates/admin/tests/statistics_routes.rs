@@ -1299,6 +1299,44 @@ async fn the_burn_route_ranks_sessions_by_tokens_and_prices_each_by_its_accounts
 }
 
 #[tokio::test]
+async fn a_failed_tier_read_fails_the_account_burn_grouping_alone() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = std::sync::Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let parts = common::admin_parts_full_on(store).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // A blob where the tier's text belongs fails every read of the OAuth account's subscription, and no other read
+    // the burn route makes touches the column.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE accounts SET subscription_tier = X'00' WHERE id = 'business'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    for (group_by, status) in [
+        ("account", 500),
+        ("key", 200),
+        ("request_class", 200),
+        ("session", 200),
+    ] {
+        let response = get(
+            &parts.app,
+            &format!("/admin/analytics/burn?range=24h&group_by={group_by}"),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(
+            response.status(),
+            status,
+            "only the account grouping answers a share, so only it reads the tier: {group_by}"
+        );
+    }
+}
+
+#[tokio::test]
 async fn the_burn_route_answers_only_the_twenty_busiest_sessions() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;

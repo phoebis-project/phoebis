@@ -6805,6 +6805,43 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await burnGroup('account');
   }
 
+  {
+    // A subscription account whose tier the cost table does not size draws no plan line: beside a priced account the
+    // legend names it as tier unknown, and with no priced account the chart's empty state names it. `tierless` is a
+    // group no account of the story sizes, as a subscription account with no tier on file reads.
+    const sizedId = (await api.listAccounts()).find((a) => a.subscription?.rateLimitTier === 'default_claude_max_20x')?.id;
+    const at = new Date(Date.now() - 3_600_000).toISOString();
+    const point = (group, share) => ({ at, cachedTokens: 0, fiveHourShare: share, group, sevenDayShare: share, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 });
+    const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
+    const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [point(sizedId, 0.01), point('tierless', null)] });
+    await burnGroup('key');
+    await burnGroup('account');
+    const items = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
+    const tierless = items.filter((li) => labelOf(li) === 'tierless');
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: [point('tierless', null)] });
+    await burnGroup('key');
+    await burnGroup('account');
+    const emptied = card('Plan per hour')?.querySelector('p.muted')?.textContent?.trim() ?? '';
+    delete api.getAnalyticsBurn;
+    await burnGroup('key');
+    await burnGroup('account');
+    results.push({
+      name: '/analytics plan per hour names a subscription account the cost table does not size as tier unknown',
+      ok:
+        sizedId !== undefined &&
+        tierless.length === 1 &&
+        valueOf(tierless[0]) === 'tier unknown' &&
+        tierless[0].getAttribute('title') === 'No tier on file, or one the cost table does not size, so no share of its windows is priced',
+      missing: [`sized ${sizedId}`, ...items.map((li) => `${labelOf(li)}=${valueOf(li)}`)],
+    });
+    results.push({
+      name: '/analytics plan per hour with no sized subscription account names the unsized ones in its empty state',
+      ok: emptied === 'No subscription account in range has a tier the cost table sizes: tierless.',
+      missing: [emptied],
+    });
+  }
+
   // Placements by rung sit in the Cache section, each budgeted member's spend in the Burn section.
   const tableOf = (t) => ({
     heads: [...(card(t)?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim()),

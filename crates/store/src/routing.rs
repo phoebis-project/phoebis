@@ -362,8 +362,8 @@ impl Store {
     }
 
     /// Written only while `row.incarnation` is the account's current one, and only when newer than the stored
-    /// row: one statement, so a write queued for a holder the id has since left lands nowhere. Answers whether a
-    /// row was written.
+    /// row or when that row is a previous holder's: one statement, so a write queued for a holder the id has since
+    /// left lands nowhere. Answers whether a row was written.
     pub fn upsert_window(&self, row: &WindowRow) -> Result<bool, StoreError> {
         self.routing_commit(|conn| upsert_window_on(conn, row))
     }
@@ -636,7 +636,8 @@ fn upsert_window_on(conn: &Connection, row: &WindowRow) -> Result<bool, StoreErr
          SELECT ?1, ?2, ?3, ?4, ?5, ?6 FROM accounts WHERE id = ?1 AND incarnation = ?6 \
          ON CONFLICT(account_id, window) DO UPDATE SET utilization = excluded.utilization, \
            reset = excluded.reset, observed_at = excluded.observed_at, incarnation = excluded.incarnation \
-         WHERE excluded.observed_at > usage_windows.observed_at",
+         WHERE excluded.observed_at > usage_windows.observed_at \
+           OR excluded.incarnation <> usage_windows.incarnation",
         params![
             row.account_id,
             row.window,
