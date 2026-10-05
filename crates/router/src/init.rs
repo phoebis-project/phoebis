@@ -812,19 +812,30 @@ fn write_file(
 /// directory the host already uses is never handed over, and the configuration and environment files stay the
 /// caller's.
 fn hand_over(plan: &Plan, uid: u32, gid: u32, written: &[Landed]) -> Result<(), InitError> {
-    let (data_dir, others): (Vec<&Path>, Vec<&Path>) = written
-        .iter()
-        .filter(|landed| landed.dir)
-        .map(|landed| landed.path.as_path())
-        .partition(|path| *path == plan.data_dir);
-    let paths = std::iter::once(plan.key_file.as_path())
-        .chain(data_dir)
-        .chain(others);
+    let paths = std::iter::once(plan.key_file.as_path()).chain(owned_dirs(plan, written));
     for path in paths {
         std::os::unix::fs::chown(path, Some(uid), Some(gid))
             .map_err(io_error(format!("handing {} to the owner", path.display())))?;
     }
     Ok(())
+}
+
+/// The directories `--owner` receives: the data directory when this run created it, then every other directory this
+/// run created on the way to the key file, the data directory or the bootstrap file, which the service reads through
+/// them. A directory created only for the environment file stays the caller's: systemd reads that file as root, and
+/// owning its directory would let the service replace it.
+fn owned_dirs<'a>(plan: &Plan, written: &'a [Landed]) -> Vec<&'a Path> {
+    let serves = |dir: &Path| {
+        plan.key_file.starts_with(dir)
+            || plan.config_path.starts_with(dir)
+            || (!plan.container && plan.data_dir.starts_with(dir))
+    };
+    let (data_dir, others): (Vec<&Path>, Vec<&Path>) = written
+        .iter()
+        .filter(|landed| landed.dir && serves(&landed.path))
+        .map(|landed| landed.path.as_path())
+        .partition(|path| *path == plan.data_dir);
+    data_dir.into_iter().chain(others).collect()
 }
 
 fn undo(error: InitError, written: Vec<Landed>) -> InitError {
@@ -1206,6 +1217,43 @@ mod tests {
             "{output}"
         );
         assert!(output.contains("[self_signed]: "), "{output}");
+    }
+
+    #[test]
+    fn the_owner_receives_the_directories_created_for_the_key_the_data_and_the_file_and_no_other() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        let flags = args(&[
+            "--key-file",
+            root.join("keys/storage.key").to_str().unwrap(),
+            "--data-dir",
+            root.join("have/data").to_str().unwrap(),
+            "--env-file",
+            root.join("env/only/phoebis.env").to_str().unwrap(),
+        ]);
+        let plan = plan(&root.join("conf/config.yaml"), &flags, false).unwrap();
+        let landed = |path: &str, dir: bool| Landed {
+            dir,
+            path: root.join(path),
+        };
+        // As `write` records them: the parents of the key file, the environment file, the data directory and the
+        // bootstrap file from the root down, then the files and the data directory itself.
+        let written = [
+            landed("keys", true),
+            landed("env", true),
+            landed("env/only", true),
+            landed("conf", true),
+            landed("keys/storage.key", false),
+            landed("env/only/phoebis.env", false),
+            landed("have/data", true),
+            landed("conf/config.yaml", false),
+        ];
+        // `have` existed, so it is not on the list; `env` and `env/only` lead to the environment file alone, which
+        // systemd reads as root, and owning them would let the service replace that file.
+        assert_eq!(
+            owned_dirs(&plan, &written),
+            [root.join("have/data"), root.join("keys"), root.join("conf")]
+        );
     }
 
     #[test]

@@ -583,6 +583,8 @@ fn the_owner_receives_the_key_file_the_data_directory_and_the_created_parents() 
     let key = secrets.join("storage.key");
     let data = dir.path().join("data");
     let config = dir.path().join("config.yaml");
+    let env_dir = dir.path().join("env");
+    let env_file = env_dir.join("phoebis.env");
     let out = init(
         dir.path(),
         &[
@@ -592,6 +594,8 @@ fn the_owner_receives_the_key_file_the_data_directory_and_the_created_parents() 
             path_arg(&key),
             "--data-dir",
             path_arg(&data),
+            "--env-file",
+            path_arg(&env_file),
             "--non-interactive",
             "--config",
             path_arg(&config),
@@ -608,8 +612,20 @@ fn the_owner_receives_the_key_file_the_data_directory_and_the_created_parents() 
         );
     }
     assert_eq!((mode(&new), mode(&secrets)), (0o700, 0o700));
-    assert_eq!(std::fs::metadata(dir.path()).unwrap().uid(), 0);
-    assert_eq!(std::fs::metadata(&config).unwrap().uid(), 0);
+    // The environment file, and the directory created for it alone, stay root's: systemd reads the file as root.
+    for path in [
+        dir.path(),
+        config.as_path(),
+        env_dir.as_path(),
+        env_file.as_path(),
+    ] {
+        assert_eq!(
+            std::fs::metadata(path).unwrap().uid(),
+            0,
+            "{}",
+            path.display()
+        );
+    }
     let read = Command::new("cat")
         .uid(uid)
         .gid(gid)

@@ -231,8 +231,9 @@ file the way `check-config` does before it answers.
 
 `init` reads neither file of a pair; `check-config` and the start check it. A TLS flag on a loopback address is written
 as given. `--owner` hands over the key file, the data directory when `init` created it, and every parent `init` created
-on the way, all to the user and its primary group, so the service can traverse them; a directory that existed keeps its
-owner, and the bootstrap file and the environment file stay the caller's.
+on the way to the key file, the data directory or the bootstrap file, all to the user and its primary group, so the
+service can traverse them. A directory that existed keeps its owner. The bootstrap file, the environment file and a
+parent created only for the environment file stay the caller's, since systemd reads the environment file as root.
 
 Without `--env-file`, stdout carries one line, `PHOEBIS_ADMIN_SECRET=<secret>` under the default name, and the secret is
 printed nowhere else, so `(umask 077; phoebis init --non-interactive > phoebis.env)` writes a usable environment file
