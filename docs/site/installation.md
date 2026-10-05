@@ -4,6 +4,24 @@ The router is one binary, `phoebis`, built from this repository, and one YAML fi
 database files, and the environment variable that holds its secret. This page walks the build, the service install, the
 commands, and every setting the file accepts, with its default, its bounds, and the message a bad value gets.
 
+## Download a release
+
+Every release carries a static binary for `x86_64` and `aarch64` Linux, which runs on any Linux of its architecture
+with no shared library, glibc version or distribution in the way:
+
+```sh
+release=https://github.com/daystrom-labs/phoebis/releases/download/<version>
+curl -LO "$release/phoebis-<version>-x86_64-unknown-linux-musl.tar.gz"
+curl -LO "$release/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf phoebis-<version>-x86_64-unknown-linux-musl.tar.gz
+sudo install -m 0755 phoebis-<version>-x86_64-unknown-linux-musl/phoebis /usr/local/bin/phoebis
+```
+
+On an `aarch64` host the archive is `phoebis-<version>-aarch64-unknown-linux-musl.tar.gz`. Each archive holds `phoebis`
+and `LICENSE`, and `SHA256SUMS` lists both, so `--ignore-missing` checks the one you downloaded. An operator who builds
+from source follows [Build](#build) instead.
+
 ## Build
 
 ```sh
