@@ -50,6 +50,8 @@ pub struct Loaded {
     pub acceptor: SslAcceptor,
     /// The file the leaf was read from, which `check-config` names for a self-signed leaf.
     pub cert_file: PathBuf,
+    /// The key's file, whose mode `warnings` checks.
+    pub key_file: PathBuf,
     pub leaf: LeafFacts,
 }
 
@@ -199,6 +201,7 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
     Ok(Loaded {
         acceptor: builder.build(),
         cert_file: cert_file.to_path_buf(),
+        key_file: key_file.to_path_buf(),
         leaf: LeafFacts {
             names,
             not_after: leaf.not_after().to_string(),
@@ -566,31 +569,28 @@ pub fn describe(
     }
 }
 
-/// The `warning:` lines for a loaded pair, without the `warning: ` prefix: the leaf within `EXPIRY_WARNING_DAYS`,
-/// and `permissions::check_private_file(key_file, 0o600)`'s lines for the key file.
+/// The `warning:` lines for a loaded pair or self-signed leaf, without the `warning: ` prefix: the leaf within
+/// `EXPIRY_WARNING_DAYS`, and `permissions::check_private_file(key_file, 0o600)`'s lines for its key file.
 pub fn warnings(key: &'static str, tls: &Option<ListenerTls>, serving: &Serving) -> Vec<String> {
-    let (
-        ListenerTls::Pair {
-            cert_file,
-            key_file,
-        },
-        Serving::Tls(loaded),
-    ) = (ListenerTls::effective(tls), serving)
-    else {
+    let Serving::Tls(loaded) = serving else {
         return Vec::new();
+    };
+    let leaf = match ListenerTls::effective(tls) {
+        ListenerTls::Pair { .. } => format!("{key}.cert_file {}", loaded.cert_file.display()),
+        ListenerTls::SelfSigned => format!("{key} self-signed leaf {}", loaded.cert_file.display()),
+        ListenerTls::PlainHttp => return Vec::new(),
     };
     let mut warnings = Vec::new();
     // A negative count never reaches here: `load_pair` refuses an expired leaf.
     if (0..EXPIRY_WARNING_DAYS).contains(&loaded.leaf.days_left) {
         warnings.push(format!(
-            "{key}.cert_file {} expires in {} days ({})",
-            cert_file.display(),
-            loaded.leaf.days_left,
-            loaded.leaf.not_after
+            "{leaf} expires in {} days ({})",
+            loaded.leaf.days_left, loaded.leaf.not_after
         ));
     }
     warnings.extend(phoebis_store::permissions::check_private_file(
-        key_file, 0o600,
+        &loaded.key_file,
+        0o600,
     ));
     warnings
 }

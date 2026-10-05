@@ -176,7 +176,8 @@ prints, in order:
 
 Further warning lines name a storage key file, data directory, database or TLS key file whose mode or owner is wider
 than the router expects, and a certificate that expires within 30 days (`warning: proxy.tls.cert_file {path} expires in
-{n} days ({date})`); the router starts either way and logs the same warnings.
+{n} days ({date})`, or `warning: proxy.tls self-signed leaf {path} expires in {n} days ({date})` for a self-signed
+leaf, which the first start after that date writes again); the router starts either way and logs the same warnings.
 
 A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and `the registry at
 {config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at

@@ -1188,3 +1188,71 @@ fn self_signed_material_the_start_refuses_fails_check_config() {
         );
     }
 }
+
+#[test]
+fn a_self_signed_leaf_within_thirty_days_of_expiry_warns_and_passes() {
+    use phoebis_router::tls::{self, SanName, Validity};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = self_signed_config(dir.path(), "self-signed-near-expiry");
+    let tls_dir = dir.path().join("tls");
+    let ca = valid_material(&tls_dir);
+    tls::write_leaf(
+        "proxy.tls",
+        &tls_dir,
+        "proxy",
+        &ca,
+        "localhost",
+        &[SanName::Dns("localhost".to_owned())],
+        Validity::days_from_now(10),
+    )
+    .unwrap();
+    let leaf = tls_dir.join("proxy.pem");
+
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let prefix = format!(
+        "warning: proxy.tls self-signed leaf {} expires in ",
+        leaf.display()
+    );
+    let days = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("no expiry warning: {}", printed(&out)));
+    // Ten days from the moment of writing is nine whole days and some hours by the time the check reads it.
+    assert!(
+        ["9 days (", "10 days ("]
+            .iter()
+            .any(|count| days.starts_with(count)),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        days.ends_with(&format!("({})", not_after(&leaf))),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_self_signed_key_readable_by_others_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = self_signed_config(dir.path(), "self-signed-wide-key");
+    let tls_dir = dir.path().join("tls");
+    valid_material(&tls_dir);
+    let key = tls_dir.join("proxy.key");
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).lines().any(|line| line
+            == format!(
+                "warning: {} is readable by group or other (mode 0644); expected 0600",
+                key.display()
+            )),
+        "{}",
+        printed(&out)
+    );
+}
