@@ -202,3 +202,38 @@ async fn a_create_refused_after_its_row_committed_logs_the_created_id() {
         ]
     );
 }
+
+#[tokio::test]
+async fn a_bearer_mutation_names_the_bearer_credential_and_no_secret() {
+    use tower::ServiceExt;
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (app, _up) = admin_app().await;
+
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/admin/accounts/business/pause")
+        .header("authorization", "Bearer admin-secret")
+        .body(Body::empty())
+        .unwrap();
+    let paused = app.clone().oneshot(request).await.unwrap();
+    assert_eq!(status(&paused), 204);
+
+    assert_eq!(
+        captured.mutations(),
+        vec![
+            "method=POST route=/admin/accounts/{id}/pause status=204 entity=account id=business \
+             credential=bearer session=bearer"
+                .to_string()
+        ]
+    );
+    let text = captured.text();
+    assert!(
+        !text.contains("admin-secret"),
+        "the log holds the bearer: {text}"
+    );
+}

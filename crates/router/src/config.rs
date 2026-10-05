@@ -590,7 +590,7 @@ pub fn secret_is_unset(name: &str) -> bool {
 /// refuses to start rather than run with a secret every reader of the repository already knows.
 const PLACEHOLDER_ADMIN_SECRET: &str = "replace-with-a-long-random-string";
 
-fn from_env(name: &str) -> Result<Secret, ConfigError> {
+pub(crate) fn from_env(name: &str) -> Result<Secret, ConfigError> {
     let value = match std::env::var(name) {
         // The value is never part of the error: a variable set to something unusable still holds a secret.
         Ok(value) if !value.is_empty() => value,

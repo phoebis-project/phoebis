@@ -19,6 +19,7 @@ axum = { workspace = true }
 base64 = { workspace = true }
 boring = { workspace = true }
 clap = { workspace = true }
+http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 jiff = { workspace = true }
@@ -39,6 +40,7 @@ phoebis-transport = { path = "../transport" }
 phoebis-ui = { path = "../ui" }
 rand = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_norway = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
@@ -50,5 +52,4 @@ tracing-subscriber = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 reqwest = { workspace = true }
-serde_json = { workspace = true }
 tempfile = { workspace = true }

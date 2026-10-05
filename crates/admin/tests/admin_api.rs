@@ -222,6 +222,181 @@ async fn a_body_carrying_mutation_needs_the_json_content_type() {
     );
 }
 
+/// A scripted call: `Authorization: Bearer <bearer>`, no cookie, and the `Origin` and body given.
+async fn with_bearer(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    bearer: &str,
+    origin: Option<&str>,
+    body: &str,
+) -> axum::http::Response<axum::body::Body> {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", format!("Bearer {bearer}"));
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
+    }
+    if !body.is_empty() {
+        request = request
+            .header("content-type", "application/json")
+            .header("content-length", body.len().to_string());
+    }
+    app.clone()
+        .oneshot(
+            request
+                .body(axum::body::Body::from(body.to_owned()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_bearer_admits_a_read_and_a_mutation_without_a_cookie_or_an_origin() {
+    use common::json;
+    let (app, _up) = common::admin_app().await;
+    let system = with_bearer(&app, "GET", "/admin/system", "admin-secret", None, "").await;
+    assert_eq!(system.status(), 200);
+    let pause = "/admin/accounts/business/pause";
+    let paused = with_bearer(
+        &app,
+        "POST",
+        pause,
+        "admin-secret",
+        Some("http://elsewhere"),
+        "",
+    )
+    .await;
+    assert_eq!(paused.status(), 204, "the bearer skips the Origin check");
+    let whoami = with_bearer(&app, "GET", "/admin/session", "admin-secret", None, "").await;
+    assert_eq!(whoami.status(), 200);
+    assert_eq!(
+        json(whoami).await,
+        serde_json::json!({"session_id": "bearer"})
+    );
+    // The scheme word is matched ignoring case, and the JSON rule still holds under a bearer.
+    let lower = {
+        use tower::ServiceExt;
+        let request = axum::http::Request::builder()
+            .method("GET")
+            .uri("/admin/system")
+            .header("authorization", "bearer admin-secret")
+            .body(axum::body::Body::empty())
+            .unwrap();
+        app.clone().oneshot(request).await.unwrap()
+    };
+    assert_eq!(lower.status(), 200);
+    let untyped = {
+        use tower::ServiceExt;
+        let body = r#"{"id":"k","label":"K","pool_id":"main"}"#;
+        let request = axum::http::Request::builder()
+            .method("POST")
+            .uri("/admin/keys")
+            .header("authorization", "Bearer admin-secret")
+            .header("content-type", "text/plain")
+            .header("content-length", body.len().to_string())
+            .body(axum::body::Body::from(body))
+            .unwrap();
+        app.clone().oneshot(request).await.unwrap()
+    };
+    assert_eq!(untyped.status(), 415);
+}
+
+#[tokio::test]
+async fn a_wrong_bearer_is_refused_and_counts_toward_the_throttle() {
+    use common::{json, post};
+    let (app, _up) = common::admin_app().await;
+    for attempt in 0..5 {
+        let refused = with_bearer(&app, "GET", "/admin/system", "nope", None, "").await;
+        assert_eq!(refused.status(), 401, "attempt {attempt}");
+        assert_eq!(json(refused).await["error"], "secret does not match");
+    }
+    let sixth = with_bearer(&app, "GET", "/admin/system", "nope", None, "").await;
+    assert_eq!(sixth.status(), 429);
+    assert_eq!(
+        json(sixth).await["error"],
+        "too many failed logins, try again in a minute"
+    );
+    let login = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
+    assert_eq!(
+        login.status(),
+        429,
+        "the bearers' failures throttle the login"
+    );
+    let correct = with_bearer(&app, "GET", "/admin/system", "admin-secret", None, "").await;
+    assert_eq!(
+        correct.status(),
+        429,
+        "a throttled process refuses a bearer too"
+    );
+}
+
+#[tokio::test]
+async fn a_bearer_on_the_login_route_is_ignored() {
+    use common::json;
+    let (app, _up) = common::admin_app().await;
+    let bodiless = with_bearer(&app, "POST", "/admin/session", "admin-secret", None, "").await;
+    assert_eq!(bodiless.status(), 400);
+    assert_eq!(json(bodiless).await["error"], "body must carry a secret");
+    // The login stays the cookie's door: its Origin check holds with a bearer on it, and a wrong bearer neither
+    // refuses a correct login nor counts against the throttle.
+    let login = r#"{"secret":"admin-secret"}"#;
+    let foreign = with_bearer(
+        &app,
+        "POST",
+        "/admin/session",
+        "admin-secret",
+        Some("http://elsewhere"),
+        login,
+    )
+    .await;
+    assert_eq!(foreign.status(), 403);
+    assert_eq!(json(foreign).await["error"], "origin is not allowed");
+    for attempt in 0..6 {
+        let wrong = with_bearer(&app, "POST", "/admin/session", "nope", None, login).await;
+        assert_eq!(wrong.status(), 204, "attempt {attempt}");
+        assert!(wrong.headers().contains_key("set-cookie"));
+    }
+}
+
+#[tokio::test]
+async fn a_bearer_cannot_hold_the_live_socket() {
+    use futures::StreamExt;
+    let (app, _up) = common::admin_app().await;
+    let addr = common::serve(app).await;
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
+            "ws://{addr}/admin/live"
+        ))
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("authorization", "Bearer admin-secret".parse().unwrap());
+    match tokio_tungstenite::connect_async(request).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(refused)) => {
+            assert!(refused.status().is_client_error(), "{refused:?}");
+        }
+        Err(other) => panic!("the upgrade failed below HTTP: {other:?}"),
+        Ok((mut ws, _)) => {
+            // Open, the socket ends at the feed's first liveness check, before the snapshot leaves.
+            let first = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+                .await
+                .expect("the socket ends without waiting on the client");
+            assert!(
+                matches!(
+                    first,
+                    None | Some(Err(_))
+                        | Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_)))
+                ),
+                "a bearer was served the feed: {first:?}"
+            );
+        }
+    }
+}
+
 #[tokio::test]
 async fn pairing_runs_start_callback_confirm_and_never_exposes_tokens() {
     use common::{get, json, login, post};

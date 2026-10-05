@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
     TRANSFER_ENCODING, UPGRADE, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
@@ -128,11 +128,17 @@ pub fn router(state: Arc<AdminState>) -> Router {
 }
 
 /// Who is calling, as the gate resolved them: the handle that names this admin session in pairing
-/// ownership and in the mutation log. The cookie that produced it never leaves the session store.
+/// ownership and in the mutation log, and the credential that admitted it. The cookie or bearer that produced it
+/// never leaves the gate.
 #[derive(Clone)]
 pub(crate) struct Caller {
     pub session_id: String,
+    /// `"bearer"` or `"session"`.
+    pub credential: &'static str,
 }
+
+/// The session id every bearer caller carries, so a pairing one scripted call starts the next confirms.
+pub(crate) const BEARER_SESSION_ID: &str = "bearer";
 
 /// The id a create handler made, which its path does not carry; read by the mutation log.
 #[derive(Clone)]
@@ -151,13 +157,10 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
     let path = request.uri().path().to_string();
     let mut response = match admit(&state, &mut request) {
         None => {
-            let session = request
-                .extensions()
-                .get::<Caller>()
-                .map(|c| c.session_id.clone());
+            let caller = request.extensions().get::<Caller>().cloned();
             let response = next.run(request).await;
             if mutation {
-                log_mutation(&method, &route, &path, session.as_deref(), &response);
+                log_mutation(&method, &route, &path, caller.as_ref(), &response);
             }
             response
         }
@@ -189,15 +192,16 @@ fn log_mutation(
     method: &Method,
     route: &str,
     path: &str,
-    session: Option<&str>,
+    caller: Option<&Caller>,
     response: &Response,
 ) {
     let (entity, id) = entity_of(route, path, response.extensions().get::<CreatedId>());
     let status = response.status().as_u16();
     let id = id.as_deref().unwrap_or("-");
-    match session {
-        Some(session) => tracing::info!(
-            %method, %route, status, %entity, %id, credential = %"session", %session, "admin mutation"
+    match caller {
+        Some(caller) => tracing::info!(
+            %method, %route, status, %entity, %id, credential = %caller.credential,
+            session = %caller.session_id, "admin mutation"
         ),
         None => tracing::info!(
             %method, %route, status, %entity, %id, credential = %"none", "admin mutation"
@@ -249,12 +253,18 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         .get(UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
+    // A bearer is the operator's own hand: a browser cannot attach `Authorization` to a cross-site request without a
+    // preflight the admin API never answers, so the Origin check is the cookie's and not the bearer's. The login
+    // route stays the cookie's door and ignores a bearer on it.
+    let bearer = (!(method == Method::POST && path == LOGIN_PATH))
+        .then(|| presented_bearer(request.headers()))
+        .flatten();
     // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake. A presented `Origin`
     // must name the request's own `Host`, since another authority is another page on this host driving the console,
     // while a request with no `Origin` (curl, a subcommand, the health probe) is the operator's own hand. A front
     // that terminates TLS passes `Host` through, so both headers name the front. The login is checked too: a forced
     // login is the one mutation an unauthenticated caller can reach.
-    if mutation || websocket {
+    if bearer.is_none() && (mutation || websocket) {
         if let Some(origin) = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok()) {
             let host = request
                 .headers()
@@ -295,11 +305,36 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         return None;
     }
 
+    if let Some(bearer) = bearer {
+        return match state
+            .sessions
+            .bearer(&bearer, &state.secrets, (state.clock)())
+        {
+            Ok(()) => {
+                request.extensions_mut().insert(Caller {
+                    session_id: BEARER_SESSION_ID.to_string(),
+                    credential: "bearer",
+                });
+                None
+            }
+            Err(LoginError::Throttled) => Some(failure(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many failed logins, try again in a minute",
+            )),
+            Err(LoginError::Invalid) => {
+                Some(failure(StatusCode::UNAUTHORIZED, "secret does not match"))
+            }
+        };
+    }
+
     let session_id = presented_cookie(request.headers())
         .and_then(|cookie| state.sessions.authenticate(&cookie, (state.clock)()));
     match session_id {
         Some(session_id) => {
-            request.extensions_mut().insert(Caller { session_id });
+            request.extensions_mut().insert(Caller {
+                session_id,
+                credential: "session",
+            });
             None
         }
         // A tab holding a dead cookie still needs the browser's copy cleared, so the logout answers it rather
@@ -343,6 +378,15 @@ pub(crate) fn forwarded_https(headers: &HeaderMap) -> bool {
         .and_then(|v| v.to_str().ok())
         .and_then(|v| v.split(',').next())
         .is_some_and(|first| first.trim().eq_ignore_ascii_case("https"))
+}
+
+/// The value of `Authorization: Bearer ...` when the header carries that scheme (case-insensitive), trimmed.
+pub(crate) fn presented_bearer(headers: &HeaderMap) -> Option<String> {
+    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, value) = header.trim_start().split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| value.trim().to_string())
 }
 
 fn presented_cookie(headers: &HeaderMap) -> Option<String> {
