@@ -318,7 +318,8 @@ fn self_signed_ca(config: &Config) -> Option<PathBuf> {
 fn base_of(url: &str) -> Result<Uri, ClientError> {
     let refused = || ClientError::Transport {
         url: "--url".to_owned(),
-        reason: "must be http:// or https:// and a host, with no credential and no path".to_owned(),
+        reason: "must be http:// or https:// and a host, with no credential, path or query"
+            .to_owned(),
     };
     let base: Uri = url.parse().map_err(|_| refused())?;
     let scheme = matches!(base.scheme_str(), Some("http" | "https"));
@@ -412,8 +413,10 @@ mod tests {
             "not a url",
         ] {
             let line = base_of(bad).map(|_| ()).unwrap_err().to_string();
-            assert!(line.starts_with("--url: "), "{line}");
-            assert!(!line.contains("hunter2"), "{line}");
+            assert_eq!(
+                line,
+                "--url: must be http:// or https:// and a host, with no credential, path or query"
+            );
         }
     }
 }
