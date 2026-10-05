@@ -167,7 +167,10 @@ test('a rotation or a revocation moves the key\'s stamp, so an edit read before 
   for (const [id, write] of [['laptop', (a) => a.rotateKey('laptop')], ['batch', (a) => a.revokeKey('batch')]]) {
     const before = await storyKey(api, id);
     await write(api);
-    await assert.rejects(() => api.updateKey(id, { ...keyInput, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.updatedAt), staleAs(KEY_STALE), id);
+    const after = await storyKey(api, id);
+    assert.ok(Date.parse(after.updatedAt) > Date.parse(before.updatedAt), id);
+    // The key's own switch, since the route refuses re-enabling a revoked key ahead of the fence.
+    await assert.rejects(() => api.updateKey(id, { ...keyInput, enabled: before.enabled, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.updatedAt), staleAs(KEY_STALE), id);
     assert.equal((await storyKey(api, id)).name, before.name, id);
   }
 });
