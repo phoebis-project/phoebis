@@ -353,7 +353,8 @@ pub fn succeed_token_requests(up: &FakeUpstream) {
     );
 }
 
-/// The app with `tls` set, for the cookie's flag; every other builder runs plain.
+/// The app with `tls` set, for the cookie's flag and the `https://` a presented `Origin` then needs; every other
+/// builder runs plain.
 pub async fn admin_app_tls() -> (Router, FakeUpstream) {
     let parts = app_with(None, ACCOUNT_UUID, true, None).await;
     (parts.app, parts.up)

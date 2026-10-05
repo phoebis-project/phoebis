@@ -58,7 +58,8 @@ pub struct AdminState {
     pub sessions: Arc<Sessions>,
     pub secrets: AdminSecrets,
     pub clock: Clock,
-    /// Whether the admin listener terminates TLS, which decides the session cookie's `Secure` flag.
+    /// Whether the admin listener terminates TLS, which decides the session cookie's `Secure` flag and makes a
+    /// presented `Origin` need `https://`.
     pub tls: bool,
     pub vault: Arc<PairingVault>,
     /// Unix milliseconds this state was built, which `GET /system` reports as uptime.
