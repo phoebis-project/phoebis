@@ -1,8 +1,8 @@
 //! `account add`, `account clear-cooldown`, `account pair`, `account confirm`, `pool create`, `key create` and `ledger
 //! replay-parked` from the outside: the binary against a router started in-process on loopback, over plain HTTP and
 //! over TLS, with the file, without it, and with a refused secret, the fake upstream standing in for the provider a
-//! pairing exchanges its code with; and `clear-cooldown` and `key create` against a scripted admin listener for the one
-//! request each sends and the answer each cannot print.
+//! pairing exchanges its code with; and `clear-cooldown` and `key create` against a scripted admin listener, each case
+//! pinning one of two things: the one request a subcommand sends, or an answer it cannot print.
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -215,16 +215,21 @@ async fn started(stdout: &mut BufReader<ChildStdout>) -> Result<Value, String> {
 
 /// The address the browser lands on after the sign-in, as the provider builds it for the start answer's redirect.
 fn callback_url(start: &Value, code: &str) -> String {
-    let state = start["authorization_url"]
+    format!(
+        "{}?code={code}&state={}",
+        start["redirect_uri"].as_str().unwrap(),
+        state(start)
+    )
+}
+
+/// The `state` the start answer's authorization URL carries, which a paste names beside the code.
+fn state(start: &Value) -> &str {
+    start["authorization_url"]
         .as_str()
         .unwrap()
         .split("state=")
         .nth(1)
-        .unwrap();
-    format!(
-        "{}?code={code}&state={state}",
-        start["redirect_uri"].as_str().unwrap()
-    )
+        .unwrap()
 }
 
 /// Starts the router with `admin_pair`, when given, as `admin.tls`, the admin secret read from `secret_env`, and an
@@ -536,6 +541,8 @@ async fn key_create_exits_one_naming_the_rotate_route_when_stdout_takes_no_secre
             && last.ends_with("POST /admin/keys/laptop/rotate issues a new one"),
         "{stderr}"
     );
+    // Every key secret starts `phoebis-`, so the lost secret has not moved to stderr in its place.
+    assert!(!stderr.contains("phoebis-"), "{stderr}");
     let keys = running.get("/admin/keys").await;
     assert!(
         entry(&keys, "keys", "laptop").is_some(),
@@ -922,14 +929,9 @@ async fn no_confirm_stops_after_the_callback_and_account_confirm_finishes_it() {
     // A second pairing of the same slot, the paste as `<code> <state>` and the confirm under `--json`.
     let (pairing, start) = running.pair(&["erin", "--no-confirm"]).await;
     let id = start["id"].as_str().unwrap().to_owned();
-    let state = start["authorization_url"]
-        .as_str()
-        .unwrap()
-        .split("state=")
-        .nth(1)
-        .unwrap()
-        .to_owned();
-    let ended = pairing.end(Some(&format!("CODE-erin {state}\n"))).await;
+    let ended = pairing
+        .end(Some(&format!("CODE-erin {}\n", state(&start))))
+        .await;
     assert_eq!(ended.code, Some(0), "stderr:\n{}", ended.stderr);
     assert_eq!(ended.answers.len(), 1, "{:?}", ended.answers);
     assert_eq!(ended.answers[0]["status"], "exchanged");
@@ -1003,7 +1005,7 @@ struct Seen {
 }
 
 /// An admin listener on loopback that answers each connection with the next scripted response and records the
-/// request, so a case sees exactly what a subcommand sent and can answer what no router on this branch answers.
+/// request, so a case sees exactly what a subcommand sent and can answer what the router never answers.
 struct ScriptedAdmin {
     url: String,
     seen: Arc<Mutex<Vec<Seen>>>,

@@ -392,6 +392,10 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
     let called = client.url();
     let listeners = match &file {
         Some(config) => Listeners {
+            certificates: status::certificate_lines(&[
+                ("proxy.tls", &config.proxy.tls),
+                ("admin.tls", &config.admin.tls),
+            ]),
             admin: match args.common.url {
                 Some(_) => called,
                 None => format!(
@@ -409,6 +413,7 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
         },
         None => Listeners {
             admin: called,
+            certificates: Vec::new(),
             metrics: None,
             proxy: None,
         },

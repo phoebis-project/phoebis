@@ -201,7 +201,10 @@ The header carries the version and the uptime from `GET /admin/system` and one o
 with each dead component (`ledger`, `router`, `store`); or `proxy down:` with the probe's line when the proxy listener
 did not answer `200`, which wins over the other two. When the admin API could not be read, the header carries the
 binary's own version and `readiness unknown`, unless the proxy is down. The listeners follow with their schemes as the
-file names them. `ledger:` prints only when a figure needs a look, and names each one: records `queued` in the writer
+file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
+`proxy.tls.cert_file {path} expires in {n} days ({date})`, and a certificate the next start would refuse prints the
+start's line for it ([TLS on the listeners](installation.md#tls-on-the-listeners)); the running router keeps the pair it
+read at start. `ledger:` prints only when a figure needs a look, and names each one: records `queued` in the writer
 channel, `behind` while admission refuses, `degraded` after a failed batch, priced records `parked` in the ledger file,
 a batch `retrying`, and after `writer:` the state writer's `deferred` writes and its `degraded` flag.
 `attention:` lists every attention item as `<kind> <subject> since <HH:MM>`, or reads

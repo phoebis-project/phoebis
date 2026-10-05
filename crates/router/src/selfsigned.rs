@@ -269,8 +269,27 @@ pub fn write_leaf(
         &[(listener, names.to_vec())],
         validity,
         modes,
-    )?;
+    )
+    .map_err(|unfinished| unfinished.error)?;
     Ok(written.remove(0))
+}
+
+/// A `write_leaves` that stopped at `error`, with the pairs it had placed by then, which are live: the caller
+/// records them as written as it would on success.
+#[derive(Debug)]
+pub struct Unfinished {
+    pub error: MaterialError,
+    /// Each placed leaf's two live paths, the certificate then the key; empty when the stop came before any move.
+    pub placed: Vec<(PathBuf, PathBuf)>,
+}
+
+impl From<MaterialError> for Unfinished {
+    fn from(error: MaterialError) -> Self {
+        Unfinished {
+            error,
+            placed: Vec::new(),
+        }
+    }
 }
 
 /// Writes one leaf per entry of `leaves` (the listener's name and the names its leaf carries) under `dir`, signed by
@@ -278,7 +297,8 @@ pub fn write_leaf(
 /// names through the store's private-file helper and are read back (both parse, the key matches the certificate, and
 /// the leaf verifies under a store holding `ca` alone, which is where a name outside the CA's constraint is caught), so
 /// a refusal or a failed write on any leaf leaves every live file as it was. Answers each leaf's two live paths, the
-/// certificate then the key, in the order of `leaves`.
+/// certificate then the key, in the order of `leaves`; a rename that fails once a leaf has moved into place answers
+/// the pairs placed before it beside the error.
 pub fn write_leaves(
     dir: &Path,
     ca: &Ca,
@@ -286,7 +306,7 @@ pub fn write_leaves(
     leaves: &[(&str, Vec<SanName>)],
     validity: Validity,
     modes: LeafModes,
-) -> Result<Vec<(PathBuf, PathBuf)>, MaterialError> {
+) -> Result<Vec<(PathBuf, PathBuf)>, Unfinished> {
     permissions::create_private_dir(dir).map_err(io(dir))?;
     let mut staged = Vec::with_capacity(leaves.len());
     for (listener, names) in leaves {
@@ -294,7 +314,7 @@ pub fn write_leaves(
             Ok(leaf) => staged.push(leaf),
             Err(error) => {
                 staged.iter().for_each(StagedLeaf::discard);
-                return Err(error);
+                return Err(error.into());
             }
         }
     }
@@ -306,7 +326,7 @@ pub fn write_leaves(
         ];
         if let Err(error) = place(&pair) {
             staged[at + 1..].iter().for_each(StagedLeaf::discard);
-            return Err(error);
+            return Err(Unfinished { error, placed });
         }
         placed.push((leaf.cert_file.clone(), leaf.key_file.clone()));
     }
@@ -902,7 +922,7 @@ mod tests {
                 .collect::<Vec<_>>()
         };
         let before = read();
-        let error = write_leaves(
+        let unfinished = write_leaves(
             dir,
             &ca,
             "host.example",
@@ -912,10 +932,47 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(&error, MaterialError::Io { path, .. } if *path == dir.join("admin.key")),
-            "{error:?}"
+            matches!(&unfinished.error, MaterialError::Io { path, .. } if *path == dir.join("admin.key")),
+            "{unfinished:?}"
         );
+        assert!(unfinished.placed.is_empty(), "{unfinished:?}");
         assert_eq!(read(), before);
+        assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
+    }
+
+    #[test]
+    fn a_rename_that_fails_on_a_later_leaf_hands_back_the_pairs_already_placed() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let names = leaf_names("192.0.2.7:8317".parse().unwrap());
+        let ca = write_ca(
+            dir,
+            "host.example",
+            &names,
+            Validity::days_from_now(CA_LIFETIME_DAYS),
+        )
+        .unwrap();
+        // A non-empty directory under the admin certificate's live name takes no rename onto it.
+        std::fs::create_dir(dir.join("admin.pem")).unwrap();
+        std::fs::write(dir.join("admin.pem").join("held"), b"x").unwrap();
+        let unfinished = write_leaves(
+            dir,
+            &ca,
+            "host.example",
+            &[("proxy", names.clone()), ("admin", names.clone())],
+            Validity::days_from_now(LEAF_LIFETIME_DAYS),
+            LeafModes::Private,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&unfinished.error, MaterialError::Io { path, .. } if *path == dir.join("admin.pem")),
+            "{unfinished:?}"
+        );
+        assert_eq!(
+            unfinished.placed,
+            [(dir.join("proxy.pem"), dir.join("proxy.key"))]
+        );
+        assert!(dir.join("proxy.pem").is_file() && dir.join("proxy.key").is_file());
         assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
     }
 

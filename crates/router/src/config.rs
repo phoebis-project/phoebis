@@ -42,7 +42,7 @@ pub struct AdminConfig {
     #[serde(default = "unresolved", skip)]
     pub secret: Secret,
     pub secret_env: String,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present_tls")]
     pub tls: Option<ListenerTls>,
 }
 
@@ -66,7 +66,7 @@ pub struct ProxyConfig {
     /// rejection of the placeholder proves it necessary.
     #[serde(default)]
     pub sign_cch_placeholder: bool,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "present_tls")]
     pub tls: Option<ListenerTls>,
     /// How the edited body leaves toward the upstream: `auto` mirrors the client, `on` always gzip, `off` never.
     #[serde(default = "default_upstream_gzip")]
@@ -84,8 +84,8 @@ pub struct ListenerTls {
     pub key_file: PathBuf,
 }
 
-/// The line for a string in the key's place, a stray key, a missing key or a repeated one; serde puts the key's path
-/// in front of it. A hand-written visitor rather than a derive, so a word earns this line and not serde's
+/// The line for a string or a null in the key's place, a stray key, a missing key or a repeated one; serde puts the
+/// key's path in front of it. A hand-written visitor rather than a derive, so a word earns this line and not serde's
 /// "invalid type" one, which names no key.
 const TLS_SHAPES: &str = "must be a mapping with cert_file and key_file";
 
@@ -101,6 +101,14 @@ impl<'de> Deserialize<'de> for ListenerTls {
             }
 
             fn visit_str<E: serde::de::Error>(self, _word: &str) -> Result<ListenerTls, E> {
+                Err(E::custom(TLS_SHAPES))
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<ListenerTls, E> {
+                Err(E::custom(TLS_SHAPES))
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> Result<ListenerTls, E> {
                 Err(E::custom(TLS_SHAPES))
             }
 
@@ -131,6 +139,15 @@ impl<'de> Deserialize<'de> for ListenerTls {
 
         deserializer.deserialize_any(Shapes)
     }
+}
+
+/// A present `tls` key must hold the pair. Serde's own `Option` reads a YAML null, the key written with nothing
+/// beneath it, as an absent key, and the listener would then serve plain HTTP on an address whose operator meant to
+/// name a pair; only a missing key means plain HTTP.
+fn present_tls<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ListenerTls>, D::Error> {
+    ListenerTls::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -831,9 +848,20 @@ mod tests {
                 "twice",
                 "  tls:\n    cert_file: /a\n    cert_file: /b\n    key_file: /c\n",
             ),
+            ("empty", "  tls:\n"),
+            ("tilde", "  tls: ~\n"),
+            ("null", "  tls: null\n"),
         ] {
             refused(name, keys);
         }
+        let admin = file_with_proxy(dir.path(), "admin-empty", "");
+        under(&admin, "admin", "  tls:\n");
+        let error = load_unresolved(&admin).unwrap_err();
+        let chain = chain(&error);
+        assert!(
+            chain.contains("admin.tls") && chain.contains(TLS_SHAPES),
+            "admin-empty: {chain}"
+        );
     }
 
     #[test]

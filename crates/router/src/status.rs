@@ -11,7 +11,8 @@ use jiff::Timestamp;
 use serde_json::{json, Value};
 
 use crate::admin_client::{AdminClient, ClientError, Common};
-use crate::health;
+use crate::config::ListenerTls;
+use crate::{health, tls};
 
 #[derive(clap::Args, Debug)]
 pub struct StatusArgs {
@@ -36,8 +37,27 @@ pub struct Reads {
 /// The three listeners as the file names them, with their schemes.
 pub struct Listeners {
     pub admin: String,
+    /// `certificate_lines`' answer for the file's pairs, printed under the listeners.
+    pub certificates: Vec<String>,
     pub metrics: Option<String>,
     pub proxy: Option<String>,
+}
+
+/// One line per listener pair whose leaf needs a look: `tls::expiry_line`'s for a leaf within the expiry warning, or
+/// the refusal the next start would print for a certificate file it cannot read or a leaf past its dates. A running
+/// router read its pair at start and keeps serving it, so the file on disk is what the next start meets. `pairs` are
+/// `(key, tls)`, `key` being `proxy.tls` or `admin.tls`.
+pub fn certificate_lines(pairs: &[(&'static str, &Option<ListenerTls>)]) -> Vec<String> {
+    pairs
+        .iter()
+        .filter_map(|(key, tls)| {
+            let pair = tls.as_ref()?;
+            match tls::read_leaf(key, &pair.cert_file) {
+                Ok(leaf) => tls::expiry_line(key, &pair.cert_file, &leaf),
+                Err(error) => Some(error.to_string()),
+            }
+        })
+        .collect()
 }
 
 /// The lines the `pins` and `accounts in no pool` blocks print before `and N more`, unless `--all`.
@@ -203,6 +223,9 @@ pub fn render(
     // Three URLs pass 80 columns at the default addresses, so the line breaks between listeners rather than inside
     // one.
     screen.flow("  ", &named, "  ", "  ");
+    for line in &listeners.certificates {
+        screen.wrap(&format!("  {line}"));
+    }
     if reads.health.is_none() {
         screen.push("  proxy: not probed, no configuration file names the listener");
     }
@@ -862,11 +885,52 @@ mod tests {
         }
     }
 
+    /// A pair whose leaf's `not_after` is midnight UTC `days` days on, so it has `days - 1` whole days left and part
+    /// of one.
+    fn expiring_pair(dir: &Path, days: i64) -> (std::path::PathBuf, std::path::PathBuf) {
+        let date = Timestamp::now()
+            .to_zoned(TimeZone::UTC)
+            .date()
+            .checked_add(jiff::Span::new().days(days))
+            .unwrap();
+        fake_upstream::generate_pair_valid_between(
+            &["localhost"],
+            (2020, 1, 1),
+            (i32::from(date.year()), date.month() as u8, date.day() as u8),
+        )
+        .write_to(dir, "proxy")
+    }
+
+    #[test]
+    fn a_certificate_line_names_a_leaf_inside_the_warning_or_a_certificate_the_start_would_refuse()
+    {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = expiring_pair(dir.path(), 400);
+        let distant = Some(ListenerTls {
+            cert_file: cert,
+            key_file: key,
+        });
+        assert!(certificate_lines(&[("proxy.tls", &distant), ("admin.tls", &None)]).is_empty());
+
+        let missing = dir.path().join("absent.pem");
+        let unreadable = Some(ListenerTls {
+            cert_file: missing.clone(),
+            key_file: dir.path().join("absent.key"),
+        });
+        let lines = certificate_lines(&[("admin.tls", &unreadable)]);
+        assert_eq!(lines.len(), 1, "{lines:?}");
+        assert!(
+            lines[0].starts_with(&format!("admin.tls.cert_file {}: ", missing.display())),
+            "{lines:?}"
+        );
+    }
+
     fn listeners() -> Listeners {
         Listeners {
             admin: "http://127.0.0.1:8081".to_owned(),
             metrics: Some("http://127.0.0.1:9464".to_owned()),
             proxy: Some("https://0.0.0.0:8317".to_owned()),
+            certificates: Vec::new(),
         }
     }
 
@@ -931,11 +995,39 @@ mod tests {
             pools: Ok(pools_answer.clone()),
             ..fixture_reads()
         };
-        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = expiring_pair(dir.path(), 31);
+        let tls = Some(ListenerTls {
+            cert_file: cert.clone(),
+            key_file: key,
+        });
+        let expiring = Listeners {
+            certificates: certificate_lines(&[("proxy.tls", &tls), ("admin.tls", &None)]),
+            ..listeners()
+        };
+        let screen = render(&reads, &expiring, "9.9.9", now(), &TimeZone::UTC, false);
         let lines: Vec<&str> = screen.lines().collect();
         for line in &lines {
             assert!(line.chars().count() <= WIDTH, "{line}");
         }
+        let after = lines
+            .iter()
+            .position(|line| line.starts_with("  metrics "))
+            .unwrap()
+            + 1;
+        assert!(
+            lines[after].starts_with(&format!("  proxy.tls.cert_file {} ", cert.display())),
+            "the expiry line follows the listeners: {screen}"
+        );
+        let expiry: Vec<&str> = lines[after..]
+            .iter()
+            .take_while(|line| !line.starts_with("  ledger") && !line.starts_with("  attention"))
+            .map(|line| line.trim())
+            .collect();
+        assert!(
+            expiry.join(" ").contains(" expires in 30 days ("),
+            "{screen}"
+        );
 
         let system = fixture("system");
         let dead: Vec<&str> = system["dead"]
@@ -1309,6 +1401,7 @@ mod tests {
             admin: "http://127.0.0.1:8081".to_owned(),
             metrics: None,
             proxy: None,
+            certificates: Vec::new(),
         };
         let screen = render(&skipped, &file_free, "9.9.9", now(), &TimeZone::UTC, false);
         let lines: Vec<&str> = screen.lines().collect();

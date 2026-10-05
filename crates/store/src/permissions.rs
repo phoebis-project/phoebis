@@ -38,8 +38,8 @@ pub fn check_private_dir(path: &Path) -> Vec<String> {
 
 /// Creates `path` at `mode`, refusing an existing file (`create_new`), under a directory created at 0700 when
 /// missing. The open can only come out narrower than `mode`, since it honors the umask, so the mode is set on the new
-/// descriptor before any byte is written: the service unit's `UMask=0077` cannot narrow `ca.pem` to 0600, no window
-/// exists in which the file is wider than its mode, and nothing is overwritten.
+/// descriptor before any byte is written: a caller's `umask 077` cannot narrow `init`'s `0644` configuration file to
+/// 0600, no window exists in which the file is wider than its mode, and nothing is overwritten.
 pub fn create_private_file(path: &Path, mode: u32) -> std::io::Result<File> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -106,13 +106,13 @@ mod tests {
     #[test]
     fn a_private_file_is_created_at_its_mode_under_a_0700_directory() {
         let dir = tempfile::tempdir().unwrap();
-        for (name, mode) in [("key", 0o600), ("ca.pem", 0o644)] {
-            let path = dir.path().join("tls").join(name);
+        for (name, mode) in [("key", 0o600), ("config.yaml", 0o644)] {
+            let path = dir.path().join("conf").join(name);
             create_private_file(&path, mode).unwrap();
             let file_mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
             assert_eq!(file_mode, mode, "{name}");
         }
-        let dir_mode = std::fs::metadata(dir.path().join("tls"))
+        let dir_mode = std::fs::metadata(dir.path().join("conf"))
             .unwrap()
             .permissions()
             .mode()
@@ -123,8 +123,8 @@ mod tests {
     #[test]
     fn a_private_file_keeps_its_mode_under_a_narrower_umask() {
         let dir = tempfile::tempdir().unwrap();
-        let path = dir.path().join("ca.pem");
-        // The service unit runs under `UMask=0077`; the process-wide mask is restored before any assertion.
+        let path = dir.path().join("config.yaml");
+        // An operator may run `init` under `umask 077`; the process-wide mask is restored before any assertion.
         // SAFETY: `umask` swaps the process-wide mask and cannot fail. Other tests in this binary run beside it, but
         // each sets its modes explicitly or creates at 0600 or 0700, which a 0077 mask leaves as they are.
         let previous = unsafe { libc::umask(0o077) };

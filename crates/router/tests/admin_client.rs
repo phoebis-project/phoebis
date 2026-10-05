@@ -1,6 +1,6 @@
 //! The subcommands' admin client against routers started in-process: the bearer on a plain listener, the CA `--ca`
-//! names trusted in place of the system roots, a refused secret, a port nothing listens on, a route's own refusal,
-//! and a body that stalls past the deadline.
+//! names trusted and no other, the system roots left unconsulted once `--ca` names a bundle, a refused secret, a port
+//! nothing listens on, a route's own refusal, and a body that stalls past the deadline.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;

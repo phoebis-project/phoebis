@@ -209,7 +209,9 @@ prints, in order:
 
 Further warning lines name a storage key file, data directory, database or TLS key file whose mode or owner is wider
 than the router expects, and a certificate that expires within 30 days (`warning: proxy.tls.cert_file {path} expires in
-{n} days ({date})`); the router starts either way and logs the same warnings.
+{n} days ({date})`); the router starts either way and logs the same warnings. A TLS key owned by root and readable by
+its group alone, such as `0640 root:phoebis` as `init --owner phoebis` writes it, earns no warning from a process that
+runs as root or holds that group.
 
 A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and `the registry at
 {config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at
@@ -554,8 +556,8 @@ Refused with:
 - `listen`: a YAML error
 - `secret_env`: `environment variable {name} is unset or empty`
 - `tls`: `admin.tls: must be a mapping with cert_file and key_file` under `the configuration is not valid YAML` for a
-  word in the key's place, a third key, a repeated key, or a mapping that lacks one of the two ([TLS on the
-  listeners](#tls-on-the-listeners))
+  word in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one
+  of the two ([TLS on the listeners](#tls-on-the-listeners))
 
 Removed keys: `admin.origin` has no replacement, the Origin check compares against the request's own `Host` in every
 mode; `admin.plain_http: true` has no replacement either: a listener without `tls` serves plain HTTP on any address.
@@ -601,8 +603,8 @@ Refused with:
 - `max_request_bytes`: `proxy.max_request_bytes must be between 1024 and 33554432, not {value}`
 - `sign_cch_placeholder`: a YAML error for anything but a boolean
 - `tls`: `proxy.tls: must be a mapping with cert_file and key_file` under `the configuration is not valid YAML` for a
-  word in the key's place, a third key, a repeated key, or a mapping that lacks one of the two ([TLS on the
-  listeners](#tls-on-the-listeners))
+  word in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one
+  of the two ([TLS on the listeners](#tls-on-the-listeners))
 - `upstream_gzip`: `proxy.upstream_gzip must be auto, on or off, not {value}`
 
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
@@ -665,13 +667,15 @@ the 40-second stop grace, bounds the gap.
 `check-config` and the start refuse a `tls` value that is not the mapping with:
 
 - `proxy.tls: must be a mapping with cert_file and key_file`, under `the configuration is not valid YAML`, for a word
-  in the key's place, a third key, a repeated key, or a mapping that lacks one of the two
+  in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one of the
+  two
 
 The start reads the pair before it binds a port, and `check-config` reads it the same way; both refuse it with one line
 naming the key and the path:
 
 - `proxy.tls.cert_file {path}: {OS error}` or `proxy.tls.key_file {path}: {OS error}` for a file it cannot read
 - `proxy.tls.cert_file {path}: holds no PEM certificate`
+- `proxy.tls.cert_file {path}: holds a PEM certificate block that does not parse`, the leaf's or an intermediate's
 - `proxy.tls.key_file {path}: holds no PEM private key`
 - `proxy.tls.key_file {path}: does not match the certificate in {cert_file}`
 - `proxy.tls.cert_file {path}: expired on {date}`

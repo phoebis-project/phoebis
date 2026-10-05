@@ -1230,8 +1230,7 @@ pub fn acceptor_for(pair: &GeneratedPair) -> SslAcceptor {
     acceptor.build()
 }
 
-/// A client of a listener serving `pair`: it trusts the pair's CA alone and offers HTTP/1.1, as a listener's
-/// clients do.
+/// A client of a listener serving `pair`: it trusts the pair's CA and offers HTTP/1.1, as a listener's clients do.
 pub fn connector_trusting(pair: &GeneratedPair) -> ConnectConfiguration {
     let mut builder = SslConnector::builder(SslMethod::tls()).expect("build TLS connector");
     let ca = X509::from_pem(pair.ca_pem.as_bytes()).expect("parse the generated CA");

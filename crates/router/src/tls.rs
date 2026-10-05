@@ -46,6 +46,8 @@ pub struct LeafFacts {
 /// as `main`'s prints the cause once, in the refusal line.
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
+    #[error("{key}.cert_file {path}: holds a PEM certificate block that does not parse")]
+    CorruptCertificate { key: &'static str, path: PathBuf },
     #[error("{key}.cert_file {path}: expired on {date}")]
     Expired {
         key: &'static str,
@@ -86,25 +88,9 @@ pub enum TlsError {
 /// and the key on a `mozilla_intermediate_v5` acceptor with ALPN fixed to `http/1.1`, and checks the key and the
 /// dates. `key` is `proxy.tls` or `admin.tls`, the prefix of every refusal.
 pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result<Loaded, TlsError> {
-    let read = |file: &'static str, path: &Path| {
-        std::fs::read(path).map_err(|error| TlsError::Unreadable {
-            key,
-            file,
-            path: path.to_path_buf(),
-            error,
-        })
-    };
-    let cert_pem = read("cert_file", cert_file)?;
-    let key_pem = read("key_file", key_file)?;
-    // A block that does not parse leaves the file with no certificate the listener could serve, the same answer
-    // as a file with no block at all.
-    let mut chain = X509::stack_from_pem(&cert_pem)
-        .unwrap_or_default()
-        .into_iter();
-    let leaf = chain.next().ok_or_else(|| TlsError::NoCertificate {
-        key,
-        path: cert_file.to_path_buf(),
-    })?;
+    let cert_pem = read_file(key, "cert_file", cert_file)?;
+    let key_pem = read_file(key, "key_file", key_file)?;
+    let (leaf, chain) = certificates(key, cert_file, &cert_pem)?;
     let pkey = PKey::private_key_from_pem(&key_pem).map_err(|_| TlsError::NoKey {
         key,
         path: key_file.to_path_buf(),
@@ -132,6 +118,55 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
         select_next_proto(b"\x08http/1.1", offered).ok_or(AlpnError::NOACK)
     });
 
+    let leaf = leaf_facts(key, cert_file, &leaf)?;
+    Ok(Loaded {
+        acceptor: builder.build(),
+        cert_file: cert_file.to_path_buf(),
+        key_file: key_file.to_path_buf(),
+        leaf,
+    })
+}
+
+/// The leaf's facts from `cert_file` alone, refused as `load_pair` refuses the certificate file. `status` reads the
+/// leaf this way: it reports the leaf's dates, and the operator running it may not be able to read the key.
+pub fn read_leaf(key: &'static str, cert_file: &Path) -> Result<LeafFacts, TlsError> {
+    let cert_pem = read_file(key, "cert_file", cert_file)?;
+    let (leaf, _) = certificates(key, cert_file, &cert_pem)?;
+    leaf_facts(key, cert_file, &leaf)
+}
+
+fn read_file(key: &'static str, file: &'static str, path: &Path) -> Result<Vec<u8>, TlsError> {
+    std::fs::read(path).map_err(|error| TlsError::Unreadable {
+        key,
+        file,
+        path: path.to_path_buf(),
+        error,
+    })
+}
+
+/// The leaf and the intermediates behind it.
+fn certificates(
+    key: &'static str,
+    cert_file: &Path,
+    cert_pem: &[u8],
+) -> Result<(X509, std::vec::IntoIter<X509>), TlsError> {
+    // An empty stack is a file with no certificate block; an error is a block that does not parse, which may sit
+    // behind a sound leaf, so the two get their own lines.
+    let mut chain = X509::stack_from_pem(cert_pem)
+        .map_err(|_| TlsError::CorruptCertificate {
+            key,
+            path: cert_file.to_path_buf(),
+        })?
+        .into_iter();
+    let leaf = chain.next().ok_or_else(|| TlsError::NoCertificate {
+        key,
+        path: cert_file.to_path_buf(),
+    })?;
+    Ok((leaf, chain))
+}
+
+/// The leaf's names and days left, refusing a leaf outside its validity window.
+fn leaf_facts(key: &'static str, cert_file: &Path, leaf: &X509) -> Result<LeafFacts, TlsError> {
     let today = Asn1Time::days_from_now(0).map_err(stack(key))?;
     if leaf.not_after().compare(&today).map_err(stack(key))? == Ordering::Less {
         return Err(TlsError::Expired {
@@ -161,15 +196,10 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
                 .collect()
         })
         .unwrap_or_default();
-    Ok(Loaded {
-        acceptor: builder.build(),
-        cert_file: cert_file.to_path_buf(),
-        key_file: key_file.to_path_buf(),
-        leaf: LeafFacts {
-            names,
-            not_after: leaf.not_after().to_string(),
-            days_left,
-        },
+    Ok(LeafFacts {
+        names,
+        not_after: leaf.not_after().to_string(),
+        days_left,
     })
 }
 
@@ -212,28 +242,80 @@ pub fn describe(listener: &str, listen: SocketAddr, serving: &Serving) -> String
     }
 }
 
-/// The `warning:` lines for a loaded pair, without the `warning: ` prefix: the leaf within `EXPIRY_WARNING_DAYS` as
-/// `{key}.cert_file {path} expires in {n} days ({date})`, and `permissions::check_private_file(key_file, 0o600)`'s
-/// lines for its key file.
+/// The `warning:` lines for a loaded pair, without the `warning: ` prefix: `expiry_line`'s for the leaf, and
+/// `key_file_warnings`' for its key file.
 pub fn warnings(key: &'static str, serving: &Serving) -> Vec<String> {
     let Serving::Tls(loaded) = serving else {
         return Vec::new();
     };
     let mut warnings = Vec::new();
-    // A negative count never reaches here: `load_pair` refuses an expired leaf.
-    if (0..EXPIRY_WARNING_DAYS).contains(&loaded.leaf.days_left) {
-        warnings.push(format!(
-            "{key}.cert_file {} expires in {} days ({})",
-            loaded.cert_file.display(),
-            loaded.leaf.days_left,
-            loaded.leaf.not_after
-        ));
-    }
-    warnings.extend(phoebis_store::permissions::check_private_file(
-        &loaded.key_file,
-        0o600,
-    ));
+    warnings.extend(expiry_line(key, &loaded.cert_file, &loaded.leaf));
+    warnings.extend(key_file_warnings(&loaded.key_file));
     warnings
+}
+
+/// `{key}.cert_file {path} expires in {n} days ({date})` for a leaf within `EXPIRY_WARNING_DAYS` of `not_after`, the
+/// last whole day included, so a leaf with 30 days and some hours left is named; `None` for any other leaf.
+pub fn expiry_line(key: &str, cert_file: &Path, leaf: &LeafFacts) -> Option<String> {
+    (0..=EXPIRY_WARNING_DAYS)
+        .contains(&leaf.days_left)
+        .then(|| {
+            format!(
+                "{key}.cert_file {} expires in {} days ({})",
+                cert_file.display(),
+                leaf.days_left,
+                leaf.not_after
+            )
+        })
+}
+
+/// `permissions::check_private_file(key_file, 0o600)`'s lines, except for the shape the service unit reads a key
+/// through, which `init --owner` writes and the installation page recommends: owned by root and readable by its group
+/// alone (`0640 root:phoebis`). That shape passes when this process holds the file's group, as the service does, or
+/// runs as root, which has no way to tell the unit's group and is the one user that can have set the shape.
+fn key_file_warnings(key_file: &Path) -> Vec<String> {
+    use std::os::unix::fs::MetadataExt;
+
+    if let Ok(metadata) = std::fs::metadata(key_file) {
+        // SAFETY: `geteuid` reads the process's effective uid and cannot fail.
+        let euid = unsafe { libc::geteuid() };
+        if read_through_group(
+            metadata.mode(),
+            metadata.uid(),
+            metadata.gid(),
+            euid,
+            &process_groups(),
+        ) {
+            return Vec::new();
+        }
+    }
+    phoebis_store::permissions::check_private_file(key_file, 0o600)
+}
+
+/// Whether a key file of `mode`, `uid` and `gid` is the unit's group-read shape for a process of `euid` holding
+/// `groups`: root's, nothing for other and nothing but read for the group, and a group the process holds unless the
+/// process is root.
+fn read_through_group(mode: u32, uid: u32, gid: u32, euid: u32, groups: &[u32]) -> bool {
+    uid == 0 && mode & 0o037 == 0 && (euid == 0 || groups.contains(&gid))
+}
+
+/// The process's effective group and its supplementary groups.
+fn process_groups() -> Vec<u32> {
+    // SAFETY: `getegid` cannot fail; `getgroups` with a zero size only counts, and the second call writes at most
+    // the `count` entries the vector holds.
+    unsafe {
+        let mut groups = vec![libc::getegid()];
+        let count = libc::getgroups(0, std::ptr::null_mut());
+        if let Ok(size) = usize::try_from(count) {
+            let mut supplementary = vec![0; size];
+            let filled = libc::getgroups(count, supplementary.as_mut_ptr());
+            if let Ok(filled) = usize::try_from(filled) {
+                supplementary.truncate(filled);
+                groups.extend(supplementary);
+            }
+        }
+        groups
+    }
 }
 
 fn stack(key: &'static str) -> impl Fn(ErrorStack) -> TlsError {
@@ -334,6 +416,23 @@ mod tests {
     }
 
     #[test]
+    fn a_sound_leaf_followed_by_a_block_that_does_not_parse_is_refused_naming_the_block() {
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
+        let mut pem = std::fs::read_to_string(&cert).unwrap();
+        pem.push_str("-----BEGIN CERTIFICATE-----\nZm9vYmFy\n-----END CERTIFICATE-----\n");
+        std::fs::write(&cert, pem).unwrap();
+        let error = load_pair("proxy.tls", &cert, &key).err().unwrap();
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "proxy.tls.cert_file {}: holds a PEM certificate block that does not parse",
+                cert.display()
+            )
+        );
+    }
+
+    #[test]
     fn a_key_file_without_a_pem_block_is_refused_as_holding_none() {
         let dir = tempfile::tempdir().unwrap();
         let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "admin");
@@ -359,6 +458,76 @@ mod tests {
         assert!(
             text.starts_with("proxy.tls.cert_file ") && text.contains("expired on"),
             "{text}"
+        );
+    }
+
+    #[test]
+    fn a_leaf_with_thirty_whole_days_left_and_part_of_a_day_warns() {
+        let dir = tempfile::tempdir().unwrap();
+        // Midnight UTC 31 days on leaves 30 whole days and what remains of today, the warning's last day.
+        let date = jiff::Timestamp::now()
+            .to_zoned(jiff::tz::TimeZone::UTC)
+            .date()
+            .checked_add(jiff::Span::new().days(31))
+            .unwrap();
+        let pair = generate_pair_valid_between(
+            &["localhost"],
+            (2020, 1, 1),
+            (i32::from(date.year()), date.month() as u8, date.day() as u8),
+        );
+        let (cert, key) = pair.write_to(dir.path(), "proxy");
+        let loaded = load_pair("proxy.tls", &cert, &key).unwrap();
+        assert_eq!(loaded.leaf.days_left, 30, "{:?}", loaded.leaf);
+        let warned = warnings("proxy.tls", &Serving::Tls(loaded));
+        let line = format!(
+            "proxy.tls.cert_file {} expires in 30 days (",
+            cert.display()
+        );
+        assert!(
+            warned.iter().any(|warning| warning.starts_with(&line)),
+            "{warned:?}"
+        );
+    }
+
+    #[test]
+    fn a_key_owned_by_root_and_read_through_the_services_group_passes_and_every_other_shape_warns()
+    {
+        let (service, staff) = (990, 50);
+        for (mode, euid, groups) in [
+            (0o100640, service, [service]),
+            (0o100440, service, [service]),
+            (0o100640, 0, [0]),
+        ] {
+            assert!(
+                read_through_group(mode, 0, service, euid, &groups),
+                "{mode:o} for uid {euid}"
+            );
+        }
+        for (mode, uid, gid) in [
+            (0o100644, 0, service),
+            (0o100660, 0, service),
+            (0o100640, 1000, service),
+            (0o100640, 0, staff),
+        ] {
+            assert!(
+                !read_through_group(mode, uid, gid, service, &[service]),
+                "{mode:o} owned by {uid}:{gid}"
+            );
+        }
+
+        let dir = tempfile::tempdir().unwrap();
+        let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "admin");
+        std::fs::set_permissions(&key, std::os::unix::fs::PermissionsExt::from_mode(0o640))
+            .unwrap();
+        let warned = warnings(
+            "admin.tls",
+            &Serving::Tls(load_pair("admin.tls", &cert, &key).unwrap()),
+        );
+        assert!(
+            warned
+                .iter()
+                .any(|warning| warning.contains("readable by group or other (mode 0640)")),
+            "a group-readable key this user owns is not the unit's shape: {warned:?}"
         );
     }
 

@@ -14,7 +14,7 @@ use serde_json::{json, Map, Value};
 use crate::admin_client::{self, AdminClient, Answer, ClientError, Common};
 
 /// `--json` under `account pair`, where the shared line would promise a quiet stderr the prompts still use. No closing
-/// period, as clap prints the doc-comment help lines beside it.
+/// period: clap strips it from the doc-comment help lines printed beside this one.
 const PAIR_JSON_HELP: &str =
     "Print each route's answer on stdout as one line as it arrives; the prompts stay on stderr";
 
@@ -421,7 +421,6 @@ fn add_account(
         "kind": new.kind.as_str(),
         "label": new.label.unwrap_or_else(|| new.id.to_owned()),
     });
-    // A create has no row to fence on, so no `expected_revision` travels with it.
     if let Some(secret) = secret {
         body["secret"] = Value::String(secret);
     }
