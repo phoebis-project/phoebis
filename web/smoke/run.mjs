@@ -1668,7 +1668,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const writerRows = [...cards.values()].filter((c) => [...c.querySelectorAll('ul.attention .badge')].some((b) => b.textContent?.trim() === 'State writer degraded')).length;
     results.push({
       name: "/pools a pool's card draws its parked records' row with the count and the accounts, and no card draws the state writer",
-      ok: parkedRow?.querySelector('.attention__detail')?.textContent === '1 priced record parked, landing at the next start (evals)' && writerRows === 0,
+      ok: parkedRow?.querySelector('.attention__detail')?.textContent === '1 priced record parked, landing at the next start or replay (evals)' && writerRows === 0,
       missing: [parkedRow?.querySelector('.attention__detail')?.textContent ?? 'no parked row', `writer rows ${writerRows}`],
     });
   }
@@ -1770,7 +1770,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     row('Re-auth required', 'badge--critical', 'team', '/accounts/team', 'serves nothing until its credential is renewed', '5h 0m ago'),
     row('Funding required', 'badge--serious', 'Evals workspace', '/accounts/evals', 'serves nothing until its organization is funded again', '4h 0m ago'),
     row('Credential refresh failed', 'badge--critical', 'team', '/accounts/team', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
-    row('Priced record parked', 'badge--serious', 'codex', null, '2 priced records parked, landing at the next start (evals, mail)', '8h 0m ago'),
+    row('Priced record parked', 'badge--serious', 'codex', null, '2 priced records parked, landing at the next start or replay (evals, mail)', '8h 0m ago'),
     row('Usage poll backing off', 'badge--warning', 'mail', '/accounts/mail', '6 rate-limited answers in a row', '2h 0m ago'),
   ];
   results.push({
