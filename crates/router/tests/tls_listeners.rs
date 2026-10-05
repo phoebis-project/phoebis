@@ -582,8 +582,14 @@ async fn an_interrupted_replacement_is_finished_at_the_next_start() {
     std::fs::set_permissions(&stale_ca, std::fs::Permissions::from_mode(0o600)).unwrap();
     assert!(!pair_loads(dir.path(), "proxy"), "the pair is mismatched");
     assert_modes(dir.path());
+    let ca_pem = read(dir.path(), "ca.pem");
 
     let router = start_self_signed(dir.path(), &up).await;
+    assert_eq!(
+        read(dir.path(), "ca.pem"),
+        ca_pem,
+        "a leaf's mismatch leaves the CA the clients trust"
+    );
     assert!(pair_loads(dir.path(), "proxy"));
     assert!(verifies_under_ca(dir.path(), "proxy"));
     assert!(!stale.exists(), "the stale temporary is removed");
@@ -592,6 +598,38 @@ async fn an_interrupted_replacement_is_finished_at_the_next_start() {
         ready(&client_trusting(&read(dir.path(), "ca.pem")), router.proxy).await,
         200
     );
+    assert_modes(dir.path());
+
+    router.stop().await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_ca_whose_key_no_longer_matches_is_replaced_with_new_leaves() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    start_self_signed(dir.path(), &up).await.stop().await;
+    let first = read(dir.path(), "ca.pem");
+
+    // What a stop between the CA's two renames leaves: a new certificate beside the old key.
+    let scratch = tempfile::tempdir().unwrap();
+    tls::write_ca(
+        "proxy.tls",
+        scratch.path(),
+        "localhost",
+        Validity::days_from_now(30),
+    )
+    .unwrap();
+    let half_replaced = std::fs::read(scratch.path().join("ca.pem")).unwrap();
+    std::fs::write(dir.path().join("tls").join("ca.pem"), &half_replaced).unwrap();
+
+    let router = start_self_signed(dir.path(), &up).await;
+    let ca_pem = read(dir.path(), "ca.pem");
+    assert_ne!(ca_pem, half_replaced);
+    assert_ne!(ca_pem, first);
+    assert!(verifies_under_ca(dir.path(), "proxy"));
+    assert!(verifies_under_ca(dir.path(), "admin"));
+    assert_eq!(ready(&client_trusting(&ca_pem), router.proxy).await, 200);
     assert_modes(dir.path());
 
     router.stop().await;

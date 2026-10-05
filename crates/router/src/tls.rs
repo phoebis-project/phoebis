@@ -1116,17 +1116,27 @@ mod tests {
 
     #[test]
     fn a_leafs_names_carry_the_host_the_two_loopbacks_and_the_listen_address_sorted() {
-        let concrete = leaf_names("192.0.2.7:8317".parse().unwrap());
-        let host = SanName::Dns(hostname());
-        for name in [
-            &host,
-            &SanName::Dns("localhost".to_owned()),
-            &SanName::Ip("127.0.0.1".parse().unwrap()),
-            &SanName::Ip("::1".parse().unwrap()),
-            &SanName::Ip("192.0.2.7".parse().unwrap()),
-        ] {
-            assert!(concrete.contains(name), "{name}: {concrete:?}");
-        }
+        // The host's name sorts among the DNS names wherever it falls, and collapses into `localhost` on a host
+        // that answers that name.
+        let mut dns = vec![hostname(), "localhost".to_owned()];
+        dns.sort();
+        dns.dedup();
+        let expected = |ips: &[&str]| {
+            dns.iter()
+                .cloned()
+                .map(SanName::Dns)
+                .chain(ips.iter().map(|ip| SanName::Ip(ip.parse().unwrap())))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            leaf_names("192.0.2.7:8317".parse().unwrap()),
+            expected(&["127.0.0.1", "192.0.2.7", "::1"])
+        );
+        assert_eq!(
+            leaf_names("127.0.0.1:8317".parse().unwrap()),
+            expected(&["127.0.0.1", "::1"]),
+            "a loopback listen address is named once"
+        );
         let every = leaf_names("0.0.0.0:8317".parse().unwrap());
         assert!(
             every.iter().all(|name| match name {

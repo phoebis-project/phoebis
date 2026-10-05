@@ -803,6 +803,7 @@ fn self_signed_prints_the_pending_shape_before_the_first_start_and_the_leaf_afte
     .unwrap();
     let tls_dir = dir.path().join("tls");
     let leaf = |listener: &str| tls_dir.join(format!("{listener}.pem"));
+    let before = snapshot(dir.path());
 
     let out = check_config(&mut phoebis(), &config);
     assert!(out.status.success(), "{}", printed(&out));
@@ -836,6 +837,10 @@ fn self_signed_prints_the_pending_shape_before_the_first_start_and_the_leaf_afte
         printed(&out)
     );
     assert!(!tls_dir.exists(), "check-config generates nothing");
+    assert!(
+        snapshot(dir.path()) == before,
+        "check-config wrote under the data directory"
+    );
 
     let ca = tls::write_ca(
         "proxy.tls",
