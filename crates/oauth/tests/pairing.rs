@@ -492,3 +492,53 @@ fn a_commit_that_failed_ends_the_session_and_frees_the_account() {
         Err(PairingError::AlreadyConsumed)
     ));
 }
+
+#[test]
+fn cancelling_a_confirmed_session_keeps_it_confirmed() {
+    let s = PairingSessions::new();
+    let redirect = "http://localhost:4567/callback";
+    let confirmed = exchanged(&s, redirect);
+    s.claim_confirm(&confirmed, "admin-1", 1_003).unwrap();
+    s.confirm(&confirmed, "admin-1", 1_003).unwrap();
+    assert!(
+        matches!(
+            s.cancel(&confirmed, "admin-1", 1_004),
+            Err(PairingError::AlreadyConsumed)
+        ),
+        "the credential is installed, so a cancel has nothing left to stop"
+    );
+    let session = s.get(&confirmed, "admin-1", 1_004).unwrap();
+    assert!(matches!(session.status, PairingStatus::Confirmed));
+    assert_eq!(session.ended_at, Some(1_003));
+
+    let failed = s.start("team", "admin-1", redirect, 1_000).unwrap().session;
+    let url = format!("{redirect}?code=CODE123&state={}", failed.state);
+    s.accept_callback(&failed.id, "admin-1", CallbackInput::Url(url), 1_001)
+        .unwrap();
+    s.fail(&failed.id, "admin-1", "exchange refused", 1_003)
+        .unwrap();
+    assert!(matches!(
+        s.cancel(&failed.id, "admin-1", 1_004),
+        Err(PairingError::AlreadyConsumed)
+    ));
+    let session = s.get(&failed.id, "admin-1", 1_004).unwrap();
+    assert!(
+        matches!(&session.status, PairingStatus::Failed(reason) if reason == "exchange refused"),
+        "the operator still reads why the pairing failed"
+    );
+    assert_eq!(session.ended_at, Some(1_003));
+}
+
+#[test]
+fn a_second_cancel_of_a_cancelled_session_answers_already_consumed() {
+    let s = PairingSessions::new();
+    let id = exchanged(&s, "http://localhost:4567/callback");
+    s.cancel(&id, "admin-1", 1_003).unwrap();
+    assert!(matches!(
+        s.cancel(&id, "admin-1", 1_004),
+        Err(PairingError::AlreadyConsumed)
+    ));
+    let session = s.get(&id, "admin-1", 1_004).unwrap();
+    assert!(matches!(session.status, PairingStatus::Cancelled));
+    assert_eq!(session.ended_at, Some(1_003));
+}

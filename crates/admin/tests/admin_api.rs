@@ -1459,11 +1459,11 @@ async fn a_confirmed_pairing_leaves_the_vault_ten_minutes_after_its_confirm() {
     );
 }
 
-/// An ended pairing's lifetime runs from its first end: a repeated owner `DELETE` answers as the first did and
-/// never extends how long the session and its vault record are kept.
+/// An ended pairing's lifetime runs from its first end: a repeated owner `DELETE` answers `409` and never extends
+/// how long the session and its vault record are kept.
 #[tokio::test]
 async fn a_repeated_delete_of_an_ended_pairing_keeps_its_first_end() {
-    use common::{delete, login};
+    use common::{delete, json, login};
     use std::sync::atomic::Ordering;
     let parts = common::admin_parts_sweepable().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1473,7 +1473,12 @@ async fn a_repeated_delete_of_an_ended_pairing_keeps_its_first_end() {
     parts
         .clock_cell
         .store(common::NOW + 300_000, Ordering::SeqCst);
-    assert_eq!(delete(&parts.app, &path, Some(&cookie)).await.status(), 204);
+    let again = delete(&parts.app, &path, Some(&cookie)).await;
+    assert_eq!(again.status(), 409);
+    assert_eq!(
+        json(again).await["error"],
+        "pairing session already consumed"
+    );
     let at = common::NOW + 600_000;
     assert_eq!(
         (parts.vault.sweep(at), parts.pairing.sweep(at)),
