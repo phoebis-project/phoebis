@@ -356,7 +356,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     preferSubscription: false,
     selectBelowUtilization: 0.4,
     sessionPlacement: 'by_warm_prefix',
-    shedAheadOfPace: null,
+    shedAheadOfPace: 0.25,
     status: 'active',
     strategy: 'pace',
     subagentPlacement: 'with_main',
@@ -368,6 +368,7 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     { account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 },
   ], 'a member without a budget sends null, which clears a stored one');
   assert.equal(body.select_below_utilization, 0.4);
+  assert.equal(body.shed_ahead_of_pace, 0.25);
   assert.equal(body.cache_diagnostics, false, 'the switch is sent off as it is sent on');
   assert.deepEqual(
     [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens],

@@ -337,6 +337,16 @@ test('a pool decodes its select-below threshold and encodes it back', () => {
   assert.equal(d.encodePool({ ...p, name: p.name, selectBelowUtilization: null, status: 'active' }).select_below_utilization, null, 'null clears it rather than leaving it alone');
 });
 
+test('a pool decodes its shedding margin and encodes it back', () => {
+  const row = fixture('pools').pools[0];
+  assert.equal(d.decodePool(row).shedAheadOfPace, null, 'the captured pool sets none');
+  const p = d.decodePool({ ...row, shed_ahead_of_pace: 0.25 });
+  assert.equal(p.shedAheadOfPace, 0.25);
+  const back = d.encodePool({ ...p, name: p.name, status: 'active' });
+  assert.equal(back.shed_ahead_of_pace, 0.25);
+  assert.equal(d.encodePool({ ...p, name: p.name, shedAheadOfPace: null, status: 'active' }).shed_ahead_of_pace, null, 'null clears it rather than leaving it alone');
+});
+
 test('a pool decodes the three strategies and the flag, and encodes the stored flag back', () => {
   const row = fixture('pools').pools[0];
   assert.equal(d.decodePool({ ...row, strategy: 'pace' }).strategy, 'pace');

@@ -65,6 +65,36 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
         .status(),
         400
     );
+    let shedding = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"p4","label":"x","strategy":"pace","shed_ahead_of_pace":0.25}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(shedding.status(), 201);
+    assert_eq!(
+        json(shedding).await["shed_ahead_of_pace"].as_f64(),
+        Some(0.25)
+    );
+    let unset = patch(
+        &app,
+        "/admin/pools/p4",
+        r#"{"shed_ahead_of_pace":null}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(unset.status(), 200);
+    assert!(
+        json(unset).await["shed_ahead_of_pace"].is_null(),
+        "null turns shedding off"
+    );
+    assert_eq!(
+        delete(&app, "/admin/pools/p4", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
     assert_eq!(
         post(
             &app,
