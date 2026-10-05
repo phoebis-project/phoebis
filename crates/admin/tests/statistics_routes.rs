@@ -674,11 +674,11 @@ async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
         tokio_tungstenite::connect_async(request)
     };
     assert!(connect(None).await.is_err(), "no session, no upgrade");
-    // A pinned origin: an authenticated handshake from another origin is refused by the gate.
-    let pinned = common::admin_parts_full_with_origin("https://phoebis.example").await;
+    // Over a real socket the client sets `Host` to the served address: an authenticated handshake whose origin
+    // names another authority is refused by the gate, and one naming the served address is admitted.
+    let pinned = common::admin_parts_full().await;
     let pinned_addr = common::serve(pinned.app.clone()).await;
-    let pinned_cookie =
-        common::login_from(&pinned.app, "admin-secret", "https://phoebis.example").await;
+    let pinned_cookie = common::login(&pinned.app, "admin-secret").await;
     let mut foreign =
         tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
             "ws://{pinned_addr}/admin/live"
@@ -705,12 +705,12 @@ async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
         format!("phoebis_admin={pinned_cookie}").parse().unwrap(),
     );
     same.headers_mut()
-        .insert("origin", "https://phoebis.example".parse().unwrap());
+        .insert("origin", format!("http://{pinned_addr}").parse().unwrap());
     let (mut same_ws, _) = tokio_tungstenite::connect_async(same).await.unwrap();
     assert_eq!(
         common::next_text(&mut same_ws).await["kind"],
         "snapshot",
-        "the configured origin is admitted"
+        "an origin naming the request's own host is admitted"
     );
     let _ = same_ws.close(None).await;
     let (mut admin_ws, _) = connect(Some(admin.clone())).await.unwrap();

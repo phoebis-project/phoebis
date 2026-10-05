@@ -39,14 +39,6 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     pub listen: SocketAddr,
-    /// The URL origin the admin API compares every mutation's `Origin` header against.
-    #[serde(default)]
-    pub origin: Option<String>,
-    /// Serves the session cookie without `Secure` and makes `origin` optional, on any listen address. Off
-    /// loopback that puts the admin secret and the cookie on the wire in the clear, which is the operator's
-    /// trust decision for the network the listener is published on, as it is for the proxy listener.
-    #[serde(default)]
-    pub plain_http: bool,
     #[serde(default = "unresolved", skip)]
     pub secret: Secret,
     pub secret_env: String,
@@ -274,8 +266,6 @@ pub enum ConfigError {
     MemoryIdleOutOfRange { value: u64 },
     #[error("sessions.memory_retention_days must be between 1 and 3650, not {value}")]
     MemoryRetentionOutOfRange { value: u32 },
-    #[error("admin.origin is required unless admin.plain_http is set")]
-    MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
     MissingSecret { name: String },
     #[error("routing.model_rejection_seconds must be between 1 and 604800, not {value}")]
@@ -339,8 +329,6 @@ impl fmt::Debug for AdminConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AdminConfig")
             .field("listen", &self.listen)
-            .field("origin", &self.origin)
-            .field("plain_http", &self.plain_http)
             .field("secret", &"***")
             .field("secret_env", &self.secret_env)
             .field("tls", &self.tls)
@@ -415,11 +403,6 @@ fn check_shape(config: &Config) -> Result<(), ConfigError> {
                 listen: listen_key,
             });
         }
-    }
-    if !config.admin.plain_http && config.admin.origin.is_none() {
-        // Without an origin to compare against, the admin API has nothing to tell a browser's cross-site
-        // write from an operator's own.
-        return Err(ConfigError::MissingOrigin);
     }
     if !(1..=3600).contains(&config.usage.cache_ttl_seconds) {
         return Err(ConfigError::UsageCacheTtlOutOfRange {
@@ -730,7 +713,7 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
         .unwrap();
-        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\n{body}", key.display(), dir.join("router.sqlite").display());
+        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\n{body}", key.display(), dir.join("router.sqlite").display());
         let path = dir.join(format!("{name}.yaml"));
         std::fs::write(&path, yaml).unwrap();
         path
@@ -746,7 +729,7 @@ mod tests {
         )
         .unwrap();
         let yaml = format!(
-            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\n\
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n\
              proxy:\n  listen: 127.0.0.1:0\n{keys}storage:\n  encryption_key_file: {}\n  path: {}\n",
             key.display(),
             dir.join("router.sqlite").display()
@@ -883,13 +866,7 @@ mod tests {
             ("half", "  tls:\n    cert_file: /a\n"),
         ] {
             let error = load_unresolved(&file_with_proxy(dir.path(), name, keys)).unwrap_err();
-            let mut chain = error.to_string();
-            let mut source = std::error::Error::source(&error);
-            while let Some(cause) = source {
-                chain.push_str(": ");
-                chain.push_str(&cause.to_string());
-                source = cause.source();
-            }
+            let chain = chain(&error);
             assert!(
                 matches!(error, ConfigError::Syntax(_))
                     && chain.contains("proxy.tls")
@@ -912,7 +889,7 @@ mod tests {
         let binding = |name: &str, admin: &str, proxy: &str| {
             let path = dir.path().join(format!("{name}.yaml"));
             let yaml = format!(
-                "admin:\n{admin}  secret_env: TEST_CFG_ADMIN\n  plain_http: true\nproxy:\n{proxy}\
+                "admin:\n{admin}  secret_env: TEST_CFG_ADMIN\nproxy:\n{proxy}\
                  storage:\n  encryption_key_file: {}\n  path: {}\n",
                 key.display(),
                 dir.path().join("router.sqlite").display()
@@ -961,6 +938,93 @@ mod tests {
             assert!(
                 load_unresolved(&binding("admin-plain", &plain, loopback)).is_ok(),
                 "{unspecified}: plain_http is the operator's decision for the admin listener"
+            );
+        }
+    }
+
+    /// Places `lines` at the top of `block` in a file a helper wrote: a key has to sit inside its block for serde
+    /// to read it as that block's member rather than as a second top-level key.
+    fn under(path: &std::path::Path, block: &str, lines: &str) {
+        let text = std::fs::read_to_string(path).unwrap();
+        let header = format!("{block}:\n");
+        assert!(text.contains(&header), "the template has no {block} block");
+        std::fs::write(path, text.replacen(&header, &format!("{header}{lines}"), 1)).unwrap();
+    }
+
+    /// The error's line and every cause beneath it, the way `check-config` prints them.
+    fn chain(error: &ConfigError) -> String {
+        let mut chain = error.to_string();
+        let mut source = std::error::Error::source(error);
+        while let Some(cause) = source {
+            chain.push_str(": ");
+            chain.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        chain
+    }
+
+    #[test]
+    fn a_tls_plain_http_line_on_a_loopback_listener_is_accepted() {
+        let dir = tempfile::tempdir().unwrap();
+        for block in ["admin", "proxy"] {
+            for path in [
+                file(dir.path(), &format!("file-{block}"), ""),
+                file_with_proxy(dir.path(), &format!("proxy-{block}"), ""),
+                file_with_secret_env(
+                    dir.path(),
+                    &format!("secret-{block}"),
+                    "TEST_CFG_TLS_LOOPBACK",
+                ),
+            ] {
+                let bare = load_unresolved(&path).unwrap();
+                under(&path, block, "  tls: plain_http\n");
+                let spelled = load_unresolved(&path).unwrap();
+                let (bare, spelled) = match block {
+                    "admin" => (bare.admin.tls, spelled.admin.tls),
+                    _ => (bare.proxy.tls, spelled.proxy.tls),
+                };
+                assert_eq!(
+                    (&bare, &spelled),
+                    (&None, &Some(ListenerTls::PlainHttp)),
+                    "{}",
+                    path.display()
+                );
+                assert_eq!(
+                    (
+                        ListenerTls::effective(&bare),
+                        ListenerTls::effective(&spelled)
+                    ),
+                    (&ListenerTls::PlainHttp, &ListenerTls::PlainHttp),
+                    "{}: the line changes nothing on loopback",
+                    path.display()
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn the_removed_admin_keys_are_refused_as_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        for (key, lines) in [
+            (
+                "origin",
+                include_str!("../tests/fixtures/removed-keys/admin-origin.yaml"),
+            ),
+            (
+                "plain_http",
+                include_str!("../tests/fixtures/removed-keys/admin-plain-http.yaml"),
+            ),
+        ] {
+            let path = file(dir.path(), key, "");
+            under(&path, "admin", lines);
+            let error = load_unresolved(&path).unwrap_err();
+            let chain = chain(&error);
+            assert!(
+                matches!(error, ConfigError::Syntax(_))
+                    && chain.contains("unknown field")
+                    && chain.contains(&format!("`{key}`"))
+                    && chain.contains("expected one of `listen`, `secret_env`, `tls`"),
+                "{key}: {chain}"
             );
         }
     }
@@ -1313,7 +1377,7 @@ mod tests {
         )
         .unwrap();
         let yaml = format!(
-            "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n  plain_http: true\n\
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n\
              proxy:\n  listen: 127.0.0.1:0\n\
              storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
              refresh_concurrency: 2\n",

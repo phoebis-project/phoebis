@@ -4,10 +4,6 @@ admin:
   listen: 127.0.0.1:8081
   # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
   # A loopback listener needs no tls key and runs plain HTTP.
-  origin: https://phoebis.example
-  # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
-  # false here, so origin is required and TLS is terminated in front.
-  plain_http: false
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in

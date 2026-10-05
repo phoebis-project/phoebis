@@ -67,68 +67,40 @@ async fn a_dead_cookie_on_logout_answers_204_with_the_clear() {
 }
 
 #[tokio::test]
-async fn the_cookie_carries_secure_exactly_when_plain_http_is_off() {
-    use common::{post, post_from};
-    let (loopback, _up) = common::admin_app().await;
-    let plain = post(
-        &loopback,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-    )
-    .await;
-    assert_eq!(plain.status(), 204);
-    assert!(!cookie_attributes(&plain).contains("Secure"));
+async fn the_cookie_carries_secure_under_tls_or_a_fronts_https_and_not_otherwise() {
+    use common::{post, post_forwarded};
+    const BODY: &str = r#"{"secret":"admin-secret"}"#;
+    let (plain, _up) = common::admin_app().await;
+    let bare = post(&plain, "/admin/session", BODY, None).await;
+    assert_eq!(bare.status(), 204);
+    assert!(!cookie_attributes(&bare).contains("Secure"));
 
-    let (pinned, _up) = common::admin_app_with_origin("https://phoebis.example").await;
-    let secure = post_from(
-        &pinned,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-        "https://phoebis.example",
-    )
-    .await;
-    assert_eq!(secure.status(), 204);
+    let (tls, _up) = common::admin_app_tls().await;
+    let terminated = post(&tls, "/admin/session", BODY, None).await;
+    assert_eq!(terminated.status(), 204);
     // The whole attribute, not a substring of one: `contains` would also pass on a cookie value that happened
     // to carry the word.
-    assert!(cookie_attributes(&secure).ends_with("; Secure"));
-}
+    assert!(cookie_attributes(&terminated).ends_with("; Secure"));
 
-#[tokio::test]
-async fn an_origin_set_under_plain_http_is_still_enforced() {
-    use common::{json, post_from};
-    let (app, _up) = common::admin_app_plain_with_origin("http://phoebis.lan:8081").await;
-    let forged = post_from(
-        &app,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-        "http://elsewhere",
-    )
-    .await;
-    assert_eq!(forged.status(), 403);
-    assert_eq!(json(forged).await["error"], "origin is not allowed");
+    let fronted = post_forwarded(&plain, "/admin/session", BODY, None, "https").await;
+    assert_eq!(fronted.status(), 204);
+    assert!(cookie_attributes(&fronted).ends_with("; Secure"));
 
-    let allowed = post_from(
-        &app,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-        "http://phoebis.lan:8081",
-    )
-    .await;
-    assert_eq!(allowed.status(), 204);
-    assert!(!cookie_attributes(&allowed).contains("Secure"));
+    let chained = post_forwarded(&plain, "/admin/session", BODY, None, "http, https").await;
+    assert_eq!(chained.status(), 204);
+    assert!(
+        !cookie_attributes(&chained).contains("Secure"),
+        "the first value is the browser's leg"
+    );
 }
 
 /// A WebSocket handshake carries a cookie and no body, so a forged page could open the live feed with nothing
 /// but the browser's own credentials; the origin check covers the upgrade exactly as it covers a write.
 #[tokio::test]
-async fn an_origin_set_under_plain_http_refuses_a_websocket_upgrade() {
-    use common::{json, login_from};
-    let (app, _up) = common::admin_app_plain_with_origin("http://phoebis.lan:8081").await;
-    let cookie = login_from(&app, "admin-secret", "http://phoebis.lan:8081").await;
+async fn a_websocket_upgrade_whose_origin_names_another_authority_is_refused() {
+    use common::{json, login};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
     let forged = handshake(&app, &cookie, "http://elsewhere").await;
     assert_eq!(forged.status(), 403);
     assert_eq!(json(forged).await["error"], "origin is not allowed");
@@ -143,7 +115,7 @@ async fn an_origin_set_under_plain_http_refuses_a_websocket_upgrade() {
     );
 }
 
-/// The head a browser sends to open `/admin/live`, with the `Origin` under test.
+/// The head a browser on `http://phoebis.lan:8081` sends to open `/admin/live`, with the `Origin` under test.
 async fn handshake(
     app: &axum::Router,
     cookie: &str,
@@ -153,6 +125,7 @@ async fn handshake(
     let request = axum::http::Request::builder()
         .method("GET")
         .uri("/admin/live")
+        .header("host", "phoebis.lan:8081")
         .header("cookie", format!("phoebis_admin={cookie}"))
         .header("origin", origin)
         .header("connection", "Upgrade")
@@ -175,7 +148,7 @@ fn cookie_attributes(response: &axum::http::Response<axum::body::Body>) -> Strin
 }
 
 #[tokio::test]
-async fn without_a_configured_origin_a_foreign_origin_is_refused_and_a_missing_one_is_admitted() {
+async fn a_foreign_origin_is_refused_and_a_missing_one_is_admitted() {
     use common::{json, login, post, post_from, send_with_host};
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1102,58 +1075,48 @@ async fn verifying_an_api_key_account_reports_the_upstream_status() {
 }
 
 #[tokio::test]
-async fn mutations_require_the_configured_origin() {
-    use common::{cookie_of, get, post, post_from};
-    const ORIGIN: &str = "https://phoebis.example";
-    let (app, _up) = common::admin_app_with_origin(ORIGIN).await;
+async fn a_refused_origin_answers_no_store_and_nosniff_and_a_login_needs_no_origin() {
+    use common::{cookie_of, get, post, send_with_host};
+    const HOST: &str = "phoebis.example";
+    let (app, _up) = common::admin_app().await;
+    let login = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
     assert_eq!(
-        post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None)
-            .await
-            .status(),
-        403,
-        "a forced login is the one mutation an unauthenticated caller can reach"
+        login.status(),
+        204,
+        "a login with no Origin is the operator's own hand"
     );
-    let ok = post_from(
+    let cookie = cookie_of(&login);
+    let pause = "/admin/accounts/business/pause";
+    let forged = send_with_host(
         &app,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-        ORIGIN,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "https://evil.example",
+        HOST,
     )
     .await;
-    assert_eq!(ok.status(), 204);
-    let cookie = cookie_of(&ok);
-    let bare = post(&app, "/admin/accounts/business/pause", "", Some(&cookie)).await;
-    assert_eq!(bare.status(), 403);
+    assert_eq!(forged.status(), 403);
     assert_eq!(
-        bare.headers().get("cache-control").unwrap(),
+        forged.headers().get("cache-control").unwrap(),
         "no-store",
         "a refusal is no more cacheable than an answer"
     );
     assert_eq!(
-        bare.headers().get("x-content-type-options").unwrap(),
+        forged.headers().get("x-content-type-options").unwrap(),
         "nosniff",
         "and no more sniffable"
     );
     assert_eq!(
-        post_from(
+        send_with_host(
             &app,
-            "/admin/accounts/business/pause",
+            "POST",
+            pause,
             "",
             Some(&cookie),
-            "https://evil.example"
-        )
-        .await
-        .status(),
-        403
-    );
-    assert_eq!(
-        post_from(
-            &app,
-            "/admin/accounts/business/pause",
-            "",
-            Some(&cookie),
-            ORIGIN
+            "https://phoebis.example",
+            HOST
         )
         .await
         .status(),

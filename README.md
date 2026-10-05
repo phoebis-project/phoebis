@@ -29,7 +29,6 @@ install -d -m 0700 ~/.config/phoebis
 [ -e ~/.config/phoebis/storage.key ] ||
   (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/.config/phoebis/storage.key)
 sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
-  -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
   deploy/config.example.yaml > ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
 export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36)

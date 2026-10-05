@@ -16,7 +16,7 @@ fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
     let key = dir.join("storage.key");
     std::fs::write(&key, HEX_KEY).unwrap();
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n\
+        "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n\
          proxy:\n  listen: 127.0.0.1:0\n\
          storage:\n  encryption_key_file: {}\n  path: {}\n{extra}",
         key.display(),
@@ -24,6 +24,19 @@ fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
     );
     let path = dir.join(format!("{name}.yaml"));
     std::fs::write(&path, yaml).unwrap();
+    path
+}
+
+/// `config_file`'s template with `admin_lines` inside its `admin` block: a second top-level `admin` would be refused
+/// as a duplicate key, never as the unknown field a removed admin key has to prove.
+fn config_file_with_admin(dir: &Path, name: &str, admin_lines: &str) -> PathBuf {
+    let path = config_file(dir, name, "");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        text.replacen("admin:\n", &format!("admin:\n{admin_lines}"), 1),
+    )
+    .unwrap();
     path
 }
 
@@ -200,23 +213,38 @@ fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the
     );
 }
 
-const REMOVED_KEY: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
+/// Each removed key with the block it sat in and its lines.
+const REMOVED_KEYS: [(&str, &str); 3] = [
+    ("routing", "  catalog_cache_seconds: 60\n"), // removed name
+    (
+        "admin",
+        include_str!("fixtures/removed-keys/admin-origin.yaml"),
+    ),
+    (
+        "admin",
+        include_str!("fixtures/removed-keys/admin-plain-http.yaml"),
+    ),
+];
 
 #[test]
 fn a_removed_key_fails_check_config_as_invalid_yaml() {
     let dir = tempfile::tempdir().unwrap();
-    let config = config_file(dir.path(), "removed-key", REMOVED_KEY);
-    let out = phoebis()
-        .args(["check-config", "--config"])
-        .arg(&config)
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("the configuration is not valid YAML") && stderr.contains("unknown field"),
-        "{stderr}"
-    );
+    for (n, (block, lines)) in REMOVED_KEYS.into_iter().enumerate() {
+        let name = format!("removed-key-{n}");
+        let config = match block {
+            "admin" => config_file_with_admin(dir.path(), &name, lines),
+            _ => config_file(dir.path(), &name, &format!("{block}:\n{lines}")),
+        };
+        let out = check_config(&mut phoebis(), &config);
+        assert!(!out.status.success(), "{block}: {lines}{}", printed(&out));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("the configuration is not valid YAML")
+                && stderr.contains("unknown field"),
+            "{block}: {lines}{}",
+            printed(&out)
+        );
+    }
 }
 
 #[test]

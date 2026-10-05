@@ -2,12 +2,11 @@
 # publishes the proxy to the LAN and the console and metrics on the host's loopback). The admin secret comes from the
 # environment file and the key from the mounted secret; the databases live on the volume at /var/lib/phoebis.
 admin:
-  # plain_http serves the console over plain HTTP on whatever address the host publishes 8081 on, with no origin
-  # to pin. On the loopback publication of the compose example that costs nothing; on a LAN publication the admin
-  # secret at login and the session cookie on every call cross that LAN in the clear.
+  # tls: plain_http serves the console over plain HTTP on whatever address the host publishes 8081 on. On the loopback
+  # publication of the compose example that costs nothing; on a LAN publication the admin secret at login and the
+  # session cookie on every call cross that LAN in the clear.
   listen: 0.0.0.0:8081
   tls: plain_http
-  plain_http: true
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in

@@ -52,7 +52,6 @@ fn configured(
         r#"admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  plain_http: true
   tls:
     cert_file: {cert}
     key_file: {key}

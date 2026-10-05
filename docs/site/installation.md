@@ -26,7 +26,6 @@ install -d -m 0700 ~/.config/phoebis
 [ -e ~/.config/phoebis/storage.key ] ||
   (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/.config/phoebis/storage.key)
 sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
-  -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
   deploy/config.example.yaml > ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
 export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36)
@@ -64,8 +63,8 @@ world-readable between the write and a later `chmod`. The key seals every creden
 Edit `/etc/phoebis/config.yaml` next. The installed file's paths are relative and its key file is
 `/run/secrets/router-storage-key`, so point `storage.encryption_key_file` at `/etc/phoebis/storage.key`,
 `storage.path` and `stats.ledger_path` under `/var/lib/phoebis/`, and `stats.pricing_path` at
-`/etc/phoebis/pricing.yaml`. Set `admin.origin`, or `admin.plain_http: true` on a loopback listener behind an SSH
-tunnel. Then validate it before enabling the service:
+`/etc/phoebis/pricing.yaml`. To reach the console from another machine, move `admin.listen` off loopback with a `tls`
+value, as [TLS on the listeners](#tls-on-the-listeners) says. Then validate it before enabling the service:
 
 ```sh
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
@@ -122,12 +121,13 @@ still has room; one it had none for counts under `phoebis_bus_dropped_total{subs
 
 The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone,
 so it is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
-`config.yaml` sets `admin.plain_http: true` with no `origin`, so the cookie is issued without `Secure` and any
-hostname that reaches the port logs in. Publishing the port on a LAN address is one edit to the `ports` line
-(`"8081:8081"`), and then the admin secret at login and the session cookie on every call cross that LAN in the
-clear; that is the same trust decision the proxy port's publication already makes. For TLS, set `plain_http:
-false`, set `origin` to the front's `https://` URL, terminate TLS in front of the published port, and open exactly
-the hostname and port `origin` names: a login from any other origin is refused with `403`.
+`config.yaml` sets `admin.tls: plain_http`, so the cookie is issued without `Secure` and any hostname that reaches the
+port logs in. Publishing the port on a LAN address is one edit to the `ports` line (`"8081:8081"`), and then the admin
+secret at login and the session cookie on every call cross that LAN in the clear; that is the same trust decision the
+proxy port's publication already makes. For TLS, name a certificate pair under `admin.tls`, mounted read-only beside the
+configuration, or terminate TLS in front: a front forwards to the plain listener, passes `Host` through unchanged and
+sets `X-Forwarded-Proto: https`, so the cookie is issued with `Secure` and the Origin check sees the front's hostname in
+both headers.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
 place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
@@ -212,10 +212,6 @@ admin:
   listen: 127.0.0.1:8081
   # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
   # A loopback listener needs no tls key and runs plain HTTP.
-  origin: https://phoebis.example
-  # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
-  # false here, so origin is required and TLS is terminated in front.
-  plain_http: false
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
@@ -294,29 +290,28 @@ is the trail.
 | Key | Default | Accepts |
 | --- | --- | --- |
 | `listen` | required | a socket address |
-| `origin` | unset | the origin every mutation's `Origin` header must equal; required unless `plain_http` |
-| `plain_http` | `false` | `true` serves the console over plain HTTP on any address |
 | `secret_env` | required | the variable holding the admin secret |
 | `tls` | unset on loopback, required off it | `plain_http`, or `{cert_file, key_file}` |
 
-With `plain_http: true` the session cookie is issued without `Secure` and `origin` may be left unset. On a
-loopback listener behind an SSH tunnel that costs nothing. On any other address the admin secret at login and
-the session cookie on every call cross the network in the clear, so publishing the admin port on a LAN is the
-operator's trust decision, as it already is for the proxy listener. An `origin` set under the flag, such as
-`http://phoebis.lan:8081`, is still compared against every mutation's `Origin` header and every WebSocket upgrade.
-For TLS, keep the flag off, set `origin` to the front's `https://` URL, and terminate TLS in front of the
-listener; a browser returns the `Secure` cookie to `http://localhost` as well, so the flag-off shape also works
-from the host's own browser when `origin` names `http://localhost:8081`.
+On a loopback listener the `tls` key is optional and the cookie travels without `Secure`, which costs nothing behind an
+SSH tunnel. Off loopback the key is required: a certificate pair terminates TLS on the listener and the cookie carries
+`Secure`; `plain_http` is the operator's trust decision for that network, as it is for the proxy listener. Every
+mutation and every WebSocket upgrade that carries an `Origin` must name the request's own `Host` with it; a request with
+no `Origin` is admitted. A front that terminates TLS forwards to a loopback listener over plain HTTP, passes `Host`
+through unchanged and sets `X-Forwarded-Proto: https`; the cookie is then issued with `Secure` and the Origin check sees
+the front's hostname in both headers.
 
 Refused with:
 
 - `listen`: a YAML error
-- `origin`: `admin.origin is required unless admin.plain_http is set`
 - `secret_env`: `environment variable {name} is unset or empty`
 - `tls`: `admin.tls is required when admin.listen leaves loopback; name a certificate pair or plain_http`, and
   `admin.tls: must be plain_http or a mapping with cert_file and key_file` under `the configuration is not valid YAML`
   for any other word, a third key, or a mapping that lacks one of the two ([TLS on the
   listeners](#tls-on-the-listeners))
+
+Removed keys: `admin.origin` has no replacement, the Origin check compares against the request's own `Host` in every
+mode; `admin.plain_http: true` becomes `admin.tls: plain_http` on an address off loopback and nothing on loopback.
 
 ### keepalive
 
@@ -551,7 +546,7 @@ Refused with:
 - `refresh_concurrency`: `usage.refresh_concurrency must be between 1 and 16, not {value}`
 
 The checks above run in a fixed order at load, not block by block: the two listeners' `tls` rule against their
-addresses, then `admin`'s loopback-or-origin rule, then `usage.cache_ttl_seconds`, `usage.refresh_concurrency`,
+addresses, then `usage.cache_ttl_seconds`, `usage.refresh_concurrency`,
 `storage.path`, the `proxy` bounds,
 `routing.model_rejection_seconds`, `routing.cooldown_fallback_seconds`, the `keepalive` bounds,
 `routing.startup_fetch_seconds`, `routing.catalog_refresh_seconds`, the four `sessions` keys,

@@ -24,7 +24,7 @@ use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, UpstreamConfig};
+use crate::config::{Config, ListenerTls, UpstreamConfig};
 use crate::{listen, tls};
 
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
@@ -340,8 +340,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             admin: Secret::new(config.admin.secret.expose()),
         },
         clock: clock.clone(),
-        plain_http: config.admin.plain_http,
-        origin: config.admin.origin.clone(),
+        tls: ListenerTls::effective(&config.admin.tls).terminates_tls(),
         vault: vault.clone(),
         started_at: (clock)(),
         router: router_task.clone(),

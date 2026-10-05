@@ -249,32 +249,20 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         .get(UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
-    // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake; a value that is
-    // not the configured admin origin is a forged request rather than a mistake. The login is checked too: a
-    // forced login is a real attack, and it is the one mutation an unauthenticated caller can reach.
+    // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake. One rule in every
+    // mode: a presented `Origin` must name the request's own `Host`, since another authority is another page on
+    // this host driving the console, while a request with no `Origin` (curl, a subcommand, the health probe) is
+    // the operator's own hand. A front that terminates TLS passes `Host` through, so both headers name the front.
+    // The login is checked too: a forced login is the one mutation an unauthenticated caller can reach.
     if mutation || websocket {
-        let presented = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok());
-        match &state.origin {
-            Some(expected) => {
-                if presented != Some(expected.as_str()) {
-                    return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
-                }
-            }
-            // No configured origin means plain HTTP on a host the operator trusts. A browser still sends
-            // `Origin` on every cross-site write and every handshake, and a value naming another authority
-            // than the request's own `Host` is another page on this host driving the console; a request
-            // with no `Origin` (curl, the health probe) is admitted.
-            None => {
-                if let Some(origin) = presented {
-                    let host = request
-                        .headers()
-                        .get(HOST)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("");
-                    if !same_authority(origin, host) {
-                        return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
-                    }
-                }
+        if let Some(origin) = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok()) {
+            let host = request
+                .headers()
+                .get(HOST)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            if !same_authority(origin, host) {
+                return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
             }
         }
     }
@@ -347,6 +335,16 @@ fn carries_body(headers: &HeaderMap) -> bool {
     has_length || headers.contains_key(TRANSFER_ENCODING)
 }
 
+/// Whether a front's word says the browser's leg is TLS: the first comma-separated value of `X-Forwarded-Proto`,
+/// case-insensitively `https`. A plain-HTTP forger earns a cookie its browser never returns over `http://`.
+pub(crate) fn forwarded_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .is_some_and(|first| first.trim().eq_ignore_ascii_case("https"))
+}
+
 fn presented_cookie(headers: &HeaderMap) -> Option<String> {
     let header = headers.get(COOKIE)?.to_str().ok()?;
     header.split(';').find_map(|pair| {
@@ -357,7 +355,7 @@ fn presented_cookie(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-async fn login(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
+async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: Bytes) -> Response {
     #[derive(serde::Deserialize)]
     struct Input {
         secret: String,
@@ -372,7 +370,7 @@ async fn login(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
         Ok(cookie) => {
             let mut attributes =
                 format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
-            if !state.plain_http {
+            if state.tls || forwarded_https(&headers) {
                 attributes.push_str("; Secure");
             }
             set_cookie(StatusCode::NO_CONTENT, &attributes)
