@@ -4544,7 +4544,8 @@ async fn replay_parked_lands_a_parked_record_whose_cause_is_gone() {
 }
 
 /// The parked row leaves in the transaction that lands its record, on a replay as at the start: a replay whose
-/// acknowledgement the database refuses lands nothing and keeps the row, and the replay after it charges the record once.
+/// acknowledgement the database refuses lands nothing and keeps the row, and the replay after it charges the record
+/// once.
 #[tokio::test]
 async fn a_replay_whose_acknowledgement_is_refused_keeps_the_row_and_a_retry_charges_once() {
     let up = FakeUpstream::start(vec![]).await;

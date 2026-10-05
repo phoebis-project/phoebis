@@ -1,7 +1,7 @@
 //! The subcommands that create an account, a pool or a key, pair an account, clear a cooldown and land the ledger's
 //! parked records over the admin API: each builds the route's body from its flags, calls the route through the admin
-//! client and prints the answer, the created id or secret on stdout and the rest on stderr. A pairing reads the callback
-//! URL from stdin between its calls and talks to the operator on stderr.
+//! client and prints the answer, the created id or secret on stdout and the rest on stderr. A pairing reads the
+//! callback URL from stdin between its calls and talks to the operator on stderr.
 
 use std::collections::BTreeMap;
 use std::future::Future;

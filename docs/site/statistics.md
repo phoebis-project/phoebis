@@ -181,11 +181,12 @@ included, whether or not the router dropped it on the way upstream.
 A batch the ledger cannot write is retried in place after 1, 2, 4 and 8 seconds, then one record at a time; a record the
 file as a whole refuses (a corrupt, full, read-only or unopenable file, an I/O error) is held and retried every 10
 seconds until it lands; a record that fails on its own is dropped with a `ledger_gap` when it carries no money and
-parked in the ledger file when it does, and every parked record is tried again once at the next start, its parked row
-deleted in the transaction that lands the record, so its charge counts once. A parked record keeps its request and
-attempt rows and not its captured bodies, so the capture of a parked request is gone while its cost is kept. While a
-batch is under retry the ledger is degraded: the system page shows it, `phoebis_ledger_degraded` reads 1, and routing
-treats every budgeted member's spend as unknown until a batch lands and the spend is read again.
+parked in the ledger file when it does, and every parked record is tried again once at the next start or by `phoebis
+ledger replay-parked`, its parked row deleted in the transaction that lands the record, so its charge counts once. A
+parked record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone
+while its cost is kept. While a batch is under retry the ledger is degraded: the system page shows it,
+`phoebis_ledger_degraded` reads 1, and routing treats every budgeted member's spend as unknown until a batch lands and
+the spend is read again.
 
 The routing state writer is bounded the same way: a stalled registry file leaves its writes in memory, coalesced per
 row, and the system page's `router.writer` reads `degraded` until they drain. A batch the registry file as a whole
@@ -484,7 +485,7 @@ at the first read.
 | `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
 | `funding_required` | the Anthropic-key account | the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
-| `ledger_record_parked` | the pool, or `-` for a record without one | the start after the fault lands the parked rows |
+| `ledger_record_parked` | the pool, or `-` for a record without one | the next start or replay lands the parked rows |
 | `poll_backoff` | the polled account | a poll answers clean |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
@@ -522,9 +523,10 @@ re-pairing settles a refresh still pending; a pairing records its own committed 
 nothing was pending. The detail counts the run's failures and gives the newest attempt's outcome and error.
 
 **`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own; each is
-tried again once at the next start, and the condition clears when the table empties. The subject is the pool the record
-was served under, or `-` for a record without one; a pool deleted since shows under its id with nothing to open. The
-item dates from the oldest row, and the detail counts the rows and names the accounts.
+tried again once at the next start or by `phoebis ledger replay-parked`, and the condition clears when the table
+empties. The subject is the pool the record was served under, or `-` for a record without one; a pool deleted since
+shows under its id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names
+the accounts.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,

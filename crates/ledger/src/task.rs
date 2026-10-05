@@ -234,7 +234,8 @@ impl Ledger {
     /// parking order, each in its own transaction with its row's deletion (`land_acknowledging`), then the spend
     /// refresh the start runs after its own pass, so the routing table holds the landed money before this answers.
     /// The writer's turn is the serialization: no row is landed twice by two passes, or by a pass and a batch, at
-    /// once. `remaining` is the table's count after the pass; `Err` when the writer has stopped.
+    /// once. `remaining` is the table's count after the pass; `Err` when the writer has stopped or the count cannot be
+    /// read.
     pub async fn replay_parked(&self, now: i64) -> Result<Replayed, LedgerError> {
         let stopped = || LedgerError::Io(std::io::Error::other("the ledger task has stopped"));
         let (reply, answer) = oneshot::channel();
