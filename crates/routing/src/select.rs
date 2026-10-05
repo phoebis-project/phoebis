@@ -1308,13 +1308,13 @@ fn move_of<'a>(
     let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
     // A sibling the next round would not shed from again soon: every reading its sample holds under the band
     // (the shared windows' leads over their pace on a subscription account, the worst live bucket of an api_key
-    // one; an unsampled account reads as under), no round of its own within the dwell, and room under the cap. A
-    // full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one rather
-    // than being dropped at the cap.
+    // one; an unsampled account reads as under), no pool has run a round on it within the dwell, and room under
+    // the cap. A full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one
+    // rather than being dropped at the cap.
     let cool = |state: &RoutingState, c: &Candidate| -> bool {
         under_band(state, snapshot, pool, &c.account_id, now)
             && state
-                .last_shed(&c.account_id)
+                .newest_shed(&c.account_id)
                 .is_none_or(|at| now - at >= dwell_ms)
             && state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap
     };
@@ -1430,11 +1430,11 @@ fn move_of<'a>(
         return None;
     }
     if state
-        .last_shed(&current.account_id)
+        .last_shed(&pool.id, &current.account_id)
         .is_none_or(|at| now - at >= dwell_ms)
     {
         let marks = shed_round(state, snapshot, pool, current, cold, fast, now, fallback_ms);
-        state.record_shed(&current.account_id, now, marks);
+        state.record_shed(&pool.id, &current.account_id, now, marks);
     }
     // A pin on an account cooled for this model is not renewed at step 5, so the fresh placement replaces it:
     // the release names the cooldown and the mark leaves with the pin, where a shed would name a move the
@@ -1453,7 +1453,7 @@ fn move_of<'a>(
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
     // moves at its next request. A plan-quota round sheds window share, which a fast request does not draw, so
     // its mark moves a standard request alone; a dollar round's mark moves a fast one too.
-    if !state.shed_marked(&current.key(), now, dwell_ms)
+    if !state.shed_marked(&pool.id, &current.key(), now, dwell_ms)
         || (request.fast
             && burn_unit(state, snapshot, &current.account_id, now, fallback_ms)
                 == BurnUnit::WindowShare)
@@ -1483,12 +1483,13 @@ fn burn_unit(
     BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms))
 }
 
-/// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
-/// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
-/// in the unit its funding selects. On plan quota each burn is the cost table's 5-hour share rate on its reference
-/// tier: the tier's factor divides every pin of the account alike, so neither the order nor the share of the sum
-/// needs it, and a pin on a fast lane is out of the round, since it draws no window and has nothing to shed there;
-/// in dollars it stays. The current pin's warmth and lane are this request's; every other pin's are the stored ones.
+/// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
+/// keys, cold first by burn, then warm by burn over rewrite cost, bounded by `warm_sessions`, marked in that order
+/// up to `shed_share` of that slice's burn in the unit its funding selects. On plan quota each burn is the cost
+/// table's 5-hour share rate on its reference tier: the tier's factor divides every pin of the account alike, so
+/// neither the order nor the share of the sum needs it, and a pin on a fast lane is out of the round, since it draws
+/// no window and has nothing to shed there; in dollars it stays. The current pin's warmth and lane are this
+/// request's; every other pin's are the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -1502,8 +1503,16 @@ fn shed_round(
 ) -> Vec<PinKey> {
     let account_id = &current.account_id;
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
+    // The round is the pool's: a pin under another pool's key on the same account is in that pool's round, with
+    // that pool's share, dwell and bounds, and is neither marked nor counted here.
+    let in_pool = |p: &PinRow| {
+        snapshot
+            .key(&p.key_id)
+            .is_some_and(|k| k.pool_id == pool.id)
+    };
     let (mut pins, mut sum) = state.burn_of(
         account_id,
+        &in_pool,
         unit,
         state.rates(),
         now,

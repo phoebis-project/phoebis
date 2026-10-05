@@ -380,9 +380,9 @@ fast takes neither the spent nor the overage rule, since it draws usage credits 
 With `migrate_above_utilization` set, every rule prefers a cool destination, so a moved session does not land where the
 next round would shed it again. A cool sibling reads under the margin minus 0.05 (`MIGRATE_BAND`) on every reading it
 holds (how far the 5-hour and 7-day windows of a subscription account run ahead of their pace, and the worst live
-rate-limit bucket of an Anthropic-key account as read; an unsampled account reads as under), has run no shedding round
-of its own within `source_dwell_seconds`, and has room under the pool's `in_flight_cap`. When no destination of a rule
-is cool, the rule still moves the pin to one of them, so a full cool sibling never keeps a free hot one from the
+rate-limit bucket of an Anthropic-key account as read; an unsampled account reads as under), no pool has run a shedding
+round on it within `source_dwell_seconds`, and it has room under the pool's `in_flight_cap`. When no destination of a
+rule is cool, the rule still moves the pin to one of them, so a full cool sibling never keeps a free hot one from the
 session; only the shed rule insists on a cool one.
 
 **Spent** The pinned account's allowance for the session's model is spent: the model's own week and both shared windows
@@ -412,32 +412,35 @@ not winding down. A warm one stays (see **Subscription end**, below).
 
 **Shed** With `migrate_above_utilization` set, a request pinned to an account whose 5-hour or 7-day window runs ahead of
 its pace by at least the margin (the prediction less the share of the window already elapsed; a 5-hour window past its
-reset reads the router's own use since) starts a shedding round there, at most once per `source_dwell_seconds`. The
-round orders every pin on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the pin's last
-prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share` (default 0.5) of the
-account's burn over `burn_window_seconds` (default 600). It never marks the account's last unmarked pin, so an account
-with one session sheds nothing and no round takes all of an account's burn. A pin whose burn carries the total past the
-share stays marked, and the round stops there. A pin whose burn the table cannot price ranks after every priced pin of
-its group, counts nothing toward the share, and is never marked, so a session is never shed on a guess. `warm_sessions`
-bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always`
-orders every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last
-refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the
-pin has no share to shed. In dollars, on an Anthropic-key account or one in overage, it stays in the round. A session
-that returns to standard requests brings its pin back with the plan burn it still carries.
+reset reads the router's own use since) starts a shedding round there, at most once per pool per `source_dwell_seconds`.
+The round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
+pin's last prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share` (default 0.5)
+of the pool's burn on the account over `burn_window_seconds` (default 600). It never marks the pool's last unmarked pin
+there, so a pool with one session on the account sheds nothing, whatever the account's other pools hold, and no round
+takes all of an account's burn. An account shared by pools runs one round per pool: each pool marks its own pins under
+its own share, dwell and bounds, and a pool's round leaves another pool's marks in place. A pin whose burn carries the
+total past the share stays marked, and the round stops there. A pin whose burn the table cannot price ranks after every
+priced pin of its group, counts nothing toward the share, and is never marked, so a session is never shed on a guess.
+`warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm
+ones, and `always` orders every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin
+whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan
+window, so the pin has no share to shed. In dollars, on an Anthropic-key account or one in overage, it stays in the
+round. A session that returns to standard requests brings its pin back with the plan burn it still carries.
 
 The console's Pools form offers, in its expert view, `shed_share`, `burn_window_seconds`, and `source_dwell_seconds`
 together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and
-conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round would move leaves out the pins of a
-subscription account on its plan whose tier the cost table does not size, which the round still ranks on the table's
-reference tier and sheds, and keeps a pin whose burn the table cannot price in the order unmarked, as the round does.
+conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round would move replays the round over the
+pool's own sessions on each member ahead of pace, leaves out the pins of a subscription account on its plan whose tier
+the cost table does not size, which the round still ranks on the table's reference tier and sheds, and keeps a pin whose
+burn the table cannot price in the order unmarked, as the round does.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the
 marked session stays where it is. A marked pin whose account is cooling for the session's model is released instead,
 with `cooldown` among its reasons, and its mark goes with it; the round on the account still runs, since a cooldown can
 hold one model alone. An unmarked pin never moves for utilization. The marks live in memory for the dwell: a marked
-session that stays idle never moves, no new round runs on the account until the dwell passes, and a restart forgets the
-marks, so the next request after it may start a fresh round.
+session that stays idle never moves, no new round of the pool runs on the account until its dwell passes, and a restart
+forgets the marks, so the next request after it may start a fresh round.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and

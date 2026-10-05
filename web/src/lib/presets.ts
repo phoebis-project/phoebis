@@ -90,8 +90,8 @@ export interface ShedPreview {
   burnShare: number;
   /**
    * Whether an eligible member reads under the band, where the router lands a marked session; without one the
-   * marks stand and nothing moves. The router also passes over a member at its in-flight cap or inside its own
-   * dwell, which the pool view does not carry.
+   * marks stand and nothing moves. The router also passes over a member at its in-flight cap or one any pool shed
+   * from within the dwell, which the pool view does not carry.
    */
   cool: boolean;
   /** Members whose 5-hour or 7-day window runs ahead of its pace by the migrate margin, each of which runs a round. */
@@ -106,11 +106,13 @@ export interface ShedPreview {
 
 /**
  * The shedding round's dry run: how many pins would be marked, how many of them warm, and their share of the burn.
- * Each member ahead of its pace by the migrate margin replays its round over its pins with each burn decayed to `now`,
- * as the router's `burn_decayed` does: cold pins first by burn, then warm ones by burn over their last input size,
- * bounded by the warm-sessions mode. A member's pins share one unit, so its round needs no conversion; members in
- * different units cannot be summed, so their shares are averaged instead. A member without `eligible` counts as
- * eligible, as a member of a pool not saved yet does. `sized` names the accounts whose tier the cost table sizes.
+ * Each member ahead of its pace by the migrate margin replays its round over the pool's pins on it: `sessions` is the
+ * pool's slice, the sessions under its keys, which the caller filters, since the router's round marks the triggering
+ * pool's pins alone. The round decays each burn to `now`, as the router's `burn_decayed` does, and orders cold pins
+ * first by burn, then warm ones by burn over their last input size, bounded by the warm-sessions mode. A member's
+ * pins share one unit, so its round needs no conversion; members in different units cannot be summed, so their shares
+ * are averaged instead. A member without `eligible` counts as eligible, as a member of a pool not saved yet does.
+ * `sized` names the accounts whose tier the cost table sizes.
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnWindowSeconds' | 'migrateAboveUtilization' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },

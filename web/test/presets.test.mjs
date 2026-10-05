@@ -187,6 +187,16 @@ test('two hot members in one unit share the burn by weight, and members in two u
   assert.equal(d.shedPreviewLine(mixed, true), "Would move 3 sessions, 1 warm, 80% of each account's burn on average, across 2 accounts.");
 });
 
+test('a pool previews its own pins on a shared account, so one pin per pool sheds nothing', () => {
+  // The caller hands in the pool's slice, the sessions under its keys: `theirs` sits under another pool's key.
+  const mine = pin('mine', 4, false);
+  const theirs = pin('theirs', 3, false, { keyId: 'notebook' });
+  assert.equal(preview([mine, theirs]).sessions, 1, 'over every pin on the account the heavier one is marked');
+  const own = preview([mine]);
+  assert.deepEqual([own.sessions, own.cool], [0, true], "the pool's one pin is its slice's last unmarked pin");
+  assert.equal(d.shedPreviewLine(own, true), 'Would move 0 sessions, 0 warm, 0% of the burn in window share.');
+});
+
 test('with no member under the band the preview marks sessions it cannot move', () => {
   // Under the threshold of 80 %, so it runs no round of its own, but above the 75 % a shed session has to land under.
   const near = account('near', 0.78);

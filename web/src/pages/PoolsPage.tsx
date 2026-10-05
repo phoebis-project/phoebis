@@ -294,7 +294,7 @@ export function PoolsPage() {
         onRetryAccounts={accounts.reload}
         keys={keys.data ?? []}
         pools={pools.data ?? []}
-        sessions={sessions.data ?? []}
+        sessions={dialog?.pool ? (sessionsByPool.get(dialog.pool.id) ?? []) : []}
         models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
         onSaved={(created) => {
           setDialog(null);
@@ -928,7 +928,7 @@ export function PoolDialog({
   open: boolean;
   pool: Pool | null;
   pools: Pool[];
-  /** Every session the router holds: a shedding round weighs all of a member's pins, whichever pool's key made them. */
+  /** The sessions under the pool's keys: a shedding round weighs the pool's own pins on a member alone. */
   sessions: Session[];
 }) {
   const now = useNow();

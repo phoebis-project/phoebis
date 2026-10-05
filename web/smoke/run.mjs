@@ -3019,6 +3019,48 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await api.updatePool('studio', studio);
 }
 {
+  // A round marks the triggering pool's pins alone: with laptop moved into studio, studio's one business pin (the busy
+  // laptop session) is its slice's last unmarked pin, so its preview sheds nothing, whatever desktop holds there.
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
+  const moveLaptop = (poolId) =>
+    api.updateKey('laptop', {
+      autoModeServer: laptop.autoModeServer,
+      bodyCaptureHours: laptop.bodyCaptureHours,
+      enabled: laptop.enabled,
+      expiresAt: undefined,
+      keepaliveOptOut: laptop.keepaliveOptOut,
+      longContextTwins: laptop.longContextTwins,
+      modelRules: laptop.modelRules,
+      modelRulesMode: laptop.modelRulesMode,
+      name: laptop.name,
+      notes: laptop.notes,
+      poolId,
+    });
+  await moveLaptop('studio');
+  m.unmount();
+  m = await mount('/pools');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool studio')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  dlg?.querySelector('button[role="switch"][aria-label="Migrate above utilization"]')?.click();
+  await m.settle(120);
+  // business leads its 5-hour pace by under 0.1 at the mock's clock, so a margin of 5 % makes it the one hot member.
+  const percent = dlg?.querySelector('input[aria-label="Migrate above utilization (%)"]');
+  if (percent) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(percent, '5');
+  percent?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  await m.settle(120);
+  const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
+  results.push({
+    name: "/pools the shedding preview counts the pool's own pins alone on an account shared with another pool",
+    // The unit shows the round ran over a pin: a member with no pin in the slice reads none.
+    ok: /^Would (move|mark) 0 sessions, 0 warm, 0% of the burn in window share/.test(line),
+    missing: [line],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(300);
+  await moveLaptop(laptop.poolId);
+}
+{
   // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and a
   // margin over pace under 50 % saves whether stored or typed.
   const story = (await api.listPools()).find((p) => p.id === 'all');
