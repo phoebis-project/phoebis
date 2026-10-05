@@ -6727,7 +6727,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         sevenDay.every((li) => valueOf(li) === '-') &&
         unlisted.length === 1 &&
         valueOf(unlisted[0]) === '5-hour, 7-day' &&
-        unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point',
+        unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost table has no row for, on a cell it leaves unmeasured, or under a tier factor it leaves unmeasured, prices no share on that window and draws no point',
       missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
     });
     // The legend's per-hour mean still ends in `%` over a single gap, so the buckets themselves are read: the
@@ -6824,7 +6824,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok:
         tip?.querySelector('.chart-tip__title')?.textContent === when &&
         JSON.stringify(tipRows.map((r) => [r.label, r.value])) === JSON.stringify([['business (5-hour)', '-'], ['business (7-day)', '-']]) &&
-        tipRows.every((r) => r.hint === 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point'),
+        tipRows.every((r) => r.hint === 'A bucket whose traffic ran on a model the cost table has no row for, on a cell it leaves unmeasured, or under a tier factor it leaves unmeasured, prices no share on that window and draws no point'),
       missing: [tip?.querySelector('.chart-tip__title')?.textContent ?? 'no tooltip', when, JSON.stringify(tipRows)],
     });
     window.HTMLElement.prototype.getBoundingClientRect = measure;
@@ -6867,6 +6867,28 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       name: '/analytics plan per hour with no sized subscription account names the unsized ones in its empty state',
       ok: emptied === 'No subscription account in range has a tier the cost table sizes: tierless.',
       missing: [emptied],
+    });
+  }
+
+  {
+    // The account grouping alone sizes its lines by tier, so with the settings read failing the key grouping still
+    // draws its charts while the account grouping states the failure.
+    const { getSettings } = api;
+    api.getSettings = () => Promise.reject(new Error('the settings read failed'));
+    await tab(m, 'Cache');
+    await tab(m, 'Burn');
+    await burnGroup('key');
+    const keyed = card('Tokens per minute')?.textContent ?? '';
+    const keyedLegend = legendOf('Tokens per minute');
+    await burnGroup('account');
+    const accounted = card('Tokens per minute')?.textContent ?? '';
+    api.getSettings = getSettings;
+    await tab(m, 'Cache');
+    await tab(m, 'Burn');
+    results.push({
+      name: '/analytics a failed settings read leaves the burn charts of a grouping that reads no tier',
+      ok: !keyed.includes('Could not load') && keyedLegend.length > 0 && accounted.includes('Could not load tokens per minute'),
+      missing: [`key: ${keyed.includes('Could not load') ? 'the error drawn' : 'no error'}`, `key legend: ${JSON.stringify(keyedLegend)}`, `account: ${accounted.includes('Could not load tokens per minute') ? 'the error drawn' : 'no error'}`],
     });
   }
 

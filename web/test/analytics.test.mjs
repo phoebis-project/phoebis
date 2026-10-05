@@ -268,6 +268,26 @@ test('an account is sized when the cost table holds its stored tier', () => {
   const accounts = [account('stored', 'default_claude_max_20x'), account('bare', 'claude_max_20x'), account('team', 'claude_team'), account('key', null)];
   const tiers = { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } };
   assert.deepEqual([...d.sizedAccounts(accounts, tiers)].sort(), ['bare', 'stored']);
+  const unmeasured = { ...tiers, default_claude_pro: { fiveHour: null, sevenDay: null } };
+  assert.deepEqual(
+    [...d.sizedAccounts([...accounts, account('pro', 'default_claude_pro')], unmeasured)].sort(),
+    ['bare', 'stored'],
+    'a tier the table lists with no 5-hour factor sizes nothing, as the route prices nothing on it',
+  );
+});
+
+test('a burn read outside the account grouping reads no accounts, so a failed account read leaves it whole', async () => {
+  const source = {
+    getAnalyticsBurn: async () => ({ bucketSeconds: 3_600, points: [] }),
+    listAccounts: async () => {
+      throw new Error('the accounts read failed');
+    },
+  };
+  const range = { from: new Date(0).toISOString(), to: new Date(HOUR).toISOString() };
+  for (const group of ['key', 'request_class', 'session']) {
+    assert.deepEqual(await d.readBurn(source, range, group), { accounts: [], answer: { bucketSeconds: 3_600, points: [] } }, group);
+  }
+  await assert.rejects(d.readBurn(source, range, 'account'), /the accounts read failed/, 'the account grouping sizes its lines by tier and needs the read');
 });
 
 test('a priced bucket between unpriced ones, or at an end beside one, is an isolated slot the plan chart marks', () => {

@@ -132,14 +132,15 @@ export function isolatedSlots(values: (number | null)[]): boolean[] {
 
 /**
  * The burn route's answer with the accounts beside it, read together: a profile refresh can supply a tier the last
- * read lacked, and the plan chart sizes each account from the tiers of the read that answered its buckets.
+ * read lacked, and the plan chart sizes each account from the tiers of the read that answered its buckets. Only the
+ * account grouping sizes its lines, so another grouping reads no account and a failed account read leaves it whole.
  */
 export async function readBurn(
   source: Pick<Api, 'getAnalyticsBurn' | 'listAccounts'>,
   range: Pick<AnalyticsQuery, 'from' | 'to'>,
   groupBy: BurnGroup,
 ): Promise<{ accounts: Account[]; answer: { bucketSeconds: number; points: BurnPoint[] } }> {
-  const [answer, accounts] = await Promise.all([source.getAnalyticsBurn(range, groupBy), source.listAccounts()]);
+  const [answer, accounts] = await Promise.all([source.getAnalyticsBurn(range, groupBy), groupBy === 'account' ? source.listAccounts() : Promise.resolve<Account[]>([])]);
   return { accounts, answer };
 }
 
@@ -155,10 +156,11 @@ export function tierFactors(tiers: CostTable['tiers'], tier: string): CostTable[
 
 /**
  * The accounts whose stored tier the cost table sizes, matched as the ledger matches it: as stored, then with the
- * `default_` prefix taken off or put on.
+ * `default_` prefix taken off or put on. A tier the table lists with no 5-hour factor sizes nothing, since the route
+ * prices no share of that window on it.
  */
 export function sizedAccounts(accounts: Account[], tiers: CostTable['tiers']): Set<string> {
-  return new Set(accounts.filter((a) => a.subscription !== null && tierFactors(tiers, a.subscription.rateLimitTier) !== undefined).map((a) => a.id));
+  return new Set(accounts.filter((a) => a.subscription !== null && (tierFactors(tiers, a.subscription.rateLimitTier)?.fiveHour ?? null) !== null).map((a) => a.id));
 }
 
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */
