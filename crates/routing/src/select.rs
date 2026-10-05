@@ -13,11 +13,11 @@ use rand::{Rng, RngExt};
 
 use crate::affinity::{AffinityEntry, AffinityMap, RungWalk, Visited};
 use crate::record::{
-    settings_of, BudgetFacts, By, CandidateFacts, ChainFacts, CooldownFacts, CreditsFacts,
-    DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
-    LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts, PinFacts,
-    PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts, RequestFacts,
-    RequestFlags, Score, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts,
+    key_fact, settings_of, BudgetFacts, By, CandidateFacts, ChainFacts, CooldownFacts,
+    CreditsFacts, DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue,
+    HoldOutcome, LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts,
+    PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
+    RequestFacts, RequestFlags, Score, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts,
     RECORD_VERSION,
 };
 use crate::state::{
@@ -794,7 +794,7 @@ struct Renewal {
 struct Pick {
     account_id: String,
     tier: Tier,
-    scores: Vec<(String, f64)>,
+    scores: Vec<Score>,
 }
 
 impl Recorder {
@@ -2843,7 +2843,7 @@ fn choose<'a>(
             ],
         ),
     ];
-    let mut scores: Vec<(String, f64)> = Vec::new();
+    let mut scores: Vec<Score> = Vec::new();
     let chosen = match pool.strategy {
         Strategy::Pace => {
             let scored: Vec<(&Candidate, f64)> = tier
@@ -2866,7 +2866,11 @@ fn choose<'a>(
                         .unit(unit)
                         .about(&c.account_id),
                 );
-                scores.push((c.account_id.clone(), *score));
+                scores.push(Score {
+                    account_id: c.account_id.clone(),
+                    score: *score,
+                    unit,
+                });
             }
             facts.push(Fact::list(
                 "ties",
@@ -2898,29 +2902,20 @@ fn choose<'a>(
         rec.step("pick", "none", facts);
         return None;
     };
-    // The chosen member ranks first; the rest of the tier follows by score under Pace, else in the tier's order.
+    let score_of = |id: &str| scores.iter().find(|s| s.account_id == id).map(|s| s.score);
     let mut order: Vec<(&str, Option<f64>)> = tier
         .iter()
         .filter(|c| c.account_id != chosen.account_id)
-        .map(|c| {
-            let score = scores
-                .iter()
-                .find(|(id, _)| *id == c.account_id)
-                .map(|(_, s)| *s);
-            (c.account_id.as_str(), score)
-        })
+        .map(|c| (c.account_id.as_str(), score_of(&c.account_id)))
         .collect();
     order.sort_by(|a, b| match (a.1, b.1) {
         (Some(a), Some(b)) => b.total_cmp(&a),
         _ => Ordering::Equal,
     });
-    let chosen_score = scores
-        .iter()
-        .find(|(id, _)| *id == chosen.account_id)
-        .map(|(_, s)| *s);
-    for (rank, (id, score)) in std::iter::once((chosen.account_id.as_str(), chosen_score))
-        .chain(order)
-        .enumerate()
+    for (rank, (id, score)) in
+        std::iter::once((chosen.account_id.as_str(), score_of(&chosen.account_id)))
+            .chain(order)
+            .enumerate()
     {
         if let Some(member) = rec.candidate_mut(id) {
             member.rank = Some(rank as u32 + 1);
@@ -3654,16 +3649,7 @@ impl Readings<'_> {
             }
             _ => {
                 let kind = outcome.refusal.as_ref().map_or("", |r| r.kind);
-                let fact = SummaryFact {
-                    key: "key",
-                    value: FactValue::Text(self.request.key_id.clone()),
-                    unit: None,
-                    entity: Some(FactEntity {
-                        kind: "key",
-                        id: self.request.key_id.clone(),
-                    }),
-                };
-                (by("refusal", kind), vec![fact])
+                (by("refusal", kind), vec![key_fact(&self.request.key_id)])
             }
         }
     }
@@ -3809,20 +3795,12 @@ impl Readings<'_> {
         if self.outcome.account_id.as_ref() != Some(chosen) {
             return (None, None);
         }
-        let score_of = |(id, score): &(String, f64)| Score {
-            account_id: id.clone(),
-            score: *score,
-            unit: match self.member(id).map(|m| m.kind) {
-                Some("api_key") => "percent",
-                _ => "percent_per_hour",
-            },
-        };
-        let score = scores.iter().find(|(id, _)| id == chosen).map(score_of);
+        let score = scores.iter().find(|s| &s.account_id == chosen).cloned();
         let runner_up = scores
             .iter()
-            .filter(|(id, _)| id != chosen)
-            .max_by(|a, b| a.1.total_cmp(&b.1))
-            .map(score_of);
+            .filter(|s| &s.account_id != chosen)
+            .max_by(|a, b| a.score.total_cmp(&b.score))
+            .cloned();
         (score, runner_up)
     }
 }

@@ -617,15 +617,7 @@ impl DecisionRecord {
                 entity: None,
             }
         } else {
-            SummaryFact {
-                key: "key",
-                value: FactValue::Text(request.key_id.clone()),
-                unit: None,
-                entity: Some(FactEntity {
-                    kind: "key",
-                    id: request.key_id.clone(),
-                }),
-            }
+            key_fact(&request.key_id)
         };
         let summary = DecisionSummary {
             kind: "refused",
@@ -650,6 +642,19 @@ impl DecisionRecord {
             fast: false,
         };
         (record, summary)
+    }
+}
+
+/// A key or resolve refusal's summary fact: the key it turned away, drawn as a link.
+pub(crate) fn key_fact(key_id: &str) -> SummaryFact {
+    SummaryFact {
+        key: "key",
+        value: FactValue::Text(key_id.to_string()),
+        unit: None,
+        entity: Some(FactEntity {
+            kind: "key",
+            id: key_id.to_string(),
+        }),
     }
 }
 
