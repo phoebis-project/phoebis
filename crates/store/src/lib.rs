@@ -9,6 +9,7 @@ mod registry;
 mod routing;
 mod schema;
 
+pub mod backup;
 pub mod crypto;
 pub mod permissions;
 
@@ -30,6 +31,7 @@ use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 pub use accounts::{
     AccountKind, AccountRow, AccountState, Identity, SubscriptionRow, INFERENCE_HOST,
 };
+pub use backup::{snapshot, BackupError, Snapshot, RETRY_PAUSE};
 pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,

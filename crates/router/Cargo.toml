@@ -52,5 +52,7 @@ tracing-subscriber = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 reqwest = { workspace = true }
+# The lock tests hold a second connection on the registry, and neither database crate re-exports the driver.
+rusqlite = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }

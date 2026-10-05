@@ -1,5 +1,6 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
-//! starting anything, probe a running proxy listener, or read a running router's readiness, pools, accounts and pins.
+//! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins, or
+//! copy both databases into a backup.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -8,6 +9,7 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient};
+use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::{init, tls};
 
@@ -35,6 +37,9 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
+    /// Copy both databases into a directory with a manifest that names the key file, taking no lock and opening no
+    /// socket: exit 0 once the manifest is written, 1 otherwise.
+    Backup(BackupArgs),
     /// Validate the configuration, the key file, the registry's key canary, the registry's and the ledger's schema
     /// versions and the certificate pairs, taking no lock and opening no socket.
     CheckConfig,
@@ -50,6 +55,7 @@ enum Command {
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
+        Some(Command::Backup(args)) => run_backup(&cli.config, &args),
         Some(Command::CheckConfig) => {
             let mut config = phoebis_router::config::load_unresolved(&cli.config)?;
             // Read before the first line, so a pair the start would refuse is the one line the check prints.
@@ -273,6 +279,36 @@ fn main() -> anyhow::Result<()> {
                         _ = terminate.recv() => {}
                     }
                 }))
+        }
+    }
+}
+
+/// `phoebis backup`. It never returns: it exits with the run's answer as the other subcommands do.
+fn run_backup(config_path: &Path, args: &BackupArgs) -> ! {
+    let taken = backup::run(
+        config_path,
+        args,
+        jiff::Timestamp::now(),
+        backup::CONTENTION_DEADLINE,
+        &mut std::io::stderr().lock(),
+    );
+    match taken {
+        Ok((manifest, _)) => {
+            if args.json {
+                let printed = serde_json::to_string_pretty(&manifest)
+                    .map(|json| format!("{json}\n"))
+                    .unwrap_or_default();
+                let mut stdout = std::io::stdout().lock();
+                // The manifest on disk is the backup's record; a reader that went away does not undo it.
+                let _ = stdout
+                    .write_all(printed.as_bytes())
+                    .and_then(|()| stdout.flush());
+            }
+            std::process::exit(0)
+        }
+        Err(error) => {
+            eprintln!("Error: {:?}", anyhow::Error::new(error));
+            std::process::exit(1)
         }
     }
 }

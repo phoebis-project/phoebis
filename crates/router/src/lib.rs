@@ -2,6 +2,7 @@
 
 pub mod admin_client;
 pub mod app;
+pub mod backup;
 pub mod config;
 pub mod health;
 pub mod init;

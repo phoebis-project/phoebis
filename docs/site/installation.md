@@ -149,6 +149,7 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
+| `phoebis backup --to <dir>` | Copies both databases into `<dir>` with a manifest; exit 0 once it is written. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
@@ -286,6 +287,24 @@ system roots, for a listener whose pair a private CA signed. With `--url` and `-
 read, so the binary reads a router on another machine: `status` then has no proxy listener to probe, prints `proxy: not
 probed, no configuration file names the listener`, and reads readiness from `/admin/system` alone. Without both, the
 file at `--config` must load.
+
+`backup` copies the registry and the ledger into a directory, each through SQLite's online backup API as one
+consistent snapshot while the router serves or while it is stopped, and writes `manifest.json` last
+([Operations](operations.md#backup) shows the container line and the restore). `--to` names the directory, which
+`backup` creates with every missing parent at `0700`, or an existing empty one, with a warning when its mode is wider;
+without it the directory is `./phoebis-backup-<YYYYMMDD>T<HHMMSS>Z`, stamped in UTC. Inside go `router.sqlite`,
+`ledger.sqlite` and `manifest.json`, each at `0600`. The manifest names the key file at `storage.encryption_key_file`,
+which `backup` never reads; a key file that does not exist earns a warning and the backup proceeds. `backup` loads the
+file the way `check-config` does, without the admin secret, and takes no lock and opens no socket. Stderr carries one
+`wrote {path} ({n} bytes)` line per file, the two `quick_check` results, the manifest's path, and last `the key file
+{path} is not in this backup; keep it apart, the registry copy is sealed under it`; stdout stays empty unless `--json`
+prints the manifest there.
+
+`backup` exits 1 with one `Error:` line and nothing written when the file does not load, when `--to` names a file or a
+directory that is not empty (`{path} is not an empty directory`), or when either database does not exist (`a backup
+carries both databases; {path} does not exist`). A copy that fails, a database another connection holds locked for ten
+seconds among them, removes every file and directory the run created and exits 1 with `backup failed: {reason};
+nothing was written to {dir}`. It exits 0 once the manifest is written, and 2 for a usage error.
 
 ## Environment variables
 
@@ -663,9 +682,11 @@ version, skip every ledger migration, and leave `requests` without the columns t
 creates the parent directory at mode 0700 when it is missing, the database at mode 0600, and a `lock` file
 beside the database that keeps a second process off the same data.
 
+The registry's `lock` file is not taken by `check-config`, `backup` or any subcommand.
+
 `storage.encryption_key_file` points at a separate file holding 32 raw bytes or 64 hex characters. It seals
 every credential in the database, so keep it outside any backup that carries the database, which is useless
-without it.
+without it. `phoebis backup` leaves the key out and says so.
 
 The registry file also holds the relay's session memory: for each key, conversation (the client's session id), and
 agent, the previous request id and the prompt id the
@@ -686,7 +707,7 @@ holds the request path rather than losing request facts; only captured bodies st
 may outrun its recorder, and a `ledger_gap` event records what was lost. Captured bodies live in this file,
 which makes it as sensitive as the registry even though it holds no credential, so give it the same care.
 
-No script in this repository backs these files up; [Operations](operations.md) says how.
+`phoebis backup` takes the snapshot; [Operations](operations.md#backup) says how and how to restore it.
 
 ![The Settings view: the downstream client block, the price table, Appearance and About
 ](assets/settings-light.png#only-light)

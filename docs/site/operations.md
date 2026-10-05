@@ -1,15 +1,17 @@
 # Operations
 
-The router keeps its state in two SQLite files and one key file. This page covers backing them up, what the storage
-key protects, upgrading the binary or the container, re-pinning the Claude Code build the router is measured against,
-publishing this site, and releasing the container image.
+The router keeps its state in two SQLite files and one key file. This page covers backing them up with `phoebis
+backup` and restoring them, what the storage key protects, reading a running router with `phoebis status`, upgrading
+the binary or the container, re-pinning the Claude Code build the router is measured against, publishing this site, and
+releasing the container image.
 
 ## Backup
 
 The router's state lives in three files: `storage.path`, the registry of accounts, sealed credentials, pools, keys,
 pricing versions, pins, cooldowns, and the relay's session memory; `stats.ledger_path`, the ledger of requests,
 attempts, events, samples, rollups, and captured bodies; and `storage.encryption_key_file`, the key that seals every
-credential the registry holds. No script in this repository takes a backup of any of them.
+credential the registry holds. `phoebis backup` takes the snapshot of both databases and names the key file; it
+never copies the key.
 
 Both databases are SQLite, and both run in WAL mode. A plain file copy taken while the service is running can land
 mid-transaction and split either database file from its `-wal` file, losing the last transactions in between.
@@ -23,26 +25,38 @@ usage windows, the marks a failing account earns, and an operator's cooldown cle
 `NORMAL` in one transaction per writer wake, so a power loss can lose the last of it: the router rebuilds it from the
 next requests, and an operator redoes a clear or a release it undid.
 
-Create the destination directory before either backup, and make it private first: `.backup` does not carry the
-source file's `0600` mode onto the copy it creates, and the ledger backup holds the prompts and tool results its
-captured bodies contain, in plain text.
+```sh
+phoebis backup --to /path/to/backups/$(date +%F)
+```
+
+Under the container the command runs in the running container and writes onto the data volume; `docker compose cp`
+copies the directory out of the volume onto the host, or a bind mount over `/var/lib/phoebis/backups` puts it there:
 
 ```sh
-install -d -m 0700 /path/to/backups
-sqlite3 /var/lib/phoebis/router.sqlite ".backup '/path/to/backups/router-$(date +%F).sqlite'"
-sqlite3 /var/lib/phoebis/ledger.sqlite ".backup '/path/to/backups/ledger-$(date +%F).sqlite'"
+docker compose exec phoebis phoebis backup --to /var/lib/phoebis/backups/$(date +%F)
+docker compose cp phoebis:/var/lib/phoebis/backups/<name> .
 ```
 
-Run as the `phoebis` user, this produces a consistent copy of each database without stopping the service. Where
-`sqlite3` is not installed, Python's `sqlite3` module does the same thing:
+`phoebis backup` copies each database through SQLite's online backup API, one consistent snapshot per database, while
+the router serves or while it is stopped; it takes no lock, opens no socket and needs no admin secret. It runs as the
+user that owns the databases (`phoebis` on the host, uid 65532 in the container, which `exec` already is), since the
+files and their `-shm` files are `0600`. The directory it writes holds `router.sqlite`, `ledger.sqlite` and
+`manifest.json`, each at `0600`, and nothing else. `backup` creates the directory and every missing parent at `0700`,
+or takes an existing empty directory and warns when its mode is wider, since the ledger copy holds the prompts and
+tool results its captured bodies contain, in plain text.
 
-```python
-import pathlib, sqlite3
+`manifest.json` is written last, once both copies have answered `PRAGMA quick_check` with `ok` and every file and the
+directory are synced, so a directory that holds a manifest holds two complete copies. It carries `format` (1),
+`phoebis_version`, `taken_at` (UTC), `config` (the file read), `key_file` (the path `storage.encryption_key_file`
+names, and nothing derived from the key), and under `registry` and `ledger` each copy's `source`, `schema_version`,
+`bytes` and `sha256`.
 
-pathlib.Path("/path/to/backups").mkdir(mode=0o700, exist_ok=True)
-sqlite3.connect("/var/lib/phoebis/router.sqlite").backup(sqlite3.connect("/path/to/backups/router.sqlite"))
-sqlite3.connect("/var/lib/phoebis/ledger.sqlite").backup(sqlite3.connect("/path/to/backups/ledger.sqlite"))
-```
+`backup` exits 1 with nothing written when the file does not load, when `--to` names a file or a directory that is not
+empty, or when either database does not exist (`a backup carries both databases; {path} does not exist`). A copy that
+fails, such as one whose database another connection holds locked for ten seconds, removes every file and directory
+the run created and exits 1 with `backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest
+is written ([commands](installation.md#commands)). Where the binary is not at hand, `sqlite3`'s `.backup` produces the
+same snapshot, one database at a time.
 
 A backup taken before an upgrade needs both snapshots to succeed: the registry and the ledger migrate together,
 and a restore built from only one of them leaves the two databases at different points in the request history.
@@ -51,6 +65,36 @@ The key seals every credential in the registry, so a backup that carries the dat
 and dangerous with it. Keep the key somewhere separate, such as a password manager or a secrets store, and never
 beside the database copy. The ledger holds captured bodies, which are prompts, so a ledger backup needs the same
 care as the registry.
+
+## Restore
+
+A restore puts both databases back with the key that sealed the registry, in this order:
+
+1. Stop the router: `sudo systemctl stop phoebis`, or `docker compose stop`.
+2. Move the current `router.sqlite` and `ledger.sqlite` aside, each with its `-wal` and `-shm` files.
+3. Copy each file of the backup to the path the configuration names, at mode `0600` and owned by the service user:
+   `sudo install -m 0600 -o phoebis -g phoebis <backup>/router.sqlite /var/lib/phoebis/router.sqlite`, and the same
+   for `ledger.sqlite`.
+4. Put the key file that sealed the registry at `storage.encryption_key_file`; the manifest's `key_file` says where it
+   lived. A wrong key is refused at start and by `check-config` with `the storage key does not match the registry at
+   {path}`.
+5. On a new host, put the certificate pair where the file names it: the backup carries neither the pair nor the key.
+6. Run `phoebis check-config`.
+7. Start the router: `sudo systemctl start phoebis`, or `docker compose up -d`.
+8. Confirm with `phoebis status`, which reads `ready`.
+
+Under the container the two copies go onto the `phoebis-data` volume, owned by uid 65532 at `0600`, from the host or
+from a one-off container that mounts the volume, as the [storage key](#the-storage-key) recovery runs; steps 6 and 8
+are `docker compose run --rm phoebis check-config` and `docker compose exec phoebis phoebis status` there.
+
+The binary that restores is the manifest's `phoebis_version` or newer: an older binary refuses a newer schema with
+`restore the backup taken before the upgrade`, and a newer one migrates the copies as it opens them.
+
+A registry restored alone brings back the accounts, their sealed credentials, the pools and the keys, and the ledger
+starts empty, so the statistics, the request log, the usage samples, the rollups, the keepalive ledger and the parked
+records are gone, while the pins and cooldowns rebuild from the next requests. A ledger restored alone brings back the
+statistics, and the registry starts empty, so every account is paired again and every key is minted anew with a new
+secret, and the ledger's rows name account and key ids that nothing resolves any more.
 
 ## The storage key
 
@@ -80,8 +124,8 @@ companion.
 
 There is no re-key command. Under a lost or replaced key no sealed row opens again and the canary refuses the start,
 so recovering means discarding the registry's secrets while keeping everything else. Stop the service
-(`sudo systemctl stop phoebis`), take the [backup](#backup) above, and run this sequence against the registry as the
-`phoebis` user:
+(`sudo systemctl stop phoebis`), take a [backup](#backup) (`phoebis backup --to <dir>`), and run this sequence against
+the registry as the `phoebis` user:
 
 ```sh
 sudo -u phoebis sqlite3 -bail /var/lib/phoebis/router.sqlite <<'SQL'
@@ -97,7 +141,9 @@ COMMIT;
 SQL
 ```
 
-Under the container the image ships no `sqlite3`, so after `docker compose stop` and the backup the same sequence runs
+Under the container the image ships no `sqlite3`. The backup is `docker compose exec phoebis phoebis backup --to
+/var/lib/phoebis/backups/<name>` before `docker compose stop`, since `exec` needs the running container, or `docker
+compose run --rm phoebis backup --to /var/lib/phoebis/backups/<name>` once it is stopped; then the same sequence runs
 as uid 65532, either from the host against `router.sqlite` on the `phoebis-data` volume or from a one-off container that
 carries `sqlite3` and mounts that volume.
 
@@ -203,7 +249,7 @@ the container's environment and so the admin secret.
    to run while the old binary still serves traffic; it reads the key file and proves it against the registry's
    canary, so a key file that drifted is caught before the restart.
 3. Read the [changelog](changelog.md) for a bootstrap key that changed.
-4. Take the [backup](#backup) above.
+4. Take a [backup](#backup): `phoebis backup --to <dir>`.
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.
 6. Restart the service: `sudo systemctl restart phoebis`. The service drains in-flight requests for up to 30 seconds;
    the unit's `TimeoutStopSec=40` covers that drain.
@@ -213,12 +259,13 @@ the container's environment and so the admin secret.
    that stopped keeping up shows as `router.queued` at `command_depth` and as keys holding their requests past the
    answer.
 
-Under the container, the same sequence is: read the changelog, take the backup, set `image:` in `compose.yaml` to
-the new version, validate the mounted configuration with the new image (`docker compose run --rm phoebis
-check-config`, which reads the service's environment file and mounts), then `docker compose up -d`. Compose
-replaces the container, stopping the old one with the 40-second grace period that covers the drain, and the new
-binary migrates both databases on the volume as it opens them. `docker compose ps` reads `healthy` once
-`phoebis health` has read the router as ready, and `GET /admin/system` confirms the version.
+Under the container, the same sequence is: read the changelog, take the backup (`docker compose exec phoebis phoebis
+backup --to /var/lib/phoebis/backups/<name>`), set `image:` in `compose.yaml` to the new version, validate the mounted
+configuration with the new image (`docker compose run --rm phoebis check-config`, which reads the service's environment
+file and mounts), then `docker compose up -d`. Compose replaces the container, stopping the old one with the 40-second
+grace period that covers the drain, and the new binary migrates both databases on the volume as it opens them. `docker
+compose ps` reads `healthy` once `phoebis health` has read the router as ready, and `GET /admin/system` confirms the
+version.
 
 A certificate pair is read at start and never watched: a renewal is stop, replace, start, and the 30-second drain,
 inside the 40-second stop grace, bounds the gap.

@@ -55,7 +55,7 @@ store is dead ([how](docs/site/installation.md#run-the-container)).
 | [Pools, keys, and routing](docs/site/routing.md) | Pace, load shedding, cooldowns, failover, overage. |
 | [Keepalive](docs/site/keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning, the cost. |
 | [Statistics](docs/site/statistics.md) | Ledger, plan meter, views, metrics, live feed, gauges. |
-| [Operations](docs/site/operations.md) | Backup, storage key, upgrades, client re-pinning, publishing, releasing. |
+| [Operations](docs/site/operations.md) | Backup, restore, storage key, upgrades, client re-pinning, publishing, releasing. |
 | [Changelog](docs/site/changelog.md) | What changed for an operator, by date. |
 
 The browser pass over the console is in
