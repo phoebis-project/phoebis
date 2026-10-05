@@ -1334,6 +1334,34 @@ fn a_pool_reopens_on_and_a_key_reopens_inheriting_until_set_off() {
 }
 
 #[test]
+fn a_key_created_with_its_own_auto_mode_setting_reopens_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_store = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key_store).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    for (id, secret, setting) in [
+        ("desktop", "phoebis-desktop-secret", true),
+        ("laptop", "phoebis-laptop-secret", false),
+    ] {
+        let mut row = key(&store, id, "main", secret);
+        row.auto_mode_server = Some(setting);
+        store.insert_api_key(&row, "test").unwrap();
+    }
+    drop(store);
+    let store = Store::open(&path, &key_store).unwrap();
+    assert_eq!(
+        store.api_key("desktop").unwrap().unwrap().auto_mode_server,
+        Some(true)
+    );
+    assert_eq!(
+        store.api_key("laptop").unwrap().unwrap().auto_mode_server,
+        Some(false),
+        "an override set at the create is stored as set, on or off"
+    );
+}
+
+#[test]
 fn a_registry_from_before_the_auto_mode_columns_reopens_every_pool_on_and_every_key_inheriting() {
     let dir = tempfile::tempdir().unwrap();
     let key_store = StorageKey::generate();
