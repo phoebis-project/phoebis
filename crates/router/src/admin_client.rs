@@ -6,6 +6,8 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use boring::ssl::{SslConnector, SslMethod};
+use boring::x509::store::X509StoreBuilder;
+use boring::x509::X509;
 use http_body_util::{BodyExt, Full};
 use hyper::body::Bytes;
 use hyper::header::{HeaderValue, AUTHORIZATION, CONNECTION, CONTENT_TYPE, HOST};
@@ -165,17 +167,15 @@ impl AdminClient {
         // The connection's driver task, kept so the deadline and not the peer decides when the connection ends.
         let mut driver: Option<tokio::task::JoinHandle<hyper::Result<()>>> = None;
         let outcome = tokio::time::timeout(self.timeout, async {
-            let tcp = TcpStream::connect((host, port)).await?;
-            let io: Box<dyn Connected> = if https {
-                let mut builder = SslConnector::builder(SslMethod::tls())?;
-                match &self.ca {
-                    Some(ca) => builder.set_ca_file(ca)?,
-                    None => builder.set_default_verify_paths()?,
-                }
-                builder.set_alpn_protos(b"\x08http/1.1")?;
-                Box::new(tokio_boring::connect(builder.build().configure()?, host, tcp).await?)
+            let tls = if https {
+                Some(connector(self.ca.as_deref())?)
             } else {
-                Box::new(tcp)
+                None
+            };
+            let tcp = TcpStream::connect((host, port)).await?;
+            let io: Box<dyn Connected> = match tls {
+                Some(tls) => Box::new(tokio_boring::connect(tls.configure()?, host, tcp).await?),
+                None => Box::new(tcp),
             };
             let (mut sender, connection) =
                 hyper::client::conn::http1::handshake(TokioIo::new(io)).await?;
@@ -279,6 +279,30 @@ impl AdminClient {
     }
 }
 
+/// The TLS side of a call: the `ca` bundle alone when one is named, else the system roots, and ALPN `http/1.1`.
+fn connector(ca: Option<&Path>) -> Result<SslConnector, Failure> {
+    let mut builder = SslConnector::builder(SslMethod::tls())?;
+    if let Some(ca) = ca {
+        // The builder has loaded the system roots already and `set_ca_file` would add to them; a store holding the
+        // bundle alone replaces them, so no root the host trusts (a TLS-inspection CA among them) can vouch for the
+        // listener the bearer goes to.
+        let refused = |reason: String| Failure(format!("--ca {}: {reason}", ca.display()));
+        let pem = std::fs::read(ca).map_err(|error| refused(error.to_string()))?;
+        let certificates =
+            X509::stack_from_pem(&pem).map_err(|error| refused(error.to_string()))?;
+        if certificates.is_empty() {
+            return Err(refused("holds no PEM certificate".to_owned()));
+        }
+        let mut store = X509StoreBuilder::new()?;
+        for certificate in certificates {
+            store.add_cert(certificate)?;
+        }
+        builder.set_cert_store(store.build());
+    }
+    builder.set_alpn_protos(b"\x08http/1.1")?;
+    Ok(builder.build())
+}
+
 /// Under `admin.tls: self_signed` the listener's leaf chains to the CA the start wrote, so a call on this host needs
 /// no flag; a CA this process cannot read leaves the system roots, and the handshake says why.
 fn self_signed_ca(config: &Config) -> Option<PathBuf> {
@@ -348,6 +372,26 @@ mod tests {
         assert_eq!(given.secret_env.as_deref(), Some("PHOEBIS_ADMIN_SECRET"));
         assert_eq!(given.ca, Some(PathBuf::from("/etc/phoebis/ca.pem")));
         assert!(given.timeout == 1 && given.json);
+    }
+
+    #[test]
+    fn a_ca_the_client_cannot_use_is_refused_naming_the_flag_and_the_path() {
+        let dir = tempfile::tempdir().unwrap();
+        let missing = dir.path().join("missing.pem");
+        let empty = dir.path().join("empty.pem");
+        std::fs::write(&empty, "not a certificate\n").unwrap();
+        for (path, reason) in [
+            (&missing, "No such file or directory"),
+            (&empty, "holds no PEM certificate"),
+        ] {
+            let Err(Failure(line)) = connector(Some(path)) else {
+                panic!("{} was accepted as a CA bundle", path.display());
+            };
+            assert!(
+                line.starts_with(&format!("--ca {}: ", path.display())) && line.contains(reason),
+                "{line}"
+            );
+        }
     }
 
     #[test]

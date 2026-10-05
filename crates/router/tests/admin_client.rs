@@ -217,6 +217,53 @@ async fn the_client_trusts_a_self_signed_ca() {
     running.stop().await;
 }
 
+/// `SSL_CERT_FILE` is read when a call builds its connector, so the lock spans both calls; each test runs on its own
+/// current-thread runtime, so no task of this test waits on the lock it holds.
+#[tokio::test]
+#[allow(clippy::await_holding_lock)]
+async fn a_named_ca_replaces_the_system_roots() {
+    let running = start("  tls: self_signed\n", "TEST_CLIENT_PINNED").await;
+    let url = format!("https://127.0.0.1:{}", running.admin);
+    let absent = running.dir.path().join("absent.yaml");
+    let env = env_lock();
+    let previous = std::env::var_os("SSL_CERT_FILE");
+    // The default roots become the router's own CA, so a call that still consulted them would be admitted.
+    std::env::set_var(
+        "SSL_CERT_FILE",
+        running.dir.path().join("tls").join("ca.pem"),
+    );
+    std::env::set_var("TEST_CLIENT_PINNED", ADMIN_SECRET);
+    let roots = AdminClient::from_flags(
+        &flags(Some(url.clone()), Some("TEST_CLIENT_PINNED")),
+        &absent,
+    )
+    .unwrap();
+    let through_roots = roots.expect(Method::GET, "/admin/system", None).await;
+    let mut pin = flags(Some(url.clone()), Some("TEST_CLIENT_PINNED"));
+    pin.ca = Some(running.dir.path().join("upstream-ca.pem"));
+    let pinned = AdminClient::from_flags(&pin, &absent).unwrap();
+    let through_pin = pinned.expect(Method::GET, "/admin/system", None).await;
+    match previous {
+        Some(value) => std::env::set_var("SSL_CERT_FILE", value),
+        None => std::env::remove_var("SSL_CERT_FILE"),
+    }
+    drop(env);
+
+    assert_eq!(
+        answered(through_roots).status,
+        200,
+        "with no --ca the default roots, here the router's CA, are the trust"
+    );
+    let error = refused(through_pin);
+    let line = error.to_string();
+    assert!(matches!(error, ClientError::Transport { .. }), "{line}");
+    assert!(
+        line.starts_with(&format!("{url}: ")) && line.contains("verif"),
+        "{line}"
+    );
+    running.stop().await;
+}
+
 #[tokio::test]
 async fn a_refused_secret_is_one_line_with_no_secret_in_it() {
     const WRONG: &str = "not-the-admin-secret-42";
