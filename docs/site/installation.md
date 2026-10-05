@@ -187,13 +187,12 @@ credential refresh still in flight is waited for up to its own 30-second timeout
 rotated is stored rather than lost to the next start's quarantine.
 
 `health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
-the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, over
-TLS when `proxy.tls` terminates it, without checking the certificate (the probe dials its own process and asks whether
+the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, over TLS
+when `proxy.tls` terminates it, without checking the certificate (the probe dials its own process and asks whether
 `/api/ready` answers, not who answers), and prints `proxy answers on {addr}` on a `200` or one line saying why not
 (`proxy on {addr} answered 503, not 200` when the router loop, the ledger consumer or the store is dead); the whole
-probe, connect included, is bounded by three seconds.
-`/api/hello` stays the liveness answer the client itself probes. The container image runs `health` as its health check
-every 30 seconds ([the container](#run-the-container)).
+probe, connect included, is bounded by three seconds. `/api/hello` stays the liveness answer the client itself probes.
+The container image runs `health` as its health check every 30 seconds ([the container](#run-the-container)).
 
 ## Environment variables
 
