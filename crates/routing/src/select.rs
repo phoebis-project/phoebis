@@ -267,8 +267,8 @@ fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
     pin.tail_hash = request.boundaries.last().cloned();
 }
 
-/// The hysteresis band under the shedding margin (`shed_ahead_of_pace`): a destination counts only below
-/// `margin - MIGRATE_BAND`.
+/// The hysteresis band under the shedding margin (`shed_ahead_of_pace`): a subscription destination counts only below
+/// `margin - MIGRATE_BAND`; an api_key one reads its bucket against 1.0.
 pub const MIGRATE_BAND: f64 = 0.05;
 
 /// Why a selection landed where it did, for the attempt row and the request drawer. `Serialize` here, so the
@@ -1243,10 +1243,11 @@ fn ahead_under(state: &RoutingState, account_id: &str, window: &str, t: f64, now
     ahead(state, account_id, window, now).is_none_or(|lead| lead < t)
 }
 
-/// Whether `account_id` reads under `shed_ahead_of_pace` minus the hysteresis band: how far each shared plan window
-/// runs ahead of its pace for a subscription account, the worst standing bucket for an api_key one. No threshold
-/// configured, or no reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a migration
-/// destination, so the arithmetic lives once.
+/// Whether `account_id` reads cool: a subscription account under `shed_ahead_of_pace` minus the hysteresis band on
+/// how far each shared plan window runs ahead of its pace, an api_key account with room in its worst standing bucket
+/// (under 1.0, whatever the margin). No threshold configured, or no reading, counts as cool. The reading `move_of`'s
+/// `cool` predicate takes for a migration destination and rung 4's `blocked` takes for a placement, so the arithmetic
+/// lives once.
 fn under_band(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1257,13 +1258,15 @@ fn under_band(
     let Some(threshold) = pool.shed_ahead_of_pace else {
         return true;
     };
-    let band = threshold - MIGRATE_BAND;
     match snapshot.account(account_id).map(|a| a.kind) {
+        // A bucket refills within its minute and a reading can be a minute old, so a line under 1.0 says little
+        // about the next minute; a destination that hits its limit costs one short wait in place, not a failover.
         Some(AccountKind::ApiKey) => state
             .sample(account_id)
             .and_then(|s| s.worst_bucket(now))
-            .is_none_or(|r| r.utilization < band),
+            .is_none_or(|r| r.utilization < 1.0),
         _ => {
+            let band = threshold - MIGRATE_BAND;
             ahead_under(state, account_id, FIVE_HOUR, band, now)
                 && ahead_under(state, account_id, SEVEN_DAY, band, now)
         }
@@ -1307,11 +1310,11 @@ fn move_of<'a>(
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
     let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
-    // A sibling the next round would not shed from again soon: every reading its sample holds under the band
-    // (the shared windows' leads over their pace on a subscription account, the worst live bucket of an api_key
-    // one; an unsampled account reads as under), no pool has run a round on it within the dwell, and room under
-    // the cap. A full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one
-    // rather than being dropped at the cap.
+    // A sibling the next round would not shed from again soon: every reading its sample holds cool (the shared windows'
+    // leads over their pace under the band on a subscription account, room in the worst live bucket of an api_key one;
+    // an unsampled account reads as cool), no pool has run a round on it within the dwell, and room under the cap. A
+    // full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one rather than
+    // being dropped at the cap.
     let cool = |state: &RoutingState, c: &Candidate| -> bool {
         under_band(state, snapshot, pool, &c.account_id, now)
             && state
@@ -1781,8 +1784,8 @@ fn account_ok(
 
 /// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
 /// post-partition selection set: under the cap, below `select_below_utilization` on the 5-hour window when the
-/// pool sets one, not winding down, above the Pace floor under Pace, and under the band `move_of`'s `cool` reads
-/// for a migration destination.
+/// pool sets one, not winding down, above the Pace floor under Pace, and cool as `move_of`'s `cool` reads a
+/// migration destination.
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,

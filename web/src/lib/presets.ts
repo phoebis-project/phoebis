@@ -21,7 +21,10 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
   fast: { inFlightCap: 8, paceFloor: 0.1, retryInPlaceSeconds: 5 },
 };
 
-/** The hysteresis band under the shedding margin: a shed session lands only on a member below `margin - MIGRATE_BAND`. */
+/**
+ * The hysteresis band under the shedding margin: a shed session lands only on a subscription member below
+ * `margin - MIGRATE_BAND`; an Anthropic-key member's bucket reads against 1.0.
+ */
 export const MIGRATE_BAND = 0.05;
 
 /** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
@@ -89,9 +92,10 @@ export interface ShedPreview {
   /** The marked burn over the burn of the members that ran a round; 0 when they burn nothing. */
   burnShare: number;
   /**
-   * Whether an eligible member reads under the band, where the router lands a marked session; without one the
-   * marks stand and nothing moves. The router also passes over a member at its in-flight cap or one any pool shed
-   * from within the dwell, which the pool view does not carry.
+   * Whether an eligible member reads cool (a subscription member under the band, an Anthropic-key member with room in
+   * its bucket), where the router lands a marked session; without one the marks stand and nothing moves. The router
+   * also passes over a member at its in-flight cap or one any pool shed from within the dwell, which the pool view
+   * does not carry.
    */
   cool: boolean;
   /** Members whose 5-hour or 7-day window runs ahead of its pace by the shedding margin, each of which runs a round. */
@@ -129,11 +133,12 @@ export function shedPreview(
     const w = windowOf(a, id);
     return w === null ? null : aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now);
   };
-  // The router's destination readings: a subscription account's two shared windows by their lead over pace, an
-  // Anthropic-key account's worst live one; a window the row does not carry reads as under.
+  // The router's destination readings: a subscription account's two shared windows by their lead over pace against the
+  // band, an Anthropic-key account's worst live bucket against 1.0 (a bucket refills within its minute); a window the
+  // row does not carry reads as under.
   const under = (a: Account) =>
     a.kind === 'api_key'
-      ? Math.max(0, ...a.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now).map((w) => w.utilization)) < band
+      ? Math.max(0, ...a.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now).map((w) => w.utilization)) < 1
       : (['5h', '7d'] as const).every((id) => (lead(a, id) ?? Number.NEGATIVE_INFINITY) < band);
   const cool = pool.members.some((m) => {
     const account = byId.get(m.accountId);

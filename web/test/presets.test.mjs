@@ -197,6 +197,19 @@ test('a pool previews its own pins on a shared account, so one pin per pool shed
   assert.equal(d.shedPreviewLine(own, true), 'Would move 0 sessions, 0 warm, 0% of the burn in window share.');
 });
 
+test('an api_key member reads cool while its worst live bucket holds room, whatever the margin', () => {
+  const keyed = (utilization) => ({
+    id: 'key',
+    kind: 'api_key',
+    label: 'key',
+    windows: [{ id: 'itpm:claude-sonnet-5', label: 'itpm', observedAt: at(NOW), periodHours: 1 / 60, resetsAt: at(NOW + MINUTE), utilization }],
+  });
+  // `hot` keeps a round in the preview, so `cool` is read for a round with marks; the margin's band sits at 0.15.
+  const read = (key) => d.shedPreview(pool({ members: [member('hot'), member('key')], shedAheadOfPace: 0.2 }), [hot, key], [pin('cold-3', 3, false)], NOW, SIZED).cool;
+  assert.equal(read(keyed(0.95)), true, 'a bucket with room is a destination, far above the band');
+  assert.equal(read(keyed(1)), false, 'an exhausted bucket is no destination');
+});
+
 test('with no member under the band the preview marks sessions it cannot move', () => {
   // Under the threshold of 80 %, so it runs no round of its own, but above the 75 % a shed session has to land under.
   const near = account('near', 0.78);

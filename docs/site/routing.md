@@ -286,21 +286,22 @@ the upstream shares no cached prefix across those, so an entry of another lane i
 deepest static boundary places a subagent under `by_cohort` or a main conversation under `by_warm_prefix`, when the
 shared prefix, sized by the relay's estimate from the request's bytes, is at least `min_shared_prefix_tokens`, the
 request carries or receives a cache marker, and the account is not at its cap, at or above the ceiling
-(`select_below_utilization`), at or above the shedding margin less its 0.05 band (`shed_ahead_of_pace`: a subscription
-account's windows ahead of their pace, an Anthropic-key account's worst live bucket as read), under the Pace floor, or
-winding down. A cooling account never reaches either rung, since the eligible set excludes it; a spent account is in the
-eligible set, and both rungs refuse it through the allowance check. A subagent under `with_main` lands its first request
-on its parent agent's pin in place of the static walk, and one under `by_strategy` skips the static walk; every case
-that finds no live match lands by the strategy. A held request of a subagent cohort waits where its cohort already is
-rather than on the strategy's own pick; a session already on an account, under any of its agents, is never held while
-that account can still serve. A token count is never placed and never held: it is bound to no cap and occupies no slot,
-so its pin or the strategy decides it. It creates no pin, since it touches no cache: a count with a pin follows it past
-the cap and the move rules, and one without lands by the strategy and leaves the agent's next message to be placed under
-the cap. An entry's warmth lasts the marker's TTL on its tier; when every marker of the request carried one TTL and the
-response reports its cache writes at the other alone, the reported TTL is the lifetime of the message boundaries that
-response wrote, and of the static boundaries only when the response read nothing from the cache, since the usage names
-no tier; a static tier the response read from and a tier it only read keep their marker's lifetime, and a request with
-markers at both TTLs keeps each marker's.
+(`select_below_utilization`), at or above the shedding margin less its 0.05 band on its windows ahead of their pace
+(`shed_ahead_of_pace`, a subscription account), without room in its worst live rate-limit bucket (an Anthropic-key
+account: a reading at or above 1.0, whatever the margin), under the Pace floor, or winding down. A cooling account never
+reaches either rung, since the eligible set excludes it; a spent account is in the eligible set, and both rungs refuse
+it through the allowance check. A subagent under `with_main` lands its first request on its parent agent's pin in place
+of the static walk, and one under `by_strategy` skips the static walk; every case that finds no live match lands by the
+strategy. A held request of a subagent cohort waits where its cohort already is rather than on the strategy's own pick;
+a session already on an account, under any of its agents, is never held while that account can still serve. A token
+count is never placed and never held: it is bound to no cap and occupies no slot, so its pin or the strategy decides it.
+It creates no pin, since it touches no cache: a count with a pin follows it past the cap and the move rules, and one
+without lands by the strategy and leaves the agent's next message to be placed under the cap. An entry's warmth lasts
+the marker's TTL on its tier; when every marker of the request carried one TTL and the response reports its cache writes
+at the other alone, the reported TTL is the lifetime of the message boundaries that response wrote, and of the static
+boundaries only when the response read nothing from the cache, since the usage names no tier; a static tier the response
+read from and a tier it only read keep their marker's lifetime, and a request with markers at both TTLs keeps each
+marker's.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is
@@ -378,12 +379,12 @@ them: the `subscription_ended` exclusion releases it, as a cooldown releases a c
 fast takes neither the spent nor the overage rule, since it draws usage credits and no plan window.
 
 With `shed_ahead_of_pace` set, every rule prefers a cool destination, so a moved session does not land where the next
-round would shed it again. A cool sibling reads under the margin minus 0.05 (`MIGRATE_BAND`) on every reading it holds
-(how far the 5-hour and 7-day windows of a subscription account run ahead of their pace, and the worst live rate-limit
-bucket of an Anthropic-key account as read; an unsampled account reads as under), no pool has run a shedding round on it
-within `source_dwell_seconds`, and it has room under the pool's `in_flight_cap`. When no destination of a rule is cool,
-the rule still moves the pin to one of them, so a full cool sibling never keeps a free hot one from the session; only
-the shed rule insists on a cool one.
+round would shed it again. A cool sibling reads under the margin minus 0.05 (`MIGRATE_BAND`) on how far the 5-hour and
+7-day windows of a subscription account run ahead of their pace, or holds room (under 1.0) in the worst live rate-limit
+bucket of an Anthropic-key account, whatever the margin, since a bucket refills within its minute; an unsampled account
+reads as under. No pool has run a shedding round on it within `source_dwell_seconds`, and it has room under the pool's
+`in_flight_cap`. When no destination of a rule is cool, the rule still moves the pin to one of them, so a full cool
+sibling never keeps a free hot one from the session; only the shed rule insists on a cool one.
 
 **Spent** The pinned account's allowance for the session's model is spent: the model's own week and both shared windows
 for a model with a week of its own, the shared plan windows otherwise (any of those readings at or above 1.0), while

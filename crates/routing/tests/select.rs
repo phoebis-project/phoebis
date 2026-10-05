@@ -4935,6 +4935,91 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
 }
 
 #[test]
+fn the_blocker_passes_an_anthropic_key_candidate_while_its_bucket_holds_room() {
+    let scenario = |seed: &dyn Fn(&mut RoutingState), expected: &str, why: &str| {
+        let s = snapshot(Pool {
+            members: vec![("a", 1), ("b", 0)],
+            kinds: vec![("a", AccountKind::ApiKey)],
+            shed_ahead: Some(0.2),
+            ..Pool::default()
+        });
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        seed_affinity(
+            &st,
+            vec![affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "s1",
+                AffinityChain::Static,
+                "a",
+                1_000,
+                3_600_000,
+                20_000,
+                "root",
+            )],
+        );
+        seed(&mut st);
+        let req = subagent(
+            placement_req(
+                request(&s, Some("session"), "claude-sonnet-5", true, &[], 2_000),
+                &[],
+                &["s1"],
+                true,
+            ),
+            "worker",
+        );
+        let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+            panic!("the request lands")
+        };
+        assert_eq!(sel.account.id, expected, "{why}");
+        // The warm prefix is a's, so a placement lands there and a refusal leaves the request to the strategy.
+        assert_eq!(sel.trace.placement.is_some(), expected == "a", "{why}");
+    };
+    let bucket = |utilization: f64| {
+        UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            "itpm:claude-sonnet-5",
+            WindowReading {
+                utilization,
+                reset: Some(1_000 + MINUTE),
+                observed_at: 1_000,
+            },
+        )
+    };
+    scenario(
+        &|st| {
+            st.record_sample("a", bucket(0.95));
+        },
+        "a",
+        "a holds room, so rung 4 places the request on its warm prefix though b outranks it",
+    );
+    scenario(
+        &|st| {
+            st.record_sample("a", bucket(1.0));
+        },
+        "b",
+        "an exhausted bucket blocks a at rung 4",
+    );
+    scenario(
+        &|st| {
+            st.record_sample("a", bucket(0.95));
+            st.record_cooldown(cooled(
+                "a",
+                "account",
+                10_000,
+                "itpm:claude-sonnet-5",
+                "rate_limit",
+            ));
+        },
+        "b",
+        "a cooling account never reaches the rung",
+    );
+}
+
+#[test]
 fn the_blocker_refuses_a_winding_down_account_for_the_static_tier() {
     let s = snapshot_with_terms(
         Pool {
@@ -10203,7 +10288,7 @@ fn a_hot_api_key_sibling_is_not_preferred() {
         &mut rng(),
     );
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    // b reads no plan window at all; its worst live bucket is what says it is hot.
+    // b reads no plan window at all; its worst live bucket is exhausted, which says it has no room.
     st.record_sample(
         "b",
         UtilizationSample {
@@ -10213,7 +10298,7 @@ fn a_hot_api_key_sibling_is_not_preferred() {
         .with(
             "itpm:claude-sonnet-5",
             WindowReading {
-                utilization: 0.9,
+                utilization: 1.0,
                 reset: Some(T + MINUTE),
                 observed_at: T + 500,
             },
@@ -10231,7 +10316,75 @@ fn a_hot_api_key_sibling_is_not_preferred() {
             .0
         ),
         ("c".into(), Some(MigrateReason::Spent)),
-        "the api_key sibling's bucket reads above the band, so the cool one is preferred over it"
+        "the api_key sibling's bucket is exhausted, so the cool one is preferred over it"
+    );
+}
+
+#[test]
+fn an_anthropic_key_sibling_is_cool_while_its_bucket_holds_room() {
+    let run = |bucket: f64, cooling: bool| -> (String, Option<MigrateReason>) {
+        let s = snapshot(Pool {
+            shed_ahead: Some(0.2),
+            ..cool_preference_pool(vec![("b", AccountKind::ApiKey)])
+        });
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+            &mut rng(),
+        );
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample(
+            "b",
+            UtilizationSample {
+                observed_at: T + 500,
+                ..Default::default()
+            }
+            .with(
+                "itpm:claude-sonnet-5",
+                WindowReading {
+                    utilization: bucket,
+                    reset: Some(T + MINUTE),
+                    observed_at: T + 500,
+                },
+            ),
+        );
+        st.record_sample("c", sample(0.1, 0.1, T + 500));
+        if cooling {
+            st.record_cooldown(cooled(
+                "b",
+                "account",
+                T + 10_000,
+                "itpm:claude-sonnet-5",
+                "rate_limit",
+            ));
+        }
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng(),
+            )
+            .0,
+        )
+    };
+    // The margin's band sits at 0.15, far under a bucket that holds room, so only a reading of its own makes b cool.
+    assert_eq!(
+        run(0.95, false),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "b holds room, so it is cool and outranks c"
+    );
+    assert_eq!(
+        run(1.0, false),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "an exhausted bucket is no cool destination"
+    );
+    assert_eq!(
+        run(0.95, true),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "a standing cooldown row keeps b out of the set"
     );
 }
 
