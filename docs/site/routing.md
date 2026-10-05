@@ -626,10 +626,11 @@ named. An account the failover marks, or finds disconnected, keeps its pin until
 fresh one; any other failover moves the pin. The failover, its waits included, starts no new leg past the request's own
 deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on
 another account. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required`
-after a conclusive failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view
-and the `reauth_required` attention condition show. The mark leaves selection at once: the routing snapshot reads it
-before the next selection, and the credential cache refuses the marked credential rather than serving the token it
-still held until that token neared its expiry.
+after a conclusive failure of the refresh (an `invalid_grant`, a token endpoint's `401`) or after a rejected replay,
+which the Accounts view and the `reauth_required` attention condition show. The refresh's mark reaches the routing
+snapshot at the reload that follows the routing writer's fenced write, and until that reload the credential cache
+refuses the marked credential, so no request dials the account on the token it still held; a rejected replay's mark
+takes the same write and reload.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no

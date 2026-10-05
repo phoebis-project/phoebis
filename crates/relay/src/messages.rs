@@ -2616,8 +2616,10 @@ impl Relay {
                             );
                             if marked || tries == 2 {
                                 // A disconnect reached the registry through the admin's own reload; the
-                                // re-authentication mark is the manager's store write alone, so it is reported
-                                // for the snapshot to leave `ready` before the next selection.
+                                // re-authentication mark is the manager's store write alone, so it is reported:
+                                // the routing writer's fenced write and the reload after it take the snapshot's
+                                // row off `ready`, and until that reload the manager's cache refuses the marked
+                                // credential, so no leg dials the account in between.
                                 let mark = matches!(error, AcquireError::ReauthRequired)
                                     .then_some(AccountState::ReauthRequired);
                                 break (None, mark, !marked);

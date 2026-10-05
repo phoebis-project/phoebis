@@ -657,11 +657,11 @@ impl Inner {
 
     /// Keeps `bundle` as the account's entry under the row's incarnation, and answers whether the caller may serve
     /// it: `false` when the slot's epoch moved past `epoch` since the caller read it, since an invalidation landed in
-    /// between and the bundle may be the one it replaced. Under a held epoch, a bundle of another lifecycle than the
-    /// row's is left out, since its lineage is not the row's to vouch for; an entry the same lineage holds at a
-    /// newer generation stays, since a read that lost a race to a refresh commit would put the older one back; and a
-    /// bundle at or under a refused generation is left out the same way, since a read that returned it lost to the
-    /// mark, while one past it is a pairing's and ends the refusal.
+    /// between and the bundle may be the one it replaced, and `false` for a bundle at or under a refused generation,
+    /// which is the one the mark is about. Under a held epoch, a bundle of another lifecycle than the row's is left
+    /// out, since its lineage is not the row's to vouch for; an entry the same lineage holds at a newer generation
+    /// stays, since a read that lost a race to a refresh commit would put the older one back; and a bundle past the
+    /// refused generation is a pairing's and ends the refusal.
     fn remember(&self, account: &AccountRow, bundle: Arc<CredentialBundle>, epoch: u64) -> bool {
         let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
         let slot = bundles.entry(account.id.clone()).or_default();
@@ -678,7 +678,7 @@ impl Inner {
         };
         if let Some(refused) = slot.refused.filter(|refused| refused.of_row(account)) {
             if lineage.generation <= refused.generation {
-                return true;
+                return false;
             }
             slot.refused = None;
         }
@@ -1334,5 +1334,43 @@ mod tests {
         assert_eq!(capped(at - 45_000), Some(45_000));
         assert_eq!(capped(at - 86_400_000), Some(MAX_NOT_BEFORE_MS));
         assert_eq!(capped(at + 1_000), Some(0));
+    }
+
+    #[tokio::test]
+    async fn a_bundle_at_a_refused_generation_is_neither_kept_nor_served() {
+        let now = 1_000_000;
+        let (manager, store, up) = manager_at(now).await;
+        let generation = store
+            .commit_credentials(
+                "a",
+                1,
+                1,
+                None,
+                None,
+                &bundle_at("refused", now, now + 3_600_000),
+            )
+            .unwrap();
+        let account = store.account("a").unwrap().unwrap();
+        let refused = Lineage {
+            incarnation: account.incarnation,
+            lifecycle_generation: account.lifecycle_generation,
+            generation,
+        };
+        let epoch = {
+            let mut bundles = manager.inner.bundles.lock().unwrap();
+            let slot = bundles.entry("a".into()).or_default();
+            slot.refused = Some(refused);
+            slot.epoch
+        };
+        let bundle = Arc::new(store.credentials("a").unwrap().unwrap());
+        assert!(
+            !manager.inner.remember(&account, bundle, epoch),
+            "the bundle the mark is about is not served"
+        );
+        assert!(
+            manager.inner.bundles.lock().unwrap()["a"].entry.is_none(),
+            "nor kept"
+        );
+        up.shutdown().await;
     }
 }

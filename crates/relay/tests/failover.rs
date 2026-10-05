@@ -1566,6 +1566,13 @@ async fn a_marked_account_is_not_dialed_again_on_its_cached_token() {
         (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
     })
     .await;
+    // The relay's report, the routing writer's fenced write and the reload after it take the snapshot's row off
+    // `ready`, so the next selection skips the account whatever the cache holds.
+    wait_for(Duration::from_secs(5), || {
+        (h.router.snapshot().account("a").unwrap().state == AccountState::ReauthRequired)
+            .then_some(())
+    })
+    .await;
     assert_eq!(credentials_seen(&up), [A, B]);
     let resp = h
         .app
