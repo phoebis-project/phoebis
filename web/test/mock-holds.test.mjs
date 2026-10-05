@@ -29,3 +29,13 @@ for (const at of ['2026-09-30T18:07:00Z', '2026-09-29T09:07:00Z']) {
     assert.equal(row.status, 429);
   });
 }
+
+// In UTC this minute's at-cap row, refused before any attempt, is a desktop Opus turn, which asked for fast.
+test('a request refused at the cap before any attempt lists under the fast speed it asked for and not under standard', async () => {
+  const api = new (await storyAt('2026-09-30T20:07:00Z')).MockApi();
+  const { requests } = await api.listRequests({ held: true, limit: 1_000 });
+  const row = requests.find((r) => r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
+  assert.equal(row?.shape.requestedSpeed, 'fast', 'the story holds an at-cap row that asked for fast');
+  const listed = async (speed) => (await api.listRequests({ limit: 1_000, speeds: [speed] })).requests.some((r) => r.id === row.id);
+  assert.deepEqual([await listed('fast'), await listed('standard')], [true, false]);
+});

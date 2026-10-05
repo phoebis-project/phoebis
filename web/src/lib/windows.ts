@@ -1,7 +1,7 @@
 import type { KnownWindowId, WindowId } from '@/api/types';
 
 /** A table over the known windows that a window id of any key reads, answering nothing for an unknown one. */
-type ByWindow<T> = Readonly<Record<KnownWindowId, T>> & Readonly<Partial<Record<string, T>>>;
+export type ByWindow<T> = Readonly<Record<KnownWindowId, T>> & Readonly<Partial<Record<string, T>>>;
 
 export const WINDOW_HOURS: ByWindow<number> = { '5h': 5, '7d': 168, '7d_fable': 168 };
 export const WINDOW_LABEL: ByWindow<string> = { '5h': '5-hour', '7d': '7-day', '7d_fable': '7-day Fable' };

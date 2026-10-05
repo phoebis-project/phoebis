@@ -3722,6 +3722,13 @@ localStorage.removeItem('phoebis.expertView');
       .filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(PLAIN_FIELDS[label]))
       .map(([label, read]) => `${label}: ${JSON.stringify(read)}`),
   });
+  const memberHint = () => [...(group(dlg, 'Utilization thresholds')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Member utilization')?.querySelector('.field__hint')?.textContent ?? 'no hint';
+  const plainHint = memberHint();
+  results.push({
+    name: '/pools with the mode off the member utilization hint names no handle, since the plain view draws none',
+    ok: plainHint !== 'no hint' && !plainHint.includes('handle') && !plainHint.includes('arrow keys'),
+    missing: [plainHint],
+  });
   const drawnExpert = ['input[aria-label="Select below utilization (%)"]', 'select[aria-label="Pin sessions"]', '[aria-label="Load shedding preset"]', '[aria-label="Failover preset"]', '[data-rule-set]', 'button[role="switch"][aria-label="Add a cache marker to a request without one"]', 'button[role="switch"][aria-label="Cache diagnostics"]', '[role="slider"][aria-label="Select-below threshold"]'].filter((s) => dlg?.querySelector(s) !== null);
   results.push({ name: '/pools with the mode off no expert control is drawn', ok: drawnExpert.length === 0, missing: drawnExpert });
   group(dlg, 'Pinning')?.querySelector('.dialog-group__more button')?.click();
@@ -3754,6 +3761,24 @@ localStorage.removeItem('phoebis.expertView');
     setter.call(selectBelow, '70');
     selectBelow.dispatchEvent(new window.Event('input', { bubbles: true }));
     await p.settle(120);
+  }
+  {
+    // The handle steps a percent on an arrow key and ten on a page key, and the steps back leave the 70 the save
+    // below reads.
+    const handle = () => dlg?.querySelector('[role="slider"][aria-label="Select-below threshold"]');
+    const percent = () => dlg?.querySelector('input[aria-label="Select below utilization (%)"]')?.value ?? 'absent';
+    const steps = [];
+    for (const key of ['ArrowUp', 'PageDown', 'PageUp', 'ArrowDown']) {
+      handle()?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key }));
+      await p.settle(60);
+      steps.push(percent());
+    }
+    const hint = memberHint();
+    results.push({
+      name: '/pools in the expert view the select-below handle steps by the arrow and page keys, and the hint names it',
+      ok: JSON.stringify(steps) === JSON.stringify(['71', '61', '71', '70']) && hint.includes('select-below') && hint.includes('arrow keys'),
+      missing: [JSON.stringify(steps), hint],
+    });
   }
   [...(dlg?.querySelectorAll('[aria-label="Failover preset"] .pill') ?? [])].find((b) => b.textContent?.trim() === 'Custom')?.click();
   await p.settle(120);

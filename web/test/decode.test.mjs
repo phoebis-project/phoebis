@@ -946,6 +946,11 @@ test('a session fold groups on the client each row named', () => {
   assert.deepEqual(named.map((g) => g.key).sort(), ['claude-cli/2.1.*', 'other', 'phoebis-batch/*'], 'the row that named no client falls under other, as the breakdown route files it');
   assert.deepEqual(named.map((g) => g.requests), [1, 1, 1]);
   assert.equal(d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/*'] })[0].requests, 1, 'the pattern keeps only the clients it admits');
+  assert.equal(
+    d.foldGroups(rows, 'all', { agentPatterns: ['claude-cli/2.1.269'] })[0]?.requests,
+    1,
+    'an exact token selects the row it folds from, as the unscoped page matches the rollups',
+  );
 });
 
 test('a session fold groups on the request class each row sent, and a classless row where the rollups file it', () => {

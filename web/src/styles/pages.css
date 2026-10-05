@@ -1211,8 +1211,7 @@
 }
 
 /* Pools */
-.stat-grid--5,
-.stat-grid--6 {
+.stat-grid--fit {
   grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
 }
 

@@ -80,7 +80,7 @@ const keyOf = (r: RequestLog, by: AnalyticsGroupBy, agentGroups: string[]): stri
 export interface FoldOptions {
   /** Patterns naming the groups under `user_agent`; a row falls in the first that matches, the rest under `other`. */
   agentGroups?: string[];
-  /** Patterns a row's user agent must match one of; a row that named none is matched as `-`, as the rollups file it. */
+  /** Patterns a row's folded user agent must match one of; a row that named none is matched as `-`, as the rollups file it. */
   agentPatterns?: string[];
   /** Patterns a row's client class must match one of; a row with none is matched as `-`, as the rollups file it. */
   clientPatterns?: string[];
@@ -118,7 +118,9 @@ export function foldGroups(rows: RequestLog[], by: AnalyticsGroupBy, options: Fo
   const lists = new Map<string, RequestLog[]>();
   const agentPatterns = options.agentPatterns ?? [];
   const clientPatterns = options.clientPatterns ?? [];
-  const kept = rows.filter((r) => (!agentPatterns.length || agentPatterns.some((p) => matchesPattern(p, r.userAgent ?? '-'))) && (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))));
+  // The agent is matched on its folded token, as the unscoped page's rollups hold it, so one pattern selects the same
+  // rows under both scopes.
+  const kept = rows.filter((r) => (!agentPatterns.length || agentPatterns.some((p) => matchesPattern(p, r.userAgent === null ? '-' : foldUserAgent(r.userAgent)))) && (!clientPatterns.length || clientPatterns.some((p) => matchesPattern(p, r.client ?? '-'))));
   for (const r of kept) {
     const key = keyOf(r, by, options.agentGroups ?? []);
     const g = groups.get(key) ?? emptyFolded(key, labelOf(r, key, by, latest));

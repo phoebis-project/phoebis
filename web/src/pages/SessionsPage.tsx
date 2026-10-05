@@ -243,7 +243,7 @@ export function SessionsPage() {
         <CostReferenceLink />
       </div>
 
-      <div className="stat-grid stat-grid--6">
+      <div className="stat-grid stat-grid--fit">
         <Tile label="Sessions" value={rows ? fmtInt(rows.length) : null} note={sessionsNote} />
         <Tile label="Cache-warming agents" value={o ? `${o.agents.busy} busy` : null} note={o ? `${o.agents.idle} idle, ${o.agents.parked} parked` : null} error={overviewError} />
         <ProbeTile overview={o} error={overviewError} />

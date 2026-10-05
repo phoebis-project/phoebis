@@ -247,7 +247,7 @@ export function PoolsPage() {
           Create pool
         </Button>
       </div>
-      <div className="stat-grid stat-grid--5">
+      <div className="stat-grid stat-grid--fit">
         <Tile label="Pools" value={totals ? fmtInt(totals.pools) : null} />
         <Tile label="Accounts in pools" value={totals ? fmtInt(totals.accounts) : null} />
         <Tile label="Keys" value={totals && totals.keys !== null ? fmtInt(totals.keys) : keysRead === 'failed' ? <span className="muted">n/a</span> : null} />
@@ -1048,6 +1048,9 @@ export function PoolDialog({
     identity: { isNew: pool === null, poolIds: new Set(pools.map((p) => p.id)) },
   });
   const refusedFields = new Set(refusals.map((r) => r.field));
+  // The plain view leaves the select-below handle to the expert view unless a refusal shows its field there.
+  const handleShown = expertView || refusedFields.has('Select below utilization (%)');
+  const handleDrawn = handleShown && form.selectBelowOn;
   const refusedGroups = new Set<PoolGroup>(refusals.map((r) => r.group));
   const invalid = (field: string) => (refusedFields.has(field) ? true : undefined);
   const refusalOf = (field: string) => refusals.find((r) => r.field === field)?.text ?? null;
@@ -1590,12 +1593,13 @@ export function PoolDialog({
           plain
           hint={
             <>
-              Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>. Drag a threshold&apos;s handle, or focus it and use the arrow keys.
+              Each tick is a member&apos;s latest 5-hour or 7-day reading, as on the <PageLink to="/quota">Quota page</PageLink>.
+              {handleDrawn && <> Drag the select-below threshold&apos;s handle, or focus it and use the arrow keys.</>}
             </>
           }
         >
           <UtilizationBar
-            expert={expertView || refusedFields.has('Select below utilization (%)')}
+            expert={handleShown}
             readings={readings}
             selectBelow={form.selectBelowOn ? { onChange: (v) => set('selectBelow', v), value: form.selectBelow } : null}
           />

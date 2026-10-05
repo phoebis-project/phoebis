@@ -261,8 +261,9 @@ export function AnalyticsPage() {
     () => ({ accountIds: filters.accountId, clients: classPattern.trim() ? [classPattern.trim()] : undefined, from: fromIso, groupBy, includeProbes, keyIds: filters.keyId, models: filters.model, poolIds: filters.poolId, to: toIso, userAgentGroups: agentGroups, userAgents: userAgentPattern.trim() ? [userAgentPattern.trim()] : undefined }),
     [agentGroups, classPattern, userAgentPattern, filters, fromIso, groupBy, includeProbes, toIso],
   );
-  // The route already narrowed the rows a session view folds, but a cursor page that crossed a filter change
-  // may be wider than the pattern, so the fold applies every pattern control again over what it holds.
+  // The route narrows the rows a session view folds by the class pattern alone, and the fold applies both pattern
+  // controls over what it holds: a cursor page that crossed a filter change may be wider than the pattern, and the
+  // user agent matches its folded token, as the unscoped page's rollups do, where the route matches the raw header.
   const foldOptions = useMemo(() => ({ agentGroups, agentPatterns: userAgentPattern.trim() ? [userAgentPattern.trim()] : undefined, clientPatterns: classPattern.trim() ? [classPattern.trim()] : undefined }), [agentGroups, classPattern, userAgentPattern]);
   // A session view answers every section from the request log, so the rollup reads stay home while one is set.
   const series = useAsync(() => (sessionId === null ? api.getAnalyticsSeries(query) : Promise.resolve<AnalyticsPoint[]>([])), [query, sessionId, generation]);
@@ -277,13 +278,13 @@ export function AnalyticsPage() {
         : loadSessionRequests(
             (cursor) =>
               api
-                .listRequests({ accountIds: filters.accountId, client: classPattern.trim() || undefined, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso, userAgent: userAgentPattern.trim() || undefined })
+                .listRequests({ accountIds: filters.accountId, client: classPattern.trim() || undefined, cursor, from: fromIso, includeProbes, keyIds: sessionKey && filters.keyId.length === 0 ? [sessionKey] : filters.keyId, limit: SESSION_PAGE_SIZE, models: filters.model, poolIds: filters.poolId, search: sessionId, to: toIso })
                 // The search matches an id across several fields, so the page keeps only the exact session; the
                 // route reads one key list, so a lifetime beside a key filter is applied here as well.
                 .then((page) => ({ ...page, requests: page.requests.filter((r) => r.sessionId === sessionId && (sessionKey === null || `${r.keyId}@${r.keyGeneration}` === sessionKey)) })),
             SESSION_PAGE_LIMIT,
           ),
-    [classPattern, userAgentPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
+    [classPattern, filters, fromIso, includeProbes, sessionId, sessionKey, toIso, generation],
   );
   const accountRollups = useAsync(() => (tab === 'accounts' ? api.listAccountRollups(fromIso, toIso) : Promise.resolve(null)), [fromIso, toIso, tab, generation]);
   // The fold rates the hour still running over the part of it this read saw, so the answer keeps its end and instant.

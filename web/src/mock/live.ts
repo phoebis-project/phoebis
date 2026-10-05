@@ -1,5 +1,6 @@
-import type { AttemptWindow, LiveAttempt, LiveDelta, LiveMetric, LivePhases, LiveRequest, LiveTick, RequestKind, RequestLog, Transport, Usage, WindowId } from '@/api/types';
+import type { AttemptWindow, LiveAttempt, LiveDelta, LiveMetric, LivePhases, LiveRequest, LiveTick, RequestKind, RequestLog, Transport, Usage } from '@/api/types';
 import { histogramOf, percentileFromHistogram } from '@/lib/histogram';
+import type { ByWindow } from '@/lib/windows';
 import { ACCOUNTS } from './accounts';
 import { createRng } from './rng';
 import { LANES, REQUESTS, SESSION_IDS, USER_AGENTS, costOf, warmsCaches, type Lane } from './requests';
@@ -128,8 +129,9 @@ type Wire = Record<string, unknown>;
 export type LiveFrame = { delta: Wire; kind: 'delta' } | { kind: 'snapshot'; snapshot: Wire };
 
 const ms = (at: string) => Date.parse(at);
-// The header sampler's name for the third window, which the decoder folds onto the UI's own.
-const WIRE_WINDOW: Record<WindowId, string> = { '5h': '5h', '7d': '7d', '7d_fable': '7d_oi' };
+// The header sampler's name for the third window, which the decoder folds onto the UI's own; any other key travels
+// as it is.
+const WIRE_WINDOW: ByWindow<string> = { '5h': '5h', '7d': '7d', '7d_fable': '7d_oi' };
 const wireAttempt = (a: LiveAttempt): Wire => ({
   account_id: a.accountId,
   cooldown_set: a.cooldownSet && { reason: a.cooldownSet.reason, until: ms(a.cooldownSet.until) },
@@ -137,7 +139,7 @@ const wireAttempt = (a: LiveAttempt): Wire => ({
   outcome: a.outcome,
   started_at: ms(a.startedAt),
   upstream_status: a.upstreamStatus,
-  windows: a.windows.map((w) => ({ id: WIRE_WINDOW[w.id], resets_at: w.resetsAt === null ? null : ms(w.resetsAt), utilization: w.utilization })),
+  windows: a.windows.map((w) => ({ id: WIRE_WINDOW[w.id] ?? w.id, resets_at: w.resetsAt === null ? null : ms(w.resetsAt), utilization: w.utilization })),
 });
 /** The router leaves a phase out until it is observed. */
 function wirePhases(p: LivePhases): Wire {
