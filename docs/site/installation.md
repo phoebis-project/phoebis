@@ -273,7 +273,9 @@ rather than the first 20 of each. `--json` prints one object instead: `health` (
 when no probe ran), the five answers verbatim (`null` for a read that failed) and `errors`, each failed read's reason
 under its name. Neither output carries the admin secret. `status` exits 0 when the probe, where it ran, answered `200`
 and `/admin/system` answered `ready`; 1 when the proxy does not answer, a component is dead, the secret is refused (`the
-admin secret was refused`), the admin listener does not answer, or the file does not load; 2 for a usage error.
+admin secret was refused`), the admin listener does not answer, or the file does not load; 2 for a usage error. After a
+refused secret or a throttled login the reads that follow print its line without calling again, so a run with a wrong
+secret counts one failed login toward the throttle.
 
 The commands that call the admin API, `status` among them, send the admin secret as `Authorization: Bearer`, one
 connection per call, and share five flags:

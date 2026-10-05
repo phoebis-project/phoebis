@@ -81,11 +81,16 @@ pub async fn read(
         }
         None => None,
     };
-    let system = get(client, "/admin/system", deadline).await;
-    let attention = get(client, "/admin/attention", deadline).await;
-    let pools = get(client, "/admin/pools", deadline).await;
-    let accounts = get(client, "/admin/accounts", deadline).await;
-    let sessions = get(client, "/admin/sessions", deadline).await;
+    let mut reader = Reader {
+        client,
+        deadline,
+        refused: None,
+    };
+    let system = reader.get("/admin/system").await;
+    let attention = reader.get("/admin/attention").await;
+    let pools = reader.get("/admin/pools").await;
+    let accounts = reader.get("/admin/accounts").await;
+    let sessions = reader.get("/admin/sessions").await;
     Reads {
         accounts,
         attention,
@@ -96,24 +101,49 @@ pub async fn read(
     }
 }
 
-/// One GET's answer, or the one line its section prints in its place.
-async fn get(client: &AdminClient, path: &str, deadline: Duration) -> Result<Value, String> {
-    match tokio::time::timeout(deadline, client.expect(Method::GET, path, None)).await {
-        Ok(Ok(answer)) => Ok(answer.body),
-        Ok(Err(ClientError::Transport { url, reason })) => Err(format!(
-            "the admin listener did not answer on {url}: {reason}"
-        )),
-        Ok(Err(ClientError::Refused { status, message })) => {
-            Err(format!("the admin listener answered {status} {message}"))
+/// The five GETs one after another, each under `deadline`.
+struct Reader<'a> {
+    client: &'a AdminClient,
+    deadline: Duration,
+    /// The line of a refused secret or a throttled login, once one answers. The admin listener counts every refused
+    /// bearer as a failed login and refuses every login after five in a minute, so the reads after a refusal print
+    /// its line rather than send the bearer again: one run with a stale secret spends one failure, not five.
+    refused: Option<String>,
+}
+
+impl Reader<'_> {
+    /// One GET's answer, or the one line its section prints in its place.
+    async fn get(&mut self, path: &str) -> Result<Value, String> {
+        if let Some(line) = &self.refused {
+            return Err(line.clone());
         }
-        Ok(Err(error)) => Err(error.to_string()),
-        Err(_) => {
-            let base = client.base();
-            Err(format!(
-                "the admin listener did not answer on {}://{}: the call did not finish within {deadline:?}",
-                base.scheme_str().unwrap_or_default(),
-                base.authority().map(|a| a.as_str()).unwrap_or_default()
-            ))
+        let deadline = self.deadline;
+        match tokio::time::timeout(deadline, self.client.expect(Method::GET, path, None)).await {
+            Ok(Ok(answer)) => Ok(answer.body),
+            Ok(Err(ClientError::Transport { url, reason })) => Err(format!(
+                "the admin listener did not answer on {url}: {reason}"
+            )),
+            Ok(Err(ClientError::Refused { status, message })) => {
+                let line = format!("the admin listener answered {status} {message}");
+                if status == 429 {
+                    self.refused = Some(line.clone());
+                }
+                Err(line)
+            }
+            Ok(Err(error @ ClientError::Refused401)) => {
+                let line = error.to_string();
+                self.refused = Some(line.clone());
+                Err(line)
+            }
+            Ok(Err(error)) => Err(error.to_string()),
+            Err(_) => {
+                let base = self.client.base();
+                Err(format!(
+                    "the admin listener did not answer on {}://{}: the call did not finish within {deadline:?}",
+                    base.scheme_str().unwrap_or_default(),
+                    base.authority().map(|a| a.as_str()).unwrap_or_default()
+                ))
+            }
         }
     }
 }

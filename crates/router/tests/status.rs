@@ -262,6 +262,34 @@ async fn a_refused_secret_exits_one_and_neither_stream_carries_a_secret() {
     running.stop().await;
 }
 
+/// The admin listener counts a refused bearer as a failed login and refuses every login after five in a minute, so
+/// a run with a stale secret must spend one failure and leave the corrected run, and the console, their logins.
+#[tokio::test]
+async fn a_refused_secret_spends_one_failed_login_so_the_corrected_run_reads_ready() {
+    const WRONG: &str = "not-the-admin-secret-status-43";
+    let running = start("TEST_STATUS_THROTTLE").await;
+    let refused = status(&[], &running.config, "TEST_STATUS_THROTTLE", WRONG).await;
+    let (stdout, stderr) = text(&refused);
+    assert_eq!(refused.status.code(), Some(1), "{stdout}\n{stderr}");
+    assert_eq!(
+        stdout.matches("the admin secret was refused").count(),
+        5,
+        "every section names the refusal: {stdout}"
+    );
+
+    let corrected = status(&[], &running.config, "TEST_STATUS_THROTTLE", ADMIN_SECRET).await;
+    let (stdout, stderr) = text(&corrected);
+    assert_eq!(corrected.status.code(), Some(0), "{stdout}\n{stderr}");
+    assert!(
+        stdout
+            .lines()
+            .next()
+            .is_some_and(|line| line.ends_with(", ready")),
+        "{stdout}"
+    );
+    running.stop().await;
+}
+
 #[tokio::test]
 async fn a_router_that_is_down_prints_the_down_screen_and_exits_one() {
     let dir = tempfile::tempdir().unwrap();
@@ -376,4 +404,90 @@ async fn a_route_that_never_answers_ends_each_read_at_the_deadline() {
     );
     assert_eq!(status::exit_code(&reads), 1);
     drop(silent);
+}
+
+/// A loopback listener answering every request with `status` and an `{"error"}` body, counting the connections.
+async fn answering(status: &'static str) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let calls = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+    let counted = calls.clone();
+    tokio::spawn(async move {
+        loop {
+            let (mut socket, _) = listener.accept().await.unwrap();
+            counted.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+            let mut head = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !head.windows(4).any(|w| w == b"\r\n\r\n") {
+                let read = socket.read(&mut chunk).await.unwrap();
+                if read == 0 {
+                    break;
+                }
+                head.extend_from_slice(&chunk[..read]);
+            }
+            let body = format!(r#"{{"error":"refused for the test, {status}"}}"#);
+            let answer = format!(
+                "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
+                body.len()
+            );
+            socket.write_all(answer.as_bytes()).await.unwrap();
+        }
+    });
+    (port, calls)
+}
+
+#[tokio::test]
+async fn a_refused_secret_or_a_throttled_login_is_asked_once_and_named_in_every_read() {
+    for (status_line, line, calls_wanted) in [
+        (
+            "401 Unauthorized",
+            "the admin secret was refused".to_owned(),
+            1,
+        ),
+        (
+            "429 Too Many Requests",
+            "the admin listener answered 429 refused for the test, 429 Too Many Requests"
+                .to_owned(),
+            1,
+        ),
+        (
+            "503 Service Unavailable",
+            "the admin listener answered 503 refused for the test, 503 Service Unavailable"
+                .to_owned(),
+            5,
+        ),
+    ] {
+        let (port, calls) = answering(status_line).await;
+        let client = {
+            let _env = env_lock();
+            std::env::set_var("TEST_STATUS_ONCE", ADMIN_SECRET);
+            AdminClient::from_flags(
+                &Common {
+                    ca: None,
+                    json: false,
+                    secret_env: Some("TEST_STATUS_ONCE".to_owned()),
+                    timeout: 10,
+                    url: Some(format!("http://127.0.0.1:{port}")),
+                },
+                Path::new("absent.yaml"),
+            )
+            .unwrap()
+        };
+        let reads = status::read(&client, None, Duration::from_secs(10)).await;
+        for (name, read) in [
+            ("system", &reads.system),
+            ("attention", &reads.attention),
+            ("pools", &reads.pools),
+            ("accounts", &reads.accounts),
+            ("sessions", &reads.sessions),
+        ] {
+            assert_eq!(read.as_ref().err(), Some(&line), "{status_line}: {name}");
+        }
+        assert_eq!(
+            calls.load(std::sync::atomic::Ordering::SeqCst),
+            calls_wanted,
+            "{status_line}: a refusal of the secret is asked once, any other refusal per read"
+        );
+    }
 }
