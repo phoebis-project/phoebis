@@ -1,7 +1,6 @@
 //! `phoebis init` writes the storage key, the environment file when one is named, and the bootstrap file, once and at
 //! their modes, and prints the admin secret once on stdout unless the environment file takes it. It refuses a file that
-//! exists, a data directory that holds a registry, an address off loopback without a TLS choice and `--owner` off root,
-//! and every refusal leaves nothing behind.
+//! exists, a data directory that holds a registry and `--owner` off root, and every refusal leaves nothing behind.
 
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -296,7 +295,7 @@ fn an_existing_empty_data_directory_is_used_as_it_is() {
 }
 
 #[test]
-fn an_address_off_loopback_needs_a_tls_choice() {
+fn an_address_off_loopback_is_written_without_a_tls_line_and_passes_check_config() {
     let dir = tempfile::tempdir().unwrap();
     let config = dir.path().join("config.yaml");
     let out = init(
@@ -309,17 +308,24 @@ fn an_address_off_loopback_needs_a_tls_choice() {
             path_arg(&config),
         ],
     );
-    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains(
-            "--proxy-listen 0.0.0.0:0 leaves loopback; name --proxy-tls self_signed or plain_http, or --proxy-cert \
-             and --proxy-key"
-        ),
-        "{stderr}"
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    let written = text(&config);
+    assert!(!written.contains("\n  tls:"), "{written}");
+    let loaded = phoebis_router::config::load_unresolved(&config).unwrap();
+    assert_eq!(loaded.proxy.listen, "0.0.0.0:0".parse().unwrap());
+    assert_eq!(loaded.proxy.tls, None);
+    let checked = phoebis(dir.path())
+        .args(["check-config", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert_eq!(checked.status.code(), Some(0), "{}", printed(&checked));
+    assert_eq!(
+        String::from_utf8_lossy(&checked.stdout).lines().nth(1),
+        Some("proxy listens on 0.0.0.0:0 over plain HTTP"),
+        "{}",
+        printed(&checked)
     );
-    assert!(out.stdout.is_empty());
-    assert!(entries(dir.path()).is_empty());
 }
 
 #[test]
@@ -357,7 +363,7 @@ fn a_failure_after_the_first_write_removes_what_the_run_wrote() {
 }
 
 #[test]
-fn a_tls_word_and_a_pair_are_written_as_given() {
+fn a_pair_is_written_as_given_and_a_tls_word_flag_is_a_usage_error() {
     let word = tempfile::tempdir().unwrap();
     let config = word.path().join("config.yaml");
     let out = init(
@@ -370,17 +376,13 @@ fn a_tls_word_and_a_pair_are_written_as_given() {
             path_arg(&config),
         ],
     );
-    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
-    let written = text(&config);
+    assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
     assert!(
-        written.contains("proxy:\n  listen: 127.0.0.1:8317\n  tls: self_signed\n"),
-        "{written}"
+        String::from_utf8_lossy(&out.stderr).contains("unexpected argument"),
+        "{}",
+        printed(&out)
     );
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("ca.pem there is the file each client trusts through NODE_EXTRA_CA_CERTS"),
-        "{stderr}"
-    );
+    assert!(entries(word.path()).is_empty());
 
     let pair = tempfile::tempdir().unwrap();
     let config = pair.path().join("config.yaml");
@@ -412,30 +414,11 @@ fn a_tls_word_and_a_pair_are_written_as_given() {
     let loaded = phoebis_router::config::load_unresolved(&config).unwrap();
     assert_eq!(
         loaded.proxy.tls,
-        Some(ListenerTls::Pair {
+        Some(ListenerTls {
             cert_file: cert,
             key_file: key
         })
     );
-
-    let both = tempfile::tempdir().unwrap();
-    let config = both.path().join("config.yaml");
-    let out = init(
-        both.path(),
-        &[
-            "--proxy-tls",
-            "self_signed",
-            "--proxy-cert",
-            "a.pem",
-            "--proxy-key",
-            "a.key",
-            "--non-interactive",
-            "--config",
-            path_arg(&config),
-        ],
-    );
-    assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
-    assert!(entries(both.path()).is_empty());
 }
 
 #[test]
@@ -492,8 +475,8 @@ fn the_container_shape_writes_the_compose_directory() {
         "  path: /var/lib/phoebis/router.sqlite\n",
         "  ledger_path: /var/lib/phoebis/ledger.sqlite\n",
         "  pricing_path: /var/lib/phoebis/pricing.yaml\n",
-        "  listen: 0.0.0.0:8317\n  tls: plain_http\n",
-        "  listen: 0.0.0.0:8081\n  tls: plain_http\n",
+        "  listen: 0.0.0.0:8317\n",
+        "  listen: 0.0.0.0:8081\n",
         "  metrics_listen: 0.0.0.0:9464\n",
     ] {
         assert!(written.contains(line), "{line:?} in\n{written}");
@@ -524,8 +507,12 @@ fn the_container_shape_writes_the_compose_directory() {
     );
     assert_eq!(loaded.proxy.listen, "0.0.0.0:8317".parse().unwrap());
     assert_eq!(loaded.admin.listen, "0.0.0.0:8081".parse().unwrap());
-    assert_eq!(loaded.proxy.tls, Some(ListenerTls::PlainHttp));
-    assert_eq!(loaded.admin.tls, Some(ListenerTls::PlainHttp));
+    assert!(
+        loaded.proxy.tls.is_none() && loaded.admin.tls.is_none(),
+        "the container's listeners serve plain HTTP: {:?} {:?}",
+        loaded.proxy,
+        loaded.admin
+    );
     assert_eq!(loaded.stats.metrics_listen, "0.0.0.0:9464".parse().unwrap());
 }
 

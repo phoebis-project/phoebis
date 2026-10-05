@@ -24,7 +24,7 @@ use phoebis_transport::pool::Pool;
 use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinHandle;
 
-use crate::config::{Config, ListenerTls, UpstreamConfig};
+use crate::config::{Config, UpstreamConfig};
 use crate::{listen, tls};
 
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
@@ -340,7 +340,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             admin: Secret::new(config.admin.secret.expose()),
         },
         clock: clock.clone(),
-        tls: ListenerTls::effective(&config.admin.tls).terminates_tls(),
+        tls: config.admin.tls.is_some(),
         vault: vault.clone(),
         started_at: (clock)(),
         router: router_task.clone(),
@@ -413,37 +413,22 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         Duration::from_secs(config.routing.catalog_refresh_seconds),
         REFRESH_TICK,
     );
-    // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken; the
-    // `self_signed` material that is missing or expired is written here.
-    let proxy_tls = tls::load(
-        "proxy.tls",
-        "proxy",
-        &config.proxy.tls,
-        &config.storage.path,
-        config.proxy.listen,
-        true,
-    )?;
-    let admin_tls = tls::load(
-        "admin.tls",
-        "admin",
-        &config.admin.tls,
-        &config.storage.path,
-        config.admin.listen,
-        true,
-    )?;
-    for (listener, key, value, serving) in [
-        ("proxy", "proxy.tls", &config.proxy.tls, &proxy_tls),
-        ("admin", "admin.tls", &config.admin.tls, &admin_tls),
+    // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken.
+    let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
+    let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
+    for (listener, key, serving) in [
+        ("proxy", "proxy.tls", &proxy_tls),
+        ("admin", "admin.tls", &admin_tls),
     ] {
         if let tls::Serving::Tls(loaded) = serving {
             tracing::info!(listener, names = ?loaded.leaf.names, not_after = %loaded.leaf.not_after, "serving TLS");
         }
-        for warning in tls::warnings(key, value, serving) {
+        for warning in tls::warnings(key, serving) {
             tracing::warn!("{warning}");
         }
     }
-    let proxy_acceptor = acceptor(proxy_tls)?;
-    let admin_acceptor = acceptor(admin_tls)?;
+    let proxy_acceptor = acceptor(proxy_tls);
+    let admin_acceptor = acceptor(admin_tls);
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;
@@ -713,19 +698,11 @@ fn router_config(
     }
 }
 
-/// The accept loop's acceptor for what `tls::load` answered with `generate` set, which never leaves material
-/// pending or stale; such an answer refuses the start rather than serving plain HTTP on a listener the file put
-/// under TLS.
-fn acceptor(serving: tls::Serving) -> anyhow::Result<tls::Acceptor> {
+/// The accept loop's acceptor for what `tls::load` answered.
+fn acceptor(serving: tls::Serving) -> tls::Acceptor {
     match serving {
-        tls::Serving::Plain => Ok(None),
-        tls::Serving::Tls(loaded) => Ok(Some(Arc::new(loaded.acceptor))),
-        tls::Serving::Pending { leaf } | tls::Serving::StaleLeaf { leaf, .. } => {
-            anyhow::bail!("the self-signed leaf {} was not generated", leaf.display())
-        }
-        tls::Serving::StaleCa { ca, .. } => {
-            anyhow::bail!("the self-signed CA {} was not generated", ca.display())
-        }
+        tls::Serving::Plain => None,
+        tls::Serving::Tls(loaded) => Some(Arc::new(loaded.acceptor)),
     }
 }
 

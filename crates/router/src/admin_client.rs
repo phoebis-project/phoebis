@@ -17,13 +17,13 @@ use phoebis_store::Secret;
 use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::net::TcpStream;
 
-use crate::config::{self, Config, ConfigError, ListenerTls};
+use crate::config::{self, ConfigError};
 use crate::{health, tls};
 
 /// The flags every subcommand over the admin API shares, `status` included.
 #[derive(clap::Args, Clone, Debug)]
 pub struct Common {
-    /// A PEM bundle to trust in place of the system roots; under `admin.tls: self_signed` the file's CA by default.
+    /// A PEM bundle to trust in place of the system roots, for a listener whose pair a private CA signed.
     #[arg(long, value_name = "PATH")]
     pub ca: Option<PathBuf>,
     /// Print the route's answer verbatim on stdout and nothing on stderr but errors.
@@ -126,7 +126,7 @@ impl AdminClient {
                         health::target(config.admin.listen)
                     )
                 });
-                let ca = common.ca.clone().or_else(|| self_signed_ca(&config));
+                let ca = common.ca.clone();
                 let secret_env = common
                     .secret_env
                     .clone()
@@ -306,16 +306,6 @@ fn connector(ca: Option<&Path>) -> Result<SslConnector, Failure> {
     }
     builder.set_alpn_protos(b"\x08http/1.1")?;
     Ok(builder.build())
-}
-
-/// Under `admin.tls: self_signed` the listener's leaf chains to the CA the start wrote, so a call on this host needs
-/// no flag; a CA this process cannot read leaves the system roots, and the handshake says why.
-fn self_signed_ca(config: &Config) -> Option<PathBuf> {
-    if !matches!(config.admin.tls, Some(ListenerTls::SelfSigned)) {
-        return None;
-    }
-    let path = tls::ca_path(&config.storage.path);
-    std::fs::File::open(&path).is_ok().then_some(path)
 }
 
 /// The base names the listener and nothing else. A credential in the URL would sit in the process list and in every

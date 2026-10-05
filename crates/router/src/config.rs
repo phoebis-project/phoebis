@@ -73,36 +73,21 @@ pub struct ProxyConfig {
     pub upstream_gzip: String,
 }
 
-/// One public listener's `tls` key. Optional on a loopback address, where its absence is plain HTTP; required off
-/// it, since an unspecified or LAN bind is published to a network and the file names the trust decision.
+/// One public listener's `tls` key: the operator's certificate pair, and the listener terminates TLS. Absent, the
+/// listener serves plain HTTP on the address named, loopback or not; the file records that trust decision by naming
+/// no pair, and no address requires one.
 #[derive(Clone, Debug, PartialEq, Eq)]
-pub enum ListenerTls {
-    /// An operator's pair: the leaf first with any intermediates after it, and the matching key, both PEM.
-    Pair {
-        cert_file: PathBuf,
-        key_file: PathBuf,
-    },
-    /// Plain HTTP on the address named, the operator's trust decision for that network.
-    PlainHttp,
-    /// A local CA and a leaf per listener, generated under the data directory at the first start.
-    SelfSigned,
+pub struct ListenerTls {
+    /// PEM, the leaf first with any intermediates after it.
+    pub cert_file: PathBuf,
+    /// PEM, the matching private key.
+    pub key_file: PathBuf,
 }
 
-impl ListenerTls {
-    /// The value a listener runs under: the key's, or plain HTTP where the key is absent.
-    pub fn effective(tls: &Option<ListenerTls>) -> &ListenerTls {
-        tls.as_ref().unwrap_or(&ListenerTls::PlainHttp)
-    }
-
-    /// Whether the listener terminates TLS; what the cookie, `health` and `status` derive their scheme from.
-    pub fn terminates_tls(&self) -> bool {
-        matches!(self, ListenerTls::Pair { .. } | ListenerTls::SelfSigned)
-    }
-}
-
-/// A word or a key outside the three shapes earns this one line; serde puts the key's path in front of it.
-const TLS_SHAPES: &str =
-    "must be self_signed, plain_http, or a mapping with cert_file and key_file";
+/// The line for a string in the key's place, a stray key, a missing key or a repeated one; serde puts the key's path
+/// in front of it. A hand-written visitor rather than a derive, so a word earns this line and not serde's
+/// "invalid type" one, which names no key.
+const TLS_SHAPES: &str = "must be a mapping with cert_file and key_file";
 
 impl<'de> Deserialize<'de> for ListenerTls {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -112,15 +97,11 @@ impl<'de> Deserialize<'de> for ListenerTls {
             type Value = ListenerTls;
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("self_signed, plain_http, or a mapping with cert_file and key_file")
+                f.write_str("a mapping with cert_file and key_file")
             }
 
-            fn visit_str<E: serde::de::Error>(self, word: &str) -> Result<ListenerTls, E> {
-                match word {
-                    "plain_http" => Ok(ListenerTls::PlainHttp),
-                    "self_signed" => Ok(ListenerTls::SelfSigned),
-                    _ => Err(E::custom(TLS_SHAPES)),
-                }
+            fn visit_str<E: serde::de::Error>(self, _word: &str) -> Result<ListenerTls, E> {
+                Err(E::custom(TLS_SHAPES))
             }
 
             fn visit_map<M: serde::de::MapAccess<'de>>(
@@ -139,7 +120,7 @@ impl<'de> Deserialize<'de> for ListenerTls {
                     }
                 }
                 match (cert_file, key_file) {
-                    (Some(cert_file), Some(key_file)) => Ok(ListenerTls::Pair {
+                    (Some(cert_file), Some(key_file)) => Ok(ListenerTls {
                         cert_file,
                         key_file,
                     }),
@@ -297,13 +278,6 @@ pub enum ConfigError {
     StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
     Syntax(#[from] serde_norway::Error),
-    #[error(
-        "{key} is required when {listen} leaves loopback; name a certificate pair, self_signed, or plain_http"
-    )]
-    TlsRequired {
-        key: &'static str,
-        listen: &'static str,
-    },
     #[error("proxy.upstream_gzip must be auto, on or off, not {value}")]
     UpstreamGzipInvalid { value: String },
     #[error("usage.cache_ttl_seconds must be between 1 and 3600, not {value}")]
@@ -385,29 +359,6 @@ impl Default for UsageConfig {
 }
 
 fn check_shape(config: &Config) -> Result<(), ConfigError> {
-    // An unspecified or LAN bind is published to a network; the file names the trust decision rather than the
-    // start guessing it.
-    for (key, listen_key, listen, tls) in [
-        (
-            "admin.tls",
-            "admin.listen",
-            config.admin.listen,
-            &config.admin.tls,
-        ),
-        (
-            "proxy.tls",
-            "proxy.listen",
-            config.proxy.listen,
-            &config.proxy.tls,
-        ),
-    ] {
-        if !listen.ip().is_loopback() && tls.is_none() {
-            return Err(ConfigError::TlsRequired {
-                key,
-                listen: listen_key,
-            });
-        }
-    }
     if !(1..=3600).contains(&config.usage.cache_ttl_seconds) {
         return Err(ConfigError::UsageCacheTtlOutOfRange {
             value: config.usage.cache_ttl_seconds,
@@ -844,21 +795,8 @@ mod tests {
     }
 
     #[test]
-    fn the_tls_key_takes_its_three_shapes_and_refuses_the_rest() {
+    fn the_tls_key_is_the_pair_and_every_other_shape_is_refused_naming_the_two_keys() {
         let dir = tempfile::tempdir().unwrap();
-        let plain = load_unresolved(&file_with_proxy(dir.path(), "plain", "  tls: plain_http\n"))
-            .unwrap()
-            .proxy;
-        assert_eq!(plain.tls, Some(ListenerTls::PlainHttp));
-        let generated = load_unresolved(&file_with_proxy(
-            dir.path(),
-            "self-signed",
-            "  tls: self_signed\n",
-        ))
-        .unwrap()
-        .proxy;
-        assert_eq!(generated.tls, Some(ListenerTls::SelfSigned));
-        assert!(ListenerTls::SelfSigned.terminates_tls());
         let pair = load_unresolved(&file_with_proxy(
             dir.path(),
             "pair",
@@ -868,31 +806,38 @@ mod tests {
         .proxy;
         assert_eq!(
             pair.tls,
-            Some(ListenerTls::Pair {
-                cert_file: PathBuf::from("/a"),
-                key_file: PathBuf::from("/b"),
+            Some(ListenerTls {
+                cert_file: "/a".into(),
+                key_file: "/b".into(),
             })
         );
-        for (name, keys) in [
-            ("word", "  tls: mutual\n"),
-            ("stray", "  tls:\n    cert_file: /a\n    chain: /c\n"),
-            ("half", "  tls:\n    cert_file: /a\n"),
-        ] {
+        let refused = |name: &str, keys: &str| {
             let error = load_unresolved(&file_with_proxy(dir.path(), name, keys)).unwrap_err();
             let chain = chain(&error);
             assert!(
                 matches!(error, ConfigError::Syntax(_))
                     && chain.contains("proxy.tls")
-                    && chain.contains(
-                        "must be self_signed, plain_http, or a mapping with cert_file and key_file"
-                    ),
+                    && chain.contains("must be a mapping with cert_file and key_file"),
                 "{name}: {chain}"
             );
+        };
+        for word in ["plain_http", "self_signed", "mutual"] {
+            refused(word, &format!("  tls: {word}\n"));
+        }
+        for (name, keys) in [
+            ("stray", "  tls:\n    cert_file: /a\n    chain: /c\n"),
+            ("half", "  tls:\n    cert_file: /a\n"),
+            (
+                "twice",
+                "  tls:\n    cert_file: /a\n    cert_file: /b\n    key_file: /c\n",
+            ),
+        ] {
+            refused(name, keys);
         }
     }
 
     #[test]
-    fn a_listener_off_loopback_needs_a_tls_value() {
+    fn a_listener_without_tls_loads_on_every_address_and_serves_plain_http() {
         let dir = tempfile::tempdir().unwrap();
         let key = dir.path().join("storage.key");
         std::fs::write(
@@ -912,47 +857,27 @@ mod tests {
             path
         };
         let loopback = "  listen: 127.0.0.1:0\n";
+        let both = load_unresolved(&binding("loopback", loopback, loopback)).unwrap();
+        assert_eq!((&both.proxy.tls, &both.admin.tls), (&None, &None));
+        assert_eq!(crate::tls::scheme(&None), "http");
         for unspecified in ["0.0.0.0:0", "\"[::]:0\""] {
             let bare = format!("  listen: {unspecified}\n");
-            let plain = format!("{bare}  tls: plain_http\n");
-            let proxy = load_unresolved(&binding("proxy-bare", loopback, &bare)).unwrap_err();
+            let proxy = load_unresolved(&binding("proxy-bare", loopback, &bare))
+                .unwrap()
+                .proxy;
             assert!(
-                matches!(
-                    proxy,
-                    ConfigError::TlsRequired {
-                        key: "proxy.tls",
-                        listen: "proxy.listen"
-                    }
-                ),
+                proxy.listen.ip().is_unspecified() && proxy.tls.is_none(),
                 "{unspecified}: {proxy:?}"
             );
-            assert_eq!(
-                proxy.to_string(),
-                "proxy.tls is required when proxy.listen leaves loopback; name a certificate pair, self_signed, or plain_http"
-            );
-            let admin = load_unresolved(&binding("admin-bare", &bare, loopback)).unwrap_err();
+            assert_eq!(crate::tls::scheme(&proxy.tls), "http", "{unspecified}");
+            let admin = load_unresolved(&binding("admin-bare", &bare, loopback))
+                .unwrap()
+                .admin;
             assert!(
-                matches!(
-                    admin,
-                    ConfigError::TlsRequired {
-                        key: "admin.tls",
-                        listen: "admin.listen"
-                    }
-                ),
+                admin.listen.ip().is_unspecified() && admin.tls.is_none(),
                 "{unspecified}: {admin:?}"
             );
-            assert_eq!(
-                admin.to_string(),
-                "admin.tls is required when admin.listen leaves loopback; name a certificate pair, self_signed, or plain_http"
-            );
-            assert!(
-                load_unresolved(&binding("proxy-plain", loopback, &plain)).is_ok(),
-                "{unspecified}: plain_http is the operator's decision for the proxy"
-            );
-            assert!(
-                load_unresolved(&binding("admin-plain", &plain, loopback)).is_ok(),
-                "{unspecified}: plain_http is the operator's decision for the admin listener"
-            );
+            assert_eq!(crate::tls::scheme(&admin.tls), "http", "{unspecified}");
         }
     }
 
@@ -975,45 +900,6 @@ mod tests {
             source = cause.source();
         }
         chain
-    }
-
-    #[test]
-    fn a_tls_plain_http_line_on_a_loopback_listener_is_accepted() {
-        let dir = tempfile::tempdir().unwrap();
-        for block in ["admin", "proxy"] {
-            for path in [
-                file(dir.path(), &format!("file-{block}"), ""),
-                file_with_proxy(dir.path(), &format!("proxy-{block}"), ""),
-                file_with_secret_env(
-                    dir.path(),
-                    &format!("secret-{block}"),
-                    "TEST_CFG_TLS_LOOPBACK",
-                ),
-            ] {
-                let bare = load_unresolved(&path).unwrap();
-                under(&path, block, "  tls: plain_http\n");
-                let spelled = load_unresolved(&path).unwrap();
-                let (bare, spelled) = match block {
-                    "admin" => (bare.admin.tls, spelled.admin.tls),
-                    _ => (bare.proxy.tls, spelled.proxy.tls),
-                };
-                assert_eq!(
-                    (&bare, &spelled),
-                    (&None, &Some(ListenerTls::PlainHttp)),
-                    "{}",
-                    path.display()
-                );
-                assert_eq!(
-                    (
-                        ListenerTls::effective(&bare),
-                        ListenerTls::effective(&spelled)
-                    ),
-                    (&ListenerTls::PlainHttp, &ListenerTls::PlainHttp),
-                    "{}: the line changes nothing on loopback",
-                    path.display()
-                );
-            }
-        }
     }
 
     #[test]

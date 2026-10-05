@@ -8,7 +8,6 @@ use std::time::Duration;
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient};
-use phoebis_router::config::ListenerTls;
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::{init, tls};
 
@@ -53,41 +52,19 @@ fn main() -> anyhow::Result<()> {
     match cli.command {
         Some(Command::CheckConfig) => {
             let mut config = phoebis_router::config::load_unresolved(&cli.config)?;
-            // Read before the first line, so a pair the start would refuse is the one line the check prints. Nothing
-            // is written: `self_signed` material the first start would generate prints its pending shape.
-            let proxy_tls = tls::load(
-                "proxy.tls",
-                "proxy",
-                &config.proxy.tls,
-                &config.storage.path,
-                config.proxy.listen,
-                false,
-            )?;
-            let admin_tls = tls::load(
-                "admin.tls",
-                "admin",
-                &config.admin.tls,
-                &config.storage.path,
-                config.admin.listen,
-                false,
-            )?;
+            // Read before the first line, so a pair the start would refuse is the one line the check prints.
+            let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
+            let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
             println!("{} is valid", cli.config.display());
             println!(
                 "{}",
-                tls::describe("proxy", config.proxy.listen, &config.proxy.tls, &proxy_tls)
+                tls::describe("proxy", config.proxy.listen, &proxy_tls)
             );
             println!(
                 "{}",
-                tls::describe("admin", config.admin.listen, &config.admin.tls, &admin_tls)
+                tls::describe("admin", config.admin.listen, &admin_tls)
             );
             println!("metrics listens on {}", config.stats.metrics_listen);
-            let ca = tls::ca_path(&config.storage.path);
-            let self_signed = [&config.proxy.tls, &config.admin.tls]
-                .into_iter()
-                .any(|value| matches!(value, Some(ListenerTls::SelfSigned)));
-            if self_signed && ca.exists() {
-                println!("tls: CA for the clients at {}", ca.display());
-            }
             println!(
                 "proxy: body budget {} bytes, body read {}s, key body reads {}, max request {} bytes, \
                  sign cch placeholder {}, upstream gzip {}",
@@ -204,9 +181,9 @@ fn main() -> anyhow::Result<()> {
             ) {
                 println!("warning: {warning}");
             }
-            for warning in tls::warnings("proxy.tls", &config.proxy.tls, &proxy_tls)
+            for warning in tls::warnings("proxy.tls", &proxy_tls)
                 .into_iter()
-                .chain(tls::warnings("admin.tls", &config.admin.tls, &admin_tls))
+                .chain(tls::warnings("admin.tls", &admin_tls))
             {
                 println!("warning: {warning}");
             }
@@ -225,7 +202,7 @@ fn main() -> anyhow::Result<()> {
             let config = phoebis_router::config::load(&cli.config)?;
             match phoebis_router::health::probe(
                 config.proxy.listen,
-                ListenerTls::effective(&config.proxy.tls).terminates_tls(),
+                config.proxy.tls.is_some(),
                 phoebis_router::health::TIMEOUT,
             ) {
                 Ok(addr) => {
@@ -242,7 +219,7 @@ fn main() -> anyhow::Result<()> {
             let interactive = std::io::stdin().is_terminal()
                 && std::io::stderr().is_terminal()
                 && !args.non_interactive;
-            let mut plan = init::plan(&cli.config, &args, interactive)?;
+            let mut plan = init::plan(&cli.config, &args)?;
             init::refuse(&plan)?;
             if interactive {
                 plan = init::ask(
@@ -321,41 +298,31 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
     };
     let called = client.url();
     let listeners = match &file {
-        Some(config) => {
-            let self_signed = [&config.proxy.tls, &config.admin.tls]
-                .into_iter()
-                .any(|value| matches!(value, Some(ListenerTls::SelfSigned)));
-            Listeners {
-                admin: match args.common.url {
-                    Some(_) => called,
-                    None => format!(
-                        "{}://{}",
-                        tls::scheme(&config.admin.tls),
-                        config.admin.listen
-                    ),
-                },
-                ca: self_signed.then(|| tls::ca_path(&config.storage.path)),
-                metrics: Some(format!("http://{}", config.stats.metrics_listen)),
-                proxy: Some(format!(
+        Some(config) => Listeners {
+            admin: match args.common.url {
+                Some(_) => called,
+                None => format!(
                     "{}://{}",
-                    tls::scheme(&config.proxy.tls),
-                    config.proxy.listen
-                )),
-            }
-        }
+                    tls::scheme(&config.admin.tls),
+                    config.admin.listen
+                ),
+            },
+            metrics: Some(format!("http://{}", config.stats.metrics_listen)),
+            proxy: Some(format!(
+                "{}://{}",
+                tls::scheme(&config.proxy.tls),
+                config.proxy.listen
+            )),
+        },
         None => Listeners {
             admin: called,
-            ca: None,
             metrics: None,
             proxy: None,
         },
     };
-    let proxy = file.as_ref().map(|config| {
-        (
-            config.proxy.listen,
-            ListenerTls::effective(&config.proxy.tls).terminates_tls(),
-        )
-    });
+    let proxy = file
+        .as_ref()
+        .map(|config| (config.proxy.listen, config.proxy.tls.is_some()));
     // Bound to a local that outlives the exit below: a temporary runtime would drop at the end of its statement and
     // wait there for every blocking thread.
     let runtime = admin_client::runtime().unwrap_or_else(|error| {

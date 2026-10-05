@@ -1585,24 +1585,17 @@ usage:
 }
 
 #[test]
-fn a_listener_off_loopback_needs_a_tls_value_and_a_loopback_one_does_not() {
-    use phoebis_router::config::{load, ConfigError, ListenerTls};
+fn a_listener_without_tls_loads_on_any_address_and_a_rootless_storage_path_does_not() {
+    use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
     let loopback_plain = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET";
     let public_bare = "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET";
-    let public_plain = "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  tls: plain_http";
-    assert!(load(&config_with(dir.path(), "ok", loopback_plain)).is_ok());
-    assert!(matches!(
-        load(&config_with(dir.path(), "public-bare", public_bare)),
-        Err(ConfigError::TlsRequired {
-            key: "admin.tls",
-            ..
-        })
-    ));
-    let public = load(&config_with(dir.path(), "public", public_plain)).unwrap();
-    assert_eq!(public.admin.tls, Some(ListenerTls::PlainHttp));
+    for (name, admin) in [("ok", loopback_plain), ("public-bare", public_bare)] {
+        let config = load(&config_with(dir.path(), name, admin)).unwrap();
+        assert!(config.admin.tls.is_none(), "{name}: {:?}", config.admin);
+    }
 
     // A storage path that names no database file inside a directory never reaches the store.
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", loopback_plain)).unwrap();

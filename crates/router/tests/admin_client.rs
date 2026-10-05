@@ -1,12 +1,12 @@
-//! The subcommands' admin client against routers started in-process: the bearer on a plain listener, the
-//! self-signed CA trusted from the configuration file, a refused secret, a port nothing listens on, a route's own
-//! refusal, and a body that stalls past the deadline.
+//! The subcommands' admin client against routers started in-process: the bearer on a plain listener, the CA `--ca`
+//! names trusted in place of the system roots, a refused secret, a port nothing listens on, a route's own refusal,
+//! and a body that stalls past the deadline.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
 use std::time::{Duration, Instant};
 
-use fake_upstream::FakeUpstream;
+use fake_upstream::{generate_pair, FakeUpstream, GeneratedPair};
 use hyper::Method;
 use phoebis_router::admin_client::{AdminClient, ClientError, Common};
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -66,6 +66,8 @@ struct Running {
     stop: tokio::sync::oneshot::Sender<()>,
     server: tokio::task::JoinHandle<anyhow::Result<()>>,
     admin: u16,
+    /// The CA that signed the admin listener's pair, when the router was started with one.
+    admin_ca: PathBuf,
     config: PathBuf,
     dir: tempfile::TempDir,
     _up: FakeUpstream,
@@ -78,13 +80,26 @@ impl Running {
     }
 }
 
-/// Starts the router with `admin_tls` (a `  tls: ...` line or nothing) under `admin`, the admin secret read from
-/// `secret_env`, and returns once the admin listener accepts; a start that ends first fails the test with its own
-/// error rather than at the settle deadline.
-async fn start(admin_tls: &str, secret_env: &str) -> Running {
+/// Starts the router with `admin_pair`, when given, as `admin.tls` and its CA written to `admin-ca.pem`, the admin
+/// secret read from `secret_env`, and returns once the admin listener accepts; a start that ends first fails the
+/// test with its own error rather than at the settle deadline.
+async fn start(admin_pair: Option<&GeneratedPair>, secret_env: &str) -> Running {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("upstream-ca.pem"), up.ca_pem()).unwrap();
+    let admin_ca = dir.path().join("admin-ca.pem");
+    let admin_tls = match admin_pair {
+        Some(pair) => {
+            let (cert, key) = pair.write_to(dir.path(), "admin");
+            std::fs::write(&admin_ca, &pair.ca_pem).unwrap();
+            format!(
+                "  tls:\n    cert_file: {}\n    key_file: {}\n",
+                cert.display(),
+                key.display()
+            )
+        }
+        None => String::new(),
+    };
     std::fs::write(
         dir.path().join("storage.key"),
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -134,6 +149,7 @@ upstream:
         stop,
         server,
         admin,
+        admin_ca,
         config,
         dir,
         _up: up,
@@ -157,7 +173,7 @@ fn refused(result: Result<phoebis_router::admin_client::Answer, ClientError>) ->
 
 #[tokio::test]
 async fn the_client_calls_a_plain_listener_with_the_bearer() {
-    let running = start("", "TEST_CLIENT_PLAIN_ADMIN").await;
+    let running = start(None, "TEST_CLIENT_PLAIN_ADMIN").await;
     let absent = running.dir.path().join("absent.yaml");
     let common = flags(
         Some(format!("http://127.0.0.1:{}", running.admin)),
@@ -187,45 +203,49 @@ async fn the_client_calls_a_plain_listener_with_the_bearer() {
 }
 
 #[tokio::test]
-async fn the_client_trusts_a_self_signed_ca() {
-    let running = start("  tls: self_signed\n", "TEST_CLIENT_SELF_SIGNED").await;
-    let ca = running.dir.path().join("tls").join("ca.pem");
-    assert!(ca.is_file(), "the start wrote the CA the client trusts");
-    let client = client_with(
-        &flags(None, None),
-        &running.config,
-        "TEST_CLIENT_SELF_SIGNED",
-        ADMIN_SECRET,
-    )
-    .unwrap();
-    let base = client.base();
+async fn the_client_trusts_the_ca_named_by_ca_and_no_other() {
+    let pair = generate_pair(&["localhost", "127.0.0.1"]);
+    let running = start(Some(&pair), "TEST_CLIENT_NAMED_CA").await;
+    let client = |ca: Option<PathBuf>| {
+        let mut common = flags(None, None);
+        common.ca = ca;
+        client_with(
+            &common,
+            &running.config,
+            "TEST_CLIENT_NAMED_CA",
+            ADMIN_SECRET,
+        )
+        .unwrap()
+    };
+    let named = client(Some(running.admin_ca.clone()));
+    let base = named.base();
     assert_eq!(
         (base.scheme_str(), base.host(), base.port_u16()),
         (Some("https"), Some("127.0.0.1"), Some(running.admin))
     );
-    // No `--ca` was given and the system roots never hold this CA, so the answer proves the file's CA is trusted.
-    let answer = answered(client.expect(Method::GET, "/admin/system", None).await);
+    let answer = answered(named.expect(Method::GET, "/admin/system", None).await);
     assert_eq!(answer.status, 200);
     assert!(answer.body["version"].is_string(), "{}", answer.body);
 
-    // Another CA in its place is not enough: the client verifies the leaf rather than trusting every certificate.
-    let mut other = flags(None, None);
-    other.ca = Some(running.dir.path().join("upstream-ca.pem"));
-    let stranger = client_with(
-        &other,
-        &running.config,
-        "TEST_CLIENT_SELF_SIGNED",
-        ADMIN_SECRET,
-    )
-    .unwrap();
-    let error = refused(stranger.expect(Method::GET, "/admin/system", None).await);
-    let line = error.to_string();
-    assert!(matches!(error, ClientError::Transport { .. }), "{line}");
-    assert!(
-        line.starts_with(&format!("https://127.0.0.1:{}: ", running.admin))
-            && line.contains("verif"),
-        "{line}"
-    );
+    // The system roots never hold the test's CA and the upstream's CA did not sign the leaf, so neither call is
+    // admitted: the client verifies the leaf rather than trusting every certificate.
+    for ca in [None, Some(running.dir.path().join("upstream-ca.pem"))] {
+        let error = refused(
+            client(ca.clone())
+                .expect(Method::GET, "/admin/system", None)
+                .await,
+        );
+        let line = error.to_string();
+        assert!(
+            matches!(error, ClientError::Transport { .. }),
+            "{ca:?}: {line}"
+        );
+        assert!(
+            line.starts_with(&format!("https://127.0.0.1:{}: ", running.admin))
+                && line.contains("verif"),
+            "{ca:?}: {line}"
+        );
+    }
     running.stop().await;
 }
 
@@ -234,16 +254,17 @@ async fn the_client_trusts_a_self_signed_ca() {
 #[tokio::test]
 #[allow(clippy::await_holding_lock)]
 async fn a_named_ca_replaces_the_system_roots() {
-    let running = start("  tls: self_signed\n", "TEST_CLIENT_PINNED").await;
+    let running = start(
+        Some(&generate_pair(&["localhost", "127.0.0.1"])),
+        "TEST_CLIENT_PINNED",
+    )
+    .await;
     let url = format!("https://127.0.0.1:{}", running.admin);
     let absent = running.dir.path().join("absent.yaml");
     let env = env_lock();
     let previous = std::env::var_os("SSL_CERT_FILE");
-    // The default roots become the router's own CA, so a call that still consulted them would be admitted.
-    std::env::set_var(
-        "SSL_CERT_FILE",
-        running.dir.path().join("tls").join("ca.pem"),
-    );
+    // The default roots become the admin pair's CA, so a call that still consulted them would be admitted.
+    std::env::set_var("SSL_CERT_FILE", &running.admin_ca);
     std::env::set_var("TEST_CLIENT_PINNED", ADMIN_SECRET);
     let roots = AdminClient::from_flags(
         &flags(Some(url.clone()), Some("TEST_CLIENT_PINNED")),
@@ -264,7 +285,7 @@ async fn a_named_ca_replaces_the_system_roots() {
     assert_eq!(
         answered(through_roots).status,
         200,
-        "with no --ca the default roots, here the router's CA, are the trust"
+        "with no --ca the default roots, here the pair's CA, are the trust"
     );
     let error = refused(through_pin);
     let line = error.to_string();
@@ -279,7 +300,7 @@ async fn a_named_ca_replaces_the_system_roots() {
 #[tokio::test]
 async fn a_refused_secret_is_one_line_with_no_secret_in_it() {
     const WRONG: &str = "not-the-admin-secret-42";
-    let running = start("", "TEST_CLIENT_REFUSED_ADMIN").await;
+    let running = start(None, "TEST_CLIENT_REFUSED_ADMIN").await;
     let common = flags(
         Some(format!("http://127.0.0.1:{}", running.admin)),
         Some("TEST_CLIENT_REFUSED_CALLER"),
@@ -335,7 +356,7 @@ async fn a_port_nothing_listens_on_names_the_url() {
 
 #[tokio::test]
 async fn a_mutation_sends_json_and_reads_the_routes_refusal() {
-    let running = start("", "TEST_CLIENT_MUTATION").await;
+    let running = start(None, "TEST_CLIENT_MUTATION").await;
     let common = flags(
         Some(format!("http://127.0.0.1:{}", running.admin)),
         Some("TEST_CLIENT_MUTATION"),

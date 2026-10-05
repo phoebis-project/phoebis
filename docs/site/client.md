@@ -13,11 +13,11 @@ _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1
 CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 DISABLE_TELEMETRY=1
 CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1
-NODE_EXTRA_CA_CERTS=<path to the copied ca.pem>   # self_signed listeners only
+NODE_EXTRA_CA_CERTS=<path to the CA's PEM>   # a private CA only
 ```
 
-Under `tls: self_signed` the client trusts the router's own CA through `NODE_EXTRA_CA_CERTS`; the client checks the CA
-before anything else, so the leaf needs no pin.
+When the proxy listener's certificate comes from a private CA, the client trusts that CA through `NODE_EXTRA_CA_CERTS`;
+a public CA needs nothing here. The client checks the CA before anything else, so the leaf needs no pin.
 
 ### ANTHROPIC_BASE_URL
 

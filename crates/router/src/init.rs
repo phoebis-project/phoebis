@@ -25,13 +25,9 @@ const CONTAINER_KEY_FILE: &str = "/run/secrets/router-storage-key";
 const CONTAINER_METRICS_LISTEN: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9464);
 
-/// One public listener's flags and the words its prompts and refusals use.
+/// One public listener's name, its default addresses, and the words its prompts and refusals use.
 struct Side {
     name: &'static str,
-    listen_flag: &'static str,
-    tls_flag: &'static str,
-    cert_flag: &'static str,
-    key_flag: &'static str,
     asked_address: &'static str,
     asked_choice: &'static str,
     asked_cert: &'static str,
@@ -42,10 +38,6 @@ struct Side {
 
 const PROXY: Side = Side {
     name: "proxy",
-    listen_flag: "proxy-listen",
-    tls_flag: "proxy-tls",
-    cert_flag: "proxy-cert",
-    key_flag: "proxy-key",
     asked_address: "the proxy address",
     asked_choice: "the proxy TLS choice",
     asked_cert: "the proxy certificate file",
@@ -56,10 +48,6 @@ const PROXY: Side = Side {
 
 const ADMIN: Side = Side {
     name: "admin",
-    listen_flag: "admin-listen",
-    tls_flag: "admin-tls",
-    cert_flag: "admin-cert",
-    key_flag: "admin-key",
     asked_address: "the admin address",
     asked_choice: "the admin TLS choice",
     asked_cert: "the admin certificate file",
@@ -74,9 +62,6 @@ pub struct InitArgs {
     /// The admin listener's address; 127.0.0.1:8081 when absent.
     #[arg(long, value_name = "ADDR")]
     pub admin_listen: Option<SocketAddr>,
-    /// The admin listener's `tls` value, which an address off loopback needs.
-    #[arg(long, value_name = "self_signed|plain_http", conflicts_with_all = ["admin_cert", "admin_key"])]
-    pub admin_tls: Option<TlsChoice>,
     /// The admin listener's certificate chain, PEM, leaf first; `check-config` and the start read it, `init` does not.
     #[arg(long, value_name = "PATH", requires = "admin_key")]
     pub admin_cert: Option<PathBuf>,
@@ -87,7 +72,7 @@ pub struct InitArgs {
     /// beside it, both listeners on every interface over plain HTTP.
     #[arg(long, conflicts_with_all = ["data_dir", "env_file", "key_file"])]
     pub container: bool,
-    /// The directory of both databases and the self-signed material; `data` beside the bootstrap file when absent.
+    /// The directory of both databases; `data` beside the bootstrap file when absent.
     #[arg(long, value_name = "PATH")]
     pub data_dir: Option<PathBuf>,
     /// Writes the admin secret here, with `RUST_LOG=info`, rather than printing it.
@@ -96,7 +81,7 @@ pub struct InitArgs {
     /// The storage key file; `storage.key` beside the bootstrap file when absent.
     #[arg(long, value_name = "PATH")]
     pub key_file: Option<PathBuf>,
-    /// Asks nothing, even on a terminal; a value a flag did not give takes its default or refuses.
+    /// Asks nothing, even on a terminal; a value a flag did not give takes its default.
     #[arg(long)]
     pub non_interactive: bool,
     /// The user that owns the key file and the data directory; needs root.
@@ -105,9 +90,6 @@ pub struct InitArgs {
     /// The proxy listener's address; 127.0.0.1:8317 when absent.
     #[arg(long, value_name = "ADDR")]
     pub proxy_listen: Option<SocketAddr>,
-    /// The proxy listener's `tls` value, which an address off loopback needs.
-    #[arg(long, value_name = "self_signed|plain_http", conflicts_with_all = ["proxy_cert", "proxy_key"])]
-    pub proxy_tls: Option<TlsChoice>,
     /// The proxy listener's certificate chain, PEM, leaf first; `check-config` and the start read it, `init` does not.
     #[arg(long, value_name = "PATH", requires = "proxy_key")]
     pub proxy_cert: Option<PathBuf>,
@@ -117,24 +99,6 @@ pub struct InitArgs {
     /// The environment variable that holds the admin secret, written as `admin.secret_env`.
     #[arg(long, value_name = "NAME", default_value = "PHOEBIS_ADMIN_SECRET", value_parser = env_name)]
     pub secret_env: String,
-}
-
-/// The word a listener's TLS flag takes; an operator's pair is the two path flags instead.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub enum TlsChoice {
-    #[value(name = "self_signed")]
-    SelfSigned,
-    #[value(name = "plain_http")]
-    PlainHttp,
-}
-
-impl From<TlsChoice> for ListenerTls {
-    fn from(choice: TlsChoice) -> ListenerTls {
-        match choice {
-            TlsChoice::PlainHttp => ListenerTls::PlainHttp,
-            TlsChoice::SelfSigned => ListenerTls::SelfSigned,
-        }
-    }
 }
 
 /// One listener as `init` will write it.
@@ -180,17 +144,6 @@ pub enum InitError {
     NoSuchUser { user: String },
     #[error("--owner needs root")]
     OwnerNeedsRoot,
-    #[error(
-        "--{flag} {listen} leaves loopback; name --{flag_tls} self_signed or plain_http, or --{flag_cert} and \
-         --{flag_key}"
-    )]
-    TlsChoiceMissing {
-        flag: &'static str,
-        flag_tls: &'static str,
-        flag_cert: &'static str,
-        flag_key: &'static str,
-        listen: SocketAddr,
-    },
     /// A step after the first write failed, and what the run had written is removed again, newest first.
     #[error("{error}; {}", undone(.removed, .kept))]
     Undone {
@@ -217,9 +170,9 @@ fn undone(removed: &[PathBuf], kept: &[PathBuf]) -> String {
     text
 }
 
-/// The prompts, over any reader and writer so a test feeds answers: the proxy address, the admin address, and the
-/// TLS choice for each that leaves loopback. An empty answer takes the default, a bad one is asked again with the
-/// parse error, end of input refuses.
+/// The prompts, over any reader and writer so a test feeds answers: the proxy address, the admin address, and for
+/// each that leaves loopback with no pair whether to name one. An empty answer takes the default, a bad one is asked
+/// again with the parse error, end of input refuses.
 pub fn ask(
     args: &InitArgs,
     defaults: &Plan,
@@ -240,7 +193,7 @@ pub fn ask(
     }
     for (side, listener) in [(&PROXY, &mut plan.proxy), (&ADMIN, &mut plan.admin)] {
         if leaves_loopback(listener) && listener.tls.is_none() {
-            listener.tls = Some(ask_tls(side, listener.listen, input, output)?);
+            listener.tls = ask_tls(side, listener.listen, input, output)?;
         }
     }
     Ok(plan)
@@ -273,18 +226,17 @@ fn ask_tls(
     listen: SocketAddr,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
-) -> Result<ListenerTls, InitError> {
+) -> Result<Option<ListenerTls>, InitError> {
     loop {
         prompt(
             output,
             &format!(
-                "{} on {listen} leaves loopback; tls: self_signed, plain_http or files [self_signed]: ",
+                "{} on {listen} leaves loopback; tls: files, or none for plain HTTP [none]: ",
                 side.name
             ),
         )?;
         match answer(input, output, side.asked_choice)?.as_str() {
-            "" | "self_signed" => return Ok(ListenerTls::SelfSigned),
-            "plain_http" => return Ok(ListenerTls::PlainHttp),
+            "" | "none" => return Ok(None),
             "files" => {
                 let cert_file = ask_path(
                     &format!("{} certificate file, PEM, leaf first: ", side.name),
@@ -298,12 +250,12 @@ fn ask_tls(
                     input,
                     output,
                 )?;
-                return Ok(ListenerTls::Pair {
+                return Ok(Some(ListenerTls {
                     cert_file,
                     key_file,
-                });
+                }));
             }
-            _ => say(output, "answer self_signed, plain_http or files")?,
+            _ => say(output, "answer files or none")?,
         }
     }
 }
@@ -352,9 +304,9 @@ fn answer(
     Ok(line.trim().to_string())
 }
 
-/// The flags and the defaults as a plan; `interactive` is `stdin` and `stderr` both terminals and no
-/// `--non-interactive`, and decides whether a missing TLS choice asks or refuses.
-pub fn plan(config_path: &Path, args: &InitArgs, interactive: bool) -> Result<Plan, InitError> {
+/// The flags and the defaults as a plan; a listener off loopback with no pair plans plain HTTP until `ask`, on a
+/// terminal, offers it one.
+pub fn plan(config_path: &Path, args: &InitArgs) -> Result<Plan, InitError> {
     let config_path = absolute(config_path)?;
     let dir = parent_of(&config_path).to_path_buf();
     let given = |flag: &Option<PathBuf>, default: PathBuf| match flag {
@@ -378,7 +330,6 @@ pub fn plan(config_path: &Path, args: &InitArgs, interactive: bool) -> Result<Pl
         admin: listener(
             &ADMIN,
             args.admin_listen,
-            args.admin_tls,
             (&args.admin_cert, &args.admin_key),
             args.container,
         )?,
@@ -391,43 +342,26 @@ pub fn plan(config_path: &Path, args: &InitArgs, interactive: bool) -> Result<Pl
         proxy: listener(
             &PROXY,
             args.proxy_listen,
-            args.proxy_tls,
             (&args.proxy_cert, &args.proxy_key),
             args.container,
         )?,
         secret_env: args.secret_env.clone(),
     };
-    if !interactive {
-        for (side, listener) in [(&PROXY, &plan.proxy), (&ADMIN, &plan.admin)] {
-            if leaves_loopback(listener) && listener.tls.is_none() {
-                return Err(InitError::TlsChoiceMissing {
-                    flag: side.listen_flag,
-                    flag_tls: side.tls_flag,
-                    flag_cert: side.cert_flag,
-                    flag_key: side.key_flag,
-                    listen: listener.listen,
-                });
-            }
-        }
-    }
     Ok(plan)
 }
 
 fn listener(
     side: &Side,
     listen: Option<SocketAddr>,
-    choice: Option<TlsChoice>,
     pair: (&Option<PathBuf>, &Option<PathBuf>),
     container: bool,
 ) -> Result<Listener, InitError> {
-    let tls = match (choice, pair) {
-        (Some(choice), _) => Some(choice.into()),
-        (None, (Some(cert_file), Some(key_file))) => Some(ListenerTls::Pair {
+    let tls = match pair {
+        (Some(cert_file), Some(key_file)) => Some(ListenerTls {
             cert_file: absolute(cert_file)?,
             key_file: absolute(key_file)?,
         }),
         // The container network is plain HTTP by default; the host decides what it publishes.
-        _ if container => Some(ListenerTls::PlainHttp),
         _ => None,
     };
     let default = if container {
@@ -542,18 +476,16 @@ fn listen_fill(block: &'static str, listener: &Listener) -> Fill {
         "  listen: {}",
         scalar(&listener.listen.to_string())
     )];
-    match &listener.tls {
-        None => {}
-        Some(ListenerTls::PlainHttp) => lines.push("  tls: plain_http".to_string()),
-        Some(ListenerTls::SelfSigned) => lines.push("  tls: self_signed".to_string()),
-        Some(ListenerTls::Pair {
-            cert_file,
-            key_file,
-        }) => lines.extend([
+    if let Some(ListenerTls {
+        cert_file,
+        key_file,
+    }) = &listener.tls
+    {
+        lines.extend([
             "  tls:".to_string(),
             format!("    cert_file: {}", scalar(&cert_file.to_string_lossy())),
             format!("    key_file: {}", scalar(&key_file.to_string_lossy())),
-        ]),
+        ]);
     }
     Fill {
         block,
@@ -899,16 +831,6 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
             plan.secret_env
         )),
     }
-    let self_signed = [&plan.proxy.tls, &plan.admin.tls]
-        .into_iter()
-        .any(|tls| matches!(tls, Some(ListenerTls::SelfSigned)));
-    if self_signed {
-        text.push_str(&format!(
-            "the first start writes the CA and the leaf under {}/; ca.pem there is the file each client trusts \
-             through NODE_EXTRA_CA_CERTS\n",
-            plan.data_dir.join("tls").display()
-        ));
-    }
     if plan.container {
         // The key path inside the file is the container's, so a check on the host cannot read it.
         text.push_str(
@@ -1026,8 +948,6 @@ mod tests {
             args(&[
                 "--proxy-listen",
                 "0.0.0.0:8317",
-                "--proxy-tls",
-                "self_signed",
                 "--admin-cert",
                 "c.pem",
                 "--admin-key",
@@ -1035,12 +955,12 @@ mod tests {
             ]),
         ];
         for shape in &shapes {
-            let plan = plan(&config, shape, false).unwrap();
+            let plan = plan(&config, shape).unwrap();
             fill(EXAMPLE, &fills(&plan)).unwrap();
         }
         // A drift in the example fails here: the rewriter refuses a key it found no line for, or found twice, rather
         // than render a file without the value.
-        let container = fills(&plan(&config, &args(&["--container"]), false).unwrap());
+        let container = fills(&plan(&config, &args(&["--container"])).unwrap());
         let lost = EXAMPLE.replace("  ledger_path: ./data/ledger.sqlite\n", "");
         assert_ne!(lost, EXAMPLE);
         assert_eq!(
@@ -1068,8 +988,6 @@ mod tests {
                 args(&[
                     "--proxy-listen",
                     "0.0.0.0:8317",
-                    "--proxy-tls",
-                    "self_signed",
                     "--admin-listen",
                     "[::1]:9081",
                     "--admin-cert",
@@ -1086,7 +1004,7 @@ mod tests {
         ];
         for (name, shape) in &shapes {
             let config = dir.path().join(name).join("config.yaml");
-            let plan = plan(&config, shape, false).unwrap();
+            let plan = plan(&config, shape).unwrap();
             std::fs::create_dir_all(config.parent().unwrap()).unwrap();
             std::fs::write(&config, render(&plan)).unwrap();
             let loaded = crate::config::load_unresolved(&config)
@@ -1130,12 +1048,11 @@ mod tests {
         let off = plan(
             &dir.path().join("off-loopback").join("config.yaml"),
             &shapes[1].1,
-            false,
         )
         .unwrap();
         assert!(off.data_dir.ends_with("odd # dir"), "{off:?}");
         assert!(
-            matches!(&off.admin.tls, Some(ListenerTls::Pair { cert_file, key_file })
+            matches!(&off.admin.tls, Some(ListenerTls { cert_file, key_file })
                 if cert_file.is_absolute() && key_file.is_absolute()),
             "{off:?}"
         );
@@ -1145,7 +1062,7 @@ mod tests {
     fn an_empty_answer_takes_the_default() {
         let dir = tempfile::tempdir().unwrap();
         let flags = args(&[]);
-        let defaults = plan(&dir.path().join("config.yaml"), &flags, true).unwrap();
+        let defaults = plan(&dir.path().join("config.yaml"), &flags).unwrap();
         let mut output = Vec::new();
         let asked = ask(&flags, &defaults, &mut "\n\n".as_bytes(), &mut output).unwrap();
         assert_eq!(asked, defaults);
@@ -1165,7 +1082,7 @@ mod tests {
     fn an_answer_that_is_not_an_address_is_asked_again_with_the_parse_error() {
         let dir = tempfile::tempdir().unwrap();
         let flags = args(&[]);
-        let defaults = plan(&dir.path().join("config.yaml"), &flags, true).unwrap();
+        let defaults = plan(&dir.path().join("config.yaml"), &flags).unwrap();
         let mut output = Vec::new();
         let asked = ask(
             &flags,
@@ -1188,7 +1105,7 @@ mod tests {
     fn end_of_input_refuses_naming_what_was_asked() {
         let dir = tempfile::tempdir().unwrap();
         let flags = args(&[]);
-        let defaults = plan(&dir.path().join("config.yaml"), &flags, true).unwrap();
+        let defaults = plan(&dir.path().join("config.yaml"), &flags).unwrap();
         for (input, expected) in [("", "the proxy address"), ("\n", "the admin address")] {
             let error = ask(&flags, &defaults, &mut input.as_bytes(), &mut Vec::new()).unwrap_err();
             assert!(
@@ -1199,10 +1116,10 @@ mod tests {
     }
 
     #[test]
-    fn an_address_off_loopback_is_asked_for_its_tls_choice() {
+    fn an_address_off_loopback_is_asked_for_a_pair_or_none() {
         let dir = tempfile::tempdir().unwrap();
         let flags = args(&[]);
-        let defaults = plan(&dir.path().join("config.yaml"), &flags, true).unwrap();
+        let defaults = plan(&dir.path().join("config.yaml"), &flags).unwrap();
         let mut output = Vec::new();
         let asked = ask(
             &flags,
@@ -1211,21 +1128,18 @@ mod tests {
             &mut output,
         )
         .unwrap();
-        assert_eq!(asked.proxy.tls, Some(ListenerTls::SelfSigned));
+        assert_eq!(asked.proxy.tls, None);
         let here = std::env::current_dir().unwrap();
         assert_eq!(
             asked.admin.tls,
-            Some(ListenerTls::Pair {
+            Some(ListenerTls {
                 cert_file: here.join("cert.pem"),
                 key_file: here.join("key.pem"),
             })
         );
         let output = String::from_utf8(output).unwrap();
-        assert!(
-            output.contains("answer self_signed, plain_http or files"),
-            "{output}"
-        );
-        assert!(output.contains("[self_signed]: "), "{output}");
+        assert!(output.contains("answer files or none"), "{output}");
+        assert!(output.contains("[none]: "), "{output}");
     }
 
     #[test]
@@ -1240,7 +1154,7 @@ mod tests {
             "--env-file",
             root.join("env/only/phoebis.env").to_str().unwrap(),
         ]);
-        let plan = plan(&root.join("conf/config.yaml"), &flags, false).unwrap();
+        let plan = plan(&root.join("conf/config.yaml"), &flags).unwrap();
         let landed = |path: &str, dir: bool| Landed {
             dir,
             path: root.join(path),
@@ -1266,16 +1180,17 @@ mod tests {
     }
 
     #[test]
-    fn a_listener_off_loopback_without_a_choice_refuses_off_a_terminal() {
+    fn a_listener_off_loopback_without_a_pair_plans_plain_http_off_a_terminal() {
         let dir = tempfile::tempdir().unwrap();
         let flags = args(&["--admin-listen", "0.0.0.0:8081"]);
-        let error = plan(&dir.path().join("config.yaml"), &flags, false).unwrap_err();
+        let plan = plan(&dir.path().join("config.yaml"), &flags).unwrap();
         assert_eq!(
-            error.to_string(),
-            "--admin-listen 0.0.0.0:8081 leaves loopback; name --admin-tls self_signed or plain_http, or \
-             --admin-cert and --admin-key"
+            plan.admin,
+            Listener {
+                listen: "0.0.0.0:8081".parse().unwrap(),
+                tls: None,
+            }
         );
-        assert!(plan(&dir.path().join("config.yaml"), &flags, true).is_ok());
         assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
     }
 }

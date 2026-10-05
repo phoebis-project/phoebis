@@ -3,7 +3,6 @@
 
 use std::collections::BTreeMap;
 use std::net::SocketAddr;
-use std::path::PathBuf;
 use std::time::Duration;
 
 use hyper::Method;
@@ -34,10 +33,9 @@ pub struct Reads {
     pub system: Result<Value, String>,
 }
 
-/// The three listeners as the file names them, with their schemes, and the CA path under `self_signed`.
+/// The three listeners as the file names them, with their schemes.
 pub struct Listeners {
     pub admin: String,
-    pub ca: Option<PathBuf>,
     pub metrics: Option<String>,
     pub proxy: Option<String>,
 }
@@ -207,9 +205,6 @@ pub fn render(
     screen.flow("  ", &named, "  ", "  ");
     if reads.health.is_none() {
         screen.push("  proxy: not probed, no configuration file names the listener");
-    }
-    if let Some(ca) = listeners.ca.as_ref().filter(|ca| ca.is_file()) {
-        screen.push(format!("  tls: clients trust {}", ca.display()));
     }
     match &reads.system {
         Ok(system) => {
@@ -867,10 +862,9 @@ mod tests {
         }
     }
 
-    fn listeners(ca: Option<PathBuf>) -> Listeners {
+    fn listeners() -> Listeners {
         Listeners {
             admin: "http://127.0.0.1:8081".to_owned(),
-            ca,
             metrics: Some("http://127.0.0.1:9464".to_owned()),
             proxy: Some("https://0.0.0.0:8317".to_owned()),
         }
@@ -923,9 +917,6 @@ mod tests {
 
     #[test]
     fn the_screen_renders_the_captured_answers_in_eighty_columns() {
-        let dir = tempfile::tempdir().unwrap();
-        let ca = dir.path().join("ca.pem");
-        std::fs::write(&ca, "").unwrap();
         // A second pool after `main` in the answer that sorts before it by id, its two members on one priority and
         // out of id order, so the screen's own ordering is what the test reads.
         let mut pools_answer = fixture("pools");
@@ -940,14 +931,7 @@ mod tests {
             pools: Ok(pools_answer.clone()),
             ..fixture_reads()
         };
-        let screen = render(
-            &reads,
-            &listeners(Some(ca.clone())),
-            "9.9.9",
-            now(),
-            &TimeZone::UTC,
-            false,
-        );
+        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
         let lines: Vec<&str> = screen.lines().collect();
         for line in &lines {
             assert!(line.chars().count() <= WIDTH, "{line}");
@@ -975,10 +959,6 @@ mod tests {
                 "{screen}"
             );
         }
-        assert!(
-            lines.contains(&format!("  tls: clients trust {}", ca.display()).as_str()),
-            "{screen}"
-        );
         assert!(lines.contains(&"  ledger: 1 parked"), "{screen}");
 
         let attention: String = lines
@@ -1105,7 +1085,7 @@ mod tests {
         extended.sessions = Ok(pinned_sessions(25));
         let capped = render(
             &extended,
-            &listeners(None),
+            &listeners(),
             "9.9.9",
             now(),
             &TimeZone::UTC,
@@ -1124,7 +1104,7 @@ mod tests {
 
         let whole = render(
             &extended,
-            &listeners(None),
+            &listeners(),
             "9.9.9",
             now(),
             &TimeZone::UTC,
@@ -1166,14 +1146,7 @@ mod tests {
         row["shed_from"] = Value::Null;
         let mut one = fixture_reads();
         one.sessions = Ok(short);
-        let one_screen = render(
-            &one,
-            &listeners(None),
-            "9.9.9",
-            now(),
-            &TimeZone::UTC,
-            false,
-        );
+        let one_screen = render(&one, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
         let one_lines: Vec<&str> = one_screen.lines().collect();
         assert_eq!(
             block(&one_lines, "pins (one per session, the main agent's)"),
@@ -1227,7 +1200,7 @@ mod tests {
         let two = "engineering-shared-2@corp.io";
         let screen = render(
             &labelled(one, two),
-            &listeners(None),
+            &listeners(),
             "9.9.9",
             now(),
             &TimeZone::UTC,
@@ -1244,7 +1217,7 @@ mod tests {
         let long = "a-label-far-too-long-for-any-column-of-an-eighty-column-screen";
         let screen = render(
             &labelled(long, two),
-            &listeners(None),
+            &listeners(),
             "9.9.9",
             now(),
             &TimeZone::UTC,
@@ -1274,14 +1247,7 @@ mod tests {
             accounts: Ok(accounts),
             ..fixture_reads()
         };
-        let screen = render(
-            &reads,
-            &listeners(None),
-            "9.9.9",
-            now(),
-            &TimeZone::UTC,
-            false,
-        );
+        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
         let lines: Vec<&str> = screen.lines().collect();
         block(&lines, "pools")[1].to_owned()
     }
@@ -1341,7 +1307,6 @@ mod tests {
 
         let file_free = Listeners {
             admin: "http://127.0.0.1:8081".to_owned(),
-            ca: None,
             metrics: None,
             proxy: None,
         };

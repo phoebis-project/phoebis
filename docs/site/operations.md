@@ -127,7 +127,6 @@ environment, and prints one screen:
 phoebis 0.1.0, up 3d 4h, ready
   proxy https://0.0.0.0:8317  admin http://127.0.0.1:8081
   metrics http://127.0.0.1:9464
-  tls: clients trust /var/lib/phoebis/tls/ca.pem
   ledger: 2 parked
   attention: pool_exhausted work since 12:03;
     refresh_failed alice@example.com since 11:40
@@ -153,8 +152,7 @@ The header carries the version and the uptime from `GET /admin/system` and one o
 with each dead component (`ledger`, `router`, `store`); or `proxy down:` with the probe's line when the proxy listener
 did not answer `200`, which wins over the other two. When the admin API could not be read, the header carries the
 binary's own version and `readiness unknown`, unless the proxy is down. The listeners follow with their schemes as the
-file names them. `tls: clients trust <path>` names the CA to hand the clients when a listener is `self_signed` and the
-file exists. `ledger:` prints only when a figure needs a look, and names each one: records `queued` in the writer
+file names them. `ledger:` prints only when a figure needs a look, and names each one: records `queued` in the writer
 channel, `behind` while admission refuses, `degraded` after a failed batch, priced records `parked` in the ledger file,
 a batch `retrying`, and after `writer:` the state writer's `deferred` writes and its `degraded` flag.
 `attention:` lists every attention item as `<kind> <subject> since <HH:MM>`, or reads
