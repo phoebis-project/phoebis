@@ -1,0 +1,26 @@
+effective: 2026-01-01
+unit:
+  defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+  units_per_window: 100
+capacity:
+  default_claude_ai:      {five_hour: 5, seven_day: 50}
+  default_claude_max_5x:  {five_hour: 25, seven_day: 250}
+  default_claude_max_20x: {five_hour: 100, seven_day: 1000}
+  default_claude_team:    {five_hour: 10, seven_day: null}
+peak:
+  zone: America/Los_Angeles
+  weekdays: true
+  from_hour: 5
+  to_hour: 11
+  capacity_factor: {five_hour: 0.5, seven_day: 1}
+type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+model_weight:
+  claude-fable-5-1: 10
+  claude-opus-5-5: 2
+  claude-opus-5: null
+  claude-sonnet-5-5: 1
+  claude-haiku-4-5: 0.5
+model_windows:
+  seven_day_fable: {of: seven_day, capacity_factor: 0.5}
+overrides:
+  claude-haiku-4-5: {type_multiplier: {cache_read: 0.2}, weight_by_window: {seven_day: 1}}

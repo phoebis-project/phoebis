@@ -1708,9 +1708,26 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = |sessions: &serde_json::Value, session: &str| session_row(sessions, session);
-    // Opus 5.5: 0.01461 of the Max 20x 5-hour window per million input tokens; Opus 5: $5 per million.
-    let share_per_hour = 145.0 * 0.01461 / 1_000_000.0 * 3_600.0;
-    let usd_per_hour = 100.0 * 5.0 / 1_000_000.0 * 3_600.0;
+    // The banded copy priced at the fixed clock, which the peak band never covers, so the shipped model's plain
+    // Opus 5.5 share on Max 20x; the plain copy at the shipped Opus 5 input price.
+    let share_per_hour = phoebis_ledger::PlanTables::shipped()
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_max_20x",
+            "claude-opus-5-5",
+            phoebis_routing::PinUsage {
+                input: 145,
+                ..phoebis_routing::PinUsage::default()
+            },
+            now,
+        )
+        .unwrap()
+        * 3_600.0;
+    let opus_5_input = phoebis_ledger::PriceTable::shipped()
+        .price("claude-opus-5")
+        .unwrap()
+        .input;
+    let usd_per_hour = 100.0 * opus_5_input / 1_000_000.0 * 3_600.0;
     let (burn, unit) = burn_of(&sessions, "s1");
     assert!(
         close(burn, share_per_hour) && unit.as_deref() == Some("window_share"),
@@ -1841,7 +1858,22 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         })
         .await;
     let window = 600.0;
-    let on_max_20x = 0.01461 * 3_600.0 / window;
+    let tables = phoebis_ledger::PlanTables::shipped();
+    let million = phoebis_routing::PinUsage {
+        input: 1_000_000,
+        ..phoebis_routing::PinUsage::default()
+    };
+    let on_max_20x = tables
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_max_20x",
+            "claude-opus-5-5",
+            million,
+            now,
+        )
+        .unwrap()
+        * 3_600.0
+        / window;
     let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         session_row(v, "s1")["burn"]
             .as_f64()
@@ -1855,14 +1887,25 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
          against {on_max_20x}",
         (burn, unit)
     );
-    name_the_tier(&parts.store, "business", "default_claude_pro");
+    name_the_tier(&parts.store, "business", "default_claude_ai");
     let on_pro = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         !close(session_row(v, "s1")["burn"].as_f64(), on_max_20x)
     })
     .await;
+    let pro = tables
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_ai",
+            "claude-opus-5-5",
+            million,
+            now,
+        )
+        .unwrap()
+        * 3_600.0
+        / window;
     assert!(
-        close(burn_of(&on_pro, "s1").0, on_max_20x / 0.05),
-        "the same tokens read on Pro are that share over Pro's 5-hour factor: {:?}",
+        close(burn_of(&on_pro, "s1").0, pro),
+        "the same tokens read on Pro are their share of Pro's own 5-hour window: {:?} against {pro}",
         burn_of(&on_pro, "s1")
     );
     name_the_tier(&parts.store, "business", "default_claude_team");

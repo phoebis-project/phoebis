@@ -18,7 +18,7 @@ use serde_json::Value;
 
 use crate::engine::{Agent, Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, Wasted};
 use crate::recipe::Recipe;
-use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_type};
+use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_reason};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
 
 /// The engine's own bound on one exchange. A probe with `max_tokens = 0` answers in seconds; the relay's idle
@@ -152,7 +152,7 @@ fn settled_cost(
         tracing::debug!(
             account,
             model = canonical_model,
-            unpriced = unpriced_type(tables, canonical_model, usage),
+            unpriced = unpriced_reason(tables, canonical_model),
             "a probe the cost table cannot price on the window share settles in dollars"
         );
     }
@@ -834,7 +834,7 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
+    use crate::config::FIVE_MINUTES_MS;
     use crate::engine::{Agent, Session};
     use crate::savings::probe_types;
 
@@ -1061,10 +1061,16 @@ mod tests {
         assert_eq!(cost, expected);
     }
 
+    // The test table: Opus 5.5 weighs 2 and an input token multiplies by 1, the Max 20x 5-hour window holds 100
+    // units, and the band holds 0.5 of it.
     #[test]
     fn a_plan_funded_probe_on_a_listed_model_settles_in_five_hour_share() {
-        let table = PriceTable::shipped();
-        let tables = PlanTables::shipped();
+        let table = phoebis_ledger::test_tables::api_prices();
+        let tables = phoebis_ledger::test_tables::subscription_costs();
+        let one_input = ProbeUsage {
+            input: 1,
+            ..ProbeUsage::default()
+        };
         let settle = |at: i64| {
             settled_cost(
                 SavingsUnit::WindowShare,
@@ -1073,7 +1079,7 @@ mod tests {
                 MAX_20X,
                 "o",
                 "claude-opus-5-5",
-                million_input(),
+                one_input,
                 probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
                 at,
             )
@@ -1081,12 +1087,12 @@ mod tests {
         let (unit, cost) = settle(OFF_BAND);
         assert_eq!(unit, SavingsUnit::WindowShare);
         assert!(
-            (cost - 0.01461).abs() < 1e-12,
-            "a million Opus 5.5 input tokens are 1.461% of the Max 20x window: {cost}"
+            (cost - 2.0 / 100.0).abs() < 1e-12,
+            "one Opus 5.5 input token is its 2 units over the window's 100: {cost}"
         );
         let (_, banded) = settle(IN_BAND);
         assert!(
-            (banded - 0.01461 * 1.435).abs() < 1e-12,
+            (banded - 2.0 / 100.0 / 0.5).abs() < 1e-12,
             "the band is inside the price at the settlement instant: {banded}"
         );
     }
@@ -1125,9 +1131,10 @@ mod tests {
     }
 
     #[test]
-    fn a_plan_funded_probe_on_a_model_with_an_unmeasured_cell_settles_in_dollars() {
-        let table = PriceTable::shipped();
-        let tables = PlanTables::shipped();
+    fn a_plan_funded_probe_on_a_model_without_a_weight_settles_in_dollars() {
+        // The test table leaves Opus 5 without a weight; the test price table lists it.
+        let table = phoebis_ledger::test_tables::api_prices();
+        let tables = phoebis_ledger::test_tables::subscription_costs();
         let (unit, cost) = settled_cost(
             SavingsUnit::WindowShare,
             &table,
@@ -1152,107 +1159,7 @@ mod tests {
         assert_eq!(
             (unit, cost),
             (SavingsUnit::Usd, dollars),
-            "every 5-hour cell of Opus 5 is null, so the share is unpriced and the dollar unit governs"
-        );
-        assert!(dollars > 0.0);
-    }
-
-    #[test]
-    fn a_null_cell_the_probe_never_carries_leaves_it_on_the_window_share() {
-        let table = PriceTable::shipped();
-        let mut tables = PlanTables::shipped();
-        tables
-            .cost
-            .windows
-            .get_mut(phoebis_routing::FIVE_HOUR)
-            .unwrap()
-            .get_mut("claude-opus-5-5")
-            .unwrap()
-            .cache_write_1h = None;
-        let settle = |ttl_ms| {
-            settled_cost(
-                SavingsUnit::WindowShare,
-                &table,
-                &tables,
-                MAX_20X,
-                "o",
-                "claude-opus-5-5",
-                million_input(),
-                probe_types(ttl_ms, ttl_ms),
-                OFF_BAND,
-            )
-        };
-        let (unit, cost) = settle(FIVE_MINUTES_MS);
-        assert_eq!(
-            unit,
-            SavingsUnit::WindowShare,
-            "a five-minute probe never writes for an hour"
-        );
-        assert!((cost - 0.01461).abs() < 1e-12, "{cost}");
-        assert_eq!(
-            settle(ONE_HOUR_MS).0,
-            SavingsUnit::Usd,
-            "an hour recipe's probe can, and the row cannot price it"
-        );
-    }
-
-    #[test]
-    fn a_share_decided_probe_whose_answer_meets_a_null_cell_settles_in_dollars_and_books_no_share()
-    {
-        let table = PriceTable::shipped();
-        let mut tables = PlanTables::shipped();
-        tables
-            .cost
-            .windows
-            .get_mut(phoebis_routing::FIVE_HOUR)
-            .unwrap()
-            .get_mut("claude-fable-5-1")
-            .unwrap()
-            .cache_write_1h = None;
-        // A five-minute recipe, so the typed usage prices on the share; the answer still reports an hour write, as
-        // one dispatched under a longer TTL than the recipe's markers does.
-        let types = probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS);
-        assert_eq!(
-            settlement_unit(
-                SavingsUnit::WindowShare,
-                &tables,
-                MAX_20X,
-                "claude-fable-5-1",
-                types
-            ),
-            SavingsUnit::WindowShare
-        );
-        let usage = ProbeUsage {
-            input: 1_000_000,
-            write: 2_000,
-            one_hour: 2_000,
-            ..ProbeUsage::default()
-        };
-        let (unit, cost) = settled_cost(
-            SavingsUnit::WindowShare,
-            &table,
-            &tables,
-            MAX_20X,
-            "o",
-            "claude-fable-5-1",
-            usage,
-            types,
-            OFF_BAND,
-        );
-        let dollars = probe_cost(
-            SavingsUnit::Usd,
-            &table,
-            &tables,
-            MAX_20X,
-            "claude-fable-5-1",
-            usage,
-            OFF_BAND,
-        )
-        .unwrap();
-        assert_eq!(
-            (unit, cost),
-            (SavingsUnit::Usd, dollars),
-            "a null cell never books a share, zero or otherwise, so the probe settles in dollars"
+            "Opus 5 has no weight, so the share is unpriced and the dollar unit governs"
         );
         assert!(dollars > 0.0);
     }

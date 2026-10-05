@@ -9,6 +9,7 @@ use common::*;
 use fake_upstream::Respond;
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason};
 use phoebis_ledger::{hour_of, read_rollups, RollupRow, RollupSelect};
+use phoebis_routing::{PinUsage, FIVE_HOUR};
 
 /// Every rollup row the rig wrote, once the writer has landed what the test waits for. The whole table
 /// rather than the rig's own hour: a test that moves the clock to the next UTC day writes past it.
@@ -1874,24 +1875,23 @@ async fn an_unpriced_model_costs_the_dearest_cells_and_still_lands_a_probe_row()
     assert_eq!(r.status("main").unanswered, 1);
 }
 
-/// A cost table lacking every model, so "claude-haiku-4-5-20251001" (which the shipped dollar table prices) is
-/// unlisted on purpose rather than by a coincidence of the shipped one's date-suffix fall-back.
+/// The test cost model with every weight and override cleared, so "claude-haiku-4-5-20251001" (which the shipped
+/// dollar table prices) is unlisted on purpose rather than by a coincidence of a table's date-suffix fall-back.
 fn plan_pricing_no_model() -> phoebis_ledger::PlanTables {
-    phoebis_ledger::PlanTables {
-        cost: phoebis_ledger::CostTable::from_yaml(
-            "effective: 2026-10-01\ntiers:\n  default_claude_max_20x: {five_hour: 1, seven_day: 1}\nbands: []\nwindows:\n  five_hour: {}\n  seven_day: {}\n",
-        )
-        .unwrap(),
-    }
+    let mut tables = phoebis_ledger::test_tables::subscription_costs();
+    tables.costs.model_weight.clear();
+    tables.costs.overrides.clear();
+    tables
 }
 
-/// The shipped tables with Sonnet 5 priced on the 5-hour window at Sonnet 5.5's cells: the subscription tests settle
+/// The test cost model with a weight inserted for Sonnet 5, at Sonnet 5.5's 1: the subscription tests settle
 /// `PRICED`'s probes in the share, while the price table keeps pricing it in dollars for the credit.
 fn plan_pricing_sonnet() -> phoebis_ledger::PlanTables {
-    let mut tables = phoebis_ledger::PlanTables::shipped();
-    let five_hour = tables.cost.windows.get_mut("five_hour").unwrap();
-    let cells = five_hour["claude-sonnet-5-5"].clone();
-    five_hour.insert(PRICED.to_string(), cells);
+    let mut tables = phoebis_ledger::test_tables::subscription_costs();
+    tables
+        .costs
+        .model_weight
+        .insert(PRICED.to_string(), Some(1.0));
     tables
 }
 
@@ -2005,82 +2005,6 @@ async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_c
         (r.status("main").probes, r.status("main").reason),
         (1, Reason::CapReached),
         "the dollar cap holds the next probe"
-    );
-}
-
-/// A pool whose plan set writes main turns for an hour rewrites a five-minute recipe's probe to the hour. On a row
-/// whose hour cell is null that probe settles in dollars, so the gate decides dollars before it dispatches and a
-/// zero share cap never holds it; with the hour cell priced the probe settles in the share, and the zero share cap
-/// holds it.
-#[tokio::test]
-async fn a_probe_the_pool_dispatches_for_an_hour_settles_in_dollars_on_a_row_whose_hour_cell_is_null(
-) {
-    let spec = |tables| RigSpec {
-        pool: PoolSpec {
-            cache_ttl: r#"{"enabled":true,"plan":{"main":"1h"}}"#,
-            overage_policy: phoebis_store::OveragePolicy::Allow,
-            ..PoolSpec::default()
-        },
-        policy: KeepalivePolicy {
-            probe_cap_window_share_per_day: Some(0.0),
-            ..RigSpec::default().policy
-        },
-        tables,
-        ..subscription_spec()
-    };
-    let mut hourless = plan_pricing_sonnet();
-    hourless
-        .cost
-        .windows
-        .get_mut("five_hour")
-        .unwrap()
-        .get_mut(PRICED)
-        .unwrap()
-        .cache_write_1h = None;
-    let mut r = rig(spec(hourless)).await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    assert_eq!(
-        r.status("main").cache_ttl_ms,
-        300_000,
-        "the upstream wrote the main turn for five minutes"
-    );
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert_eq!(
-        status.probes, 1,
-        "the probe goes for an hour, which the row cannot price, so the zero share cap never holds it: {status:?}"
-    );
-    let probe = r.up.requests().into_iter().last().unwrap();
-    assert!(
-        std::str::from_utf8(&probe.body)
-            .unwrap()
-            .contains(r#""ttl":"1h""#),
-        "the relay dispatched the probe for an hour"
-    );
-    // 2,000 cached tokens read back at Sonnet 5's 0.2 per million.
-    let dollars = 2_000.0 * 0.2 / 1_000_000.0;
-    assert!(
-        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - dollars).abs() < 1e-12
-            && !r.engine.share_spent_today().contains_key("o"),
-        "the settlement books dollars: {:?}",
-        r.engine.spent_today()
-    );
-    assert!(
-        (status.net_usd + dollars).abs() < 1e-12 && status.net_five_hour_share == 0.0,
-        "{status:?}"
-    );
-
-    let mut r = rig(spec(plan_pricing_sonnet())).await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (0, Reason::CapReached),
-        "with the hour cell priced the probe settles in the share, which the zero share cap holds"
     );
 }
 
@@ -2753,10 +2677,6 @@ fn million_input_answer() -> Respond {
     Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":1000000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":0}}"#.to_vec() }
 }
 
-/// That probe's share of the Max 20x 5-hour window outside the band: a million input tokens at 0.01461 and 2,000
-/// cache reads at 0.000365 per million, both measured cells.
-const OPUS_PROBE_SHARE: f64 = 0.01461 + 2_000.0 * 0.000365 / 1_000_000.0;
-
 /// One such probe on account `o` settled at `at`, and the share of the day it spent there.
 async fn one_opus_probe(spec: RigSpec, at: i64) -> (Rig, f64) {
     let mut r = rig(spec).await;
@@ -2781,63 +2701,89 @@ async fn one_opus_probe(spec: RigSpec, at: i64) -> (Rig, f64) {
 /// spent.
 #[tokio::test]
 async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_counts_more() {
+    // The shipped model, since the test table's small capacities put a million-token probe far past the share
+    // cap's bound of 1; every figure below is read from the model loaded here.
+    fn shipped_subscription_spec() -> RigSpec {
+        RigSpec {
+            tables: phoebis_ledger::PlanTables::shipped(),
+            ..subscription_spec()
+        }
+    }
     let tables = phoebis_ledger::PlanTables::shipped();
     let hour_ms = 3_600_000i64;
     let week: Vec<i64> = (0..7 * 24).map(|h| NOW + h as i64 * hour_ms).collect();
     // The probe settles 270 s after the observation, so both instants are checked there.
-    let band_at = |at: i64| tables.cost.band_factor("five_hour", at + 270_000);
+    let band_at = |at: i64| tables.band_factor(FIVE_HOUR, at + 270_000);
     let in_band = *week
         .iter()
         .find(|&&at| band_at(at) > 1.0)
-        .expect("the shipped table names a peak band");
+        .expect("the shipped model names a peak band");
     let out_of_band = *week
         .iter()
         .find(|&&at| band_at(at) == 1.0)
-        .expect("the shipped table leaves most hours at par");
+        .expect("the shipped model leaves most hours at par");
+    // The probe's usage: the million input tokens and the 2,000 cache reads `million_input_answer` bills.
+    let opus_probe_share = tables
+        .share_at(
+            FIVE_HOUR,
+            "default_claude_max_20x",
+            OPUS,
+            PinUsage {
+                input: 1_000_000,
+                cache_read: 2_000,
+                write_5m: 0,
+                write_1h: 0,
+                output: 0,
+            },
+            out_of_band + 270_000,
+        )
+        .unwrap();
 
-    let (r, outside) = one_opus_probe(subscription_spec(), out_of_band).await;
+    let (r, outside) = one_opus_probe(shipped_subscription_spec(), out_of_band).await;
     assert!(
-        (outside - OPUS_PROBE_SHARE).abs() < 1e-12,
-        "a million Opus 5.5 input tokens on Max 20x outside the band: {outside} against {OPUS_PROBE_SHARE}"
+        (outside - opus_probe_share).abs() < 1e-12,
+        "a million Opus 5.5 input tokens on Max 20x outside the band: {outside} against {opus_probe_share}"
     );
     let status = r.status("main");
     assert!(
-        (status.net_five_hour_share + OPUS_PROBE_SHARE).abs() < 1e-12 && status.net_usd == 0.0,
+        (status.net_five_hour_share + opus_probe_share).abs() < 1e-12 && status.net_usd == 0.0,
         "the probe's cost is the agent's share balance: {status:?}"
     );
 
-    let (_, inside) = one_opus_probe(subscription_spec(), in_band).await;
+    let (_, inside) = one_opus_probe(shipped_subscription_spec(), in_band).await;
+    let banded = opus_probe_share * tables.band_factor(FIVE_HOUR, in_band + 270_000);
     assert!(
-        (inside - OPUS_PROBE_SHARE * 1.435).abs() < 1e-12,
-        "the same probe inside the band counts 1.435 times: {inside}"
+        (inside - banded).abs() < 1e-12,
+        "the same probe inside the band counts the band's weight more: {inside} against {banded}"
     );
 
     let (_, on_pro) = one_opus_probe(
         RigSpec {
-            tier: Some("default_claude_pro"),
-            ..subscription_spec()
+            tier: Some("default_claude_ai"),
+            ..shipped_subscription_spec()
         },
         out_of_band,
     )
     .await;
+    let pro = opus_probe_share / tables.tier_factor("default_claude_ai", FIVE_HOUR).unwrap();
     assert!(
-        (on_pro - OPUS_PROBE_SHARE / 0.05).abs() < 1e-12,
-        "on Pro the same tokens are that share over Pro's 5-hour factor: {on_pro}"
+        (on_pro - pro).abs() < 1e-12,
+        "on Pro the same tokens are that share over Pro's capacity ratio: {on_pro} against {pro}"
     );
 
     let (mut r, spent) = one_opus_probe(
         RigSpec {
             policy: KeepalivePolicy {
-                probe_cap_window_share_per_day: Some(OPUS_PROBE_SHARE / 2.0),
+                probe_cap_window_share_per_day: Some(opus_probe_share / 2.0),
                 ..RigSpec::default().policy
             },
-            ..subscription_spec()
+            ..shipped_subscription_spec()
         },
         out_of_band,
     )
     .await;
     assert!(
-        spent >= OPUS_PROBE_SHARE / 2.0,
+        spent >= opus_probe_share / 2.0,
         "the first probe alone reaches the cap: {spent}"
     );
     r.advance(270_000);

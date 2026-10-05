@@ -200,6 +200,17 @@ impl PriceTable {
     }
 }
 
+/// The operator's file at `path`: `None` when nothing is there (`NotFound`), the I/O error for any other failure to
+/// read it, so a path that exists and cannot be read refuses the start rather than selecting the shipped table, the
+/// way `Path::exists` would by reading false whenever the metadata cannot be read.
+pub(crate) fn read_override(path: &Path) -> Result<Option<String>, LedgerError> {
+    match std::fs::read_to_string(path) {
+        Ok(text) => Ok(Some(text)),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(e) => Err(LedgerError::Io(e)),
+    }
+}
+
 pub struct Pricing {
     table: Arc<PriceTable>,
     unknown: AtomicU64,
@@ -344,62 +355,38 @@ mod tests {
     }
 
     #[test]
-    fn the_shipped_table_is_the_specs_and_an_estimate_is_list_price_per_million() {
+    fn the_shipped_table_parses_and_every_cell_is_a_finite_price_at_or_above_zero() {
         let table = PriceTable::shipped();
-        assert_eq!(
-            (
-                table.version.as_str(),
-                table.effective.as_str(),
-                table.source.as_str()
-            ),
-            ("2026-10-01", "2026-10-01", "shipped")
-        );
-        assert_eq!(table.models.len(), 8);
-        let cells = |p: &ModelPrice| {
-            (
+        assert_eq!(table.source, "shipped");
+        assert!(!table.models.is_empty());
+        let finite = |p: &ModelPrice| {
+            [
                 p.input,
                 p.cache_write_5m,
                 p.cache_write_1h,
                 p.cache_read,
                 p.output,
-            )
+            ]
+            .iter()
+            .all(|c| c.is_finite() && *c >= 0.0)
         };
-        let row = |model: &str| table.models.get(model).unwrap();
-        assert_eq!(
-            cells(&row("claude-opus-5-5").standard),
-            (4.0, 5.0, 8.0, 0.2, 20.0)
-        );
-        assert_eq!(
-            row("claude-opus-5-5").fast.as_ref().map(cells),
-            Some((8.0, 10.0, 16.0, 0.4, 40.0))
-        );
-        assert_eq!(
-            row("claude-opus-5").fast.as_ref().map(cells),
-            Some((10.0, 12.5, 20.0, 1.0, 50.0))
-        );
-        assert_eq!(
-            cells(&row("claude-opus-4-8").standard),
-            (5.0, 6.25, 10.0, 0.5, 25.0)
-        );
-        assert_eq!(
-            row("claude-opus-4-8").fast.as_ref().map(cells),
-            Some((10.0, 12.5, 20.0, 1.0, 50.0))
-        );
-        assert_eq!(row("claude-sonnet-5").fast, None);
-        let sonnet = table.price("claude-sonnet-5").unwrap();
-        assert_eq!(
-            (
-                sonnet.input,
-                sonnet.cache_write_5m,
-                sonnet.cache_write_1h,
-                sonnet.cache_read,
-                sonnet.output
-            ),
-            (2.0, 2.5, 4.0, 0.2, 10.0)
-        );
+        for (model, row) in &table.models {
+            assert!(finite(&row.standard), "{model}: {:?}", row.standard);
+            assert!(
+                row.fast.as_ref().is_none_or(finite),
+                "{model}: {:?}",
+                row.fast
+            );
+        }
+    }
+
+    // The test table's Sonnet 5.5 row: input 3, cache read 0.3, 5-minute write 3.75, output 15 per million.
+    #[test]
+    fn an_estimate_is_the_list_price_per_million_tokens_of_each_type() {
+        let table = crate::test_tables::api_prices();
         let (usd, split) = table
             .estimate(
-                "claude-sonnet-5",
+                "claude-sonnet-5-5",
                 Speed::Standard,
                 1_000_000,
                 500_000,
@@ -409,12 +396,13 @@ mod tests {
             )
             .unwrap();
         assert!(
-            (split.input_usd - 2.0).abs() < 1e-9
-                && (split.cache_read_usd - 0.1).abs() < 1e-9
-                && (split.cache_write_usd - 0.25).abs() < 1e-9
-                && (split.output_usd - 0.1).abs() < 1e-9
+            (split.input_usd - 3.0).abs() < 1e-9
+                && (split.cache_read_usd - 0.15).abs() < 1e-9
+                && (split.cache_write_usd - 0.375).abs() < 1e-9
+                && (split.output_usd - 0.15).abs() < 1e-9,
+            "{split:?}"
         );
-        assert!((usd - 2.45).abs() < 1e-9);
+        assert!((usd - 3.675).abs() < 1e-9, "{usd}");
         assert!(table
             .estimate("gpt-5", Speed::Standard, 1, 0, 0, 0, 1)
             .is_none());
@@ -429,18 +417,19 @@ mod tests {
 
     #[test]
     fn a_fast_answer_prices_at_the_fast_cells_and_a_model_without_them_at_the_standard_cells() {
-        let table = PriceTable::shipped();
+        // The test table's Opus 5.5 input is 10 per million standard and 20 fast; Sonnet 5.5 has no fast cells.
+        let table = crate::test_tables::api_prices();
         let input = |model: &str, speed: Speed| {
             table
                 .estimate(model, speed, 1_000_000, 0, 0, 0, 0)
                 .unwrap()
                 .0
         };
-        assert_eq!(input("claude-opus-5-5", Speed::Standard), 4.0);
-        assert_eq!(input("claude-opus-5-5", Speed::Fast), 8.0);
+        assert_eq!(input("claude-opus-5-5", Speed::Standard), 10.0);
+        assert_eq!(input("claude-opus-5-5", Speed::Fast), 20.0);
         assert_eq!(
-            input("claude-sonnet-5", Speed::Fast),
-            2.0,
+            input("claude-sonnet-5-5", Speed::Fast),
+            3.0,
             "a model without fast cells prices a fast answer at its standard cells"
         );
         assert_eq!(
@@ -464,11 +453,11 @@ mod tests {
         };
         assert_eq!(
             fast.price("claude-opus-5-5", one_input),
-            Some(8.0 / 1_000_000.0)
+            Some(20.0 / 1_000_000.0)
         );
         assert_eq!(
-            fast.price("claude-sonnet-5", one_input),
-            standard.price("claude-sonnet-5", one_input),
+            fast.price("claude-sonnet-5-5", one_input),
+            standard.price("claude-sonnet-5-5", one_input),
             "the fast table prices a model without fast cells as the standard table does"
         );
         assert_eq!(
@@ -480,22 +469,29 @@ mod tests {
 
     #[test]
     fn the_rate_table_prices_one_token_at_the_list_price_over_a_million() {
-        let rates = PriceTable::shipped().rate_table();
+        // The test table: Sonnet 5.5 at 3, 0.3, 3.75, 6 and 15 per million; Haiku's input at 1; Opus 5.5 the
+        // dearest row, at 10 input and 50 output.
+        let rates = crate::test_tables::api_prices().rate_table();
         let one = |pick: fn(&mut phoebis_routing::PinUsage)| {
             let mut usage = phoebis_routing::PinUsage::default();
             pick(&mut usage);
             usage
         };
-        let sonnet = |usage| rates.price("claude-sonnet-5", usage);
-        assert_eq!(sonnet(one(|u| u.input = 1)), Some(2.0 / 1_000_000.0));
-        assert_eq!(sonnet(one(|u| u.cache_read = 1)), Some(0.2 / 1_000_000.0));
-        assert_eq!(sonnet(one(|u| u.write_5m = 1)), Some(2.5 / 1_000_000.0));
-        assert_eq!(sonnet(one(|u| u.write_1h = 1)), Some(4.0 / 1_000_000.0));
-        assert_eq!(sonnet(one(|u| u.output = 1)), Some(10.0 / 1_000_000.0));
+        let sonnet = |usage| rates.price("claude-sonnet-5-5", usage);
+        assert_eq!(sonnet(one(|u| u.input = 1)), Some(3.0 / 1_000_000.0));
+        assert_eq!(sonnet(one(|u| u.cache_read = 1)), Some(0.3 / 1_000_000.0));
+        assert_eq!(sonnet(one(|u| u.write_5m = 1)), Some(3.75 / 1_000_000.0));
+        assert_eq!(sonnet(one(|u| u.write_1h = 1)), Some(6.0 / 1_000_000.0));
+        assert_eq!(sonnet(one(|u| u.output = 1)), Some(15.0 / 1_000_000.0));
         assert_eq!(
             rates.price("claude-haiku-4-5-20251001", one(|u| u.input = 1)),
             Some(1.0 / 1_000_000.0),
             "a dated row prices as itself"
+        );
+        assert_eq!(
+            rates.price("gpt-5", one(|u| u.input = 1)),
+            Some(10.0 / 1_000_000.0),
+            "a model the table lacks prices at the dearest listed rate of each type"
         );
         assert_eq!(
             rates.price("gpt-5", one(|u| u.output = 1)),
@@ -592,7 +588,9 @@ mod tests {
 
     #[test]
     fn attempts_are_stamped_with_the_version_and_an_unknown_model_is_counted_once() {
-        let table = PriceTable::shipped();
+        let table = crate::test_tables::api_prices();
+        // The test table's Haiku row: input 1 and output 5 per million.
+        let want = (1_000.0 * 1.0 + 100.0 * 5.0) / 1_000_000.0;
         let unknown = AtomicU64::new(0);
         let mut attempts = vec![
             AttemptRecord {
@@ -615,9 +613,9 @@ mod tests {
             (None, None),
             "no usage, no estimate"
         );
-        assert!((attempts[1].estimated_usd.unwrap() - 0.0015).abs() < 1e-12);
-        assert_eq!(attempts[1].pricing_version.as_deref(), Some("2026-10-01"));
-        assert!((split.total() - 0.0015).abs() < 1e-12);
+        assert!((attempts[1].estimated_usd.unwrap() - want).abs() < 1e-12);
+        assert_eq!(attempts[1].pricing_version.as_deref(), Some("2026-01-01"));
+        assert!((split.total() - want).abs() < 1e-12);
         let split = price_attempts(&table, "gpt-5", &mut attempts, &unknown);
         assert_eq!(
             (

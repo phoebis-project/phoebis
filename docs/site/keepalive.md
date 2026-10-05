@@ -190,19 +190,18 @@ a model the cost table has no row for shows a dash in every cell.
 The prices carry one caveat: "API list prices. A subscription account on plan quota spends the window share columns
 instead of money." A recipe's own net follows the same split: the share of the account's 5-hour window, the band inside
 each probe's price, on a subscription account outside overage, and dollars on an api_key account or one in overage; a
-plan-funded probe whose token types the cost table cannot price on the account's tier (no row, or a cell left unmeasured
-under a type the probe carries: input, cache reads, output, the 5-minute write, and the 1-hour write when the probe goes
-out for an hour), or on an account whose tier the table does not size, settles in dollars too, counts toward the dollar
-cap and never toward the window-share cap; so does a probe whose answer carries a type the table cannot price, which
-never books a share. A probe goes out for an hour when the pool's cache TTL policy is on and the rule set the account's
-funding selects holds `1h` for the probe's agent, since the relay rewrites every marker of the probe to that TTL (and
-adds one where `inject_when_absent` is on); with the policy off, when the recipe keeps an hour's cache or marks any part
-of its prefix for an hour. A probe settled in dollars on a model the price table does not list prices at the table's
-dearest cell of each type, never at zero, so the dollar cap and the net still bound it; a request such a probe kept warm
-saves at the same cells, so its net stays positive while the cache saves more than the probes cost. Whatever the
-account's funding, a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of
-the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose account changed
-funding while it was warmed.
+plan-funded probe whose token types the cost table cannot price on the account's tier (no weight on the 5-hour window,
+or a tier with no capacity on it), or on an account whose tier the table does not size, settles in dollars too, counts
+toward the dollar cap and never toward the window-share cap; so does a probe whose answer carries a type the table
+cannot price, which never books a share. A probe goes out for an hour when the pool's cache TTL policy is on and the
+rule set the account's funding selects holds `1h` for the probe's agent, since the relay rewrites every marker of the
+probe to that TTL (and adds one where `inject_when_absent` is on); with the policy off, when the recipe keeps an hour's
+cache or marks any part of its prefix for an hour. A probe settled in dollars on a model the price table does not list
+prices at the table's dearest cell of each type, never at zero, so the dollar cap and the net still bound it; a request
+such a probe kept warm saves at the same cells, so its net stays positive while the cache saves more than the probes
+cost. Whatever the account's funding, a fast-mode session's net is a dollar net, since its probes draw usage credits.
+Each agent line of the Sessions view shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose
+account changed funding while it was warmed.
 
 The four shipped rows, all prices in USD per million tokens:
 

@@ -663,7 +663,9 @@ fn router_config(
     let band = tables.clone();
     let measured = tables.clone();
     phoebis_routing::RouterConfig {
-        band: phoebis_routing::BandWeight::new(move |window, at| band.cost.band_factor(window, at)),
+        band: phoebis_routing::BandWeight::new(move |window, at| {
+            band.costs.band_factor(window, at)
+        }),
         rates: phoebis_routing::BurnRates {
             dollars: prices.rate_table(),
             five_hour: tables.rate_table(phoebis_routing::FIVE_HOUR),
@@ -937,18 +939,43 @@ mod tests {
             "the fast table prices a usage as the price table estimates a fast answer"
         );
         // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
+        let (in_band, out_of_band) = (1_789_999_200_000, 1_790_020_800_000);
+        let banded = config.band.at(phoebis_routing::FIVE_HOUR, in_band);
         assert_eq!(
-            config
-                .band
-                .at(phoebis_routing::FIVE_HOUR, 1_789_999_200_000),
-            1.435
+            banded,
+            tables.band_factor(phoebis_routing::FIVE_HOUR, in_band),
+            "the router weighs the band as the model it loaded does"
         );
-        assert_eq!(
-            config
-                .band
-                .at(phoebis_routing::FIVE_HOUR, 1_790_020_800_000),
-            1.0
+        assert_eq!(config.band.at(phoebis_routing::FIVE_HOUR, out_of_band), 1.0);
+        assert!(
+            banded > 1.0,
+            "a charge inside the band weighs more than one outside it: {banded}"
         );
+    }
+
+    /// The anchor tier carries a capacity on both windows, so every model with a weight has a burn rate on each.
+    #[test]
+    fn the_burn_rates_the_router_installs_carry_a_row_per_weighted_model_on_both_windows() {
+        let tables = phoebis_ledger::PlanTables::shipped();
+        let anchor = &tables.costs.unit.defined_by.tier;
+        for window in [phoebis_routing::FIVE_HOUR, phoebis_routing::SEVEN_DAY] {
+            let rates = tables.rate_table(window);
+            let mut rows: Vec<&str> = rates.rows.keys().map(String::as_str).collect();
+            rows.sort_unstable();
+            let mut weighted: Vec<&str> = tables
+                .costs
+                .model_weight
+                .keys()
+                .map(String::as_str)
+                .filter(|model| tables.priced(window, anchor, model))
+                .collect();
+            weighted.sort_unstable();
+            assert!(
+                !rows.is_empty(),
+                "{window}: the shipped model weighs a model"
+            );
+            assert_eq!(rows, weighted, "{window}");
+        }
     }
 
     #[tokio::test]

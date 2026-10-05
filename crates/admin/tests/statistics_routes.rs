@@ -122,30 +122,27 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     );
     assert_eq!(settings["pricing"]["version"], "2026-10-01");
     assert_eq!(settings["pricing"]["source"], "shipped");
-    let tables = &settings["plan_tables"];
-    let cost = &tables["cost"];
-    assert_eq!(cost["effective"], "2026-10-01");
+    let loaded = phoebis_ledger::PlanTables::shipped().costs;
+    let cost = &settings["plan_tables"]["cost"];
     assert_eq!(
-        cost["tiers"]["default_claude_pro"]["five_hour"].as_f64(),
-        Some(0.05)
+        cost,
+        &serde_json::to_value(&loaded).unwrap(),
+        "the echo answers the cost model the harness loaded, key for key"
     );
-    assert!(cost["tiers"]["default_claude_pro"]["seven_day"].is_null());
+    let models: Vec<&str> = cost["model_weight"]
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
     assert_eq!(
-        cost["windows"]["five_hour"]["claude-opus-5-5"]["input"].as_f64(),
-        Some(0.01461)
-    );
-    assert!(cost["windows"]["five_hour"]["claude-opus-5"]["input"].is_null());
-    assert!(cost["windows"]["seven_day"]["claude-opus-5-5"]["input"].is_null());
-    assert_eq!(cost["bands"][0]["factor"].as_f64(), Some(1.435));
-    assert_eq!(
-        (
-            cost.get("tier"),
-            cost.get("version"),
-            cost["bands"][0].get("measured"),
-            tables.get("tiers")
-        ),
-        (None, None, None, None),
-        "the one table answers its v2 shape alone: {tables}"
+        models,
+        loaded
+            .model_weight
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "in the file's order"
     );
     let text = settings.to_string();
     assert!(
@@ -982,14 +979,29 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let point = business(&burn);
     let tables = phoebis_ledger::PlanTables::shipped();
     let hour = point["at"].as_i64().unwrap();
-    let band = tables.cost.band_factor(phoebis_routing::FIVE_HOUR, hour);
+    let share = |window: &str| {
+        tables
+            .share_at(
+                window,
+                "default_claude_max_20x",
+                "claude-opus-5-5",
+                phoebis_routing::PinUsage {
+                    input: 1_000_000,
+                    ..phoebis_routing::PinUsage::default()
+                },
+                hour,
+            )
+            .unwrap()
+    };
+    let five_hour = share(phoebis_routing::FIVE_HOUR);
     assert!(
-        (point["five_hour_share"].as_f64().unwrap() - 0.01461 * band).abs() < 1e-9,
-        "a million Opus 5.5 input tokens read the table's 5-hour share on Max 20x: {point}"
+        (point["five_hour_share"].as_f64().unwrap() - five_hour).abs() < 1e-9,
+        "a million Opus 5.5 input tokens read the model's 5-hour share on Max 20x: {point} against {five_hour}"
     );
+    let seven_day = share(phoebis_routing::SEVEN_DAY);
     assert!(
-        null_field(&point, "seven_day_share"),
-        "every 7-day cell is unmeasured, so the 7-day share reads null: {point}"
+        (point["seven_day_share"].as_f64().unwrap() - seven_day).abs() < 1e-9,
+        "and its 7-day share: {point} against {seven_day}"
     );
     assert_eq!(
         (&point["unit"], &point["usd"]),
@@ -1460,11 +1472,24 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
         .iter()
         .rfind(|p| p["group"] == "business")
         .unwrap();
+    let seven_day = phoebis_ledger::PlanTables::shipped()
+        .share_at(
+            phoebis_routing::SEVEN_DAY,
+            "default_claude_max_20x",
+            "claude-sonnet-5-5",
+            phoebis_routing::PinUsage {
+                input: 500,
+                output: 50,
+                ..phoebis_routing::PinUsage::default()
+            },
+            phoebis_ledger::hour_of(now) * 1_000,
+        )
+        .unwrap();
     assert!(
         account_trailing["five_hour_share"].as_f64().unwrap_or(0.0) > 0.0
-            && account_trailing["seven_day_share"].is_null(),
-        "the account series prices the same attempt's 5-hour share in its trailing bucket, and every 7-day cell \
-         is unmeasured: {account_trailing}"
+            && (account_trailing["seven_day_share"].as_f64().unwrap() - seven_day).abs() < 1e-9,
+        "the account series prices the same attempt's share of both windows in its trailing bucket: \
+         {account_trailing} against {seven_day}"
     );
 }
 

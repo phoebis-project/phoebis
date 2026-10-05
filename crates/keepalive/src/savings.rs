@@ -167,27 +167,18 @@ pub(crate) fn dispatched_types(
     probe_types(dispatched_ms, dispatched_ms)
 }
 
-/// The first token type `usage` carries that the model's 5-hour row leaves unmeasured, for a log line: `row` when
-/// the table lists no row for the model and `tier` when the row prices and the tier's factor does not.
-pub(crate) fn unpriced_type(
-    tables: &PlanTables,
-    canonical_model: &str,
-    usage: ProbeUsage,
-) -> &'static str {
-    let Some(cells) = tables.cost.cells(FIVE_HOUR, canonical_model) else {
-        return "row";
-    };
-    let typed = typed(usage);
-    [
-        (typed.input, cells.input, "input"),
-        (typed.cache_read, cells.cache_read, "cache_read"),
-        (typed.write_5m, cells.cache_write_5m, "cache_write_5m"),
-        (typed.write_1h, cells.cache_write_1h, "cache_write_1h"),
-        (typed.output, cells.output, "output"),
-    ]
-    .into_iter()
-    .find(|(tokens, cell, _)| *tokens > 0 && cell.is_none())
-    .map_or("tier", |(_, _, name)| name)
+/// `row` when the model has no weight on the 5-hour window, else `tier`: the only two reasons left, since the loader
+/// refuses an anchor tier without a capacity on either window and a weighted model prices every type.
+pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str) -> &'static str {
+    if !tables.priced(
+        FIVE_HOUR,
+        &tables.costs.unit.defined_by.tier,
+        canonical_model,
+    ) {
+        "row"
+    } else {
+        "tier"
+    }
 }
 
 /// The unit a probe is gated in, settles in and earns its savings in: `default_unit`, unless that is the window share
@@ -497,18 +488,33 @@ mod tests {
         const SATURDAY_AFTERNOON: i64 = 1_790_431_200_000;
         let saved = gross_saving(
             SavingsUnit::WindowShare,
-            &PriceTable::shipped(),
-            &PlanTables::shipped(),
+            &phoebis_ledger::test_tables::api_prices(),
+            &phoebis_ledger::test_tables::subscription_costs(),
             Some("default_claude_max_20x"),
             "claude-opus-5-5",
-            1_000_000,
+            1,
             SATURDAY_AFTERNOON,
             Speed::Standard,
         )
         .expect("a priced model on a known tier");
-        // The shipped table's Opus 5.5 cells on Max 20x's 5-hour window, per million tokens: input 0.01461, cache
-        // read 0.000365.
-        assert!((saved - (0.01461 - 0.000365)).abs() < 1e-12, "{saved}");
+        // The test table: Opus 5.5 weighs 2, an input token multiplies by 1 and a cache read by 0.1, and the Max
+        // 20x 5-hour window holds 100 units.
+        let want = 2.0 * 1.0 / 100.0 - 2.0 * 0.1 / 100.0;
+        assert!((saved - want).abs() < 1e-12, "{saved} against {want}");
+    }
+
+    #[test]
+    fn an_unpriced_probe_reads_row_for_a_model_without_a_weight_and_tier_otherwise() {
+        // The test table weighs Opus 5.5, leaves Opus 5 null and has no row for Opus 9.
+        let tables = phoebis_ledger::test_tables::subscription_costs();
+        assert_eq!(unpriced_reason(&tables, "claude-opus-5"), "row");
+        assert_eq!(unpriced_reason(&tables, "claude-opus-9"), "row");
+        assert_eq!(unpriced_reason(&tables, "claude-opus-5-5"), "tier");
+        assert_eq!(
+            unpriced_reason(&tables, "claude-opus-5-5-20260401"),
+            "tier",
+            "a dated id reads its undated weight"
+        );
     }
 
     #[test]

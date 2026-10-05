@@ -2214,8 +2214,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "group": "business",
           "unit": "window_share",
           "usd": 0.0072,
-          "five_hour_share": 0.000035185,
-          "seven_day_share": null,
+          "five_hour_share": 0.00003525,
+          "seven_day_share": 0.000005875,
           "cached_tokens": 1500,
           "tokens": 5400,
           "uncached_tokens": 3000
@@ -2225,8 +2225,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "group": "business",
           "unit": "window_share",
           "usd": 0,
-          "five_hour_share": 0.000035185,
-          "seven_day_share": null,
+          "five_hour_share": 0.00003525,
+          "seven_day_share": 0.000005875,
           "cached_tokens": 1000,
           "tokens": 3600,
           "uncached_tokens": 2000
@@ -8053,137 +8053,59 @@ export const FIXTURES: Record<string, Fixture> = {
       },
       "plan_tables": {
         "cost": {
-          "bands": [
-            {
-              "weekdays": true,
-              "from_hour": 5,
-              "to_hour": 11,
-              "factor": 1.435,
-              "windows": [
-                "five_hour"
-              ],
-              "zone": "America/Los_Angeles"
-            }
-          ],
-          "effective": "2026-10-01",
-          "tiers": {
-            "default_claude_max_20x": {
-              "five_hour": 1,
-              "seven_day": 1
+          "effective": "2026-10-05",
+          "unit": {
+            "defined_by": {
+              "band": "out_of_band",
+              "tier": "default_claude_max_20x",
+              "window": "five_hour"
+            },
+            "units_per_window": 150000000
+          },
+          "capacity": {
+            "default_claude_ai": {
+              "five_hour": 7500000,
+              "seven_day": 90000000
             },
             "default_claude_max_5x": {
-              "five_hour": 0.25,
-              "seven_day": null
+              "five_hour": 37500000,
+              "seven_day": 450000000
             },
-            "default_claude_pro": {
-              "five_hour": 0.05,
-              "seven_day": null
+            "default_claude_max_20x": {
+              "five_hour": 150000000,
+              "seven_day": 900000000
             }
           },
-          "windows": {
-            "five_hour": {
-              "claude-fable-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-fable-5-1": {
-                "cache_read": 0.001675,
-                "cache_write_1h": 0.084,
-                "cache_write_5m": 0.08326,
-                "input": 0.06647,
-                "output": 0.3292
-              },
-              "claude-haiku-4-5": {
-                "cache_read": 0.000167,
-                "cache_write_1h": 0.00823,
-                "cache_write_5m": 0.00824,
-                "input": 0.00659,
-                "output": 0.03294
-              },
-              "claude-opus-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-opus-5-5": {
-                "cache_read": 0.000365,
-                "cache_write_1h": 0.01824,
-                "cache_write_5m": 0.0183,
-                "input": 0.01461,
-                "output": 0.07279
-              },
-              "claude-sonnet-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-sonnet-5-5": {
-                "cache_read": 0.000249,
-                "cache_write_1h": 0.01251,
-                "cache_write_5m": 0.01247,
-                "input": 0.00999,
-                "output": 0.04984
-              }
+          "peak": {
+            "capacity_factor": {
+              "five_hour": 0.7,
+              "seven_day": 1
             },
-            "seven_day": {
-              "claude-fable-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-fable-5-1": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-haiku-4-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-opus-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-opus-5-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-sonnet-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              },
-              "claude-sonnet-5-5": {
-                "cache_read": null,
-                "cache_write_1h": null,
-                "cache_write_5m": null,
-                "input": null,
-                "output": null
-              }
+            "from_hour": 5,
+            "to_hour": 11,
+            "weekdays": true,
+            "zone": "America/Los_Angeles"
+          },
+          "type_multiplier": {
+            "cache_read": 0.025,
+            "cache_write_1h": 1.25,
+            "cache_write_5m": 1.25,
+            "input": 1,
+            "output": 5
+          },
+          "model_weight": {
+            "claude-fable-5-1": 10,
+            "claude-opus-5-5": 2.2,
+            "claude-sonnet-5-5": 1.5,
+            "claude-haiku-4-5": 1
+          },
+          "model_windows": {
+            "seven_day_fable": {
+              "capacity_factor": 0.5,
+              "of": "seven_day"
             }
-          }
+          },
+          "overrides": {}
         }
       },
       "pricing": {

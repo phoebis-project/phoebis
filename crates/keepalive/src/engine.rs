@@ -2363,8 +2363,6 @@ pub(crate) fn gate(
 
 #[cfg(test)]
 mod tests {
-    use phoebis_routing::FIVE_HOUR;
-
     use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
 
     use super::*;
@@ -2631,61 +2629,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_row_whose_hour_cell_is_null_gates_a_five_minute_probe_on_the_share() {
-        let mut tables = PlanTables::shipped();
-        tables
-            .cost
-            .windows
-            .get_mut(FIVE_HOUR)
-            .unwrap()
-            .get_mut("claude-opus-5-5")
-            .unwrap()
-            .cache_write_1h = None;
-        let net = Net {
-            five_hour_share: -0.01,
-            usd: 0.50,
-        };
-        let gated = |view: &RouterView, ttl_ms: i64| {
-            let mut agent = Agent::new("main", "k", 1, 0);
-            agent.account = Some("o".into());
-            agent.canonical_model = "claude-opus-5-5".into();
-            agent.ttl_ms = ttl_ms;
-            agent.net = net;
-            agent.grace_left = 0;
-            gate(
-                view,
-                &mut agent,
-                "s",
-                &BTreeMap::new(),
-                &BTreeMap::new(),
-                &tables,
-            )
-            .err()
-        };
-        assert_eq!(
-            gated(&stop_view(false), FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::NetNegative)),
-            "a five-minute probe never writes for an hour, so it settles in the share and the share balance decides"
-        );
-        assert_eq!(
-            gated(&stop_view(false), ONE_HOUR_MS),
-            None,
-            "an hour recipe's probe can, so it settles in dollars and the dollar balance is positive"
-        );
-        let capped = stop_view_capped(false, Some(0.0));
-        assert_eq!(
-            gated(&capped, FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::CapReached)),
-            "a zero share cap holds a probe that settles in the share"
-        );
-        assert_eq!(
-            gated(&capped, ONE_HOUR_MS),
-            None,
-            "and never one that settles in dollars"
-        );
-    }
-
     /// An observation whose recipe `make_recipe` built from a body sent in fast mode, or at standard speed.
     fn observation(fast: bool) -> Observation {
         let speed = if fast { r#""speed":"fast","# } else { "" };
@@ -2825,21 +2768,14 @@ mod tests {
     }
 
     #[test]
-    fn a_recipe_with_an_hour_marker_on_a_row_whose_hour_cell_is_null_gates_in_dollars() {
-        let mut tables = PlanTables::shipped();
-        tables
-            .cost
-            .windows
-            .get_mut(FIVE_HOUR)
-            .unwrap()
-            .get_mut("claude-opus-5-5")
-            .unwrap()
-            .cache_write_1h = None;
-        let gated = |view: &RouterView, longest_ttl_ms: i64| {
+    fn a_recipe_on_a_model_without_a_weight_gates_in_dollars_whatever_its_markers() {
+        // The test table leaves Opus 5 without a weight and weighs Opus 5.5.
+        let tables = phoebis_ledger::test_tables::subscription_costs();
+        let gated = |view: &RouterView, model: &str, longest_ttl_ms: i64| {
             let mut agent = Agent::new("main", "k", 1, 0);
             agent.account = Some("o".into());
-            agent.canonical_model = "claude-opus-5-5".into();
-            // The shortest marker is the TTL in force; the recipe also marks a part for an hour.
+            agent.canonical_model = model.into();
+            // The shortest marker is the TTL in force; the recipe may also mark a part for an hour.
             agent.ttl_ms = FIVE_MINUTES_MS;
             agent.current = Some(Observation {
                 id: "obs".into(),
@@ -2848,7 +2784,7 @@ mod tests {
                 recipe: Recipe {
                     body: Vec::new(),
                     headers: Vec::new(),
-                    model: "claude-opus-5-5".into(),
+                    model: model.into(),
                     ttl_ms: FIVE_MINUTES_MS,
                     longest_ttl_ms,
                     size: 0,
@@ -2878,119 +2814,27 @@ mod tests {
             )
             .err()
         };
-        assert_eq!(
-            gated(&stop_view(false), ONE_HOUR_MS),
-            None,
-            "a cold probe writes the hour-marked part, which the row cannot price, so the positive dollar balance decides"
-        );
-        assert_eq!(
-            gated(&stop_view_capped(false, Some(0.0)), ONE_HOUR_MS),
-            None,
-            "and a zero share cap never holds it"
-        );
-        assert_eq!(
-            gated(&stop_view(false), FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::NetNegative)),
-            "with five-minute markers alone the probe settles in the share"
-        );
-    }
-
-    #[test]
-    fn a_probe_gates_on_the_ttl_its_agents_branch_dispatches_it_with() {
-        let mut hourless = PlanTables::shipped();
-        hourless
-            .cost
-            .windows
-            .get_mut(FIVE_HOUR)
-            .unwrap()
-            .get_mut("claude-opus-5-5")
-            .unwrap()
-            .cache_write_1h = None;
-        // A zero share cap holds exactly the probes that settle in the share, so whether it holds names the unit.
-        let gated_as =
-            |agent_id: &str, cache_ttl_json: &str, tables: &PlanTables, marker_ms: i64| {
-                let view =
-                    stop_view_dispatching(false, OveragePolicy::Allow, Some(0.0), cache_ttl_json);
-                let mut agent = Agent::new(agent_id, "k", 1, 0);
-                agent.account = Some("o".into());
-                agent.canonical_model = "claude-opus-5-5".into();
-                agent.ttl_ms = marker_ms;
-                let mut current = observation(false);
-                current.recipe.ttl_ms = marker_ms;
-                current.recipe.longest_ttl_ms = marker_ms;
-                agent.current = Some(current);
-                gate(
-                    &view,
-                    &mut agent,
-                    "s",
-                    &BTreeMap::new(),
-                    &BTreeMap::new(),
-                    tables,
-                )
-                .err()
-            };
-        let gated = |cache_ttl_json: &str, tables: &PlanTables, marker_ms: i64| {
-            gated_as("main", cache_ttl_json, tables, marker_ms)
-        };
-        let probes_for_an_hour = r#"{"enabled":true,"plan":{"main":"1h"}}"#;
-        assert_eq!(
-            gated(probes_for_an_hour, &hourless, FIVE_MINUTES_MS),
-            None,
-            "the relay rewrites the five-minute markers to the hour the main branch holds, which the row cannot price, so the probe settles in dollars"
-        );
-        assert_eq!(
-            gated(probes_for_an_hour, &PlanTables::shipped(), FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::CapReached)),
-            "with the hour cell priced the same probe settles in the share"
-        );
-        assert_eq!(
-            gated("{}", &hourless, FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::CapReached)),
-            "with the policy off the five-minute markers go as sent"
-        );
-        assert_eq!(
-            gated(
-                r#"{"enabled":true,"plan":{"main":"5m"}}"#,
-                &hourless,
-                ONE_HOUR_MS
-            ),
-            Some(Gate::Hold(Reason::CapReached)),
-            "an hour recipe whose probe the pool dispatches for five minutes never writes for an hour"
-        );
-        assert_eq!(
-            gated(
-                r#"{"enabled":true,"metered":{"main":"1h"},"plan":{"main":"5m"}}"#,
-                &hourless,
-                FIVE_MINUTES_MS
-            ),
-            Some(Gate::Hold(Reason::CapReached)),
-            "a plan-funded probe reads the plan set, never the metered set"
-        );
-        assert_eq!(
-            gated(probes_for_an_hour, &hourless, 0),
-            Some(Gate::Hold(Reason::CapReached)),
-            "a body without a marker goes without one, so it writes nothing for an hour"
-        );
-        assert_eq!(
-            gated(
-                r#"{"enabled":true,"inject_when_absent":true,"plan":{"main":"1h"}}"#,
-                &hourless,
-                0
-            ),
-            None,
-            "unless the policy adds the marker, at the hour"
-        );
-        let by_agent = r#"{"enabled":true,"plan":{"main":"5m","subagent":"1h"}}"#;
-        assert_eq!(
-            gated(by_agent, &hourless, FIVE_MINUTES_MS),
-            Some(Gate::Hold(Reason::CapReached)),
-            "a main agent's probe reads the main branch's five minutes"
-        );
-        assert_eq!(
-            gated_as("sub-1", by_agent, &hourless, FIVE_MINUTES_MS),
-            None,
-            "a subagent's probe reads the subagent branch's hour, which the row cannot price, so the probe settles in dollars"
-        );
+        for longest_ttl_ms in [FIVE_MINUTES_MS, ONE_HOUR_MS] {
+            assert_eq!(
+                gated(&stop_view(false), "claude-opus-5", longest_ttl_ms),
+                None,
+                "a model without a weight settles in dollars, so the positive dollar balance decides"
+            );
+            assert_eq!(
+                gated(
+                    &stop_view_capped(false, Some(0.0)),
+                    "claude-opus-5",
+                    longest_ttl_ms
+                ),
+                None,
+                "and a zero share cap never holds it"
+            );
+            assert_eq!(
+                gated(&stop_view(false), "claude-opus-5-5", longest_ttl_ms),
+                Some(Gate::Hold(Reason::NetNegative)),
+                "a weighted model settles in the share whatever its markers, so the share balance decides"
+            );
+        }
     }
 
     #[test]

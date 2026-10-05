@@ -16,6 +16,7 @@ test-support = []
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
+indexmap = { workspace = true }
 jiff = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-oauth = { path = "../oauth" }

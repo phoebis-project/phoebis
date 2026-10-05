@@ -2347,7 +2347,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         .find(|p| p.key_id == "desktop" && p.session_id == "burn-e2e")
         .expect("the pin the request created is on disk once the binary has stopped");
     let per_second = |tokens: f64| tokens / 600.0;
-    let band = tables.cost.band_factor(phoebis_routing::FIVE_HOUR, burn_at);
+    let band = tables.band_factor(phoebis_routing::FIVE_HOUR, burn_at);
     assert_eq!(
         (pin.burn, pin.burn_at),
         (

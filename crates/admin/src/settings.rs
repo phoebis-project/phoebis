@@ -19,7 +19,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
         "access": { "admin_configured": true },
         "keepalive": s.keepalive,
         "listeners": { "metrics": s.metrics_listen, "proxy": s.proxy_listen },
-        "plan_tables": { "cost": tables.cost },
+        "plan_tables": { "cost": &tables.costs },
         "pricing": crate::pricing::table_json(&table),
         "retention": { "body_capture_max_hours": s.body_capture_max_hours },
         "sessions": { "expire_after_seconds": s.session_expire_after_seconds },

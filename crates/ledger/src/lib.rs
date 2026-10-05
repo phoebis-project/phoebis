@@ -33,10 +33,15 @@ pub use pattern::{
     matches as pattern_matches, to_like as pattern_to_like,
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
-pub use plan::{Band, CostTable, Factors, ModelCells, PlanTables};
+pub use plan::{
+    Capacity, DefinedBy, ModelWindow, Override, Peak, PerWindow, PlanTables, SubscriptionCosts,
+    TypeMultiplier, TypeOverride, Unit,
+};
 pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Speed};
 #[cfg(any(test, feature = "test-support"))]
 pub use query::{apply_filter, breakdown, burn_rows, burn_series, series};
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_tables;
 pub use query::{
     breakdown_paged, bucket_seconds, burn_groups_paged, burn_series_over, dashboard, group_of,
     hour_ceil, key_request_totals, latest_extra_usage, latest_quota, list_requests, literal_like,
