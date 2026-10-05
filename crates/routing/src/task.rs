@@ -3298,8 +3298,9 @@ impl Task {
                 let Some(term) = snapshot.term(&member.account_id) else {
                     continue;
                 };
-                let Some(ends_at) =
-                    term::end_of(term, now).filter(|_| term::winding_down(term, now, minutes))
+                // A cancelled term past its end still reads as winding down; its account has ended, which is no start.
+                let Some(ends_at) = term::end_of(term, now)
+                    .filter(|_| term::winding_down(term, now, minutes) && !term::ended(term, now))
                 else {
                     continue;
                 };

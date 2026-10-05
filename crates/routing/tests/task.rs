@@ -6275,6 +6275,25 @@ async fn a_member_entering_its_wind_down_emits_once() {
 }
 
 #[tokio::test]
+async fn a_member_past_its_cancelled_end_emits_no_wind_down() {
+    let store = seeded(&["a"]);
+    // The subscription ended an hour before the router starts: past its end, not entering a wind-down.
+    store.set_cancelled("a", true, Some(1_000 - HOUR)).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let mut events = handle.subscribe_events();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
 async fn the_purge_groups_expired_entries_per_root() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a"]);
