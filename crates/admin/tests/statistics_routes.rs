@@ -1974,3 +1974,526 @@ async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
         "desktop's own rows still answer under the filter"
     );
 }
+
+/// A pool of the one API-key member and the key that reaches it, so a selection through the harness's router places
+/// on `direct` without a pairing.
+async fn routed(parts: &common::Full, cookie: &str) {
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#,
+        Some(cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(cookie),
+    )
+    .await;
+}
+
+/// One selection through the harness's router as the relay asks for it, at `at`: no session, so no pin and no pin
+/// event beside the decision.
+async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, at: i64) {
+    let snapshot = parts.router.snapshot();
+    let key = snapshot
+        .key("desktop")
+        .expect("the key is in the snapshot")
+        .clone();
+    let candidates = phoebis_routing::resolve(
+        &snapshot,
+        &key,
+        "claude-sonnet-5",
+        "claude-sonnet-5",
+    )
+    .expect("the pool allows the model");
+    let answer = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            request_id: request_id.into(),
+            attempt,
+            seq,
+            key_id: "desktop".into(),
+            key_generation: common::generation(&parts.store, "desktop"),
+            agent_id: "main".into(),
+            session_id: None,
+            canonical_model: "claude-sonnet-5".into(),
+            folded_model: "claude-sonnet-5".into(),
+            candidates,
+            portable: true,
+            attempted: Vec::new(),
+            now: at,
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            count: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: std::sync::Arc::from([]),
+            client: phoebis_routing::ClientClass::ClaudeCode,
+            static_boundaries: std::sync::Arc::from([]),
+            marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            fast: false,
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, phoebis_routing::SelectResult::Selected(_)),
+        "the pool's member answers a selection"
+    );
+}
+
+fn routing_event(at: i64, kind: &str) -> Record {
+    Record::Event(EventRecord {
+        at,
+        kind: kind.into(),
+        account_id: Some("direct".into()),
+        detail: Some(r#"{"scope":"account"}"#.into()),
+        ..Default::default()
+    })
+}
+
+/// A request whose attempts answered on `direct`: each `(status, cache read)`, usage only where a read is named.
+fn answered(id: &str, at: i64, attempts: &[(u16, Option<u64>)]) -> Record {
+    Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 5_000),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: attempts.last().map(|(status, _)| *status),
+            outcome: "succeeded".into(),
+            attempts: attempts.len() as u32,
+            ..Default::default()
+        },
+        attempts: attempts
+            .iter()
+            .zip(1..)
+            .map(|((status, read), n)| AttemptRecord {
+                request_id: id.into(),
+                attempt: n,
+                account_id: "direct".into(),
+                account_kind: "api_key".into(),
+                started_at: at,
+                finished_at: Some(at + i64::from(n) * 1_000),
+                upstream_status: Some(*status),
+                outcome: if *status == 200 {
+                    "succeeded"
+                } else {
+                    "rate_limited"
+                }
+                .into(),
+                input_tokens: read.map(|_| 2_000),
+                output_tokens: read.map(|_| 100),
+                cache_read_tokens: *read,
+                ..Default::default()
+            })
+            .collect(),
+        bodies: None,
+    }
+}
+
+const DECISION_ROW_KEYS: &[&str] = &[
+    "type",
+    "request_id",
+    "seq",
+    "attempt",
+    "attempt_count",
+    "at",
+    "kind",
+    "probe",
+    "key_id",
+    "pool_id",
+    "session_id",
+    "agent_id",
+    "model",
+    "account_id",
+    "from_account_id",
+    "by",
+    "fact",
+    "rule",
+    "strategy",
+    "tier",
+    "rung",
+    "score",
+    "runner_up",
+    "skipped",
+    "warmth",
+    "hold",
+    "exhaustion",
+    "refusal",
+    "fast",
+    "cache",
+    "status",
+];
+
+const EVENT_ROW_KEYS: &[&str] = &[
+    "type",
+    "id",
+    "at",
+    "kind",
+    "account_id",
+    "key_id",
+    "pool_id",
+    "session_id",
+    "agent_id",
+    "model",
+    "request_id",
+    "actor",
+    "detail",
+];
+
+fn keys_of(row: &serde_json::Value) -> Vec<&str> {
+    row.as_object()
+        .expect("a row is an object")
+        .keys()
+        .map(String::as_str)
+        .collect()
+}
+
+#[tokio::test]
+async fn the_routing_log_answers_the_merged_page_with_the_api_page_s_field_names() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now + 1_000).await;
+    decide(&parts, "r2", 1, 1, now + 3_000).await;
+    parts
+        .ledger
+        .record(routing_event(now + 2_000, "cooldown_set"));
+    parts
+        .ledger
+        .record(routing_event(now + 3_000, "cooldown_cleared"));
+    // `from` as an RFC 3339 instant, `to` as Unix milliseconds: the route reads both.
+    let page = wait_json(
+        &parts.app,
+        "/admin/routing-log?from=1970-01-01T00:16:40Z&to=1010000",
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
+    )
+    .await;
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row["type"].as_str().unwrap(), row["at"].as_i64().unwrap()))
+            .collect::<Vec<_>>(),
+        [
+            ("decision", now + 3_000),
+            ("event", now + 3_000),
+            ("event", now + 2_000),
+            ("decision", now + 1_000)
+        ],
+        "newest first, a decision before an event at one instant"
+    );
+    for row in rows {
+        let expected = if row["type"] == "decision" {
+            DECISION_ROW_KEYS
+        } else {
+            EVENT_ROW_KEYS
+        };
+        assert_eq!(keys_of(row), expected, "{row}");
+    }
+    assert_eq!(
+        (rows[0]["request_id"].as_str(), rows[0]["kind"].as_str()),
+        (Some("r2"), Some("placed"))
+    );
+    assert_eq!(rows[0]["account_id"], "direct");
+    assert_eq!(rows[1]["detail"], serde_json::json!({ "scope": "account" }));
+    assert!(page["next_cursor"].is_null());
+    assert!(
+        page.get("counts").is_none(),
+        "counts are answered under a request filter alone"
+    );
+}
+
+#[tokio::test]
+async fn the_routing_log_pages_through_its_cursor() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now + 1_000).await;
+    decide(&parts, "r2", 1, 1, now + 4_000).await;
+    parts
+        .ledger
+        .record(routing_event(now + 2_000, "cooldown_set"));
+    parts
+        .ledger
+        .record(routing_event(now + 3_000, "cooldown_cleared"));
+    let range = format!("from={now}&to={}", now + 10_000);
+    wait_json(
+        &parts.app,
+        &format!("/admin/routing-log?{range}"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
+    )
+    .await;
+    let first = json(
+        get(
+            &parts.app,
+            &format!("/admin/routing-log?{range}&limit=2"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let ats = |page: &serde_json::Value| {
+        page["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["at"].as_i64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ats(&first), [now + 4_000, now + 3_000]);
+    let cursor = first["next_cursor"]
+        .as_str()
+        .expect("two rows lie past the first page");
+    let second = json(
+        get(
+            &parts.app,
+            &format!("/admin/routing-log?{range}&limit=2&cursor={cursor}"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(ats(&second), [now + 2_000, now + 1_000]);
+    assert!(
+        second["next_cursor"].is_null(),
+        "the last page names no cursor"
+    );
+}
+
+#[tokio::test]
+async fn the_routing_log_refuses_an_unknown_kind_a_bad_time_a_bad_cursor_and_a_limit_out_of_range()
+{
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (query, error) in [
+        ("kinds=placed,bogus", "unknown kind bogus"),
+        ("from=yesterday", "from is not a time"),
+        ("to=2026-13-40T00:00:00Z", "to is not a time"),
+        ("cursor=abc", "cursor is <at>:<rank>:<id>"),
+        ("cursor=100:2:r1/1", "cursor is <at>:<rank>:<id>"),
+        ("limit=0", "limit is 1 to 200"),
+        ("limit=201", "limit is 1 to 200"),
+        ("limit=many", "limit is 1 to 200"),
+    ] {
+        let refused = get(
+            &parts.app,
+            &format!("/admin/routing-log?{query}"),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "{query}");
+        assert_eq!(json(refused).await["error"], error, "{query}");
+    }
+    for query in ["limit=1", "limit=200", "kinds=probe,warm_prefix_expired"] {
+        assert_eq!(
+            get(
+                &parts.app,
+                &format!("/admin/routing-log?{query}"),
+                Some(&cookie)
+            )
+            .await
+            .status(),
+            200,
+            "{query}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_routing_log_refuses_a_filter_outside_its_keys() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let refused = get(&parts.app, "/admin/routing-log?statuses=429", Some(&cookie)).await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"],
+        "unknown filter statuses",
+        "a filter the route does not read is refused rather than ignored"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_record_answers_404() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (path, error) in [
+        (
+            "/admin/requests/r-none/decisions/1",
+            "no decision 1 for request r-none",
+        ),
+        (
+            "/admin/requests/r-none/decisions/first",
+            "no decision first for request r-none",
+        ),
+    ] {
+        let missing = get(&parts.app, path, Some(&cookie)).await;
+        assert_eq!(missing.status(), 404, "{path}");
+        assert_eq!(json(missing).await["error"], error, "{path}");
+    }
+}
+
+#[tokio::test]
+async fn a_decision_record_answers_record_v1_with_its_completion() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now).await;
+    parts
+        .ledger
+        .record(answered("r1", now, &[(200, Some(700))]));
+    let record = wait_json(&parts.app, "/admin/requests/r1/decisions/1", &cookie, |v| {
+        v["outcome"]["completion"]["status"] == 200
+    })
+    .await;
+    assert_eq!(
+        keys_of(&record),
+        [
+            "request_id",
+            "seq",
+            "version",
+            "request",
+            "pin",
+            "pin_reason",
+            "settings",
+            "candidates",
+            "walk",
+            "outcome"
+        ]
+    );
+    assert_eq!(
+        (&record["request_id"], &record["seq"], &record["version"]),
+        (
+            &serde_json::json!("r1"),
+            &serde_json::json!(1),
+            &serde_json::json!(1)
+        )
+    );
+    assert_eq!(record["outcome"]["kind"], "placed");
+    assert_eq!(
+        record["outcome"]["completion"],
+        serde_json::json!({
+            "status": 200,
+            "cache_read_tokens": 700,
+            "input_tokens": 2_000,
+            "promised_tokens": null,
+            "hit": true,
+            "held_ms": null,
+            "freed": false,
+            "cache_map_written": null,
+            "completed_at": now + 1_000,
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_routing_log_s_decision_row_and_record_read_the_answering_attempt_after_a_retry_in_place(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now).await;
+    // The same decision's account answered a 429 and, retried in place, a 200.
+    parts
+        .ledger
+        .record(answered("r1", now, &[(429, None), (200, Some(900))]));
+    let page = wait_json(
+        &parts.app,
+        &format!("/admin/routing-log?from={now}&to={now}&request=r1"),
+        &cookie,
+        |v| v["rows"][0]["status"] == 200,
+    )
+    .await;
+    let row = &page["rows"][0];
+    assert_eq!(
+        (&row["attempt"], &row["attempt_count"], &row["status"]),
+        (
+            &serde_json::json!(1),
+            &serde_json::json!(2),
+            &serde_json::json!(200)
+        ),
+        "the row keeps its own attempt and reads the attempt that answered"
+    );
+    assert_eq!(
+        row["cache"],
+        serde_json::json!({ "hit": true, "read_tokens": 900, "promised_tokens": null, "input_tokens": 2_000 })
+    );
+    assert_eq!(
+        page["counts"],
+        serde_json::json!({ "decisions": 1, "events": 0 })
+    );
+    let record = json(get(&parts.app, "/admin/requests/r1/decisions/1", Some(&cookie)).await).await;
+    let completion = &record["outcome"]["completion"];
+    assert_eq!(
+        (
+            &completion["status"],
+            &completion["cache_read_tokens"],
+            &completion["completed_at"]
+        ),
+        (
+            &serde_json::json!(200),
+            &serde_json::json!(900),
+            &serde_json::json!(now + 2_000)
+        )
+    );
+}
+
+#[tokio::test]
+async fn the_request_s_events_carry_their_three_columns() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    parts
+        .ledger
+        .record(record("r1", now, "claude-sonnet-5", "s1"));
+    parts.ledger.record(Record::Event(EventRecord {
+        at: now + 100,
+        kind: "window_spent".into(),
+        account_id: Some("business".into()),
+        pool_id: Some("main".into()),
+        agent_id: Some("main".into()),
+        request_id: Some("r1".into()),
+        session_id: Some("s1".into()),
+        detail: Some(r#"{"window":"five_hour","source_request_id":"r1"}"#.into()),
+        ..Default::default()
+    }));
+    let shown = wait_json(&parts.app, "/admin/requests/r1", &cookie, |v| {
+        v["events"].as_array().is_some_and(|e| !e.is_empty())
+    })
+    .await;
+    let event = &shown["events"][0];
+    assert_eq!(
+        (&event["pool_id"], &event["agent_id"], &event["request_id"]),
+        (
+            &serde_json::json!("main"),
+            &serde_json::json!("main"),
+            &serde_json::json!("r1")
+        )
+    );
+}
+
+#[tokio::test]
+async fn the_system_page_counts_the_refusals_the_router_s_mailbox_refused() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(system["router"]["dropped_refusals"], 0);
+}

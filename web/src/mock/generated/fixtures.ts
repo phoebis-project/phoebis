@@ -5223,6 +5223,429 @@ export const FIXTURES: Record<string, Fixture> = {
       }
     }
   },
+  "decision": {
+    "route": "GET /admin/requests/r-static/decisions/1",
+    "body": {
+      "request_id": "r-static",
+      "seq": 1,
+      "version": 1,
+      "request": {
+        "request_id": "r-static",
+        "attempt": 1,
+        "seq": 1,
+        "at": 1000000,
+        "key_id": "desktop",
+        "key_generation": 1791217561402,
+        "pool_id": "main",
+        "routing_session_id": "s-static",
+        "agent_id": "main",
+        "parent_agent_id": null,
+        "client_class": "claude_code",
+        "request_class": null,
+        "canonical_model": "claude-sonnet-5",
+        "lane": {
+          "speed": "standard",
+          "thinking": "none",
+          "effort": "-"
+        },
+        "flags": {
+          "fast": false,
+          "count": false,
+          "probe": false,
+          "portable": false,
+          "marker": true,
+          "context_compacted": false
+        },
+        "chain": {
+          "static_boundaries": 1,
+          "boundaries": 0,
+          "static_hash": false
+        },
+        "attempted": [],
+        "holds": [],
+        "registry_revision": 66
+      },
+      "pin": {
+        "found": "none",
+        "account_id": null,
+        "epoch": null,
+        "incarnation": null,
+        "created_at": null,
+        "last_used_at": null,
+        "last_refresh_at": null,
+        "idle_ms": null,
+        "refresh_age_ms": null,
+        "lane": null,
+        "shed": null,
+        "marked": false,
+        "warmth": null,
+        "warmth_cause": null,
+        "released": []
+      },
+      "pin_reason": null,
+      "settings": {
+        "strategy": "pace",
+        "prefer_subscription": true,
+        "overage_policy": "prefer_plan",
+        "affinity_ttl_seconds": 600,
+        "affinity_mode": "always",
+        "session_placement": "by_warm_prefix",
+        "min_shared_prefix_tokens": 20000,
+        "subagent_placement": "by_cohort",
+        "select_below_utilization": null,
+        "migrate_above_utilization": null,
+        "migrate_when_spent": true,
+        "overage_move_grace_minutes": 30,
+        "wind_down_minutes": 30,
+        "shed_share": 0.5,
+        "burn_window_seconds": 600,
+        "source_dwell_seconds": 900,
+        "warm_sessions": "when_needed",
+        "in_flight_cap": 16,
+        "retry_in_place_seconds": 10,
+        "pace_floor": 0.05,
+        "migrate_band": 0.05,
+        "pool_updated_at": 1791217561688
+      },
+      "candidates": [
+        {
+          "account_id": "business",
+          "incarnation": 1,
+          "kind": "oauth",
+          "plan_tier": "default_claude_max_20x",
+          "enabled": true,
+          "state": "ready",
+          "priority": 0,
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "in_overage": false,
+          "overage": null,
+          "in_flight": 0,
+          "in_flight_cap": 16,
+          "windows": {
+            "fast_input": {
+              "utilization": 0.42,
+              "reset": 1030000,
+              "source": "head",
+              "observed_at": 995000,
+              "age_ms": 5000,
+              "ahead": null
+            },
+            "fast_output": {
+              "utilization": 0.08,
+              "reset": 1030000,
+              "source": "head",
+              "observed_at": 995000,
+              "age_ms": 5000,
+              "ahead": null
+            }
+          },
+          "allowance_known": false,
+          "pace": {
+            "remaining": 1,
+            "reset": null,
+            "end": null,
+            "deadline": null,
+            "hours": 168,
+            "score": 0.005952380952380952
+          },
+          "budget": [
+            {
+              "period": "month",
+              "budget_usd": 30,
+              "spent_usd": 0,
+              "period_start": 0,
+              "period_end": 2678400000,
+              "observed_at": 1000000
+            }
+          ],
+          "cooldowns": [
+            {
+              "scope": "model:claude-haiku-4-5-20251001",
+              "reason": "model_rejected",
+              "window": "model_rejection",
+              "until": 2800000,
+              "blocking": false
+            }
+          ],
+          "credits": null,
+          "term": {
+            "since": 1773482400000,
+            "trial_ends_at": null,
+            "cancelled": false,
+            "ends_at": null,
+            "winding_down": false,
+            "ended": false
+          },
+          "prefix": {
+            "content": null,
+            "content_match": null,
+            "static": {
+              "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+              "depth": 1,
+              "prefix_tokens": 31200,
+              "written_at": 1000000,
+              "ttl_ms": 3600000,
+              "live": true,
+              "refused_by": null
+            },
+            "static_match": {
+              "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+              "depth": 1,
+              "prefix_tokens": 31200,
+              "written_at": 1000000,
+              "ttl_ms": 3600000,
+              "live": true,
+              "refused_by": null
+            },
+            "with_main": false
+          },
+          "obstacle": null,
+          "partition": null,
+          "rank": null,
+          "score": null,
+          "verdict": "chosen"
+        },
+        {
+          "account_id": "direct",
+          "incarnation": 1,
+          "kind": "api_key",
+          "plan_tier": null,
+          "enabled": true,
+          "state": "ready",
+          "priority": 1,
+          "tier": [
+            2,
+            1,
+            0
+          ],
+          "in_overage": false,
+          "overage": null,
+          "in_flight": 0,
+          "in_flight_cap": 16,
+          "windows": {},
+          "allowance_known": true,
+          "pace": {
+            "remaining": 1,
+            "reset": null,
+            "end": null,
+            "deadline": null,
+            "hours": null,
+            "score": 1
+          },
+          "budget": [
+            {
+              "period": "month",
+              "budget_usd": 50,
+              "spent_usd": 0.0036,
+              "period_start": 0,
+              "period_end": 2678400000,
+              "observed_at": 1000000
+            }
+          ],
+          "cooldowns": [],
+          "credits": null,
+          "term": {
+            "since": null,
+            "trial_ends_at": null,
+            "cancelled": false,
+            "ends_at": null,
+            "winding_down": false,
+            "ended": false
+          },
+          "prefix": {
+            "content": null,
+            "content_match": null,
+            "static": null,
+            "static_match": null,
+            "with_main": false
+          },
+          "obstacle": null,
+          "partition": null,
+          "rank": null,
+          "score": null,
+          "verdict": "not_needed"
+        }
+      ],
+      "walk": [
+        {
+          "step": "pin",
+          "verdict": "none",
+          "facts": [
+            {
+              "key": "found",
+              "value": "none",
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "eligible",
+          "verdict": "match",
+          "facts": [
+            {
+              "key": "standing",
+              "value": "eligible",
+              "account_id": "business",
+              "unit": null
+            },
+            {
+              "key": "standing",
+              "value": "eligible",
+              "account_id": "direct",
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "partitions",
+          "verdict": "match",
+          "facts": [
+            {
+              "key": "spent",
+              "value": "off",
+              "account_id": null,
+              "unit": null
+            },
+            {
+              "key": "at_cap",
+              "value": 0,
+              "account_id": null,
+              "unit": null
+            },
+            {
+              "key": "above_ceiling",
+              "value": "off",
+              "account_id": null,
+              "unit": null
+            },
+            {
+              "key": "winding_down",
+              "value": 0,
+              "account_id": null,
+              "unit": null
+            },
+            {
+              "key": "floor",
+              "value": 0,
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "rung:content",
+          "verdict": "none",
+          "facts": [
+            {
+              "key": "reason",
+              "value": "no_entry",
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "rung:with_main",
+          "verdict": "none",
+          "facts": [
+            {
+              "key": "reason",
+              "value": "class",
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        },
+        {
+          "step": "rung:static",
+          "verdict": "match",
+          "facts": [
+            {
+              "key": "depth",
+              "value": 1,
+              "account_id": null,
+              "unit": "count"
+            },
+            {
+              "key": "prefix_tokens",
+              "value": 31200,
+              "account_id": null,
+              "unit": "tokens"
+            },
+            {
+              "key": "account_id",
+              "value": "business",
+              "account_id": "business",
+              "unit": null
+            },
+            {
+              "key": "hash",
+              "value": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+              "account_id": null,
+              "unit": null
+            }
+          ]
+        }
+      ],
+      "outcome": {
+        "kind": "placed",
+        "account_id": "business",
+        "from_account_id": null,
+        "upstream_model": "claude-sonnet-5",
+        "tier": null,
+        "strategy": "pace",
+        "rule": null,
+        "rung": {
+          "rung": "static",
+          "depth": 1,
+          "prefix_tokens": 31200
+        },
+        "in_overage": false,
+        "pin_written": {
+          "action": "created",
+          "epoch": 3,
+          "lane": "claude-sonnet-5|standard|none|-",
+          "refresh_stamped": true,
+          "hashes_stamped": false
+        },
+        "pin_events": [
+          {
+            "kind": "pin_created",
+            "reason": null
+          }
+        ],
+        "hold": null,
+        "exhaustion": null,
+        "refusal": null,
+        "cohort_hold": null,
+        "shed_marks": null,
+        "completion": {
+          "status": 200,
+          "cache_read_tokens": 500,
+          "input_tokens": 1000,
+          "promised_tokens": 31200,
+          "hit": true,
+          "held_ms": null,
+          "freed": false,
+          "cache_map_written": [
+            {
+              "tier": "message",
+              "depth": 1,
+              "prefix_tokens": 31200,
+              "ttl_ms": 300000,
+              "account_id": "business"
+            }
+          ],
+          "completed_at": 999400
+        }
+      }
+    }
+  },
   "keepalive_overview": {
     "route": "GET /admin/keepalive/overview",
     "body": {
@@ -6720,7 +7143,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1790987341276,
+        "key_generation": 1791217561402,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -6919,7 +7342,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "from_account": "direct",
             "epoch": 2,
             "reason": "spent"
-          }
+          },
+          "pool_id": null,
+          "agent_id": "main",
+          "request_id": null
         },
         {
           "at": -2599800,
@@ -6935,7 +7361,10 @@ export const FIXTURES: Record<string, Fixture> = {
               "cooldown",
               "spent"
             ]
-          }
+          },
+          "pool_id": null,
+          "agent_id": "main",
+          "request_id": null
         },
         {
           "at": -2599700,
@@ -6950,7 +7379,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "request_id": "req-rejected",
             "source_request_id": "r-failover",
             "wire_model": "claude-haiku-4-5"
-          }
+          },
+          "pool_id": null,
+          "agent_id": null,
+          "request_id": "r-failover"
         },
         {
           "at": -2599650,
@@ -6968,7 +7400,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "request_id": "req-permitted",
             "source_request_id": "r-failover",
             "wire_model": "claude-haiku-4-5"
-          }
+          },
+          "pool_id": null,
+          "agent_id": null,
+          "request_id": "r-failover"
         }
       ]
     }
@@ -7742,6 +8177,1308 @@ export const FIXTURES: Record<string, Fixture> = {
       "next_cursor": null
     }
   },
+  "routing_log": {
+    "route": "GET /admin/routing-log?from=1969-12-31T23:16:40Z&to=1970-01-01T00:16:40Z&kinds=exhausted,held,moved,placed,refused,renewed,probe,account_state_changed,budget_period_ended,budget_reached,catalog_changed,cooldown_cleared,cooldown_set,fast_credits_changed,ledger_gap,model_permitted,model_rejected,overage_ended,overage_started,pin_created,pin_expired,pin_migrated,pin_released,poll_backoff_ended,poll_backoff_started,reauth_required,refresh_failed,refresh_succeeded,refresh_uncertain,registry_changed,router_started,shedding_round,warm_prefix_expired,wind_down_started,window_reset,window_spent&limit=200",
+    "body": {
+      "rows": [
+        {
+          "type": "decision",
+          "request_id": "r-warm",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "strategy",
+            "value": "pace",
+            "tier": [
+              0,
+              0,
+              0
+            ]
+          },
+          "fact": [
+            {
+              "key": "pick",
+              "value": "only candidate",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 1,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-static",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": 1,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-static",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "rung",
+            "value": "static",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "prefix",
+              "value": 31200,
+              "unit": "tokens",
+              "entity": null
+            },
+            {
+              "key": "depth",
+              "value": 1,
+              "unit": "count",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": {
+            "rung": "static",
+            "depth": 1,
+            "prefix_tokens": 31200
+          },
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": {
+            "hit": true,
+            "read_tokens": 500,
+            "promised_tokens": 31200,
+            "input_tokens": 1000
+          },
+          "status": 200
+        },
+        {
+          "type": "decision",
+          "request_id": "r-renew",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "renewed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "none",
+            "value": "",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "idle",
+              "value": 0,
+              "unit": "ms",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": {
+            "verdict": "refresh",
+            "cause": "chainless"
+          },
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-refused",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "refused",
+          "probe": false,
+          "key_id": "retired",
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": null,
+          "from_account_id": null,
+          "by": {
+            "kind": "refusal",
+            "value": "key",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "key",
+              "value": "retired",
+              "unit": null,
+              "entity": {
+                "kind": "key",
+                "id": "retired"
+              }
+            }
+          ],
+          "rule": null,
+          "strategy": "",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": {
+            "kind": "key",
+            "reason": "the key is not in the registry"
+          },
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-probe",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "renewed",
+          "probe": true,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "none",
+            "value": "",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "epoch",
+              "value": 2,
+              "unit": "count",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": {
+            "verdict": "untouched",
+            "cause": "probe"
+          },
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-move",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "moved",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "direct",
+          "from_account_id": "business",
+          "by": {
+            "kind": "rule",
+            "value": "spent",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "pick",
+              "value": "only candidate",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": "spent",
+          "strategy": "pace",
+          "tier": [
+            2,
+            1,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "direct",
+            "score": 1,
+            "unit": "percent"
+          },
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": {
+            "verdict": "refresh",
+            "cause": "chainless"
+          },
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-held",
+          "seq": 2,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-held",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "hold",
+            "value": "strategy_pick",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "held",
+              "value": 800,
+              "unit": "ms",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 1,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-held",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "held",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-held",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "hold",
+            "value": "strategy_pick",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "in_flight",
+              "value": "1/1",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": {
+            "account_id": "business",
+            "cohort": null,
+            "bound_ms": 10000
+          },
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-exhausted",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "exhausted",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": null,
+          "from_account_id": null,
+          "by": {
+            "kind": "exhaustion",
+            "value": "timed",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "retry",
+              "value": 1600000,
+              "unit": "time",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": null,
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": {
+            "kind": "timed",
+            "deadline": 1600000,
+            "window": "five_hour",
+            "reason": null,
+            "obstacle": null
+          },
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-2",
+          "seq": 2,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": "main",
+          "model": "claude-sonnet-5-5",
+          "account_id": "direct",
+          "from_account_id": null,
+          "by": {
+            "kind": "hold",
+            "value": "cohort",
+            "tier": null
+          },
+          "fact": [
+            {
+              "key": "held",
+              "value": 1250,
+              "unit": "ms",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": null,
+          "rung": {
+            "rung": "content",
+            "depth": 2,
+            "prefix_tokens": 500
+          },
+          "score": null,
+          "runner_up": null,
+          "skipped": 0,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "decision",
+          "request_id": "r-1",
+          "seq": 1,
+          "attempt": 1,
+          "attempt_count": null,
+          "at": 1000000,
+          "kind": "placed",
+          "probe": false,
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s-fixture",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "account_id": "business",
+          "from_account_id": null,
+          "by": {
+            "kind": "strategy",
+            "value": "pace",
+            "tier": [
+              0,
+              0,
+              0
+            ]
+          },
+          "fact": [
+            {
+              "key": "pick",
+              "value": "only candidate",
+              "unit": "text",
+              "entity": null
+            }
+          ],
+          "rule": null,
+          "strategy": "pace",
+          "tier": [
+            0,
+            0,
+            0
+          ],
+          "rung": null,
+          "score": {
+            "account_id": "business",
+            "score": 0.005952380952380952,
+            "unit": "percent_per_hour"
+          },
+          "runner_up": null,
+          "skipped": 1,
+          "warmth": null,
+          "hold": null,
+          "exhaustion": null,
+          "refusal": null,
+          "fast": false,
+          "cache": null,
+          "status": null
+        },
+        {
+          "type": "event",
+          "id": 21,
+          "at": 1000000,
+          "kind": "cooldown_set",
+          "account_id": "direct",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-move",
+          "actor": null,
+          "detail": {
+            "scope": "account",
+            "until": 1600000,
+            "reason": "rate_limited",
+            "window": "five_hour",
+            "source_request_id": "r-move"
+          }
+        },
+        {
+          "type": "event",
+          "id": 20,
+          "at": 1000000,
+          "kind": "cooldown_set",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-move",
+          "actor": null,
+          "detail": {
+            "scope": "account",
+            "until": 1600000,
+            "reason": "rate_limited",
+            "window": "five_hour",
+            "source_request_id": "r-move"
+          }
+        },
+        {
+          "type": "event",
+          "id": 19,
+          "at": 1000000,
+          "kind": "pin_released",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-static",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main"
+          }
+        },
+        {
+          "type": "event",
+          "id": 18,
+          "at": 1000000,
+          "kind": "cooldown_cleared",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": "claude-haiku-4-5-20251001",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "cause": "admin",
+            "scope": "model:claude-haiku-4-5-20251001"
+          }
+        },
+        {
+          "type": "event",
+          "id": 17,
+          "at": 1000000,
+          "kind": "fast_credits_changed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "before": null,
+            "after": {
+              "enabled": false,
+              "disabled_reason": "out_of_credits",
+              "utilization": 0.25
+            },
+            "blocked_before": null,
+            "blocked_after": "out_of_credits",
+            "observed_at": 1000000
+          }
+        },
+        {
+          "type": "event",
+          "id": 16,
+          "at": 1000000,
+          "kind": "overage_ended",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "since": 940000
+          }
+        },
+        {
+          "type": "event",
+          "id": 14,
+          "at": 1000000,
+          "kind": "pin_migrated",
+          "account_id": "direct",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "from_account": "business",
+            "epoch": 5,
+            "reason": "spent"
+          }
+        },
+        {
+          "type": "event",
+          "id": 13,
+          "at": 1000000,
+          "kind": "window_spent",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-probe",
+          "actor": null,
+          "detail": {
+            "window": "five_hour",
+            "utilization": 1,
+            "reset": 4600000,
+            "source": "head",
+            "source_request_id": "r-probe"
+          }
+        },
+        {
+          "type": "event",
+          "id": 12,
+          "at": 1000000,
+          "kind": "pin_created",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-held",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "epoch": 4
+          }
+        },
+        {
+          "type": "event",
+          "id": 11,
+          "at": 1000000,
+          "kind": "pin_created",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-static",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "epoch": 3
+          }
+        },
+        {
+          "type": "event",
+          "id": 10,
+          "at": 1000000,
+          "kind": "pin_created",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-warm",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "epoch": 2
+          }
+        },
+        {
+          "type": "event",
+          "id": 9,
+          "at": 1000000,
+          "kind": "cooldown_set",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": "claude-haiku-4-5-20251001",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "scope": "model:claude-haiku-4-5-20251001",
+            "until": 2800000,
+            "reason": "model_rejected",
+            "window": "model_rejection",
+            "source_request_id": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 4,
+          "at": 1000000,
+          "kind": "pin_created",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s-fixture",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "epoch": 1
+          }
+        },
+        {
+          "type": "event",
+          "id": 3,
+          "at": 1000000,
+          "kind": "account_state_changed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "from": "unpaired",
+            "to": "ready",
+            "cause": "registry",
+            "detail": null
+          }
+        },
+        {
+          "type": "event",
+          "id": 15,
+          "at": 940000,
+          "kind": "overage_started",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": null
+        },
+        {
+          "type": "event",
+          "id": 37,
+          "at": -1580000,
+          "kind": "registry_changed",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": "admin",
+          "detail": {
+            "kind": "pool_updated",
+            "target": "main",
+            "diff": {
+              "in_flight_cap": {
+                "from": 16,
+                "to": 1
+              }
+            }
+          }
+        },
+        {
+          "type": "event",
+          "id": 36,
+          "at": -1640000,
+          "kind": "refresh_uncertain",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": null
+        },
+        {
+          "type": "event",
+          "id": 35,
+          "at": -1700000,
+          "kind": "refresh_failed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": null
+        },
+        {
+          "type": "event",
+          "id": 34,
+          "at": -1760000,
+          "kind": "refresh_succeeded",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": null
+        },
+        {
+          "type": "event",
+          "id": 33,
+          "at": -1820000,
+          "kind": "reauth_required",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": null
+        },
+        {
+          "type": "event",
+          "id": 32,
+          "at": -1880000,
+          "kind": "ledger_gap",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-gap",
+          "actor": null,
+          "detail": {
+            "request_id": "r-gap",
+            "reason": "chunk_skipped"
+          }
+        },
+        {
+          "type": "event",
+          "id": 31,
+          "at": -1940000,
+          "kind": "budget_period_ended",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "period": "day",
+            "previous_spent_usd": 4.2,
+            "period_start": -1940000
+          }
+        },
+        {
+          "type": "event",
+          "id": 30,
+          "at": -2000000,
+          "kind": "budget_reached",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "period": "month",
+            "budget_usd": 30,
+            "spent_usd": 30.4,
+            "period_end": 87400000,
+            "source_request_id": "r-failover"
+          }
+        },
+        {
+          "type": "event",
+          "id": 29,
+          "at": -2060000,
+          "kind": "catalog_changed",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "added": [
+              "claude-sonnet-5-5"
+            ],
+            "removed": [
+              "claude-sonnet-4-5"
+            ],
+            "count": 12
+          }
+        },
+        {
+          "type": "event",
+          "id": 28,
+          "at": -2120000,
+          "kind": "poll_backoff_ended",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "duration_ms": 120000,
+            "attempts": 2,
+            "resumed_at": -2120000
+          }
+        },
+        {
+          "type": "event",
+          "id": 27,
+          "at": -2240000,
+          "kind": "poll_backoff_started",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "reason": "429",
+            "endpoint": "usage",
+            "attempts": 1,
+            "next_attempt_at": -2180000,
+            "last_clean_poll_at": -2300000
+          }
+        },
+        {
+          "type": "event",
+          "id": 26,
+          "at": -2300000,
+          "kind": "window_reset",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "window": "seven_day",
+            "utilization_before": 0.83,
+            "reset_at": -2300000,
+            "next_reset": 602500000,
+            "observed": "sample"
+          }
+        },
+        {
+          "type": "event",
+          "id": 25,
+          "at": -2360000,
+          "kind": "wind_down_started",
+          "account_id": "business",
+          "key_id": null,
+          "pool_id": "main",
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "ends_at": 87400000,
+            "wind_down_minutes": 1440,
+            "end_source": "cancelled"
+          }
+        },
+        {
+          "type": "event",
+          "id": 24,
+          "at": -2420000,
+          "kind": "warm_prefix_expired",
+          "account_id": "direct",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s0",
+          "agent_id": null,
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "root": "s0",
+            "entries": 3,
+            "deepest": {
+              "tier": "message",
+              "depth": 3,
+              "prefix_tokens": 52000,
+              "ttl_ms": 300000,
+              "account_id": "direct"
+            },
+            "lane": "claude-sonnet-5|standard|none|-",
+            "cause": "ttl"
+          }
+        },
+        {
+          "type": "event",
+          "id": 23,
+          "at": -2480000,
+          "kind": "shedding_round",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": "main",
+          "session_id": "s1",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "window": "five_hour",
+            "utilization": 0.71,
+            "elapsed_share": 0.5,
+            "ahead": 0.21,
+            "threshold": 0.15,
+            "margin": 0.06,
+            "unit": "window_share",
+            "burn_window_seconds": 900,
+            "shed_share": 0.5,
+            "burn_sum": 0.12,
+            "target": 0.06,
+            "warm_sessions": "when_needed",
+            "pins": [
+              {
+                "key_id": "desktop",
+                "session_id": "s0",
+                "agent_id": "main",
+                "model": "claude-sonnet-5",
+                "cold": true,
+                "burn": 0.07,
+                "last_input_tokens": 48100,
+                "per_rewrite": 0.004,
+                "marked": true,
+                "note": null
+              }
+            ],
+            "marks": [
+              {
+                "key_id": "desktop",
+                "session_id": "s0",
+                "agent_id": "main",
+                "model": "claude-sonnet-5"
+              }
+            ],
+            "dwell_seconds": 900,
+            "dwell_until": -1580000
+          }
+        },
+        {
+          "type": "event",
+          "id": 22,
+          "at": -2540000,
+          "kind": "router_started",
+          "account_id": null,
+          "key_id": null,
+          "pool_id": null,
+          "session_id": null,
+          "agent_id": null,
+          "model": null,
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "version": "0.0.0-fixture",
+            "pins_loaded": 3,
+            "windows_loaded": 2,
+            "affinity_entries_loaded": 5,
+            "down_since": 1791217561398,
+            "holds_lost": true
+          }
+        },
+        {
+          "type": "event",
+          "id": 8,
+          "at": -2599650,
+          "kind": "model_permitted",
+          "account_id": "direct",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s1",
+          "agent_id": null,
+          "model": "claude-haiku-4-5-20251001",
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "attempt": 2,
+            "rejected_by": [
+              "business"
+            ],
+            "request_id": "req-permitted",
+            "source_request_id": "r-failover",
+            "wire_model": "claude-haiku-4-5"
+          }
+        },
+        {
+          "type": "event",
+          "id": 7,
+          "at": -2599700,
+          "kind": "model_rejected",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s1",
+          "agent_id": null,
+          "model": "claude-haiku-4-5-20251001",
+          "request_id": "r-failover",
+          "actor": null,
+          "detail": {
+            "attempt": 1,
+            "request_id": "req-rejected",
+            "source_request_id": "r-failover",
+            "wire_model": "claude-haiku-4-5"
+          }
+        },
+        {
+          "type": "event",
+          "id": 6,
+          "at": -2599800,
+          "kind": "pin_expired",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s1",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "reasons": [
+              "cooldown",
+              "spent"
+            ]
+          }
+        },
+        {
+          "type": "event",
+          "id": 5,
+          "at": -2599900,
+          "kind": "pin_migrated",
+          "account_id": "business",
+          "key_id": "desktop",
+          "pool_id": null,
+          "session_id": "s1",
+          "agent_id": "main",
+          "model": "claude-sonnet-5",
+          "request_id": null,
+          "actor": null,
+          "detail": {
+            "agent_id": "main",
+            "from_account": "direct",
+            "epoch": 2,
+            "reason": "spent"
+          }
+        }
+      ],
+      "next_cursor": null
+    }
+  },
   "session": {
     "route": "GET /admin/session",
     "body": {
@@ -8342,6 +10079,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "sample": 0,
           "usage": 0
         },
+        "dropped_refusals": 0,
         "writer": {
           "depth": 0,
           "deferred": 0,

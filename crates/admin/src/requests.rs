@@ -115,7 +115,7 @@ fn attempt_json(a: &AttemptRecord) -> Value {
     })
 }
 
-fn list_param(q: &HashMap<String, String>, name: &str) -> Vec<String> {
+pub(crate) fn list_param(q: &HashMap<String, String>, name: &str) -> Vec<String> {
     q.get(name)
         .map(|v| {
             v.split(',')
@@ -226,8 +226,13 @@ pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Value {
         .as_deref()
         .and_then(|d| serde_json::from_str::<Value>(d).ok())
         .unwrap_or(Value::Null);
-    // A row the mirror wrote before `registry_changed`'s diff became a value still carries it as a JSON
-    // string; decoded here so every row reads the same.
+    decode_diff(&mut detail);
+    json!({ "at": e.at, "kind": e.kind, "account_id": e.account_id, "key_id": e.key_id, "session_id": e.session_id, "model": e.model, "actor": e.actor, "detail": detail, "pool_id": e.pool_id, "agent_id": e.agent_id, "request_id": e.request_id })
+}
+
+/// A row the mirror wrote before `registry_changed`'s diff became a value still carries it as a JSON string; decoded
+/// here so every row reads the same.
+pub(crate) fn decode_diff(detail: &mut Value) {
     if let Some(diff) = detail
         .get("diff")
         .and_then(Value::as_str)
@@ -235,7 +240,6 @@ pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Value {
     {
         detail["diff"] = diff;
     }
-    json!({ "at": e.at, "kind": e.kind, "account_id": e.account_id, "key_id": e.key_id, "session_id": e.session_id, "model": e.model, "actor": e.actor, "detail": detail })
 }
 
 pub(crate) async fn bodies(

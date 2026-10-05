@@ -112,6 +112,11 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/requests", get(requests::list))
         .route("/admin/requests/{id}", get(requests::show))
         .route("/admin/requests/{id}/bodies", get(requests::bodies))
+        .route(
+            "/admin/requests/{id}/decisions/{seq}",
+            get(crate::routing_log::record),
+        )
+        .route("/admin/routing-log", get(crate::routing_log::list))
         .route("/admin/session", get(whoami).post(login).delete(logout))
         .route("/admin/sessions", get(sessions::list))
         .route(
@@ -965,6 +970,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         },
         "router": {
             "command_depth": phoebis_routing::COMMANDS, "queued": state.router.queued(), "dropped_reports": dropped,
+            "dropped_refusals": state.router.dropped_refusals(),
             "writer": { "depth": writer.depth, "deferred": writer.deferred, "degraded": writer.degraded, "failed_batches": writer.failed_batches },
         },
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),

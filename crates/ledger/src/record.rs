@@ -2,6 +2,8 @@
 
 use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary};
 
+use crate::LedgerError;
+
 // A parked row outlives the build that wrote it, so a field a later build adds reads at its default.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -256,6 +258,33 @@ pub struct CacheMapWrite {
     pub attempt: u32,
     pub entries: Vec<CacheMapEntry>,
     pub at: i64,
+}
+
+/// The most a decision's frame may decode to. A record runs to a few kilobytes per pool member, so the bound sits far
+/// above any pool's and still keeps a damaged header from sizing an allocation of its own choosing.
+pub(crate) const MAX_RECORD_BYTES: u64 = 16 << 20;
+
+/// The decision's frame decoded to its JSON object with a bounded output: the header's content size sizes the output
+/// only within the bound, and the decoder refuses a frame that runs past the size it was given.
+pub(crate) fn decode_record(
+    frame: &[u8],
+) -> Result<serde_json::Map<String, serde_json::Value>, LedgerError> {
+    let capacity = match zstd::zstd_safe::get_frame_content_size(frame) {
+        Ok(Some(size)) if size <= MAX_RECORD_BYTES => size,
+        Ok(None) => MAX_RECORD_BYTES,
+        Ok(Some(size)) => {
+            return Err(LedgerError::Io(std::io::Error::other(format!(
+                "a decision record's frame names {size} bytes, past the {MAX_RECORD_BYTES} a record may hold"
+            ))))
+        }
+        Err(_) => {
+            return Err(LedgerError::Io(std::io::Error::other(
+                "a decision record's frame has no readable header",
+            )))
+        }
+    };
+    let bytes = zstd::bulk::decompress(frame, capacity as usize)?;
+    Ok(serde_json::from_slice(&bytes)?)
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -5200,3 +5200,564 @@ async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_
     assert_eq!(detail["previous_spent_usd"], serde_json::json!(2.0));
     up.shutdown().await;
 }
+
+/// A routing log row as the writer stores it, on the request `request_id` at `at`: a decision of `kind` on account
+/// `a` under routing session `s1`, no probe and no move; a case edits the columns it filters on.
+fn logged(request_id: &str, seq: u32, attempt: u32, at: i64, kind: &'static str) -> DecisionRow {
+    let (mut summary, mut record) = decision(request_id, seq, attempt);
+    record.request.at = at;
+    record.request.flags.probe = false;
+    record.outcome.kind = kind;
+    record.outcome.account_id = Some("a".into());
+    record.outcome.from_account_id = None;
+    summary.kind = kind;
+    summary.probe = false;
+    DecisionRow::of(summary, record, at)
+}
+
+/// The writer's own encoding: the summary's JSON and the record's one-shot zstd frame, the content size in its header.
+fn put_decision(db: &LedgerDb, row: &DecisionRow) {
+    let summary = serde_json::to_string(&row.summary).unwrap();
+    let frame = zstd::bulk::compress(&serde_json::to_vec(&row.record).unwrap(), 0).unwrap();
+    db.write(|c| {
+        c.execute(
+            "INSERT INTO decisions (request_id, seq, attempt, at, kind, probe, key_id, pool_id, account_id, \
+             from_account_id, session_id, agent_id, model, summary, record) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+            rusqlite::params![
+                row.request_id,
+                row.seq,
+                row.attempt,
+                row.at,
+                row.kind,
+                row.probe,
+                row.key_id,
+                row.pool_id,
+                row.account_id,
+                row.from_account_id,
+                row.session_id,
+                row.agent_id,
+                row.model,
+                summary,
+                frame
+            ],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
+fn logged_event(at: i64, kind: &str) -> EventRecord {
+    EventRecord {
+        at,
+        kind: kind.into(),
+        detail: Some(r#"{"scope":"account"}"#.into()),
+        ..Default::default()
+    }
+}
+
+/// One attempt row of `request_id`: a 429 with no usage, or an answer with `read` cache-read tokens of 1,000 input.
+fn logged_attempt(request_id: &str, attempt: u32, status: u16, read: Option<u64>) -> AttemptRecord {
+    AttemptRecord {
+        request_id: request_id.into(),
+        attempt,
+        account_id: "a".into(),
+        account_kind: "oauth".into(),
+        started_at: NOW,
+        finished_at: Some(NOW + i64::from(attempt) * 1_000),
+        upstream_status: Some(status),
+        outcome: if status == 200 {
+            "succeeded"
+        } else {
+            "rate_limited"
+        }
+        .into(),
+        input_tokens: read.map(|_| 1_000),
+        cache_read_tokens: read,
+        ..Default::default()
+    }
+}
+
+fn put_request(db: &LedgerDb, id: &str, attempts: &[AttemptRecord], held: Option<&str>) {
+    db.insert_request(
+        &RequestRecord {
+            id: id.into(),
+            received_at: NOW,
+            finished_at: Some(NOW + 5_000),
+            canonical_model: "claude-sonnet-5".into(),
+            model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: Some(200),
+            outcome: "succeeded".into(),
+            attempts: attempts.len() as u32,
+            held: held.map(String::from),
+            ..Default::default()
+        },
+        attempts,
+        None,
+    )
+    .unwrap();
+}
+
+/// The whole default range of these cases: every row they write sits inside it.
+fn log_filter() -> phoebis_ledger::RoutingLogFilter {
+    phoebis_ledger::RoutingLogFilter {
+        from: 0,
+        to: 10 * NOW,
+        ..Default::default()
+    }
+}
+
+/// Each row by its identity: `d:<request>/<seq>` for a decision, `e:<kind>@<at>` for an event.
+fn log_ids(db: &LedgerDb, filter: &phoebis_ledger::RoutingLogFilter) -> Vec<String> {
+    let page = db
+        .read_blocking(|c| phoebis_ledger::list_routing_log(c, filter, None, 200))
+        .unwrap();
+    page.rows.iter().map(log_id).collect()
+}
+
+fn log_id(row: &phoebis_ledger::RoutingLogRow) -> String {
+    match row {
+        phoebis_ledger::RoutingLogRow::Decision(d) => format!("d:{}/{}", d.request_id, d.seq),
+        phoebis_ledger::RoutingLogRow::Event(e) => format!("e:{}@{}", e.kind, e.at),
+    }
+}
+
+#[test]
+fn the_routing_log_lists_newest_first_with_decisions_before_events_at_one_instant() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    put_decision(&db, &logged("r1", 1, 1, 100, "placed"));
+    db.insert_event(&logged_event(200, "cooldown_set")).unwrap();
+    put_decision(&db, &logged("r2", 1, 1, 200, "held"));
+    put_decision(&db, &logged("r2", 2, 1, 200, "placed"));
+    db.insert_event(&logged_event(300, "cooldown_cleared"))
+        .unwrap();
+    db.insert_event(&logged_event(100, "overage_started"))
+        .unwrap();
+    assert_eq!(
+        log_ids(&db, &log_filter()),
+        [
+            "e:cooldown_cleared@300",
+            "d:r2/2",
+            "d:r2/1",
+            "e:cooldown_set@200",
+            "d:r1/1",
+            "e:overage_started@100"
+        ],
+        "newest first; at one instant the decisions, newest seq first, then the events"
+    );
+    let ranged = phoebis_ledger::RoutingLogFilter {
+        from: 100,
+        to: 200,
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &ranged),
+        [
+            "d:r2/2",
+            "d:r2/1",
+            "e:cooldown_set@200",
+            "d:r1/1",
+            "e:overage_started@100"
+        ],
+        "both ends of the range are inclusive"
+    );
+}
+
+#[test]
+fn the_routing_log_answers_a_cursor_only_past_a_full_page() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    put_decision(&db, &logged("r1", 1, 1, 100, "held"));
+    put_decision(&db, &logged("r1", 2, 1, 100, "placed"));
+    db.insert_event(&logged_event(100, "cooldown_set")).unwrap();
+    db.insert_event(&logged_event(100, "cooldown_cleared"))
+        .unwrap();
+    let page = |cursor: Option<&phoebis_ledger::RoutingLogCursor>, limit: usize| {
+        db.read_blocking(|c| phoebis_ledger::list_routing_log(c, &log_filter(), cursor, limit))
+            .unwrap()
+    };
+    let whole = page(None, 4);
+    assert_eq!(
+        whole.rows.iter().map(log_id).collect::<Vec<_>>(),
+        [
+            "d:r1/2",
+            "d:r1/1",
+            "e:cooldown_cleared@100",
+            "e:cooldown_set@100"
+        ]
+    );
+    assert_eq!(
+        whole.next_cursor, None,
+        "a page of exactly `limit` rows has nothing past it"
+    );
+    let first = page(None, 3);
+    assert_eq!(first.rows.len(), 3);
+    let cursor = first.next_cursor.expect("a row lies past a page of three");
+    let next = page(
+        Some(&phoebis_ledger::RoutingLogCursor::parse(&cursor).expect("the cursor parses back")),
+        3,
+    );
+    assert_eq!(
+        next.rows.iter().map(log_id).collect::<Vec<_>>(),
+        ["e:cooldown_set@100"],
+        "the next page holds the extra row"
+    );
+    assert_eq!(next.next_cursor, None);
+    // Page by page through one instant: the cursor's three keys neither skip nor repeat a row on a tie.
+    let mut walked = Vec::new();
+    let mut cursor: Option<phoebis_ledger::RoutingLogCursor> = None;
+    loop {
+        let one = page(cursor.as_ref(), 1);
+        walked.extend(one.rows.iter().map(log_id));
+        match one.next_cursor {
+            Some(next) => cursor = phoebis_ledger::RoutingLogCursor::parse(&next),
+            None => break,
+        }
+    }
+    assert_eq!(
+        walked,
+        whole.rows.iter().map(log_id).collect::<Vec<_>>(),
+        "one row a page walks the instant in the whole page's order"
+    );
+}
+
+#[test]
+fn the_default_kind_set_hides_probes_and_prefix_expiries_and_kinds_replaces_it() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    put_decision(&db, &logged("r1", 1, 1, 100, "placed"));
+    let mut probe = logged("r2", 1, 1, 200, "renewed");
+    probe.probe = true;
+    put_decision(&db, &probe);
+    db.insert_event(&logged_event(300, "warm_prefix_expired"))
+        .unwrap();
+    db.insert_event(&logged_event(400, "cooldown_set")).unwrap();
+    let kinds = |kinds: &[&str]| phoebis_ledger::RoutingLogFilter {
+        kinds: Some(kinds.iter().map(|k| k.to_string()).collect()),
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &log_filter()),
+        ["e:cooldown_set@400", "d:r1/1"],
+        "the default set hides probe decisions and the prefix expiries"
+    );
+    assert_eq!(
+        log_ids(&db, &kinds(&["probe"])),
+        ["d:r2/1"],
+        "`probe` lists the probes alone, of any kind"
+    );
+    assert_eq!(
+        log_ids(&db, &kinds(&["renewed"])),
+        Vec::<String>::new(),
+        "a decision kind names the decisions that are not probes"
+    );
+    assert_eq!(
+        log_ids(&db, &kinds(&["placed", "probe"])),
+        ["d:r2/1", "d:r1/1"]
+    );
+    assert_eq!(
+        log_ids(&db, &kinds(&["warm_prefix_expired"])),
+        ["e:warm_prefix_expired@300"],
+        "the kinds named replace the default set whole"
+    );
+}
+
+#[test]
+fn counts_answer_under_a_request_filter_alone() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    put_decision(&db, &logged("r1", 1, 1, 100, "held"));
+    put_decision(&db, &logged("r1", 2, 1, 100, "placed"));
+    put_decision(&db, &logged("r2", 1, 1, 200, "placed"));
+    for (at, request) in [(150, Some("r1")), (250, Some("r2")), (300, None)] {
+        db.insert_event(&EventRecord {
+            request_id: request.map(String::from),
+            ..logged_event(at, "cooldown_set")
+        })
+        .unwrap();
+    }
+    let read = |filter: &phoebis_ledger::RoutingLogFilter, limit: usize| {
+        db.read_blocking(|c| phoebis_ledger::list_routing_log(c, filter, None, limit))
+            .unwrap()
+    };
+    assert_eq!(
+        read(&log_filter(), 25).counts,
+        None,
+        "a count over a range is a scan no page needs"
+    );
+    let one = phoebis_ledger::RoutingLogFilter {
+        request: Some("r1".into()),
+        ..log_filter()
+    };
+    let page = read(&one, 1);
+    assert_eq!(
+        page.rows.iter().map(log_id).collect::<Vec<_>>(),
+        ["e:cooldown_set@150"]
+    );
+    assert_eq!(
+        page.counts,
+        Some((2, 1)),
+        "the request's decisions and events, past the page"
+    );
+}
+
+#[test]
+fn a_session_prefix_matches() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (n, session) in [(1, "abc-1"), (2, "abd-2")] {
+        let mut row = logged(&format!("r{n}"), 1, 1, 100 * n as i64, "placed");
+        row.session_id = Some(session.into());
+        put_decision(&db, &row);
+    }
+    db.insert_event(&EventRecord {
+        session_id: Some("abc-x".into()),
+        ..logged_event(300, "pin_created")
+    })
+    .unwrap();
+    let session = |s: &str| phoebis_ledger::RoutingLogFilter {
+        session: Some(s.into()),
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &session("abc")),
+        ["e:pin_created@300", "d:r1/1"]
+    );
+    assert_eq!(log_ids(&db, &session("abc-1")), ["d:r1/1"]);
+}
+
+#[test]
+fn a_session_prefix_with_like_metacharacters_matches_literally() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    for (n, session) in [(1, "s_1"), (2, "sx1"), (3, "100%a"), (4, "1000b")] {
+        let mut row = logged(&format!("r{n}"), 1, 1, 100 * n as i64, "placed");
+        row.session_id = Some(session.into());
+        put_decision(&db, &row);
+    }
+    let session = |s: &str| phoebis_ledger::RoutingLogFilter {
+        session: Some(s.into()),
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &session("s_")),
+        ["d:r1/1"],
+        "`_` is a character"
+    );
+    assert_eq!(
+        log_ids(&db, &session("100%")),
+        ["d:r3/1"],
+        "`%` is a character"
+    );
+}
+
+#[test]
+fn accounts_match_a_move_s_source() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let mut moved = logged("r1", 1, 1, 100, "moved");
+    moved.account_id = Some("b".into());
+    moved.from_account_id = Some("a".into());
+    put_decision(&db, &moved);
+    let mut placed = logged("r2", 1, 1, 200, "placed");
+    placed.account_id = Some("c".into());
+    put_decision(&db, &placed);
+    db.insert_event(&EventRecord {
+        account_id: Some("a".into()),
+        ..logged_event(300, "cooldown_set")
+    })
+    .unwrap();
+    let accounts = |a: &str| phoebis_ledger::RoutingLogFilter {
+        accounts: vec![a.into()],
+        ..log_filter()
+    };
+    assert_eq!(
+        log_ids(&db, &accounts("a")),
+        ["e:cooldown_set@300", "d:r1/1"],
+        "a move is listed under the account it left"
+    );
+    assert_eq!(log_ids(&db, &accounts("b")), ["d:r1/1"]);
+    assert_eq!(log_ids(&db, &accounts("c")), ["d:r2/1"]);
+}
+
+/// A decision row's identity, its own attempt, the request's count, and the answering attempt's status and cache.
+type CompletionFacts = (
+    String,
+    u32,
+    Option<u32>,
+    Option<u16>,
+    Option<phoebis_ledger::CacheFacts>,
+);
+
+#[test]
+fn a_decision_s_completion_is_the_attempt_that_answered_after_a_retry_in_place() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let content = |mut row: DecisionRow| {
+        let rung = phoebis_routing::Placement {
+            rung: "content",
+            depth: 2,
+            prefix_tokens: 500,
+        };
+        row.summary.rung = Some(rung.clone());
+        row.record.outcome.rung = Some(rung);
+        row
+    };
+    // A retry in place: one decision, two wire attempts, the second the one that answered.
+    put_decision(&db, &content(logged("r1", 1, 1, 100, "placed")));
+    put_request(
+        &db,
+        "r1",
+        &[
+            logged_attempt("r1", 1, 429, None),
+            logged_attempt("r1", 2, 200, Some(600)),
+        ],
+        None,
+    );
+    // A hold and its placement share one attempt.
+    put_decision(&db, &logged("r2", 1, 1, 200, "held"));
+    put_decision(&db, &logged("r2", 2, 1, 200, "placed"));
+    put_request(&db, "r2", &[logged_attempt("r2", 1, 200, Some(0))], None);
+    // A failover: the next dispatching decision bounds the first's attempts.
+    put_decision(&db, &logged("r3", 1, 1, 300, "placed"));
+    put_decision(&db, &logged("r3", 2, 2, 300, "placed"));
+    put_request(
+        &db,
+        "r3",
+        &[
+            logged_attempt("r3", 1, 429, None),
+            logged_attempt("r3", 2, 200, Some(300)),
+        ],
+        None,
+    );
+    let page = db
+        .read_blocking(|c| phoebis_ledger::list_routing_log(c, &log_filter(), None, 25))
+        .unwrap();
+    let facts: Vec<CompletionFacts> = page
+        .rows
+        .iter()
+        .map(|row| match row {
+            phoebis_ledger::RoutingLogRow::Decision(d) => (
+                format!("{}/{}", d.request_id, d.seq),
+                d.attempt,
+                d.attempt_count,
+                d.status,
+                d.cache.clone(),
+            ),
+            phoebis_ledger::RoutingLogRow::Event(_) => panic!("no event was written"),
+        })
+        .collect();
+    let cache = |hit: bool, read: u64, promised: Option<u64>| {
+        Some(phoebis_ledger::CacheFacts {
+            hit,
+            read_tokens: read,
+            promised_tokens: promised,
+            input_tokens: 1_000,
+        })
+    };
+    assert_eq!(
+        facts,
+        [
+            ("r3/2".to_string(), 2, Some(2), Some(200), cache(true, 300, None)),
+            ("r3/1".to_string(), 1, Some(2), Some(429), None),
+            ("r2/2".to_string(), 1, Some(1), Some(200), cache(false, 0, None)),
+            ("r2/1".to_string(), 1, Some(1), None, None),
+            (
+                "r1/1".to_string(),
+                1,
+                Some(2),
+                Some(200),
+                cache(true, 600, Some(500))
+            ),
+        ],
+        "a decision reads the newest attempt it dispatched before the next decision's, a hold reads none, and the \
+         retry's row keeps the decision's own attempt"
+    );
+}
+
+#[test]
+fn a_record_read_decodes_the_frame_and_composes_the_completion() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let mut placed = logged("r1", 1, 1, 100, "placed");
+    let rung = phoebis_routing::Placement {
+        rung: "content",
+        depth: 2,
+        prefix_tokens: 500,
+    };
+    placed.summary.rung = Some(rung.clone());
+    placed.record.outcome.rung = Some(rung);
+    put_decision(&db, &placed);
+    let entries = serde_json::json!([
+        {"tier": "message", "depth": 2, "prefix_tokens": 500, "ttl_ms": 300_000, "account_id": "a"}
+    ]);
+    db.write(|c| {
+        c.execute(
+            "UPDATE decisions SET cache_map = ?1 WHERE request_id = 'r1' AND seq = 1",
+            [entries.to_string()],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    put_request(
+        &db,
+        "r1",
+        &[
+            logged_attempt("r1", 1, 429, None),
+            logged_attempt("r1", 2, 200, Some(600)),
+        ],
+        Some(r#"{"waited_on":["a"],"cohort":null,"held_ms":1250}"#),
+    );
+    put_decision(&db, &logged("r2", 1, 1, 200, "held"));
+    let read = |request: &str, seq: u32| {
+        db.read_blocking(|c| phoebis_ledger::decision_record(c, request, seq))
+            .unwrap()
+    };
+    let record = read("r1", 1).expect("the decision is stored");
+    let mut expected = serde_json::to_value(&placed.record).unwrap();
+    expected["outcome"]["completion"] = serde_json::json!({
+        "status": 200,
+        "cache_read_tokens": 600,
+        "input_tokens": 1_000,
+        "promised_tokens": 500,
+        "hit": true,
+        "held_ms": 1_250,
+        "freed": true,
+        "cache_map_written": entries,
+        "completed_at": NOW + 2_000,
+    });
+    let mut answer = serde_json::Map::new();
+    answer.insert("request_id".into(), "r1".into());
+    answer.insert("seq".into(), 1.into());
+    answer.extend(expected.as_object().unwrap().clone());
+    assert_eq!(
+        record,
+        serde_json::Value::Object(answer),
+        "the frame decoded, its completion the answering attempt's after the retry in place"
+    );
+    assert_eq!(record["version"], 1);
+    assert_eq!(
+        read("r2", 1).expect("the hold is stored")["outcome"]["completion"],
+        serde_json::Value::Null,
+        "a hold dispatched nothing"
+    );
+    assert_eq!(read("r1", 9), None, "a seq the request never reached");
+    assert_eq!(read("r9", 1), None, "a request never written");
+}
+
+#[test]
+fn a_record_frame_naming_a_size_past_the_reader_s_bound_is_refused_unread() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    put_decision(&db, &logged("r1", 1, 1, 100, "placed"));
+    // A record of one long string folds to a few kilobytes, so a small frame names a size no record reaches; it is
+    // valid JSON, so only the bound refuses it.
+    let record = format!(r#"{{"version":1,"pad":"{}"}}"#, "a".repeat(64 << 20));
+    let frame = zstd::bulk::compress(record.as_bytes(), 0).unwrap();
+    db.write(|c| {
+        c.execute(
+            "UPDATE decisions SET record = ?1 WHERE request_id = 'r1' AND seq = 1",
+            [frame],
+        )?;
+        Ok(())
+    })
+    .unwrap();
+    assert!(
+        db.read_blocking(|c| phoebis_ledger::decision_record(c, "r1", 1))
+            .is_err(),
+        "the header's size is checked against the bound before any output is sized"
+    );
+}

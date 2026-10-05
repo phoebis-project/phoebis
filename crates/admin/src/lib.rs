@@ -17,6 +17,7 @@ mod pricing;
 mod readiness;
 mod requests;
 mod routes;
+mod routing_log;
 mod rules;
 mod session;
 mod sessions;
