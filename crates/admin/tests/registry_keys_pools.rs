@@ -2955,22 +2955,28 @@ async fn a_pool_edit_with_a_stale_expected_revision_answers_409_and_writes_nothi
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
     let read_at = listed_stamp(&app, &cookie, "pools", "main").await;
-    let stale = patch(
-        &app,
-        "/admin/pools/main",
-        &format!(r#"{{"label":"Moved","expected_revision":{}}}"#, read_at - 1),
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(stale.status(), 409);
-    assert_eq!(
-        stale.headers().get("x-phoebis-error-code").unwrap(),
-        "stale_edit"
-    );
-    assert_eq!(
-        json(stale).await["error"],
-        "the pool changed while it was being edited; reload and try again"
-    );
+    // Behind the row's stamp, or ahead of it by up to the day the fence admits: a view the row no longer matches,
+    // refused as stale rather than as a malformed stamp.
+    for sent in [read_at - 1, read_at + 1, read_at + 86_400_000] {
+        let stale = patch(
+            &app,
+            "/admin/pools/main",
+            &format!(r#"{{"label":"Moved","expected_revision":{sent}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(stale.status(), 409, "{sent}");
+        assert_eq!(
+            stale.headers().get("x-phoebis-error-code").unwrap(),
+            "stale_edit",
+            "{sent}"
+        );
+        assert_eq!(
+            json(stale).await["error"],
+            "the pool changed while it was being edited; reload and try again",
+            "{sent}"
+        );
+    }
     assert_eq!(store.pool("main").unwrap().unwrap().label, "Main");
 }
 
@@ -3050,22 +3056,28 @@ async fn a_key_edit_with_a_stale_expected_revision_answers_409_and_writes_nothin
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
     let read_at = listed_stamp(&app, &cookie, "keys", "desktop").await;
-    let stale = patch(
-        &app,
-        "/admin/keys/desktop",
-        &format!(r#"{{"label":"Moved","expected_revision":{}}}"#, read_at - 1),
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(stale.status(), 409);
-    assert_eq!(
-        stale.headers().get("x-phoebis-error-code").unwrap(),
-        "stale_edit"
-    );
-    assert_eq!(
-        json(stale).await["error"],
-        "the key changed while it was being edited; reload and try again"
-    );
+    // Behind the row's stamp, or ahead of it by up to the day the fence admits: a view the row no longer matches,
+    // refused as stale rather than as a malformed stamp.
+    for sent in [read_at - 1, read_at + 1, read_at + 86_400_000] {
+        let stale = patch(
+            &app,
+            "/admin/keys/desktop",
+            &format!(r#"{{"label":"Moved","expected_revision":{sent}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(stale.status(), 409, "{sent}");
+        assert_eq!(
+            stale.headers().get("x-phoebis-error-code").unwrap(),
+            "stale_edit",
+            "{sent}"
+        );
+        assert_eq!(
+            json(stale).await["error"],
+            "the key changed while it was being edited; reload and try again",
+            "{sent}"
+        );
+    }
     assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Desktop");
 }
 
