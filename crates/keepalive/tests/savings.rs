@@ -856,6 +856,129 @@ async fn a_cache_read_on_another_model_settles_the_probes_kept_on_the_first_as_a
     );
 }
 
+/// The probe rows of one speed, summed.
+fn probe_rows_at(rows: &[RollupRow], fast: bool) -> RollupRow {
+    let mut sum = RollupRow::key(0, "", 0, "", "", "", "probe", "", "", "", "", "", "");
+    for row in rows
+        .iter()
+        .filter(|r| r.kind == "probe" && (r.speed == "fast") == fast)
+    {
+        sum.add(row);
+    }
+    sum
+}
+
+/// A credit answers only the batch whose lineage it read. A fast probe's batch, kept by a standard request that failed
+/// before any head, waits beside the batch of a standard probe a bus gap left; the standard request that earns the
+/// credit read the standard lane, so the fast batch settles as a cold return at its price.
+#[tokio::test]
+async fn a_credit_on_the_standard_lane_settles_a_fast_batch_kept_beside_it_as_a_cold_return() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let standard = opus_body();
+    let fast = standard.replacen('{', r#"{"speed":"fast","#, 1);
+    open_request_with(&r, "first", &fast, 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (1, 1),
+        "a covering fast probe"
+    );
+    r.advance_attended(10_000);
+    r.engine.observe(r.observed("second", "main", &standard));
+    r.engine.observe(r.selected("second", "a"));
+    r.engine.observe(failed(&r, "second", None));
+    assert_eq!(r.status("main").unanswered, 1, "the fast batch stays kept");
+    r.advance_attended(10_000);
+    open_request_with(&r, "third", &standard, 0, 2_000);
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (2, 2),
+        "a covering standard probe landed while the third request streamed"
+    );
+    r.engine.bus_gap(1, 0);
+    r.advance_attended(40_000);
+    open_request_with(&r, "fourth", &standard, 2_000, 0);
+    r.engine.observe(completed(&r, "fourth", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    let (fast_probes, standard_probes) = (probe_rows_at(&rows, true), probe_rows_at(&rows, false));
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            fast_probes.wasted_probe_reasons.clone(),
+            standard_probes.wasted_probes
+        ),
+        (1, BTreeMap::from([("cold_return".to_string(), 1)]), 0),
+        "the credit answered the standard batch and nothing on the fast lane"
+    );
+    assert!(
+        fast_probes.wasted_probe_usd > 0.0
+            && (fast_probes.wasted_probe_usd - fast_probes.probe_cost_usd).abs() < 1e-12,
+        "{fast_probes:?}"
+    );
+}
+
+/// A batch answers only to a read that arrived while the entry its probes kept was still there. A request that failed
+/// before any head leaves the batch kept; the next request on the same model, speed and account arrives as that entry
+/// expires and reads the cache, which nothing the probe paid for kept, so the batch settles as a cold return.
+#[tokio::test]
+async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_a_cold_return() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+    r.advance_attended(10_000);
+    r.engine.observe(r.observed("second", "main", BODY));
+    r.engine.observe(r.selected("second", "a"));
+    r.engine.observe(failed(&r, "second", None));
+    assert_eq!(r.status("main").unanswered, 1, "the batch stays kept");
+    // The probe wrote its five-minute entry 270 s in, so it expires 570 s in.
+    r.advance_attended(290_000);
+    open_request(&r, "third", 2_000, 0);
+    r.engine.observe(completed(&r, "third", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (0, BTreeMap::from([("cold_return".to_string(), 1)])),
+        "the read arrived as the probe's entry expired"
+    );
+    assert!(
+        probe.wasted_probe_usd > 0.0
+            && (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        "{probe:?}"
+    );
+}
+
 /// A migrated probe settles at its own cost in the unit its serving attempt was funded in: dollars on an
 /// Anthropic-key pool, where the day's dollar cap and the agent's dollar net move by its price, and the 5-hour share
 /// on a subscription pool, where the account's share cap and the agent's share move by its share.

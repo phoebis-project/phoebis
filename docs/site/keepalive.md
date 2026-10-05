@@ -281,7 +281,7 @@ lapses or is evicted, or when the next request after the probe reads nothing fro
 
 | Reason | What settles it |
 | --- | --- |
-| `cold_return` | The next request read nothing from the probe's entry: no cache, or another model, speed or account. |
+| `cold_return` | The next request read no cache, or on another account, model or speed, or after the entry lapsed. |
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
 | `expired` | The recipe's cache entry expired before its probe was due. |
 | `idle_limit` | The pool's idle limits ran out before a real request answered the probe. |
