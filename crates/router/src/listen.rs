@@ -80,7 +80,7 @@ pub async fn serve(
         let service = TowerToHyperService::new(app.clone());
         let upgrading = upgrading.clone();
         let plain = Arc::clone(&plain);
-        let drain = stop.clone();
+        let mut drain = stop.clone();
         let acceptor = acceptor.clone();
         // The permit is released once the connection future itself ends: for an upgraded socket that is when
         // hyper hands it to its `on_upgrade` task, not when the socket later closes, so the live crate's own
@@ -88,15 +88,23 @@ pub async fn serve(
         // inside the spawned task, not before it, because the future it returns borrows the builder.
         tasks.spawn(async move {
             let _slot = permit;
-            let stream =
-                match handshake(stream, acceptor.as_deref(), limits.header_read_timeout).await {
-                    Ok(stream) => stream,
-                    Err(error) => {
-                        // A plain-HTTP request on a TLS port lands here too; the bytes are never logged.
-                        tracing::debug!(%peer, %error, "a connection ended at the handshake");
-                        return;
-                    }
-                };
+            let handshaken = tokio::select! {
+                // Biased toward the handshake: a plain listener's resolves on its first poll, so the stop never
+                // drops a plain connection here.
+                biased;
+                handshaken = handshake(stream, acceptor.as_deref(), limits.header_read_timeout) => handshaken,
+                // A peer still in its handshake has sent no request, so the stop ends it as hyper's graceful
+                // shutdown ends a connection that has read no byte, rather than waiting out the bound.
+                _ = stopped(&mut drain) => return,
+            };
+            let stream = match handshaken {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // A plain-HTTP request on a TLS port lands here too; the bytes are never logged.
+                    tracing::debug!(%peer, %error, "a connection ended at the handshake");
+                    return;
+                }
+            };
             let io = TokioIo::new(stream);
             let ended: Result<(), Box<dyn std::error::Error + Send + Sync>> = if upgrades {
                 let conn = upgrading.serve_connection(io, service).with_upgrades();

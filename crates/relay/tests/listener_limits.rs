@@ -110,6 +110,55 @@ async fn a_tls_listener_drops_a_silent_peer_at_the_bound_and_serves_a_finished_h
     up.shutdown().await;
 }
 
+/// A peer that opens a socket on a TLS listener and sends nothing has no request to finish, so the stop ends its
+/// handshake as it ends a plain connection that has read no byte, rather than waiting out the handshake's bound.
+/// The served request behind it proves the silent peer was accepted, and its handshake running, before the stop.
+#[tokio::test]
+async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
+    let pair = fake_upstream::generate_pair(&["localhost"]);
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    let limits = phoebis_relay::ListenLimits {
+        drain_timeout: Duration::from_secs(30),
+        header_read_timeout: Duration::from_secs(30),
+        max_connections: 8,
+    };
+    let serving = tokio::spawn(phoebis_relay::serve(
+        listener,
+        h.relay.clone(),
+        axum::Router::new(),
+        stop_rx,
+        limits,
+        Some(Arc::new(fake_upstream::acceptor_for(&pair))),
+    ));
+    let _silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut tls = tokio_boring::connect(trusting(&pair.ca_pem), "localhost", socket)
+        .await
+        .unwrap();
+    tls.write_all(b"HEAD /api/hello HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), tls.read_to_end(&mut answer)).await;
+    assert!(String::from_utf8_lossy(&answer).starts_with("HTTP/1.1 200"));
+    stop.send(true).unwrap();
+    let returned = tokio::time::timeout(Duration::from_secs(3), serving).await;
+    assert!(
+        matches!(returned, Ok(Ok(Ok(())))),
+        "the listener returned with a silent peer mid-handshake: {returned:?}"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn the_connection_cap_holds_the_next_accept_until_a_slot_frees() {
     let limits = phoebis_relay::ListenLimits {

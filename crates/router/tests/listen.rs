@@ -208,6 +208,53 @@ async fn the_upgrade_path_hands_a_websocket_handshake_to_its_route() {
     );
 }
 
+/// A peer that opens a socket on a TLS listener and sends nothing has no request to finish, so the stop ends its
+/// handshake on either path rather than waiting out the handshake's bound. The served request behind it proves the
+/// silent peer was accepted, and its handshake running, before the stop.
+#[tokio::test]
+async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
+    let pair = fake_upstream::generate_pair(&["localhost"]);
+    let acceptor = Arc::new(fake_upstream::acceptor_for(&pair));
+    let limits = phoebis_router::listen::ListenLimits {
+        drain_timeout: Duration::from_secs(30),
+        header_read_timeout: Duration::from_secs(30),
+        max_connections: 8,
+    };
+    for upgrades in [false, true] {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let addr = listener.local_addr().unwrap();
+        let (stop, stop_rx) = tokio::sync::watch::channel(false);
+        let server = tokio::spawn(phoebis_router::listen::serve(
+            listener,
+            app(),
+            stop_rx,
+            limits,
+            upgrades,
+            Some(acceptor.clone()),
+        ));
+        let _silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+        let mut tls = tokio_boring::connect(trusting(&pair.ca_pem), "localhost", socket)
+            .await
+            .unwrap();
+        tls.write_all(b"GET /ping HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+            .await
+            .unwrap();
+        let mut answer = Vec::new();
+        let _ = tokio::time::timeout(Duration::from_secs(3), tls.read_to_end(&mut answer)).await;
+        assert!(
+            String::from_utf8_lossy(&answer).starts_with("HTTP/1.1 200"),
+            "upgrades {upgrades}"
+        );
+        stop.send(true).unwrap();
+        let returned = tokio::time::timeout(Duration::from_secs(3), server).await;
+        assert!(
+            matches!(returned, Ok(Ok(Ok(())))),
+            "the listener returned with a silent peer mid-handshake (upgrades {upgrades}): {returned:?}"
+        );
+    }
+}
+
 /// The stop reaches a connection that is idle between requests on either path, so the listener returns once it
 /// closes rather than at the drain deadline or the next header read timeout.
 #[tokio::test]

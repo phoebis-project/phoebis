@@ -186,13 +186,21 @@ pub async fn serve(
         let builder = builder.clone();
         let acceptor = acceptor.clone();
         let app = app.clone();
+        let mut drain = stop.clone();
         // The handshake runs here rather than in the accept loop, so a slow peer holds its own slot and not the
         // loop; the permit is dropped with the task, so a failed handshake releases it.
         tasks.spawn(async move {
             let _slot = permit;
-            let stream = match handshake(stream, acceptor.as_deref(), limits.header_read_timeout)
-                .await
-            {
+            let handshaken = tokio::select! {
+                // Biased toward the handshake: a plain listener's resolves on its first poll, so the stop never
+                // drops a plain connection here.
+                biased;
+                handshaken = handshake(stream, acceptor.as_deref(), limits.header_read_timeout) => handshaken,
+                // A peer still in its handshake has sent no request, so the stop ends it as hyper's graceful
+                // shutdown ends a connection that has read no byte, rather than waiting out the bound.
+                _ = stopped(&mut drain) => return,
+            };
+            let stream = match handshaken {
                 Ok(stream) => stream,
                 Err(error) => {
                     // A plain-HTTP request on a TLS port lands here too; the bytes are never logged.
