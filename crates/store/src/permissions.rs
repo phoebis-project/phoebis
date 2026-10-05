@@ -36,8 +36,10 @@ pub fn check_private_dir(path: &Path) -> Vec<String> {
     check_private_file(path, 0o700)
 }
 
-/// Creates `path` with `mode` in one `open`, refusing an existing file (`create_new`), under a directory created at
-/// 0700 when missing: no window exists in which the file is wider than its mode, and nothing is overwritten.
+/// Creates `path` at `mode`, refusing an existing file (`create_new`), under a directory created at 0700 when
+/// missing. The open can only come out narrower than `mode`, since it honors the umask, so the mode is set on the new
+/// descriptor before any byte is written: the service unit's `UMask=0077` cannot narrow `ca.pem` to 0600, no window
+/// exists in which the file is wider than its mode, and nothing is overwritten.
 pub fn create_private_file(path: &Path, mode: u32) -> std::io::Result<File> {
     use std::os::unix::fs::PermissionsExt;
 
@@ -47,8 +49,6 @@ pub fn create_private_file(path: &Path, mode: u32) -> std::io::Result<File> {
         .write(true)
         .mode(mode)
         .open(path)?;
-    // The open honors the umask, which can only narrow the mode; the service unit's `UMask=0077` would leave a
-    // 0644 file at 0600, so the descriptor gets the asked mode back before anything is written through it.
     file.set_permissions(std::fs::Permissions::from_mode(mode))?;
     Ok(file)
 }
@@ -125,8 +125,11 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("ca.pem");
         // The service unit runs under `UMask=0077`; the process-wide mask is restored before any assertion.
+        // SAFETY: `umask` swaps the process-wide mask and cannot fail. Other tests in this binary run beside it, but
+        // each sets its modes explicitly or creates at 0600 or 0700, which a 0077 mask leaves as they are.
         let previous = unsafe { libc::umask(0o077) };
         let created = create_private_file(&path, 0o644);
+        // SAFETY: puts back the mask the call above returned, with the same reasoning.
         unsafe { libc::umask(previous) };
         created.unwrap();
         let mode = std::fs::metadata(&path).unwrap().permissions().mode() & 0o777;
