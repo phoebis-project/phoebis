@@ -253,7 +253,7 @@ file the way `check-config` does before it answers.
 | `--env-file PATH` | unset | Writes the admin secret there rather than printing it. |
 | `--key-file PATH` | `storage.key` beside the file | The storage key file. |
 | `--non-interactive` | off | Asks nothing, even on a terminal. |
-| `--owner USER` | unset | Hands the key file and the directories `init` created to that user; needs root. |
+| `--owner USER` | unset | Gives that user the key file and each directory `init` created for the service; needs root. |
 | `--proxy-cert PATH`, `--proxy-key PATH` | unset | An operator's pair as `proxy.tls`, both paths made absolute. |
 | `--proxy-listen ADDR` | `127.0.0.1:8317` | The proxy listener's address. |
 | `--secret-env NAME` | `PHOEBIS_ADMIN_SECRET` | The admin secret's variable, written as `admin.secret_env`. |
@@ -289,13 +289,13 @@ trust again.
 Without `--env-file`, stdout carries one line, `PHOEBIS_ADMIN_SECRET=<secret>` under the default name, and the secret is
 printed nowhere else, so `(umask 077; phoebis init --non-interactive > phoebis.env)` writes a usable environment file
 that only its owner reads; a bare redirect under the usual umask leaves the secret readable by others. `--env-file`
-writes the same file at `0600` itself. Everything else goes to stderr. On a terminal (stdin and stderr both) and without
-`--non-interactive`, `init` asks, once the refusals below have found nothing, for what the flags did not give, in this
-order: the proxy address, the admin address, and for each that leaves loopback with no pair, `self-signed` for a pair
-`init` generates, `files` and then the two paths, or `none` for plain HTTP, the default; `--tls` answers that question
-for every listener, so a run that carries it is not asked. An empty answer takes the default shown in brackets, and an
-address that does not parse is asked again. Then it prints one line per path written with its mode and owner, where the
-secret went, and the next command, `phoebis check-config --config <path>`.
+writes that line beside `RUST_LOG=info` to the file it names, at `0600`. Everything else goes to stderr. On a terminal
+(stdin and stderr both) and without `--non-interactive`, `init` asks, once the refusals below have found nothing, for
+what the flags did not give, in this order: the proxy address, the admin address, and for each that leaves loopback with
+no pair, `self-signed` for a pair `init` generates, `files` and then the two paths, or `none` for plain HTTP, the
+default; `--tls` answers that question for every listener, so a run that carries it is not asked. An empty answer takes
+the default shown in brackets, and an address that does not parse is asked again. Then it prints one line per path
+written with its mode and owner, where the secret went, and the next command, `phoebis check-config --config <path>`.
 
 `init` exits 1 with one `Error:` line and nothing written when the bootstrap file, the key file or the environment file
 already exists, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory
@@ -370,11 +370,11 @@ seconds among them, removes every file and directory the run created and exits 1
 nothing was written to {dir}`. It exits 0 once the manifest is written, and 2 for a usage error.
 
 `account add` creates an account through `POST /admin/accounts`. `--kind` is `oauth`, for a subscription paired
-afterwards, or `api_key`, and `--label` defaults to the id. An `api_key` account's upstream key travels in the variable
-`--api-key-env NAME` names, or as the first line of stdin under `--secret-stdin`, and never in a flag, so neither the
-process list nor the shell history carries it; `--secret-env` stays the admin secret's variable. The router checks the
-key against the upstream before it creates the account. Stdout carries the account's id, and stderr its fields, one
-`field: value` line each, sorted by field.
+afterwards, or `api_key`, for an Anthropic key, and `--label` defaults to the account id. An `api_key` account's
+Anthropic API key comes from the variable `--api-key-env NAME` names, or from the first line of stdin under
+`--secret-stdin`; it never travels in a flag, so neither the process list nor the shell history carries it, and
+`--secret-env` stays the admin secret's variable. The router checks the key against the upstream before it creates the
+account. Stdout carries the account's id, and stderr its fields, one `field: value` line each, sorted by field.
 
 `account pair` pairs an `oauth` account through the three pairing routes, the calls [Pairing](pairing.md#with-curl)
 makes by hand. It starts the pairing with `POST /admin/oauth/sessions`, prints on stderr the instruction to open the
@@ -422,14 +422,19 @@ route's `400` prints as it comes.
 route](api.md#post-adminledgerparkedreplay) rather than a restart. It prints `landed {n}, remaining {m}` on stderr,
 `remaining` the parked records the ledger still refuses.
 
-These seven take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line
-the route wrote and nothing on stderr but errors; `account pair` prints one such line per route and keeps its own lines
-on stderr. A refused call prints `{status} {message}` from the route's answer on stderr and exits 1, a refused secret as
-`the admin secret was refused`; a call that does not reach the listener prints one line naming the URL and exits 1. The
-commands' own refusals exit 1 before any call: `an api_key account needs --api-key-env or --secret-stdin`, `environment
-variable {name} is unset or empty` for `--api-key-env`, `--secret-stdin read no secret from stdin`, and `--body {path}:
-{reason}` or `--member {member}: {reason}`. Each exits 0 when the route accepts the call, and 2 for a usage error. No
+These seven take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line the
+route wrote and nothing on stderr but errors; `account pair` prints one such line per route and keeps its own lines on
+stderr. A refused call prints `{status} {message}` from the route's answer on stderr and exits 1, a refused secret as
+`the admin secret was refused`; a call that does not reach the listener prints one line naming the URL and exits 1. Each
+exits 0 when the route accepts the call, `key create` only once its secret reached stdout, and 2 for a usage error. No
 output carries the admin secret or an upstream key.
+
+The commands' own refusals exit 1 before any call:
+
+- `--body {path}: {reason}` or `--member {member}: {reason}`, for a body file or a member that does not read
+- `--secret-stdin read no secret from stdin`, for an Anthropic API key that stdin did not carry
+- `an api_key account needs --api-key-env or --secret-stdin`, for an Anthropic API key with neither source
+- `environment variable {name} is unset or empty`, for the Anthropic API key's `--api-key-env` variable
 
 ## Environment variables
 

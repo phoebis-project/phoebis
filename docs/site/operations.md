@@ -214,9 +214,9 @@ Under `pools` each pool prints by id with its status, its member, key and pin co
 hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is
 off on it), the member's eligibility, the five-hour and seven-day windows in whole percent (`-` with no sample) and the
 Fable week when the account has one, then the nearest reset as `resets <HH:MM>` or, under a cooldown, `until <HH:MM>
-<reason>`, with the scope ahead of the reason (`model:<id>`, `fast`, `fast_credits`) when the cooldown holds less than
-the whole account. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts no pool
-holds, with their state, and is left out when there are none.
+<reason>`, with the scope ahead of the reason (`fast`, `fast_credits`, `model:<canonical>`) when the cooldown holds less
+than the whole account. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts no
+pool holds, with their state, and is left out when there are none.
 
 The pins block is the sessions route's answer, one line per session that holds a pin: the route groups pins by key
 generation and session and prefers the main agent's pin, so a session whose subagent is pinned to another account shows
@@ -241,10 +241,11 @@ reads readiness from `/admin/system` alone.
 
 `status` exits 0 when the router answers `ready` and the probe, where it ran, answered; 1 otherwise; 2 for a usage
 error. `ready` is the liveness of the router's components, the answer `/api/ready` gives, and not a promise that a
-request finds an account: a router whose every pool member is cooling down reads `ready` and exits 0, with
-`pool_exhausted` on the attention line, so a script that asks whether requests can be served reads the attention items
-too. Under the container, `docker compose exec phoebis phoebis status` runs it in the running container, which inherits
-the container's environment and so the admin secret.
+request finds an account: a router whose every pool member is cooling down reads `ready` and exits 0. `pool_exhausted`
+joins the attention line once a request finds the pool dry, so a pool whose members all cooled with no request since
+shows none; a script that asks whether requests can be served reads each member's eligibility under `pools` too. Under
+the container, `docker compose exec phoebis phoebis status` runs it in the running container, which inherits the
+container's environment and so the admin secret.
 
 ## Upgrades
 
@@ -401,10 +402,11 @@ release:
 
 A failed smoke, of the image or of a binary, leaves untagged digests in the registry, no tag and no archive on the
 release; a failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the dry run: it builds
-both platforms and runs the smoke checks without pushing; run it after a change to the Dockerfile or the workflow, and
-before the first release. The package inherits the repository's visibility: while the repository is private, pulling
-needs a token with `read:packages`. The image name is derived from the repository that runs the workflow, so a renamed
-repository publishes under its new name without a workflow change.
+both platforms and runs the smoke checks without pushing; run it after a change to the Dockerfile, `Cross.toml` or the
+workflow, since a pull request builds the amd64 side alone, and before the first release. The package inherits the
+repository's visibility: while the repository is private, pulling needs a token with `read:packages`. The image name is
+derived from the repository that runs the workflow, so a renamed repository publishes under its new name without a
+workflow change.
 
 ## License
 

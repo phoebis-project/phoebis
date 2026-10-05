@@ -16,7 +16,7 @@ API with the embedded console, and a metrics endpoint in Prometheus text format.
 | [Pools, keys, and routing](routing.md) | Pace, load shedding, cooldowns, failover, and overage. |
 | [Keepalive](keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning fields, the cost. |
 | [Statistics](statistics.md) | The ledger, the plan meter, the views, metrics, the live feed, and the gauges. |
-| [Operations](operations.md) | Backup, the storage key, upgrades, re-pinning a client build, publishing. |
+| [Operations](operations.md) | Backup, restore, the storage key, upgrades, re-pinning a client build, publishing. |
 | [Changelog](changelog.md) | What changed for an operator, by date. |
 
 ## How a request travels
