@@ -1613,6 +1613,9 @@ impl Relay {
         // attempt that follows names the wait on its trace.
         let mut holds: Vec<HoldFacts> = Vec::new();
         let mut attempt: u8 = 0;
+        // The selections asked for this request, the decision's `seq`: a hold and the placement after it are two
+        // decisions of one wire attempt, and a retry in place or a refresh pass dispatches again under one.
+        let mut selections: u32 = 0;
         // The accounts this request was held for once already. A freed slot is read, not reserved, so another
         // request can take it before the next selection; without this the same account could hold the request
         // again on every pass.
@@ -1642,9 +1645,15 @@ impl Relay {
                     )
                     .await;
             }
+            selections += 1;
             let answer = match self
                 .router
                 .select(SelectRequest {
+                    request_id: trace.request_id.clone(),
+                    // The pass loop of `dispatch_to` increments the counter before it publishes, so the attempt
+                    // this decision dispatches is the next one.
+                    attempt: u32::from(attempt) + 1,
+                    seq: selections,
                     key_id: key.id.clone(),
                     key_generation: key.created_at,
                     agent_id: identity.agent_id.clone(),

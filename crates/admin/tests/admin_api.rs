@@ -860,7 +860,9 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
 #[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
-    use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
+    use phoebis_routing::{
+        Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    };
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
@@ -875,6 +877,7 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
                         utilization: 0.25,
                         reset: Some(NOW + 3_600_000),
                         observed_at: NOW - 120_000,
+                        source: WindowSource::Stored,
                     },
                 )
                 .with(
@@ -883,6 +886,7 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
                         utilization: 0.5,
                         reset: Some(NOW + 86_400_000),
                         observed_at: NOW - 60_000,
+                        source: WindowSource::Stored,
                     },
                 ),
             incarnation: 1,
@@ -929,7 +933,8 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
 async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
     use phoebis_routing::{
-        Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+        Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+        SEVEN_DAY_FABLE,
     };
     const HOUR: i64 = 3_600_000;
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
@@ -939,6 +944,7 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         utilization,
         reset,
         observed_at: read_at,
+        source: WindowSource::Stored,
     };
     h.router
         .report(Report::Sample {

@@ -9,7 +9,7 @@ use phoebis_routing::{
     BurnRates, ClientClass, CreditsState, Exhaustion, KeyRefusal, MemberSpend, PinRef,
     PinUsage, Presented, RateTable, Rates, Refusal, ReloadError, Report, ResolveError,
     RouterConfig, RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer,
-    UtilizationSample, WindowReading, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    UtilizationSample, WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
     FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
@@ -120,6 +120,9 @@ fn request(
 ) -> SelectRequest {
     let s = handle.snapshot();
     SelectRequest {
+        request_id: "r-1".into(),
+        attempt: 1,
+        seq: 1,
         key_id: "k".into(),
         key_generation: s.key("k").unwrap().created_at,
         agent_id: "main".into(),
@@ -950,6 +953,9 @@ async fn a_persisted_resolution_keys_the_dated_pin_after_a_restart_before_any_re
     let req = |handle: &phoebis_routing::RouterHandle, now: i64| {
         let s = handle.snapshot();
         SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "k".into(),
             key_generation: s.key("k").unwrap().created_at,
             agent_id: "main".into(),
@@ -1080,6 +1086,9 @@ async fn resolve_answers_once_the_state_holds_the_spellings_pins_and_cooldowns_u
     let s = handle.snapshot();
     let answer = handle
         .select(SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "k".into(),
             key_generation: s.key("k").unwrap().created_at,
             agent_id: "main".into(),
@@ -2511,6 +2520,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             utilization: 0.5,
             reset: Some(10 * HOUR),
             observed_at: 1_000,
+            source: WindowSource::Poll,
         };
         Report::Sample {
             account_id: "a".into(),
@@ -2611,6 +2621,7 @@ async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
         utilization,
         reset: Some(100 * HOUR),
         observed_at: 1_000,
+        source: WindowSource::Head,
     };
     handle
         .report(observed(
@@ -2923,6 +2934,7 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
                     utilization: 0.2,
                     reset: None,
                     observed_at: 1_500,
+                    source: WindowSource::Poll,
                 },
             ),
             incarnation: 1,
@@ -2968,6 +2980,7 @@ async fn a_spent_five_hour_window_migrates_the_pin_with_reason_spent() {
                 utilization: 0.1,
                 reset: Some(at + 7 * 86_400_000),
                 observed_at: at,
+                source: WindowSource::Poll,
             },
         )
     };
@@ -3023,6 +3036,7 @@ async fn a_pin_on_a_cooled_and_spent_account_with_no_sibling_allowance_expires_w
                 utilization: 0.1,
                 reset: Some(at + 7 * 86_400_000),
                 observed_at: at,
+                source: WindowSource::Poll,
             },
         )
     };
@@ -3110,6 +3124,7 @@ fn sample_with(
             utilization,
             reset,
             observed_at,
+            source: WindowSource::Poll,
         },
     )
 }
@@ -3302,6 +3317,7 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
                     utilization: 1.0,
                     reset: None,
                     observed_at: 2_000,
+                    source: WindowSource::Poll,
                 },
             ),
         ))
@@ -3328,6 +3344,7 @@ async fn a_claim_that_names_neither_shared_window_waits_for_both() {
                     utilization: 0.9,
                     reset: None,
                     observed_at: 2_002,
+                    source: WindowSource::Poll,
                 },
             ),
         ))
@@ -3382,6 +3399,7 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
                         utilization: 0.0,
                         reset: None,
                         observed_at: 2_000,
+                        source: WindowSource::Poll,
                     },
                 )
                 .with(
@@ -3390,6 +3408,7 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
                         utilization: 0.0,
                         reset: None,
                         observed_at: 2_000,
+                        source: WindowSource::Poll,
                     },
                 ),
         ))
@@ -3503,6 +3522,7 @@ async fn a_model_scoped_row_reads_the_model_window_and_nothing_else() {
                     utilization: 0.1,
                     reset: None,
                     observed_at: 2_000,
+                    source: WindowSource::Poll,
                 },
             ),
         ))
@@ -3910,6 +3930,7 @@ async fn an_enabled_credits_state_with_room_lifts_a_fast_credits_row_and_a_plan_
                     utilization: 0.4,
                     reset: None,
                     observed_at: 2_000,
+                    source: WindowSource::Poll,
                 },
             ),
         ))

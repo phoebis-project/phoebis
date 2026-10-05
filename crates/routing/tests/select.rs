@@ -3,9 +3,9 @@ use phoebis_routing::{
     AffinityChain, AffinityMap, AffinityRow, BurnRates, BurnUnit, ClientClass, CohortHold,
     CreditsState, EvidenceSource, Exhaustion, HoldFacts, MemberSpend,
     MigrateReason, OverageEvidence, PinRef, Placement, RateTable, Rates, RegistrySnapshot,
-    RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample, Warmth,
-    WindowReading, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON,
-    SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample, Warmth, WarmthCause,
+    WindowReading, WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR,
+    MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -354,6 +354,9 @@ fn request(
     now: i64,
 ) -> SelectRequest {
     SelectRequest {
+        request_id: "r-1".into(),
+        attempt: 1,
+        seq: 1,
         key_id: "k".into(),
         key_generation: s.key("k").unwrap().created_at,
         agent_id: "main".into(),
@@ -417,6 +420,7 @@ fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample
             utilization: five_hour,
             reset: None,
             observed_at,
+            source: WindowSource::Poll,
         },
     )
     .with(
@@ -425,6 +429,7 @@ fn sample(five_hour: f64, seven_day: f64, observed_at: i64) -> UtilizationSample
             utilization: seven_day,
             reset: None,
             observed_at,
+            source: WindowSource::Poll,
         },
     )
 }
@@ -443,6 +448,7 @@ fn refreshing(
                 utilization: five_hour,
                 reset: Some(five_hour_reset),
                 observed_at,
+                source: WindowSource::Poll,
             },
         )
         .with(
@@ -451,6 +457,7 @@ fn refreshing(
                 utilization: 0.1,
                 reset: Some(seven_day_reset),
                 observed_at,
+                source: WindowSource::Poll,
             },
         )
 }
@@ -464,6 +471,7 @@ fn with_fable(base: UtilizationSample, fable: f64, fable_reset: Option<i64>) -> 
             utilization: fable,
             reset: fable_reset,
             observed_at,
+            source: WindowSource::Poll,
         },
     )
 }
@@ -637,6 +645,7 @@ fn pace_ranks_remaining_weekly_allowance_over_hours_to_reset_and_scores_an_unsam
                 utilization: seven_day,
                 reset: Some(reset_at),
                 observed_at,
+                source: WindowSource::Poll,
             },
         )
     };
@@ -2993,6 +3002,7 @@ fn an_unknown_seven_day_reading_drops_nothing() {
                 utilization: 1.0,
                 reset: Some(9 * HOUR),
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -4453,6 +4463,9 @@ fn two_pools_sharing_an_account_share_its_entries() {
     };
     seed_affinity(&st, vec![row]);
     let req_for = |key_id: &str, session: &str, now: i64| SelectRequest {
+        request_id: "r-1".into(),
+        attempt: 1,
+        seq: 1,
         key_id: key_id.into(),
         key_generation: s.key(key_id).unwrap().created_at,
         agent_id: "main".into(),
@@ -5962,6 +5975,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
     let _b = st.in_flight().dispatched("b", 1_000);
     let sub_req = placement_req(
         SelectRequest {
+            seq: 2,
             holds: vec![HoldFacts {
                 account_id: "a".into(),
                 cohort: Some("a".into()),
@@ -5995,6 +6009,7 @@ fn a_cohort_hold_that_times_out_lands_the_next_member_elsewhere() {
 
     drop(_b);
     let follow_up = SelectRequest {
+        seq: 3,
         now: 2_000,
         ..sub_req
     };
@@ -6203,6 +6218,7 @@ fn a_spent_seven_day_window_moves_the_pin_as_a_spent_five_hour_one_does() {
                 utilization: 1.0,
                 reset: Some(9 * HOUR),
                 observed_at: 1_500,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -6924,6 +6940,7 @@ fn pace_reads_the_window_map_and_ranks_an_api_key_account_by_its_worst_bucket() 
                 utilization,
                 reset,
                 observed_at,
+                source: WindowSource::Head,
             },
         )
     };
@@ -6972,6 +6989,7 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
                 utilization: 0.5,
                 reset: Some(999),
                 observed_at: 999,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -6988,6 +7006,7 @@ fn a_subscription_window_past_its_reset_scores_as_untouched_not_by_a_minutes_cla
                 utilization: 0.9,
                 reset: Some(1_000 + HOUR),
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -7058,6 +7077,7 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 utilization: 1.0,
                 reset: Some(1_030),
                 observed_at: 1_000,
+                source: WindowSource::Head,
             },
         ),
     );
@@ -7073,6 +7093,7 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 utilization: 0.1,
                 reset: None,
                 observed_at: 1_031,
+                source: WindowSource::Head,
             },
         ),
     );
@@ -7088,6 +7109,7 @@ fn an_exhausted_bucket_of_one_model_is_refunded_at_its_reset_and_a_siblings_free
                 utilization: 0.5,
                 reset: None,
                 observed_at: 1_000,
+                source: WindowSource::Head,
             },
         ),
     );
@@ -7125,6 +7147,7 @@ fn the_pace_floor_makes_an_account_last_resort_and_places_by_pace_inside_the_flo
                 utilization: 0.95,
                 reset: Some(1_000 + HOUR),
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -7184,6 +7207,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
                 utilization: 0.5,
                 reset: Some(1_000 + 96 * HOUR),
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -7195,6 +7219,7 @@ fn an_ending_account_is_paced_against_the_earlier_of_its_reset_and_its_end() {
                 utilization: 0.5,
                 reset: Some(1_000 + 24 * HOUR),
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -7612,6 +7637,7 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
                 utilization: 1.0,
                 reset: Some(2_000),
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -7628,6 +7654,7 @@ fn a_fable_spent_candidate_is_skipped_as_spent_whether_or_not_it_names_a_reset()
                 utilization: 1.0,
                 reset: None,
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             },
         ),
     );
@@ -8073,7 +8100,7 @@ fn a_request_that_continues_nothing_on_another_lane_leaves_the_sessions_pin_unto
     let map = st.affinity();
     let map = map.read().unwrap();
     assert_eq!(
-        warmth_of(&after, &at(T + 3_000, &fast_lane, None, &[]), &map),
+        warmth_of(&after, &at(T + 3_000, &fast_lane, None, &[]), &map).0,
         Warmth::Cold,
         "a chainless body on another lane still reads cold"
     );
@@ -8082,7 +8109,8 @@ fn a_request_that_continues_nothing_on_another_lane_leaves_the_sessions_pin_unto
             &after,
             &at(T + 3_000, &fast_lane, Some("s0"), &["m1", "m2", "m3"]),
             &map
-        ),
+        )
+        .0,
         Warmth::Cold,
         "and so does a continuation"
     );
@@ -8113,7 +8141,8 @@ fn a_control_entry_after_the_tail_continues_the_conversation() {
             &pinned(&st, "s1"),
             &with_control_entry,
             &st.affinity().read().unwrap()
-        ),
+        )
+        .0,
         Warmth::Refresh,
         "the control entry is one more message past the pin's tail"
     );
@@ -8123,6 +8152,109 @@ fn a_control_entry_after_the_tail_continues_the_conversation() {
         (pin.last_refresh_at, pin.tail_hash.as_deref()),
         (T + 2_000, Some("c1"))
     );
+}
+
+#[test]
+fn warmth_of_names_the_branch_that_decided_each_verdict() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0)],
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let model = "claude-sonnet-5";
+    select(
+        &mut st,
+        &s,
+        &with_facts(
+            request(&s, Some("s1"), model, true, &[], T + 1_000),
+            None,
+            false,
+            Some("s0"),
+            &["m1", "m2"],
+        ),
+        &mut rng(),
+    );
+    let pin = pinned(&st, "s1");
+    // The builder's request carries no chain; every case below varies it by one fact.
+    let plain = || request(&s, Some("s1"), model, true, &[], T + 2_000);
+    let chain = |static_hash: Option<&str>, boundaries: &[&str]| {
+        with_facts(plain(), None, false, static_hash, boundaries)
+    };
+    let cases = [
+        (
+            "a keepalive probe",
+            SelectRequest {
+                probe: true,
+                ..plain()
+            },
+            (Warmth::Untouched, WarmthCause::Probe),
+        ),
+        (
+            "a token count",
+            SelectRequest {
+                count: true,
+                ..plain()
+            },
+            (Warmth::Untouched, WarmthCause::Count),
+        ),
+        (
+            "a compacted context",
+            SelectRequest {
+                context_compacted: true,
+                ..plain()
+            },
+            (Warmth::Cold, WarmthCause::Compacted),
+        ),
+        (
+            "another lane",
+            SelectRequest {
+                lane: lane_key(model, "fast", "none", "-"),
+                ..plain()
+            },
+            (Warmth::Cold, WarmthCause::LaneChanged),
+        ),
+        (
+            "a main turn's class",
+            SelectRequest {
+                request_class: Some("main".into()),
+                ..plain()
+            },
+            (Warmth::Refresh, WarmthCause::ClassRefreshes),
+        ),
+        (
+            "an auxiliary class",
+            SelectRequest {
+                request_class: Some("other".into()),
+                ..plain()
+            },
+            (Warmth::Untouched, WarmthCause::ClassAuxiliary),
+        ),
+        (
+            "an empty chain",
+            plain(),
+            (Warmth::Refresh, WarmthCause::Chainless),
+        ),
+        (
+            "a boundary on the pin's tail",
+            chain(None, &["m1", "m2", "m3"]),
+            (Warmth::Refresh, WarmthCause::ContinuesPin),
+        ),
+        (
+            "the pin's static prefix under a session identity",
+            chain(Some("s0"), &["y1"]),
+            (Warmth::Cold, WarmthCause::StaticRestart),
+        ),
+        (
+            "a foreign chain",
+            chain(Some("s9"), &["x1", "x2"]),
+            (Warmth::Untouched, WarmthCause::Foreign),
+        ),
+    ];
+    let map = st.affinity();
+    let map = map.read().unwrap();
+    for (case, req, expected) in cases {
+        assert_eq!(warmth_of(&pin, &req, &map), expected, "{case}");
+    }
 }
 
 #[test]
@@ -9896,6 +10028,7 @@ fn a_hot_api_key_sibling_is_not_preferred() {
                 utilization: 0.9,
                 reset: Some(T + MINUTE),
                 observed_at: T + 500,
+                source: WindowSource::Head,
             },
         ),
     );
@@ -10049,6 +10182,7 @@ fn weekly(
             utilization: seven_day,
             reset: Some(T + WEEK_MS * remaining_tenths / 10),
             observed_at,
+            source: WindowSource::Poll,
         },
     )
 }
@@ -10097,6 +10231,7 @@ fn a_five_hour_window_at_nine_tenths_eighty_percent_elapsed_does_not_shed() {
                 utilization: 0.9,
                 reset: Some(T + HOUR),
                 observed_at: T - 500,
+                source: WindowSource::Poll,
             },
         ),
     );

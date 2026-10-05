@@ -564,7 +564,7 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
 #[tokio::test]
 async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_any_reading() {
     use phoebis_relay::{FAST_INPUT, FAST_OUTPUT};
-    use phoebis_routing::{UtilizationSample, WindowReading, FIVE_HOUR};
+    use phoebis_routing::{UtilizationSample, WindowReading, WindowSource, FIVE_HOUR};
     let (app, _up, _store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     let row = |id: &'static str| {
@@ -580,6 +580,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
         utilization,
         reset: Some(common::NOW + reset),
         observed_at: common::NOW,
+        source: WindowSource::Head,
     };
     let sample = |windows: &[(&str, WindowReading)]| {
         windows.iter().fold(

@@ -410,6 +410,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
     let selected = parts
         .router
         .select(phoebis_routing::SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "desktop".into(),
             key_generation,
             agent_id: "main".into(),
@@ -478,6 +481,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
     let placed = parts
         .router
         .select(phoebis_routing::SelectRequest {
+            request_id: "r-2".into(),
+            attempt: 1,
+            seq: 2,
             key_id: "desktop".into(),
             key_generation,
             agent_id: "main".into(),
@@ -692,6 +698,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         utilization,
         reset: Some(now + 30_000),
         observed_at: now - 5_000,
+        source: phoebis_routing::WindowSource::Head,
     };
     parts
         .router

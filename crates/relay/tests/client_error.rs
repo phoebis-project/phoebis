@@ -71,6 +71,9 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
     let answer = h
         .router
         .select(SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: key.id.clone(),
             key_generation: key.created_at,
             agent_id: "main".into(),

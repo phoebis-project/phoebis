@@ -38,6 +38,13 @@ impl ClientClass {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct SelectRequest {
+    /// The request this decision belongs to and the wire attempt it dispatches, numbered from 1 as the bus and the
+    /// attempt rows number it (the relay's counter at the selection plus one, since `dispatch_to` increments it
+    /// before publishing); `seq` counts the selections the relay asked for the request from 1, so a hold and the
+    /// placement after it are two decisions of one attempt, and a retry in place is one decision over two attempts.
+    pub request_id: String,
+    pub attempt: u32,
+    pub seq: u32,
     pub key_id: String,
     /// The authenticated key's `created_at` at admission. The id is reusable, so the lifetime is the identity: a
     /// stale-revision re-authentication that finds another generation under the id refuses the request.
@@ -189,6 +196,49 @@ pub enum Warmth {
     Untouched,
 }
 
+impl Warmth {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Warmth::Cold => "cold",
+            Warmth::Refresh => "refresh",
+            Warmth::Untouched => "untouched",
+        }
+    }
+}
+
+/// The branch of `warmth_of` that decided the verdict, one name per return.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WarmthCause {
+    Probe,
+    Count,
+    Compacted,
+    LaneChanged,
+    ClassRefreshes,
+    ClassAuxiliary,
+    Chainless,
+    ContinuesPin,
+    StaticRestart,
+    Foreign,
+}
+
+impl WarmthCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WarmthCause::Probe => "probe",
+            WarmthCause::Count => "count",
+            WarmthCause::Compacted => "compacted",
+            WarmthCause::LaneChanged => "lane_changed",
+            WarmthCause::ClassRefreshes => "class_refreshes",
+            WarmthCause::ClassAuxiliary => "class_auxiliary",
+            WarmthCause::Chainless => "chainless",
+            WarmthCause::ContinuesPin => "continues_pin",
+            WarmthCause::StaticRestart => "static_restart",
+            WarmthCause::Foreign => "foreign",
+        }
+    }
+}
+
 /// The verdict of `request` on the pin it arrives for. The compacted flag is cold whatever else the request says; a
 /// request on another cache lane than the pin's last is cold whatever its messages continue, unless it leaves the
 /// pin alone (a class that does not refresh, or a foreign request); the class decides when present; without it, a
@@ -199,31 +249,40 @@ pub enum Warmth {
 /// without a chain refreshes, the fallback for a request that carries no fact. A keepalive probe replays the
 /// recipe's headers and body verbatim, the re-arming request's rather than its own, so it is judged by none of
 /// this: its renewal report stamps the refresh instead. A token count is judged by none of it either, since it
-/// creates no cache entry to be warm about.
-pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> Warmth {
-    if request.probe || request.count {
-        return Warmth::Untouched;
+/// creates no cache entry to be warm about. The cause beside the verdict names the branch that decided it.
+pub fn warmth_of(
+    current: &PinRow,
+    request: &SelectRequest,
+    affinity: &AffinityMap,
+) -> (Warmth, WarmthCause) {
+    if request.probe {
+        return (Warmth::Untouched, WarmthCause::Probe);
+    }
+    if request.count {
+        return (Warmth::Untouched, WarmthCause::Count);
     }
     if request.context_compacted {
-        return Warmth::Cold;
+        return (Warmth::Cold, WarmthCause::Compacted);
     }
     // Another lane is another cache: a refreshing turn on it reads the pin cold, whatever its boundaries. A request
     // that leaves the pin alone still does, since it never touched the conversation's prefix.
     let lane_changed = !same_lane(&current.lane, &request.lane);
-    let refreshed = if lane_changed {
-        Warmth::Cold
-    } else {
-        Warmth::Refresh
+    let refreshed = |cause: WarmthCause| {
+        if lane_changed {
+            (Warmth::Cold, WarmthCause::LaneChanged)
+        } else {
+            (Warmth::Refresh, cause)
+        }
     };
     if let Some(class) = request.request_class.as_deref() {
         return if REFRESHING_CLASSES.contains(&class) {
-            refreshed
+            refreshed(WarmthCause::ClassRefreshes)
         } else {
-            Warmth::Untouched
+            (Warmth::Untouched, WarmthCause::ClassAuxiliary)
         };
     }
     if request.static_hash.is_none() && request.boundaries.is_empty() {
-        return refreshed;
+        return refreshed(WarmthCause::Chainless);
     }
     // The pin's tail stays an anchor beside the map: the affinity report lands when the previous answer ends,
     // and a quick continuation can select before it does.
@@ -239,17 +298,21 @@ pub fn warmth_of(current: &PinRow, request: &SelectRequest, affinity: &AffinityM
                 .entry(&request.canonical_model, b)
                 .is_some_and(on_pin)
     }) {
-        return refreshed;
+        return refreshed(WarmthCause::ContinuesPin);
     }
     if request.static_hash.is_some() && request.static_hash == current.static_hash {
-        return Warmth::Cold;
+        return (Warmth::Cold, WarmthCause::StaticRestart);
     }
-    Warmth::Untouched
+    (Warmth::Untouched, WarmthCause::Foreign)
 }
 
 /// The pin's warmth on this request: `Refresh` is warm, `Cold` is cold, `Untouched` reads `warm(current, now)`.
 pub fn effective_warm(current: &PinRow, request: &SelectRequest, affinity: &AffinityMap) -> bool {
-    warm_on(current, warmth_of(current, request, affinity), request.now)
+    warm_on(
+        current,
+        warmth_of(current, request, affinity).0,
+        request.now,
+    )
 }
 
 fn warm_on(current: &PinRow, verdict: Warmth, now: i64) -> bool {
@@ -685,12 +748,13 @@ pub fn select(
 
     // What the request says about the pin's cache, judged once where the pin is: every rule below that reads
     // warmth reads this, so a compacted or restarted request is cold on the request that carries the fact.
-    let verdict = pin.as_ref().map_or(Warmth::Untouched, |current| {
-        warmth_of(
+    let (verdict, _cause) = pin.as_ref().map_or((Warmth::Untouched, None), |current| {
+        let (verdict, cause) = warmth_of(
             current,
             request,
             &state.affinity().read().expect("affinity lock poisoned"),
-        )
+        );
+        (verdict, Some(cause))
     });
 
     // Step 2: the eligible set and the obstacle of everything outside it, each kept with its account id for

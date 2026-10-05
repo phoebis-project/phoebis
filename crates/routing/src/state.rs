@@ -56,6 +56,28 @@ impl EvidenceSource {
     }
 }
 
+/// Where a window's reading came from: a response head, the usage poll, the registry at start (which keeps no
+/// origin), or the router's own prediction once a charge or a passed reset moved the stored reading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowSource {
+    Head,
+    Poll,
+    Predicted,
+    Stored,
+}
+
+impl WindowSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WindowSource::Head => "head",
+            WindowSource::Poll => "poll",
+            WindowSource::Predicted => "predicted",
+            WindowSource::Stored => "stored",
+        }
+    }
+}
+
 #[derive(Clone, Debug, PartialEq)]
 pub struct OverageEvidence {
     pub in_use: bool,
@@ -140,6 +162,7 @@ pub struct WindowReading {
     pub utilization: f64,
     pub reset: Option<i64>,
     pub observed_at: i64,
+    pub source: WindowSource,
 }
 
 /// The fast lane's two buckets, per organization and shared by every fast-capable model, so the names carry no
@@ -736,6 +759,7 @@ impl RoutingState {
                     utilization: row.utilization,
                     reset: row.reset,
                     observed_at: row.observed_at,
+                    source: WindowSource::Stored,
                 },
             );
         }
@@ -1203,7 +1227,8 @@ impl RoutingState {
     /// with none named: the reading, plus the share of the router's own requests completed on the account since
     /// it was observed. At or past the reset: zero plus the share of the requests completed since the reset; a
     /// weekly window's reset advanced by whole weeks past `now`, a 5-hour window's `None` until the next reading
-    /// names one. `None` while the account holds no reading of the window.
+    /// names one. A reading the router's own figure moved names `Predicted` as its source; one nothing moved keeps
+    /// its own. `None` while the account holds no reading of the window.
     pub fn predicted(&self, account_id: &str, window: &str, now: i64) -> Option<WindowReading> {
         let reading = self.samples.get(account_id)?.reading(window)?;
         let charges = self
@@ -1227,18 +1252,28 @@ impl RoutingState {
                         utilization: since(next - WEEK_MS),
                         reset: Some(next),
                         observed_at: reading.observed_at,
+                        source: WindowSource::Predicted,
                     })
                 }
                 _ => Some(WindowReading {
                     utilization: since(reset),
                     reset: None,
                     observed_at: reading.observed_at,
+                    source: WindowSource::Predicted,
                 }),
             },
-            _ => Some(WindowReading {
-                utilization: reading.utilization + since(reading.observed_at),
-                ..reading
-            }),
+            _ => {
+                let charged = since(reading.observed_at);
+                Some(WindowReading {
+                    utilization: reading.utilization + charged,
+                    source: if charged != 0.0 {
+                        WindowSource::Predicted
+                    } else {
+                        reading.source
+                    },
+                    ..reading
+                })
+            }
         }
     }
 
@@ -2116,6 +2151,7 @@ mod tests {
             utilization,
             reset: None,
             observed_at,
+            source: WindowSource::Head,
         };
         state.record_sample(
             "a",
@@ -2187,6 +2223,7 @@ mod tests {
             utilization: 0.5,
             reset: None,
             observed_at,
+            source: WindowSource::Head,
         };
         // The account is present, so only the bucket cut can empty its map.
         let snapshot = RegistrySnapshot::from_load(
@@ -2272,6 +2309,7 @@ mod tests {
                 utilization: 0.9,
                 reset: Some(1_400),
                 observed_at: 1_000,
+                source: WindowSource::Head,
             },
         )
         .with(
@@ -2280,6 +2318,7 @@ mod tests {
                 utilization: 0.3,
                 reset: None,
                 observed_at: 1_000,
+                source: WindowSource::Head,
             },
         );
         assert_eq!(
@@ -2322,6 +2361,7 @@ mod tests {
                     utilization,
                     reset,
                     observed_at: at,
+                    source: WindowSource::Poll,
                 },
             ),
         );
@@ -2353,6 +2393,7 @@ mod tests {
                         utilization: 0.0,
                         reset: Some(reset + (weeks + 1) * WEEK_MS),
                         observed_at,
+                        source: WindowSource::Predicted,
                     }),
                     "{window} past its reset by {weeks} whole weeks"
                 );
@@ -2372,6 +2413,7 @@ mod tests {
                 utilization: 0.0,
                 reset: None,
                 observed_at: 1_000,
+                source: WindowSource::Predicted,
             }),
             "at the reset the window reads zero, and the next reading names the reset after it"
         );
@@ -2401,6 +2443,7 @@ mod tests {
                     utilization: 0.55,
                     reset: Some(HOUR_MS),
                     observed_at: 2_500,
+                    source: WindowSource::Poll,
                 },
             ),
         );
@@ -2430,11 +2473,79 @@ mod tests {
                 utilization: 0.7,
                 reset: None,
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             }),
             "no reset named: the reading stands however old it is"
         );
         read(&mut state, FIVE_HOUR, 0.2, None, 2_000);
         assert!((utilization(&state, FIVE_HOUR, 1_000 + 3 * WEEK_MS) - 0.2).abs() < CLOSE);
+    }
+
+    #[test]
+    fn a_reading_restored_at_start_reads_stored_and_a_charge_turns_it_predicted() {
+        let mut state = RoutingState::from_load(RoutingLoad {
+            windows: vec![phoebis_store::WindowRow {
+                account_id: "a".into(),
+                incarnation: 1,
+                observed_at: 1_000,
+                reset: Some(HOUR_MS),
+                utilization: 0.5,
+                window: FIVE_HOUR.into(),
+            }],
+            ..RoutingLoad::default()
+        });
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 2_000),
+            Some(WindowReading {
+                utilization: 0.5,
+                reset: Some(HOUR_MS),
+                observed_at: 1_000,
+                source: WindowSource::Stored,
+            }),
+            "the registry keeps no origin, and nothing has moved the restored reading"
+        );
+        state.charge("a", 3_000, &[(FIVE_HOUR, 0.25)]);
+        let moved = state
+            .predicted("a", FIVE_HOUR, 4_000)
+            .expect("the account holds a reading of the window");
+        assert_eq!(
+            moved.source,
+            WindowSource::Predicted,
+            "the router's own use since the reading moved it"
+        );
+        assert!((moved.utilization - 0.75).abs() < CLOSE);
+    }
+
+    #[test]
+    fn a_reading_past_its_reset_is_predicted_from_the_router_s_own_use() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        read(&mut state, FIVE_HOUR, 0.5, Some(5_000), 1_000);
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 4_000).map(|r| r.source),
+            Some(WindowSource::Poll),
+            "before its reset, with nothing charged, the reading stands as the poll read it"
+        );
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 5_000),
+            Some(WindowReading {
+                utilization: 0.0,
+                reset: None,
+                observed_at: 1_000,
+                source: WindowSource::Predicted,
+            }),
+            "at the reset the window reads zero, the router's own figure"
+        );
+        state.charge("a", 6_000, &[(FIVE_HOUR, 0.125)]);
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 7_000),
+            Some(WindowReading {
+                utilization: 0.125,
+                reset: None,
+                observed_at: 1_000,
+                source: WindowSource::Predicted,
+            }),
+            "past the reset the window reads the share completed since it"
+        );
     }
 
     #[test]
@@ -2542,6 +2653,7 @@ mod tests {
                             utilization: *utilization,
                             reset: None,
                             observed_at: 2_000,
+                            source: WindowSource::Poll,
                         },
                     )
                 },

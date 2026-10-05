@@ -32,6 +32,25 @@ impl AffinityEntry {
     }
 }
 
+/// One boundary the rung walk visited, deepest first: the gate's verdict beside the entry, so a record names each
+/// member's deepest entry whether or not the rung took it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Visited<'a> {
+    pub depth: u32,
+    pub hash: &'a str,
+    pub entry: &'a AffinityEntry,
+    /// `None` for an entry the gate accepted; the gate's name otherwise.
+    pub refused_by: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RungWalk<'a> {
+    /// The index into `visited` of the deepest accepted entry, what `deepest` answers; `None` when every entry
+    /// was refused or no boundary has one.
+    pub matched: Option<usize>,
+    pub visited: Vec<Visited<'a>>,
+}
+
 /// What a completed inference or probe answer reports: its conversation's links always, and the cache facts
 /// per tier when the response carries any.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -186,6 +205,34 @@ impl AffinityMap {
                 let entry = self.entry(canonical_model, boundary)?;
                 accept(entry).then_some((index as u32 + 1, entry))
             })
+    }
+
+    /// Every boundary with an entry for the model, from the last boundary to the first, each judged by `gate`
+    /// (`None` accepts, `Some(name)` refuses). Every entry is judged, not only those down to the match, so the
+    /// record reads a member's standing at a depth the rung never reached.
+    pub fn walk<'a>(
+        &'a self,
+        canonical_model: &str,
+        boundaries: &'a [String],
+        gate: impl Fn(&'a AffinityEntry) -> Option<&'static str>,
+    ) -> RungWalk<'a> {
+        let mut walk = RungWalk::default();
+        for (index, boundary) in boundaries.iter().enumerate().rev() {
+            let Some(entry) = self.entry(canonical_model, boundary) else {
+                continue;
+            };
+            let refused_by = gate(entry);
+            if refused_by.is_none() && walk.matched.is_none() {
+                walk.matched = Some(walk.visited.len());
+            }
+            walk.visited.push(Visited {
+                depth: index as u32 + 1,
+                hash: boundary,
+                entry,
+                refused_by,
+            });
+        }
+        walk
     }
 
     /// Upserts the report's boundaries; answers the rows to persist (new or moved).
@@ -546,6 +593,47 @@ mod tests {
             .deepest("m", &boundaries, |e| e.account_id != "a3")
             .expect("the third boundary is accepted");
         assert_eq!(depth, 3);
+    }
+
+    #[test]
+    fn the_walk_judges_every_entry_and_matches_the_deepest_accepted() {
+        let mut map = AffinityMap::default();
+        for (boundary, account) in [("b1", "a1"), ("b2", "a1"), ("b3", "a2")] {
+            map.record(&AffinityReport {
+                message_boundaries: Arc::from([boundary.to_string()]),
+                ..report("k", account, 1_000)
+            });
+        }
+        let boundaries: Vec<String> = ["b1", "b2", "b3"].iter().map(|s| s.to_string()).collect();
+        let gate = |e: &AffinityEntry| (e.account_id == "a2").then_some("expired");
+        let walk = map.walk("m", &boundaries, gate);
+        assert_eq!(
+            walk.visited
+                .iter()
+                .map(|v| (v.depth, v.hash, v.entry.account_id.as_str(), v.refused_by))
+                .collect::<Vec<_>>(),
+            vec![
+                (3, "b3", "a2", Some("expired")),
+                (2, "b2", "a1", None),
+                (1, "b1", "a1", None),
+            ],
+            "every entry is judged, deepest first, past the match as well"
+        );
+        assert_eq!(walk.matched, Some(1));
+        assert_eq!(
+            map.deepest("m", &boundaries, |e| gate(e).is_none())
+                .map(|(depth, _)| depth),
+            Some(walk.visited[1].depth),
+            "the match is the entry `deepest` answers under the same gate"
+        );
+    }
+
+    #[test]
+    fn the_walk_of_a_chain_with_no_entry_is_empty() {
+        let mut map = AffinityMap::default();
+        map.record(&report("k", "a1", 1_000));
+        let boundaries: Vec<String> = ["x1", "x2"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(map.walk("m", &boundaries, |_| None), RungWalk::default());
     }
 
     #[test]

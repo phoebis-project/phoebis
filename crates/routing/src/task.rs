@@ -23,7 +23,8 @@ use crate::select::{release_reasons, select, MigrateReason, Refusal, SelectReque
 use crate::state::{
     burn_folded, is_plan_window, AccountTicket, CreditsState, EvidenceSource, InFlight,
     MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
-    StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
 };
 use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
@@ -3057,6 +3058,7 @@ pub fn sample_from_usage(
                     utilization: utilization / 100.0,
                     reset: window.resets_at,
                     observed_at: snapshot.fetched_at,
+                    source: WindowSource::Poll,
                 },
             );
         }

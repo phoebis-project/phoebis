@@ -371,6 +371,9 @@ async fn select_main(r: &Rig) -> SelectResult {
     let lane = lane_key(&model, "standard", "adaptive", "-");
     r.h.router
         .select(SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "desktop".into(),
             key_generation: key.created_at,
             agent_id: "main".into(),
@@ -695,6 +698,9 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
     .unwrap();
     r.h.router
         .select(SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "desktop".into(),
             key_generation: key.created_at,
             agent_id: "main".into(),
@@ -1228,6 +1234,9 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
     let answer =
         r.h.router
             .select(SelectRequest {
+                request_id: "r-1".into(),
+                attempt: 1,
+                seq: 1,
                 key_id: pin.key_id.clone(),
                 key_generation: key.created_at,
                 agent_id: pin.agent_id.clone(),
