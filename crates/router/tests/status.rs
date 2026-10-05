@@ -406,8 +406,11 @@ async fn a_route_that_never_answers_ends_each_read_at_the_deadline() {
     drop(silent);
 }
 
-/// A loopback listener answering every request with `status` and an `{"error"}` body, counting the connections.
-async fn answering(status: &'static str) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
+/// A loopback listener answering every request with `status` and `body`, counting the connections.
+async fn answering(
+    status: &'static str,
+    body: String,
+) -> (u16, std::sync::Arc<std::sync::atomic::AtomicUsize>) {
     use tokio::io::{AsyncReadExt, AsyncWriteExt};
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let port = listener.local_addr().unwrap().port();
@@ -426,7 +429,6 @@ async fn answering(status: &'static str) -> (u16, std::sync::Arc<std::sync::atom
                 }
                 head.extend_from_slice(&chunk[..read]);
             }
-            let body = format!(r#"{{"error":"refused for the test, {status}"}}"#);
             let answer = format!(
                 "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n{body}",
                 body.len()
@@ -458,7 +460,8 @@ async fn a_refused_secret_or_a_throttled_login_is_asked_once_and_named_in_every_
             5,
         ),
     ] {
-        let (port, calls) = answering(status_line).await;
+        let body = format!(r#"{{"error":"refused for the test, {status_line}"}}"#);
+        let (port, calls) = answering(status_line, body).await;
         let client = {
             let _env = env_lock();
             std::env::set_var("TEST_STATUS_ONCE", ADMIN_SECRET);
@@ -489,5 +492,36 @@ async fn a_refused_secret_or_a_throttled_login_is_asked_once_and_named_in_every_
             calls_wanted,
             "{status_line}: a refusal of the secret is asked once, any other refusal per read"
         );
+    }
+}
+
+#[tokio::test]
+async fn a_listener_that_answers_something_else_is_named_as_answering() {
+    let (port, _calls) = answering("200 OK", "hello".to_owned()).await;
+    let client = {
+        let _env = env_lock();
+        std::env::set_var("TEST_STATUS_STRANGER", ADMIN_SECRET);
+        AdminClient::from_flags(
+            &Common {
+                ca: None,
+                json: false,
+                secret_env: Some("TEST_STATUS_STRANGER".to_owned()),
+                timeout: 10,
+                url: Some(format!("http://127.0.0.1:{port}")),
+            },
+            Path::new("absent.yaml"),
+        )
+        .unwrap()
+    };
+    let reads = status::read(&client, None, Duration::from_secs(10)).await;
+    let line = format!("http://127.0.0.1:{port}: answered 200 with a body that is not JSON");
+    for (name, read) in [
+        ("system", &reads.system),
+        ("attention", &reads.attention),
+        ("pools", &reads.pools),
+        ("accounts", &reads.accounts),
+        ("sessions", &reads.sessions),
+    ] {
+        assert_eq!(read.as_ref().err(), Some(&line), "{name}");
     }
 }

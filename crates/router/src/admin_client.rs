@@ -62,6 +62,9 @@ pub enum ClientError {
     Refused401,
     #[error("{status} {message}")]
     Refused { status: u16, message: String },
+    /// The listener answered, with a body that is not JSON: something other than the admin API holds the address.
+    #[error("{url}: answered {status} with a body that is not JSON")]
+    NotJson { url: String, status: u16 },
     #[error("{url}: {reason}")]
     Transport { url: String, reason: String },
 }
@@ -223,11 +226,9 @@ impl AdminClient {
         let body = if bytes.is_empty() {
             serde_json::Value::Null
         } else {
-            serde_json::from_slice(&bytes).map_err(|_| {
-                transport(format!(
-                    "answered {} with a body that is not JSON",
-                    status.as_u16()
-                ))
+            serde_json::from_slice(&bytes).map_err(|_| ClientError::NotJson {
+                url: self.url(),
+                status: status.as_u16(),
             })?
         };
         Ok(Answer {
