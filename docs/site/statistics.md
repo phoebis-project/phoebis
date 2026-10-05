@@ -181,10 +181,11 @@ included, whether or not the router dropped it on the way upstream.
 A batch the ledger cannot write is retried in place after 1, 2, 4 and 8 seconds, then one record at a time; a record the
 file as a whole refuses (a corrupt, full, read-only or unopenable file, an I/O error) is held and retried every 10
 seconds until it lands; a record that fails on its own is dropped with a `ledger_gap` when it carries no money and
-parked in the ledger file when it does, and every parked record is tried again once at the next start. A parked record
-keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while its
-cost is kept. While a batch is under retry the ledger is degraded: the system page shows it, `phoebis_ledger_degraded`
-reads 1, and routing treats every budgeted member's spend as unknown until a batch lands and the spend is read again.
+parked in the ledger file when it does, and every parked record is tried again once at the next start, leaving the file
+in the transaction that lands it, so its charge counts once. A parked record keeps its request and attempt rows and not
+its captured bodies, so the capture of a parked request is gone while its cost is kept. While a batch is under retry the
+ledger is degraded: the system page shows it, `phoebis_ledger_degraded` reads 1, and routing treats every budgeted
+member's spend as unknown until a batch lands and the spend is read again.
 
 The routing state writer is bounded the same way: a stalled registry file leaves its writes in memory, coalesced per
 row, and the system page's `router.writer` reads `degraded` until they drain. A batch the registry file as a whole

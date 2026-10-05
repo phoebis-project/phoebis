@@ -14,7 +14,9 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex};
 
 use crate::assemble::{Assembler, Record};
 use crate::bodies::{request_cutoff, run_retention};
-use crate::db::{begin_write, insert_event_in, insert_request_in, insert_samples_in};
+use crate::db::{
+    begin_write, delete_parked_in, insert_event_in, insert_request_in, insert_samples_in,
+};
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
@@ -779,8 +781,9 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
     }
 }
 
-/// Every parked record is tried once at start, in the order it was parked, each in its own transaction: one that
-/// lands leaves the table and is observed as a landed record; one that fails keeps its row with the error it met
+/// Every parked record is tried once at start, in the order it was parked, each in its own transaction, which deletes
+/// the parked row as it lands the record, so a replay is charged once however the process fares between the two: one
+/// that lands leaves the table and is observed as a landed record; one that fails keeps its row with the error it met
 /// this time.
 async fn land_parked(
     db: &Arc<LedgerDb>,
@@ -813,7 +816,7 @@ async fn land_parked(
                     attempts: parked.attempts,
                     bodies: None,
                 }]);
-                land(db, pricing, stats, metrics, &batch, 0..1).await
+                land_acknowledging(db, pricing, stats, metrics, &batch, 0..1, Some(row.id)).await
             }
             Err(error) => Landed::Refused {
                 database_wide: false,
@@ -824,7 +827,7 @@ async fn land_parked(
         let settled = match outcome {
             Landed::Written => {
                 landed += 1;
-                blocking(db, move |db| db.delete_parked(id)).await
+                Ok(())
             }
             Landed::Refused { error, .. } => {
                 kept += 1;
@@ -1032,6 +1035,21 @@ async fn land(
     batch: &Batch,
     range: Range<usize>,
 ) -> Landed {
+    land_acknowledging(db, pricing, stats, metrics, batch, range, None).await
+}
+
+/// `land`, deleting the parked row the batch replays in the record's own transaction. A row deleted after the commit
+/// could outlive its landing, through a failed delete or a retention pass that cut the raw rows, and the next start
+/// would charge the record again; a row deleted ahead of a failed commit would lose the money.
+async fn land_acknowledging(
+    db: &Arc<LedgerDb>,
+    pricing: &Arc<Pricing>,
+    stats: &Arc<LedgerStats>,
+    metrics: &Arc<Metrics>,
+    batch: &Batch,
+    range: Range<usize>,
+    parked: Option<i64>,
+) -> Landed {
     let db = db.clone();
     let pricing = pricing.clone();
     let records = batch.clone();
@@ -1083,6 +1101,9 @@ async fn land(
                         });
                     }
                 }
+            }
+            if let Some(id) = parked {
+                delete_parked_in(&tx, id)?;
             }
             tx.commit()?;
             Ok::<(), LedgerError>(())

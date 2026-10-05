@@ -14,10 +14,10 @@ use phoebis_bus::{
     ResponseFacts, Usage, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_ledger::{
-    list_requests, member_spends, parked_count, parked_summary, Assembler, AttemptRecord,
-    AttentionGauges, BodyRecord, BudgetedMember, EventRecord, LedgerConfig, LedgerDb, LedgerError,
-    LiveKeys, ParkedSummary, PriceTable, Record, RequestFilter, RequestRecord, BATCH_RETRY_DELAYS,
-    BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
+    list_requests, member_spends, parked_count, parked_summary, run_retention, Assembler,
+    AttemptRecord, AttentionGauges, BodyRecord, BudgetedMember, EventRecord, LedgerConfig,
+    LedgerDb, LedgerError, LiveKeys, ParkedSummary, PriceTable, Record, RequestFilter,
+    RequestRecord, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
 };
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{BudgetPeriod, MemberWrite, StorageKey, Store};
@@ -3639,6 +3639,17 @@ fn refuse_parking(db: &LedgerDb) {
     .unwrap();
 }
 
+/// A trigger that refuses every delete from `parked_records`.
+fn refuse_parked_deletes(db: &LedgerDb) {
+    db.write(|c| {
+        c.execute_batch(
+            "CREATE TRIGGER refuse_ack BEFORE DELETE ON parked_records BEGIN SELECT RAISE(ABORT, 'acknowledgement refused by test'); END;",
+        )?;
+        Ok(())
+    })
+    .unwrap();
+}
+
 fn drop_trigger(db: &LedgerDb, name: &str) {
     db.write(|c| {
         c.execute_batch(&format!("DROP TRIGGER {name};"))?;
@@ -4398,6 +4409,67 @@ async fn a_parked_record_refused_again_at_the_start_keeps_its_row_with_this_star
     );
     assert_eq!(parked_rows(&h).await, 1);
     assert!(h.db.request("poison").await.unwrap().is_none());
+    up.shutdown().await;
+}
+
+/// The parked row leaves in the transaction that lands its record. A start whose acknowledgement the database refuses
+/// lands nothing, so the record stays parked past a retention pass that would have cut its raw rows, and the start that
+/// lands it charges it once.
+#[tokio::test]
+async fn a_parked_record_whose_acknowledgement_is_refused_is_charged_once() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    park_in_file(&path, "parked", "an earlier error", 0);
+    refuse_parked_deletes(&LedgerDb::open(&path).unwrap());
+    let store = fresh_store();
+    let h = on_disk(&up, store.clone(), &path, quick()).await;
+    // The start's try is over once the row records it, or once the record landed beside it.
+    wait_for_async(Duration::from_secs(5), || async {
+        let tried =
+            h.db.read(|c| {
+                Ok(c.query_row("SELECT error FROM parked_records", [], |r| {
+                    r.get::<_, String>(0)
+                })?)
+            })
+            .await
+            .unwrap()
+                != "an earlier error";
+        let landed = h.db.request("parked").await.unwrap().is_some();
+        (tried || landed).then_some(())
+    })
+    .await;
+    h.ledger.clone().shutdown().await.unwrap();
+    drop_trigger(&h.db, "refuse_ack");
+    // A pass past the raw window: the request and attempt rows go, the rollups stay.
+    let later = NOW + 91 * 86_400_000;
+    run_retention(h.db.clone(), LedgerConfig::default(), later, Vec::new())
+        .await
+        .unwrap();
+    drop(h);
+    let h = on_disk(&up, store, &path, quick()).await;
+    wait_for_async(Duration::from_secs(5), || async {
+        (parked_rows(&h).await == 0).then_some(())
+    })
+    .await;
+    let (_, attempts) =
+        h.db.request("parked")
+            .await
+            .unwrap()
+            .expect("the start landed the parked record");
+    assert_eq!(attempts[0].input_tokens, Some(1_000_000));
+    let charged: i64 = h
+        .db
+        .read(|c| {
+            Ok(c.query_row(
+                "SELECT COALESCE(SUM(input_tokens), 0) FROM rollups_hourly WHERE pool_id = 'main' AND account_id = 'a'",
+                [],
+                |r| r.get(0),
+            )?)
+        })
+        .await
+        .unwrap();
+    assert_eq!(charged, 1_000_000, "the parked charge contributes once");
     up.shutdown().await;
 }
 

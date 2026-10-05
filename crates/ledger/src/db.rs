@@ -270,13 +270,6 @@ impl LedgerDb {
         })
     }
 
-    pub(crate) fn delete_parked(&self, id: i64) -> Result<(), LedgerError> {
-        self.write(|conn| {
-            conn.execute("DELETE FROM parked_records WHERE id = ?1", params![id])?;
-            Ok(())
-        })
-    }
-
     /// Records the failure a parked row met at this start's try.
     pub(crate) fn update_parked(&self, id: i64, error: &str, at: i64) -> Result<(), LedgerError> {
         self.write(|conn| {
@@ -404,6 +397,14 @@ impl LedgerDb {
 /// or once that one committed past its snapshot, and its batch would be lost rather than wait.
 pub(crate) fn begin_write(conn: &mut Connection) -> rusqlite::Result<Transaction<'_>> {
     conn.transaction_with_behavior(TransactionBehavior::Immediate)
+}
+
+/// Deletes a parked row inside the transaction that lands its record, so the two commit or roll back together: a row
+/// deleted on its own after the commit could outlive a landing the file then loses, and the next start would land the
+/// record again.
+pub(crate) fn delete_parked_in(tx: &Transaction<'_>, id: i64) -> Result<(), LedgerError> {
+    tx.execute("DELETE FROM parked_records WHERE id = ?1", params![id])?;
+    Ok(())
 }
 
 pub(crate) fn insert_samples_in(
