@@ -1532,6 +1532,67 @@ async fn a_lost_response_then_an_invalid_grant_marks_the_account_and_fails_over(
     up.shutdown().await;
 }
 
+/// A re-authentication mark the refresh lands is authoritative over the credential cache and the routing snapshot
+/// alike: the next request selects past the marked account rather than dialing it on the token the cache still holds.
+#[tokio::test]
+async fn a_marked_account_is_not_dialed_again_on_its_cached_token() {
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 400,
+                headers: vec![],
+                body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    // The first leg's 401 alone; every inference after it answers 200.
+    up.set_rule_after(1, "/v1/messages", json_200());
+    let h = two_accounts(&up).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200, "the request fails over to b");
+    resp.into_body().collect().await.unwrap();
+    wait_for(Duration::from_secs(5), || {
+        (h.store.account("a").unwrap().unwrap().state == AccountState::ReauthRequired).then_some(())
+    })
+    .await;
+    assert_eq!(credentials_seen(&up), [A, B]);
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s2"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        outcome(&resp).account_id,
+        "b",
+        "the marked account is not selected"
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        credentials_seen(&up),
+        [A, B, B],
+        "nothing dials the marked account on its cached token"
+    );
+    assert_eq!(
+        token_posts(&up),
+        1,
+        "the marked account is not refreshed again"
+    );
+    up.shutdown().await;
+}
+
 #[tokio::test]
 async fn six_accounts_with_lost_refresh_answers_hold_once_and_answer_within_the_deadline() {
     const D: &str = "sk-ant-oat01-DDDD";

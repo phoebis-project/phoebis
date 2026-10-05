@@ -2614,11 +2614,13 @@ impl Relay {
                                     | AcquireError::ReauthRequired
                                     | AcquireError::Unpaired
                             );
-                            if matches!(error, AcquireError::ReauthRequired) {
-                                ctx.auth_marked = true;
-                            }
                             if marked || tries == 2 {
-                                break (None, None, !marked);
+                                // A disconnect reached the registry through the admin's own reload; the
+                                // re-authentication mark is the manager's store write alone, so it is reported
+                                // for the snapshot to leave `ready` before the next selection.
+                                let mark = matches!(error, AcquireError::ReauthRequired)
+                                    .then_some(AccountState::ReauthRequired);
+                                break (None, mark, !marked);
                             }
                             // One wait on the same account, bounded by the manager's own rule: a short refusal
                             // clears in seconds and a token endpoint's bad minute in a minute, both cheaper than

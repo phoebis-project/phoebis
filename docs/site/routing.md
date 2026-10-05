@@ -627,7 +627,9 @@ fresh one; any other failover moves the pin. The failover, its waits included, s
 deadline, ten minutes less a margin: past it the request is answered `503 accounts_unavailable` rather than tried on
 another account. The attempt rows read `auth_failed` with the upstream status, and the account reads `reauth_required`
 after a conclusive failure (a rejected replay, an `invalid_grant`, a token endpoint's `401`), which the Accounts view
-and the `reauth_required` attention condition show.
+and the `reauth_required` attention condition show. The mark leaves selection at once: the routing snapshot reads it
+before the next selection, and the credential cache refuses the marked credential rather than serving the token it
+still held until that token neared its expiry.
 
 A stream commits at its `message_start` event or its first `error` event, whichever comes first; earlier events
 are buffered, up to 64 KiB, and relayed after commit in order; a stream that exceeds the buffer or sends no

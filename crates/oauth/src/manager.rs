@@ -147,19 +147,55 @@ enum Read {
     Inline,
 }
 
-/// A bundle the manager read or committed, with the lineage it belongs to: the holder's incarnation and lifecycle
-/// generation beside the bundle's own generation, since a recreated id and a reconnected slot both restart the
-/// generation at 1 and a figure read alone would match the old holder's bundle.
-struct BundleEntry {
+/// Where a bundle stands in the registry: the holder's incarnation and lifecycle generation beside the bundle's own
+/// generation, since a recreated id and a reconnected slot both restart the generation at 1 and a figure read alone
+/// would match the old holder's bundle.
+#[derive(Clone, Copy, PartialEq, Eq)]
+struct Lineage {
     incarnation: u64,
     lifecycle_generation: u64,
     generation: u64,
+}
+
+impl Lineage {
+    /// Whether the lineage is the row's holder and slot, at whatever generation.
+    fn of_row(&self, account: &AccountRow) -> bool {
+        self.incarnation == account.incarnation
+            && self.lifecycle_generation == account.lifecycle_generation
+    }
+}
+
+/// A bundle the manager read or committed, under its lineage.
+struct BundleEntry {
+    lineage: Lineage,
     bundle: Arc<CredentialBundle>,
 }
 
+/// An account's place in the cache.
+#[derive(Default)]
+struct CacheSlot {
+    /// The bundle the account's acquisitions answer from while its lineage holds, so a leg pays no registry read.
+    entry: Option<BundleEntry>,
+    /// The lineage whose refresh the token endpoint refused for good. The mark is the store's alone until the next
+    /// reload, while the rows the legs carry still read `ready`, and the bundle stored under the lineage is the one
+    /// the mark is about: a miss on it is refused rather than read. A credential committed past it, by a pairing or a
+    /// disconnect, ends the refusal.
+    refused: Option<Lineage>,
+}
+
+impl CacheSlot {
+    /// Whether a miss for the row answers the recorded refusal: the row is the refused holder and slot, and the
+    /// caller expects no generation past the refused one, which only a pairing committed since could have produced.
+    fn refuses(&self, account: &AccountRow, expected: Option<u64>) -> bool {
+        self.refused.is_some_and(|refused| {
+            refused.of_row(account)
+                && expected.is_none_or(|expected| expected <= refused.generation)
+        })
+    }
+}
+
 struct Inner {
-    /// The bundle each account's acquisitions answer from while its lineage holds, so a leg pays no registry read.
-    bundles: Mutex<HashMap<String, BundleEntry>>,
+    bundles: Mutex<HashMap<String, CacheSlot>>,
     clock: Clock,
     control: Arc<ControlClient>,
     /// Set by `drain` under the `inflight` lock, so no refresh starts outside the set it waits for.
@@ -306,7 +342,8 @@ impl CredentialManager {
     }
 
     /// Drops the account's cached bundle: a credential committed from outside the manager (a pairing, a
-    /// disconnect) is served on the next call rather than after the cached one expires.
+    /// disconnect) is served on the next call rather than after the cached one expires. A refusal recorded against
+    /// the replaced credential goes with it.
     pub fn invalidate(&self, account_id: &str) {
         self.inner
             .bundles
@@ -528,17 +565,21 @@ impl Inner {
         expected: Option<u64>,
         read: Read,
     ) -> Result<Arc<CredentialBundle>, AcquireError> {
-        let cached = self
-            .bundles
-            .lock()
-            .expect(LOCK_POISONED)
-            .get(&account.id)
-            .filter(|entry| {
-                entry.incarnation == account.incarnation
-                    && entry.lifecycle_generation == account.lifecycle_generation
-                    && expected.is_none_or(|expected| entry.generation >= expected)
-            })
-            .map(|entry| entry.bundle.clone());
+        let cached = {
+            let bundles = self.bundles.lock().expect(LOCK_POISONED);
+            let slot = bundles.get(&account.id);
+            let hit = slot
+                .and_then(|slot| slot.entry.as_ref())
+                .filter(|entry| {
+                    entry.lineage.of_row(account)
+                        && expected.is_none_or(|expected| entry.lineage.generation >= expected)
+                })
+                .map(|entry| entry.bundle.clone());
+            if hit.is_none() && slot.is_some_and(|slot| slot.refuses(account, expected)) {
+                return Err(AcquireError::ReauthRequired);
+            }
+            hit
+        };
         if let Some(bundle) = cached {
             return Ok(bundle);
         }
@@ -561,28 +602,32 @@ impl Inner {
     }
 
     /// Keeps `bundle` as the account's entry under the row's incarnation. A bundle of another lifecycle than the
-    /// row's is left out, since its lineage is not the row's to vouch for; and an entry the same lineage holds at a
-    /// newer generation stays, since a read that lost a race to a refresh commit would put the older one back.
+    /// row's is left out, since its lineage is not the row's to vouch for; an entry the same lineage holds at a
+    /// newer generation stays, since a read that lost a race to a refresh commit would put the older one back; and a
+    /// bundle at or under a refused generation is left out the same way, since a read that returned it lost to the
+    /// mark, while one past it is a pairing's and ends the refusal.
     fn remember(&self, account: &AccountRow, bundle: Arc<CredentialBundle>) {
         if bundle.lifecycle_generation != account.lifecycle_generation {
             return;
         }
+        let lineage = Lineage {
+            incarnation: account.incarnation,
+            lifecycle_generation: bundle.lifecycle_generation,
+            generation: bundle.generation,
+        };
         let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
-        let newer = bundles.get(&account.id).is_some_and(|entry| {
-            entry.incarnation == account.incarnation
-                && entry.lifecycle_generation == bundle.lifecycle_generation
-                && entry.generation > bundle.generation
+        let slot = bundles.entry(account.id.clone()).or_default();
+        if let Some(refused) = slot.refused.filter(|refused| refused.of_row(account)) {
+            if lineage.generation <= refused.generation {
+                return;
+            }
+            slot.refused = None;
+        }
+        let newer = slot.entry.as_ref().is_some_and(|entry| {
+            entry.lineage.of_row(account) && entry.lineage.generation > lineage.generation
         });
         if !newer {
-            bundles.insert(
-                account.id.clone(),
-                BundleEntry {
-                    incarnation: account.incarnation,
-                    lifecycle_generation: bundle.lifecycle_generation,
-                    generation: bundle.generation,
-                    bundle,
-                },
-            );
+            slot.entry = Some(BundleEntry { lineage, bundle });
         }
     }
 
@@ -936,14 +981,32 @@ impl Inner {
     /// away, or that a re-pairing replaced without one, must not lock out what took their place, and neither
     /// may one about a holder the id no longer has. A re-pair keeps the lifecycle generation, so the bundle
     /// generation this refresh was started against is the half of the fence that catches it.
+    ///
+    /// A mark that lands takes the cached bundle with it and refuses the lineage: the store knows the state, but the
+    /// rows the legs carry read `ready` until the next reload, and a miss that read the store would find the bundle
+    /// the mark is about and serve it to its expiry.
     fn mark_reauth(&self, account: &AccountRow, credential_generation: u64) {
-        let _ = self.store.set_state_if_generations(
-            &account.id,
-            AccountState::ReauthRequired,
-            account.incarnation,
-            account.lifecycle_generation,
-            credential_generation,
-        );
+        let landed = self
+            .store
+            .set_state_if_generations(
+                &account.id,
+                AccountState::ReauthRequired,
+                account.incarnation,
+                account.lifecycle_generation,
+                credential_generation,
+            )
+            .unwrap_or(false);
+        if !landed {
+            return;
+        }
+        let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
+        let slot = bundles.entry(account.id.clone()).or_default();
+        slot.entry = None;
+        slot.refused = Some(Lineage {
+            incarnation: account.incarnation,
+            lifecycle_generation: account.lifecycle_generation,
+            generation: credential_generation,
+        });
     }
 }
 
