@@ -1076,9 +1076,26 @@ async fn verifying_an_api_key_account_reports_the_upstream_status() {
 
 #[tokio::test]
 async fn a_refused_origin_answers_no_store_and_nosniff_and_a_login_needs_no_origin() {
-    use common::{cookie_of, get, post, send_with_host};
+    use common::{cookie_of, get, json, post, send_with_host};
     const HOST: &str = "phoebis.example";
     let (app, _up) = common::admin_app().await;
+    // A forced login is the one mutation an unauthenticated caller can reach, so the gate checks it too.
+    let forced = send_with_host(
+        &app,
+        "POST",
+        "/admin/session",
+        r#"{"secret":"admin-secret"}"#,
+        None,
+        "https://evil.example",
+        HOST,
+    )
+    .await;
+    assert_eq!(forced.status(), 403);
+    assert!(
+        forced.headers().get("set-cookie").is_none(),
+        "a refused login sets no cookie"
+    );
+    assert_eq!(json(forced).await["error"], "origin is not allowed");
     let login = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
     assert_eq!(
         login.status(),
