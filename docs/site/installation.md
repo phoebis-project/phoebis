@@ -315,7 +315,8 @@ Refused with:
 - `secret_env`: `environment variable {name} is unset or empty`
 - `tls`: `admin.tls is required when admin.listen leaves loopback; name a certificate pair or plain_http`, and
   `admin.tls: must be plain_http or a mapping with cert_file and key_file` under `the configuration is not valid YAML`
-  for any other value ([TLS on the listeners](#tls-on-the-listeners))
+  for any other word, a third key, or a mapping that lacks one of the two ([TLS on the
+  listeners](#tls-on-the-listeners))
 
 ### keepalive
 
@@ -359,7 +360,8 @@ Refused with:
 - `sign_cch_placeholder`: a YAML error for anything but a boolean
 - `tls`: `proxy.tls is required when proxy.listen leaves loopback; name a certificate pair or plain_http`, and
   `proxy.tls: must be plain_http or a mapping with cert_file and key_file` under `the configuration is not valid YAML`
-  for any other value ([TLS on the listeners](#tls-on-the-listeners))
+  for any other word, a third key, or a mapping that lacks one of the two ([TLS on the
+  listeners](#tls-on-the-listeners))
 - `upstream_gzip`: `proxy.upstream_gzip must be auto, on or off, not {value}`
 
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
@@ -414,8 +416,8 @@ PKCS#8 or the traditional RSA and EC forms. Under the service unit, keep both un
 beside the configuration, with the key at `0400` owned by uid 65532. A Tailscale certificate, a certificate from a LAN
 CA, or one an ACME client renews all serve.
 
-The start reads the pair once and never watches it; a renewal is stop, replace, start, and the 40-second drain bounds
-the gap.
+The start reads the pair once and never watches it; a renewal is stop, replace, start, and the 30-second drain, inside
+the 40-second stop grace, bounds the gap.
 
 `check-config` and the start refuse a listener off loopback without a `tls` value, and any value outside the two
 shapes, with:
@@ -610,7 +612,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Cooldown booking | Seven days ahead of each announcement; a later announcement books the next stretch. |
 | Decoded output | 1 MiB per stream chunk, 64 KiB for an inspected or buffered body, 4 MiB for a control-plane answer. |
 | Drain window | 30 seconds for requests still in flight on shutdown; a request still running then is ended. |
-| Header read timeout | 30 seconds for a connection's request head on all three listeners, the TLS handshake included. |
+| Header read timeout | 30 seconds for a request head on all three listeners, after the TLS handshake's own 30. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
 | Ledger channel | 4,096 records; `ledger_behind` at 2,048 queued; an event or sample past it drops as a `ledger_gap`. |

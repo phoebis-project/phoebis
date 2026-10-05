@@ -140,8 +140,8 @@ replaces the container, stopping the old one with the 40-second grace period tha
 binary migrates both databases on the volume as it opens them. `docker compose ps` reads `healthy` once
 `phoebis health` has read the router as ready, and `GET /admin/system` confirms the version.
 
-A certificate pair is read at start and never watched: a renewal is stop, replace, start, under the same 40-second
-drain.
+A certificate pair is read at start and never watched: a renewal is stop, replace, start, and the 30-second drain,
+inside the 40-second stop grace, bounds the gap.
 
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
 own transaction. The registry's migrations may drop or rebuild a table, and a ledger migration can rebuild a table
