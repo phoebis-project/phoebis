@@ -288,20 +288,20 @@ shared prefix, sized by the relay's estimate from the request's bytes, is at lea
 request carries or receives a cache marker, and the account is not at its cap, at or above the ceiling
 (`select_below_utilization`), at or above the shedding margin less its 0.05 band on its windows ahead of their pace
 (`shed_ahead_of_pace`, a subscription account), without room in its worst live rate-limit bucket (an Anthropic-key
-account: a reading at or above 1.0, whatever the margin), under the Pace floor, or winding down. A cooling account never
-reaches either rung, since the eligible set excludes it; a spent account is in the eligible set, and both rungs refuse
-it through the allowance check. A subagent under `with_main` lands its first request on its parent agent's pin in place
-of the static walk, and one under `by_strategy` skips the static walk; every case that finds no live match lands by the
-strategy. A held request of a subagent cohort waits where its cohort already is rather than on the strategy's own pick;
-a session already on an account, under any of its agents, is never held while that account can still serve. A token
-count is never placed and never held: it is bound to no cap and occupies no slot, so its pin or the strategy decides it.
-It creates no pin, since it touches no cache: a count with a pin follows it past the cap and the move rules, and one
-without lands by the strategy and leaves the agent's next message to be placed under the cap. An entry's warmth lasts
-the marker's TTL on its tier; when every marker of the request carried one TTL and the response reports its cache writes
-at the other alone, the reported TTL is the lifetime of the message boundaries that response wrote, and of the static
-boundaries only when the response read nothing from the cache, since the usage names no tier; a static tier the response
-read from and a tier it only read keep their marker's lifetime, and a request with markers at both TTLs keeps each
-marker's.
+account while a margin is set: a reading at or above 1.0, whatever its value), under the Pace floor, or winding down. A
+cooling account never reaches either rung, since the eligible set excludes it; a spent account is in the eligible set,
+and both rungs refuse it through the allowance check. A subagent under `with_main` lands its first request on its parent
+agent's pin in place of the static walk, and one under `by_strategy` skips the static walk; every case that finds no
+live match lands by the strategy. A held request of a subagent cohort waits where its cohort already is rather than on
+the strategy's own pick; a session already on an account, under any of its agents, is never held while that account can
+still serve. A token count is never placed and never held: it is bound to no cap and occupies no slot, so its pin or the
+strategy decides it. It creates no pin, since it touches no cache: a count with a pin follows it past the cap and the
+move rules, and one without lands by the strategy and leaves the agent's next message to be placed under the cap. An
+entry's warmth lasts the marker's TTL on its tier; when every marker of the request carried one TTL and the response
+reports its cache writes at the other alone, the reported TTL is the lifetime of the message boundaries that response
+wrote, and of the static boundaries only when the response read nothing from the cache, since the usage names no tier; a
+static tier the response read from and a tier it only read keep their marker's lifetime, and a request with markers at
+both TTLs keeps each marker's.
 
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is

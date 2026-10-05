@@ -10370,7 +10370,8 @@ fn an_anthropic_key_sibling_is_cool_while_its_bucket_holds_room() {
             .0,
         )
     };
-    // The margin's band sits at 0.15, far under a bucket that holds room, so only a reading of its own makes b cool.
+    // The margin's band sits at 0.15, far under a bucket that holds room, so b can read cool only by its bucket's
+    // line, never by the band.
     assert_eq!(
         run(0.95, false),
         ("b".into(), Some(MigrateReason::Spent)),

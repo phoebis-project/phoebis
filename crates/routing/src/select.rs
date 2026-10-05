@@ -1784,8 +1784,8 @@ fn account_ok(
 
 /// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
 /// post-partition selection set: under the cap, below `select_below_utilization` on the 5-hour window when the
-/// pool sets one, not winding down, above the Pace floor under Pace, and cool as `move_of`'s `cool` reads a
-/// migration destination.
+/// pool sets one, not winding down, above the Pace floor under Pace, and under `under_band`, the reading
+/// `move_of`'s `cool` takes for a migration destination.
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
