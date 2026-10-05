@@ -3135,6 +3135,48 @@ async fn a_malformed_expected_revision_on_a_key_answers_400_and_writes_nothing()
     }
 }
 
+// A stamp no row carries, which an edit would refuse as stale: a create has no row to fence on, so it lands.
+#[tokio::test]
+async fn a_pool_create_accepts_expected_revision_and_ignores_it() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","expected_revision":1}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(store.pool("main").unwrap().unwrap().label, "Main");
+}
+
+#[tokio::test]
+async fn a_key_create_accepts_expected_revision_and_ignores_it() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(
+        post(
+            &app,
+            "/admin/pools",
+            r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let created = post(
+        &app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main","expected_revision":1}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Desktop");
+}
+
 #[tokio::test]
 async fn a_key_edit_without_expected_revision_lands_as_today() {
     let (app, _up, store, _router) = common::admin_parts().await;
