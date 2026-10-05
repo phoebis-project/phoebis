@@ -74,6 +74,10 @@ impl ClientError {
 }
 
 /// Builds the runtime a subcommand runs on: one current-thread tokio runtime, since one call at a time is made.
+///
+/// A subcommand ends with `std::process::exit(code)` once it has printed its result, never by dropping this runtime: a
+/// host name in the URL resolves on tokio's blocking pool, the deadline abandons a lookup that hangs rather than
+/// cancelling it, and dropping the runtime waits for that thread, which would hold the exit past `--timeout`.
 pub fn runtime() -> std::io::Result<tokio::runtime::Runtime> {
     tokio::runtime::Builder::new_current_thread()
         .enable_all()
