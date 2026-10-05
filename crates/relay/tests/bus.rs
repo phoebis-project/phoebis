@@ -1003,7 +1003,9 @@ async fn a_subscriber_that_never_reads_drops_chunks_but_the_completion_waits_for
     // before the publisher waits on the sleeper, and every chunk went by before the completion: the drop count is
     // settled the moment the reader holds the completion, with nothing slept. The wait is the stream's own length,
     // its 4,097 one-millisecond gaps, which the drop needs to overfill the queue.
-    up.written(0).await;
+    tokio::time::timeout(Duration::from_secs(60), up.written(0))
+        .await
+        .expect("the stream's response is written whole");
     drain_until_complete(&mut reader).await;
     let dropped = sleeper.stats.dropped.load(Ordering::SeqCst);
     assert!(dropped > 0, "the queue filled and dropped");

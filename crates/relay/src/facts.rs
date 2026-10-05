@@ -720,6 +720,37 @@ mod tests {
         assert_eq!(facts.shape.message_count, 1);
     }
 
+    /// A lone surrogate at a sampled index reads as U+FFFD off the reading copy. The client's suffix decodes its
+    /// own units lossily, so the lone unit reads the same there and the cut conversation is no drift.
+    #[test]
+    fn a_lone_surrogate_at_a_sampled_index_reads_as_the_replacement_and_its_suffix_reproduces() {
+        let client_units = [0xD83D, u16::from(b'g'), u16::from(b't')];
+        let line = format!(
+            "x-anthropic-billing-header: cc_version={}; cc_entrypoint=cli;",
+            crate::billing::cc_version("2.1.269", client_units)
+        );
+        let body = format!(
+            r#"{{"model":"m","system":[{{"type":"text","text":"{line}"}}],"messages":[{{"role":"user","content":"abcd\ud83defghijklmnopqrstuvwxyz"}}]}}"#
+        );
+        assert!(serde_json::from_slice::<Value>(body.as_bytes()).is_err());
+        let facts = BodyFacts::read(body.as_bytes());
+        assert!(facts.carries_line);
+        assert_eq!(
+            facts.prompt_units,
+            [0xFFFD, u16::from(b'g'), u16::from(b't')]
+        );
+        assert_eq!(
+            crate::body::version_drift(
+                body.as_bytes(),
+                crate::body::VersionCheck {
+                    client_version: "2.1.269",
+                    prompt_units: facts.prompt_units,
+                }
+            ),
+            None
+        );
+    }
+
     #[test]
     fn whether_system_is_an_array_is_read_off_the_one_parse() {
         assert!(BodyFacts::read(br#"{"system":[],"messages":[]}"#).system_is_array);

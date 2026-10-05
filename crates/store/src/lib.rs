@@ -246,6 +246,8 @@ pub struct Store {
     key: StorageKey,
     _lock: Option<lock::ProcessLock>,
     #[cfg(any(test, feature = "debug-hooks"))]
+    credential_after_hold: Mutex<Option<Arc<HoldGate>>>,
+    #[cfg(any(test, feature = "debug-hooks"))]
     credential_hold: Mutex<Option<Arc<HoldGate>>>,
     #[cfg(any(test, feature = "debug-hooks"))]
     credential_reads: AtomicU64,
@@ -337,6 +339,8 @@ impl Store {
             key: key.clone(),
             _lock: Some(process_lock),
             #[cfg(any(test, feature = "debug-hooks"))]
+            credential_after_hold: Mutex::new(None),
+            #[cfg(any(test, feature = "debug-hooks"))]
             credential_hold: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             credential_reads: AtomicU64::new(0),
@@ -372,6 +376,8 @@ impl Store {
             conn: CountedMutex::new(conn),
             key: key.clone(),
             _lock: None,
+            #[cfg(any(test, feature = "debug-hooks"))]
+            credential_after_hold: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
             credential_hold: Mutex::new(None),
             #[cfg(any(test, feature = "debug-hooks"))]
@@ -587,6 +593,16 @@ impl Store {
         CredentialReadHold(gate)
     }
 
+    /// Parks the next OAuth `credentials` read once it has read, after the connection's lock is released, until the
+    /// hold drops: a commit and a reload the test lands under it postdate the credential the read answers.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_hold_after_next_credential_read(&self) -> CredentialReadHold {
+        let gate = Arc::new(HoldGate::default());
+        *self.credential_after_hold.lock().expect(HOLD_POISONED) = Some(gate.clone());
+        CredentialReadHold(gate)
+    }
+
     /// Parks the next fenced pool write before its lock until the hold drops, so a test can land another edit
     /// between a handler's read and its write.
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -636,6 +652,11 @@ impl Store {
     #[cfg(any(test, feature = "debug-hooks"))]
     fn park_on_credential_hold(&self) {
         park_on(&self.credential_hold);
+    }
+
+    #[cfg(any(test, feature = "debug-hooks"))]
+    fn park_after_credential_read(&self) {
+        park_on(&self.credential_after_hold);
     }
 
     /// Counted and parked before the connection's lock, so the store stays writable while the load waits.

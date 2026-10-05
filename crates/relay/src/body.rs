@@ -1285,6 +1285,11 @@ mod tests {
             "the billing line is no top-level member"
         );
         assert_eq!(
+            RelayError::BodyShape(BodyMember::Repeated("metadata.user_id")).to_string(),
+            "request body carries the member \"metadata.user_id\" more than once",
+            "nor is the user id under metadata"
+        );
+        assert_eq!(
             RelayError::BodyShape(BodyMember::Model).to_string(),
             "request body has no model member to edit"
         );

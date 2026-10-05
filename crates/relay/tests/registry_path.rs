@@ -8,13 +8,15 @@ use axum::body::Body;
 use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
-use phoebis_store::{AccountState, Secret};
+use phoebis_store::{AccountState, NewBundle, Secret};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-api03-AAAA";
 const A_ROTATED: &str = "sk-ant-api03-AAAB";
 const B: &str = "sk-ant-api03-BBBB";
 const OAUTH_A: &str = "sk-ant-oat01-AAAA";
+const OAUTH_A_REPAIRED: &str = "sk-ant-oat01-AAAB";
+const OAUTH_B: &str = "sk-ant-oat01-BBBB";
 
 async fn upstream() -> FakeUpstream {
     FakeUpstream::start(vec![Rule {
@@ -202,5 +204,71 @@ async fn an_acquisition_suspended_across_a_rotation_and_a_reload_is_refused_stal
     );
     leg(&h, "s2").await.into_body().collect().await.unwrap();
     assert_eq!(credentials_seen(&up), [B, A_ROTATED]);
+    up.shutdown().await;
+}
+
+/// The generation clause of the fence alone: a re-pair keeps the row's revision, so an acquisition whose read
+/// returned the old bundle before the pairing committed and the reload landed is refused by the generation it
+/// carries rather than dispatched with a token the registry has replaced.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_that_returned_before_a_re_pair_and_its_reload_is_refused_stale() {
+    let up = upstream().await;
+    let h = harness(
+        &up,
+        &[oauth("a", OAUTH_A, 0), oauth("b", OAUTH_B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    // The catalog's fill at start warmed the bundle cache, so the leg's acquisition reads the store only once the
+    // entry is gone.
+    h.manager.invalidate("a");
+    let hold = h.store.debug_hold_after_next_credential_read();
+    let app = h.app.clone();
+    let inflight = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(5), || hold.is_parked().then_some(())).await;
+    h.store
+        .commit_pairing(
+            "a",
+            1,
+            1,
+            Some(1),
+            &NewBundle {
+                access_token: Secret::new(OAUTH_A_REPAIRED),
+                refresh_token: None,
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    let snapshot = h.router.snapshot();
+    assert_eq!(
+        (
+            snapshot.account("a").unwrap().revision,
+            snapshot.credential_generation("a")
+        ),
+        (1, Some(2)),
+        "the re-pair moved the generation alone"
+    );
+    hold.release();
+    let resp = inflight.await.unwrap();
+    assert_eq!(resp.status(), 200);
+    assert_eq!(
+        outcome(&resp).account_id,
+        "b",
+        "the old bundle is not dispatched; the request is re-selected"
+    );
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        credentials_seen(&up),
+        [OAUTH_B],
+        "nothing went out under a's replaced token"
+    );
     up.shutdown().await;
 }

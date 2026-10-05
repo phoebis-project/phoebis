@@ -249,7 +249,7 @@ fn oauth_cooldown(
                 window: exhaustion_window(Some(u), AccountKind::Oauth),
             };
         }
-        if model_only(u, ctx.canonical_model).is_some()
+        if model_only(u, ctx.canonical_model)
             && (rejected(&u.seven_day_oi_status) || rejected(&u.status))
         {
             // Same deadline rule as the shared row: the later of the rejected window's own reset and the
@@ -283,7 +283,7 @@ fn oauth_cooldown(
 /// model's own week is the only one that rejected.
 fn shared_window_rejected(u: &UnifiedHeaders, canonical_model: &str) -> bool {
     plan_window_rejected(u)
-        || (u.status.as_deref() == Some("rejected") && model_only(u, canonical_model).is_none())
+        || (u.status.as_deref() == Some("rejected") && !model_only(u, canonical_model))
 }
 
 /// The 5-hour or the 7-day status rejected. The top-level status is left out for a fast request: it draws neither
@@ -356,27 +356,26 @@ fn shared_healthy(status: &Option<String>, utilization: Option<f64>) -> bool {
 /// The overage week's own claim: the window the `7d_oi` status reads, which no model family owns.
 const OVERAGE_INCLUDED_CLAIM: &str = "seven_day_overage_included";
 
-/// The model window's key when the rejection names the request model's own week and nothing shared, else `None`:
-/// both shared windows healthy, the model's family has a row in the window table, and the representative claim
-/// names that row's window, or names the overage week or no week while the 7d_oi status is rejected. A claim
-/// naming another family's week, or one no row knows, is read before the status fallback and is no model
-/// evidence: the account cools, the safe direction while the claim vocabulary is not yet measured live, and a
-/// foreign week never borrows the fallback.
-fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> Option<&'static str> {
+/// Whether the rejection names the request model's own week and nothing shared: both shared windows healthy, the
+/// model's family has a row in the window table, and the representative claim names that row's window, or names
+/// the overage week or no week while the 7d_oi status is rejected. A claim naming another family's week, or one no
+/// row knows, is read before the status fallback and is no model evidence: the account cools, the safe direction
+/// while the claim vocabulary is not yet measured live, and a foreign week never borrows the fallback.
+fn model_only(u: &UnifiedHeaders, canonical_model: &str) -> bool {
     let own = phoebis_routing::window_for(canonical_model);
     if own == phoebis_routing::SEVEN_DAY {
-        return None;
+        return false;
     }
     let shared_fine = shared_healthy(&u.five_hour_status, u.five_hour_utilization)
         && shared_healthy(&u.seven_day_status, u.seven_day_utilization);
     if !shared_fine {
-        return None;
+        return false;
     }
     match u.representative_claim.as_deref() {
-        Some(claim) if claim == own => Some(own),
+        Some(claim) if claim == own => true,
         // Another family's week, or a week no row names: the account-wide cooldown, whatever `7d_oi` reads.
-        Some(claim) if claim.starts_with("seven_day_") && claim != OVERAGE_INCLUDED_CLAIM => None,
-        _ => (u.seven_day_oi_status.as_deref() == Some("rejected")).then_some(own),
+        Some(claim) if claim.starts_with("seven_day_") && claim != OVERAGE_INCLUDED_CLAIM => false,
+        _ => u.seven_day_oi_status.as_deref() == Some("rejected"),
     }
 }
 
@@ -506,8 +505,9 @@ fn names_spend_limit(body: &[u8]) -> bool {
 
 /// Whether `error.message` names `wire_model` as a whole token: the byte before and after each occurrence are
 /// absent (the message's ends) or a boundary, where a boundary is any byte that is neither ASCII alphanumeric
-/// nor `-` nor `.` (quotes, whitespace, `:`, `,`, and the rest of punctuation all bound). An empty `wire_model`
-/// never matches, since every message contains the empty string.
+/// nor `-` nor `.` (quotes, whitespace, `:`, `,`, and the rest of punctuation all bound). A cut message's end
+/// counts as its end, so a cut landing just past a shorter model name that prefixes the real one reads the shorter
+/// name. An empty `wire_model` never matches, since every message contains the empty string.
 fn names_model(body: &[u8], wire_model: &str) -> bool {
     if wire_model.is_empty() {
         return false;

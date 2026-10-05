@@ -183,6 +183,13 @@ impl Store {
             self.count_credential_read();
             self.park_on_credential_hold();
         }
+        let read = self.read_credentials(account_id);
+        #[cfg(any(test, feature = "debug-hooks"))]
+        self.park_after_credential_read();
+        read
+    }
+
+    fn read_credentials(&self, account_id: &str) -> Result<Option<CredentialBundle>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let row: Option<CredentialRow> = conn
             .query_row(

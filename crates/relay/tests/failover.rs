@@ -2394,6 +2394,7 @@ async fn a_drifted_stamp_under_a_key_that_refuses_the_model_gets_the_model_refus
     );
     let mut answers = Vec::new();
     for sent in [drifted, escaped] {
+        assert_ne!(sent, fixture, "the edit reached the fixture's spelling");
         let resp = h
             .app
             .clone()

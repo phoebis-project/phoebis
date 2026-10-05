@@ -45,11 +45,21 @@ fn control_heads_serialize_byte_identical() {
     }
 }
 
-/// Accepts `limit` bytes, then fails; `fail_flush` fails the flush instead of a write.
+/// Takes every byte offered up to `limit`, then fails; `fail_flush` fails the flush instead of a write.
 struct Budget {
     limit: usize,
-    written: usize,
+    taken: Vec<u8>,
     fail_flush: bool,
+}
+
+impl Budget {
+    fn new(limit: usize, fail_flush: bool) -> Budget {
+        Budget {
+            limit,
+            taken: Vec::new(),
+            fail_flush,
+        }
+    }
 }
 
 impl tokio::io::AsyncWrite for Budget {
@@ -58,14 +68,14 @@ impl tokio::io::AsyncWrite for Budget {
         _: &mut Context<'_>,
         buf: &[u8],
     ) -> Poll<std::io::Result<usize>> {
-        if self.written >= self.limit {
+        if self.taken.len() >= self.limit {
             return Poll::Ready(Err(std::io::Error::new(
                 std::io::ErrorKind::BrokenPipe,
                 "budget",
             )));
         }
-        let n = buf.len().min(self.limit - self.written);
-        self.written += n;
+        let n = buf.len().min(self.limit - self.taken.len());
+        self.taken.extend_from_slice(&buf[..n]);
         Poll::Ready(Ok(n))
     }
     fn poll_flush(self: Pin<&mut Self>, _: &mut Context<'_>) -> Poll<std::io::Result<()>> {
@@ -94,25 +104,24 @@ async fn every_write_failure_reports_the_progress_it_reached() {
     let head = serialize_head(&req).len();
     let cases = [
         (0, false, WriteProgress::NothingWritten),
+        (head - 1, false, WriteProgress::NothingWritten),
         (head, false, WriteProgress::HeadWritten),
+        (head + 3, false, WriteProgress::HeadWritten),
         (head + req.body.len(), true, WriteProgress::BodyWritten),
     ];
     for (limit, fail_flush, want) in cases {
-        let mut w = Budget {
-            limit,
-            written: 0,
-            fail_flush,
-        };
+        let mut w = Budget::new(limit, fail_flush);
         let err = write_request(&mut w, &req)
             .await
             .expect_err("the writer fails");
         assert_eq!(err.progress, want, "limit {limit}");
+        if want == WriteProgress::BodyWritten {
+            let mut wire = serialize_head(&req);
+            wire.extend_from_slice(&req.body);
+            assert_eq!(w.taken, wire, "the head and then the body, every byte");
+        }
     }
-    let mut w = Budget {
-        limit: usize::MAX,
-        written: 0,
-        fail_flush: false,
-    };
+    let mut w = Budget::new(usize::MAX, false);
     write_request(&mut w, &req)
         .await
         .expect("a healthy writer succeeds");

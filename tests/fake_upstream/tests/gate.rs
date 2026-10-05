@@ -140,7 +140,7 @@ async fn written_holds_until_the_response_is_whole_and_latches_for_every_later_w
         let early = up.written(0);
         tokio::pin!(early);
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut early)
+            tokio::time::timeout(Duration::ZERO, &mut early)
                 .await
                 .is_err(),
             "no request has arrived"
@@ -149,7 +149,7 @@ async fn written_holds_until_the_response_is_whole_and_latches_for_every_later_w
         let mut conn = open_gated(up.addr()).await;
         read_until_contains(&mut conn, rendered_chunk(&events()[0]).as_bytes()).await;
         assert!(
-            tokio::time::timeout(Duration::from_millis(50), &mut early)
+            tokio::time::timeout(Duration::ZERO, &mut early)
                 .await
                 .is_err(),
             "the gate still holds the rest of the response"
