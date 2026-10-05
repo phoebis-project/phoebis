@@ -1223,12 +1223,21 @@ async fn a_read_waiting_on_the_registry_leaves_the_bus_arm_free() {
         }
     });
     held_rx.recv().unwrap();
+    let before = rig.store.debug_lock_count();
     let reading = std::thread::spawn({
         let attention = attention.clone();
         move || attention.conditions(NOW).map(|read| read.len())
     });
-    // Long enough for the read to reach the registry's connection and wait on it.
-    std::thread::sleep(Duration::from_millis(200));
+    // The counter moves as a caller reaches for the registry's connection, before it blocks on the holder, so
+    // once it moves the read is the one waiting there.
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    while rig.store.debug_lock_count() == before {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the read never reached the registry"
+        );
+        std::thread::yield_now();
+    }
     let observing = std::thread::spawn({
         let attention = attention.clone();
         move || refuse(&attention, "r1", "2.1.999", NOW)
@@ -1241,7 +1250,7 @@ async fn a_read_waiting_on_the_registry_leaves_the_bus_arm_free() {
         if std::time::Instant::now() > deadline {
             break false;
         }
-        std::thread::sleep(Duration::from_millis(5));
+        std::thread::yield_now();
     };
     release_tx.send(()).unwrap();
     holder.join().unwrap();

@@ -2806,11 +2806,12 @@ impl Task {
                 );
             }
             Err(mpsc::error::TrySendError::Full(())) => {}
-            // The writer task is gone, so nothing would ever take the backlog.
+            // The writer task is gone, so nothing would ever take the backlog. It closes as the loop shuts down,
+            // where the loss is expected, so this warns as `drain_writer` does.
             Err(mpsc::error::TrySendError::Closed(())) => {
                 let lost = deferred.take().len();
                 self.writer_status.deferred.store(0, Ordering::Relaxed);
-                tracing::error!(
+                tracing::warn!(
                     lost,
                     "the routing state writer has stopped; the writes held in memory are lost"
                 );

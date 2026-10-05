@@ -277,11 +277,11 @@ frees within seconds. A probe answered `503 accounts_unavailable` because its ke
 flight is `retrying` rather than paused under `pool_exhausted`: its next attempt admits under the new pool.
 
 A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
-lapses or is evicted, or when the next request after the probe reads no cache:
+lapses or is evicted, or when the next request after the probe reads nothing from the entry it kept:
 
 | Reason | What settles it |
 | --- | --- |
-| `cold_return` | The request after a covering probe read no cache, so the probe kept nothing. |
+| `cold_return` | The next request read nothing from the probe's entry: no cache, or another model, speed or account. |
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
 | `expired` | The recipe's cache entry expired before its probe was due. |
 | `idle_limit` | The pool's idle limits ran out before a real request answered the probe. |

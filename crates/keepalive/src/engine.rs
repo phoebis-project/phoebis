@@ -483,9 +483,6 @@ pub(crate) struct PriorCoverage {
     pub fast: bool,
     pub real_at: i64,
     pub ttl_ms: i64,
-    /// When the entry the previous request or its last probe wrote expires: a request at or past it returned to an
-    /// entry that was gone, whatever it read.
-    pub entry_expires: i64,
 }
 
 /// One real request the engine is following from its observation to its completion.
@@ -540,6 +537,9 @@ pub(crate) struct Kept {
     pub account: Option<String>,
     pub fast: bool,
     pub costs: Vec<f64>,
+    /// When the entry the probes kept expires, taken as the batch is kept because the keeping request moves the
+    /// agent's entry to its own: a read arriving at or past it found the entry gone.
+    pub entry_expires: i64,
 }
 
 impl Kept {
@@ -551,6 +551,7 @@ impl Kept {
             account: agent.account.clone(),
             fast,
             costs,
+            entry_expires: agent.cache_started + agent.ttl_ms,
         }
     }
 
@@ -793,9 +794,12 @@ impl Inner {
 
     /// The decision `discard_keeping_unanswered` defers, taken by the completion of the request that kept the
     /// probes: `read` is what the completion read from the cache, and `credited` whether it earned the kept-warm
-    /// credit. A warm return is one on the model, speed and account the probes ran on, inside the entry they
-    /// kept, that read the cache; the model is the previous recipe's as resolutions followed it. A probe sent
-    /// while the request was open is not among them: it pays for the request after this one.
+    /// credit. Each batch answers to the lineage it was paid under, since a request that failed before any head
+    /// leaves its batch behind with the agent already moved to that request's model and entry: a warm return is
+    /// one on the batch's model, speed and account, arriving before the entry the batch kept expired, that read
+    /// the cache, and the credit answers only the batches on the model it was earned on. The model is the
+    /// batch's as resolutions followed it. A probe sent while the request was open is not among them: it pays
+    /// for the request after this one.
     pub(crate) fn decide_unanswered(
         &mut self,
         key: &SessionKey,
@@ -811,20 +815,18 @@ impl Inner {
             return;
         };
         let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
-        let inside_on_its_model = agent
-            .current
-            .as_ref()
-            .and_then(|o| o.prior.as_ref())
-            .zip(agent.last_real_at)
-            .is_some_and(|(prior, real_at)| {
-                real_at < prior.entry_expires && prior.model == agent.canonical_model
-            });
+        // The read happened when the request reached the cache, so a stream that outlives the entry still read it.
+        let arrived = agent.current.as_ref().map(|o| o.started);
         for kept in std::mem::take(&mut agent.kept) {
-            let warm = credited
-                || read > 0
-                    && inside_on_its_model
-                    && kept.fast == fast
-                    && kept.account == agent.account;
+            // The credit is earned only on the prior's model, which is then the agent's own, so one comparison
+            // serves both branches.
+            let same_model = kept.canonical_model == agent.canonical_model;
+            let warm = same_model
+                && (credited
+                    || read > 0
+                        && kept.fast == fast
+                        && kept.account == agent.account
+                        && arrived.is_some_and(|at| at < kept.entry_expires));
             if !warm {
                 self.settlements.push(kept.settle(key, Wasted::ColdReturn));
             }
@@ -1354,7 +1356,6 @@ impl Engine {
                 fast: agent.covered_fast,
                 real_at,
                 ttl_ms: agent.ttl_ms,
-                entry_expires: agent.cache_started + agent.ttl_ms,
             })
         };
         let poisoned = inner.gap_backlog > 0;
@@ -3014,5 +3015,61 @@ mod tests {
             ),
             Guard::Foreign
         );
+    }
+
+    /// The credit is earned on one model, and a batch kept on another, left behind by a request that failed before
+    /// any head, read nothing the credited request read: it settles as a cold return while the batch on the
+    /// credited model is answered.
+    #[test]
+    fn the_credit_answers_only_the_kept_batches_on_the_model_it_was_earned_on() {
+        let key: SessionKey = ("k".into(), "s".into());
+        let mut agent = Agent::new("main", "k", 1, 0);
+        agent.account = Some("a".into());
+        let mut inner = Inner::empty(None);
+        inner.agents = 1;
+        inner.sessions.insert(
+            key.clone(),
+            Session {
+                key_id: "k".into(),
+                key_generation: 0,
+                session_id: "s".into(),
+                instance: "i".into(),
+                sequence: 0,
+                lease: i64::MAX,
+                attended: true,
+                ended: false,
+                owner_id: None,
+                last_report_at: 0,
+                last_real_at: Some(0),
+                agents: BTreeMap::from([("main".to_string(), agent)]),
+            },
+        );
+        for (model, cost) in [("claude-sonnet-5", 0.25), ("claude-opus-5-5", 0.5)] {
+            let agent = inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut("main")
+                .unwrap();
+            agent.canonical_model = model.into();
+            agent.unanswered = vec![cost];
+            inner.discard_keeping_unanswered(&key, "main", Reason::AwaitingSelection);
+        }
+        inner.decide_unanswered(&key, "main", 2_000, true);
+        let settled: Vec<(String, Wasted, Vec<f64>)> = inner
+            .settlements
+            .iter()
+            .map(|s| (s.canonical_model.clone(), s.label, s.costs.clone()))
+            .collect();
+        assert_eq!(
+            settled,
+            vec![(
+                "claude-sonnet-5".to_string(),
+                Wasted::ColdReturn,
+                vec![0.25]
+            )]
+        );
+        assert!(inner.sessions[&key].agents["main"].kept.is_empty());
     }
 }

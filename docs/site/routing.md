@@ -553,9 +553,9 @@ auxiliary class, or a request foreign to the conversation) moves that pin too.
 | Idle bound after the head, before any byte reached the client | None | No; 502 `upstream_stalled` |
 | 200 head, body ends before its end | None | No; the request reads `incomplete` |
 
-The router classifies a rejection whose body runs past 64 KiB from its first 64 KiB, a coded body decoded as far as it
-was read: a 429 cools and fails over, a 401 or a 403 `authentication_error` takes the credential path, and a body the
-verdict forwards reaches the client whole, the prefix first.
+The router classifies a rejection whose body runs past 64 KiB from its first 64 KiB, a coded body from the text those
+64 KiB decode to: a 429 cools and fails over, a 401 or a 403 `authentication_error` takes the credential path, and a
+body the verdict forwards reaches the client whole, the prefix first.
 
 The router answers a failure after the head with its own `502` while nothing of the upstream's answer has reached the
 client: `upstream_stalled` when a rejection body went silent past the idle bound, and `upstream_cut` for any other

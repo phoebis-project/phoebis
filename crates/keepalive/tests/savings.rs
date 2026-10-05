@@ -802,6 +802,60 @@ async fn a_warm_return_without_the_credit_answers_the_probes_it_kept() {
     );
 }
 
+/// Probes kept on one model answer only to a return on that model. A request on another model that failed before
+/// any head moves the agent to that model and leaves the probes kept; the next request on it reads that model's own
+/// entry inside its TTL, which reads nothing the probes paid for, so they settle as a cold return and nothing is
+/// credited.
+#[tokio::test]
+async fn a_cache_read_on_another_model_settles_the_probes_kept_on_the_first_as_a_cold_return() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+    r.advance_attended(10_000);
+    let other = opus_body();
+    r.engine.observe(r.observed("second", "main", &other));
+    r.engine.observe(r.selected("second", "a"));
+    r.engine.observe(failed(&r, "second", None));
+    let status = r.status("main");
+    assert_eq!(
+        (status.canonical_model.as_str(), status.unanswered),
+        (OPUS, 1),
+        "the failed request moved the model and decided nothing"
+    );
+    r.advance_attended(10_000);
+    open_request_with(&r, "third", &other, 2_000, 0);
+    r.engine.observe(completed(&r, "third", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (0, 1, BTreeMap::from([("cold_return".to_string(), 1)])),
+        "the read on the other model answered nothing the first model's probe paid for"
+    );
+    assert!(
+        probe.wasted_probe_usd > 0.0
+            && (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        "{probe:?}"
+    );
+}
+
 /// A migrated probe settles at its own cost in the unit its serving attempt was funded in: dollars on an
 /// Anthropic-key pool, where the day's dollar cap and the agent's dollar net move by its price, and the 5-hour share
 /// on a subscription pool, where the account's share cap and the agent's share move by its share.
