@@ -523,6 +523,9 @@ fn a_second_run_with_tls_self_signed_renews_the_leaves_under_the_same_ca_and_tou
         tls.join("ca.key"),
     ];
     let renewed = [tls.join("proxy.pem"), tls.join("proxy.key")];
+    // The modes the service unit's pair carries, so each renewed file shows it kept its own.
+    std::fs::set_permissions(&renewed[0], std::fs::Permissions::from_mode(0o644)).unwrap();
+    std::fs::set_permissions(&renewed[1], std::fs::Permissions::from_mode(0o640)).unwrap();
     let (kept_before, renewed_before) = (contents(&kept), contents(&renewed));
     let tree = entries(dir.path());
 
@@ -540,7 +543,7 @@ fn a_second_run_with_tls_self_signed_renews_the_leaves_under_the_same_ca_and_tou
         &certificate(&tls.join("ca.pem")),
         &certificate(&tls.join("proxy.pem"))
     ));
-    assert_eq!((mode(&renewed[0]), mode(&renewed[1])), (0o600, 0o600));
+    assert_eq!((mode(&renewed[0]), mode(&renewed[1])), (0o644, 0o640));
     assert_eq!(
         entries(&tls),
         ["ca.key", "ca.pem", "proxy.key", "proxy.pem"]
@@ -850,9 +853,22 @@ fn the_container_shape_with_tls_self_signed_writes_tls_beside_the_file_and_names
         .find(|line| line.starts_with("remaining: "))
         .unwrap_or_default();
     assert!(
-        remaining.contains("mount ./tls read-only at /etc/phoebis/tls"),
+        remaining.ends_with(concat!(
+            "; mount ./tls read-only at /etc/phoebis/tls",
+            " and own tls/proxy.key and tls/admin.key by uid 65532 at mode 0400"
+        )),
         "{stderr}"
     );
+    assert!(!remaining.contains("ca.key"), "{stderr}");
+    // uid 65532 reads the directory and both certificates through the bind mount; each leaf key waits for the hand-over
+    // the line names, and the CA's key is never handed over, so the container cannot read it.
+    assert_eq!(mode(&tls), 0o755);
+    for name in ["ca.pem", "proxy.pem", "admin.pem"] {
+        assert_eq!(mode(&tls.join(name)), 0o644, "{name}");
+    }
+    for name in ["ca.key", "proxy.key", "admin.key"] {
+        assert_eq!(mode(&tls.join(name)), 0o600, "{name}");
+    }
     // The clients copy the CA from the host, so the line names the host's path.
     assert!(
         stderr.contains(&format!(
@@ -861,6 +877,146 @@ fn the_container_shape_with_tls_self_signed_writes_tls_beside_the_file_and_names
         )),
         "{stderr}"
     );
+}
+
+#[test]
+fn the_container_shape_renews_its_leaves_under_tls_beside_the_compose_file() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let first = init(
+        dir.path(),
+        &[
+            "--container",
+            "--tls",
+            "self-signed",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(first.status.code(), Some(0), "{}", printed(&first));
+    let tls = dir.path().join("tls");
+    let kept = [
+        config.clone(),
+        dir.path().join("storage.key"),
+        dir.path().join("phoebis.env"),
+        tls.join("ca.pem"),
+        tls.join("ca.key"),
+    ];
+    let renewed = [
+        tls.join("proxy.pem"),
+        tls.join("proxy.key"),
+        tls.join("admin.pem"),
+        tls.join("admin.key"),
+    ];
+    let (kept_before, renewed_before) = (contents(&kept), contents(&renewed));
+
+    // The file names the container's paths; the renewal writes the pairs mounted there, under tls/ on the host.
+    let out = init(
+        dir.path(),
+        &["--tls", "self-signed", "--config", path_arg(&config)],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert!(out.stdout.is_empty(), "{}", printed(&out));
+    assert_eq!(contents(&kept), kept_before);
+    let renewed_after = contents(&renewed);
+    for (at, path) in renewed.iter().enumerate() {
+        assert_ne!(renewed_after[at], renewed_before[at], "{}", path.display());
+    }
+    let ca = certificate(&tls.join("ca.pem"));
+    for name in ["proxy.pem", "admin.pem"] {
+        assert!(verifies_under(&ca, &certificate(&tls.join(name))), "{name}");
+        assert_eq!(mode(&tls.join(name)), 0o644, "{name}");
+    }
+    for name in ["proxy.key", "admin.key"] {
+        assert_eq!(mode(&tls.join(name)), 0o600, "{name}");
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    for name in ["proxy.pem", "admin.pem"] {
+        assert!(
+            stderr.contains(&tls.join(name).display().to_string()),
+            "{stderr}"
+        );
+    }
+    assert!(
+        stderr.ends_with("next: stop and start the router, which reads the pair at start\n"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_first_run_reuses_a_complete_ca_under_tls_and_a_refused_run_keeps_it() {
+    use phoebis_router::selfsigned::{self, SanName, Validity, CA_LIFETIME_DAYS};
+
+    let dir = tempfile::tempdir().unwrap();
+    let tls = dir.path().join("tls");
+    selfsigned::write_ca(
+        &tls,
+        &selfsigned::hostname(),
+        &selfsigned::leaf_names("0.0.0.0:0".parse().unwrap()),
+        Validity::days_from_now(CA_LIFETIME_DAYS),
+    )
+    .unwrap();
+    let ca_files = [tls.join("ca.pem"), tls.join("ca.key")];
+    let ca_before = contents(&ca_files);
+    let (_, out) = init_self_signed(dir.path());
+    assert_eq!(contents(&ca_files), ca_before);
+    assert!(verifies_under(
+        &certificate(&tls.join("ca.pem")),
+        &certificate(&tls.join("proxy.pem"))
+    ));
+    assert_eq!(
+        entries(&tls),
+        ["ca.key", "ca.pem", "proxy.key", "proxy.pem"]
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        !stderr.contains(&format!("wrote {}", tls.join("ca.pem").display())),
+        "the reused CA is not this run's: {stderr}"
+    );
+
+    // A CA whose constraint leaves out this host's names refuses the leaf after the key file landed; the run removes
+    // what it wrote and keeps the CA it found.
+    let other = tempfile::tempdir().unwrap();
+    let tls = other.path().join("tls");
+    selfsigned::write_ca(
+        &tls,
+        "other.example",
+        &[SanName::Dns("other.example".into())],
+        Validity::days_from_now(CA_LIFETIME_DAYS),
+    )
+    .unwrap();
+    let ca_files = [tls.join("ca.pem"), tls.join("ca.key")];
+    let ca_before = contents(&ca_files);
+    let config = other.path().join("config.yaml");
+    let refused = init(
+        other.path(),
+        &[
+            "--tls",
+            "self-signed",
+            "--proxy-listen",
+            "0.0.0.0:0",
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(refused.status.code(), Some(1), "{}", printed(&refused));
+    let stderr = String::from_utf8_lossy(&refused.stderr);
+    assert!(
+        stderr.contains("are not all within the CA's name constraint"),
+        "{stderr}"
+    );
+    assert!(
+        stderr.contains(&format!(
+            "removed what this run wrote: {}",
+            other.path().join("data").display()
+        )),
+        "{stderr}"
+    );
+    assert!(refused.stdout.is_empty(), "{}", printed(&refused));
+    assert_eq!(contents(&ca_files), ca_before);
+    assert_eq!(entries(other.path()), ["tls"]);
+    assert_eq!(entries(&tls), ["ca.key", "ca.pem"]);
 }
 
 #[test]

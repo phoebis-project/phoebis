@@ -273,7 +273,8 @@ version.
 A certificate pair is read at start and never watched: a renewal is stop, replace, start, and the 30-second drain,
 inside the 40-second stop grace, bounds the gap. For a pair `init` generated, the replace step is
 `phoebis init --tls self-signed --config <path>`, which writes new leaves under the same CA
-([installation](installation.md#commands)).
+([installation](installation.md#commands)); in the container shape it runs from the compose directory under `sudo`,
+since the leaf keys belong to uid 65532.
 
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
 own transaction. The registry's migrations may drop or rebuild a table, and a ledger migration can rebuild a table

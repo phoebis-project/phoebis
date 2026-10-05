@@ -149,12 +149,14 @@ and any hostname that reaches the port logs in. Publishing the port on a LAN add
 that is the same trust decision the proxy port's publication already makes. For TLS, mount a certificate pair read-only
 beside the configuration and name the mounted paths under `tls`, the certificate world-readable and the key at `0400`
 owned by uid 65532; the clients trust the pair's issuer, through `NODE_EXTRA_CA_CERTS` when it is a private CA.
-`init --container --tls self-signed` writes such a pair for both listeners under `tls/` beside `compose.yaml` and names
-it in `config.yaml` as `/etc/phoebis/tls/...`; add `- ./tls:/etc/phoebis/tls:ro` to the service's `volumes` and own each
-`.key` under `tls/` by uid 65532 at `0400`, as the summary says, and hand the clients `tls/ca.pem`. A front can
-terminate TLS instead: it forwards to the plain listener, passes `Host` through unchanged and sets
-`X-Forwarded-Proto: https`, so the cookie is issued with `Secure` and the Origin check sees the front's hostname in both
-headers.
+`init --container --tls self-signed` writes such a pair for both listeners under `tls/` beside `compose.yaml`, the
+directory at `0755` and both certificates at `0644` so uid 65532 reads them through the mount, and names it in
+`config.yaml` as `/etc/phoebis/tls/...`; add `- ./tls:/etc/phoebis/tls:ro` to the service's `volumes`, own
+`tls/proxy.key` and `tls/admin.key` by uid 65532 at `0400`, as the summary says, and hand the clients `tls/ca.pem`.
+`tls/ca.key` stays at `0600` and yours, so the container cannot read the CA's key though the directory is mounted;
+renewing the leaves there runs under `sudo`, as [Commands](#commands) says. A front can terminate TLS instead: it
+forwards to the plain listener, passes `Host` through unchanged and sets `X-Forwarded-Proto: https`, so the cookie is
+issued with `Secure` and the Origin check sees the front's hostname in both headers.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
 place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
@@ -273,8 +275,13 @@ lines the summary prints
 `clients must trust <dir>/tls/ca.pem; copy it to each client and set NODE_EXTRA_CA_CERTS to the copy`. The router reads
 the pair at start and renews nothing: `check-config` warns 30 days before a leaf expires, and
 `phoebis init --tls self-signed --config <path>` run again against the existing bootstrap file writes new leaves under
-the same CA with the old key's owner and mode on both files, touches nothing else and asks for a stop and start; the
-clients keep their anchor. Remove `tls/ca.pem` and `tls/ca.key` only for a new CA, which every client must trust again.
+the same CA, keeps each file's owner and mode, touches nothing else and asks for a stop and start; the clients keep
+their anchor. Every leaf is written and checked before any replaces its pair, so a refused renewal leaves every pair as
+it was, and a certificate under `tls/` that the CA did not sign, such as an operator's pair named there, is refused
+rather than replaced. In the container shape the file names `/etc/phoebis/tls/...` and the renewal writes the pairs
+under `tls/` beside `compose.yaml`; run it there with `sudo`, since the leaf keys belong to uid 65532 by then and only
+root gives the new keys that owner. Remove `tls/ca.pem` and `tls/ca.key` only for a new CA, which every client must
+trust again.
 
 Without `--env-file`, stdout carries one line, `PHOEBIS_ADMIN_SECRET=<secret>` under the default name, and the secret is
 printed nowhere else, so `(umask 077; phoebis init --non-interactive > phoebis.env)` writes a usable environment file
@@ -292,10 +299,11 @@ already exists, when a `router.sqlite` or `ledger.sqlite` already sits in the da
 (`{path} exists and a new key cannot open it; keep the key that sealed it, or name an empty --data-dir`), when input
 ends before a question is answered, when `--owner` runs off root or names no user, when `--tls files` names no pair for
 a listener off loopback (`--tls files needs --proxy-cert and --proxy-key for proxy on {addr}`), when a renewal meets a
-bootstrap file that names no pair under `tls/` or carries any other flag, and when the CA under `tls/` is half there,
-does not parse, does not match its key, has expired or does not cover the host's name (each line naming the file and
-saying `remove tls/ca.pem and tls/ca.key for a new CA, which every client must trust again`). A directory or a file it
-cannot write exits 1 too, after removing what the run wrote, which the line names. A usage error, such as `--proxy-cert`
+bootstrap file that names no pair under `tls/`, carries any other flag or finds a certificate there that the CA did not
+sign, and when the CA under `tls/` is half there, does not parse, does not match its key, has expired or does not cover
+the host's name (each line naming the file and saying
+`remove tls/ca.pem and tls/ca.key for a new CA, which every client must trust again`). A directory or a file it cannot
+write exits 1 too, after removing what the run wrote, which the line names. A usage error, such as `--proxy-cert`
 without `--proxy-key` or an address that does not parse, exits 2.
 
 Under `--container` the bootstrap file's directory is the compose directory: `init` writes `storage.key` and
@@ -303,10 +311,11 @@ Under `--container` the bootstrap file's directory is the compose directory: `in
 `/var/lib/phoebis/router.sqlite`, `/var/lib/phoebis/ledger.sqlite` and `/var/lib/phoebis/pricing.yaml`), both listeners
 on every interface with no `tls` line, and `metrics_listen: 0.0.0.0:9464`. It asks nothing and creates no data
 directory, since `/var/lib/phoebis` is the volume inside the container. The listen and TLS flags still apply;
-`--data-dir`, `--env-file` and `--key-file` are usage errors beside it. The summary ends with the steps that remain, the
-key file's owner and mode and the image tag in `compose.yaml`, under `--tls self-signed` the read-only mount of `./tls`
-and its keys' owner too, and with `docker compose run --rm phoebis check-config` as the next command, since the key's
-path in the file is the container's.
+`--data-dir`, `--env-file` and `--key-file` are usage errors beside it. Under `--tls self-signed`, `tls/` is `0755` and
+each certificate `0644`, which uid 65532 reads through the mount, while every key stays `0600` and yours. The summary
+ends with the steps that remain, the key file's owner and mode and the image tag in `compose.yaml`, under
+`--tls self-signed` the read-only mount of `./tls` and the owner of `tls/proxy.key` and `tls/admin.key` too, and with
+`docker compose run --rm phoebis check-config` as the next command, since the key's path in the file is the container's.
 
 `status` probes the proxy listener, reads the admin API and prints one screen of readiness, pools, accounts and live
 pins ([Is it up?](operations.md#is-it-up) shows the screen and reads it line by line). It probes `proxy.listen` as

@@ -84,6 +84,19 @@ impl fmt::Display for SanName {
     }
 }
 
+/// The owner and modes a leaf's two files land with.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LeafModes {
+    /// The host's shape: the certificate and the key at 0600, both the caller's; `--owner` hands them over after.
+    Private,
+    /// The container's shape: the certificate at 0644, which the container's uid reads through the bind mount, and the
+    /// key at 0600 until the operator hands it over.
+    Mounted,
+    /// The renewal: each staged file takes the owner and mode of the live file it replaces, and the live certificate
+    /// must be one the CA signed, so a renewal never replaces an operator's pair named under `tls/`.
+    KeepLive,
+}
+
 /// One line per refusal, the path first; the CA's lines end with `NEW_CA`.
 #[derive(Debug, thiserror::Error)]
 pub enum MaterialError {
@@ -104,6 +117,10 @@ pub enum MaterialError {
     NoCertificate { path: PathBuf },
     #[error("{path}: holds no PEM private key; {}", NEW_CA)]
     NoKey { path: PathBuf },
+    #[error(
+        "{path}: holds no certificate the CA in {ca} signed; init --tls self-signed renews only the leaves it wrote"
+    )]
+    NotSignedByCa { path: PathBuf, ca: PathBuf },
     #[error(
         "the leaf's names ({names}) are not all within the CA's name constraint; {}",
         NEW_CA
@@ -234,11 +251,8 @@ pub fn write_ca(
     Ok(ca)
 }
 
-/// Writes `<listener>.pem` and `<listener>.key` (0600) under `dir`, signed by `ca`, with `names` as the subject
-/// alternative names, staged the same way and checked before the rename: both parse, the key matches the certificate,
-/// and the leaf verifies under a store holding `ca` alone, which is where a name outside the CA's constraint is caught.
-/// `keep` names a live key file whose owner and mode both staged files take before the rename (the renewal); `None`
-/// leaves the helper's modes. Answers the two live paths, the certificate then the key.
+/// Writes `<listener>.pem` and `<listener>.key` under `dir`, signed by `ca`, with `names` as the subject alternative
+/// names, at `modes`: `write_leaves` for one leaf. Answers the two live paths, the certificate then the key.
 pub fn write_leaf(
     dir: &Path,
     listener: &str,
@@ -246,23 +260,107 @@ pub fn write_leaf(
     hostname: &str,
     names: &[SanName],
     validity: Validity,
-    keep: Option<&Path>,
+    modes: LeafModes,
 ) -> Result<(PathBuf, PathBuf), MaterialError> {
+    let mut written = write_leaves(
+        dir,
+        ca,
+        hostname,
+        &[(listener, names.to_vec())],
+        validity,
+        modes,
+    )?;
+    Ok(written.remove(0))
+}
+
+/// Writes one leaf per entry of `leaves` (the listener's name and the names its leaf carries) under `dir`, signed by
+/// `ca`, at `modes`. Every leaf is staged and checked before any moves into place: its two files land under `.tmp`
+/// names through the store's private-file helper and are read back (both parse, the key matches the certificate, and
+/// the leaf verifies under a store holding `ca` alone, which is where a name outside the CA's constraint is caught), so
+/// a refusal or a failed write on any leaf leaves every live file as it was. Answers each leaf's two live paths, the
+/// certificate then the key, in the order of `leaves`.
+pub fn write_leaves(
+    dir: &Path,
+    ca: &Ca,
+    hostname: &str,
+    leaves: &[(&str, Vec<SanName>)],
+    validity: Validity,
+    modes: LeafModes,
+) -> Result<Vec<(PathBuf, PathBuf)>, MaterialError> {
     permissions::create_private_dir(dir).map_err(io(dir))?;
-    let keep = keep
-        .map(|live| std::fs::metadata(live).map_err(io(live)))
-        .transpose()?;
-    let (cert, key) = build_leaf(ca, hostname, names, validity)?;
+    let mut staged = Vec::with_capacity(leaves.len());
+    for (listener, names) in leaves {
+        match stage_leaf(dir, listener, ca, hostname, names, validity, modes) {
+            Ok(leaf) => staged.push(leaf),
+            Err(error) => {
+                staged.iter().for_each(StagedLeaf::discard);
+                return Err(error);
+            }
+        }
+    }
+    let mut placed = Vec::with_capacity(staged.len());
+    for (at, leaf) in staged.iter().enumerate() {
+        let pair = [
+            (leaf.cert_tmp.as_path(), leaf.cert_file.as_path()),
+            (leaf.key_tmp.as_path(), leaf.key_file.as_path()),
+        ];
+        if let Err(error) = place(&pair) {
+            staged[at + 1..].iter().for_each(StagedLeaf::discard);
+            return Err(error);
+        }
+        placed.push((leaf.cert_file.clone(), leaf.key_file.clone()));
+    }
+    Ok(placed)
+}
+
+/// A leaf's two files written and checked under their `.tmp` names, not yet live.
+struct StagedLeaf {
+    cert_file: PathBuf,
+    cert_tmp: PathBuf,
+    key_file: PathBuf,
+    key_tmp: PathBuf,
+}
+
+impl StagedLeaf {
+    fn discard(&self) {
+        discard(&[&self.cert_tmp, &self.key_tmp]);
+    }
+}
+
+fn stage_leaf(
+    dir: &Path,
+    listener: &str,
+    ca: &Ca,
+    hostname: &str,
+    names: &[SanName],
+    validity: Validity,
+    modes: LeafModes,
+) -> Result<StagedLeaf, MaterialError> {
     let (cert_file, key_file) = (
         dir.join(format!("{listener}.pem")),
         dir.join(format!("{listener}.key")),
     );
-    let cert_tmp = stage(&cert_file, 0o600, &cert.to_pem()?, keep.as_ref())?;
+    let (cert_mode, keep) = match modes {
+        LeafModes::Private => (0o600, None),
+        LeafModes::Mounted => (0o644, None),
+        LeafModes::KeepLive => {
+            signed_leaf(dir, &cert_file, ca)?;
+            let metadata = |live: &Path| std::fs::metadata(live).map_err(io(live));
+            (0o600, Some((metadata(&cert_file)?, metadata(&key_file)?)))
+        }
+    };
+    let (cert, key) = build_leaf(ca, hostname, names, validity)?;
+    let cert_tmp = stage(
+        &cert_file,
+        cert_mode,
+        &cert.to_pem()?,
+        keep.as_ref().map(|(cert, _)| cert),
+    )?;
     let key_tmp = stage(
         &key_file,
         0o600,
         &key.private_key_to_pem_pkcs8()?,
-        keep.as_ref(),
+        keep.as_ref().map(|(_, key)| key),
     )
     .inspect_err(|_| discard(&[&cert_tmp]))?;
     let checked = read_back(&cert_tmp, &key_tmp).and_then(|(cert, key)| {
@@ -285,8 +383,25 @@ pub fn write_leaf(
         Ok(())
     });
     checked.inspect_err(|_| discard(&[&cert_tmp, &key_tmp]))?;
-    place(&[(&cert_tmp, &cert_file), (&key_tmp, &key_file)])?;
-    Ok((cert_file, key_file))
+    Ok(StagedLeaf {
+        cert_file,
+        cert_tmp,
+        key_file,
+        key_tmp,
+    })
+}
+
+/// Refuses a live certificate `ca` did not sign, so a renewal never replaces an operator's pair named under `tls/`.
+/// The signature alone is checked, never the dates, since an expiring leaf is what a renewal is for.
+fn signed_leaf(dir: &Path, cert_file: &Path, ca: &Ca) -> Result<(), MaterialError> {
+    let pem = std::fs::read(cert_file).map_err(io(cert_file))?;
+    match X509::from_pem(&pem) {
+        Ok(cert) if signed_by(&cert, &ca.key) => Ok(()),
+        _ => Err(MaterialError::NotSignedByCa {
+            path: cert_file.to_path_buf(),
+            ca: dir.join(CA_CERT),
+        }),
+    }
 }
 
 fn io(path: &Path) -> impl FnOnce(std::io::Error) -> MaterialError + '_ {
@@ -420,8 +535,8 @@ fn build_leaf(
 }
 
 /// Writes `contents` to `<live>.tmp` at `mode` through the store's helper, after removing a temporary an interrupted
-/// run left; the live name is untouched until `place`. Under `keep` the file takes that file's owner and mode before
-/// any rename, so a renewal under the service unit keeps the group the service reads through.
+/// run left; the live name is untouched until `place`. Under `keep`, the live file's metadata, the file takes that
+/// owner and mode before any rename, so a renewal under the service unit keeps the group the service reads through.
 fn stage(
     live: &Path,
     mode: u32,
@@ -637,7 +752,7 @@ mod tests {
             "host.example",
             &names,
             Validity::days_from_now(LEAF_LIFETIME_DAYS),
-            None,
+            LeafModes::Private,
         )
         .unwrap();
         assert_eq!(
@@ -667,7 +782,9 @@ mod tests {
             days_left(&leaf)
         );
 
-        // A renewal under the service unit finds the key at 0640 for the service's group, and keeps it there.
+        // A renewal under the service unit finds the certificate at 0644 and the key at 0640 for the service's
+        // group, and each renewed file keeps its own.
+        std::fs::set_permissions(&cert, std::fs::Permissions::from_mode(0o644)).unwrap();
         std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o640)).unwrap();
         let (cert, key) = write_leaf(
             dir,
@@ -676,11 +793,129 @@ mod tests {
             "host.example",
             &names,
             Validity::days_from_now(LEAF_LIFETIME_DAYS),
-            Some(&key),
+            LeafModes::KeepLive,
         )
         .unwrap();
-        assert_eq!((mode(&cert), mode(&key)), (0o640, 0o640));
+        assert_eq!((mode(&cert), mode(&key)), (0o644, 0o640));
         assert!(verifies_under(&ca_cert, &certificate_in(&cert)));
+        assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
+
+        // The container's uid reads the certificate through a bind mount; the key waits for the operator's hand-over.
+        let (cert, key) = write_leaf(
+            dir,
+            "admin",
+            &ca,
+            "host.example",
+            &names,
+            Validity::days_from_now(LEAF_LIFETIME_DAYS),
+            LeafModes::Mounted,
+        )
+        .unwrap();
+        assert_eq!((mode(&cert), mode(&key)), (0o644, 0o600));
+    }
+
+    #[test]
+    fn a_renewal_refuses_a_pair_its_ca_did_not_sign_and_leaves_it_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let names = leaf_names("192.0.2.7:8317".parse().unwrap());
+        let ca = write_ca(
+            dir,
+            "host.example",
+            &names,
+            Validity::days_from_now(CA_LIFETIME_DAYS),
+        )
+        .unwrap();
+        // An operator's pair from a CA of their own, named under tls/ through the pair flags.
+        let (cert, key) = fake_upstream::generate_pair(&["localhost"]).write_to(dir, "proxy");
+        let before = (std::fs::read(&cert).unwrap(), std::fs::read(&key).unwrap());
+        let error = write_leaf(
+            dir,
+            "proxy",
+            &ca,
+            "host.example",
+            &names,
+            Validity::days_from_now(LEAF_LIFETIME_DAYS),
+            LeafModes::KeepLive,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, MaterialError::NotSignedByCa { path, ca }
+                if *path == cert && *ca == dir.join(CA_CERT)),
+            "{error:?}"
+        );
+        assert_eq!(
+            error.to_string(),
+            format!(
+                "{}: holds no certificate the CA in {} signed; init --tls self-signed renews only the leaves it wrote",
+                cert.display(),
+                dir.join(CA_CERT).display()
+            )
+        );
+        assert_eq!(
+            (std::fs::read(&cert).unwrap(), std::fs::read(&key).unwrap()),
+            before
+        );
+        assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
+    }
+
+    #[test]
+    fn leaves_are_staged_and_checked_together_so_a_failure_on_one_places_none() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        let names = leaf_names("192.0.2.7:8317".parse().unwrap());
+        let ca = write_ca(
+            dir,
+            "host.example",
+            &names,
+            Validity::days_from_now(CA_LIFETIME_DAYS),
+        )
+        .unwrap();
+        let leaves = [("proxy", names.clone()), ("admin", names.clone())];
+        let written = write_leaves(
+            dir,
+            &ca,
+            "host.example",
+            &leaves,
+            Validity::days_from_now(LEAF_LIFETIME_DAYS),
+            LeafModes::Private,
+        )
+        .unwrap();
+        assert_eq!(
+            written,
+            [
+                (dir.join("proxy.pem"), dir.join("proxy.key")),
+                (dir.join("admin.pem"), dir.join("admin.key")),
+            ]
+        );
+        // The admin key went missing, so its renewal has no owner and mode to keep; the proxy pair, staged first,
+        // stays as it was.
+        std::fs::remove_file(dir.join("admin.key")).unwrap();
+        let live = [
+            dir.join("proxy.pem"),
+            dir.join("proxy.key"),
+            dir.join("admin.pem"),
+        ];
+        let read = || {
+            live.iter()
+                .map(|path| std::fs::read(path).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let before = read();
+        let error = write_leaves(
+            dir,
+            &ca,
+            "host.example",
+            &leaves,
+            Validity::days_from_now(LEAF_LIFETIME_DAYS),
+            LeafModes::KeepLive,
+        )
+        .unwrap_err();
+        assert!(
+            matches!(&error, MaterialError::Io { path, .. } if *path == dir.join("admin.key")),
+            "{error:?}"
+        );
+        assert_eq!(read(), before);
         assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
     }
 
@@ -712,7 +947,7 @@ mod tests {
             "host.example",
             &names,
             Validity::days_from_now(LEAF_LIFETIME_DAYS),
-            None,
+            LeafModes::Private,
         )
         .unwrap_or_else(|error| panic!("{error}"));
         let mut store = X509StoreBuilder::new().unwrap();
@@ -748,7 +983,7 @@ mod tests {
             "host.example",
             &[SanName::Dns("other.example".into())],
             Validity::days_from_now(LEAF_LIFETIME_DAYS),
-            None,
+            LeafModes::Private,
         )
         .unwrap_err();
         assert!(

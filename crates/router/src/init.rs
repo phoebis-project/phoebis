@@ -17,7 +17,8 @@ use rand::Rng;
 
 use crate::config::{ConfigError, ListenerTls};
 use crate::selfsigned::{
-    self, MaterialError, SanName, Validity, CA_CERT, CA_LIFETIME_DAYS, LEAF_LIFETIME_DAYS,
+    self, LeafModes, MaterialError, SanName, Validity, CA_CERT, CA_LIFETIME_DAYS,
+    LEAF_LIFETIME_DAYS,
 };
 
 /// The text the bootstrap file is filled from, embedded since the binary runs where no checkout exists.
@@ -159,7 +160,8 @@ pub struct Plan {
 pub struct Renewal {
     pub config_path: PathBuf,
     pub tls_dir: PathBuf,
-    /// Each public listener whose `tls` names `<tls_dir>/<name>.pem`, with its address: the leaves to write.
+    /// Each public listener whose `tls` names `<tls_dir>/<name>.pem` and `.key`, or the container's mount of them under
+    /// `CONTAINER_TLS_DIR`, with its address: the leaves to write.
     pub listeners: Vec<(&'static str, SocketAddr)>,
 }
 
@@ -859,6 +861,14 @@ fn generate(plan: &Plan, written: &mut Vec<Landed>) -> Result<(), InitError> {
             path: plan.tls_dir.clone(),
         });
     }
+    if plan.container {
+        // The container's uid traverses the bind-mounted directory to the certificates; `ca.key` and each leaf key
+        // stay 0600 and the caller's, so the wider directory opens nothing secret.
+        set_mode(&plan.tls_dir, None, None, 0o755).map_err(io_error(format!(
+            "setting the mode of {}",
+            plan.tls_dir.display()
+        )))?;
+    }
     let hostname = selfsigned::hostname();
     let ca = match selfsigned::read_ca(&plan.tls_dir).map_err(material)? {
         Some(ca) => ca,
@@ -884,17 +894,24 @@ fn generate(plan: &Plan, written: &mut Vec<Landed>) -> Result<(), InitError> {
             ca
         }
     };
-    for (name, listener) in generated(plan) {
-        let (cert_file, key_file) = selfsigned::write_leaf(
-            &plan.tls_dir,
-            name,
-            &ca,
-            &hostname,
-            &selfsigned::leaf_names(listener.listen),
-            Validity::days_from_now(LEAF_LIFETIME_DAYS),
-            None,
-        )
-        .map_err(material)?;
+    let leaves: Vec<(&str, Vec<SanName>)> = generated(plan)
+        .map(|(name, listener)| (name, selfsigned::leaf_names(listener.listen)))
+        .collect();
+    let modes = if plan.container {
+        LeafModes::Mounted
+    } else {
+        LeafModes::Private
+    };
+    let pairs = selfsigned::write_leaves(
+        &plan.tls_dir,
+        &ca,
+        &hostname,
+        &leaves,
+        Validity::days_from_now(LEAF_LIFETIME_DAYS),
+        modes,
+    )
+    .map_err(material)?;
+    for (cert_file, key_file) in pairs {
         for path in [cert_file, key_file] {
             written.push(Landed { dir: false, path });
         }
@@ -970,18 +987,10 @@ fn hand_over(
 
 /// A generated pair as the unit wants an operator's: the directory `0750` and each leaf's key `0640`, both root's
 /// with the owner's group, each leaf `0644`. The service reads its leaf and key through the group and never signs, so
-/// `ca.pem` and `ca.key` stay root's as written. Each file is opened without following a link, and changed through
-/// that descriptor, so a link swapped in by name cannot carry the change to another file.
+/// `ca.pem` and `ca.key` stay root's as written.
 fn hand_over_pair(plan: &Plan, gid: u32) -> Result<(), InitError> {
     let set = |path: &Path, group: Option<u32>, mode: u32| {
-        OpenOptions::new()
-            .read(true)
-            .custom_flags(libc::O_NOFOLLOW)
-            .open(path)
-            .and_then(|file| {
-                std::os::unix::fs::fchown(&file, Some(0), group)?;
-                file.set_permissions(Permissions::from_mode(mode))
-            })
+        set_mode(path, Some(0), group, mode)
             .map_err(io_error(format!("handing {} to the owner", path.display())))
     };
     set(&plan.tls_dir, Some(gid), 0o750)?;
@@ -991,6 +1000,19 @@ fn hand_over_pair(plan: &Plan, gid: u32) -> Result<(), InitError> {
         set(&pair.key_file, Some(gid), 0o640)?;
     }
     Ok(())
+}
+
+/// Changes `path`'s owner where one is given, then its mode, through a descriptor opened without following a link, so
+/// a link swapped in by name cannot carry the change to another file.
+fn set_mode(path: &Path, uid: Option<u32>, gid: Option<u32>, mode: u32) -> std::io::Result<()> {
+    let file = OpenOptions::new()
+        .read(true)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(path)?;
+    if uid.is_some() || gid.is_some() {
+        std::os::unix::fs::fchown(&file, uid, gid)?;
+    }
+    file.set_permissions(Permissions::from_mode(mode))
 }
 
 /// The directories `--owner` receives: the data directory when this run created it, then every other directory this
@@ -1075,9 +1097,14 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
             "remaining: own storage.key by uid 65532 at mode 0400; copy deploy/compose.yaml with the image tag set",
         );
         if generates(plan) {
-            text.push_str(
-                "; mount ./tls read-only at /etc/phoebis/tls and own each .key under it by uid 65532 at mode 0400",
-            );
+            // The leaf keys by name: `ca.key` sits in the mounted directory too, and the container never signs.
+            let keys: Vec<String> = generated(plan)
+                .map(|(name, _)| format!("tls/{name}.key"))
+                .collect();
+            text.push_str(&format!(
+                "; mount ./tls read-only at /etc/phoebis/tls and own {} by uid 65532 at mode 0400",
+                keys.join(" and ")
+            ));
         }
         text.push('\n');
         text.push_str("next: docker compose run --rm phoebis check-config\n");
@@ -1092,7 +1119,8 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
 
 /// `Some` when `--tls self-signed` meets an existing bootstrap file, read through `load_unresolved`; `None` when the
 /// file does not exist (a first run) or the flag is absent (the refusal of an existing file follows in `refuse`).
-/// Refuses any other flag beside `--config` and `--tls`, and a file that names no pair under `tls_dir`.
+/// Refuses any other flag beside `--config` and `--tls`, and a file that names no pair under `tls_dir` or, for the
+/// container shape, under the mount of it at `CONTAINER_TLS_DIR`.
 pub fn renewal(config_path: &Path, args: &InitArgs) -> Result<Option<Renewal>, InitError> {
     if args.tls != Some(TlsMode::SelfSigned) {
         return Ok(None);
@@ -1107,15 +1135,18 @@ pub fn renewal(config_path: &Path, args: &InitArgs) -> Result<Option<Renewal>, I
     let config = crate::config::load_unresolved(&config_path)
         .map_err(|error| InitError::Unreadable { error })?;
     let tls_dir = parent_of(&config_path).join("tls");
-    // Both halves must be the ones `init` writes: a key an operator moved elsewhere would not match a new leaf.
+    // Both halves must be the ones `init` writes: a key an operator moved elsewhere would not match a new leaf. A
+    // container's file names the mount of `tls/`, whose files the renewal writes on the host.
+    let mounted = Path::new(CONTAINER_TLS_DIR);
     let listeners: Vec<(&'static str, SocketAddr)> = [
         (PROXY.name, config.proxy.listen, &config.proxy.tls),
         (ADMIN.name, config.admin.listen, &config.admin.tls),
     ]
     .into_iter()
     .filter(|(name, _, tls)| {
-        tls.as_ref()
-            .is_some_and(|tls| *tls == generated_pair(name, &tls_dir))
+        tls.as_ref().is_some_and(|tls| {
+            *tls == generated_pair(name, &tls_dir) || *tls == generated_pair(name, mounted)
+        })
     })
     .map(|(name, listen, _)| (name, listen))
     .collect();
@@ -1166,8 +1197,9 @@ fn tls_alone(args: &InitArgs) -> bool {
         && secret_env == DEFAULT_SECRET_ENV
 }
 
-/// Writes the renewal's leaves under the existing CA, keeping each replaced file's owner and mode, and prints one line
-/// per leaf and the stop-and-start line on `report`.
+/// Writes the renewal's leaves under the existing CA, each replaced file keeping its own owner and mode, and prints one
+/// line per leaf and the stop-and-start line on `report`. Every leaf is staged and checked before any replaces its
+/// pair, and a live certificate the CA did not sign is refused, so a refused renewal leaves every pair as it was.
 pub fn renew(renewal: &Renewal, report: &mut dyn Write) -> Result<(), InitError> {
     let material = |error| InitError::Material {
         what: format!("renewing the leaves under {}", renewal.tls_dir.display()),
@@ -1180,19 +1212,22 @@ pub fn renew(renewal: &Renewal, report: &mut dyn Write) -> Result<(), InitError>
             })
         })
         .map_err(material)?;
-    let hostname = selfsigned::hostname();
+    let leaves: Vec<(&str, Vec<SanName>)> = renewal
+        .listeners
+        .iter()
+        .map(|(name, listen)| (*name, selfsigned::leaf_names(*listen)))
+        .collect();
+    let pairs = selfsigned::write_leaves(
+        &renewal.tls_dir,
+        &ca,
+        &selfsigned::hostname(),
+        &leaves,
+        Validity::days_from_now(LEAF_LIFETIME_DAYS),
+        LeafModes::KeepLive,
+    )
+    .map_err(material)?;
     let ca_file = renewal.tls_dir.join(CA_CERT);
-    for (name, listen) in &renewal.listeners {
-        let (cert_file, key_file) = selfsigned::write_leaf(
-            &renewal.tls_dir,
-            name,
-            &ca,
-            &hostname,
-            &selfsigned::leaf_names(*listen),
-            Validity::days_from_now(LEAF_LIFETIME_DAYS),
-            Some(&renewal.tls_dir.join(format!("{name}.key"))),
-        )
-        .map_err(material)?;
+    for (cert_file, key_file) in pairs {
         writeln!(
             report,
             "wrote {} and {} under the CA {}",
@@ -1681,6 +1716,26 @@ mod tests {
                 plain.display(),
                 plain_dir.join("tls").display()
             )
+        );
+    }
+
+    #[test]
+    fn a_container_file_renews_its_pairs_under_tls_beside_it() {
+        let dir = tempfile::tempdir().unwrap();
+        let config = dir.path().join("config.yaml");
+        let container = plan(&config, &args(&["--container", "--tls", "self-signed"])).unwrap();
+        std::fs::write(&config, render(&container)).unwrap();
+        // The file names the container's mount at /etc/phoebis/tls; the pairs behind it sit in tls/ beside the file.
+        assert_eq!(
+            renewal(&config, &args(&["--tls", "self-signed"])).unwrap(),
+            Some(Renewal {
+                config_path: config.clone(),
+                tls_dir: dir.path().join("tls"),
+                listeners: vec![
+                    ("proxy", "0.0.0.0:8317".parse().unwrap()),
+                    ("admin", "0.0.0.0:8081".parse().unwrap()),
+                ],
+            })
         );
     }
 
