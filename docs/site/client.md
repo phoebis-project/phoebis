@@ -16,8 +16,9 @@ CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1
 NODE_EXTRA_CA_CERTS=<path to the CA's PEM>   # a private CA only
 ```
 
-When the proxy listener's certificate comes from a private CA, the client trusts that CA through `NODE_EXTRA_CA_CERTS`;
-a public CA needs nothing here. The client checks the CA before anything else, so the leaf needs no pin.
+When the proxy listener's certificate comes from a private CA, the client trusts that CA through `NODE_EXTRA_CA_CERTS`:
+for a pair `phoebis init --tls self-signed` wrote, that is a copy of the router's `tls/ca.pem`; a public CA needs
+nothing here. The client checks the CA before anything else, so the leaf needs no pin.
 
 ### ANTHROPIC_BASE_URL
 

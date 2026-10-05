@@ -78,7 +78,10 @@ A restore puts both databases back with the key that sealed the registry, in thi
 4. Put the key file that sealed the registry at `storage.encryption_key_file`; the manifest's `key_file` says where it
    lived. A wrong key is refused at start and by `check-config` with `the storage key does not match the registry at
    {path}`.
-5. On a new host, put the certificate pair where the file names it: the backup carries neither the pair nor the key.
+5. On a new host, put the certificate pair where the file names it: the backup carries neither the pair nor the key. A
+   pair `init` generated lives under `tls/` beside the configuration (`/etc/phoebis/tls/` under the unit, `tls/` beside
+   `compose.yaml` in the container shape) with the `ca.pem` the clients trust; copy that directory with the
+   configuration, since a new CA would need every client to trust it again.
 6. Run `phoebis check-config`.
 7. Start the router: `sudo systemctl start phoebis`, or `docker compose up -d`.
 8. Confirm with `phoebis status`, which reads `ready`.
@@ -268,7 +271,9 @@ compose ps` reads `healthy` once `phoebis health` has read the router as ready, 
 version.
 
 A certificate pair is read at start and never watched: a renewal is stop, replace, start, and the 30-second drain,
-inside the 40-second stop grace, bounds the gap.
+inside the 40-second stop grace, bounds the gap. For a pair `init` generated, the replace step is
+`phoebis init --tls self-signed --config <path>`, which writes new leaves under the same CA
+([installation](installation.md#commands)).
 
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
 own transaction. The registry's migrations may drop or rebuild a table, and a ledger migration can rebuild a table

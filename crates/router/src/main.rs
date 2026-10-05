@@ -246,6 +246,10 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(Command::Init(args)) => {
+            if let Some(renewal) = init::renewal(&cli.config, &args)? {
+                init::renew(&renewal, &mut std::io::stderr().lock())?;
+                return Ok(());
+            }
             let interactive = std::io::stdin().is_terminal()
                 && std::io::stderr().is_terminal()
                 && !args.non_interactive;

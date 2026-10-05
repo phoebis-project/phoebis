@@ -1,11 +1,14 @@
 //! Both public listeners terminate TLS from an operator's certificate pair: the router started in-process with a
 //! pair the test generates and trusts from its own clients alone, `phoebis health` probing its proxy listener over
-//! TLS, and a pair the start cannot serve refused before any port is taken.
+//! TLS, a pair the start cannot serve refused before any port is taken, and a pair `phoebis init --tls self-signed`
+//! wrote served to a client that trusts the `ca.pem` beside it.
 
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
+use boring::ssl::{ConnectConfiguration, SslConnector, SslMethod};
+use boring::x509::X509;
 use fake_upstream::{connector_trusting, generate_pair, FakeUpstream};
 use phoebis_router::config::Config;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
@@ -246,5 +249,99 @@ async fn a_key_that_does_not_match_the_certificate_refuses_the_start_naming_the_
         std::net::TcpListener::bind(("127.0.0.1", proxy_port)).is_ok(),
         "the refused start took no port"
     );
+    up.shutdown().await;
+}
+
+/// A client that trusts the one CA `ca_pem` holds, offering HTTP/1.1.
+fn connector_trusting_pem(ca_pem: &[u8]) -> ConnectConfiguration {
+    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
+    builder
+        .cert_store_mut()
+        .add_cert(X509::from_pem(ca_pem).unwrap())
+        .unwrap();
+    builder.set_alpn_protos(b"\x08http/1.1").unwrap();
+    builder.build().configure().unwrap()
+}
+
+#[tokio::test]
+async fn a_pair_init_generated_serves_the_proxy_to_a_client_trusting_ca_pem() {
+    let up = FakeUpstream::start(vec![]).await;
+    let scratch = tempfile::tempdir().unwrap();
+    let init = tokio::process::Command::new(env!("CARGO_BIN_EXE_phoebis"))
+        .args([
+            "init",
+            "--tls",
+            "self-signed",
+            "--proxy-listen",
+            "0.0.0.0:0",
+            "--non-interactive",
+            "--config",
+        ])
+        .arg(scratch.path().join("config.yaml"))
+        .current_dir(scratch.path())
+        .env_remove("PHOEBIS_ADMIN_SECRET")
+        .env_remove("PHOEBIS_CONFIG")
+        .output()
+        .await
+        .unwrap();
+    assert_eq!(
+        init.status.code(),
+        Some(0),
+        "{}",
+        String::from_utf8_lossy(&init.stderr)
+    );
+    let tls = scratch.path().join("tls");
+    let dir = tempfile::tempdir().unwrap();
+    let (proxy_port, admin_port) = (free_port(), free_port());
+    let config = configured(
+        dir.path(),
+        &up,
+        (proxy_port, admin_port),
+        &tls.join("proxy.pem"),
+        &tls.join("proxy.key"),
+    );
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+
+    let ca_pem = std::fs::read(tls.join("ca.pem")).unwrap();
+    let socket = fake_upstream::wait_for_async(SETTLE, || async {
+        TcpStream::connect(("127.0.0.1", proxy_port)).await.ok()
+    })
+    .await;
+    let mut ready = tokio::time::timeout(
+        SETTLE,
+        tokio_boring::connect(connector_trusting_pem(&ca_pem), "localhost", socket),
+    )
+    .await
+    .expect("the handshake finished")
+    .unwrap();
+    ready
+        .write_all(b"GET /api/ready HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(SETTLE, ready.read_to_end(&mut answer)).await;
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+
+    // The trust is `ca.pem`'s alone: a client that trusts another CA is refused at the handshake.
+    let socket = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    let refused = tokio::time::timeout(
+        SETTLE,
+        tokio_boring::connect(
+            connector_trusting_pem(up.ca_pem().as_bytes()),
+            "localhost",
+            socket,
+        ),
+    )
+    .await
+    .expect("the handshake ended")
+    .expect_err("a client trusting another CA is refused");
+    assert!(refused.to_string().contains("verif"), "{refused}");
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
     up.shutdown().await;
 }

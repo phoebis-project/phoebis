@@ -1,6 +1,8 @@
 //! `phoebis init` writes the storage key, the environment file when one is named, and the bootstrap file, once and at
 //! their modes, and prints the admin secret once on stdout unless the environment file takes it. It refuses a file that
 //! exists, a data directory that holds a registry and `--owner` off root, and every refusal leaves nothing behind.
+//! Under `--tls self-signed` it writes a local CA and a leaf per network listener under `tls/`, and run again against
+//! the file it wrote it renews those leaves under the same CA.
 
 use std::io::{Read, Write};
 use std::os::fd::{AsRawFd, FromRawFd};
@@ -8,6 +10,10 @@ use std::os::unix::fs::{MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output, Stdio};
 
+use boring::asn1::Asn1Time;
+use boring::stack::Stack;
+use boring::x509::store::X509StoreBuilder;
+use boring::x509::{X509StoreContext, X509};
 use phoebis_router::config::ListenerTls;
 
 fn phoebis(dir: &Path) -> Command {
@@ -78,6 +84,75 @@ fn is_key_text(key: &str) -> bool {
 
 fn path_arg(path: &Path) -> &str {
     path.to_str().unwrap()
+}
+
+fn certificate(path: &Path) -> X509 {
+    X509::from_pem(&std::fs::read(path).unwrap()).unwrap()
+}
+
+/// Whether `leaf` chains to `ca` under a store that holds `ca` and nothing else.
+fn verifies_under(ca: &X509, leaf: &X509) -> bool {
+    let mut store = X509StoreBuilder::new().unwrap();
+    store.add_cert(ca.clone()).unwrap();
+    let store = store.build();
+    X509StoreContext::new()
+        .unwrap()
+        .init(&store, leaf, &Stack::<X509>::new().unwrap(), |context| {
+            context.verify_cert()
+        })
+        .unwrap()
+}
+
+fn days_left(cert: &X509) -> i32 {
+    Asn1Time::days_from_now(0)
+        .unwrap()
+        .diff(cert.not_after())
+        .unwrap()
+        .days
+}
+
+/// The subject alternative names, DNS names and addresses alike, as text.
+fn alt_names(cert: &X509) -> Vec<String> {
+    cert.subject_alt_names()
+        .unwrap()
+        .iter()
+        .map(|name| match (name.dnsname(), name.ipaddress()) {
+            (Some(dns), _) => dns.to_owned(),
+            (None, Some(octets)) if octets.len() == 4 => {
+                std::net::IpAddr::from(<[u8; 4]>::try_from(octets).unwrap()).to_string()
+            }
+            (None, Some(octets)) => {
+                std::net::IpAddr::from(<[u8; 16]>::try_from(octets).unwrap()).to_string()
+            }
+            (None, None) => panic!("a subject alternative name that is neither DNS nor IP"),
+        })
+        .collect()
+}
+
+fn contents(paths: &[PathBuf]) -> Vec<Vec<u8>> {
+    paths
+        .iter()
+        .map(|path| std::fs::read(path).unwrap())
+        .collect()
+}
+
+/// The first run of the self-signed shape on the proxy alone, off loopback, as the renewal cases start from.
+fn init_self_signed(dir: &Path) -> (PathBuf, Output) {
+    let config = dir.join("config.yaml");
+    let out = init(
+        dir,
+        &[
+            "--tls",
+            "self-signed",
+            "--proxy-listen",
+            "0.0.0.0:0",
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    (config, out)
 }
 
 #[test]
@@ -326,6 +401,220 @@ fn an_address_off_loopback_is_written_without_a_tls_line_and_passes_check_config
         "{}",
         printed(&checked)
     );
+    assert!(!dir.path().join("tls").exists());
+}
+
+#[test]
+fn tls_self_signed_writes_a_ca_and_a_leaf_per_network_listener_and_check_config_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (config, out) = init_self_signed(dir.path());
+    let secret = secret_line(&out.stdout, "PHOEBIS_ADMIN_SECRET");
+    let tls = dir.path().join("tls");
+    assert_eq!(mode(&tls), 0o700);
+    assert_eq!(mode(&tls.join("ca.pem")), 0o644);
+    for name in ["ca.key", "proxy.pem", "proxy.key"] {
+        assert_eq!(mode(&tls.join(name)), 0o600, "{name}");
+    }
+    // The admin listener stays on loopback, so it gets no leaf; nothing staged is left behind.
+    assert_eq!(
+        entries(&tls),
+        ["ca.key", "ca.pem", "proxy.key", "proxy.pem"]
+    );
+    let loaded = phoebis_router::config::load_unresolved(&config).unwrap();
+    assert_eq!(
+        loaded.proxy.tls,
+        Some(ListenerTls {
+            cert_file: tls.join("proxy.pem"),
+            key_file: tls.join("proxy.key"),
+        })
+    );
+    assert_eq!(loaded.admin.tls, None);
+
+    let checked = phoebis(dir.path())
+        .env("PHOEBIS_ADMIN_SECRET", &secret)
+        .args(["check-config", "--config"])
+        .arg(&config)
+        .output()
+        .unwrap();
+    assert_eq!(checked.status.code(), Some(0), "{}", printed(&checked));
+    let line = String::from_utf8_lossy(&checked.stdout)
+        .lines()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
+    assert!(
+        line.starts_with(&format!(
+            "proxy listens on 0.0.0.0:0 over TLS (certificate {}, expires ",
+            tls.join("proxy.pem").display()
+        )),
+        "{}",
+        printed(&checked)
+    );
+
+    let (ca, leaf) = (
+        certificate(&tls.join("ca.pem")),
+        certificate(&tls.join("proxy.pem")),
+    );
+    assert!(verifies_under(&ca, &leaf));
+    let names = alt_names(&leaf);
+    for name in ["localhost", "127.0.0.1", "::1"] {
+        assert!(names.iter().any(|n| n == name), "{name} in {names:?}");
+    }
+    assert!(
+        (364..=366).contains(&days_left(&leaf)),
+        "{}",
+        days_left(&leaf)
+    );
+    assert!(
+        (3_649..=3_651).contains(&days_left(&ca)),
+        "{}",
+        days_left(&ca)
+    );
+
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "clients must trust {}; copy it to each client and set NODE_EXTRA_CA_CERTS to the copy",
+            tls.join("ca.pem").display()
+        )),
+        "{stderr}"
+    );
+    assert!(!stderr.contains(&secret), "{stderr}");
+}
+
+#[test]
+fn tls_files_without_the_pair_flags_refuses_and_writes_nothing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let out = init(
+        dir.path(),
+        &[
+            "--tls",
+            "files",
+            "--proxy-listen",
+            "0.0.0.0:0",
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "Error: --tls files needs --proxy-cert and --proxy-key for proxy on 0.0.0.0:0"
+        ),
+        "{stderr}"
+    );
+    assert!(out.stdout.is_empty(), "{}", printed(&out));
+    assert!(entries(dir.path()).is_empty());
+}
+
+#[test]
+fn a_second_run_with_tls_self_signed_renews_the_leaves_under_the_same_ca_and_touches_nothing_else()
+{
+    let dir = tempfile::tempdir().unwrap();
+    let (config, _) = init_self_signed(dir.path());
+    let tls = dir.path().join("tls");
+    let kept = [
+        config.clone(),
+        dir.path().join("storage.key"),
+        tls.join("ca.pem"),
+        tls.join("ca.key"),
+    ];
+    let renewed = [tls.join("proxy.pem"), tls.join("proxy.key")];
+    let (kept_before, renewed_before) = (contents(&kept), contents(&renewed));
+    let tree = entries(dir.path());
+
+    let out = init(
+        dir.path(),
+        &["--tls", "self-signed", "--config", path_arg(&config)],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert!(out.stdout.is_empty(), "{}", printed(&out));
+    assert_eq!(contents(&kept), kept_before);
+    let renewed_after = contents(&renewed);
+    assert_ne!(renewed_after[0], renewed_before[0]);
+    assert_ne!(renewed_after[1], renewed_before[1]);
+    assert!(verifies_under(
+        &certificate(&tls.join("ca.pem")),
+        &certificate(&tls.join("proxy.pem"))
+    ));
+    assert_eq!((mode(&renewed[0]), mode(&renewed[1])), (0o600, 0o600));
+    assert_eq!(
+        entries(&tls),
+        ["ca.key", "ca.pem", "proxy.key", "proxy.pem"]
+    );
+    assert_eq!(entries(dir.path()), tree);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&tls.join("proxy.pem").display().to_string()),
+        "{stderr}"
+    );
+    assert!(
+        stderr.ends_with("next: stop and start the router, which reads the pair at start\n"),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn a_renewal_with_another_flag_or_against_a_file_without_a_generated_pair_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let (config, _) = init_self_signed(dir.path());
+    let tls = dir.path().join("tls");
+    let files = [
+        config.clone(),
+        dir.path().join("storage.key"),
+        tls.join("ca.pem"),
+        tls.join("ca.key"),
+        tls.join("proxy.pem"),
+        tls.join("proxy.key"),
+    ];
+    let before = contents(&files);
+    let flagged = init(
+        dir.path(),
+        &[
+            "--tls",
+            "self-signed",
+            "--proxy-listen",
+            "0.0.0.0:1",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(flagged.status.code(), Some(1), "{}", printed(&flagged));
+    assert!(
+        String::from_utf8_lossy(&flagged.stderr).contains(
+            "Error: init --tls self-signed against an existing bootstrap file renews its leaves and takes no other flag"
+        ),
+        "{}",
+        printed(&flagged)
+    );
+    assert!(flagged.stdout.is_empty(), "{}", printed(&flagged));
+    assert_eq!(contents(&files), before);
+
+    let plain = tempfile::tempdir().unwrap();
+    let config = plain.path().join("config.yaml");
+    let first = init(
+        plain.path(),
+        &["--non-interactive", "--config", path_arg(&config)],
+    );
+    assert_eq!(first.status.code(), Some(0), "{}", printed(&first));
+    let out = init(
+        plain.path(),
+        &["--tls", "self-signed", "--config", path_arg(&config)],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stderr).contains(&format!(
+            "Error: {} names no pair under {}; init --tls self-signed renews only the pairs it wrote",
+            config.display(),
+            plain.path().join("tls").display()
+        )),
+        "{}",
+        printed(&out)
+    );
+    assert!(!plain.path().join("tls").exists());
 }
 
 #[test]
@@ -517,6 +806,64 @@ fn the_container_shape_writes_the_compose_directory() {
 }
 
 #[test]
+fn the_container_shape_with_tls_self_signed_writes_tls_beside_the_file_and_names_the_containers_paths(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let out = init(
+        dir.path(),
+        &[
+            "--container",
+            "--tls",
+            "self-signed",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    let tls = dir.path().join("tls");
+    assert_eq!(
+        entries(dir.path()),
+        ["config.yaml", "phoebis.env", "storage.key", "tls"]
+    );
+    assert_eq!(
+        entries(&tls),
+        [
+            "admin.key",
+            "admin.pem",
+            "ca.key",
+            "ca.pem",
+            "proxy.key",
+            "proxy.pem"
+        ]
+    );
+    let loaded = phoebis_router::config::load_unresolved(&config).unwrap();
+    let inside = |name: &str| ListenerTls {
+        cert_file: PathBuf::from(format!("/etc/phoebis/tls/{name}.pem")),
+        key_file: PathBuf::from(format!("/etc/phoebis/tls/{name}.key")),
+    };
+    assert_eq!(loaded.proxy.tls, Some(inside("proxy")));
+    assert_eq!(loaded.admin.tls, Some(inside("admin")));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    let remaining = stderr
+        .lines()
+        .find(|line| line.starts_with("remaining: "))
+        .unwrap_or_default();
+    assert!(
+        remaining.contains("mount ./tls read-only at /etc/phoebis/tls"),
+        "{stderr}"
+    );
+    // The clients copy the CA from the host, so the line names the host's path.
+    assert!(
+        stderr.contains(&format!(
+            "clients must trust {};",
+            tls.join("ca.pem").display()
+        )),
+        "{stderr}"
+    );
+}
+
+#[test]
 fn the_parents_this_run_creates_are_0700_and_an_existing_one_is_untouched() {
     let dir = tempfile::tempdir().unwrap();
     let have = dir.path().join("have");
@@ -607,6 +954,10 @@ fn the_owner_receives_the_key_file_the_data_directory_and_the_created_parents() 
             path_arg(&data),
             "--env-file",
             path_arg(&env_file),
+            "--tls",
+            "self-signed",
+            "--proxy-listen",
+            "0.0.0.0:0",
             "--non-interactive",
             "--config",
             path_arg(&config),
@@ -645,6 +996,30 @@ fn the_owner_receives_the_key_file_the_data_directory_and_the_created_parents() 
         .unwrap();
     assert_eq!(read.status.code(), Some(0), "{}", printed(&read));
     assert!(is_key_text(&String::from_utf8_lossy(&read.stdout)));
+
+    // The pair as the unit wants an operator's: the service reads its leaf and key through the group and never signs.
+    let tls = dir.path().join("tls");
+    let owned = |path: &Path| {
+        let metadata = std::fs::metadata(path).unwrap();
+        (metadata.mode() & 0o777, metadata.uid(), metadata.gid())
+    };
+    assert_eq!(owned(&tls), (0o750, 0, gid));
+    assert_eq!(owned(&tls.join("proxy.pem")).0, 0o644);
+    assert_eq!(owned(&tls.join("proxy.pem")).1, 0);
+    assert_eq!(owned(&tls.join("proxy.key")), (0o640, 0, gid));
+    assert_eq!(owned(&tls.join("ca.key")), (0o600, 0, 0));
+    let read_as_owner = |path: &Path| {
+        Command::new("cat")
+            .uid(uid)
+            .gid(gid)
+            .arg(path)
+            .output()
+            .unwrap()
+    };
+    let leaf_key = read_as_owner(&tls.join("proxy.key"));
+    assert_eq!(leaf_key.status.code(), Some(0), "{}", printed(&leaf_key));
+    let ca_key = read_as_owner(&tls.join("ca.key"));
+    assert_ne!(ca_key.status.code(), Some(0), "{}", printed(&ca_key));
 }
 
 #[test]
