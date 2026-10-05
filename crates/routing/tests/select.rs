@@ -11297,7 +11297,21 @@ fn a_shed_round_answers_its_hot_window_and_its_pins_in_the_round_s_order() {
     st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
     st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
     let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
-    let round = d.shed_round.expect("the round ran on this decision");
+    let ran = d.shed_round.expect("the round ran on this decision");
+    assert_eq!(
+        (ran.account_id.as_str(), &ran.pin),
+        (
+            "a",
+            &PinKeyFacts {
+                key_id: "k".into(),
+                session_id: "s1".into(),
+                agent_id: "main".into(),
+                model: "claude-sonnet-5".into(),
+            }
+        ),
+        "the round names the pin it ran on and that pin's account"
+    );
+    let round = ran.facts;
     // The 5-hour lead of 0.1 stays under the threshold; the week's 0.4 is the first to reach it.
     assert_eq!(
         (round.window.as_str(), round.unit),

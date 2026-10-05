@@ -2141,20 +2141,15 @@ impl Task {
                     }
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
-                // A round runs on the pin step 1 found, so the record's pin block names its account.
                 let round = shed_round.map(|round| RouterEvent::SheddingRound {
-                    account_id: record
-                        .pin
-                        .as_ref()
-                        .and_then(|pin| pin.account_id.clone())
-                        .unwrap_or_default(),
+                    account_id: round.account_id,
                     pool_id: record.request.pool_id.clone(),
                     request_id: request.request_id.clone(),
-                    key_id: request.key_id.clone(),
-                    session_id: request.session_id.clone().unwrap_or_default(),
-                    agent_id: request.agent_id.clone(),
-                    model: request.canonical_model.clone(),
-                    round,
+                    key_id: round.pin.key_id,
+                    session_id: round.pin.session_id,
+                    agent_id: round.pin.agent_id,
+                    model: round.pin.model,
+                    round: round.facts,
                     at: request.now,
                 });
                 self.emit(RouterEvent::Decision {

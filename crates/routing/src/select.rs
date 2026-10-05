@@ -724,7 +724,16 @@ pub struct Decided {
     pub record: DecisionRecord,
     pub summary: DecisionSummary,
     /// The round this decision ran, for the task's `SheddingRound` event; `None` when none ran.
-    pub shed_round: Option<ShedRoundFacts>,
+    pub shed_round: Option<ShedRound>,
+}
+
+/// A shedding round a decision ran: the pin it ran on and that pin's account, which the round's event names, beside
+/// what the round read.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ShedRound {
+    pub account_id: String,
+    pub pin: PinKeyFacts,
+    pub facts: ShedRoundFacts,
 }
 
 /// The selection with its record: every step appends what it read as it read it, so the record and the answer
@@ -783,7 +792,7 @@ struct Recorder {
     destinations: Vec<String>,
     pin_written: Option<PinWritten>,
     hold_place: Option<&'static str>,
-    shed_round: Option<ShedRoundFacts>,
+    shed_round: Option<ShedRound>,
     pick: Option<Pick>,
     renewal: Option<Renewal>,
 }
@@ -1980,7 +1989,11 @@ fn move_of<'a>(
             "marks",
             marks.iter().map(pin_key_text).collect(),
         ));
-        rec.shed_round = Some(round);
+        rec.shed_round = Some(ShedRound {
+            account_id: current.account_id.clone(),
+            pin: pin_key_facts(&current.key()),
+            facts: round,
+        });
         state.record_shed(&current.account_id, now, marks);
     } else {
         facts.push(Fact::text("round", "within_dwell"));
@@ -3469,7 +3482,7 @@ fn finish(
     snapshot: &RegistrySnapshot,
     pool: Option<&PoolRow>,
     result: &SelectResult,
-) -> (DecisionRecord, DecisionSummary, Option<ShedRoundFacts>) {
+) -> (DecisionRecord, DecisionSummary, Option<ShedRound>) {
     let Recorder {
         walk,
         mut candidates,
@@ -3502,7 +3515,7 @@ fn finish(
         exhaustion: None,
         refusal: None,
         cohort_hold: cohort_hold(&request.holds),
-        shed_marks: shed_round.as_ref().map(|round| round.marks.clone()),
+        shed_marks: shed_round.as_ref().map(|round| round.facts.marks.clone()),
     };
     let mut skipped = 0;
     match result {
