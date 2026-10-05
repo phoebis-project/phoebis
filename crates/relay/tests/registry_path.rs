@@ -272,3 +272,60 @@ async fn a_read_that_returned_before_a_re_pair_and_its_reload_is_refused_stale()
     );
     up.shutdown().await;
 }
+
+/// The pairing's invalidation outruns a read that returned the replaced bundle: the read drops its bundle rather than
+/// put it back, so an acquisition that names no generation (the usage poll's, the catalog's) answers the new token.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_read_outrun_by_a_pairings_invalidation_does_not_put_the_replaced_bundle_back() {
+    let up = upstream().await;
+    let h = harness(
+        &up,
+        &[oauth("a", OAUTH_A, 0), oauth("b", OAUTH_B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    h.manager.invalidate("a");
+    let hold = h.store.debug_hold_after_next_credential_read();
+    let app = h.app.clone();
+    let inflight = tokio::spawn(async move {
+        app.oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+            .await
+            .unwrap()
+    });
+    wait_for(Duration::from_secs(5), || hold.is_parked().then_some(())).await;
+    h.store
+        .commit_pairing(
+            "a",
+            1,
+            1,
+            Some(1),
+            &NewBundle {
+                access_token: Secret::new(OAUTH_A_REPAIRED),
+                refresh_token: None,
+                issued_at: NOW,
+                expires_at: i64::MAX / 2,
+                refresh_expires_at: None,
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    // What the pairing's confirmation does once its commit landed.
+    h.manager.invalidate("a");
+    hold.release();
+    let resp = inflight.await.unwrap();
+    let token = h.manager.acquire("a").await.unwrap();
+    assert_eq!(
+        token.secret.expose(),
+        OAUTH_A_REPAIRED,
+        "the cache answers the pairing's bundle, not the one the outrun read returned"
+    );
+    assert_eq!(resp.status(), 200);
+    resp.into_body().collect().await.unwrap();
+    assert_eq!(
+        credentials_seen(&up),
+        [OAUTH_A_REPAIRED],
+        "the outrun read answers the bundle stored now, and nothing went out under the replaced token"
+    );
+    up.shutdown().await;
+}

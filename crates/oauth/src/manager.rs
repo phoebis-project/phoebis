@@ -174,6 +174,9 @@ struct BundleEntry {
 /// An account's place in the cache.
 #[derive(Default)]
 struct CacheSlot {
+    /// Advanced by every invalidation and every mark, so a read or a refresh that began before one can tell that the
+    /// bundle it holds may be the replaced one and leave the entry alone.
+    epoch: u64,
     /// The bundle the account's acquisitions answer from while its lineage holds, so a leg pays no registry read.
     entry: Option<BundleEntry>,
     /// The lineage whose refresh the token endpoint refused for good. The mark is the store's alone until the next
@@ -192,6 +195,20 @@ impl CacheSlot {
                 && expected.is_none_or(|expected| expected <= refused.generation)
         })
     }
+
+    /// Drops the entry and moves the epoch, so a bundle read or committed before this call is not put back.
+    fn outrun(&mut self) {
+        self.entry = None;
+        self.epoch += 1;
+    }
+}
+
+/// What the cache answers a row.
+enum Lookup {
+    Hit(Arc<CredentialBundle>),
+    Miss,
+    /// A miss on a lineage a re-authentication mark refused.
+    Refused,
 }
 
 struct Inner {
@@ -345,11 +362,10 @@ impl CredentialManager {
     /// disconnect) is served on the next call rather than after the cached one expires. A refusal recorded against
     /// the replaced credential goes with it.
     pub fn invalidate(&self, account_id: &str) {
-        self.inner
-            .bundles
-            .lock()
-            .expect(LOCK_POISONED)
-            .remove(account_id);
+        let mut bundles = self.inner.bundles.lock().expect(LOCK_POISONED);
+        let slot = bundles.entry(account_id.to_string()).or_default();
+        slot.outrun();
+        slot.refused = None;
     }
 
     /// Forces the refresh path for a token the upstream has just rejected.
@@ -558,68 +574,111 @@ impl CredentialManager {
 
 impl Inner {
     /// The account's bundle: the cached one while its lineage is the row's and its generation is at or above
-    /// `expected`, else one store read where `read` says, which replaces the entry.
+    /// `expected`, else one store read where `read` says, which replaces the entry. A read an invalidation outran
+    /// drops what it read, since a pairing may have committed under it, and runs once more; a second invalidation
+    /// under that read answers what the cache holds by then.
     async fn bundle(
         &self,
         account: &AccountRow,
         expected: Option<u64>,
         read: Read,
     ) -> Result<Arc<CredentialBundle>, AcquireError> {
-        let cached = {
-            let bundles = self.bundles.lock().expect(LOCK_POISONED);
-            let slot = bundles.get(&account.id);
-            let hit = slot
-                .and_then(|slot| slot.entry.as_ref())
-                .filter(|entry| {
-                    entry.lineage.of_row(account)
-                        && expected.is_none_or(|expected| entry.lineage.generation >= expected)
-                })
-                .map(|entry| entry.bundle.clone());
-            if hit.is_none() && slot.is_some_and(|slot| slot.refuses(account, expected)) {
-                return Err(AcquireError::ReauthRequired);
+        let mut retried = false;
+        loop {
+            let (epoch, found) = self.lookup(account, expected);
+            match found {
+                Lookup::Hit(bundle) => return Ok(bundle),
+                Lookup::Refused => return Err(AcquireError::ReauthRequired),
+                Lookup::Miss => {}
             }
-            hit
-        };
-        if let Some(bundle) = cached {
-            return Ok(bundle);
+            let stored = match read {
+                Read::Blocking => {
+                    let store = self.store.clone();
+                    let id = account.id.clone();
+                    tokio::task::spawn_blocking(move || store.credentials(&id))
+                        .await
+                        .map_err(|error| {
+                            AcquireError::Unavailable(format!(
+                                "the credential read failed: {error}"
+                            ))
+                        })??
+                }
+                Read::Inline => self.store.credentials(&account.id)?,
+            };
+            let bundle = Arc::new(stored.ok_or(AcquireError::Unpaired)?);
+            if self.remember(account, bundle.clone(), epoch) {
+                return Ok(bundle);
+            }
+            if retried {
+                return match self.lookup(account, expected).1 {
+                    Lookup::Hit(bundle) => Ok(bundle),
+                    Lookup::Refused => Err(AcquireError::ReauthRequired),
+                    Lookup::Miss => Err(AcquireError::Unavailable(
+                        "the credential changed while it was read".into(),
+                    )),
+                };
+            }
+            retried = true;
         }
-        let stored = match read {
-            Read::Blocking => {
-                let store = self.store.clone();
-                let id = account.id.clone();
-                tokio::task::spawn_blocking(move || store.credentials(&id))
-                    .await
-                    .map_err(|error| {
-                        AcquireError::Unavailable(format!("the credential read failed: {error}"))
-                    })??
-            }
-            Read::Inline => self.store.credentials(&account.id)?,
-        };
-        let bundle = stored.ok_or(AcquireError::Unpaired)?;
-        let bundle = Arc::new(bundle);
-        self.remember(account, bundle.clone());
-        Ok(bundle)
     }
 
-    /// Keeps `bundle` as the account's entry under the row's incarnation. A bundle of another lifecycle than the
+    /// The cache's answer for the row, with the epoch it was read under: the entry while its lineage is the row's
+    /// and its generation at or above `expected`, the refusal for a miss on a refused lineage, or a miss.
+    fn lookup(&self, account: &AccountRow, expected: Option<u64>) -> (u64, Lookup) {
+        let bundles = self.bundles.lock().expect(LOCK_POISONED);
+        let Some(slot) = bundles.get(&account.id) else {
+            return (0, Lookup::Miss);
+        };
+        let hit = slot
+            .entry
+            .as_ref()
+            .filter(|entry| {
+                entry.lineage.of_row(account)
+                    && expected.is_none_or(|expected| entry.lineage.generation >= expected)
+            })
+            .map(|entry| entry.bundle.clone());
+        let found = match hit {
+            Some(bundle) => Lookup::Hit(bundle),
+            None if slot.refuses(account, expected) => Lookup::Refused,
+            None => Lookup::Miss,
+        };
+        (slot.epoch, found)
+    }
+
+    /// The account's current epoch, read before a store read or a refresh so `remember` can tell whether an
+    /// invalidation landed in between.
+    fn epoch(&self, account_id: &str) -> u64 {
+        self.bundles
+            .lock()
+            .expect(LOCK_POISONED)
+            .get(account_id)
+            .map_or(0, |slot| slot.epoch)
+    }
+
+    /// Keeps `bundle` as the account's entry under the row's incarnation, and answers whether the caller may serve
+    /// it: `false` when the slot's epoch moved past `epoch` since the caller read it, since an invalidation landed in
+    /// between and the bundle may be the one it replaced. Under a held epoch, a bundle of another lifecycle than the
     /// row's is left out, since its lineage is not the row's to vouch for; an entry the same lineage holds at a
     /// newer generation stays, since a read that lost a race to a refresh commit would put the older one back; and a
     /// bundle at or under a refused generation is left out the same way, since a read that returned it lost to the
     /// mark, while one past it is a pairing's and ends the refusal.
-    fn remember(&self, account: &AccountRow, bundle: Arc<CredentialBundle>) {
+    fn remember(&self, account: &AccountRow, bundle: Arc<CredentialBundle>, epoch: u64) -> bool {
+        let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
+        let slot = bundles.entry(account.id.clone()).or_default();
+        if slot.epoch != epoch {
+            return false;
+        }
         if bundle.lifecycle_generation != account.lifecycle_generation {
-            return;
+            return true;
         }
         let lineage = Lineage {
             incarnation: account.incarnation,
             lifecycle_generation: bundle.lifecycle_generation,
             generation: bundle.generation,
         };
-        let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
-        let slot = bundles.entry(account.id.clone()).or_default();
         if let Some(refused) = slot.refused.filter(|refused| refused.of_row(account)) {
             if lineage.generation <= refused.generation {
-                return;
+                return true;
             }
             slot.refused = None;
         }
@@ -628,6 +687,29 @@ impl Inner {
         });
         if !newer {
             slot.entry = Some(BundleEntry { lineage, bundle });
+        }
+        true
+    }
+
+    /// The token stored now, for a refresh whose own bundle an invalidation outran: one read under the current
+    /// epoch, and what the cache holds when a second invalidation outruns that one too.
+    fn stored_now(&self, account: &AccountRow) -> Result<AccessToken, RefreshFailure> {
+        let epoch = self.epoch(&account.id);
+        let bundle = self
+            .store
+            .credentials(&account.id)
+            .map_err(store_failure)?
+            .ok_or(RefreshFailure::Unpaired)?;
+        let bundle = Arc::new(bundle);
+        if self.remember(account, bundle.clone(), epoch) {
+            return Ok(access_token(account, &bundle));
+        }
+        match self.lookup(account, None).1 {
+            Lookup::Hit(current) => Ok(access_token(account, &current)),
+            Lookup::Refused => Err(RefreshFailure::ReauthRequired),
+            Lookup::Miss => Err(RefreshFailure::Unavailable(
+                "the credential changed while it was refreshed".into(),
+            )),
         }
     }
 
@@ -675,6 +757,9 @@ impl Inner {
         if self.panic_next_refresh.swap(false, Ordering::SeqCst) {
             panic!("refresh panicked on purpose");
         }
+        // Read ahead of the store reads, so a pairing or a disconnect committed anywhere under this refresh shows as
+        // a moved epoch when the result is published.
+        let epoch = self.epoch(account_id);
         let account = self
             .store
             .account(account_id)
@@ -696,7 +781,9 @@ impl Inner {
         // been replaced. It replaces the entry the caller read too, or every later call would come back here.
         if bundle.generation != observed_generation {
             let token = access_token(&account, &bundle);
-            self.remember(&account, Arc::new(bundle));
+            if !self.remember(&account, Arc::new(bundle), epoch) {
+                return self.stored_now(&account);
+            }
             return Ok(token);
         }
 
@@ -863,23 +950,23 @@ impl Inner {
             Ok(generation) => {
                 // The one write that moves the generation without a reload, so the entry moves with it. A response
                 // without a refresh token keeps the stored one, as the commit does.
-                self.remember(
-                    &account,
-                    Arc::new(CredentialBundle {
-                        access_token: Secret::new(fresh.access_token.expose()),
-                        refresh_token: fresh
-                            .refresh_token
-                            .as_ref()
-                            .or(bundle.refresh_token.as_ref())
-                            .map(|token| Secret::new(token.expose())),
-                        issued_at: fresh.issued_at,
-                        expires_at: fresh.expires_at,
-                        refresh_expires_at: fresh.refresh_expires_at,
-                        scopes: fresh.scopes.clone(),
-                        generation,
-                        lifecycle_generation: account.lifecycle_generation,
-                    }),
-                );
+                let committed = Arc::new(CredentialBundle {
+                    access_token: Secret::new(fresh.access_token.expose()),
+                    refresh_token: fresh
+                        .refresh_token
+                        .as_ref()
+                        .or(bundle.refresh_token.as_ref())
+                        .map(|token| Secret::new(token.expose())),
+                    issued_at: fresh.issued_at,
+                    expires_at: fresh.expires_at,
+                    refresh_expires_at: fresh.refresh_expires_at,
+                    scopes: fresh.scopes.clone(),
+                    generation,
+                    lifecycle_generation: account.lifecycle_generation,
+                });
+                if !self.remember(&account, committed, epoch) {
+                    return self.stored_now(&account);
+                }
                 Ok(AccessToken {
                     secret: Secret::new(fresh.access_token.expose()),
                     generation,
@@ -1001,7 +1088,7 @@ impl Inner {
         }
         let mut bundles = self.bundles.lock().expect(LOCK_POISONED);
         let slot = bundles.entry(account.id.clone()).or_default();
-        slot.entry = None;
+        slot.outrun();
         slot.refused = Some(Lineage {
             incarnation: account.incarnation,
             lifecycle_generation: account.lifecycle_generation,
