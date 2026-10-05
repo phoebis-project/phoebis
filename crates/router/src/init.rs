@@ -662,6 +662,17 @@ pub fn run(
         .map_err(|error| undo(error, written))
 }
 
+/// The refusals that need no write: a file that exists, a registry in the data directory, `--owner` off root or naming
+/// no user. They run before `ask`, so a terminal never answers questions for a run that then refuses, and `run` runs
+/// them again for whatever landed in between.
+pub fn refuse(plan: &Plan) -> Result<(), InitError> {
+    refuse_existing(plan)?;
+    if let Some(user) = &plan.owner {
+        owner_ids(user)?;
+    }
+    Ok(())
+}
+
 fn refuse_existing(plan: &Plan) -> Result<(), InitError> {
     if exists(&plan.config_path)? {
         return Err(InitError::ConfigExists {

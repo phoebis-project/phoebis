@@ -237,6 +237,7 @@ fn main() -> anyhow::Result<()> {
                 && std::io::stderr().is_terminal()
                 && !args.non_interactive;
             let mut plan = init::plan(&cli.config, &args, interactive)?;
+            init::refuse(&plan)?;
             if interactive {
                 plan = init::ask(
                     &args,

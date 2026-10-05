@@ -238,11 +238,12 @@ Without `--env-file`, stdout carries one line, `PHOEBIS_ADMIN_SECRET=<secret>` u
 printed nowhere else, so `(umask 077; phoebis init --non-interactive > phoebis.env)` writes a usable environment file
 that only its owner reads; a bare redirect under the usual umask leaves the secret readable by others. `--env-file`
 writes the same file at `0600` itself. Everything else goes to stderr. On a terminal (stdin and stderr both) and without
-`--non-interactive`, `init` asks for what the flags did not give, in this order: the proxy address, the admin address,
-and for each that leaves loopback its TLS choice (`self_signed`, the default, `plain_http`, or `files` and then the two
-paths). An empty answer takes the default shown in brackets, and an address that does not parse is asked again. Then it
-prints one line per path written with its mode and owner, where the secret went, under `self_signed` where the first
-start writes the CA, and the next command, `phoebis check-config --config <path>`.
+`--non-interactive`, `init` asks, once the refusals below have found nothing, for what the flags did not give, in this
+order: the proxy address, the admin address, and for each that leaves loopback its TLS choice (`self_signed`, the
+default, `plain_http`, or `files` and then the two paths). An empty answer takes the default shown in brackets, and an
+address that does not parse is asked again. Then it prints one line per path written with its mode and owner, where the
+secret went, under `self_signed` where the first start writes the CA, and the next command,
+`phoebis check-config --config <path>`.
 
 `init` exits 1 with one `Error:` line and nothing written when the bootstrap file, the key file or the environment file
 already exists, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory (`{path} exists and a new
