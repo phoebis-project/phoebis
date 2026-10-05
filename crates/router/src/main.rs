@@ -45,29 +45,41 @@ fn main() -> anyhow::Result<()> {
     };
     match cli.command {
         Some(Command::CheckConfig) => {
-            // Read before the first line, so a pair the start would refuse is the one line the check prints.
-            let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
-            let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
+            // Read before the first line, so a pair the start would refuse is the one line the check prints. Nothing
+            // is written: `self_signed` material the first start would generate prints its pending shape.
+            let proxy_tls = tls::load(
+                "proxy.tls",
+                "proxy",
+                &config.proxy.tls,
+                &config.storage.path,
+                config.proxy.listen,
+                false,
+            )?;
+            let admin_tls = tls::load(
+                "admin.tls",
+                "admin",
+                &config.admin.tls,
+                &config.storage.path,
+                config.admin.listen,
+                false,
+            )?;
             println!("{} is valid", cli.config.display());
             println!(
                 "{}",
-                tls::describe(
-                    "proxy",
-                    config.proxy.listen,
-                    &config.proxy.tls,
-                    proxy_tls.as_ref()
-                )
+                tls::describe("proxy", config.proxy.listen, &config.proxy.tls, &proxy_tls)
             );
             println!(
                 "{}",
-                tls::describe(
-                    "admin",
-                    config.admin.listen,
-                    &config.admin.tls,
-                    admin_tls.as_ref()
-                )
+                tls::describe("admin", config.admin.listen, &config.admin.tls, &admin_tls)
             );
             println!("metrics listens on {}", config.stats.metrics_listen);
+            let ca = tls::ca_path(&config.storage.path);
+            let self_signed = [&config.proxy.tls, &config.admin.tls]
+                .into_iter()
+                .any(|value| matches!(value, Some(ListenerTls::SelfSigned)));
+            if self_signed && ca.exists() {
+                println!("tls: CA for the clients at {}", ca.display());
+            }
             println!(
                 "proxy: body budget {} bytes, body read {}s, key body reads {}, max request {} bytes, \
                  sign cch placeholder {}, upstream gzip {}",
@@ -172,9 +184,9 @@ fn main() -> anyhow::Result<()> {
             for warning in phoebis_store::permissions::check_private_file(&config.storage.encryption_key_file, 0o600) {
                 println!("warning: {warning}");
             }
-            for warning in tls::warnings("proxy.tls", &config.proxy.tls, proxy_tls.as_ref())
+            for warning in tls::warnings("proxy.tls", &config.proxy.tls, &proxy_tls)
                 .into_iter()
-                .chain(tls::warnings("admin.tls", &config.admin.tls, admin_tls.as_ref()))
+                .chain(tls::warnings("admin.tls", &config.admin.tls, &admin_tls))
             {
                 println!("warning: {warning}");
             }

@@ -3,7 +3,8 @@
 //! does and proves the key against the registry's canary, or against the sealed rows of a registry from before the
 //! canary, refuses a registry or a ledger a newer build wrote, and warns about an unset secret variable while
 //! refusing a set one the start refuses. It reads each listener's certificate pair as the start does, prints each
-//! listener's scheme, and refuses a pair the start refuses with the loader's line.
+//! listener's scheme, and refuses a pair the start refuses with the loader's line. Under `self_signed` it writes
+//! nothing: it prints the pending shape before the first start and the leaf and the CA's path after it.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -786,4 +787,113 @@ fn a_refused_pair_fails_check_config_with_the_loaders_line() {
             printed(&out)
         );
     }
+}
+
+#[test]
+fn self_signed_prints_the_pending_shape_before_the_first_start_and_the_leaf_after() {
+    use phoebis_router::tls::{self, Validity};
+
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file_with_proxy(dir.path(), "self-signed", "  tls: self_signed\n");
+    let text = std::fs::read_to_string(&config).unwrap();
+    std::fs::write(
+        &config,
+        text.replacen("admin:\n", "admin:\n  tls: self_signed\n", 1),
+    )
+    .unwrap();
+    let tls_dir = dir.path().join("tls");
+    let leaf = |listener: &str| tls_dir.join(format!("{listener}.pem"));
+
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.get(1..4),
+        Some(
+            &[
+                format!(
+                    "proxy listens on 127.0.0.1:0 over TLS (self-signed leaf {}, not generated yet; the first \
+                     start generates it)",
+                    leaf("proxy").display()
+                )
+                .as_str(),
+                format!(
+                    "admin listens on 127.0.0.1:0 over TLS (self-signed leaf {}, not generated yet; the first \
+                     start generates it)",
+                    leaf("admin").display()
+                )
+                .as_str(),
+                "metrics listens on 127.0.0.1:9464",
+            ][..]
+        ),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        !stdout.lines().any(|line| line.starts_with("tls:")),
+        "{}",
+        printed(&out)
+    );
+    assert!(!tls_dir.exists(), "check-config generates nothing");
+
+    let ca = tls::write_ca(
+        "proxy.tls",
+        &tls_dir,
+        "localhost",
+        Validity::days_from_now(tls::CA_LIFETIME_DAYS),
+    )
+    .unwrap();
+    for (key, listener) in [("proxy.tls", "proxy"), ("admin.tls", "admin")] {
+        tls::write_leaf(
+            key,
+            &tls_dir,
+            listener,
+            &ca,
+            "localhost",
+            &tls::leaf_names("127.0.0.1:0".parse().unwrap()),
+            Validity::days_from_now(tls::LEAF_LIFETIME_DAYS),
+        )
+        .unwrap();
+    }
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.get(1..5),
+        Some(
+            &[
+                format!(
+                    "proxy listens on 127.0.0.1:0 over TLS (self-signed leaf {}, expires {})",
+                    leaf("proxy").display(),
+                    not_after(&leaf("proxy"))
+                )
+                .as_str(),
+                format!(
+                    "admin listens on 127.0.0.1:0 over TLS (self-signed leaf {}, expires {})",
+                    leaf("admin").display(),
+                    not_after(&leaf("admin"))
+                )
+                .as_str(),
+                "metrics listens on 127.0.0.1:9464",
+                format!(
+                    "tls: CA for the clients at {}",
+                    tls_dir.join("ca.pem").display()
+                )
+                .as_str(),
+            ][..]
+        ),
+        "{}",
+        printed(&out)
+    );
+    assert_eq!(
+        stdout
+            .lines()
+            .filter(|line| line.starts_with("tls:"))
+            .count(),
+        1,
+        "{}",
+        printed(&out)
+    );
 }

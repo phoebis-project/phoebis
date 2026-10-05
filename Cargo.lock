@@ -1789,6 +1789,7 @@ dependencies = [
  "hyper",
  "hyper-util",
  "jiff",
+ "libc",
  "phoebis-admin",
  "phoebis-attention",
  "phoebis-bus",

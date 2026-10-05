@@ -125,10 +125,11 @@ so it is reached from the host's own browser or through an SSH tunnel whose loca
 `config.yaml` sets `admin.tls: plain_http`, so the cookie is issued without `Secure` and any hostname that reaches the
 port logs in. Publishing the port on a LAN address is one edit to the `ports` line (`"8081:8081"`), and then the admin
 secret at login and the session cookie on every call cross that LAN in the clear; that is the same trust decision the
-proxy port's publication already makes. For TLS, name a certificate pair under `admin.tls`, mounted read-only beside the
-configuration, or terminate TLS in front: a front forwards to the plain listener, passes `Host` through unchanged and
-sets `X-Forwarded-Proto: https`, so the cookie is issued with `Secure` and the Origin check sees the front's hostname in
-both headers.
+proxy port's publication already makes. For TLS, `tls: self_signed` on a listener writes the material under
+`/var/lib/phoebis/tls` on the volume, and `docker compose cp phoebis:/var/lib/phoebis/tls/ca.pem .` brings the CA out
+for the clients; an operator's pair is a read-only mount beside the configuration. A front can terminate TLS instead:
+it forwards to the plain listener, passes `Host` through unchanged and sets `X-Forwarded-Proto: https`, so the cookie
+is issued with `Secure` and the Origin check sees the front's hostname in both headers.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
 place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
@@ -153,21 +154,26 @@ prints, in order:
 
 1. `{config path} is valid`
 2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {addr} over TLS (certificate
-   {cert_file}, expires {date})` for a certificate pair
+   {cert_file}, expires {date})` for a certificate pair, `proxy listens on {addr} over TLS (self-signed leaf {path},
+   expires {date})` under `self_signed`, or `proxy listens on {addr} over TLS (self-signed leaf {path}, not generated
+   yet; the first start generates it)` under `self_signed` before the first start
 3. `admin listens on {config.admin.listen} over plain HTTP`, or `admin listens on {addr} over TLS (certificate
-   {cert_file}, expires {date})` for a certificate pair
+   {cert_file}, expires {date})` for a certificate pair, `admin listens on {addr} over TLS (self-signed leaf {path},
+   expires {date})` under `self_signed`, or `admin listens on {addr} over TLS (self-signed leaf {path}, not generated
+   yet; the first start generates it)` under `self_signed` before the first start
 4. `metrics listens on {config.stats.metrics_listen}`
-5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
+5. `tls: CA for the clients at {data_dir}/tls/ca.pem`, when a listener is `self_signed` and the file exists
+6. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
    {on|off}, upstream gzip {auto|on|off}`
-6. `profile {the build's profile}`
-7. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
-8. `ledger at {config.stats.ledger_path}`
-9. `retention {n days|forever}, rollups {n days|forever}`
-10. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
-11. the registry line, `registry at {config.storage.path} does not exist yet; the first start creates it` when the
+7. `profile {the build's profile}`
+8. `routing: cooldown_fallback {n}s, model_rejection {n}s, catalog refresh {n}s, startup fetch {n}s`
+9. `ledger at {config.stats.ledger_path}`
+10. `retention {n days|forever}, rollups {n days|forever}`
+11. `keepalive: {n} sessions, {n} agents, {n} MiB retained`
+12. the registry line, `registry at {config.storage.path} does not exist yet; the first start creates it` when the
     registry is not there yet, or `registry at {config.storage.path} has no key canary yet; a sealed row opens under
     the key, and the next start seals one` for a registry from before the canary
-12. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
+13. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
 
 Further warning lines name a storage key file, data directory, database or TLS key file whose mode or owner is wider
 than the router expects, and a certificate that expires within 30 days (`warning: proxy.tls.cert_file {path} expires in
@@ -221,6 +227,7 @@ admin:
   listen: 127.0.0.1:8081
   # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
   # A loopback listener needs no tls key and runs plain HTTP.
+  # tls: self_signed generates a local CA and a leaf under <data dir>/tls at the first start; the clients trust ca.pem.
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
@@ -232,6 +239,7 @@ proxy:
   listen: 127.0.0.1:8317
   # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
   # A loopback listener needs no tls key and runs plain HTTP.
+  # tls: self_signed generates a local CA and a leaf under <data dir>/tls at the first start; the clients trust ca.pem.
   # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
   # body_budget_bytes: 536870912
   # body_read_seconds: 60
@@ -300,7 +308,7 @@ is the trail.
 | --- | --- | --- |
 | `listen` | required | a socket address |
 | `secret_env` | required | the variable holding the admin secret |
-| `tls` | unset on loopback, required off it | `plain_http`, or `{cert_file, key_file}` |
+| `tls` | unset on loopback, required off it | `self_signed`, `plain_http`, or `{cert_file, key_file}` |
 
 On a loopback listener the `tls` key is optional. Plain HTTP there issues the cookie without `Secure`, which costs
 nothing behind an SSH tunnel; a front's `X-Forwarded-Proto: https`, below, is the one exception. Off loopback the key is
@@ -315,9 +323,9 @@ Refused with:
 
 - `listen`: a YAML error
 - `secret_env`: `environment variable {name} is unset or empty`
-- `tls`: `admin.tls is required when admin.listen leaves loopback; name a certificate pair or plain_http`, and
-  `admin.tls: must be plain_http or a mapping with cert_file and key_file` under `the configuration is not valid YAML`
-  for any other word, a third key, or a mapping that lacks one of the two ([TLS on the
+- `tls`: `admin.tls is required when admin.listen leaves loopback; name a certificate pair, self_signed, or
+  plain_http`, and `admin.tls: must be self_signed, plain_http, or a mapping with cert_file and key_file` under `the
+  configuration is not valid YAML` for any other word, a third key, or a mapping that lacks one of the two ([TLS on the
   listeners](#tls-on-the-listeners))
 
 Removed keys: `admin.origin` has no replacement, the Origin check compares against the request's own `Host` in every
@@ -352,7 +360,7 @@ All six are tunable in the file for power users and have no console control.
 | `key_body_reads` | `128` | 1 to 4096 |
 | `max_request_bytes` | `33554432` | 1024 to 33554432 |
 | `sign_cch_placeholder` | `false` | `true` or `false` |
-| `tls` | unset on loopback, required off it | `plain_http`, or `{cert_file, key_file}` |
+| `tls` | unset on loopback, required off it | `self_signed`, `plain_http`, or `{cert_file, key_file}` |
 | `upstream_gzip` | `auto` | `auto`, `on` or `off` |
 
 Refused with:
@@ -363,9 +371,9 @@ Refused with:
 - `key_body_reads`: `proxy.key_body_reads must be between 1 and 4096, not {value}`
 - `max_request_bytes`: `proxy.max_request_bytes must be between 1024 and 33554432, not {value}`
 - `sign_cch_placeholder`: a YAML error for anything but a boolean
-- `tls`: `proxy.tls is required when proxy.listen leaves loopback; name a certificate pair or plain_http`, and
-  `proxy.tls: must be plain_http or a mapping with cert_file and key_file` under `the configuration is not valid YAML`
-  for any other word, a third key, or a mapping that lacks one of the two ([TLS on the
+- `tls`: `proxy.tls is required when proxy.listen leaves loopback; name a certificate pair, self_signed, or
+  plain_http`, and `proxy.tls: must be self_signed, plain_http, or a mapping with cert_file and key_file` under `the
+  configuration is not valid YAML` for any other word, a third key, or a mapping that lacks one of the two ([TLS on the
   listeners](#tls-on-the-listeners))
 - `upstream_gzip`: `proxy.upstream_gzip must be auto, on or off, not {value}`
 
@@ -391,7 +399,7 @@ the upstream follow the bytes actually sent.
 
 ### TLS on the listeners
 
-The proxy and the admin listener each take one `tls` key under their block, in one of two shapes. `plain_http` serves
+The proxy and the admin listener each take one `tls` key under their block, in one of three shapes. `plain_http` serves
 plain HTTP on the address named, the operator's trust decision for that network:
 
 ```yaml title="config.yaml"
@@ -410,6 +418,15 @@ proxy:
     key_file: /etc/phoebis/proxy.key
 ```
 
+`self_signed` has the router generate a local certificate authority and a leaf for the listener at the first start,
+and the listener terminates TLS with that leaf:
+
+```yaml title="config.yaml"
+admin:
+  listen: 0.0.0.0:8081
+  tls: self_signed
+```
+
 On a loopback address the key is optional, and a listener without it runs plain HTTP; `tls: plain_http` may be spelled
 there and changes nothing. Off loopback, the unspecified `0.0.0.0` and `::` included, the key is required: you name the
 trust decision for a listener published to a network in the file, and the start never guesses it. Both listeners speak
@@ -424,13 +441,32 @@ CA, or one an ACME client renews all serve.
 The start reads the pair once and never watches it; a renewal is stop, replace, start, and the 30-second drain, inside
 the 40-second stop grace, bounds the gap.
 
-`check-config` and the start refuse a listener off loopback without a `tls` value, and any value outside the two
+Under `self_signed` the material lives in `<data dir>/tls`, beside the database `storage.path` names
+(`/var/lib/phoebis/tls` under the service unit and in the container). The start creates the directory at `0700`,
+`ca.pem` at `0644`, and `ca.key`, `proxy.pem`, `proxy.key`, `admin.pem` and `admin.key` at `0600`. Both listeners share
+the one CA (`CN=Phoebis local CA <hostname>`), so a client trusts one file. The CA lives ten years and a leaf
+(`CN=<hostname>`) 365 days. A leaf names the host's name, `localhost`, `127.0.0.1` and `::1`, plus the listen address
+when the listener binds a single address, or every address of the host when it binds every interface; the start logs
+the names when it writes a leaf.
+
+Every start reads the material back and checks it as it checks an operator's pair. It writes a leaf past its end again
+under the same CA, and the clients notice nothing. It writes a CA past its end again with new leaves and logs a warning
+that every client must trust the new `ca.pem`. It replaces a pair with a missing half, a file that does not parse, or a
+key that no longer matches its certificate the same way. For a leaf with other names, after a new address or host
+name, delete that listener's `.pem` and `.key` and restart.
+
+The clients trust the CA, never a leaf: copy `ca.pem` to each client machine and set `NODE_EXTRA_CA_CERTS=<path>`
+beside `ANTHROPIC_BASE_URL` in the client's [environment block](client.md#the-environment-block). `check-config` prints
+the file's path (`tls: CA for the clients at {data_dir}/tls/ca.pem`) and writes nothing; before the first start it
+prints the pending line, and the first start generates the material.
+
+`check-config` and the start refuse a listener off loopback without a `tls` value, and any value outside the three
 shapes, with:
 
-- `proxy.tls is required when proxy.listen leaves loopback; name a certificate pair or plain_http`, and the admin twin
-  with `admin.tls` and `admin.listen`
-- `proxy.tls: must be plain_http or a mapping with cert_file and key_file`, under `the configuration is not valid YAML`,
-  for any other word, a third key, or a mapping that lacks one of the two
+- `proxy.tls is required when proxy.listen leaves loopback; name a certificate pair, self_signed, or plain_http`, and
+  the admin twin with `admin.tls` and `admin.listen`
+- `proxy.tls: must be self_signed, plain_http, or a mapping with cert_file and key_file`, under `the configuration is
+  not valid YAML`, for any other word, a third key, or a mapping that lacks one of the two
 
 The start reads the pair before it binds a port, and `check-config` reads it the same way; both refuse it with one line
 naming the key and the path:
@@ -442,8 +478,11 @@ naming the key and the path:
 - `proxy.tls.cert_file {path}: expired on {date}`
 - `proxy.tls.cert_file {path}: not valid before {date}`
 
-The admin listener's lines carry `admin.tls` in place of `proxy.tls`. The start logs `serving TLS` for each listener
-that serves a pair, with its leaf's names and `not_after`, and the `listening` line names each listener's scheme.
+The admin listener's lines carry `admin.tls` in place of `proxy.tls`. Under `self_signed`, `check-config` replaces
+nothing: it refuses a half, mismatched or expired pair under `<data dir>/tls` with the same lines, and the next start
+replaces that pair. The start refuses with `proxy.tls: {path}: {OS error}` when it cannot read, write or rename a file
+there. The start logs `serving TLS` for each listener that terminates TLS, with its leaf's names and `not_after`, and
+the `listening` line names each listener's scheme.
 
 A plain-HTTP request to a listener that terminates TLS gets no HTTP answer: the handshake fails and the connection
 closes, so `curl` reports `curl: (35)` and a Node client `ECONNRESET` or `EPROTO`. Put `https://` in the caller's URL.
@@ -575,6 +614,9 @@ version, skip every ledger migration, and leave `requests` without the columns t
 creates the parent directory at mode 0700 when it is missing, the database at mode 0600, and a `lock` file
 beside the database that keeps a second process off the same data.
 
+`<data dir>/tls/` holds the self-signed material: the directory at `0700`, `ca.pem` at `0644`, the CA's key and each
+listener's leaf and key at `0600` ([TLS on the listeners](#tls-on-the-listeners)).
+
 `storage.encryption_key_file` points at a separate file holding 32 raw bytes or 64 hex characters. It seals
 every credential in the database, so keep it outside any backup that carries the database, which is useless
 without it.
@@ -625,6 +667,8 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Live feed | 30 minutes or 2,048 finished requests kept; a client behind by 1,024 messages is disconnected. |
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
+| Self-signed CA lifetime | Ten years from generation; regenerated at the next start after it ends, with new leaves. |
+| Self-signed leaf lifetime | 365 days from generation; regenerated under the same CA at the next start after it ends. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
 | TLS handshake | Bounded by the header read timeout, 30 seconds. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |

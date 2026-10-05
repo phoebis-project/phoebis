@@ -4,6 +4,7 @@ admin:
   listen: 127.0.0.1:8081
   # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
   # A loopback listener needs no tls key and runs plain HTTP.
+  # tls: self_signed generates a local CA and a leaf under <data dir>/tls at the first start; the clients trust ca.pem.
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
@@ -15,6 +16,7 @@ proxy:
   listen: 127.0.0.1:8317
   # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
   # A loopback listener needs no tls key and runs plain HTTP.
+  # tls: self_signed generates a local CA and a leaf under <data dir>/tls at the first start; the clients trust ca.pem.
   # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
   # body_budget_bytes: 536870912
   # body_read_seconds: 60

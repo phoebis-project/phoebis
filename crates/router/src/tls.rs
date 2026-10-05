@@ -1,16 +1,28 @@
 //! The listeners' TLS: one loader turns a listener's `tls` value into the acceptor its accept loop takes, with
-//! the checks the start and `check-config` share, so both refuse a pair with the same line.
+//! the checks the start and `check-config` share, so both refuse a pair with the same line. Under `self_signed` the
+//! start writes a local CA and a leaf per listener under the data directory and serves them as an operator's pair.
 
 use std::cmp::Ordering;
-use std::net::{IpAddr, SocketAddr};
+use std::fmt;
+use std::io::Write;
+use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use boring::asn1::Asn1Time;
+use boring::bn::{BigNum, MsbOption};
+use boring::ec::{EcGroup, EcKey};
 use boring::error::ErrorStack;
-use boring::pkey::PKey;
+use boring::hash::MessageDigest;
+use boring::nid::Nid;
+use boring::pkey::{HasPublic, PKey, PKeyRef, Private};
 use boring::ssl::{select_next_proto, AlpnError, SslAcceptor, SslMethod};
-use boring::x509::X509;
+use boring::x509::extension::{
+    AuthorityKeyIdentifier, BasicConstraints, ExtendedKeyUsage, KeyUsage, SubjectAlternativeName,
+    SubjectKeyIdentifier,
+};
+use boring::x509::{X509Builder, X509Name, X509NameBuilder, X509NameRef, X509Ref, X509};
+use phoebis_store::permissions;
 
 use crate::config::ListenerTls;
 
@@ -20,9 +32,24 @@ pub type Acceptor = Option<Arc<SslAcceptor>>;
 /// A leaf this close to `not_after` earns a warning in `check-config` and a line in `status`, and starts.
 pub const EXPIRY_WARNING_DAYS: i32 = 30;
 
+/// The self-signed CA's lifetime: ten years.
+pub const CA_LIFETIME_DAYS: u32 = 3_650;
+/// A self-signed leaf's lifetime.
+pub const LEAF_LIFETIME_DAYS: u32 = 365;
+
+const CA_CERT: &str = "ca.pem";
+const CA_KEY: &str = "ca.key";
+/// The listeners whose leaves one CA signs, so a new CA voids both pairs.
+const LISTENERS: [&str; 2] = ["admin", "proxy"];
+const SECONDS_PER_DAY: i64 = 86_400;
+/// X.520 caps a common name at 64 characters.
+const COMMON_NAME_MAX: usize = 64;
+
 /// A loaded listener: the acceptor, and the leaf's facts the start logs and `check-config` prints.
 pub struct Loaded {
     pub acceptor: SslAcceptor,
+    /// The file the leaf was read from, which `check-config` names for a self-signed leaf.
+    pub cert_file: PathBuf,
     pub leaf: LeafFacts,
 }
 
@@ -37,6 +64,9 @@ pub struct LeafFacts {
 }
 
 /// One line per refusal, naming the listener key and the path, identical in `check-config` and at the start.
+///
+/// `Material`, `Stack` and `Unreadable` carry their cause in the line rather than as the error's source, so a chain
+/// printer such as `main`'s prints the cause once, in the refusal line.
 #[derive(Debug, thiserror::Error)]
 pub enum TlsError {
     #[error("{key}.cert_file {path}: expired on {date}")]
@@ -51,18 +81,28 @@ pub enum TlsError {
         path: PathBuf,
         cert: PathBuf,
     },
+    #[error("{key}: {path}: {error}")]
+    Material {
+        key: &'static str,
+        path: PathBuf,
+        error: std::io::Error,
+    },
     #[error("{key}.cert_file {path}: holds no PEM certificate")]
     NoCertificate { key: &'static str, path: PathBuf },
     #[error("{key}.key_file {path}: holds no PEM private key")]
     NoKey { key: &'static str, path: PathBuf },
+    #[error("{key}: the leaf {path} is not signed by {ca}")]
+    NotSignedByCa {
+        key: &'static str,
+        path: PathBuf,
+        ca: PathBuf,
+    },
     #[error("{key}.cert_file {path}: not valid before {date}")]
     NotYetValid {
         key: &'static str,
         path: PathBuf,
         date: String,
     },
-    // The two variants below carry their cause in the line rather than as the error's source, so a chain printer
-    // such as `main`'s prints the cause once, in the refusal line.
     #[error("{key}: {error}")]
     Stack {
         key: &'static str,
@@ -158,6 +198,7 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
         .unwrap_or_default();
     Ok(Loaded {
         acceptor: builder.build(),
+        cert_file: cert_file.to_path_buf(),
         leaf: LeafFacts {
             names,
             not_after: leaf.not_after().to_string(),
@@ -166,15 +207,261 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
     })
 }
 
-/// The listener's acceptor for its `tls` value: `Ok(None)` for plain HTTP.
-pub fn load(key: &'static str, tls: &Option<ListenerTls>) -> Result<Option<Loaded>, TlsError> {
+/// `<data dir>/tls`, `data_dir_of(storage.path)` below: the one place the running service writes.
+pub fn material_dir(storage_path: &Path) -> PathBuf {
+    permissions::data_dir_of(storage_path).join("tls")
+}
+
+/// `<data dir>/tls/ca.pem`, the one file the operator copies out.
+pub fn ca_path(storage_path: &Path) -> PathBuf {
+    material_dir(storage_path).join(CA_CERT)
+}
+
+/// A validity window in Unix seconds, so a test can write material that is already expired.
+#[derive(Clone, Copy, Debug)]
+pub struct Validity {
+    pub not_before: i64,
+    pub not_after: i64,
+}
+
+impl Validity {
+    /// From now until `days` from now.
+    pub fn days_from_now(days: u32) -> Validity {
+        let now = jiff::Timestamp::now().as_second();
+        Validity {
+            not_before: now,
+            not_after: now + i64::from(days) * SECONDS_PER_DAY,
+        }
+    }
+}
+
+/// The CA as a signer: its certificate and key, read from `ca.pem` and `ca.key` or just written.
+pub struct Ca {
+    pub cert: X509,
+    pub key: PKey<Private>,
+}
+
+/// One subject alternative name of a self-signed leaf.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SanName {
+    Dns(String),
+    Ip(IpAddr),
+}
+
+impl fmt::Display for SanName {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            SanName::Dns(name) => f.write_str(name),
+            SanName::Ip(ip) => ip.fmt(f),
+        }
+    }
+}
+
+/// Writes `ca.pem` (0644) and `ca.key` (0600) under `dir`, staged: both land under `.tmp` names at their modes, are
+/// read back and checked (the certificate parses and is signed by the key), then each moves into place by one
+/// `rename`, replacing what was there. A stale `.tmp` of either name from an interrupted run is removed first.
+/// `key` (`proxy.tls` or `admin.tls`) prefixes every refusal, as it does for an operator's pair.
+pub fn write_ca(
+    key: &'static str,
+    dir: &Path,
+    hostname: &str,
+    validity: Validity,
+) -> Result<Ca, TlsError> {
+    permissions::create_private_dir(dir).map_err(material(key, dir))?;
+    let (cert, pkey) = build_ca(hostname, validity).map_err(stack(key))?;
+    let cert_tmp = stage(
+        key,
+        dir,
+        CA_CERT,
+        0o644,
+        &cert.to_pem().map_err(stack(key))?,
+    )?;
+    let key_pem = pkey.private_key_to_pem_pkcs8().map_err(stack(key))?;
+    let key_tmp = stage(key, dir, CA_KEY, 0o600, &key_pem)?;
+    let (cert, pkey) = read_back(key, &cert_tmp, &key_tmp)?;
+    if !signed_by(&cert, &pkey) {
+        return Err(TlsError::KeyMismatch {
+            key,
+            path: key_tmp,
+            cert: cert_tmp,
+        });
+    }
+    place(key, &cert_tmp, &dir.join(CA_CERT))?;
+    place(key, &key_tmp, &dir.join(CA_KEY))?;
+    Ok(Ca { cert, key: pkey })
+}
+
+/// Writes `<listener>.pem` and `<listener>.key` (0600) under `dir`, signed by `ca`, with `names` as the subject
+/// alternative names (DNS names and IP addresses), staged the same way: the two `.tmp` files are read back and
+/// checked (both parse, the key matches the certificate, the leaf verifies under `ca`; the dates are not checked,
+/// since a test writes expired material through this on purpose and `load` judges the dates at the start), then the
+/// certificate and the key are renamed into place.
+pub fn write_leaf(
+    key: &'static str,
+    dir: &Path,
+    listener: &str,
+    ca: &Ca,
+    hostname: &str,
+    names: &[SanName],
+    validity: Validity,
+) -> Result<(), TlsError> {
+    permissions::create_private_dir(dir).map_err(material(key, dir))?;
+    let (cert, pkey) = build_leaf(ca, hostname, names, validity).map_err(stack(key))?;
+    let (cert_name, key_name) = (format!("{listener}.pem"), format!("{listener}.key"));
+    let cert_tmp = stage(
+        key,
+        dir,
+        &cert_name,
+        0o600,
+        &cert.to_pem().map_err(stack(key))?,
+    )?;
+    let key_pem = pkey.private_key_to_pem_pkcs8().map_err(stack(key))?;
+    let key_tmp = stage(key, dir, &key_name, 0o600, &key_pem)?;
+    let (cert, pkey) = read_back(key, &cert_tmp, &key_tmp)?;
+    if !matches_key(&cert, &pkey) {
+        return Err(TlsError::KeyMismatch {
+            key,
+            path: key_tmp,
+            cert: cert_tmp,
+        });
+    }
+    if !signed_by(&cert, &ca.key) {
+        return Err(TlsError::NotSignedByCa {
+            key,
+            path: cert_tmp,
+            ca: dir.join(CA_CERT),
+        });
+    }
+    place(key, &cert_tmp, &dir.join(cert_name))?;
+    place(key, &key_tmp, &dir.join(key_name))
+}
+
+/// The names a leaf for `listen` carries: the host's name, `localhost`, `127.0.0.1`, `::1`, the listen IP when it
+/// is concrete, and every non-loopback unicast address of the host (`getifaddrs`) when it is unspecified.
+pub fn leaf_names(listen: SocketAddr) -> Vec<SanName> {
+    let mut names = vec![
+        SanName::Dns(hostname()),
+        SanName::Dns("localhost".to_owned()),
+        SanName::Ip(Ipv4Addr::LOCALHOST.into()),
+        SanName::Ip(Ipv6Addr::LOCALHOST.into()),
+    ];
+    if listen.ip().is_unspecified() {
+        names.extend(
+            interface_addresses()
+                .into_iter()
+                .filter(|ip| !ip.is_loopback() && !ip.is_unspecified() && !ip.is_multicast())
+                .map(SanName::Ip),
+        );
+    } else {
+        names.push(SanName::Ip(listen.ip()));
+    }
+    // Sorted and deduplicated, so a regenerated leaf carries the same names in the same order.
+    names.sort_by(|a, b| match (a, b) {
+        (SanName::Dns(a), SanName::Dns(b)) => a.cmp(b),
+        (SanName::Ip(a), SanName::Ip(b)) => a.cmp(b),
+        (SanName::Dns(_), SanName::Ip(_)) => Ordering::Less,
+        (SanName::Ip(_), SanName::Dns(_)) => Ordering::Greater,
+    });
+    names.dedup();
+    names
+}
+
+/// What a listener serves, for the start and for `check-config`.
+pub enum Serving {
+    Plain,
+    Tls(Loaded),
+    /// `self_signed` whose material is not generated yet; only `check-config` sees it (`generate` false).
+    Pending {
+        leaf: PathBuf,
+    },
+}
+
+/// One call per listener. `generate` is the start's word: missing or expired material is written (the CA when
+/// `ca.pem` or `ca.key` is missing or expired, the leaf when its pair is missing, expired, or no longer signed by
+/// the CA); under `check-config` nothing is written and missing material answers `Pending`.
+pub fn load(
+    key: &'static str,
+    listener: &'static str,
+    tls: &Option<ListenerTls>,
+    storage_path: &Path,
+    listen: SocketAddr,
+    generate: bool,
+) -> Result<Serving, TlsError> {
     match ListenerTls::effective(tls) {
-        ListenerTls::PlainHttp => Ok(None),
+        ListenerTls::PlainHttp => Ok(Serving::Plain),
         ListenerTls::Pair {
             cert_file,
             key_file,
-        } => load_pair(key, cert_file, key_file).map(Some),
+        } => load_pair(key, cert_file, key_file).map(Serving::Tls),
+        ListenerTls::SelfSigned => {
+            self_signed(key, listener, &material_dir(storage_path), listen, generate)
+        }
     }
+}
+
+fn self_signed(
+    key: &'static str,
+    listener: &'static str,
+    dir: &Path,
+    listen: SocketAddr,
+    generate: bool,
+) -> Result<Serving, TlsError> {
+    let leaf = dir.join(format!("{listener}.pem"));
+    let leaf_key = dir.join(format!("{listener}.key"));
+    if !generate {
+        if absent(&leaf) && absent(&leaf_key) {
+            return Ok(Serving::Pending { leaf });
+        }
+        return load_pair(key, &leaf, &leaf_key).map(Serving::Tls);
+    }
+    permissions::create_private_dir(dir).map_err(material(key, dir))?;
+    remove_temporaries(key, dir)?;
+    let hostname = hostname();
+    let ca = match read_ca(key, dir)? {
+        Some(ca) => ca,
+        None => {
+            let ca_pem = dir.join(CA_CERT);
+            let replaced = !absent(&ca_pem) || !absent(&dir.join(CA_KEY));
+            let ca = write_ca(
+                key,
+                dir,
+                &hostname,
+                Validity::days_from_now(CA_LIFETIME_DAYS),
+            )?;
+            if replaced {
+                tracing::warn!(
+                    ca = %ca_pem.display(),
+                    "the self-signed CA was replaced; the clients must trust the new ca.pem"
+                );
+            }
+            for name in LISTENERS
+                .iter()
+                .flat_map(|listener| [format!("{listener}.pem"), format!("{listener}.key")])
+            {
+                let path = dir.join(name);
+                remove_if_present(&path).map_err(material(key, &path))?;
+            }
+            ca
+        }
+    };
+    if !leaf_holds(key, &leaf, &leaf_key, &ca)? {
+        let names = leaf_names(listen);
+        write_leaf(
+            key,
+            dir,
+            listener,
+            &ca,
+            &hostname,
+            &names,
+            Validity::days_from_now(LEAF_LIFETIME_DAYS),
+        )?;
+        tracing::info!(
+            listener,
+            names = ?names.iter().map(ToString::to_string).collect::<Vec<_>>(),
+            "a self-signed leaf was written"
+        );
+    }
+    load_pair(key, &leaf, &leaf_key).map(Serving::Tls)
 }
 
 /// The scheme word for a `listening` line and a URL: `https` when the value terminates TLS, else `http`.
@@ -186,20 +473,30 @@ pub fn scheme(tls: &Option<ListenerTls>) -> &'static str {
     }
 }
 
-/// The `check-config` line for one listener: `{listener} listens on {listen} over plain HTTP`, or
-/// `over TLS (certificate {cert_file}, expires {not_after})` for a loaded pair. `loaded` is `load`'s answer for the
-/// same `tls`.
+/// The `check-config` line for one listener: `{listener} listens on {listen} over plain HTTP`, `over TLS
+/// (certificate {cert_file}, expires {not_after})` for a loaded pair, or a self-signed leaf's `over TLS (self-signed
+/// leaf {path}, expires {not_after})` or its pending shape. `serving` is `load`'s answer for the same `tls`.
 pub fn describe(
     listener: &str,
     listen: SocketAddr,
     tls: &Option<ListenerTls>,
-    loaded: Option<&Loaded>,
+    serving: &Serving,
 ) -> String {
-    match (ListenerTls::effective(tls), loaded) {
-        (ListenerTls::Pair { cert_file, .. }, Some(loaded)) => format!(
+    match (ListenerTls::effective(tls), serving) {
+        (ListenerTls::Pair { cert_file, .. }, Serving::Tls(loaded)) => format!(
             "{listener} listens on {listen} over TLS (certificate {}, expires {})",
             cert_file.display(),
             loaded.leaf.not_after
+        ),
+        (ListenerTls::SelfSigned, Serving::Tls(loaded)) => format!(
+            "{listener} listens on {listen} over TLS (self-signed leaf {}, expires {})",
+            loaded.cert_file.display(),
+            loaded.leaf.not_after
+        ),
+        (ListenerTls::SelfSigned, Serving::Pending { leaf }) => format!(
+            "{listener} listens on {listen} over TLS (self-signed leaf {}, not generated yet; the first start \
+             generates it)",
+            leaf.display()
         ),
         _ => format!("{listener} listens on {listen} over plain HTTP"),
     }
@@ -207,18 +504,14 @@ pub fn describe(
 
 /// The `warning:` lines for a loaded pair, without the `warning: ` prefix: the leaf within `EXPIRY_WARNING_DAYS`,
 /// and `permissions::check_private_file(key_file, 0o600)`'s lines for the key file.
-pub fn warnings(
-    key: &'static str,
-    tls: &Option<ListenerTls>,
-    loaded: Option<&Loaded>,
-) -> Vec<String> {
+pub fn warnings(key: &'static str, tls: &Option<ListenerTls>, serving: &Serving) -> Vec<String> {
     let (
         ListenerTls::Pair {
             cert_file,
             key_file,
         },
-        Some(loaded),
-    ) = (ListenerTls::effective(tls), loaded)
+        Serving::Tls(loaded),
+    ) = (ListenerTls::effective(tls), serving)
     else {
         return Vec::new();
     };
@@ -240,6 +533,304 @@ pub fn warnings(
 
 fn stack(key: &'static str) -> impl Fn(ErrorStack) -> TlsError {
     move |error| TlsError::Stack { key, error }
+}
+
+fn material<'a>(key: &'static str, path: &'a Path) -> impl FnOnce(std::io::Error) -> TlsError + 'a {
+    move |error| TlsError::Material {
+        key,
+        path: path.to_path_buf(),
+        error,
+    }
+}
+
+fn new_key() -> Result<PKey<Private>, ErrorStack> {
+    let group = EcGroup::from_curve_name(Nid::X9_62_PRIME256V1)?;
+    PKey::from_ec_key(EcKey::generate(&group)?)
+}
+
+fn common_name(text: &str) -> Result<X509Name, ErrorStack> {
+    // BoringSSL refuses a longer common name; the subject alternative names carry the host's full name.
+    let text = text
+        .char_indices()
+        .nth(COMMON_NAME_MAX)
+        .map_or(text, |(end, _)| &text[..end]);
+    let mut name = X509NameBuilder::new()?;
+    name.append_entry_by_nid(Nid::COMMONNAME, text)?;
+    Ok(name.build())
+}
+
+/// A builder with the fields both certificates share: v3, a random 128-bit serial, the names, the window, the key.
+fn certificate(
+    subject: &X509NameRef,
+    issuer: &X509NameRef,
+    key: &PKeyRef<Private>,
+    validity: Validity,
+) -> Result<X509Builder, ErrorStack> {
+    let mut builder = X509Builder::new()?;
+    // The field counts from zero, so 2 is X.509 v3, the version that carries extensions.
+    builder.set_version(2)?;
+    let mut serial = BigNum::new()?;
+    serial.rand(128, MsbOption::MAYBE_ZERO, false)?;
+    let serial = serial.to_asn1_integer()?;
+    builder.set_serial_number(&serial)?;
+    builder.set_subject_name(subject)?;
+    builder.set_issuer_name(issuer)?;
+    let (not_before, not_after) = (
+        Asn1Time::from_unix(validity.not_before)?,
+        Asn1Time::from_unix(validity.not_after)?,
+    );
+    builder.set_not_before(&not_before)?;
+    builder.set_not_after(&not_after)?;
+    builder.set_pubkey(key)?;
+    Ok(builder)
+}
+
+fn build_ca(hostname: &str, validity: Validity) -> Result<(X509, PKey<Private>), ErrorStack> {
+    let key = new_key()?;
+    let name = common_name(&format!("Phoebis local CA {hostname}"))?;
+    let mut builder = certificate(&name, &name, &key, validity)?;
+    let extensions = [
+        BasicConstraints::new().critical().ca().build()?,
+        KeyUsage::new()
+            .critical()
+            .key_cert_sign()
+            .crl_sign()
+            .build()?,
+        SubjectKeyIdentifier::new().build(&builder.x509v3_context(None, None))?,
+    ];
+    for extension in &extensions {
+        builder.append_extension(extension)?;
+    }
+    builder.sign(&key, MessageDigest::sha256())?;
+    Ok((builder.build(), key))
+}
+
+fn build_leaf(
+    ca: &Ca,
+    hostname: &str,
+    names: &[SanName],
+    validity: Validity,
+) -> Result<(X509, PKey<Private>), ErrorStack> {
+    let key = new_key()?;
+    let subject = common_name(hostname)?;
+    let mut builder = certificate(&subject, ca.cert.subject_name(), &key, validity)?;
+    let mut alt_names = SubjectAlternativeName::new();
+    for name in names {
+        match name {
+            SanName::Dns(dns) => alt_names.dns(dns),
+            SanName::Ip(ip) => alt_names.ip(&ip.to_string()),
+        };
+    }
+    let extensions = {
+        let context = builder.x509v3_context(Some(&ca.cert), None);
+        [
+            BasicConstraints::new().critical().build()?,
+            KeyUsage::new().critical().digital_signature().build()?,
+            ExtendedKeyUsage::new().server_auth().build()?,
+            alt_names.build(&context)?,
+            SubjectKeyIdentifier::new().build(&context)?,
+            AuthorityKeyIdentifier::new().keyid(true).build(&context)?,
+        ]
+    };
+    for extension in &extensions {
+        builder.append_extension(extension)?;
+    }
+    builder.sign(&ca.key, MessageDigest::sha256())?;
+    Ok((builder.build(), key))
+}
+
+/// Writes `contents` to `<dir>/<name>.tmp` at `mode` through the store's helper, after removing a temporary an
+/// interrupted run left; the live name is untouched until `place`.
+fn stage(
+    key: &'static str,
+    dir: &Path,
+    name: &str,
+    mode: u32,
+    contents: &[u8],
+) -> Result<PathBuf, TlsError> {
+    let tmp = dir.join(format!("{name}.tmp"));
+    remove_if_present(&tmp).map_err(material(key, &tmp))?;
+    permissions::create_private_file(&tmp, mode)
+        .and_then(|mut file| file.write_all(contents))
+        .map_err(material(key, &tmp))?;
+    Ok(tmp)
+}
+
+/// `rename` replaces the live name in one step, so it is never half written and never meets the store helper's
+/// refusal of an existing file.
+fn place(key: &'static str, tmp: &Path, live: &Path) -> Result<(), TlsError> {
+    std::fs::rename(tmp, live).map_err(material(key, live))
+}
+
+/// The staged pair as the disk holds it, so the check covers the bytes the listener will serve.
+fn read_back(
+    key: &'static str,
+    cert_file: &Path,
+    key_file: &Path,
+) -> Result<(X509, PKey<Private>), TlsError> {
+    let cert_pem = std::fs::read(cert_file).map_err(material(key, cert_file))?;
+    let key_pem = std::fs::read(key_file).map_err(material(key, key_file))?;
+    let cert = X509::from_pem(&cert_pem).map_err(|_| TlsError::NoCertificate {
+        key,
+        path: cert_file.to_path_buf(),
+    })?;
+    let pkey = PKey::private_key_from_pem(&key_pem).map_err(|_| TlsError::NoKey {
+        key,
+        path: key_file.to_path_buf(),
+    })?;
+    Ok((cert, pkey))
+}
+
+/// The CA when both files hold a parseable, unexpired certificate and its own key; `None` sends the start to write
+/// a new one. A key that does not verify the certificate is what a stop between the CA's two renames leaves.
+fn read_ca(key: &'static str, dir: &Path) -> Result<Option<Ca>, TlsError> {
+    let (Some(cert_pem), Some(key_pem)) = (
+        read_if_present(key, &dir.join(CA_CERT))?,
+        read_if_present(key, &dir.join(CA_KEY))?,
+    ) else {
+        return Ok(None);
+    };
+    let (Ok(cert), Ok(pkey)) = (
+        X509::from_pem(&cert_pem),
+        PKey::private_key_from_pem(&key_pem),
+    ) else {
+        return Ok(None);
+    };
+    if expired(&cert).map_err(stack(key))? || !signed_by(&cert, &pkey) {
+        return Ok(None);
+    }
+    Ok(Some(Ca { cert, key: pkey }))
+}
+
+/// Whether the listener's pair is whole, parseable, unexpired, matched, and signed by `ca`; a pair that fails any
+/// of these is written again. A mismatch is what a stop between the leaf's two renames leaves.
+fn leaf_holds(
+    key: &'static str,
+    cert_file: &Path,
+    key_file: &Path,
+    ca: &Ca,
+) -> Result<bool, TlsError> {
+    let (Some(cert_pem), Some(key_pem)) = (
+        read_if_present(key, cert_file)?,
+        read_if_present(key, key_file)?,
+    ) else {
+        return Ok(false);
+    };
+    let (Ok(cert), Ok(pkey)) = (
+        X509::from_pem(&cert_pem),
+        PKey::private_key_from_pem(&key_pem),
+    ) else {
+        return Ok(false);
+    };
+    Ok(!expired(&cert).map_err(stack(key))?
+        && matches_key(&cert, &pkey)
+        && signed_by(&cert, &ca.key))
+}
+
+/// The file's bytes, or `None` when it does not exist. Any other failure refuses the start rather than replacing
+/// material the clients may already trust.
+fn read_if_present(key: &'static str, path: &Path) -> Result<Option<Vec<u8>>, TlsError> {
+    match std::fs::read(path) {
+        Ok(bytes) => Ok(Some(bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(None),
+        Err(error) => Err(material(key, path)(error)),
+    }
+}
+
+/// Only a confirmed absence counts: a path behind an unreadable directory is read next and refused with its error.
+fn absent(path: &Path) -> bool {
+    matches!(path.try_exists(), Ok(false))
+}
+
+fn remove_if_present(path: &Path) -> std::io::Result<()> {
+    match std::fs::remove_file(path) {
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        result => result,
+    }
+}
+
+/// Removes every `.tmp` an interrupted write left, so no half-written file outlives the start that finds it.
+fn remove_temporaries(key: &'static str, dir: &Path) -> Result<(), TlsError> {
+    for entry in std::fs::read_dir(dir).map_err(material(key, dir))? {
+        let path = entry.map_err(material(key, dir))?.path();
+        if path.extension().is_some_and(|extension| extension == "tmp") {
+            remove_if_present(&path).map_err(material(key, &path))?;
+        }
+    }
+    Ok(())
+}
+
+fn expired(cert: &X509Ref) -> Result<bool, ErrorStack> {
+    let now = Asn1Time::days_from_now(0)?;
+    Ok(cert.not_after().compare(&now)? == Ordering::Less)
+}
+
+/// Whether `key` verifies `cert`'s signature. A failed verify leaves its reason on the thread's error queue, which
+/// is drained so a later refusal's `ErrorStack` does not carry it.
+fn signed_by<T: HasPublic>(cert: &X509Ref, key: &PKeyRef<T>) -> bool {
+    let verified = matches!(cert.verify(key), Ok(true));
+    if !verified {
+        let _ = ErrorStack::get();
+    }
+    verified
+}
+
+fn matches_key(cert: &X509Ref, key: &PKeyRef<Private>) -> bool {
+    let matched = cert.public_key().is_ok_and(|public| public.public_eq(key));
+    if !matched {
+        let _ = ErrorStack::get();
+    }
+    matched
+}
+
+/// The host's name as `gethostname` answers it, or `localhost` when it fails or is not a plain ASCII name.
+fn hostname() -> String {
+    let mut buffer = [0u8; 256];
+    // SAFETY: the pointer and the length describe `buffer`, which outlives the call.
+    let answered = unsafe { libc::gethostname(buffer.as_mut_ptr().cast(), buffer.len()) } == 0;
+    let end = buffer
+        .iter()
+        .position(|&byte| byte == 0)
+        .unwrap_or(buffer.len());
+    match std::str::from_utf8(&buffer[..end]) {
+        Ok(name) if answered && !name.is_empty() && name.is_ascii() => name.to_owned(),
+        _ => "localhost".to_owned(),
+    }
+}
+
+/// Every IPv4 and IPv6 address on the host's interfaces, loopback included; `leaf_names` filters.
+fn interface_addresses() -> Vec<IpAddr> {
+    let mut addresses = Vec::new();
+    let mut head: *mut libc::ifaddrs = std::ptr::null_mut();
+    // SAFETY: `getifaddrs` fills `head` with a list this function frees once, below.
+    if unsafe { libc::getifaddrs(&mut head) } != 0 {
+        return addresses;
+    }
+    let mut cursor = head;
+    while !cursor.is_null() {
+        // SAFETY: `cursor` is a node of the list `getifaddrs` returned, which stays alive until `freeifaddrs`; an
+        // address's family says which `sockaddr` layout it has.
+        unsafe {
+            let entry = &*cursor;
+            if !entry.ifa_addr.is_null() {
+                match i32::from((*entry.ifa_addr).sa_family) {
+                    libc::AF_INET => {
+                        let address = &*entry.ifa_addr.cast::<libc::sockaddr_in>();
+                        addresses.push(IpAddr::from(address.sin_addr.s_addr.to_ne_bytes()));
+                    }
+                    libc::AF_INET6 => {
+                        let address = &*entry.ifa_addr.cast::<libc::sockaddr_in6>();
+                        addresses.push(IpAddr::from(address.sin6_addr.s6_addr));
+                    }
+                    _ => {}
+                }
+            }
+            cursor = entry.ifa_next;
+        }
+    }
+    // SAFETY: `head` is the list `getifaddrs` returned, freed exactly once.
+    unsafe { libc::freeifaddrs(head) };
+    addresses
 }
 
 /// A SAN's address octets as text: four for IPv4, sixteen for IPv6, anything else is no address at all.
@@ -395,19 +986,54 @@ mod tests {
 
     #[test]
     fn plain_http_and_an_absent_key_load_no_acceptor_and_name_the_http_scheme() {
-        assert!(load("proxy.tls", &None).unwrap().is_none());
-        assert!(load("proxy.tls", &Some(ListenerTls::PlainHttp))
-            .unwrap()
-            .is_none());
+        let dir = tempfile::tempdir().unwrap();
+        let storage = dir.path().join("router.sqlite");
+        let listen: SocketAddr = "127.0.0.1:0".parse().unwrap();
+        let loaded = |tls: &Option<ListenerTls>| {
+            load("proxy.tls", "proxy", tls, &storage, listen, false).unwrap()
+        };
+        assert!(matches!(loaded(&None), Serving::Plain));
+        assert!(matches!(
+            loaded(&Some(ListenerTls::PlainHttp)),
+            Serving::Plain
+        ));
         assert_eq!(scheme(&None), "http");
         assert_eq!(scheme(&Some(ListenerTls::PlainHttp)), "http");
-        let dir = tempfile::tempdir().unwrap();
         let (cert_file, key_file) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
         let pair = Some(ListenerTls::Pair {
             cert_file,
             key_file,
         });
-        assert!(load("proxy.tls", &pair).unwrap().is_some());
+        assert!(matches!(loaded(&pair), Serving::Tls(_)));
         assert_eq!(scheme(&pair), "https");
+        assert_eq!(scheme(&Some(ListenerTls::SelfSigned)), "https");
+    }
+
+    #[test]
+    fn a_leafs_names_carry_the_host_the_two_loopbacks_and_the_listen_address_sorted() {
+        let concrete = leaf_names("192.0.2.7:8317".parse().unwrap());
+        let host = SanName::Dns(hostname());
+        for name in [
+            &host,
+            &SanName::Dns("localhost".to_owned()),
+            &SanName::Ip("127.0.0.1".parse().unwrap()),
+            &SanName::Ip("::1".parse().unwrap()),
+            &SanName::Ip("192.0.2.7".parse().unwrap()),
+        ] {
+            assert!(concrete.contains(name), "{name}: {concrete:?}");
+        }
+        let every = leaf_names("0.0.0.0:8317".parse().unwrap());
+        assert!(
+            every.iter().all(|name| match name {
+                SanName::Ip(ip) =>
+                    !ip.is_loopback() || ["127.0.0.1", "::1"].contains(&ip.to_string().as_str()),
+                SanName::Dns(_) => true,
+            }),
+            "{every:?}"
+        );
+        assert_eq!(every, leaf_names("0.0.0.0:8317".parse().unwrap()));
+        let mut deduplicated = every.clone();
+        deduplicated.dedup();
+        assert_eq!(deduplicated, every);
     }
 }

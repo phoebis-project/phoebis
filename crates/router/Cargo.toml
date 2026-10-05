@@ -21,6 +21,7 @@ clap = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 jiff = { workspace = true }
+libc = { workspace = true }
 phoebis-admin = { path = "../admin" }
 phoebis-attention = { path = "../attention" }
 phoebis-bus = { path = "../bus" }

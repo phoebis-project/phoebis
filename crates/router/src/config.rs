@@ -84,6 +84,8 @@ pub enum ListenerTls {
     },
     /// Plain HTTP on the address named, the operator's trust decision for that network.
     PlainHttp,
+    /// A local CA and a leaf per listener, generated under the data directory at the first start.
+    SelfSigned,
 }
 
 impl ListenerTls {
@@ -94,12 +96,13 @@ impl ListenerTls {
 
     /// Whether the listener terminates TLS; what the cookie, `health` and `status` derive their scheme from.
     pub fn terminates_tls(&self) -> bool {
-        matches!(self, ListenerTls::Pair { .. })
+        matches!(self, ListenerTls::Pair { .. } | ListenerTls::SelfSigned)
     }
 }
 
-/// A word or a key outside the two shapes earns this one line; serde puts the key's path in front of it.
-const TLS_SHAPES: &str = "must be plain_http or a mapping with cert_file and key_file";
+/// A word or a key outside the three shapes earns this one line; serde puts the key's path in front of it.
+const TLS_SHAPES: &str =
+    "must be self_signed, plain_http, or a mapping with cert_file and key_file";
 
 impl<'de> Deserialize<'de> for ListenerTls {
     fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
@@ -109,12 +112,13 @@ impl<'de> Deserialize<'de> for ListenerTls {
             type Value = ListenerTls;
 
             fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-                f.write_str("plain_http or a mapping with cert_file and key_file")
+                f.write_str("self_signed, plain_http, or a mapping with cert_file and key_file")
             }
 
             fn visit_str<E: serde::de::Error>(self, word: &str) -> Result<ListenerTls, E> {
                 match word {
                     "plain_http" => Ok(ListenerTls::PlainHttp),
+                    "self_signed" => Ok(ListenerTls::SelfSigned),
                     _ => Err(E::custom(TLS_SHAPES)),
                 }
             }
@@ -294,7 +298,7 @@ pub enum ConfigError {
     #[error("the configuration is not valid YAML")]
     Syntax(#[from] serde_norway::Error),
     #[error(
-        "{key} is required when {listen} leaves loopback; name a certificate pair or plain_http"
+        "{key} is required when {listen} leaves loopback; name a certificate pair, self_signed, or plain_http"
     )]
     TlsRequired {
         key: &'static str,
@@ -840,12 +844,21 @@ mod tests {
     }
 
     #[test]
-    fn the_tls_key_takes_plain_http_or_a_pair_and_refuses_the_rest() {
+    fn the_tls_key_takes_its_three_shapes_and_refuses_the_rest() {
         let dir = tempfile::tempdir().unwrap();
         let plain = load_unresolved(&file_with_proxy(dir.path(), "plain", "  tls: plain_http\n"))
             .unwrap()
             .proxy;
         assert_eq!(plain.tls, Some(ListenerTls::PlainHttp));
+        let generated = load_unresolved(&file_with_proxy(
+            dir.path(),
+            "self-signed",
+            "  tls: self_signed\n",
+        ))
+        .unwrap()
+        .proxy;
+        assert_eq!(generated.tls, Some(ListenerTls::SelfSigned));
+        assert!(ListenerTls::SelfSigned.terminates_tls());
         let pair = load_unresolved(&file_with_proxy(
             dir.path(),
             "pair",
@@ -870,8 +883,9 @@ mod tests {
             assert!(
                 matches!(error, ConfigError::Syntax(_))
                     && chain.contains("proxy.tls")
-                    && chain
-                        .contains("must be plain_http or a mapping with cert_file and key_file"),
+                    && chain.contains(
+                        "must be self_signed, plain_http, or a mapping with cert_file and key_file"
+                    ),
                 "{name}: {chain}"
             );
         }
@@ -914,7 +928,7 @@ mod tests {
             );
             assert_eq!(
                 proxy.to_string(),
-                "proxy.tls is required when proxy.listen leaves loopback; name a certificate pair or plain_http"
+                "proxy.tls is required when proxy.listen leaves loopback; name a certificate pair, self_signed, or plain_http"
             );
             let admin = load_unresolved(&binding("admin-bare", &bare, loopback)).unwrap_err();
             assert!(
@@ -929,7 +943,7 @@ mod tests {
             );
             assert_eq!(
                 admin.to_string(),
-                "admin.tls is required when admin.listen leaves loopback; name a certificate pair or plain_http"
+                "admin.tls is required when admin.listen leaves loopback; name a certificate pair, self_signed, or plain_http"
             );
             assert!(
                 load_unresolved(&binding("proxy-plain", loopback, &plain)).is_ok(),

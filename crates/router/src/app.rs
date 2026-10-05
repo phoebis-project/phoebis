@@ -413,20 +413,37 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         Duration::from_secs(config.routing.catalog_refresh_seconds),
         REFRESH_TICK,
     );
-    // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken.
-    let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
-    let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
-    for (listener, key, value, loaded) in [
+    // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken; the
+    // `self_signed` material that is missing or expired is written here.
+    let proxy_tls = tls::load(
+        "proxy.tls",
+        "proxy",
+        &config.proxy.tls,
+        &config.storage.path,
+        config.proxy.listen,
+        true,
+    )?;
+    let admin_tls = tls::load(
+        "admin.tls",
+        "admin",
+        &config.admin.tls,
+        &config.storage.path,
+        config.admin.listen,
+        true,
+    )?;
+    for (listener, key, value, serving) in [
         ("proxy", "proxy.tls", &config.proxy.tls, &proxy_tls),
         ("admin", "admin.tls", &config.admin.tls, &admin_tls),
     ] {
-        if let Some(loaded) = loaded {
+        if let tls::Serving::Tls(loaded) = serving {
             tracing::info!(listener, names = ?loaded.leaf.names, not_after = %loaded.leaf.not_after, "serving TLS");
         }
-        for warning in tls::warnings(key, value, loaded.as_ref()) {
+        for warning in tls::warnings(key, value, serving) {
             tracing::warn!("{warning}");
         }
     }
+    let proxy_acceptor = acceptor(proxy_tls)?;
+    let admin_acceptor = acceptor(admin_tls)?;
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;
@@ -501,7 +518,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: PROXY_MAX_CONNECTIONS,
         },
-        proxy_tls.map(|l| Arc::new(l.acceptor)),
+        proxy_acceptor,
     ));
     let mut admin_server = tokio::spawn(listen::serve(
         admin_listener,
@@ -513,7 +530,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             max_connections: ADMIN_MAX_CONNECTIONS,
         },
         true,
-        admin_tls.map(|l| Arc::new(l.acceptor)),
+        admin_acceptor,
     ));
     let mut metrics_server = tokio::spawn(listen::serve(
         metrics_listener,
@@ -693,6 +710,18 @@ fn router_config(
         )
         .with_measured(move |window| measured.measured(window)),
         ..phoebis_routing::RouterConfig::default()
+    }
+}
+
+/// The accept loop's acceptor for what `tls::load` answered with `generate` set, which never leaves material
+/// pending; a pending answer refuses the start rather than serving plain HTTP on a listener the file put under TLS.
+fn acceptor(serving: tls::Serving) -> anyhow::Result<tls::Acceptor> {
+    match serving {
+        tls::Serving::Plain => Ok(None),
+        tls::Serving::Tls(loaded) => Ok(Some(Arc::new(loaded.acceptor))),
+        tls::Serving::Pending { leaf } => {
+            anyhow::bail!("the self-signed leaf {} was not generated", leaf.display())
+        }
     }
 }
 
