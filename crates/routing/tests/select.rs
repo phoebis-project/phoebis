@@ -2840,10 +2840,19 @@ fn under_allow_a_spent_model_week_places_behind_a_plan_funded_sibling_while_extr
             "five_hour",
             "rate_limit",
         ));
+        let served = fable(&mut st, 3_000);
         assert_eq!(
-            picked(&fable(&mut st, 3_000)),
+            picked(&served),
             "a",
             "with the sibling cooled, the spent week goes on in extra usage, kind order {prefer_subscription}"
+        );
+        let SelectResult::Selected(selection) = &served else {
+            unreachable!("picked above")
+        };
+        assert_eq!(
+            selection.trace.tier.map(|tier| tier.2),
+            Some(1),
+            "the trace marks the spent week's account as billing in overage, kind order {prefer_subscription}"
         );
         st.record_credits("a", credits(false, None, None, 4_000));
         assert!(

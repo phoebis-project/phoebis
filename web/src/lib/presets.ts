@@ -21,7 +21,7 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
   fast: { inFlightCap: 8, paceFloor: 0.1, retryInPlaceSeconds: 5 },
 };
 
-/** The hysteresis band under the migrate threshold: a shed session lands only on a member below `threshold - MIGRATE_BAND`. */
+/** The hysteresis band under the migrate margin: a shed session lands only on a member below `margin - MIGRATE_BAND`. */
 export const MIGRATE_BAND = 0.05;
 
 /** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */

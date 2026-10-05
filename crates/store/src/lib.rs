@@ -542,6 +542,18 @@ impl Store {
         park_on(&self.routing_hold);
     }
 
+    /// Sets the connection's busy timeout, so a test that holds the write lock from a second connection waits out a
+    /// fraction of `BUSY_TIMEOUT` rather than the whole of it.
+    #[cfg(any(test, feature = "debug-hooks"))]
+    #[doc(hidden)]
+    pub fn debug_set_busy_timeout(&self, timeout: Duration) -> Result<(), StoreError> {
+        self.conn
+            .lock()
+            .expect(LOCK_POISONED)
+            .busy_timeout(timeout)?;
+        Ok(())
+    }
+
     /// Takes of the connection mutex since start, so a test can prove a path pays none.
     #[cfg(any(test, feature = "debug-hooks"))]
     #[doc(hidden)]

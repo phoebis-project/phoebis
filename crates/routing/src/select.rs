@@ -267,7 +267,7 @@ fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
     pin.tail_hash = request.boundaries.last().cloned();
 }
 
-/// The hysteresis band under the migrate threshold: a destination counts only below `threshold - MIGRATE_BAND`.
+/// The hysteresis band under the migrate margin: a destination counts only below `margin - MIGRATE_BAND`.
 pub const MIGRATE_BAND: f64 = 0.05;
 
 /// Why a selection landed where it did, for the attempt row and the request drawer. `Serialize` here, so the
@@ -1982,35 +1982,31 @@ fn choose<'a>(
     rng: &mut impl Rng,
 ) -> Option<(&'a Candidate, Tier)> {
     let kind_ordered = pool.kind_ordered();
-    // Group one: oauth with plan quota; two: oauth in overage; three: api_key. The split holds under any
-    // overage_policy, because it orders by cost, not eligibility: `allow` still demotes an overage oauth
-    // account behind a plan-quota one. `overage_policy` governs eligibility everywhere and orders the tier
-    // itself only when the kind order is off, in the `false` arm below.
+    // Under the kind order, group one: oauth with plan quota; two: oauth in overage; three: api_key. The split
+    // holds under any overage_policy, because it orders by cost, not eligibility: `allow` still demotes an overage
+    // oauth account behind a plan-quota one. `overage_policy` governs eligibility everywhere and orders the tier
+    // itself only when the kind order is off, through the overage bit.
     let group_of = |c: &Candidate, in_overage: bool| -> u8 {
-        let kind = snapshot.account(&c.account_id).map(|a| a.kind);
-        match (kind_ordered, kind, in_overage) {
-            (true, Some(AccountKind::ApiKey), _) => 2,
-            (true, _, true) => 1,
-            (true, _, false) => 0,
-            (false, _, in_overage) => {
-                u8::from(pool.overage_policy == OveragePolicy::PreferPlan && in_overage)
-            }
+        match (snapshot.account(&c.account_id).map(|a| a.kind), in_overage) {
+            (Some(AccountKind::ApiKey), _) => 2,
+            (_, true) => 1,
+            (_, false) => 0,
         }
     };
     // The kind order puts the group ahead of the priority; within a group, `prefer_plan` still orders an
     // overage account behind a plan-quota one, group three (api_key) included. A candidate step 6 kept on extra
     // usage with its model week spent bills as an account in overage does, so every plan-funded sibling goes ahead
     // of it whatever the priorities: it joins the overage group under the kind order and leads the key otherwise.
+    // The third element is the overage bit under either order, which the selection trace reads.
     let key_of = |c: &Candidate| -> Tier {
         let spent = spent_model.contains(&c.account_id);
         let in_overage = state.in_overage(&c.account_id, now, fallback_ms);
         let overage_bit =
             u8::from(spent || (pool.overage_policy == OveragePolicy::PreferPlan && in_overage));
-        let group = group_of(c, in_overage || spent);
         if kind_ordered {
-            (group, c.priority, overage_bit)
+            (group_of(c, in_overage || spent), c.priority, overage_bit)
         } else {
-            (u8::from(spent), c.priority, group)
+            (u8::from(spent), c.priority, overage_bit)
         }
     };
     let first = set.iter().map(|c| key_of(c)).min()?;

@@ -961,10 +961,9 @@ impl RoutingState {
 
     /// The live rate-limit rows on the account that `sample` shows recovered: the window the row answers for (a
     /// model row's is the model's own week) has allowance again, read from a sample taken after the rejection that
-    /// set the row. A window the sample
-    /// never read is not evidence, and neither is a row no usage window answers for. A row already past its
-    /// deadline is left to the purge tick, which says so. Only an OAuth account is ever sampled, which is what
-    /// keeps an api-key account's rows out of here without a registry lookup.
+    /// set the row. A window the sample never read is not evidence, and neither is a row no usage window answers
+    /// for. A row already past its deadline is left to the purge tick, which says so. Only an OAuth account is ever
+    /// sampled, which is what keeps an api-key account's rows out of here without a registry lookup.
     pub fn recovered_cooldowns(
         &self,
         account_id: &str,
@@ -2565,13 +2564,20 @@ mod tests {
                 "the Fable week has allowance again, whatever the row's window {window} says"
             );
             assert!(
-                recovered(&state, &[(window, 0.5), (SEVEN_DAY_FABLE, 1.0)]).is_empty(),
-                "a reading under the row's window text says nothing while the Fable week stays spent"
-            );
-            assert!(
                 recovered(&state, &[(SEVEN_DAY, 0.5)]).is_empty(),
                 "a shared week under 1.0 does not recover the model's row, window {window}"
             );
         }
+        // Under the spend cap's own key alone: a row naming the Fable week reads one key for both readings.
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        state.record_cooldown(row("seven_day_overage_included"));
+        assert!(
+            recovered(
+                &state,
+                &[("seven_day_overage_included", 0.5), (SEVEN_DAY_FABLE, 1.0)]
+            )
+            .is_empty(),
+            "a reading under the row's window text says nothing while the Fable week stays spent"
+        );
     }
 }

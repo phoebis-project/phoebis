@@ -376,8 +376,26 @@ enum CoalesceKey {
     },
 }
 
-/// The replacing readings the loop drains at the top of every turn, in key order.
-type Pending = Arc<Mutex<BTreeMap<CoalesceKey, Report>>>;
+/// The replacing readings the loop drains at the top of every turn, in key order, and how far the shutdown has
+/// gone; both under one lock, so a reading is either taken by a drain or counted as dropped, never both.
+type Pending = Arc<Mutex<PendingReadings>>;
+
+#[derive(Default)]
+struct PendingReadings {
+    readings: BTreeMap<CoalesceKey, Report>,
+    mailbox: Mailbox,
+}
+
+/// Where the shutdown stands for a replacing reading. `Closing` runs from the mailbox's close to the final drain,
+/// which takes the map whole, so a reading inserted then needs no marker and lands; past that drain the mailbox is
+/// `Closed` and a reading lands nowhere.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Mailbox {
+    #[default]
+    Open,
+    Closing,
+    Closed,
+}
 
 const PENDING_POISONED: &str = "pending readings lock poisoned";
 
@@ -432,7 +450,10 @@ impl Report {
     }
 
     /// Folds `self` into the reading pending under the same key: the evidence's own age decides, never the
-    /// arrival order, since the loop may be parked while a newer reading and then an older one arrive.
+    /// arrival order, since the loop may be parked while a newer reading and then an older one arrive. Two overage
+    /// readings of one account folded within one loop turn reach the loop as the newer alone, so an episode that
+    /// began and ended between them never reaches the event log or the hourly `overage_seconds`, and two episodes
+    /// either side of a gap can read as one.
     fn merge_into(self, pending: &mut Report) {
         let replaces = match (&self, &*pending) {
             // Two samples under one key read the same windows, so the sample's own age speaks for each of them.
@@ -703,27 +724,39 @@ impl RouterHandle {
         let Some(key) = report.coalesce_key() else {
             return Some(report);
         };
-        let inserted = {
+        let dropped = {
             let mut pending = self.pending.lock().expect(PENDING_POISONED);
-            match pending.entry(key) {
-                btree_map::Entry::Occupied(mut held) => {
-                    report.merge_into(held.get_mut());
-                    false
-                }
-                btree_map::Entry::Vacant(slot) => {
-                    slot.insert(report);
-                    true
+            match pending.mailbox {
+                Mailbox::Closed => true,
+                mailbox => {
+                    let inserted = match pending.readings.entry(key) {
+                        btree_map::Entry::Occupied(mut held) => {
+                            report.merge_into(held.get_mut());
+                            false
+                        }
+                        btree_map::Entry::Vacant(slot) => {
+                            slot.insert(report);
+                            true
+                        }
+                    };
+                    // One marker per key: a reading that replaced a pending one is covered by that one's marker, or
+                    // by the busy loop's next drain when the full mailbox refused it. Sent under the lock, so the
+                    // shutdown's close cannot fall between the state read and the send. While `Closing`, the final
+                    // drain takes the reading; an open mailbox that is closed anyway lost its loop without that
+                    // drain.
+                    mailbox == Mailbox::Open
+                        && if inserted {
+                            matches!(
+                                self.tx.try_send(Command::Coalesced),
+                                Err(mpsc::error::TrySendError::Closed(_))
+                            )
+                        } else {
+                            self.tx.is_closed()
+                        }
                 }
             }
         };
-        // One marker per key: a reading that replaced a pending one is covered by that one's marker, or by the
-        // busy loop's next drain when the full mailbox refused it.
-        if inserted {
-            if let Err(mpsc::error::TrySendError::Closed(_)) = self.tx.try_send(Command::Coalesced)
-            {
-                self.count_drop(kind);
-            }
-        } else if self.tx.is_closed() {
+        if dropped {
             self.count_drop(kind);
         }
         None
@@ -1168,7 +1201,7 @@ pub fn spawn(
                 command = rx.recv() => match command {
                     Some(Command::Shutdown { reply }) => {
                         // Nothing queued behind the shutdown is served: the handles that sent it are done.
-                        rx.close();
+                        close_mailbox(&task.pending, &mut rx);
                         // A held report lands with the drain like any other, ahead of the ones queued after it.
                         #[cfg(any(test, feature = "debug-hooks"))]
                         task.release_reports();
@@ -1185,7 +1218,7 @@ pub fn spawn(
                             }
                         }
                         // A reading inserted after the last turn's drain lands as a queued report does.
-                        task.drain_pending();
+                        task.final_drain();
                         // A clean shutdown loses none of the refreshes since the last purge tick.
                         let drained = task
                             .state
@@ -1202,7 +1235,7 @@ pub fn spawn(
                     }
                     Some(command) => task.handle(command).await,
                     None => {
-                        task.drain_pending();
+                        task.final_drain();
                         task.drain_writer().await;
                         break;
                     }
@@ -1312,8 +1345,16 @@ impl Writer {
                         "{skipped} of {size} routing state writes failed and were skipped"
                     );
                 }
-                if rekey.is_some() {
-                    self.rekey = rekey;
+                if let Some(rekey) = rekey {
+                    // A wake lands its remainder and then its batch, and keeps one refused rekey to retry: the
+                    // newer, which for one spelling is the latest resolution.
+                    if let Some(replaced) = self.rekey.replace(rekey) {
+                        tracing::warn!(
+                            spelling = %replaced.resolution.spelling,
+                            dated_id = %replaced.resolution.dated_id,
+                            "a refused model resolution's rekey is dropped: a later one of this wake replaces it"
+                        );
+                    }
                 }
                 moved
             }
@@ -1521,6 +1562,21 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<bool, StoreError> {
     }
 }
 
+/// Closes the mailbox under the pending lock, so a reading pended from here on waits for the final drain rather than
+/// sending a marker the closed mailbox would refuse.
+fn close_mailbox(pending: &Pending, rx: &mut mpsc::Receiver<Command>) {
+    let mut pending = pending.lock().expect(PENDING_POISONED);
+    pending.mailbox = Mailbox::Closing;
+    rx.close();
+}
+
+/// The pending map's last take: a reading after it lands nowhere and counts as dropped.
+fn take_final(pending: &Pending) -> BTreeMap<CoalesceKey, Report> {
+    let mut pending = pending.lock().expect(PENDING_POISONED);
+    pending.mailbox = Mailbox::Closed;
+    std::mem::take(&mut pending.readings)
+}
+
 impl Task {
     /// A send with no receiver is an error and means nothing: the loop must never depend on anyone listening.
     fn emit(&self, event: RouterEvent) {
@@ -1538,9 +1594,19 @@ impl Task {
             // Awaited: the channel is bounded and the writer is still draining it, so the backlog takes the next
             // slot it frees, and a shutdown after a full channel still lands every acknowledged pin and cooldown.
             self.writer_status.depth.fetch_add(1, Ordering::Relaxed);
-            if self.writer.send(backlog).await.is_err() {
+            if let Err(mpsc::error::SendError(lost)) = self.writer.send(backlog).await {
                 self.writer_status.depth.fetch_sub(1, Ordering::Relaxed);
+                let rekeys = lost
+                    .iter()
+                    .filter(|write| matches!(write, StateWrite::Rekey(_)))
+                    .count();
+                tracing::warn!(
+                    rows = lost.len() - rekeys,
+                    rekeys,
+                    "the routing state writer has stopped; the writes held in memory are lost"
+                );
             }
+            // Cleared whatever the send did: the loop is leaving, and nothing is held for it any more.
             self.writer_status.deferred.store(0, Ordering::Relaxed);
             self.writer_status.degraded.store(false, Ordering::Relaxed);
         }
@@ -1953,8 +2019,15 @@ impl Task {
     /// cooldown; one taken after a cooldown may drain before that cooldown's command, and then it lifts nothing
     /// and the next reading does.
     fn drain_pending(&mut self) {
-        let readings = std::mem::take(&mut *self.pending.lock().expect(PENDING_POISONED));
+        let readings = std::mem::take(&mut self.pending.lock().expect(PENDING_POISONED).readings);
         for report in readings.into_values() {
+            self.report(report);
+        }
+    }
+
+    /// The loop's last drain: what it takes lands, and a reading after it counts as dropped.
+    fn final_drain(&mut self) {
+        for report in take_final(&self.pending).into_values() {
             self.report(report);
         }
     }
@@ -3054,6 +3127,58 @@ mod tests {
         })
     }
 
+    /// A handle over a mailbox whose receiver the test holds, built as `spawn` builds one.
+    fn handle_over(tx: tokio::sync::mpsc::Sender<Command>) -> RouterHandle {
+        RouterHandle {
+            affinity: Arc::default(),
+            dropped: Arc::default(),
+            events: broadcast::channel(1).0,
+            in_flight: InFlight::default(),
+            pending: Pending::default(),
+            reports: Arc::default(),
+            snapshot: Arc::new(RwLock::new(Arc::new(RegistrySnapshot::from_load(
+                RegistryLoad::default(),
+                [0; 32],
+                0,
+                1,
+            )))),
+            tx,
+            writer: Arc::default(),
+        }
+    }
+
+    fn dropped(handle: &RouterHandle) -> u64 {
+        handle.dropped_reports().iter().map(|(_, n)| n).sum()
+    }
+
+    /// A reading taken after the shutdown closed the mailbox and before the final drain lands with that drain and
+    /// counts no drop; one taken after the final drain lands nowhere and counts one.
+    #[test]
+    fn a_reading_between_the_mailbox_closing_and_the_final_drain_lands_and_one_after_it_counts_a_drop(
+    ) {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(4);
+        let handle = handle_over(tx);
+        close_mailbox(&handle.pending, &mut rx);
+        assert!(handle.pend(Report::Accounting { degraded: true }).is_none());
+        assert_eq!(
+            dropped(&handle),
+            0,
+            "the final drain still takes the reading"
+        );
+        assert_eq!(take_final(&handle.pending).len(), 1);
+        assert!(handle
+            .pend(Report::Accounting { degraded: false })
+            .is_none());
+        assert_eq!(
+            handle.dropped_reports(),
+            Report::KINDS
+                .iter()
+                .map(|kind| (*kind, u64::from(*kind == "accounting")))
+                .collect::<Vec<_>>(),
+            "after the final drain nothing takes the reading"
+        );
+    }
+
     #[test]
     fn of_two_refused_rekeys_of_one_spelling_the_newer_is_the_one_retried() {
         let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
@@ -3145,6 +3270,9 @@ mod tests {
     ) {
         let scratch = Scratch::new("writer-remainder");
         let (store, holder) = linked_stores(&scratch);
+        store
+            .debug_set_busy_timeout(Duration::from_millis(100))
+            .unwrap();
         let store = Arc::new(store);
         let figures = Arc::new(WriterShared::default());
         let mut writer = Writer {
@@ -3197,6 +3325,9 @@ mod tests {
     fn a_lock_held_past_the_busy_timeout_stops_the_replay_at_its_first_write() {
         let scratch = Scratch::new("replay-busy");
         let (store, holder) = linked_stores(&scratch);
+        store
+            .debug_set_busy_timeout(Duration::from_millis(100))
+            .unwrap();
         let (release, holding) = hold_the_lock(holder);
 
         let landed = replay(

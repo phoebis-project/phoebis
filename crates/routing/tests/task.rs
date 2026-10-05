@@ -1163,6 +1163,12 @@ async fn a_refused_rekey() -> (Arc<Store>, phoebis_routing::RouterHandle) {
         .resolve("claude-sonnet-4-5", "claude-sonnet-4-5-20250929", 1_500)
         .await
         .unwrap();
+    // The rekey's batch has left the channel, so the next report wakes the writer on its own rather than joining
+    // the rekey's wake, where it would land beside the refusal instead of after it.
+    wait_for(WRITTEN, || {
+        (handle.writer_status().depth == 0).then_some(())
+    })
+    .await;
     (store, handle)
 }
 
@@ -1429,6 +1435,9 @@ async fn a_shutdown_with_a_full_writer_channel_lands_every_deferred_write() {
         let handle = handle.clone();
         async move { handle.shutdown().await }
     });
+    // Past this the loop has left its turn, so only the shutdown's own flush can take the backlog; a release
+    // before it lets the turn's `writer_room` arm land it instead.
+    wait_for(WRITTEN, || (!handle.is_alive()).then_some(())).await;
     hold.release();
     shutdown.await.unwrap().unwrap();
     let load = store.load_routing().unwrap();
@@ -2089,7 +2098,7 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
             incarnation: 1,
         })
         .await;
-    // The report and the ask share one sender, so both reports are applied before this answers.
+    // The ask is handled after a drain that holds both reports, so both are applied before this answers.
     assert!(handle.cooldowns().await.unwrap().is_empty());
     // Shutdown drains the writer, so a verdict that was going to land has landed by now.
     handle.shutdown().await.unwrap();
@@ -2919,7 +2928,8 @@ async fn the_router_broadcasts_pin_cooldown_and_overage_events() {
             incarnation: 1,
         })
         .await;
-    // The report and the ask share one sender, so the task has applied the sample before it answers this.
+    // The ask is handled after a drain that holds the report, so the task has applied the sample before it answers
+    // this.
     let samples = handle.samples().await.unwrap();
     assert_eq!(
         samples
@@ -3350,8 +3360,8 @@ async fn a_row_no_usage_window_answers_for_is_left_alone() {
             "five_hour",
         ))
         .await;
-    // A fable-only 429 whose headers carried no claim: the upstream sent a deadline and named no window, so
-    // the fable reading is a guess about which window the rejection was for.
+    // A 429 on the Fable model alone whose headers carried no claim: the upstream sent a deadline and named no
+    // window, so the model week's reading is a guess about which window the rejection was for.
     handle
         .report(cooled(
             "a",
