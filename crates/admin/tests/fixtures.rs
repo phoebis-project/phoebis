@@ -721,6 +721,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .with(phoebis_relay::FAST_INPUT, fast_reading(0.42))
             .with(phoebis_relay::FAST_OUTPUT, fast_reading(0.08)),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     parts.ledger.record(Record::Event(EventRecord {

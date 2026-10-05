@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use phoebis_oauth::Clock;
-use phoebis_routing::{RouterEvent, RouterHandle};
+use phoebis_routing::{CreditsState, RouterEvent, RouterHandle};
 use phoebis_store::{AccountState, Store};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
@@ -20,8 +20,9 @@ use crate::LedgerDb;
 /// Rows read per mirror tick; a registry busier than this per tick is caught up on the next.
 const MIRROR_BATCH: usize = 500;
 
-/// `None` for a variant the mirror consumes itself rather than as an event row: a `Decision` or a
-/// `CacheMapWritten`, the ledger's own records.
+/// `None` for the three variants that land as no row of their own here: a `Decision` and a `CacheMapWritten`, which
+/// the mirror maps to the ledger's own records, and an `AccountStateChanged`, a transition the mirror's account
+/// watch reads from the registry.
 pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
     let model_of = |scope: &str| scope.strip_prefix("model:").map(str::to_string);
     let row = match event {
@@ -155,7 +156,166 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             agent_id: Some(agent_id.clone()),
             ..Default::default()
         },
-        RouterEvent::Decision { .. } | RouterEvent::CacheMapWritten { .. } => return None,
+        RouterEvent::SheddingRound {
+            account_id,
+            pool_id,
+            request_id,
+            key_id,
+            session_id,
+            agent_id,
+            model,
+            round,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "shedding_round".into(),
+            account_id: Some(account_id.clone()),
+            key_id: Some(key_id.clone()),
+            session_id: Some(session_id.clone()),
+            model: Some(model.clone()),
+            // The round's facts serialize as the detail's fields, the pins and the marks as arrays of objects.
+            detail: serde_json::to_string(round).ok(),
+            pool_id: Some(pool_id.clone()),
+            agent_id: Some(agent_id.clone()),
+            request_id: Some(request_id.clone()),
+            ..Default::default()
+        },
+        RouterEvent::FastCreditsChanged {
+            account_id,
+            before,
+            after,
+            blocked_before,
+            blocked_after,
+            at,
+        } => {
+            let credits = |state: &CreditsState| {
+                json!({
+                    "enabled": state.enabled,
+                    "disabled_reason": state.disabled_reason,
+                    "utilization": state.utilization,
+                })
+            };
+            EventRecord {
+                at: *at,
+                kind: "fast_credits_changed".into(),
+                account_id: Some(account_id.clone()),
+                detail: Some(
+                    json!({
+                        "before": before.as_ref().map(credits),
+                        "after": credits(after),
+                        "blocked_before": blocked_before,
+                        "blocked_after": blocked_after,
+                        "observed_at": after.observed_at,
+                    })
+                    .to_string(),
+                ),
+                ..Default::default()
+            }
+        }
+        RouterEvent::WindowSpent {
+            account_id,
+            window,
+            utilization,
+            reset,
+            source,
+            source_request_id,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "window_spent".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "window": window,
+                    "utilization": utilization,
+                    "reset": reset,
+                    "source": source.as_str(),
+                    "source_request_id": source_request_id,
+                })
+                .to_string(),
+            ),
+            request_id: source_request_id.clone(),
+            ..Default::default()
+        },
+        RouterEvent::WindowReset {
+            account_id,
+            window,
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "window_reset".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "window": window,
+                    "utilization_before": utilization_before,
+                    "reset_at": reset_at,
+                    "next_reset": next_reset,
+                    "observed": observed,
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+        RouterEvent::WarmPrefixExpired {
+            account_id,
+            key_id,
+            root,
+            model,
+            lane,
+            entries,
+            deepest,
+            cause,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "warm_prefix_expired".into(),
+            account_id: Some(account_id.clone()),
+            key_id: Some(key_id.clone()),
+            // The root is the conversation's identity, which is what the session column holds.
+            session_id: Some(root.clone()),
+            model: Some(model.clone()),
+            detail: Some(
+                json!({
+                    "root": root,
+                    "entries": entries,
+                    "deepest": deepest,
+                    "lane": lane,
+                    "cause": cause,
+                })
+                .to_string(),
+            ),
+            ..Default::default()
+        },
+        RouterEvent::WindDownStarted {
+            account_id,
+            pool_id,
+            ends_at,
+            wind_down_minutes,
+            end_source,
+            at,
+        } => EventRecord {
+            at: *at,
+            kind: "wind_down_started".into(),
+            account_id: Some(account_id.clone()),
+            detail: Some(
+                json!({
+                    "ends_at": ends_at,
+                    "wind_down_minutes": wind_down_minutes,
+                    "end_source": end_source,
+                })
+                .to_string(),
+            ),
+            pool_id: Some(pool_id.clone()),
+            ..Default::default()
+        },
+        RouterEvent::Decision { .. }
+        | RouterEvent::CacheMapWritten { .. }
+        | RouterEvent::AccountStateChanged { .. } => return None,
     };
     Some(row)
 }
@@ -435,6 +595,325 @@ mod tests {
             row.detail.as_deref(),
             Some(r#"{"agent_id":"main","reasons":["cooldown","spent"]}"#),
             "the facts travel in the selection's order"
+        );
+    }
+
+    fn detail_of(row: &EventRecord) -> serde_json::Value {
+        serde_json::from_str(row.detail.as_deref().expect("a detail")).unwrap()
+    }
+
+    /// The row's columns: kind, account, pool, key, session, agent, model, request.
+    type Columns<'a> = (
+        &'a str,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+        Option<&'a str>,
+    );
+
+    fn columns(row: &EventRecord) -> Columns<'_> {
+        (
+            row.kind.as_str(),
+            row.account_id.as_deref(),
+            row.pool_id.as_deref(),
+            row.key_id.as_deref(),
+            row.session_id.as_deref(),
+            row.agent_id.as_deref(),
+            row.model.as_deref(),
+            row.request_id.as_deref(),
+        )
+    }
+
+    #[test]
+    fn the_router_s_state_changes_map_to_their_kinds_with_their_columns_and_detail() {
+        use phoebis_routing::{
+            CacheMapEntry, CreditsState, PinKeyFacts, ShedPinFacts, ShedRoundFacts, WindowSource,
+        };
+        let key = PinKeyFacts {
+            key_id: "k".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+        };
+        let row = event_of(&RouterEvent::SheddingRound {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            request_id: "r1".into(),
+            key_id: "k".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "m".into(),
+            round: ShedRoundFacts {
+                window: "seven_day".into(),
+                utilization: 0.5,
+                elapsed_share: 0.1,
+                ahead: 0.4,
+                threshold: 0.2,
+                margin: 0.2,
+                unit: "window_share",
+                burn_window_seconds: 600,
+                shed_share: 0.5,
+                burn_sum: 5.0,
+                target: 2.5,
+                warm_sessions: "when_needed",
+                pins: vec![ShedPinFacts {
+                    key_id: "k".into(),
+                    session_id: "s1".into(),
+                    agent_id: "main".into(),
+                    model: "m".into(),
+                    cold: true,
+                    burn: Some(4.0),
+                    last_input_tokens: 1_000,
+                    per_rewrite: Some(0.004),
+                    marked: true,
+                    note: Some("current"),
+                }],
+                marks: vec![key.clone()],
+                dwell_seconds: 900,
+                dwell_until: 901_000,
+            },
+            at: 1_000,
+        })
+        .expect("a round row");
+        assert_eq!(
+            (row.at, columns(&row)),
+            (
+                1_000,
+                (
+                    "shedding_round",
+                    Some("a"),
+                    Some("p"),
+                    Some("k"),
+                    Some("s1"),
+                    Some("main"),
+                    Some("m"),
+                    Some("r1")
+                )
+            )
+        );
+        let detail = detail_of(&row);
+        for (field, value) in [
+            ("window", json!("seven_day")),
+            ("utilization", json!(0.5)),
+            ("elapsed_share", json!(0.1)),
+            ("ahead", json!(0.4)),
+            ("threshold", json!(0.2)),
+            ("margin", json!(0.2)),
+            ("unit", json!("window_share")),
+            ("burn_window_seconds", json!(600)),
+            ("shed_share", json!(0.5)),
+            ("burn_sum", json!(5.0)),
+            ("target", json!(2.5)),
+            ("warm_sessions", json!("when_needed")),
+            ("dwell_seconds", json!(900)),
+            ("dwell_until", json!(901_000)),
+        ] {
+            assert_eq!(detail[field], value, "{field}");
+        }
+        assert_eq!(
+            detail["pins"],
+            json!([{
+                "key_id": "k", "session_id": "s1", "agent_id": "main", "model": "m", "cold": true,
+                "burn": 4.0, "last_input_tokens": 1_000, "per_rewrite": 0.004, "marked": true,
+                "note": "current"
+            }]),
+            "each pin is an object of one-value fields"
+        );
+        assert_eq!(
+            detail["marks"],
+            json!([{"key_id": "k", "session_id": "s1", "agent_id": "main", "model": "m"}])
+        );
+
+        let credits = |enabled: bool, reason: Option<&str>, observed_at: i64| CreditsState {
+            enabled,
+            disabled_reason: reason.map(String::from),
+            utilization: Some(0.25),
+            observed_at,
+            incarnation: 1,
+        };
+        let row = event_of(&RouterEvent::FastCreditsChanged {
+            account_id: "a".into(),
+            before: Some(credits(true, None, 1_000)),
+            after: credits(false, Some("org_level_disabled"), 2_000),
+            blocked_before: None,
+            blocked_after: Some("org_level_disabled".into()),
+            at: 2_500,
+        })
+        .expect("a credits row");
+        assert_eq!(
+            columns(&row),
+            (
+                "fast_credits_changed",
+                Some("a"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "before": {"enabled": true, "disabled_reason": null, "utilization": 0.25},
+                "after": {"enabled": false, "disabled_reason": "org_level_disabled", "utilization": 0.25},
+                "blocked_before": null,
+                "blocked_after": "org_level_disabled",
+                "observed_at": 2_000,
+            })
+        );
+
+        let row = event_of(&RouterEvent::WindowSpent {
+            account_id: "a".into(),
+            window: "five_hour".into(),
+            utilization: 1.0,
+            reset: Some(9_000),
+            source: WindowSource::Head,
+            source_request_id: Some("r2".into()),
+            at: 3_000,
+        })
+        .expect("a window row");
+        assert_eq!(
+            columns(&row),
+            (
+                "window_spent",
+                Some("a"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                Some("r2")
+            ),
+            "the head that reported the reading names the request"
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "window": "five_hour", "utilization": 1.0, "reset": 9_000, "source": "head",
+                "source_request_id": "r2"
+            })
+        );
+
+        let row = event_of(&RouterEvent::WindowReset {
+            account_id: "a".into(),
+            window: "five_hour".into(),
+            utilization_before: 0.7,
+            reset_at: 2_000,
+            next_reset: None,
+            observed: "clock",
+            at: 2_050,
+        })
+        .expect("a reset row");
+        assert_eq!(
+            columns(&row),
+            (
+                "window_reset",
+                Some("a"),
+                None,
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "window": "five_hour", "utilization_before": 0.7, "reset_at": 2_000, "next_reset": null,
+                "observed": "clock"
+            })
+        );
+
+        let row = event_of(&RouterEvent::WarmPrefixExpired {
+            account_id: "a".into(),
+            key_id: "k".into(),
+            root: "s1".into(),
+            model: "m".into(),
+            lane: "m|standard|none|-".into(),
+            entries: 2,
+            deepest: CacheMapEntry {
+                tier: "message",
+                depth: 3,
+                prefix_tokens: 1_200,
+                ttl_ms: 300_000,
+                account_id: "a".into(),
+            },
+            cause: "ttl",
+            at: 4_000,
+        })
+        .expect("an expiry row");
+        assert_eq!(
+            columns(&row),
+            (
+                "warm_prefix_expired",
+                Some("a"),
+                None,
+                Some("k"),
+                Some("s1"),
+                None,
+                Some("m"),
+                None
+            ),
+            "the root fills the session column"
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({
+                "root": "s1", "entries": 2,
+                "deepest": {"tier": "message", "depth": 3, "prefix_tokens": 1_200, "ttl_ms": 300_000,
+                    "account_id": "a"},
+                "lane": "m|standard|none|-", "cause": "ttl"
+            })
+        );
+
+        let row = event_of(&RouterEvent::WindDownStarted {
+            account_id: "a".into(),
+            pool_id: "p".into(),
+            ends_at: 9_000,
+            wind_down_minutes: 30,
+            end_source: "cancelled",
+            at: 5_000,
+        })
+        .expect("a wind-down row");
+        assert_eq!(
+            columns(&row),
+            (
+                "wind_down_started",
+                Some("a"),
+                Some("p"),
+                None,
+                None,
+                None,
+                None,
+                None
+            )
+        );
+        assert_eq!(
+            detail_of(&row),
+            json!({"ends_at": 9_000, "wind_down_minutes": 30, "end_source": "cancelled"})
+        );
+    }
+
+    #[test]
+    fn an_account_state_change_maps_to_no_event_row() {
+        assert_eq!(
+            event_of(&RouterEvent::AccountStateChanged {
+                account_id: "a".into(),
+                to: AccountState::ReauthRequired,
+                incarnation: 1,
+                revision: 4,
+                cause: "auth_failed",
+                detail: None,
+                at: 1,
+            }),
+            None,
+            "the transition is the account watch's row"
         );
     }
 

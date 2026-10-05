@@ -11291,6 +11291,77 @@ fn a_shed_move_records_the_round_and_its_marks() {
 }
 
 #[test]
+fn a_shed_round_answers_its_hot_window_and_its_pins_in_the_round_s_order() {
+    let s = snapshot(pace_pool());
+    let mut st = two_pins_on_a();
+    st.record_sample("a", weekly(0.1, 0.5, 9, T - 500));
+    st.record_sample("b", weekly(0.1, 0.3, 4, T - 500));
+    let d = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    let round = d.shed_round.expect("the round ran on this decision");
+    // The 5-hour lead of 0.1 stays under the threshold; the week's 0.4 is the first to reach it.
+    assert_eq!(
+        (round.window.as_str(), round.unit),
+        ("seven_day", "window_share")
+    );
+    for (read, expected) in [
+        (round.utilization, 0.5),
+        (round.elapsed_share, 0.1),
+        (round.ahead, 0.4),
+        (round.threshold, 0.2),
+        (round.margin, 0.2),
+        (round.shed_share, 0.5),
+        (round.burn_sum, 5.0),
+        (round.target, 2.5),
+    ] {
+        assert!((read - expected).abs() < 1e-9, "{read} against {expected}");
+    }
+    assert_eq!(
+        round
+            .pins
+            .iter()
+            .map(|p| (
+                p.session_id.as_str(),
+                p.cold,
+                p.burn,
+                p.last_input_tokens,
+                p.per_rewrite,
+                p.marked,
+                p.note
+            ))
+            .collect::<Vec<_>>(),
+        [
+            (
+                "s1",
+                true,
+                Some(4.0),
+                1_000,
+                Some(0.004),
+                true,
+                Some("current")
+            ),
+            ("s0", true, Some(1.0), 1_000, Some(0.001), false, None),
+        ],
+        "cold first by burn, the request's own pin named"
+    );
+    assert_eq!(
+        Some(round.marks.clone()),
+        d.record.outcome.shed_marks,
+        "the record keeps the round's marks alone"
+    );
+    assert_eq!(
+        (
+            round.burn_window_seconds,
+            round.warm_sessions,
+            round.dwell_seconds,
+            round.dwell_until
+        ),
+        (600, "when_needed", 900, T + 900_000)
+    );
+    let next = decide(&mut st, &s, &auxiliary(&s, "s0", T + 1_000), &mut rng());
+    assert_eq!(next.shed_round, None, "inside the dwell no round runs");
+}
+
+#[test]
 fn a_static_placement_records_the_three_rung_lines_and_the_partitions() {
     let s = snapshot(Pool {
         members: vec![("a", 0), ("b", 1)],

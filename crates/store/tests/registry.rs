@@ -1779,19 +1779,30 @@ fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
         "the kind-agnostic read answers the same generation"
     );
     assert_eq!(store.credential_generation("nobody").unwrap(), None);
-    assert!(
-        !store
+    let before = store.account("a").unwrap().unwrap().revision;
+    assert_eq!(
+        store
             .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 1)
             .unwrap(),
+        None,
         "a verdict about the replaced key changes nothing"
     );
+    let row = store.account("a").unwrap().unwrap();
+    assert_eq!((row.state, row.revision), (AccountState::Ready, before));
     assert_eq!(
-        store.account("a").unwrap().unwrap().state,
-        AccountState::Ready
+        store
+            .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 2)
+            .unwrap(),
+        Some((before + 1, AccountState::Ready)),
+        "the moved row's revision after the write and the state it held before"
     );
-    assert!(store
-        .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 2)
-        .unwrap());
+    assert_eq!(
+        store
+            .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 2)
+            .unwrap(),
+        Some((before + 2, AccountState::ReauthRequired)),
+        "a repeated verdict lands under its fences and names the state it found unchanged"
+    );
 }
 
 #[test]
@@ -2010,15 +2021,14 @@ fn a_state_verdict_from_a_previous_incarnation_changes_nothing() {
             credential,
         )
         .unwrap();
-    assert!(!moved, "the verdict named a holder that is gone");
+    assert_eq!(moved, None, "the verdict named a holder that is gone");
+    let row = store.account("a").unwrap().unwrap();
+    assert_eq!(row.state, AccountState::Ready);
     assert_eq!(
-        store.account("a").unwrap().unwrap().state,
-        AccountState::Ready
-    );
-    assert!(
         store
             .set_state_if_generations("a", AccountState::FundingRequired, 2, 1, 1)
             .unwrap(),
+        Some((row.revision + 1, AccountState::Ready)),
         "the holder the tombstone numbered 2 takes its own verdicts"
     );
 }

@@ -438,7 +438,7 @@ impl RoutingTx<'_> {
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
-    ) -> Result<bool, StoreError> {
+    ) -> Result<Option<(u64, AccountState)>, StoreError> {
         set_state_if_generations_on(
             self.tx,
             id,

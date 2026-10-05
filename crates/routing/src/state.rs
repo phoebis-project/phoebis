@@ -12,7 +12,7 @@ use phoebis_store::{
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
-use crate::affinity::AffinityMap;
+use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date};
 use crate::select::affinity_ttl_ms;
 use crate::task::BurnRates;
@@ -225,13 +225,15 @@ impl UtilizationSample {
 pub enum StateWrite {
     /// The relay's verdict on an account, fenced by the incarnation and the generations the attempt that
     /// formed it went out with. It travels with the rest of the routing writes so shutdown drains it like any
-    /// other.
+    /// other. `cause` and `detail` ride to the event the loop emits when the write moves the row's state.
     AccountState {
         account_id: String,
         state: AccountState,
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
+        cause: &'static str,
+        detail: Option<String>,
     },
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
@@ -251,7 +253,10 @@ pub enum StateWrite {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Purged {
+    /// The removed entries' keys, for the store's delete.
     pub affinity: Vec<(String, String)>,
+    /// The same entries whole, with why each left, for the expiry events.
+    pub affinity_entries: Vec<PurgedEntry>,
     pub cooldowns: Vec<(String, String)>,
     /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
     pub pins: Vec<(PinKey, &'static str)>,
@@ -449,6 +454,13 @@ pub enum BurnUnit {
 }
 
 impl BurnUnit {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BurnUnit::Usd => "usd",
+            BurnUnit::WindowShare => "window_share",
+        }
+    }
+
     pub fn of(kind: AccountKind, in_overage: bool) -> BurnUnit {
         match (kind, in_overage) {
             (AccountKind::Oauth, false) => BurnUnit::WindowShare,
@@ -1760,19 +1772,24 @@ impl RoutingState {
                 .and_then(|k| snapshot.pool(&k.pool_id))
                 .map(affinity_ttl_ms)
         };
-        let affinity = self
+        let affinity_entries = self
             .affinity
             .write()
             .expect("affinity lock poisoned")
             .purge(now, ttl_of, |account_id| {
                 snapshot.account(account_id).map(|a| a.incarnation)
             });
+        let affinity = affinity_entries
+            .iter()
+            .map(|purged| (purged.model.clone(), purged.hash.clone()))
+            .collect();
         self.member_spend
             .retain(|(pool_id, account_id, period), _| {
                 member_spend_matches(snapshot, pool_id, account_id, *period)
             });
         Purged {
             affinity,
+            affinity_entries,
             cooldowns,
             pins,
         }

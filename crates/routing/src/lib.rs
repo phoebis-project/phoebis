@@ -16,7 +16,7 @@ pub mod windows;
 
 pub use affinity::{
     AffinityChain, AffinityEntry, AffinityMap, AffinityReport, AffinityRow, ConversationLookup,
-    ConversationMatch, ConversationQuery, RungWalk, Visited,
+    ConversationMatch, ConversationQuery, PurgedEntry, RungWalk, Visited,
 };
 pub use phoebis_store::canonical_id as canonical_model;
 pub use record::{
@@ -24,8 +24,8 @@ pub use record::{
     DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue, HoldOutcome,
     LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts, PinEventFacts,
     PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
-    RefusedRequest, RequestFacts, RequestFlags, Score, Settings, SummaryFact, TermFacts, WalkStep,
-    WarmthFacts, WindowFacts, RECORD_VERSION,
+    RefusedRequest, RequestFacts, RequestFlags, Score, Settings, ShedPinFacts, ShedRoundFacts,
+    SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION,
 };
 pub use resolve::{resolve, Candidate, ResolveError};
 pub use select::{

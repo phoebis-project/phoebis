@@ -7,7 +7,7 @@ use std::sync::Arc;
 
 use phoebis_routing::{
     lane_key, AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup,
-    ConversationMatch, ConversationQuery,
+    ConversationMatch, ConversationQuery, PurgedEntry,
 };
 
 fn boundaries(hashes: &[&str]) -> Vec<String> {
@@ -247,4 +247,64 @@ fn the_conversation_lookup_finds_a_root_across_lanes() {
     // its entries were written under; the lane only filters where the cache is warm.
     let q = boundaries(&["b1", "b2", "b3", "b4"]);
     content_match(map.conversation(&query("k", &q)), 3);
+}
+
+#[test]
+fn purge_answers_each_removed_entry_with_its_cause() {
+    let mut map = AffinityMap::default();
+    map.record(&report("aged", "a", &["old"], 1_000));
+    map.record(&report("live", "replaced", &["moved"], 1_000));
+    map.record(&report("live", "a", &["kept"], 1_000));
+    let ttl_of = |key_id: &str| match key_id {
+        "aged" => Some(1_000),
+        _ => Some(1_000_000),
+    };
+    // `replaced` holds the id under a newer incarnation than the one its entry names.
+    let incarnation_of = |account_id: &str| match account_id {
+        "replaced" => Some(2),
+        _ => Some(1),
+    };
+    let mut gone: Vec<PurgedEntry> = map.purge(5_000, ttl_of, incarnation_of);
+    gone.sort_by(|a, b| a.hash.cmp(&b.hash));
+    assert_eq!(
+        gone.iter()
+            .map(|g| (
+                g.model.as_str(),
+                g.hash.as_str(),
+                g.entry.account_id.as_str(),
+                g.cause
+            ))
+            .collect::<Vec<_>>(),
+        [
+            ("claude-sonnet-5", "moved", "replaced", "incarnation"),
+            ("claude-sonnet-5", "old", "a", "ttl"),
+        ],
+        "each removal names the entry it took and why"
+    );
+    assert!(map.entry("claude-sonnet-5", "kept").is_some());
+}
+
+#[test]
+fn an_entry_records_the_ordinal_of_its_boundary_and_a_refresh_keeps_it() {
+    let mut map = AffinityMap::default();
+    map.record(&AffinityReport {
+        static_boundaries: std::sync::Arc::from(["s1".to_string(), "s2".to_string()]),
+        static_sizes: vec![100, 200],
+        static_ttl_ms: Some(300_000),
+        cache_touched: true,
+        ..report("k", "a", &["b1", "b2", "b3"], 1_000)
+    });
+    let depth = |hash: &str| map.entry("claude-sonnet-5", hash).map(|e| e.depth);
+    assert_eq!(
+        ["b1", "b2", "b3", "s1", "s2"].map(depth),
+        [Some(1), Some(2), Some(3), Some(1), Some(2)],
+        "each chain counts its own boundaries from 1"
+    );
+    map.record(&report("k", "a", &["b3"], 2_000));
+    assert_eq!(
+        map.entry("claude-sonnet-5", "b3")
+            .map(|e| (e.depth, e.written_at)),
+        Some((3, 2_000)),
+        "a refresh in place moves the entry's time and keeps the ordinal it was written at"
+    );
 }

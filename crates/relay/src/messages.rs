@@ -51,7 +51,8 @@ use crate::casing::OriginalHead;
 use crate::catalog::CatalogService;
 use crate::chains::Chains;
 use crate::classify::{
-    classify, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict, MARGIN_MS,
+    classify, error_message, error_type, refused_names, Cooldown, HeadContext, Scope, Verdict,
+    MARGIN_MS,
 };
 use crate::dispatch::{self, until_cancelled, AttemptFailure, Sent};
 use crate::errors::{
@@ -2481,8 +2482,14 @@ impl Relay {
         );
         outcome.upstream_request_id = head.get("request-id").map(str::to_string);
         self.report_overage(ctx.account, &head, head_at).await;
-        self.report_head_sample(ctx.account, &head, &ctx.identity.canonical_model, head_at)
-            .await;
+        self.report_head_sample(
+            ctx.account,
+            &head,
+            &ctx.identity.canonical_model,
+            head_at,
+            ctx.request_id,
+        )
+        .await;
 
         // Heads the table reads a body for are drained within the bound. A body past the bound is classified from
         // the prefix the drain read as if it were the whole body, and keeps its reader for the rest should the
@@ -2595,12 +2602,13 @@ impl Relay {
                     ..
                 }
         );
+        let classified = attempt_outcome(&verdict, head.status, first_event.as_deref());
         ctx.trace
             .head(
                 ctx.attempt,
                 &head,
                 committing,
-                attempt_outcome(&verdict, head.status, first_event.as_deref()),
+                classified,
                 cooldown_set(cooldown_seen, &ctx.identity.canonical_model),
                 written_at,
                 head_at,
@@ -2611,6 +2619,14 @@ impl Relay {
             ctx.account.lifecycle_generation,
             ctx.credential_generation,
         );
+        // A mark this head forms names the verdict as the attempt trail does and the upstream's own words for it.
+        let marked = |state: AccountState| {
+            (
+                state,
+                classified.as_str(),
+                decoded.as_deref().and_then(error_message),
+            )
+        };
 
         let (cooldown, mark, moves_pin) = match verdict {
             // A rejected replay is conclusive: the refreshed token was refused too.
@@ -2780,7 +2796,7 @@ impl Relay {
                             // migrates; a non-portable request keeps its pin. The deadline is measured
                             // from the error's arrival, not from the selection.
                             let now = clock();
-                            if let Verdict::FailOver { cooldown, mark } = classify(
+                            let verdict = classify(
                                 &head,
                                 &HeadContext {
                                     kind,
@@ -2798,12 +2814,15 @@ impl Relay {
                                     model_rejection_ms,
                                     fast,
                                 },
-                            ) {
+                            );
+                            let cause =
+                                attempt_outcome(&verdict, head.status, Some(&data)).as_str();
+                            if let Verdict::FailOver { cooldown, mark } = verdict {
                                 for report in failover_reports(
                                     &account_id,
                                     &canonical_model,
                                     cooldown,
-                                    mark,
+                                    mark.map(|state| (state, cause, None)),
                                     pin,
                                     &request_id,
                                     generations,
@@ -2867,7 +2886,7 @@ impl Relay {
             &ctx.account.id,
             &ctx.identity.canonical_model,
             cooldown,
-            mark,
+            mark.map(marked),
             (ctx.portable && moves_pin && retry_in_place.is_none())
                 .then(|| ctx.pin.cloned())
                 .flatten(),
@@ -3561,6 +3580,7 @@ impl Relay {
         head: &ResponseHead,
         canonical_model: &str,
         now: i64,
+        request_id: &str,
     ) {
         let observed_at = upstream_date(head).unwrap_or(now);
         let Some(sample) = head_sample(head, account.kind, canonical_model, observed_at) else {
@@ -3571,6 +3591,7 @@ impl Relay {
                 account_id: account.id.clone(),
                 sample,
                 incarnation: account.incarnation,
+                source_request_id: Some(request_id.to_string()),
             })
             .await;
     }
@@ -4089,7 +4110,7 @@ pub(crate) async fn report_failover(
     account_id: &str,
     canonical_model: &str,
     cooldown: Option<Cooldown>,
-    mark: Option<AccountState>,
+    mark: Option<Mark>,
     pin: Option<PinRef>,
     request_id: &str,
     generations: (u64, u64, u64),
@@ -4109,6 +4130,10 @@ pub(crate) async fn report_failover(
     }
 }
 
+/// The state a verdict marks its account with, the verdict's name as the attempt trail spells it, and the upstream
+/// error's message where the verdict read one.
+pub(crate) type Mark = (AccountState, &'static str, Option<String>);
+
 /// What a failover verdict tells the router, in order: the cooldown, or without one the end of the pin, then the
 /// mark.
 #[allow(clippy::too_many_arguments)]
@@ -4116,7 +4141,7 @@ pub(crate) fn failover_reports(
     account_id: &str,
     canonical_model: &str,
     cooldown: Option<Cooldown>,
-    mark: Option<AccountState>,
+    mark: Option<Mark>,
     pin: Option<PinRef>,
     request_id: &str,
     generations: (u64, u64, u64),
@@ -4158,13 +4183,15 @@ pub(crate) fn failover_reports(
             credential_generation: generations.2,
         });
     }
-    if let Some(state) = mark {
+    if let Some((state, cause, detail)) = mark {
         reports.push(Report::AccountState {
             account_id: account_id.to_string(),
             state,
             incarnation: generations.0,
             lifecycle_generation: generations.1,
             credential_generation: generations.2,
+            cause,
+            detail,
         });
     }
     reports

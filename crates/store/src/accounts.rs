@@ -285,10 +285,11 @@ impl Store {
     /// generation and a re-pair without one moves the credential generation, so both have to match or the
     /// verdict is about credentials that no longer exist and would only lock out what replaced them. A slot
     /// deleted and created again under the same id reads both generations at 1 again, so the incarnation has
-    /// to match as well. Reports whether the row moved.
+    /// to match as well. Answers the row's revision after the write and the state it held before it when the fences
+    /// let the write through, a repeated verdict included; `None` when they refused it.
     ///
-    /// One statement, because two would leave a window between the check and the update exactly as wide as
-    /// the one this exists to close.
+    /// One statement for the fenced write, because two would leave a window between the check and the update
+    /// exactly as wide as the one this exists to close.
     pub fn set_state_if_generations(
         &self,
         id: &str,
@@ -296,7 +297,7 @@ impl Store {
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
-    ) -> Result<bool, StoreError> {
+    ) -> Result<Option<(u64, AccountState)>, StoreError> {
         self.routing_commit(|conn| {
             set_state_if_generations_on(
                 conn,
@@ -562,6 +563,9 @@ pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<
     Ok(buried.unwrap_or(0) as u64 + 1)
 }
 
+/// The state before the write is read on the same connection first: every caller holds the connection's lock or
+/// its transaction across both statements, so no other write lands between them, and the routing loop tells a
+/// transition from a repeated verdict by it.
 pub(crate) fn set_state_if_generations_on(
     conn: &rusqlite::Connection,
     id: &str,
@@ -569,22 +573,36 @@ pub(crate) fn set_state_if_generations_on(
     incarnation: u64,
     lifecycle_generation: u64,
     credential_generation: u64,
-) -> Result<bool, StoreError> {
-    let updated = conn.execute(
-        "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 \
-         WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
-         AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
-              OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5))",
-        params![
-            id,
-            state,
-            jiff::Timestamp::now().as_millisecond(),
-            lifecycle_generation as i64,
-            credential_generation as i64,
-            incarnation as i64
-        ],
-    )?;
-    Ok(updated > 0)
+) -> Result<Option<(u64, AccountState)>, StoreError> {
+    let Some(before) = conn
+        .query_row(
+            "SELECT state FROM accounts WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, AccountState>(0),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let revision: Option<i64> = conn
+        .query_row(
+            "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
+             AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
+                  OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5)) \
+             RETURNING revision",
+            params![
+                id,
+                state,
+                jiff::Timestamp::now().as_millisecond(),
+                lifecycle_generation as i64,
+                credential_generation as i64,
+                incarnation as i64
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(revision.map(|revision| (revision as u64, before)))
 }
 
 /// The revision bump for a write that changes a dispatch input without touching the account row itself.

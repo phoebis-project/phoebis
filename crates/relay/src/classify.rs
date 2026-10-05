@@ -486,7 +486,7 @@ fn names_credit_balance(body: &[u8]) -> bool {
 
 /// The body's `error.message`: read off the parsed document when it is complete, and textually as far as the cut
 /// when the body was read only up to the buffer bound.
-fn error_message(body: &[u8]) -> Option<String> {
+pub(crate) fn error_message(body: &[u8]) -> Option<String> {
     match serde_json::from_slice::<Value>(body) {
         Ok(value) => value["error"]["message"].as_str().map(str::to_string),
         Err(_) => textual_member(valid_text(body), "message").map(str::to_string),

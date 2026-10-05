@@ -599,6 +599,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
                 (FAST_OUTPUT, reading(0.08, 20_000)),
             ]),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     // A plan window alone is no fast reading, so this account's row keeps its null.
@@ -607,6 +608,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
             account_id: "business".into(),
             sample: sample(&[(FIVE_HOUR, reading(0.5, 60_000))]),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     fake_upstream::wait_for_async(std::time::Duration::from_secs(2), || {

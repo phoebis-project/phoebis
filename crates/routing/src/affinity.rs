@@ -23,6 +23,19 @@ pub struct AffinityEntry {
     /// The cache lane of the last report that wrote the entry: the placement reads an entry of another lane as
     /// no warm prefix, while the conversation climb reads across lanes.
     pub lane: String,
+    /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it; 0 for an
+    /// entry restored from a registry that does not keep it.
+    pub depth: u32,
+}
+
+/// An entry the purge removed, with why: `ttl` for one past its key's idle TTL or whose key no pool serves,
+/// `incarnation` for one whose account is gone or held under another incarnation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PurgedEntry {
+    pub model: String,
+    pub hash: String,
+    pub entry: AffinityEntry,
+    pub cause: &'static str,
 }
 
 impl AffinityEntry {
@@ -167,6 +180,7 @@ impl AffinityMap {
                     key_generation: row.key_generation,
                     root: row.root,
                     lane: row.lane,
+                    depth: 0,
                 },
             );
         }
@@ -276,11 +290,12 @@ impl AffinityMap {
         let message_ttl = message_ttl_ms.unwrap_or(0);
         let mut rows = Vec::new();
 
-        for boundary in report.message_boundaries.iter() {
+        for (index, boundary) in report.message_boundaries.iter().enumerate() {
             if let Some(row) = self.upsert(
                 &canonical_model,
                 boundary,
                 AffinityChain::Message,
+                ordinal(index),
                 report,
                 &root,
                 message_confirmed,
@@ -299,6 +314,7 @@ impl AffinityMap {
                     &canonical_model,
                     boundary,
                     AffinityChain::Static,
+                    ordinal(index),
                     report,
                     &root,
                     static_confirmed,
@@ -313,31 +329,42 @@ impl AffinityMap {
     }
 
     /// Entries past `ttl_of(key_id)` (an idle TTL in ms; `None` is unserved), or whose account is gone or under
-    /// another incarnation, leave; answers their keys.
+    /// another incarnation, leave; answers each with its cause, the account's before the TTL's, since a replaced
+    /// holder's entry would have left whatever its age.
     pub fn purge(
         &mut self,
         now: i64,
         ttl_of: impl Fn(&str) -> Option<i64>,
         incarnation_of: impl Fn(&str) -> Option<u64>,
-    ) -> Vec<(String, String)> {
+    ) -> Vec<PurgedEntry> {
         let mut gone = Vec::new();
         for (model, hashes) in &mut self.entries {
             hashes.retain(|hash, entry| {
+                let replaced = incarnation_of(&entry.account_id) != Some(entry.incarnation);
                 let expired = match ttl_of(&entry.key_id) {
                     None => true,
                     Some(ttl) => now - entry.written_at > ttl,
                 };
-                let leaves =
-                    expired || incarnation_of(&entry.account_id) != Some(entry.incarnation);
-                if leaves {
-                    gone.push((model.clone(), hash.clone()));
-                }
-                !leaves
+                let cause = if replaced {
+                    "incarnation"
+                } else if expired {
+                    "ttl"
+                } else {
+                    return true;
+                };
+                gone.push(PurgedEntry {
+                    model: model.clone(),
+                    hash: hash.clone(),
+                    entry: entry.clone(),
+                    cause,
+                });
+                false
             });
         }
         self.entries.retain(|_, hashes| !hashes.is_empty());
-        for key in &gone {
-            self.dirty.remove(key);
+        for purged in &gone {
+            self.dirty
+                .remove(&(purged.model.clone(), purged.hash.clone()));
         }
         gone
     }
@@ -365,12 +392,15 @@ impl AffinityMap {
     /// dirty; any other case (new, or held by another key) replaces it and yields a row. `confirmed` decides
     /// the warmth: when false a refreshed entry on the report's lane keeps its warm deadline, its `ttl_ms`
     /// shrinking to the lifetime it has left, and one refreshed from another lane or a new one carries no warmth.
+    /// `depth` is the boundary's place in the report's chain, which a refresh in place leaves as it was: a
+    /// boundary's hash covers everything before it, so its place in the chain never changes.
     #[allow(clippy::too_many_arguments)]
     fn upsert(
         &mut self,
         model: &str,
         hash: &str,
         chain: AffinityChain,
+        depth: u32,
         report: &AffinityReport,
         root: &str,
         confirmed: bool,
@@ -429,6 +459,7 @@ impl AffinityMap {
             key_generation: report.key_generation,
             root: inherited_root.unwrap_or_else(|| root.to_string()),
             lane: report.lane.clone(),
+            depth,
         };
         let row = row_of(model, hash, &entry);
         let key: EntryKey = (model.to_string(), hash.to_string());
@@ -436,6 +467,11 @@ impl AffinityMap {
         self.entries.entry(key.0).or_default().insert(key.1, entry);
         Some(row)
     }
+}
+
+/// A chain index as the boundary's place counted from 1.
+fn ordinal(index: usize) -> u32 {
+    u32::try_from(index + 1).unwrap_or(u32::MAX)
 }
 
 impl ConversationLookup for AffinityMap {
@@ -735,6 +771,7 @@ mod tests {
             key_generation: 0,
             root: "b1".into(),
             lane: crate::lane_key("m", "standard", "none", "-"),
+            depth: 1,
         };
         assert!(!entry.live(1_000));
         let warm = AffinityEntry {

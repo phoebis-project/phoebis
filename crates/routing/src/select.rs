@@ -17,8 +17,8 @@ use crate::record::{
     CreditsFacts, DecisionRecord, DecisionSummary, ExhaustionFacts, Fact, FactEntity, FactValue,
     HoldOutcome, LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts,
     PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
-    RequestFacts, RequestFlags, Score, SummaryFact, TermFacts, WalkStep, WarmthFacts, WindowFacts,
-    RECORD_VERSION,
+    RequestFacts, RequestFlags, Score, ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts,
+    WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION,
 };
 use crate::state::{
     budget_deadline, shed_marks, warm, BurnUnit, CreditsState, MemberSpend, PinRef, RoutingState,
@@ -723,6 +723,8 @@ pub struct Decided {
     pub writes: Vec<StateWrite>,
     pub record: DecisionRecord,
     pub summary: DecisionSummary,
+    /// The round this decision ran, for the task's `SheddingRound` event; `None` when none ran.
+    pub shed_round: Option<ShedRoundFacts>,
 }
 
 /// The selection with its record: every step appends what it read as it read it, so the record and the answer
@@ -738,12 +740,13 @@ pub fn decide(
     let pool = snapshot
         .key(&request.key_id)
         .and_then(|k| snapshot.pool(&k.pool_id));
-    let (record, summary) = finish(rec, request, snapshot, pool, &result);
+    let (record, summary, shed_round) = finish(rec, request, snapshot, pool, &result);
     Decided {
         result,
         writes,
         record,
         summary,
+        shed_round,
     }
 }
 
@@ -780,7 +783,7 @@ struct Recorder {
     destinations: Vec<String>,
     pin_written: Option<PinWritten>,
     hold_place: Option<&'static str>,
-    shed_marks: Option<Vec<PinKey>>,
+    shed_round: Option<ShedRoundFacts>,
     pick: Option<Pick>,
     renewal: Option<Renewal>,
 }
@@ -1935,29 +1938,49 @@ fn move_of<'a>(
         return None;
     };
     let mut facts = Vec::new();
-    let leads = lead_facts(
-        &mut facts,
-        ahead(state, &current.account_id, FIVE_HOUR, now),
-        ahead(state, &current.account_id, SEVEN_DAY, now),
-        threshold,
-    );
+    let leads = [
+        (FIVE_HOUR, ahead(state, &current.account_id, FIVE_HOUR, now)),
+        (SEVEN_DAY, ahead(state, &current.account_id, SEVEN_DAY, now)),
+    ];
+    lead_facts(&mut facts, leads[0].1, leads[1].1, threshold);
     facts.push(Fact::number("threshold", threshold).unit("percent"));
-    let hot = leads.iter().flatten().any(|lead| *lead >= threshold);
-    if !hot {
+    let Some((window, (lead, elapsed))) = leads.into_iter().find_map(|(window, read)| {
+        read.filter(|(lead, _)| *lead >= threshold)
+            .map(|read| (window, read))
+    }) else {
         rec.step(RULES[4], "no", facts);
         return None;
-    }
+    };
     if state
         .last_shed(&current.account_id)
         .is_none_or(|at| now - at >= dwell_ms)
     {
-        let marks = shed_round(state, snapshot, pool, current, cold, fast, now, fallback_ms);
+        let hot = HotWindow {
+            window,
+            utilization: state
+                .predicted(&current.account_id, window, now)
+                .map_or(lead + elapsed, |reading| reading.utilization),
+            elapsed_share: elapsed,
+            ahead: lead,
+            threshold,
+        };
+        let (marks, round) = shed_round(
+            state,
+            snapshot,
+            pool,
+            current,
+            cold,
+            fast,
+            now,
+            fallback_ms,
+            hot,
+        );
         facts.push(Fact::text("round", "ran"));
         facts.push(Fact::list(
             "marks",
             marks.iter().map(pin_key_text).collect(),
         ));
-        rec.shed_marks = Some(marks.clone());
+        rec.shed_round = Some(round);
         state.record_shed(&current.account_id, now, marks);
     } else {
         facts.push(Fact::text("round", "within_dwell"));
@@ -2049,12 +2072,22 @@ fn burn_unit(
     BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms))
 }
 
+/// The window whose lead over pace fired a shedding round, as `ahead` read it, with the threshold it reached.
+struct HotWindow {
+    window: &'static str,
+    utilization: f64,
+    elapsed_share: f64,
+    ahead: f64,
+    threshold: f64,
+}
+
 /// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
 /// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
 /// in the unit its funding selects. On plan quota each burn is the cost table's 5-hour share rate on its reference
 /// tier: the tier's factor divides every pin of the account alike, so neither the order nor the share of the sum
 /// needs it, and a pin on a fast lane is out of the round, since it draws no window and has nothing to shed there;
 /// in dollars it stays. The current pin's warmth and lane are this request's; every other pin's are the stored ones.
+/// Answers the marks with what the round read, `hot` the window that fired it.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -2065,7 +2098,8 @@ fn shed_round(
     current_fast: bool,
     now: i64,
     fallback_ms: i64,
-) -> Vec<PinKey> {
+    hot: HotWindow,
+) -> (Vec<PinKey>, ShedRoundFacts) {
     let account_id = &current.account_id;
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
     let (mut pins, mut sum) = state.burn_of(
@@ -2076,6 +2110,14 @@ fn shed_round(
         seconds_ms(pool.shedding.burn_window_seconds),
     );
     let is_current = |p: &PinRow| p.key() == current.key();
+    let is_cold = |p: &PinRow| {
+        if is_current(p) {
+            current_cold
+        } else {
+            !warm(p, now)
+        }
+    };
+    let mut left_out = Vec::new();
     if unit == BurnUnit::WindowShare {
         let on_fast_lane = |p: &PinRow| {
             if is_current(p) {
@@ -2084,16 +2126,11 @@ fn shed_round(
                 lane_is_fast(&p.lane)
             }
         };
-        pins.retain(|(p, _)| !on_fast_lane(p));
+        (left_out, pins) = pins.into_iter().partition(|(p, _)| on_fast_lane(p));
         sum = pins.iter().filter_map(|(_, burn)| *burn).sum();
     }
-    let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) = pins.into_iter().partition(|(p, _)| {
-        if is_current(p) {
-            current_cold
-        } else {
-            !warm(p, now)
-        }
-    });
+    let (mut cold, mut warm_pins): (Vec<_>, Vec<_>) =
+        pins.into_iter().partition(|(p, _)| is_cold(p));
     // A pin whose burn cannot be priced ranks after every priced pin of its group: a guess never orders a shed.
     let priced_first =
         |a: &Option<f64>, b: &Option<f64>, desc: fn(f64, f64) -> Ordering| match (a, b) {
@@ -2116,14 +2153,67 @@ fn shed_round(
     if pool.shedding.warm_sessions == WarmSessions::Always {
         ordered.sort_by(by_rewrite);
     }
-    let mut marks = shed_marks(&ordered, pool.shedding.shed_share * sum);
+    let target = pool.shedding.shed_share * sum;
+    let mut marks = shed_marks(&ordered, target);
     // `never` stops after the cold pins. The warm ones stay in the order all the same, so the last-pin rule
     // still counts them among the account's pins; the marks are priced pins alone, so the cold group's marks are
     // its priced count at most.
     if pool.shedding.warm_sessions == WarmSessions::Never {
         marks.truncate(cold_priced);
     }
-    marks
+    let pin_facts = |(p, burn): &(PinRow, Option<f64>), left: bool| ShedPinFacts {
+        key_id: p.key_id.clone(),
+        session_id: p.session_id.clone(),
+        agent_id: p.agent_id.clone(),
+        model: p.model.clone(),
+        cold: is_cold(p),
+        burn: *burn,
+        last_input_tokens: p.last_input_tokens,
+        per_rewrite: burn.map(|b| b / p.last_input_tokens.max(1) as f64),
+        marked: marks.contains(&p.key()),
+        note: if left {
+            Some("fast_lane")
+        } else if burn.is_none() {
+            Some("unpriced")
+        } else if is_current(p) {
+            Some("current")
+        } else {
+            None
+        },
+    };
+    let dwell_seconds = pool.shedding.source_dwell_seconds;
+    let round = ShedRoundFacts {
+        window: hot.window.to_string(),
+        utilization: hot.utilization,
+        elapsed_share: hot.elapsed_share,
+        ahead: hot.ahead,
+        threshold: hot.threshold,
+        margin: hot.ahead - hot.threshold,
+        unit: unit.as_str(),
+        burn_window_seconds: pool.shedding.burn_window_seconds,
+        shed_share: pool.shedding.shed_share,
+        burn_sum: sum,
+        target,
+        warm_sessions: pool.shedding.warm_sessions.as_str(),
+        pins: ordered
+            .iter()
+            .map(|pin| pin_facts(pin, false))
+            .chain(left_out.iter().map(|pin| pin_facts(pin, true)))
+            .collect(),
+        marks: marks.iter().map(pin_key_facts).collect(),
+        dwell_seconds,
+        dwell_until: now.saturating_add(seconds_ms(dwell_seconds)),
+    };
+    (marks, round)
+}
+
+fn pin_key_facts(key: &PinKey) -> PinKeyFacts {
+    PinKeyFacts {
+        key_id: key.key_id.clone(),
+        session_id: key.session_id.clone(),
+        agent_id: key.agent_id.clone(),
+        model: key.model.clone(),
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3369,14 +3459,14 @@ fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
 }
 
 /// The record and its summary from the answer and what the steps recorded: the outcome, every member's verdict,
-/// and the row's `by` and `fact`.
+/// and the row's `by` and `fact`; with the shedding round the decision ran, which the record keeps the marks of.
 fn finish(
     rec: Recorder,
     request: &SelectRequest,
     snapshot: &RegistrySnapshot,
     pool: Option<&PoolRow>,
     result: &SelectResult,
-) -> (DecisionRecord, DecisionSummary) {
+) -> (DecisionRecord, DecisionSummary, Option<ShedRoundFacts>) {
     let Recorder {
         walk,
         mut candidates,
@@ -3387,7 +3477,7 @@ fn finish(
         destinations,
         pin_written,
         hold_place,
-        shed_marks,
+        shed_round,
         pick,
         renewal,
     } = rec;
@@ -3409,17 +3499,7 @@ fn finish(
         exhaustion: None,
         refusal: None,
         cohort_hold: cohort_hold(&request.holds),
-        shed_marks: shed_marks.map(|marks| {
-            marks
-                .into_iter()
-                .map(|mark| PinKeyFacts {
-                    key_id: mark.key_id,
-                    session_id: mark.session_id,
-                    agent_id: mark.agent_id,
-                    model: mark.model,
-                })
-                .collect()
-        }),
+        shed_marks: shed_round.as_ref().map(|round| round.marks.clone()),
     };
     let mut skipped = 0;
     match result {
@@ -3545,7 +3625,7 @@ fn finish(
         walk,
         outcome,
     };
-    (record, summary)
+    (record, summary, shed_round)
 }
 
 /// What the summary's `by` and `fact` are computed from: the outcome and the facts the steps recorded, never a

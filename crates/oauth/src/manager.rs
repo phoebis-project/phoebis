@@ -1082,7 +1082,7 @@ impl Inner {
                 account.lifecycle_generation,
                 credential_generation,
             )
-            .unwrap_or(false);
+            .is_ok_and(|landed| landed.is_some());
         if !landed {
             return;
         }

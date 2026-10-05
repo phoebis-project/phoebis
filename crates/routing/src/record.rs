@@ -421,6 +421,47 @@ pub struct PinKeyFacts {
     pub model: String,
 }
 
+/// What a shedding round read and did, for the round's event; the record keeps the marks alone. The hot window's
+/// fields are the first of `five_hour` and `seven_day` whose lead over pace reached the threshold.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ShedRoundFacts {
+    pub window: String,
+    pub utilization: f64,
+    pub elapsed_share: f64,
+    pub ahead: f64,
+    pub threshold: f64,
+    pub margin: f64,
+    /// `window_share` or `usd`.
+    pub unit: &'static str,
+    pub burn_window_seconds: u64,
+    pub shed_share: f64,
+    pub burn_sum: f64,
+    pub target: f64,
+    pub warm_sessions: &'static str,
+    pub pins: Vec<ShedPinFacts>,
+    pub marks: Vec<PinKeyFacts>,
+    pub dwell_seconds: u64,
+    pub dwell_until: i64,
+}
+
+/// One pin of the account a round ran on: those in the round in its order, then those it left out.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ShedPinFacts {
+    pub key_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub model: String,
+    pub cold: bool,
+    pub burn: Option<f64>,
+    pub last_input_tokens: u64,
+    pub per_rewrite: Option<f64>,
+    pub marked: bool,
+    /// `unpriced` for a pin whose burn could not be priced, `fast_lane` for one left out of a window-share round,
+    /// `current` for the request's own pin; `None` otherwise. A pin left out reads `fast_lane` and an unpriced one
+    /// `unpriced` whether or not it is the request's own.
+    pub note: Option<&'static str>,
+}
+
 /// The list route's decision row before the ledger joins the attempt and the request: what the router has in hand
 /// when the decision is made, so the route never decodes a frame.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]

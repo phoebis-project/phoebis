@@ -2,7 +2,7 @@
 //! registry snapshot on request, folds the readings and the usage the relay and the poll report, and writes state
 //! through a single writer so the store sees every change in the order the loop made it.
 
-use std::collections::{btree_map, BTreeMap, HashMap};
+use std::collections::{btree_map, BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
@@ -18,10 +18,11 @@ use tokio_util::sync::CancellationToken;
 
 use crate::affinity::{
     AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup, ConversationMatch,
-    ConversationQuery,
+    ConversationQuery, PurgedEntry,
 };
 use crate::record::{
     CacheMapEntry, DecisionRecord, DecisionSummary, PinEventFacts, RefusalFacts, RefusedRequest,
+    ShedRoundFacts,
 };
 use crate::select::{
     decide, release_reasons, Decided, MigrateReason, Refusal, SelectRequest, SelectResult,
@@ -32,7 +33,7 @@ use crate::state::{
     StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
     SEVEN_DAY_FABLE,
 };
-use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
+use crate::{resolve, term, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
 /// The router loop's command queue size, which `/admin/system` reports. A report that finds the queue full waits for a
 /// slot; one the closed queue refuses at shutdown is dropped and counted under its kind.
@@ -64,6 +65,11 @@ const EVENTS: usize = 1_024;
 /// How long after an invalidation the next pin for the same triple counts as a migration rather than a new
 /// session. A failover re-selects within one request, well inside this.
 const MIGRATION_WINDOW_MS: i64 = 60_000;
+
+/// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
+/// the poll in milliseconds, so the two sources disagree about one reset by under a second, while a window's next
+/// reset lands hours after the last.
+const RESET_SLACK_MS: i64 = 60_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RouterEvent {
@@ -146,6 +152,85 @@ pub enum RouterEvent {
         seq: u32,
         attempt: u32,
         entries: Vec<CacheMapEntry>,
+        at: i64,
+    },
+    /// A shedding round that ran on `account_id` for a request of `pool_id`: the reading that fired it as the lead
+    /// over pace, the round's unit, its pins in the round's order and the marks it made.
+    SheddingRound {
+        account_id: String,
+        pool_id: String,
+        request_id: String,
+        key_id: String,
+        session_id: String,
+        agent_id: String,
+        model: String,
+        round: ShedRoundFacts,
+        at: i64,
+    },
+    /// `blocked()` answered differently before and after a credits reading landed.
+    FastCreditsChanged {
+        account_id: String,
+        before: Option<CreditsState>,
+        after: CreditsState,
+        blocked_before: Option<String>,
+        blocked_after: Option<String>,
+        at: i64,
+    },
+    /// A plan window's stored reading moved to 1.0 or above from under it.
+    WindowSpent {
+        account_id: String,
+        window: String,
+        utilization: f64,
+        reset: Option<i64>,
+        source: WindowSource,
+        source_request_id: Option<String>,
+        at: i64,
+    },
+    /// A window's reset passed: a sample named a later reset (`observed` `sample`), or the purge tick found the clock
+    /// past a stored reset with no newer sample (`clock`), once per account, window and reset.
+    WindowReset {
+        account_id: String,
+        window: String,
+        utilization_before: f64,
+        reset_at: i64,
+        next_reset: Option<i64>,
+        observed: &'static str,
+        at: i64,
+    },
+    /// The entries the purge removed for one root on one account, with the largest among them; `deepest.depth` is
+    /// the ordinal the entry was written at, never the count removed.
+    WarmPrefixExpired {
+        account_id: String,
+        key_id: String,
+        root: String,
+        model: String,
+        lane: String,
+        entries: u32,
+        deepest: CacheMapEntry,
+        cause: &'static str,
+        at: i64,
+    },
+    /// A pool member entered its wind-down window at a tick.
+    WindDownStarted {
+        account_id: String,
+        pool_id: String,
+        ends_at: i64,
+        wind_down_minutes: u32,
+        end_source: &'static str,
+        at: i64,
+    },
+    /// The writer reported an `AccountState` row its write moved to another state: the state written, the row's
+    /// identity after the write (its incarnation and the revision the write bumped, `AccountRow.revision`), and the
+    /// relay's cause; `registry` is written by the ledger for a store-side transition this event never names. The
+    /// mirror reconciles on the identity, so a transition it observed through the registry already, or a newer one,
+    /// drops this event.
+    AccountStateChanged {
+        account_id: String,
+        to: AccountState,
+        incarnation: u64,
+        revision: u64,
+        cause: &'static str,
+        detail: Option<String>,
         at: i64,
     },
 }
@@ -264,6 +349,11 @@ pub enum Report {
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
+        /// The relay's verdict as its classification names it (`auth_failed`, `upstream_error`), for the event a
+        /// moved row emits.
+        cause: &'static str,
+        /// The upstream error's message where the verdict read one.
+        detail: Option<String>,
     },
     /// The ledger's standing: `degraded` from a failed batch until one lands and the spend is read again. A replacing
     /// reading.
@@ -323,6 +413,8 @@ pub enum Report {
         account_id: String,
         sample: UtilizationSample,
         incarnation: u64,
+        /// The request whose response head carried the reading; `None` for the usage poll's.
+        source_request_id: Option<String>,
     },
     /// A finished inference or probe answer's typed tokens on the account that served it, pinned or not: what the
     /// prediction adds to the account's last reading until the next one lands.
@@ -459,6 +551,7 @@ impl Report {
                 account_id,
                 sample,
                 incarnation,
+                ..
             } => Some(CoalesceKey::Sample {
                 account_id: account_id.clone(),
                 incarnation: *incarnation,
@@ -607,6 +700,10 @@ enum Command {
     },
     Samples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
+    },
+    /// The account-state rows a writer wake moved, sent ahead of the reload the move asks for.
+    StateMoved {
+        rows: Vec<MovedState>,
     },
     Select {
         request: SelectRequest,
@@ -1132,6 +1229,9 @@ struct Task {
     /// the running load's read.
     reload_waiters: Vec<oneshot::Sender<Result<(), String>>>,
     reports: Arc<ReportSequence>,
+    /// The reset last announced per account and window, by a sample or by the clock, so one passing reset is
+    /// announced once whichever saw it first.
+    reset_announced: HashMap<(String, String), i64>,
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     state: RoutingState,
@@ -1139,6 +1239,9 @@ struct Task {
     /// The rotation each slot's last touch was stamped under, beside its timestamp: a touch under a different
     /// rotation is a first sight of that presentation, not a repeat the grace period should swallow.
     touched_at: HashMap<(String, Presented), (i64, Option<i64>)>,
+    /// The pool members inside their wind-down at the last purge, by pool and account: a member's start is the
+    /// tick that first finds it there.
+    winding: HashSet<(String, String)>,
     writer: mpsc::Sender<Vec<StateWrite>>,
     /// Resolves once the writer has landed everything it was sent and exited; `shutdown` waits on it.
     writer_done: Option<oneshot::Receiver<()>>,
@@ -1212,10 +1315,15 @@ pub fn spawn(
                 writer.figures.depth.fetch_sub(1, Ordering::Relaxed);
                 batch.extend(more);
             }
-            // An account-state mark that moved the row changes what the snapshot has to say, so the loop is
-            // asked for a reload once the write is on disk rather than before.
-            if writer.wake(batch).await {
+            // An account-state mark that landed changes what the snapshot has to say, so the loop is asked for a
+            // reload once the write is on disk rather than before; the rows whose state it moved go first, so their
+            // events leave ahead of the snapshot that shows them.
+            let marks = writer.wake(batch).await;
+            if marks.landed {
                 if let Some(tx) = writer_tx.upgrade() {
+                    if !marks.moved.is_empty() {
+                        let _ = tx.send(Command::StateMoved { rows: marks.moved }).await;
+                    }
                     let (reply, _rx) = oneshot::channel();
                     let _ = tx.send(Command::Reload { reply }).await;
                 }
@@ -1239,11 +1347,13 @@ pub fn spawn(
         pending,
         reload_waiters: Vec::new(),
         reports,
+        reset_announced: HashMap::new(),
         revision: 1,
         snapshot,
         state,
         store,
         touched_at: HashMap::new(),
+        winding: HashSet::new(),
         writer,
         writer_done: Some(done_rx),
         writer_status,
@@ -1276,6 +1386,7 @@ pub fn spawn(
                                 Command::RecordRefusal { request, refusal } => {
                                     task.record_refusal(&request, &refusal);
                                 }
+                                Command::StateMoved { rows } => task.state_moved(rows),
                                 _ => {}
                             }
                         }
@@ -1319,13 +1430,72 @@ pub fn spawn(
 /// one it met, and `remainder` those writes in order, rekeys among them; `rekey` is the refused rekey the writer tries
 /// once more.
 struct Landed {
-    moved: bool,
+    marks: Marks,
     refused: Option<StoreError>,
     skipped: usize,
     stopped: Option<StoreError>,
     left: usize,
     rekey: Option<Box<RekeyWrite>>,
     remainder: Vec<StateWrite>,
+}
+
+/// An account-state row a writer wake moved, for the loop's `AccountStateChanged`: the state written, the row's
+/// identity after the write and the verdict's cause.
+struct MovedState {
+    account_id: String,
+    state: AccountState,
+    incarnation: u64,
+    revision: u64,
+    cause: &'static str,
+    detail: Option<String>,
+}
+
+/// What a wake's account-state writes did: whether any passed its fences, which the snapshot is rebuilt from even
+/// when the state was already the one written, and the rows whose state moved, which alone are transitions.
+#[derive(Default)]
+struct Marks {
+    landed: bool,
+    moved: Vec<MovedState>,
+}
+
+impl Marks {
+    fn absorb(&mut self, other: Marks) {
+        self.landed |= other.landed;
+        self.moved.extend(other.moved);
+    }
+
+    /// One state write's marks from the store's answer: the row's revision after it and the state before it, `None`
+    /// when the fences refused it.
+    fn of(write: &StateWrite, answer: Option<(u64, AccountState)>) -> Marks {
+        let (
+            StateWrite::AccountState {
+                account_id,
+                state,
+                incarnation,
+                cause,
+                detail,
+                ..
+            },
+            Some((revision, before)),
+        ) = (write, answer)
+        else {
+            return Marks::default();
+        };
+        Marks {
+            landed: true,
+            moved: (before != *state)
+                .then(|| MovedState {
+                    account_id: account_id.clone(),
+                    state: *state,
+                    incarnation: *incarnation,
+                    revision,
+                    cause,
+                    detail: detail.clone(),
+                })
+                .into_iter()
+                .collect(),
+        }
+    }
 }
 
 /// The writer task's own state between wakes.
@@ -1343,31 +1513,31 @@ struct Writer {
 }
 
 impl Writer {
-    /// Lands what an earlier wake left to try again, then `batch`; answers whether an account-state mark moved its
-    /// row.
-    async fn wake(&mut self, batch: Vec<StateWrite>) -> bool {
-        let retried = self.retry().await;
-        self.land(batch, false).await || retried
+    /// Lands what an earlier wake left to try again, then `batch`; answers what their account-state marks did.
+    async fn wake(&mut self, batch: Vec<StateWrite>) -> Marks {
+        let mut marks = self.retry().await;
+        marks.absorb(self.land(batch, false).await);
+        marks
     }
 
     /// The refused rekey's one more try, then the unapplied remainder's.
-    async fn retry(&mut self) -> bool {
+    async fn retry(&mut self) -> Marks {
         if let Some(rekey) = self.rekey.take() {
             retry_rekey(&self.store, rekey).await;
         }
         match self.remainder.take() {
             Some(remainder) => self.land(remainder, true).await,
-            None => false,
+            None => Marks::default(),
         }
     }
 
     /// `retried` is whether `batch` is an earlier wake's remainder, which a second failure drops.
-    async fn land(&mut self, batch: Vec<StateWrite>, retried: bool) -> bool {
+    async fn land(&mut self, batch: Vec<StateWrite>, retried: bool) -> Marks {
         let store = self.store.clone();
         let size = batch.len();
         match tokio::task::spawn_blocking(move || land(&store, batch)).await {
             Ok(Landed {
-                moved,
+                marks,
                 refused,
                 skipped,
                 stopped,
@@ -1418,11 +1588,11 @@ impl Writer {
                         );
                     }
                 }
-                moved
+                marks
             }
             Err(error) => {
                 tracing::error!(%error, batch = size, "a routing state write panicked, its batch is lost");
-                false
+                Marks::default()
             }
         }
     }
@@ -1447,8 +1617,8 @@ async fn retry_rekey(store: &Arc<Store>, rekey: Box<RekeyWrite>) {
 fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
     let size = batch.len();
     match store.write_routing(|tx| apply_in(tx, &batch)) {
-        Ok(moved) => Landed {
-            moved,
+        Ok(marks) => Landed {
+            marks,
             refused: None,
             skipped: 0,
             stopped: None,
@@ -1474,7 +1644,7 @@ fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
 
 fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
     let size = batch.len();
-    let mut moved = false;
+    let mut marks = Marks::default();
     let mut refused = None;
     let mut skipped = 0;
     let mut stopped = None;
@@ -1484,8 +1654,8 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
     let mut writes = batch.into_iter().enumerate();
     while let Some((index, write)) = writes.next() {
         match apply_one(store, &write) {
-            Ok(mark_moved) => {
-                moved |= mark_moved;
+            Ok(write_marks) => {
+                marks.absorb(write_marks);
                 // The rekey's upsert carries no generation check, so retrying a refused one after a later rekey
                 // of its spelling landed would put the older mapping back and restore the rows the later one moved.
                 if let StateWrite::Rekey(landed) = &write {
@@ -1521,7 +1691,7 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
         }
     }
     Landed {
-        moved,
+        marks,
         refused,
         skipped,
         stopped,
@@ -1540,10 +1710,10 @@ fn refuse_rekey(refused_rekeys: &mut Vec<RekeyWrite>, rekey: RekeyWrite) {
     refused_rekeys.push(rekey);
 }
 
-/// Reports whether any account-state mark in the batch actually moved its row, which is the one write here
-/// that the registry snapshot has to be rebuilt from.
-fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreError> {
-    let mut moved = false;
+/// Reports what the batch's account-state marks did, the one write here that the registry snapshot has to be
+/// rebuilt from.
+fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, StoreError> {
+    let mut marks = Marks::default();
     for write in batch {
         match write {
             StateWrite::AccountState {
@@ -1552,14 +1722,16 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreE
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
+                ..
             } => {
-                moved |= tx.set_state_if_generations(
+                let answer = tx.set_state_if_generations(
                     account_id,
                     *state,
                     *incarnation,
                     *lifecycle_generation,
                     *credential_generation,
                 )?;
+                marks.absorb(Marks::of(write, answer));
             }
             StateWrite::DeleteAffinity(keys) => {
                 tx.delete_affinity(keys)?;
@@ -1588,12 +1760,12 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreE
             }
         }
     }
-    Ok(moved)
+    Ok(marks)
 }
 
-/// One write through the store's own method for it, its own commit; answers whether an account-state mark moved
-/// its row.
-fn apply_one(store: &Store, write: &StateWrite) -> Result<bool, StoreError> {
+/// One write through the store's own method for it, its own commit; answers what an account-state mark did.
+fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
+    let none = Marks::default;
     match write {
         StateWrite::AccountState {
             account_id,
@@ -1601,26 +1773,29 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<bool, StoreError> {
             incarnation,
             lifecycle_generation,
             credential_generation,
-        } => store.set_state_if_generations(
-            account_id,
-            *state,
-            *incarnation,
-            *lifecycle_generation,
-            *credential_generation,
-        ),
-        StateWrite::DeleteAffinity(keys) => store.delete_affinity(keys).map(|_| false),
+            ..
+        } => store
+            .set_state_if_generations(
+                account_id,
+                *state,
+                *incarnation,
+                *lifecycle_generation,
+                *credential_generation,
+            )
+            .map(|answer| Marks::of(write, answer)),
+        StateWrite::DeleteAffinity(keys) => store.delete_affinity(keys).map(|_| none()),
         StateWrite::DeleteCooldown(account_id, scope) => {
-            store.delete_cooldown(account_id, scope).map(|_| false)
+            store.delete_cooldown(account_id, scope).map(|_| none())
         }
-        StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| false),
-        StateWrite::PurgeStaleWindows => store.purge_stale_windows().map(|_| false),
-        StateWrite::Rekey(rekey) => store.rekey_resolution(rekey).map(|()| false),
-        StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| false),
-        StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| false),
-        StateWrite::UpsertCredits(row) => store.upsert_credits(row).map(|_| false),
-        StateWrite::UpsertOverage(row) => store.upsert_overage(row).map(|_| false),
-        StateWrite::UpsertPin(row) => store.upsert_pin(row).map(|()| false),
-        StateWrite::UpsertWindow(row) => store.upsert_window(row).map(|_| false),
+        StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| none()),
+        StateWrite::PurgeStaleWindows => store.purge_stale_windows().map(|_| none()),
+        StateWrite::Rekey(rekey) => store.rekey_resolution(rekey).map(|()| none()),
+        StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| none()),
+        StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| none()),
+        StateWrite::UpsertCredits(row) => store.upsert_credits(row).map(|_| none()),
+        StateWrite::UpsertOverage(row) => store.upsert_overage(row).map(|_| none()),
+        StateWrite::UpsertPin(row) => store.upsert_pin(row).map(|()| none()),
+        StateWrite::UpsertWindow(row) => store.upsert_window(row).map(|_| none()),
     }
 }
 
@@ -1705,6 +1880,22 @@ impl Task {
             record: Box::new(record),
             at: request.at,
         });
+    }
+
+    /// One transition per account-state row the writer moved, with the verdict's cause.
+    fn state_moved(&self, rows: Vec<MovedState>) {
+        let at = (self.clock)();
+        for row in rows {
+            self.emit(RouterEvent::AccountStateChanged {
+                account_id: row.account_id,
+                to: row.state,
+                incarnation: row.incarnation,
+                revision: row.revision,
+                cause: row.cause,
+                detail: row.detail,
+                at,
+            });
+        }
     }
 
     /// Answers a request the current registry refuses before the engine runs, its decision emitted first.
@@ -1844,6 +2035,7 @@ impl Task {
                     writes,
                     mut record,
                     mut summary,
+                    shed_round,
                 } = decide(&mut self.state, &snapshot, &request, &mut rand::rng());
                 self.write(writes);
                 if let Some(pin) = record.pin.as_mut() {
@@ -1948,12 +2140,28 @@ impl Task {
                     }
                 }
                 record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
+                // A round runs on the pin step 1 found, so the record's pin block names its account.
+                let round = shed_round.map(|round| RouterEvent::SheddingRound {
+                    account_id: record
+                        .pin
+                        .as_ref()
+                        .and_then(|pin| pin.account_id.clone())
+                        .unwrap_or_default(),
+                    pool_id: record.request.pool_id.clone(),
+                    request_id: request.request_id.clone(),
+                    key_id: request.key_id.clone(),
+                    session_id: request.session_id.clone().unwrap_or_default(),
+                    agent_id: request.agent_id.clone(),
+                    model: request.canonical_model.clone(),
+                    round,
+                    at: request.now,
+                });
                 self.emit(RouterEvent::Decision {
                     summary: Box::new(summary),
                     record: Box::new(record),
                     at: request.now,
                 });
-                for event in pin_events {
+                for event in pin_events.into_iter().chain(round) {
                     self.emit(event);
                 }
                 let (cancel, ticket) = match &result {
@@ -1983,6 +2191,7 @@ impl Task {
             Command::RecordRefusal { request, refusal } => self.record_refusal(&request, &refusal),
             // The top of this turn drained the map already.
             Command::Coalesced => {}
+            Command::StateMoved { rows } => self.state_moved(rows),
             #[cfg(any(test, feature = "debug-hooks"))]
             Command::HoldReports { reply } => {
                 self.parked.get_or_insert_with(Vec::new);
@@ -2330,10 +2539,28 @@ impl Task {
                 let observed_at = state.observed_at;
                 let room = state.blocked().is_none();
                 let row = RoutingState::credits_row(&account_id, &state);
+                // Read before the fold replaces it, and the holder's own: another holder's state is no edge.
+                let before = self.state.credits_of(&account_id, incarnation).cloned();
+                let after = state.clone();
                 if !self.state.record_credits(&account_id, state) {
                     return;
                 }
                 self.write(vec![StateWrite::UpsertCredits(row)]);
+                let blocked_before = before
+                    .as_ref()
+                    .and_then(CreditsState::blocked)
+                    .map(String::from);
+                let blocked_after = after.blocked().map(String::from);
+                if blocked_before != blocked_after {
+                    self.emit(RouterEvent::FastCreditsChanged {
+                        account_id: account_id.clone(),
+                        before,
+                        after,
+                        blocked_before,
+                        blocked_after,
+                        at: (self.clock)(),
+                    });
+                }
                 if !room {
                     return;
                 }
@@ -2566,10 +2793,22 @@ impl Task {
                 account_id,
                 sample,
                 incarnation,
+                source_request_id,
             } => {
                 if self.moved_past(&account_id, incarnation) {
                     return;
                 }
+                // The edges compare each plan window's stored reading with the one that replaces it, so the stored
+                // ones are read before the fold.
+                let stored: HashMap<&str, WindowReading> = sample
+                    .windows
+                    .keys()
+                    .filter(|window| is_plan_window(window))
+                    .filter_map(|window| {
+                        let reading = self.state.sample(&account_id)?.reading(window)?;
+                        Some((window.as_str(), reading))
+                    })
+                    .collect();
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: a head and a poll can cross, and the older one's reading is one
@@ -2583,6 +2822,19 @@ impl Task {
                     // An api_key bucket refills within a minute, so only the plan windows are worth a restart.
                     let windows: Vec<String> =
                         moved.into_iter().filter(|w| is_plan_window(w)).collect();
+                    for window in &windows {
+                        let Some(reading) = sample.reading(window) else {
+                            continue;
+                        };
+                        self.window_edges(
+                            &account_id,
+                            window,
+                            stored.get(window.as_str()).copied(),
+                            reading,
+                            source_request_id.as_deref(),
+                            now,
+                        );
+                    }
                     let rows = self.state.window_rows(&account_id, &windows, incarnation);
                     self.write(rows.into_iter().map(StateWrite::UpsertWindow).collect());
                 }
@@ -2641,6 +2893,8 @@ impl Task {
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
+                cause,
+                detail,
             } => {
                 // The relay decided; the store is the source the snapshot is rebuilt from, so the write comes
                 // first and the reload follows once it has landed. The write is fenced by the incarnation and
@@ -2654,6 +2908,8 @@ impl Task {
                     incarnation,
                     lifecycle_generation,
                     credential_generation,
+                    cause,
+                    detail,
                 }]);
             }
         }
@@ -2896,6 +3152,9 @@ impl Task {
                 });
             }
         }
+        self.clock_resets(now);
+        self.wind_downs(&snapshot, now);
+        self.expiries(&purged.affinity_entries, now);
         let mut writes: Vec<StateWrite> = purged
             .cooldowns
             .into_iter()
@@ -2925,6 +3184,178 @@ impl Task {
         // got there anyway outlives a tick.
         writes.push(StateWrite::PurgeStaleWindows);
         self.write(writes);
+    }
+
+    /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
+    /// reset names, then the window spent, which a reading at 1.0 or above names over one under it.
+    fn window_edges(
+        &mut self,
+        account_id: &str,
+        window: &str,
+        stored: Option<WindowReading>,
+        reading: WindowReading,
+        source_request_id: Option<&str>,
+        now: i64,
+    ) {
+        let passed = stored.and_then(|stored| {
+            let (reset_at, next_reset) = (stored.reset?, reading.reset?);
+            (next_reset > reset_at.saturating_add(RESET_SLACK_MS)).then_some((
+                stored.utilization,
+                reset_at,
+                next_reset,
+            ))
+        });
+        if let Some((utilization_before, reset_at, next_reset)) = passed {
+            if self.announce_reset(account_id, window, reset_at) {
+                self.emit(RouterEvent::WindowReset {
+                    account_id: account_id.to_string(),
+                    window: window.to_string(),
+                    utilization_before,
+                    reset_at,
+                    next_reset: Some(next_reset),
+                    observed: "sample",
+                    at: now,
+                });
+            }
+        }
+        if stored.is_none_or(|stored| stored.utilization < 1.0) && reading.utilization >= 1.0 {
+            self.emit(RouterEvent::WindowSpent {
+                account_id: account_id.to_string(),
+                window: window.to_string(),
+                utilization: reading.utilization,
+                reset: reading.reset,
+                source: reading.source,
+                source_request_id: source_request_id.map(String::from),
+                at: now,
+            });
+        }
+    }
+
+    /// Whether `reset_at` is a reset not yet announced for the account and window, recording it when it is: the
+    /// sample edge and the clock walk both ask, so one passing reset is announced once whichever sees it first.
+    fn announce_reset(&mut self, account_id: &str, window: &str, reset_at: i64) -> bool {
+        let key = (account_id.to_string(), window.to_string());
+        if self
+            .reset_announced
+            .get(&key)
+            .is_some_and(|announced| announced.abs_diff(reset_at) <= RESET_SLACK_MS.unsigned_abs())
+        {
+            return false;
+        }
+        self.reset_announced.insert(key, reset_at);
+        true
+    }
+
+    /// Every stored plan reading whose reset the clock has passed with no newer sample, announced once.
+    fn clock_resets(&mut self, now: i64) {
+        let passed: Vec<(String, String, WindowReading)> = self
+            .state
+            .samples()
+            .into_iter()
+            .flat_map(|(account_id, sample)| {
+                sample
+                    .windows
+                    .into_iter()
+                    .filter(|(window, reading)| {
+                        is_plan_window(window) && reading.reset.is_some_and(|reset| reset <= now)
+                    })
+                    .map(move |(window, reading)| (account_id.clone(), window, reading))
+            })
+            .collect();
+        for (account_id, window, reading) in passed {
+            let Some(reset_at) = reading.reset else {
+                continue;
+            };
+            if self.announce_reset(&account_id, &window, reset_at) {
+                self.emit(RouterEvent::WindowReset {
+                    account_id,
+                    window,
+                    utilization_before: reading.utilization,
+                    reset_at,
+                    next_reset: None,
+                    observed: "clock",
+                    at: now,
+                });
+            }
+        }
+        // An account whose readings left takes what was announced for it along.
+        self.reset_announced
+            .retain(|(account_id, _), _| self.state.sample(account_id).is_some());
+    }
+
+    /// Every pool member inside its wind-down now that was not at the last tick, announced once while it stays.
+    fn wind_downs(&mut self, snapshot: &RegistrySnapshot, now: i64) {
+        let mut winding = HashSet::new();
+        for pool in snapshot.pools() {
+            let minutes = pool.failover.wind_down_minutes;
+            for member in snapshot.members(&pool.id) {
+                let Some(term) = snapshot.term(&member.account_id) else {
+                    continue;
+                };
+                let Some(ends_at) =
+                    term::end_of(term, now).filter(|_| term::winding_down(term, now, minutes))
+                else {
+                    continue;
+                };
+                let key = (pool.id.clone(), member.account_id.clone());
+                if !self.winding.contains(&key) {
+                    self.emit(RouterEvent::WindDownStarted {
+                        account_id: member.account_id.clone(),
+                        pool_id: pool.id.clone(),
+                        ends_at,
+                        wind_down_minutes: minutes,
+                        end_source: if term.cancelled { "cancelled" } else { "trial" },
+                        at: now,
+                    });
+                }
+                winding.insert(key);
+            }
+        }
+        self.winding = winding;
+    }
+
+    /// One expiry per root and account from the entries the purge removed: how many left, the largest of them, and
+    /// `incarnation` when any left with its account rather than its age.
+    fn expiries(&self, purged: &[PurgedEntry], now: i64) {
+        let mut groups: BTreeMap<(&str, &str), Vec<&PurgedEntry>> = BTreeMap::new();
+        for purged in purged {
+            groups
+                .entry((&purged.entry.root, &purged.entry.account_id))
+                .or_default()
+                .push(purged);
+        }
+        for ((root, account_id), entries) in groups {
+            // A chain's message entries all carry the size of the report that wrote them, so the deeper of two
+            // equal ones stands for the root.
+            let Some(deepest) = entries
+                .iter()
+                .max_by_key(|purged| (purged.entry.prefix_tokens, purged.entry.depth))
+            else {
+                continue;
+            };
+            let cause = if entries.iter().any(|purged| purged.cause == "incarnation") {
+                "incarnation"
+            } else {
+                "ttl"
+            };
+            self.emit(RouterEvent::WarmPrefixExpired {
+                account_id: account_id.to_string(),
+                key_id: deepest.entry.key_id.clone(),
+                root: root.to_string(),
+                model: deepest.model.clone(),
+                lane: deepest.entry.lane.clone(),
+                entries: u32::try_from(entries.len()).unwrap_or(u32::MAX),
+                deepest: CacheMapEntry {
+                    tier: deepest.entry.chain.as_str(),
+                    depth: deepest.entry.depth,
+                    prefix_tokens: deepest.entry.prefix_tokens,
+                    ttl_ms: deepest.entry.ttl_ms,
+                    account_id: account_id.to_string(),
+                },
+                cause,
+                at: now,
+            });
+        }
     }
 
     fn write(&self, writes: Vec<StateWrite>) {
@@ -3103,6 +3534,8 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             incarnation,
             lifecycle_generation,
             credential_generation,
+            cause,
+            detail,
         } => one(
             DeferredKey::AccountState {
                 account_id: account_id.clone(),
@@ -3116,6 +3549,8 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
+                cause,
+                detail,
             },
         ),
         StateWrite::DeleteAffinity(keys) => Ok(keys
