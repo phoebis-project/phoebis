@@ -790,6 +790,8 @@ pub struct RouterHandle {
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
     load_counts: LoadCounts,
+    /// A receiver opened before the loop's first turn, taken by `subscribe_from_start`.
+    start_events: Arc<Mutex<Option<broadcast::Receiver<RouterEvent>>>>,
     /// The replacing readings the loop has not drained yet, shared with the task.
     pending: Pending,
     reports: Arc<ReportSequence>,
@@ -827,6 +829,18 @@ impl RouterHandle {
     /// events and is told so; the task never waits on a receiver.
     pub fn subscribe_events(&self) -> broadcast::Receiver<RouterEvent> {
         self.events.subscribe()
+    }
+
+    /// `subscribe_events` for the one subscriber that must also see what the loop broadcast before its spawner could
+    /// subscribe: the purge tick fires at once, so the first purge after a start announces the clock resets and the
+    /// wind-downs of the downtime ahead of every other subscriber. The first call takes the receiver opened before
+    /// the loop's first turn; a later one subscribes now.
+    pub fn subscribe_from_start(&self) -> broadcast::Receiver<RouterEvent> {
+        self.start_events
+            .lock()
+            .expect("start receiver lock poisoned")
+            .take()
+            .unwrap_or_else(|| self.events.subscribe())
     }
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
@@ -1314,7 +1328,7 @@ pub fn spawn(
     // `deferred`, coalesced by row, which the state's own caps bound.
     let (writer, mut writes) = mpsc::channel::<Vec<StateWrite>>(WRITER_DEPTH);
     let (done_tx, done_rx) = oneshot::channel();
-    let (events, _) = broadcast::channel(EVENTS);
+    let (events, start_events) = broadcast::channel(EVENTS);
     let reports = Arc::new(ReportSequence::default());
     let pending = Pending::default();
     let writer_status = Arc::new(WriterShared::default());
@@ -1325,6 +1339,7 @@ pub fn spawn(
         events: events.clone(),
         in_flight,
         load_counts,
+        start_events: Arc::new(Mutex::new(Some(start_events))),
         pending: pending.clone(),
         reports: reports.clone(),
         snapshot: snapshot.clone(),
@@ -3788,6 +3803,7 @@ mod tests {
             events: broadcast::channel(1).0,
             in_flight: InFlight::default(),
             load_counts: LoadCounts::default(),
+            start_events: Arc::default(),
             pending: Pending::default(),
             reports: Arc::default(),
             snapshot: Arc::new(RwLock::new(Arc::new(RegistrySnapshot::from_load(

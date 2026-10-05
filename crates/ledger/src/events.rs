@@ -470,8 +470,9 @@ pub fn spawn_event_mirror(
     poll: Duration,
 ) -> tokio::task::JoinHandle<()> {
     // Subscribed and read here rather than inside the task: a spawned task does not run until the caller
-    // yields, and everything the router broadcast or the store recorded in between would be lost or replayed.
-    let mut events = router.subscribe_events();
+    // yields, and everything the router broadcast or the store recorded in between would be lost or replayed. The
+    // receiver from the router's start also holds its first purge, which runs before this is called.
+    let mut events = router.subscribe_from_start();
     // Watermarks start at the newest row: history before the mirror existed is not replayed on every restart.
     let mut last_change = store
         .newest_registry_change_id()

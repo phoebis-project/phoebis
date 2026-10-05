@@ -690,3 +690,78 @@ async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_start() {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    store
+        .insert_account(&phoebis_store::AccountRow {
+            id: "a".into(),
+            kind: phoebis_store::AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+        })
+        .unwrap();
+    let down_since = NOW - 60_000;
+    let reset_at = NOW - 30_000;
+    assert!(store
+        .upsert_window(&phoebis_store::WindowRow {
+            account_id: "a".into(),
+            incarnation: 1,
+            observed_at: down_since - 1_000,
+            reset: Some(reset_at),
+            utilization: 0.9,
+            window: "five_hour".into(),
+        })
+        .unwrap());
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    db.insert_event(&EventRecord {
+        at: down_since,
+        kind: "pin_created".into(),
+        account_id: Some("a".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let clock: phoebis_oauth::Clock = Arc::new(|| NOW);
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    // The loop's first purge runs at once, before the ledger is spawned over the router, as at the router's start.
+    let mut early = router.subscribe_events();
+    let first = tokio::time::timeout(Duration::from_secs(5), early.recv())
+        .await
+        .expect("the first purge's event")
+        .unwrap();
+    assert!(
+        matches!(first, RouterEvent::WindowReset { observed: "clock", reset_at: at, .. } if at == reset_at),
+        "{first:?}"
+    );
+    let _ledger = phoebis_ledger::spawn(
+        db.clone(),
+        Arc::new(phoebis_ledger::Pricing::new(
+            phoebis_ledger::PriceTable::shipped(),
+        )),
+        store,
+        &phoebis_bus::Bus::new(),
+        router,
+        clock,
+        Arc::new(phoebis_ledger::Metrics::new()),
+        polled_every_50_ms(),
+    );
+    let resets = || async {
+        db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "window_reset")
+            .count()
+    };
+    wait_for_async(Duration::from_secs(5), || async {
+        (resets().await == 1).then_some(())
+    })
+    .await;
+    stays_for_async(Duration::from_millis(200), || async { resets().await == 1 }).await;
+}
