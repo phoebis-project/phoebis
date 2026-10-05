@@ -106,8 +106,11 @@ async fn a_client_gets_the_relays_in_flight_set_then_the_deltas_of_a_streamed_re
             .await
             .unwrap()
     });
+    // The relay publishes the selection after it reads the account's credential, so the feed holds the request
+    // before its attempt; the case connects once the feed holds both.
     wait_for(Duration::from_secs(5), || {
-        (h.feed.in_flight() == 1).then_some(())
+        let snapshot = h.feed.snapshot();
+        (snapshot.in_flight.len() == 1 && !snapshot.in_flight[0].attempts.is_empty()).then_some(())
     })
     .await;
     let mut client = connect(&h).await;
