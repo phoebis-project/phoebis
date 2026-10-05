@@ -1,6 +1,7 @@
-//! The subcommands that create an account, a pool or a key and clear a cooldown over the admin API: each builds the
-//! route's body from its flags, calls the route through the admin client and prints the answer, the created id or
-//! secret on stdout and the rest on stderr.
+//! The subcommands that create an account, a pool or a key, pair an account and clear a cooldown over the admin API:
+//! each builds the route's body from its flags, calls the route through the admin client and prints the answer, the
+//! created id or secret on stdout and the rest on stderr. A pairing reads the callback URL from stdin between its calls
+//! and talks to the operator on stderr.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -45,6 +46,26 @@ pub enum AccountCommand {
         #[command(flatten)]
         common: Common,
     },
+    /// Finish a pairing that `account pair --no-confirm` left exchanged: `POST /admin/oauth/sessions/{id}/confirm`.
+    Confirm {
+        /// The pairing id `account pair --no-confirm` printed.
+        pairing_id: String,
+        #[command(flatten)]
+        common: Common,
+    },
+    /// Pair an OAuth account: start, paste the callback URL, confirm.
+    Pair {
+        /// The account's id.
+        id: String,
+        /// `claude_ai` for a Claude.ai login, `console` for a Console one.
+        #[arg(long, value_enum, default_value = "claude_ai")]
+        login: LoginArg,
+        /// Stop after the callback and print the pairing id with the `account confirm` line that finishes it.
+        #[arg(long)]
+        no_confirm: bool,
+        #[command(flatten)]
+        common: Common,
+    },
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
@@ -59,6 +80,22 @@ impl AccountKindArg {
         match self {
             AccountKindArg::ApiKey => "api_key",
             AccountKindArg::Oauth => "oauth",
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
+pub enum LoginArg {
+    #[value(name = "claude_ai")]
+    ClaudeAi,
+    Console,
+}
+
+impl LoginArg {
+    fn as_str(self) -> &'static str {
+        match self {
+            LoginArg::ClaudeAi => "claude_ai",
+            LoginArg::Console => "console",
         }
     }
 }
@@ -204,10 +241,39 @@ pub fn run_account(
             stdin,
             out,
             err,
-        ),
+        )
+        .map(|()| 0),
         AccountCommand::ClearCooldown { id, scope, common } => {
-            clear_cooldown(&id, &scope, &common, config_path, err)
+            clear_cooldown(&id, &scope, &common, config_path, err).map(|()| 0)
         }
+        AccountCommand::Confirm { pairing_id, common } => {
+            AdminClient::from_flags(&common, config_path)
+                .map_err(Failed::from)
+                .and_then(|client| {
+                    block_on(confirm(&client, &pairing_id, common.json, out, err))
+                        .map_err(Failed::from)
+                })
+        }
+        AccountCommand::Pair {
+            id,
+            login,
+            no_confirm,
+            common,
+        } => AdminClient::from_flags(&common, config_path)
+            .map_err(Failed::from)
+            .and_then(|client| {
+                block_on(pair(
+                    &client,
+                    &id,
+                    login,
+                    no_confirm,
+                    common.json,
+                    stdin,
+                    out,
+                    err,
+                ))
+                .map_err(Failed::from)
+            }),
     };
     finish(done, out, err)
 }
@@ -219,7 +285,7 @@ pub fn run_key(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> i32 {
-    let done = create_key(cmd, config_path, stdin, out, err);
+    let done = create_key(cmd, config_path, stdin, out, err).map(|()| 0);
     finish(done, out, err)
 }
 
@@ -230,7 +296,7 @@ pub fn run_pool(
     out: &mut dyn Write,
     err: &mut dyn Write,
 ) -> i32 {
-    let done = create_pool(cmd, config_path, stdin, out, err);
+    let done = create_pool(cmd, config_path, stdin, out, err).map(|()| 0);
     finish(done, out, err)
 }
 
@@ -530,6 +596,157 @@ fn account_secret(
     Ok(secret)
 }
 
+/// The three-route flow. `input` is stdin: one line, the callback URL or `<code> <state>`; its end before the
+/// line cancels the pairing. Answers the exit code; `out` gets nothing but the `--json` answers.
+// The flow's flags and its three streams, each passed as `run_account` holds it; a struct for them would be built at
+// the one call site and read once.
+#[allow(clippy::too_many_arguments)]
+pub async fn pair(
+    client: &AdminClient,
+    id: &str,
+    login: LoginArg,
+    no_confirm: bool,
+    json: bool,
+    input: &mut dyn BufRead,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    let body = json!({ "account_id": id, "login": login.as_str() });
+    let started = match client
+        .expect(Method::POST, "/admin/oauth/sessions", Some(&body))
+        .await
+    {
+        Ok(answer) => answer,
+        Err(error) => return refused(error, err),
+    };
+    answered(json, &started, out);
+    let (Some(pairing), Some(url)) = (
+        started.body["id"].as_str(),
+        started.body["authorization_url"].as_str(),
+    ) else {
+        let _ = writeln!(
+            err,
+            "the start answer carries no pairing id or authorization URL"
+        );
+        return 1;
+    };
+    let _ = writeln!(
+        err,
+        "open this URL, sign in, and paste the callback URL here:"
+    );
+    let _ = writeln!(err, "{url}");
+    let _ = err.flush();
+
+    let mut line = String::new();
+    let pasted = match input.read_line(&mut line) {
+        Ok(_) => {
+            paste(&line).ok_or_else(|| "input ended before the callback URL was pasted".to_owned())
+        }
+        Err(error) => Err(format!("stdin could not be read ({error})")),
+    };
+    let pasted = match pasted {
+        Ok(pasted) => pasted,
+        Err(reason) => {
+            let path = format!("/admin/oauth/sessions/{}", segment(pairing));
+            // The pairing holds the account until its deadline, so the delete is worth trying; its failure does not
+            // change the outcome, which is the cancel either way.
+            if let Err(error) = client.expect(Method::DELETE, &path, None).await {
+                let _ = writeln!(
+                    err,
+                    "the router did not take the cancel ({error}); the pairing ends at its deadline"
+                );
+            }
+            let _ = writeln!(err, "the pairing was cancelled: {reason}");
+            return 1;
+        }
+    };
+
+    // A refused callback is left to expire: a code the exchange rejected already ended the pairing at the router,
+    // and a mistyped paste is the operator's to retry from a fresh start.
+    let path = format!("/admin/oauth/sessions/{}/callback", segment(pairing));
+    let exchanged = match client.expect(Method::POST, &path, Some(&pasted)).await {
+        Ok(answer) => answer,
+        Err(error) => return refused(error, err),
+    };
+    answered(json, &exchanged, out);
+    let pending = &exchanged.body["pending"];
+    let email = pending["email"].as_str().unwrap_or_default();
+    let _ = match pending["organization_name"].as_str() {
+        Some(organization) => writeln!(err, "pending: {email} ({organization})"),
+        None => writeln!(err, "pending: {email}"),
+    };
+    if no_confirm {
+        let _ = writeln!(
+            err,
+            "pairing {pairing} exchanged; finish it with: phoebis account confirm {pairing}"
+        );
+        return 0;
+    }
+
+    let path = format!("/admin/oauth/sessions/{}/confirm", segment(pairing));
+    let confirmed = match client.expect(Method::POST, &path, None).await {
+        Ok(answer) => answer,
+        Err(error) => return refused(error, err),
+    };
+    answered(json, &confirmed, out);
+    let _ = writeln!(err, "paired {id} as {email}");
+    0
+}
+
+/// The confirm route alone, for a pairing a bearer started and left exchanged. Answers the exit code.
+pub async fn confirm(
+    client: &AdminClient,
+    pairing_id: &str,
+    json: bool,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    let path = format!("/admin/oauth/sessions/{}/confirm", segment(pairing_id));
+    match client.expect(Method::POST, &path, None).await {
+        Ok(answer) if json => {
+            answered(true, &answer, out);
+            0
+        }
+        Ok(answer) => {
+            let account = answer.body["account_id"].as_str().unwrap_or_default();
+            let _ = writeln!(err, "paired {account}");
+            0
+        }
+        Err(error) => refused(error, err),
+    }
+}
+
+/// Under `--json`, the answer as its one line on `out`, flushed: a reader of a piped stdout holds the start answer
+/// while `pair` waits on stdin, and a line left in the buffer there would wait as long.
+fn answered(json: bool, answer: &Answer, out: &mut dyn Write) {
+    if json {
+        print_answer(answer, "", &[], true, out, &mut std::io::sink());
+        let _ = out.flush();
+    }
+}
+
+fn refused(error: ClientError, err: &mut dyn Write) -> i32 {
+    let _ = writeln!(err, "{error}");
+    error.exit_code()
+}
+
+/// The callback's body from one pasted line: `<code> <state>` for a line with exactly one space and no `://`, the
+/// URL otherwise; `None` for an empty line, which cancels as the end of input does.
+fn paste(line: &str) -> Option<Value> {
+    // A Windows terminal pastes a carriage return before the newline.
+    let line = line.strip_suffix('\n').unwrap_or(line);
+    let line = line.strip_suffix('\r').unwrap_or(line);
+    if line.is_empty() {
+        return None;
+    }
+    match line.split_once(' ') {
+        Some((code, state)) if !state.contains(' ') && !line.contains("://") => {
+            Some(json!({ "code": code, "state": state }))
+        }
+        _ => Some(json!({ "url": line })),
+    }
+}
+
 /// One path segment, percent-encoded, so an id or a scope names its own route and never another route or a query.
 fn segment(raw: &str) -> String {
     let mut encoded = String::with_capacity(raw.len());
@@ -553,9 +770,9 @@ fn block_on<T>(call: impl Future<Output = T>) -> std::io::Result<T> {
     Ok(output)
 }
 
-fn finish(done: Result<(), Failed>, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
+fn finish(done: Result<i32, Failed>, out: &mut dyn Write, err: &mut dyn Write) -> i32 {
     let code = match done {
-        Ok(()) => 0,
+        Ok(code) => code,
         Err(failed) => failed.print(err),
     };
     let _ = out.flush();
@@ -757,6 +974,28 @@ mod tests {
             .unwrap_err()
             .to_string();
         assert_eq!(line, "--secret-stdin read no secret from stdin");
+    }
+
+    #[test]
+    fn a_paste_with_one_space_and_no_scheme_is_a_code_and_a_state_and_any_other_line_a_url() {
+        let url = "http://localhost:4123/callback?code=CODE-a&state=st";
+        for line in [format!("{url}\n"), format!("{url}\r\n"), url.to_owned()] {
+            assert_eq!(paste(&line), Some(json!({ "url": url })), "{line:?}");
+        }
+        assert_eq!(
+            paste("CODE-a#st st\r\n"),
+            Some(json!({ "code": "CODE-a#st", "state": "st" }))
+        );
+        for other in ["http://localhost:4123/callback?code=a b", "a b c", "CODE-a"] {
+            assert_eq!(
+                paste(&format!("{other}\n")),
+                Some(json!({ "url": other })),
+                "{other:?}"
+            );
+        }
+        for empty in ["", "\n", "\r\n"] {
+            assert_eq!(paste(empty), None, "{empty:?}");
+        }
     }
 
     #[test]

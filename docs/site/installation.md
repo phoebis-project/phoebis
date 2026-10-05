@@ -151,6 +151,8 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
 | `phoebis backup --to <dir>` | Copies both databases into `<dir>` with a manifest; exit 0 once it is written. |
 | `phoebis account add <id> --kind oauth|api_key` | Creates an account and prints its id. |
+| `phoebis account pair <id>` | Pairs an `oauth` account: prints the sign-in URL, reads the callback URL, confirms. |
+| `phoebis account confirm <pairing id>` | Confirms a pairing that `account pair --no-confirm` left exchanged. |
 | `phoebis account clear-cooldown <id>` | Clears one of the account's cooldowns, the account-wide one by default. |
 | `phoebis pool create <id>` | Creates a pool and prints its id. |
 | `phoebis key create <id> --pool <id>` | Creates a key in the pool and prints its secret, once. |
@@ -317,6 +319,26 @@ process list nor the shell history carries it; `--secret-env` stays the admin se
 key against the upstream before it creates the account. Stdout carries the account's id, and stderr its fields, one
 `field: value` line each, sorted by field.
 
+`account pair` pairs an `oauth` account through the three pairing routes, the calls [Pairing](pairing.md#with-curl)
+makes by hand. It starts the pairing with `POST /admin/oauth/sessions`, prints on stderr the instruction to open the
+authorization URL, sign in and paste the callback URL, with the URL on its own line, and reads one line from stdin: the
+URL the browser lands on, or `<code> <state>`, the code and the state separated by one space. It posts that line to the
+callback route, prints the pending identity as `pending: {email} ({organization})`, confirms, and prints `paired {id} as
+{email}`. `--login` is `claude_ai` (the default) or `console`. End of input or an empty line before the paste cancels
+the pairing with `DELETE /admin/oauth/sessions/{id}`, prints `the pairing was cancelled: input ended before the callback
+URL was pasted` and exits 1. A refused call prints its line and exits 1, and running `account pair` again replaces a
+pairing it left standing. The command keeps no state: the pairing lives in the router until it expires, ten minutes
+after the start.
+
+`--no-confirm` stops after the callback and prints `pairing {pairing id} exchanged; finish it with: phoebis account
+confirm {pairing id}`. `account confirm` posts the confirm route for that id and prints `paired {id}`, or `404 pairing
+session not found` for a pairing another credential started or one past its expiry. A pairing is the starting
+credential's to finish, and every command holding the admin secret is the same caller, so a pairing that `--no-confirm`
+leaves is finished from any shell with the admin secret and not from the console, whose login is another caller. Under
+`--json` stdout carries each route's answer as its own line, the start's first, so a script holds the pairing id and the
+redirect while the command waits for the paste; the lines on stderr stay as they are. Both commands exit 0 once the
+pairing is confirmed, or exchanged under `--no-confirm`, and 1 otherwise.
+
 `account clear-cooldown` clears one cooldown through `DELETE /admin/accounts/{id}/cooldowns/{scope}`, one call with no
 body. `--scope` is `account` (the default), `fast`, `fast_credits` or `model:<canonical>`. It prints `cleared {scope} on
 {id}` on stderr, and a cooldown the account does not hold answers `404 no such cooldown`.
@@ -338,8 +360,9 @@ fills only a field neither names, so every field [the pool route](api.md#post-ad
 route](api.md#post-adminkeys) accept is reachable without a flag of its own. The subcommand validates no field, and the
 route's `400` prints as it comes.
 
-These four commands take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line
-the route wrote and nothing on stderr but errors. A refused call prints `{status} {message}` from the route's answer on
+These six commands take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line
+the route wrote and nothing on stderr but errors; `account pair` prints one such line per route and keeps its own lines
+on stderr. A refused call prints `{status} {message}` from the route's answer on
 stderr and exits 1, a refused secret as `the admin secret was refused`; a call that does not reach the listener prints
 one line naming the URL and exits 1. The commands' own refusals exit 1 before any call: `an api_key account needs
 --api-key-env or --secret-stdin`, `environment variable {name} is unset or empty` for `--api-key-env`, `--secret-stdin

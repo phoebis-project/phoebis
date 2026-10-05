@@ -1,7 +1,8 @@
-//! `account add`, `account clear-cooldown`, `pool create` and `key create` from the outside: the binary against a
-//! router started in-process on loopback, over plain HTTP and over TLS, with the file, without it, and with a refused
-//! secret; and `clear-cooldown` and `key create` against a scripted admin listener for the one request each sends and
-//! the answer each cannot print.
+//! `account add`, `account clear-cooldown`, `account pair`, `account confirm`, `pool create` and `key create` from the
+//! outside: the binary against a router started in-process on loopback, over plain HTTP and over TLS, with the file,
+//! without it, and with a refused secret, the fake upstream standing in for the provider a pairing exchanges its code
+//! with; and `clear-cooldown` and `key create` against a scripted admin listener for the one request each sends and the
+//! answer each cannot print.
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -10,10 +11,12 @@ use std::time::Duration;
 
 use fake_upstream::{generate_pair, FakeUpstream, GeneratedPair, Respond, Rule};
 use hyper::Method;
+use phoebis_profile::fixtures::{control_response, ControlFixture};
 use phoebis_router::admin_client::{AdminClient, Common};
 use serde_json::Value;
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncBufReadExt, AsyncReadExt, AsyncWriteExt, BufReader};
 use tokio::net::{TcpListener, TcpStream};
+use tokio::process::{Child, ChildStdin, ChildStdout};
 
 /// `load` and `from_flags` read the admin secret from the process environment, so each test holds this across its
 /// set-then-read sequence.
@@ -26,6 +29,12 @@ const ADMIN_SECRET: &str = "admin-secret-subcommands-001";
 
 /// An upstream key the fake upstream's discovery rule answers 200 for.
 const UPSTREAM_KEY: &str = "sk-ant-api03-subcommands-fake-key";
+
+/// How long a pairing run may take to answer or end; reached only when the command waits on input it already has.
+const PAIRED: Duration = Duration::from_secs(30);
+
+/// The identity the profile control fixture answers, which a pairing's callback shows as pending.
+const FIXTURE_EMAIL: &str = "test@example.invalid";
 
 /// A port from a hundred-port slice below the kernel's ephemeral range (32768 upward on Linux), spread by pid as
 /// `end_to_end.rs` spreads its own, so no outbound connection takes it between the probe and the router's bind.
@@ -95,20 +104,161 @@ impl Running {
             .unwrap_or_else(|error| panic!("GET {path} failed: {error}"))
             .body
     }
+
+    /// `phoebis account pair <args> --json` with its three streams piped, and the start answer read off stdout while
+    /// the command waits on stdin for the paste.
+    async fn pair(&self, args: &[&str]) -> (Pairing, Value) {
+        let mut child = tokio::process::Command::new(env!("CARGO_BIN_EXE_phoebis"))
+            .env_remove("PHOEBIS_CONFIG")
+            .env(&self.secret_env, ADMIN_SECRET)
+            .args(["account", "pair"])
+            .args(args)
+            .arg("--json")
+            .arg("--config")
+            .arg(&self.config)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .kill_on_drop(true)
+            .spawn()
+            .unwrap();
+        let stdin = child.stdin.take();
+        let mut stdout = BufReader::new(child.stdout.take().unwrap());
+        let mut stderr_pipe = child.stderr.take().unwrap();
+        // Read beside stdout, so a command that writes more to stderr than a pipe holds never stalls the test.
+        let stderr = tokio::spawn(async move {
+            let mut text = String::new();
+            stderr_pipe.read_to_string(&mut text).await.unwrap();
+            text
+        });
+        match started(&mut stdout).await {
+            Ok(start) => (
+                Pairing {
+                    child,
+                    stdin,
+                    stdout,
+                    stderr,
+                },
+                start,
+            ),
+            Err(first) => {
+                drop(stdin);
+                let status = child.wait().await.unwrap();
+                let stderr = stderr.await.unwrap();
+                panic!("no start answer on stdout ({first:?}), {status}, stderr:\n{stderr}")
+            }
+        }
+    }
+}
+
+/// A running `account pair` whose stdout has been read up to the start answer.
+struct Pairing {
+    child: Child,
+    stdin: Option<ChildStdin>,
+    stdout: BufReader<ChildStdout>,
+    stderr: tokio::task::JoinHandle<String>,
+}
+
+/// A pairing run's end: the exit code, the stdout lines after the start answer, and stderr whole.
+struct Ended {
+    code: Option<i32>,
+    answers: Vec<Value>,
+    stderr: String,
+}
+
+impl Pairing {
+    /// Writes `paste`, if any, closes stdin and waits for the command to end.
+    async fn end(mut self, paste: Option<&str>) -> Ended {
+        let mut stdin = self.stdin.take().unwrap();
+        if let Some(paste) = paste {
+            stdin.write_all(paste.as_bytes()).await.unwrap();
+        }
+        drop(stdin);
+        let ended = tokio::time::timeout(PAIRED, async {
+            let mut rest = String::new();
+            self.stdout.read_to_string(&mut rest).await.unwrap();
+            let status = self.child.wait().await.unwrap();
+            (status.code(), rest, self.stderr.await.unwrap())
+        })
+        .await
+        .expect("the pairing run ended");
+        let (code, rest, stderr) = ended;
+        let answers = rest
+            .lines()
+            .map(|line| {
+                serde_json::from_str(line)
+                    .unwrap_or_else(|_| panic!("stdout carries a line that is no answer: {line:?}"))
+            })
+            .collect();
+        Ended {
+            code,
+            answers,
+            stderr,
+        }
+    }
+}
+
+/// The start answer, the first line `--json` writes: the one place the pairing id, the redirect and the state
+/// travel, since no route lists a pairing, `pairing_show` answers no redirect and the instruction names no id. The
+/// line read is the error when it is no JSON object.
+async fn started(stdout: &mut BufReader<ChildStdout>) -> Result<Value, String> {
+    let mut first = String::new();
+    tokio::time::timeout(PAIRED, stdout.read_line(&mut first))
+        .await
+        .expect("the start answer arrived")
+        .unwrap();
+    match serde_json::from_str::<Value>(&first) {
+        Ok(start) if start.is_object() => Ok(start),
+        _ => Err(first),
+    }
+}
+
+/// The address the browser lands on after the sign-in, as the provider builds it for the start answer's redirect.
+fn callback_url(start: &Value, code: &str) -> String {
+    let state = start["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap();
+    format!(
+        "{}?code={code}&state={state}",
+        start["redirect_uri"].as_str().unwrap()
+    )
 }
 
 /// Starts the router with `admin_pair`, when given, as `admin.tls`, the admin secret read from `secret_env`, and an
-/// upstream whose discovery answers 200, and returns once the admin listener accepts; a start that ends first fails
-/// the test with its own error rather than at the settle deadline.
+/// upstream whose discovery answers 200 and whose token, profile and roles routes answer the control fixtures, so a
+/// pairing's exchange reaches it as the provider; returns once the admin listener accepts, and a start that ends first
+/// fails the test with its own error rather than at the settle deadline.
 async fn start(admin_pair: Option<&GeneratedPair>, secret_env: &str) -> Running {
-    let up = FakeUpstream::start(vec![Rule {
-        path_prefix: "/v1/models".into(),
-        respond: Respond::Json {
-            status: 200,
-            headers: vec![],
-            body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+    let control = |which: ControlFixture| Respond::Json {
+        status: 200,
+        headers: vec![],
+        body: control_response(which).to_vec(),
+    };
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/models".into(),
+            respond: Respond::Json {
+                status: 200,
+                headers: vec![],
+                body: br#"{"data":[{"id":"claude-sonnet-4-5","type":"model"}]}"#.to_vec(),
+            },
         },
-    }])
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: control(ControlFixture::Token),
+        },
+        Rule {
+            path_prefix: "/api/oauth/profile".into(),
+            respond: control(ControlFixture::Profile),
+        },
+        Rule {
+            path_prefix: "/api/oauth/claude_cli/roles".into(),
+            respond: control(ControlFixture::Roles),
+        },
+    ])
     .await;
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("upstream-ca.pem"), up.ca_pem()).unwrap();
@@ -610,6 +760,187 @@ async fn account_add_api_key_reads_the_key_from_its_own_variable() {
     assert!(
         discovered >= 2,
         "each creation's discovery carried the key from ALICE_KEY"
+    );
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn account_pair_runs_the_three_routes_on_stdin() {
+    let running = start(None, "TEST_SUB_PAIR").await;
+    assert_exit(
+        &running
+            .run(&["account", "add", "dave", "--kind", "oauth"])
+            .await,
+        0,
+    );
+    let (pairing, start) = running.pair(&["dave"]).await;
+    let url = start["authorization_url"].as_str().unwrap().to_owned();
+    assert!(
+        url.starts_with("https://claude.com/cai/oauth/authorize?"),
+        "a claude_ai login by default: {url}"
+    );
+    let paste = format!("{}\n", callback_url(&start, "CODE-dave"));
+    let ended = pairing.end(Some(&paste)).await;
+    assert_eq!(ended.code, Some(0), "stderr:\n{}", ended.stderr);
+    assert_eq!(ended.answers.len(), 2, "{:?}", ended.answers);
+    let (callback, confirm) = (&ended.answers[0], &ended.answers[1]);
+    assert_eq!(callback["status"], "exchanged");
+    assert_eq!(callback["pending"]["email"], FIXTURE_EMAIL);
+    assert_eq!(confirm["status"], "confirmed");
+    assert_eq!(confirm["account_id"], "dave");
+
+    let lines: Vec<&str> = ended.stderr.lines().collect();
+    assert!(
+        lines.contains(&"open this URL, sign in, and paste the callback URL here:")
+            && lines.contains(&url.as_str()),
+        "{}",
+        ended.stderr
+    );
+    assert!(
+        lines.contains(&format!("pending: {FIXTURE_EMAIL} (Test Org)").as_str()),
+        "{}",
+        ended.stderr
+    );
+    assert_eq!(
+        lines.last().copied(),
+        Some(format!("paired dave as {FIXTURE_EMAIL}").as_str())
+    );
+    let token = String::from_utf8(control_response(ControlFixture::Token).to_vec()).unwrap();
+    let token: Value = serde_json::from_str(&token).unwrap();
+    for secret in [
+        ADMIN_SECRET,
+        token["access_token"].as_str().unwrap(),
+        token["refresh_token"].as_str().unwrap(),
+    ] {
+        assert!(
+            !ended.stderr.contains(secret)
+                && !ended.answers.iter().any(|a| a.to_string().contains(secret)),
+            "a secret was printed"
+        );
+    }
+
+    assert_eq!(running.get("/admin/accounts/dave").await["state"], "ready");
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn end_of_input_before_the_paste_cancels_the_pairing() {
+    let running = start(None, "TEST_SUB_PAIR_EOF").await;
+    assert_exit(
+        &running
+            .run(&["account", "add", "dave", "--kind", "oauth"])
+            .await,
+        0,
+    );
+    let (pairing, start) = running.pair(&["dave", "--login", "console"]).await;
+    let url = start["authorization_url"].as_str().unwrap();
+    assert!(
+        url.starts_with("https://platform.claude.com/oauth/authorize?"),
+        "--login console reaches the start route: {url}"
+    );
+    let ended = pairing.end(None).await;
+    assert_eq!(ended.code, Some(1), "stderr:\n{}", ended.stderr);
+    assert!(ended.answers.is_empty(), "{:?}", ended.answers);
+    assert_eq!(
+        ended.stderr.lines().last(),
+        Some("the pairing was cancelled: input ended before the callback URL was pasted")
+    );
+    let id = start["id"].as_str().unwrap();
+    let session = running.get(&format!("/admin/oauth/sessions/{id}")).await;
+    assert_eq!(session["status"], "cancelled", "{session}");
+    assert_eq!(
+        running.get("/admin/accounts/dave").await["state"],
+        "unpaired"
+    );
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn an_empty_line_cancels_the_pairing_as_the_end_of_input_does() {
+    let running = start(None, "TEST_SUB_PAIR_EMPTY").await;
+    assert_exit(
+        &running
+            .run(&["account", "add", "dave", "--kind", "oauth"])
+            .await,
+        0,
+    );
+    let (pairing, start) = running.pair(&["dave"]).await;
+    let ended = pairing.end(Some("\r\nnever read\n")).await;
+    assert_eq!(ended.code, Some(1), "stderr:\n{}", ended.stderr);
+    assert!(ended.answers.is_empty(), "{:?}", ended.answers);
+    assert_eq!(
+        ended.stderr.lines().last(),
+        Some("the pairing was cancelled: input ended before the callback URL was pasted")
+    );
+    let id = start["id"].as_str().unwrap();
+    let session = running.get(&format!("/admin/oauth/sessions/{id}")).await;
+    assert_eq!(session["status"], "cancelled", "{session}");
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn no_confirm_stops_after_the_callback_and_account_confirm_finishes_it() {
+    let running = start(None, "TEST_SUB_PAIR_NO_CONFIRM").await;
+    assert_exit(
+        &running
+            .run(&["account", "add", "erin", "--kind", "oauth"])
+            .await,
+        0,
+    );
+    let (pairing, start) = running.pair(&["erin", "--no-confirm"]).await;
+    let id = start["id"].as_str().unwrap().to_owned();
+    let paste = format!("{}\n", callback_url(&start, "CODE-erin"));
+    let ended = pairing.end(Some(&paste)).await;
+    assert_eq!(ended.code, Some(0), "stderr:\n{}", ended.stderr);
+    assert_eq!(ended.answers.len(), 1, "{:?}", ended.answers);
+    assert_eq!(ended.answers[0]["status"], "exchanged");
+    assert_eq!(
+        ended.stderr.lines().last(),
+        Some(
+            format!("pairing {id} exchanged; finish it with: phoebis account confirm {id}")
+                .as_str()
+        )
+    );
+    assert!(
+        !ended.stderr.contains("paired"),
+        "nothing was confirmed: {}",
+        ended.stderr
+    );
+    assert_eq!(
+        running.get("/admin/accounts/erin").await["state"],
+        "unpaired"
+    );
+
+    let confirmed = running.run(&["account", "confirm", &id]).await;
+    assert_exit(&confirmed, 0);
+    assert_eq!(
+        text(&confirmed),
+        (String::new(), "paired erin\n".to_owned())
+    );
+    assert_eq!(running.get("/admin/accounts/erin").await["state"], "ready");
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn account_confirm_of_an_unknown_pairing_is_404() {
+    let running = start(None, "TEST_SUB_CONFIRM_404").await;
+    let confirmed = running.run(&["account", "confirm", "nope"]).await;
+    assert_exit(&confirmed, 1);
+    assert_eq!(
+        text(&confirmed),
+        (String::new(), "404 pairing session not found\n".to_owned())
+    );
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn a_refused_start_prints_the_routes_line_and_exits_one() {
+    let running = start(None, "TEST_SUB_PAIR_REFUSED").await;
+    let refused = running.run(&["account", "pair", "nobody"]).await;
+    assert_exit(&refused, 1);
+    assert_eq!(
+        text(&refused),
+        (String::new(), "404 account not found\n".to_owned())
     );
     running.stop().await;
 }

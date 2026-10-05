@@ -1,6 +1,7 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
 //! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins,
-//! copy both databases into a backup, or create an account, a pool or a key and clear a cooldown over the admin API.
+//! copy both databases into a backup, or create or pair an account, create a pool or a key and clear a cooldown over
+//! the admin API.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -38,7 +39,7 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
-    /// Create an account or clear one of its cooldowns over the admin API.
+    /// Create or pair an account, or clear one of its cooldowns, over the admin API.
     #[command(subcommand)]
     Account(AccountCommand),
     /// Copy both databases into a directory with a manifest that names the key file, taking no lock and opening no
