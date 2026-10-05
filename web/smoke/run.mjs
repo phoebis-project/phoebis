@@ -2747,6 +2747,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const written = { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) };
   const shedChip = () => m.container.querySelector('.pool__features a[href="/pools?edit=all&group=shedding"]') !== null;
   const stale = await openAll();
+  // Save pressed at the end of a long group, where the callout above the groups would sit out of view.
+  rail(stale, 'keepalive')?.click();
+  await m.settle(150);
+  const body = stale?.querySelector('.dialog__body--grouped');
+  // jsdom lays nothing out, so the body keeps its scroll position by hand: what the dialog writes is what it reads.
+  let scrolled = 0;
+  if (body) {
+    Object.defineProperty(body, 'scrollTop', { configurable: true, get: () => scrolled, set: (top) => (scrolled = top) });
+    body.scrollTo = (to) => (scrolled = to.top ?? scrolled);
+    body.scrollTop = 1_200;
+  }
   // Through the API, which the mock stamps later than the row the dialog opened with.
   await api.updatePool('all', { ...written, shedAheadOfPace: 0.3 });
   footButton(stale, 'Save pool')?.click();
@@ -2760,6 +2771,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok: story.shedAheadOfPace === null && refused[0] && refused[1] === `${sentence} Reload` && refused[2] && !refused[3],
     missing: [String(story.shedAheadOfPace), ...refused.map(String)],
   });
+  const footer = stale?.querySelector('.dialog__status');
+  results.push({
+    name: '/pools a stale refusal brings the callout into view and holds the footer',
+    ok: !!body && scrolled === 0 && footer?.classList.contains('is-held') === true,
+    missing: [body ? `scrolled ${scrolled}` : 'no body', footer?.className ?? 'no footer'],
+  });
+  if (body) {
+    delete body.scrollTop;
+    delete body.scrollTo;
+  }
   const reloaded = await readsOn(() => reload?.click());
   results.push({
     name: '/pools Reload closes the dialog and reads the pools and keys once each, and the card shows the written value',
@@ -4617,6 +4638,8 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     ok: laptop.name === 'laptop' && refused[0] && refused[1] === `${sentence} Reload` && refused[2] && !refused[3],
     missing: [laptop.name, ...refused.map(String)],
   });
+  const footer = stale?.querySelector('.dialog__status');
+  results.push({ name: '/keys a stale refusal holds the footer', ok: footer?.classList.contains('is-held') === true, missing: [footer?.className ?? 'no footer'] });
   const keys = countCalls('listKeys');
   reload?.click();
   await m.settle(400);

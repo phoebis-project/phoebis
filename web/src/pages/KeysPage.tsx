@@ -493,6 +493,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const submit = async () => {
     setBusy(true);
     setError(null);
+    setStale(null);
     const form = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
     const input = keyInputOf(form, clock.now());
     try {
@@ -716,7 +717,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       // before the edit.
       status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
       hold={first?.group ?? null}
-      held={first !== null || error !== null}
+      held={first !== null || error !== null || stale !== null}
       notice={
         stale &&
         refusalCallout(

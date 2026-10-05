@@ -590,6 +590,12 @@ export function GroupedDialog({
     focusIn(chosen, choice.focus);
     // Only a choice moves focus; the helpers and the body ref change without one.
   }, [open, chosen, chosenShown, initialGroup]);
+  // The notice sits above the groups and is about the whole save, so one raised by a save pressed low in a long group
+  // would land out of view; the body returns to its top when one appears.
+  const noticed = Boolean(notice);
+  useEffect(() => {
+    if (noticed) bodyRef.current?.scrollTo?.({ top: 0 });
+  }, [noticed]);
   const runs: { groups: DialogGroup[]; parent?: string }[] = [];
   for (const g of shown) {
     const last = runs[runs.length - 1];

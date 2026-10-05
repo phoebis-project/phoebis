@@ -1136,6 +1136,7 @@ export function PoolDialog({
   const submit = async () => {
     setBusy(true);
     setError(null);
+    setStale(null);
     try {
       if (pool) await api.updatePool(pool.id, input, pool.updatedAt);
       else await api.createPool(input);
@@ -2032,7 +2033,7 @@ export function PoolDialog({
         // before the edit.
         status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
         hold={first?.group ?? null}
-        held={first !== null || error !== null}
+        held={first !== null || error !== null || stale !== null}
         notice={
           stale &&
           refusalCallout(
