@@ -1162,7 +1162,7 @@ impl RouterHandle {
 }
 
 /// Compiled only under the `debug-hooks` feature, which a dependent's dev-dependency turns on, so a release build
-/// carries no way to stall the task's reports.
+/// carries no way to stall the task's reports or to put an event of its own on the task's broadcast.
 #[cfg(any(test, feature = "debug-hooks"))]
 impl RouterHandle {
     /// Answers once the task parks every affinity report it receives, unapplied and with the watermark behind
