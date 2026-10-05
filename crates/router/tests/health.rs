@@ -130,8 +130,8 @@ fn a_closed_port_fails_within_the_timeout() {
     assert!(started.elapsed() < phoebis_router::health::TIMEOUT + Duration::from_secs(1));
 }
 
-/// The budget the two stalled-listener tests hand to `probe`: short, so the suite stays fast, while the
-/// subcommand's constant stays at its three seconds.
+/// The budget the four stalled-listener tests hand to `probe`, plain and TLS: short, so the suite stays fast, while
+/// the subcommand's constant stays at its three seconds.
 const SHORT: Duration = Duration::from_secs(1);
 
 #[test]
@@ -178,6 +178,63 @@ fn a_listener_that_trickles_the_status_line_fails_within_the_budget() {
         started.elapsed()
     );
     assert!(reason.contains("no status line"), "{reason}");
+    trickled.join().unwrap();
+}
+
+#[test]
+fn a_tls_listener_that_accepts_and_never_answers_the_handshake_fails_within_the_budget() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let held = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        // Held open until the probe has given up, so the handshake sees silence rather than a closed socket.
+        std::thread::sleep(SHORT + Duration::from_secs(1));
+        drop(stream);
+    });
+    let started = Instant::now();
+    let reason = phoebis_router::health::probe(addr, true, SHORT).unwrap_err();
+    assert!(
+        started.elapsed() < SHORT + Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    // A listener that never answers ran out the budget; it refused nothing.
+    assert!(
+        reason.contains("no status line") && !reason.contains("refused"),
+        "{reason}"
+    );
+    held.join().unwrap();
+}
+
+#[test]
+fn a_tls_listener_that_trickles_its_handshake_fails_within_the_budget() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let trickled = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        // A handshake record's header announcing sixteen bytes, then the sixteen, one byte every 400 ms: BoringSSL
+        // reads a record to its announced length one socket read at a time, so only a deadline on every read stops
+        // the handshake before the record completes.
+        let mut record = vec![0x16, 0x03, 0x03, 0x00, 0x10];
+        record.extend([0u8; 16]);
+        for byte in record {
+            if stream.write_all(&[byte]).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(400));
+        }
+    });
+    let started = Instant::now();
+    let reason = phoebis_router::health::probe(addr, true, SHORT).unwrap_err();
+    assert!(
+        started.elapsed() < SHORT + Duration::from_millis(500),
+        "{:?}: {reason}",
+        started.elapsed()
+    );
+    assert!(
+        reason.contains("no status line") && !reason.contains("refused"),
+        "{reason}"
+    );
     trickled.join().unwrap();
 }
 
