@@ -93,6 +93,80 @@ async fn a_failover_writes_cooldown_set_and_pin_migrated_and_the_account_rollup_
 }
 
 #[tokio::test]
+async fn a_pin_event_s_agent_and_a_cooldown_s_request_land_in_their_columns() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        A,
+        "/v1/messages",
+        Respond::Json {
+            status: 429,
+            headers: vec![
+                (
+                    "anthropic-ratelimit-unified-status".into(),
+                    "rejected".into(),
+                ),
+                (
+                    "anthropic-ratelimit-unified-5h-status".into(),
+                    "rejected".into(),
+                ),
+                ("anthropic-ratelimit-unified-5h-reset".into(), "4600".into()),
+                ("anthropic-ratelimit-unified-reset".into(), "4600".into()),
+            ],
+            body: b"{}".to_vec(),
+        },
+    );
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = resp
+        .extensions()
+        .get::<phoebis_relay::RelayOutcome>()
+        .unwrap()
+        .request_id
+        .clone();
+    let _ = resp.into_body().collect().await.unwrap();
+    let events = wait_for_async(Duration::from_secs(5), || async {
+        let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
+        rows.iter()
+            .any(|e| e.kind == "pin_migrated")
+            .then_some(rows)
+    })
+    .await;
+    let row = |kind: &str| events.iter().find(|e| e.kind == kind).unwrap();
+    assert_eq!(
+        (
+            row("pin_migrated").agent_id.as_deref(),
+            row("pin_migrated").request_id.as_deref()
+        ),
+        (Some("main"), None)
+    );
+    assert_eq!(
+        (
+            row("cooldown_set").agent_id.as_deref(),
+            row("cooldown_set").request_id.as_deref()
+        ),
+        (None, Some(id.as_str())),
+        "the cooldown names the request whose answer set it"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_is_an_event() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(

@@ -54,8 +54,8 @@ pub use quota::{
     PROFILE_EVERY_POLLS,
 };
 pub use record::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta, ParkedRecord,
-    QuotaSampleRecord, RequestRecord,
+    AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
+    KeepaliveDelta, ParkedRecord, QuotaSampleRecord, RequestRecord,
 };
 pub use rollup::{
     bucket_of, delta_of, fold_account, fold_effort, fold_event, fold_identifier, fold_keepalive,

@@ -422,7 +422,7 @@ Defaults whole.
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
 | `pricing_path` | `./pricing.yaml` | a path; a missing file is fine |
-| `retention_days` | `90` | 0 for forever, otherwise any number of days; also covers the quota and extra-usage samples |
+| `retention_days` | `90` | 0 for forever, else a number of days; also covers decisions, quota and extra-usage samples |
 | `rollup_retention_days` | `400` | 0 for forever, otherwise at least `retention_days` |
 
 Refused with:

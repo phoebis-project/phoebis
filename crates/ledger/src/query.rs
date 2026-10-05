@@ -436,7 +436,7 @@ pub fn request_events(
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let to = request.finished_at.unwrap_or(i64::MAX);
     let marker = format!("%\"source_request_id\":\"{}\"%", request.id);
-    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE at >= ?1 AND at <= ?2 AND ((session_id IS NOT NULL AND session_id = ?3) OR detail LIKE ?4) ORDER BY at, rowid")?;
+    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND ((session_id IS NOT NULL AND session_id = ?3) OR detail LIKE ?4) ORDER BY at, rowid")?;
     let rows = stmt.query_map(
         params![request.received_at, to, request.session_id, marker],
         |r| {
@@ -449,13 +449,16 @@ pub fn request_events(
                 model: r.get(5)?,
                 actor: r.get(6)?,
                 detail: r.get(7)?,
+                pool_id: r.get(8)?,
+                agent_id: r.get(9)?,
+                request_id: r.get(10)?,
             })
         },
     )?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-const RECENT_EVENTS_OF_KIND: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2";
+const RECENT_EVENTS_OF_KIND: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2";
 
 /// The newest `limit` events of one kind, newest first.
 pub fn recent_events_of_kind(
@@ -474,12 +477,15 @@ pub fn recent_events_of_kind(
             model: r.get(5)?,
             actor: r.get(6)?,
             detail: r.get(7)?,
+            pool_id: r.get(8)?,
+            agent_id: r.get(9)?,
+            request_id: r.get(10)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-const RECENT_GAPS: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT ?2";
+const RECENT_GAPS: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT ?2";
 
 /// The newest `limit` `ledger_gap` events at or after `since`, newest first: what the system page lists beside the
 /// writer's gap counter.
@@ -499,6 +505,9 @@ pub fn recent_gaps(
             model: r.get(5)?,
             actor: r.get(6)?,
             detail: r.get(7)?,
+            pool_id: r.get(8)?,
+            agent_id: r.get(9)?,
+            request_id: r.get(10)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)

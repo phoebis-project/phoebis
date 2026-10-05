@@ -1,5 +1,7 @@
 //! One struct per ledger table, field order matching the table's column order.
 
+use phoebis_routing::{CacheMapEntry, DecisionRecord, DecisionSummary};
+
 // A parked row outlives the build that wrote it, so a field a later build adds reads at its default.
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
 #[serde(default)]
@@ -188,6 +190,72 @@ pub struct EventRecord {
     pub model: Option<String>,
     pub actor: Option<String>,
     pub detail: Option<String>,
+    pub pool_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub request_id: Option<String>,
+}
+
+/// One decision as the ledger stores it: the columns, the summary and the record as the router typed them. The
+/// record is compressed by the writer inside its batch, never on the broadcast.
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecisionRow {
+    pub request_id: String,
+    pub seq: u32,
+    pub attempt: u32,
+    pub at: i64,
+    pub kind: String,
+    pub probe: bool,
+    pub key_id: Option<String>,
+    pub pool_id: Option<String>,
+    pub account_id: Option<String>,
+    pub from_account_id: Option<String>,
+    pub session_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub model: Option<String>,
+    pub summary: DecisionSummary,
+    pub record: DecisionRecord,
+}
+
+impl DecisionRow {
+    /// The columns off the record's request and outcome blocks: `kind` and the accounts from the outcome, the
+    /// rest from the request, `probe` from its flags.
+    pub fn of(summary: DecisionSummary, record: DecisionRecord, at: i64) -> DecisionRow {
+        let request = &record.request;
+        DecisionRow {
+            request_id: request.request_id.clone(),
+            seq: request.seq,
+            attempt: request.attempt,
+            at,
+            kind: record.outcome.kind.to_string(),
+            probe: request.flags.probe,
+            key_id: column(&request.key_id),
+            pool_id: column(&request.pool_id),
+            account_id: record.outcome.account_id.clone(),
+            from_account_id: record.outcome.from_account_id.clone(),
+            session_id: None,
+            agent_id: column(&request.agent_id),
+            model: column(&request.canonical_model),
+            summary,
+            record,
+        }
+    }
+}
+
+/// A refusal under a key the snapshot no longer holds names no pool, which the record spells empty; the column
+/// reads null instead, so no filter finds the row under an empty id.
+fn column(value: &str) -> Option<String> {
+    (!value.is_empty()).then(|| value.to_string())
+}
+
+/// A completed answer's cache-map rows, for the `cache_map` column of the decision `seq` names; `attempt` is the
+/// wire attempt that completed, kept for the log line.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CacheMapWrite {
+    pub request_id: String,
+    pub seq: u32,
+    pub attempt: u32,
+    pub entries: Vec<CacheMapEntry>,
+    pub at: i64,
 }
 
 #[derive(Clone, Debug, Default, PartialEq)]

@@ -168,8 +168,16 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(28), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that spells every quota window by the endpoint's key"
+        (Some(29), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that adds the decisions table"
+    );
+    assert_eq!(
+        (
+            system["ledger"]["cache_map_orphans"].as_u64(),
+            system["ledger"]["mirror_lagged"].as_u64()
+        ),
+        (Some(0), Some(0)),
+        "a ledger that stored every decision has no orphaned cache map, and a mirror that kept up missed nothing: {system}"
     );
     assert_eq!(
         (
@@ -1519,6 +1527,9 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
             serde_json::json!({ "from_account": "direct", "epoch": 2, "reason": "shed" })
                 .to_string(),
         ),
+        pool_id: None,
+        agent_id: None,
+        request_id: None,
     }));
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts.db.request("r-rewrite").await.unwrap()
@@ -1580,6 +1591,9 @@ async fn a_pool_row_answers_moves_per_hour_by_reason() {
             model: Some("claude-sonnet-5".into()),
             actor: None,
             detail: Some(serde_json::json!({ "reason": reason }).to_string()),
+            pool_id: None,
+            agent_id: None,
+            request_id: None,
         })
     };
     let event = |account: &str, reason: &str| event_at(account, reason, now - 100);

@@ -13,6 +13,12 @@ were lost is stored as truncated with a `ledger_gap` event naming the request. O
 folded into the hour's rollup, which is what the analytics routes report, so a long range costs one row per hour
 rather than one per request.
 
+Every routing decision lands as its own row in a decisions table beside the attempt rows: one zstd-compressed record per
+decision holding the request's facts, the settings in force, every pool member's standing at decision time, the rule
+walk and the outcome, keyed by the request and the decision's place in it, so a hold and the placement after it are two
+rows. The small trace on the attempt row stays for the analytics. The router emits the record as it emits its events,
+and the ledger stores it.
+
 A `ledger_gap` event names one of these reasons:
 
 | Reason | Meaning |
@@ -196,11 +202,13 @@ refusal drops it.
 
 | Data | Kept for |
 | --- | --- |
-| Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default; 0 forever) |
+| Requests, attempts, events, decisions, kept-warm marks | `stats.retention_days` (90 days by default; 0 forever) |
 | Quota and extra-usage samples | `stats.retention_days` (90 days by default; 0 forever) |
 | Resolved credential refresh attempts and registry changes | `stats.retention_days` (90 days by default; 0 forever) |
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
+
+A routing decision leaves in the purge that takes its request; one whose request never landed leaves at the same age.
 
 The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction, so the
 writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute poll's

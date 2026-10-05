@@ -664,6 +664,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
             j!({ "agent_id": "main", "from_account": "direct", "epoch": 2, "reason": "spent" })
                 .to_string(),
         ),
+        pool_id: None,
+        agent_id: Some("main".into()),
+        request_id: None,
     }));
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 200,
@@ -674,6 +677,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-sonnet-5".into()),
         actor: None,
         detail: Some(j!({ "agent_id": "main", "reasons": ["cooldown", "spent"] }).to_string()),
+        pool_id: None,
+        agent_id: Some("main".into()),
+        request_id: None,
     }));
     // The pool's model_rules excludes claude-haiku-*, and the account this cools is one of its members, so the
     // key-models and models-state fixtures both carry it: the pool's rule with a live cooldown, and one group.
@@ -726,6 +732,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-haiku-4-5-20251001".into()),
         actor: None,
         detail: Some(j!({ "attempt": 1, "request_id": "req-rejected", "source_request_id": "r-failover", "wire_model": "claude-haiku-4-5" }).to_string()),
+        pool_id: None,
+        agent_id: None,
+        request_id: Some("r-failover".into()),
     }));
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 350,
@@ -736,6 +745,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-haiku-4-5-20251001".into()),
         actor: None,
         detail: Some(j!({ "attempt": 2, "rejected_by": ["business"], "request_id": "req-permitted", "source_request_id": "r-failover", "wire_model": "claude-haiku-4-5" }).to_string()),
+        pool_id: None,
+        agent_id: None,
+        request_id: Some("r-failover".into()),
     }));
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -977,6 +989,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
     common::park_unreadable(&parts.db, "main", "business", now);
     // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
     parts.usage.poll("business").await.unwrap();
+    // The affinity report above stands for an earlier request, `r-0`, whose decision the ledger never stored, so its
+    // cache map is the one orphan `system.json` counts; waited for, so every capture reads the same figure.
+    let stats = parts.ledger.stats();
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (stats
+            .cache_map_orphans
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == 1)
+            .then_some(())
+    })
+    .await;
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_catalog", "/admin/accounts/business/catalog"),

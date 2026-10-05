@@ -15,9 +15,9 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{
     list_requests, member_spends, parked_count, parked_summary, run_retention, Assembler,
-    AttemptRecord, AttentionGauges, BodyRecord, BudgetedMember, EventRecord, LedgerConfig,
-    LedgerDb, LedgerError, LiveKeys, ParkedSummary, PriceTable, Record, RequestFilter,
-    RequestRecord, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
+    AttemptRecord, AttentionGauges, BodyRecord, BudgetedMember, CacheMapWrite, DecisionRow,
+    EventRecord, LedgerConfig, LedgerDb, LedgerError, LiveKeys, ParkedSummary, PriceTable, Record,
+    RequestFilter, RequestRecord, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
 };
 use phoebis_profile::fixtures::BodyFixture;
 use phoebis_store::{BudgetPeriod, MemberWrite, StorageKey, Store};
@@ -2049,10 +2049,10 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table, the
-        // columns migrations 21, 25 and 26 add and migration 27's table and index, each dropped back out so the
-        // replay below has to add them again; `rollups_hourly` keeps the shape the class dimension joins, since a
-        // primary-key column cannot be dropped in place and the rebuild names its own columns regardless of what
-        // the source table still carries.
+        // columns migrations 21, 25 and 26 add, migration 27's table and index and migration 29's table, columns and
+        // indexes, each dropped back out so the replay below has to add them again; `rollups_hourly` keeps the
+        // shape the class dimension joins, since a primary-key column cannot be dropped in place and the rebuild
+        // names its own columns regardless of what the source table still carries.
         db.write(|c| {
             c.execute_batch(
                 "ALTER TABLE requests DROP COLUMN request_class; \
@@ -2068,7 +2068,11 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
                  ALTER TABLE requests DROP COLUMN auto_mode; \
                  ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
-                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires;",
+                 DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
+                 DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                 DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                 ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                 ALTER TABLE events DROP COLUMN pool_id;",
             )?;
             Ok(())
         })
@@ -2093,7 +2097,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 28);
+    assert_eq!(db.schema_version().await.unwrap(), 29);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2189,6 +2193,10 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
                  ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
+                 DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                 DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                 ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                 ALTER TABLE events DROP COLUMN pool_id; \
                  UPDATE meta SET value = '18' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -2196,7 +2204,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 28);
+    assert_eq!(db.schema_version().await.unwrap(), 29);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -2243,6 +2251,10 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  {RECREATE_DROPPED_TABLE}\n\
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
+                 DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                 DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                 ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                 ALTER TABLE events DROP COLUMN pool_id; \
                  UPDATE meta SET value = '20' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -2250,7 +2262,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 28);
+    assert_eq!(db.schema_version().await.unwrap(), 29);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2322,6 +2334,10 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
                  ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; {RECREATE_DROPPED_TABLE}\n\
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
+                 DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                 DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                 ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                 ALTER TABLE events DROP COLUMN pool_id; \
                  UPDATE meta SET value = '21' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -2329,7 +2345,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 28);
+    assert_eq!(db.schema_version().await.unwrap(), 29);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -2395,6 +2411,10 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
                  ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
+                 DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                 DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                 ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                 ALTER TABLE events DROP COLUMN pool_id; \
                  UPDATE meta SET value = '23' WHERE key = 'schema_version';"
             ))?;
             Ok(())
@@ -2402,7 +2422,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 28);
+    assert_eq!(db.schema_version().await.unwrap(), 29);
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2462,6 +2482,10 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
+                 DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                 DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                 ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                 ALTER TABLE events DROP COLUMN pool_id; \
                  UPDATE meta SET value = '24' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -2469,7 +2493,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 28);
+    assert_eq!(db.schema_version().await.unwrap(), 29);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -2515,6 +2539,10 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
                 "ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
+                 DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                 DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                 ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                 ALTER TABLE events DROP COLUMN pool_id; \
                  UPDATE meta SET value = '25' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -2522,7 +2550,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 28);
+    assert_eq!(db.schema_version().await.unwrap(), 29);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2573,6 +2601,10 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
                    ('a', 0, 'seven_day_fable', 0.5, NULL, 'poll', 20), \
                    ('a', 0, 'seven_day_opus', 0.03, NULL, 'poll', 20), \
                    ('a', 300, 'five_hour', 0.3, NULL, 'poll', 320); \
+                 DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                 DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                 ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                 ALTER TABLE events DROP COLUMN pool_id; \
                  UPDATE meta SET value = '27' WHERE key = 'schema_version';",
             )?;
             Ok(())
@@ -2580,7 +2612,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 28);
+    assert_eq!(db.schema_version().await.unwrap(), 29);
     let rows: Vec<(i64, String, Option<f64>, String)> = db
         .quota_samples("a", 0, i64::MAX)
         .await
@@ -2607,6 +2639,374 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         "each window reads under the endpoint's key, a colliding pair keeps the row the old spelling named, and a \
          poll row with nothing to collide with stays"
     );
+}
+
+/// What one query lists in its first column, in the query's order.
+fn names(db: &phoebis_ledger::LedgerDb, sql: &str) -> Vec<String> {
+    db.read_blocking(|c| {
+        let mut stmt = c.prepare(sql)?;
+        let names = stmt
+            .query_map([], |r| r.get::<_, String>(0))?
+            .collect::<rusqlite::Result<Vec<_>>>()?;
+        Ok(names)
+    })
+    .unwrap()
+}
+
+#[tokio::test]
+async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh_and_an_existing_file(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    let decision_indexes =
+        "SELECT name FROM pragma_index_list('decisions') WHERE origin = 'c' ORDER BY name";
+    let event_columns = "SELECT name FROM pragma_table_info('events') ORDER BY cid";
+    let event_indexes = "SELECT name FROM pragma_index_list('events') ORDER BY name";
+    {
+        let fresh = Arc::new(LedgerDb::open(&path).unwrap());
+        assert_eq!(fresh.schema_version().await.unwrap(), 29);
+        assert_eq!(
+            names(
+                &fresh,
+                "SELECT name FROM pragma_table_info('decisions') ORDER BY cid"
+            ),
+            [
+                "request_id",
+                "seq",
+                "attempt",
+                "at",
+                "kind",
+                "probe",
+                "key_id",
+                "pool_id",
+                "account_id",
+                "from_account_id",
+                "session_id",
+                "agent_id",
+                "model",
+                "summary",
+                "record",
+                "cache_map"
+            ]
+        );
+        assert_eq!(
+            names(&fresh, decision_indexes),
+            [
+                "decisions_account",
+                "decisions_at",
+                "decisions_key",
+                "decisions_pool",
+                "decisions_session"
+            ]
+        );
+        // The indexes leave first, since SQLite refuses to drop an indexed column.
+        fresh
+            .write(|c| {
+                c.execute_batch(
+                    "DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                     DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
+                     ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
+                     ALTER TABLE events DROP COLUMN pool_id; \
+                     UPDATE meta SET value = '28' WHERE key = 'schema_version';",
+                )?;
+                Ok(())
+            })
+            .unwrap();
+        assert_eq!(
+            names(&fresh, event_columns).len(),
+            8,
+            "the rewound file's events table is back to its eight columns"
+        );
+    }
+    let existing = Arc::new(LedgerDb::open(&path).unwrap());
+    assert_eq!(existing.schema_version().await.unwrap(), 29);
+    assert_eq!(
+        names(&existing, event_columns),
+        [
+            "at",
+            "kind",
+            "account_id",
+            "key_id",
+            "session_id",
+            "model",
+            "actor",
+            "detail",
+            "pool_id",
+            "agent_id",
+            "request_id"
+        ]
+    );
+    assert_eq!(
+        names(&existing, event_indexes),
+        [
+            "events_account",
+            "events_at",
+            "events_kind_at",
+            "events_request",
+            "events_session"
+        ]
+    );
+    assert_eq!(names(&existing, decision_indexes).len(), 5);
+}
+
+/// A decision whose every column reads a value of its own: a probe's move from `a` to `b` under routing session
+/// `s1`. Built over a refusal's record, since the columns come off the request and outcome blocks alone.
+fn decision(
+    request_id: &str,
+    seq: u32,
+    attempt: u32,
+) -> (
+    phoebis_routing::DecisionSummary,
+    phoebis_routing::DecisionRecord,
+) {
+    let snapshot = phoebis_routing::RegistrySnapshot::from_load(
+        phoebis_store::RegistryLoad::default(),
+        [0; 32],
+        0,
+        1,
+    );
+    let (mut record, mut summary) = phoebis_routing::DecisionRecord::refused(
+        &phoebis_routing::RefusedRequest {
+            request_id: request_id.into(),
+            attempt,
+            seq,
+            at: NOW,
+            key_id: "desktop".into(),
+            key_generation: 0,
+            agent_id: "main".into(),
+            session_id: Some("s1".into()),
+            canonical_model: "claude-sonnet-5".into(),
+            client: phoebis_routing::ClientClass::ClaudeCode,
+            client_version: None,
+        },
+        &snapshot,
+        &phoebis_routing::RefusalFacts {
+            kind: "key",
+            reason: "the key is unknown".into(),
+        },
+    );
+    record.request.pool_id = "main".into();
+    record.request.flags.probe = true;
+    record.outcome.kind = "moved";
+    record.outcome.account_id = Some("b".into());
+    record.outcome.from_account_id = Some("a".into());
+    summary.kind = "moved";
+    summary.probe = true;
+    (summary, record)
+}
+
+type DecisionColumns = (
+    u32,
+    i64,
+    String,
+    bool,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+    Option<String>,
+);
+
+#[tokio::test]
+async fn a_decision_lands_as_a_row_whose_frame_decodes_to_the_record() {
+    use rusqlite::OptionalExtension as _;
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let (summary, record) = decision("r1", 2, 2);
+    h.ledger.record(Record::Decision(Box::new(DecisionRow::of(
+        summary.clone(),
+        record.clone(),
+        NOW,
+    ))));
+    let (columns, stored_summary, frame) = wait_for(Duration::from_secs(5), || {
+        h.db.read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT attempt, at, kind, probe, key_id, pool_id, account_id, from_account_id, session_id, \
+                 agent_id, model, summary, record FROM decisions WHERE request_id = ?1 AND seq = ?2",
+                rusqlite::params!["r1", 2],
+                |r| {
+                    let columns: DecisionColumns = (
+                        r.get(0)?,
+                        r.get(1)?,
+                        r.get(2)?,
+                        r.get(3)?,
+                        r.get(4)?,
+                        r.get(5)?,
+                        r.get(6)?,
+                        r.get(7)?,
+                        r.get(8)?,
+                        r.get(9)?,
+                        r.get(10)?,
+                    );
+                    Ok((columns, r.get::<_, String>(11)?, r.get::<_, Vec<u8>>(12)?))
+                },
+            )
+            .optional()?)
+        })
+        .unwrap()
+    })
+    .await;
+    let some = |value: &str| Some(value.to_string());
+    assert_eq!(
+        columns,
+        (
+            2,
+            NOW,
+            "moved".to_string(),
+            true,
+            some("desktop"),
+            some("main"),
+            some("b"),
+            some("a"),
+            some("s1"),
+            some("main"),
+            some("claude-sonnet-5")
+        ),
+        "the columns are the record's request and outcome facts"
+    );
+    assert_eq!(
+        serde_json::from_str::<serde_json::Value>(&stored_summary).unwrap(),
+        serde_json::to_value(&summary).unwrap(),
+        "the summary is stored as its JSON"
+    );
+    let decoded = zstd::decode_all(frame.as_slice()).expect("the record is one zstd frame");
+    assert_eq!(
+        serde_json::from_slice::<serde_json::Value>(&decoded).unwrap(),
+        serde_json::to_value(&record).unwrap()
+    );
+    assert_eq!(
+        zstd::zstd_safe::get_frame_content_size(&frame)
+            .ok()
+            .flatten(),
+        Some(decoded.len() as u64),
+        "the frame's header names the record's size, so a reader can bound its output before it decodes"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_cache_map_write_lands_on_the_decision_its_seq_names_and_a_stray_one_counts() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    for (seq, attempt) in [(1, 1), (2, 2)] {
+        let (summary, record) = decision("r1", seq, attempt);
+        h.ledger.record(Record::Decision(Box::new(DecisionRow::of(
+            summary, record, NOW,
+        ))));
+    }
+    let entries = vec![phoebis_routing::CacheMapEntry {
+        tier: "message",
+        depth: 2,
+        prefix_tokens: 1_200,
+        ttl_ms: 300_000,
+        account_id: "b".into(),
+    }];
+    // A retry in place on the second leg: its third wire attempt completed under the decision that selected it.
+    h.ledger.record(Record::CacheMap(CacheMapWrite {
+        request_id: "r1".into(),
+        seq: 2,
+        attempt: 3,
+        entries: entries.clone(),
+        at: NOW + 1_000,
+    }));
+    h.ledger.record(Record::CacheMap(CacheMapWrite {
+        request_id: "r-unknown".into(),
+        seq: 1,
+        attempt: 1,
+        entries: entries.clone(),
+        at: NOW + 1_000,
+    }));
+    let stats = h.ledger.stats();
+    wait_for(Duration::from_secs(5), || {
+        (stats.cache_map_orphans.load(Ordering::Relaxed) == 1).then_some(())
+    })
+    .await;
+    let maps =
+        h.db.read_blocking(|c| {
+            let mut stmt = c.prepare(
+                "SELECT request_id, seq, cache_map FROM decisions ORDER BY request_id, seq",
+            )?;
+            let rows = stmt
+                .query_map([], |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, u32>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                })?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(rows)
+        })
+        .unwrap();
+    assert_eq!(
+        maps,
+        [
+            ("r1".to_string(), 1, None),
+            (
+                "r1".to_string(),
+                2,
+                Some(serde_json::to_string(&entries).unwrap())
+            )
+        ],
+        "the map lands on the decision its seq names whatever attempt completed, and the stray write lands nowhere"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_request_through_the_relay_lands_its_decision_with_the_cache_map_its_answer_wrote() {
+    use rusqlite::OptionalExtension as _;
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = request_id(&resp);
+    let _ = resp.into_body().collect().await.unwrap();
+    let (kind, account_id, cache_map) = wait_for(Duration::from_secs(5), || {
+        h.db.read_blocking(|c| {
+            Ok(c.query_row(
+                "SELECT kind, account_id, cache_map FROM decisions WHERE request_id = ?1 AND seq = 1",
+                rusqlite::params![id],
+                |r| {
+                    Ok((
+                        r.get::<_, String>(0)?,
+                        r.get::<_, Option<String>>(1)?,
+                        r.get::<_, Option<String>>(2)?,
+                    ))
+                },
+            )
+            .optional()?)
+        })
+        .unwrap()
+        .filter(|(_, _, cache_map)| cache_map.is_some())
+    })
+    .await;
+    assert_eq!(
+        (kind.as_str(), account_id.as_deref()),
+        ("placed", Some("a"))
+    );
+    assert!(
+        serde_json::from_str::<serde_json::Value>(&cache_map.unwrap())
+            .unwrap()
+            .is_array(),
+        "the answer's cache-map rows land as a list on the decision that selected it"
+    );
+    assert_eq!(
+        h.ledger.stats().cache_map_orphans.load(Ordering::Relaxed),
+        0
+    );
+    up.shutdown().await;
 }
 
 #[test]

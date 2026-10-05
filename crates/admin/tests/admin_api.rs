@@ -2198,6 +2198,9 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
         detail: Some(
             r#"{"agent_id":"main","epoch":2,"from_account":"direct","reason":"cooldown"}"#.into(),
         ),
+        pool_id: None,
+        agent_id: Some("main".into()),
+        request_id: None,
     }));
 
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {

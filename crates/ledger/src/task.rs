@@ -15,7 +15,8 @@ use tokio::sync::{mpsc, oneshot, watch, Mutex};
 use crate::assemble::{Assembler, Record};
 use crate::bodies::{request_cutoff, run_retention};
 use crate::db::{
-    begin_write, delete_parked_in, insert_event_in, insert_request_in, insert_samples_in,
+    begin_write, delete_parked_in, insert_decision_in, insert_event_in, insert_request_in,
+    insert_samples_in, update_cache_map_in,
 };
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
@@ -97,6 +98,12 @@ pub struct LedgerStats {
     pub parked_priced: AtomicU64,
     /// Retention passes the purge task finished since start, whatever each one cut.
     pub purge_passes: AtomicU64,
+    /// Cache-map writes whose decision row the ledger never stored (dropped under pressure, or purged); counted
+    /// and never retried, since the decision precedes its answer's end by the upstream's whole turn.
+    pub cache_map_orphans: AtomicU64,
+    /// Router events the mirror's broadcast receiver missed because it lagged, each a decision or an event row
+    /// never written; apart from `dropped`, which counts the ledger's own records.
+    pub mirror_lagged: AtomicU64,
 }
 
 /// What the relay's ledger check reads: counted here, since every `behind` answer is one `ledger_behind` refusal.
@@ -1001,6 +1008,8 @@ fn wrote_priced_attempt(batch: &[Record]) -> bool {
 
 fn table_of(record: &Record) -> &'static str {
     match record {
+        Record::CacheMap(_) => "cache_map",
+        Record::Decision(_) => "decisions",
         Record::Event(_) => "events",
         Record::Keepalive(_) => "rollups",
         Record::Request { .. } => "requests",
@@ -1057,6 +1066,9 @@ async fn land_acknowledging(
     let tables: Vec<&'static str> = batch[range.clone()].iter().map(table_of).collect();
     let written = tokio::task::spawn_blocking(move || {
         let mut observations = Vec::new();
+        // The cache-map writes that found no decision, counted once the transaction commits: an orphan in a batch
+        // that rolls back is tried again with it.
+        let mut orphans = Vec::new();
         let result = db.write(|conn| {
             let tx = begin_write(conn)?;
             for record in &records[range] {
@@ -1100,6 +1112,21 @@ async fn land_acknowledging(
                             quota: quota.clone(),
                         });
                     }
+                    Record::Decision(row) => {
+                        let summary = serde_json::to_string(&row.summary)?;
+                        // Compressed here, inside the batch on the blocking thread, so the request path and the
+                        // broadcast carry the typed record and no frame; the default level folds this JSON four
+                        // to six times. The one-shot call writes the content size into the frame's header, which
+                        // a reader checks against its bound before it decodes.
+                        let frame = zstd::bulk::compress(&serde_json::to_vec(&row.record)?, 0)?;
+                        insert_decision_in(&tx, row, &summary, &frame)?;
+                    }
+                    Record::CacheMap(write) => {
+                        let entries = serde_json::to_string(&write.entries)?;
+                        if update_cache_map_in(&tx, write, &entries)? == 0 {
+                            orphans.push((write.request_id.clone(), write.seq, write.attempt));
+                        }
+                    }
                 }
             }
             if let Some(id) = parked {
@@ -1108,12 +1135,23 @@ async fn land_acknowledging(
             tx.commit()?;
             Ok::<(), LedgerError>(())
         });
-        (result, observations)
+        (result, observations, orphans)
     })
     .await;
     match written {
-        Ok((Ok(()), observations)) => {
+        Ok((Ok(()), observations, orphans)) => {
             stats.written.fetch_add(size, Ordering::Relaxed);
+            stats
+                .cache_map_orphans
+                .fetch_add(orphans.len() as u64, Ordering::Relaxed);
+            for (request_id, seq, attempt) in orphans {
+                tracing::debug!(
+                    %request_id,
+                    seq,
+                    attempt,
+                    "a cache map found no decision to land on; it is counted and dropped"
+                );
+            }
             for observation in observations {
                 match observation {
                     Observation::Request {
@@ -1126,7 +1164,7 @@ async fn land_acknowledging(
             }
             Landed::Written
         }
-        Ok((Err(error), _)) => {
+        Ok((Err(error), _, _)) => {
             tracing::error!(%error, records = size, "a ledger batch could not be written");
             stats.write_failures.fetch_add(1, Ordering::Relaxed);
             Landed::Refused {

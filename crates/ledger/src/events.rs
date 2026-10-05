@@ -2,6 +2,7 @@
 //! store record on their own, mirrored into one table so the UI has one timeline.
 
 use std::collections::HashMap;
+use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -12,7 +13,7 @@ use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::assemble::Record;
-use crate::record::EventRecord;
+use crate::record::{CacheMapWrite, DecisionRow, EventRecord};
 use crate::task::Ledger;
 use crate::LedgerDb;
 
@@ -54,6 +55,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 json!({ "scope": scope, "until": until, "reason": reason, "window": window, "source_request_id": source_request_id })
                     .to_string(),
             ),
+            request_id: source_request_id.clone(),
             ..Default::default()
         },
         RouterEvent::OverageEnded {
@@ -89,6 +91,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
             detail: Some(json!({ "agent_id": agent_id, "epoch": epoch }).to_string()),
+            agent_id: Some(agent_id.clone()),
             ..Default::default()
         },
         RouterEvent::PinExpired {
@@ -107,6 +110,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
             detail: Some(json!({ "agent_id": agent_id, "reasons": reasons }).to_string()),
+            agent_id: Some(agent_id.clone()),
             ..Default::default()
         },
         RouterEvent::PinMigrated {
@@ -130,6 +134,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
                 json!({ "agent_id": agent_id, "from_account": from_account, "epoch": epoch, "reason": reason })
                     .to_string(),
             ),
+            agent_id: Some(agent_id.clone()),
             ..Default::default()
         },
         RouterEvent::PinReleased {
@@ -147,6 +152,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
             detail: Some(json!({ "agent_id": agent_id }).to_string()),
+            agent_id: Some(agent_id.clone()),
             ..Default::default()
         },
         RouterEvent::Decision { .. } | RouterEvent::CacheMapWritten { .. } => return None,
@@ -187,12 +193,22 @@ pub fn spawn_event_mirror(
         loop {
             tokio::select! {
                 received = events.recv() => match received {
+                    Ok(RouterEvent::Decision { summary, record, at }) => {
+                        ledger.record(Record::Decision(Box::new(DecisionRow::of(*summary, *record, at))));
+                    }
+                    Ok(RouterEvent::CacheMapWritten { request_id, seq, attempt, entries, at }) => {
+                        ledger.record(Record::CacheMap(CacheMapWrite { request_id, seq, attempt, entries, at }));
+                    }
                     Ok(event) => {
                         if let Some(row) = event_of(&event) {
                             ledger.record(Record::Event(row));
                         }
                     }
-                    Err(RecvError::Lagged(n)) => tracing::warn!(lost = n, "the ledger fell behind the router's events"),
+                    // Counted apart from `dropped`, so that figure keeps meaning the ledger's own records.
+                    Err(RecvError::Lagged(n)) => {
+                        ledger.stats().mirror_lagged.fetch_add(n, Ordering::Relaxed);
+                        tracing::warn!(lost = n, "the ledger fell behind the router's events");
+                    }
                     Err(RecvError::Closed) => break,
                 },
                 _ = tick.tick() => {
@@ -203,6 +219,8 @@ pub fn spawn_event_mirror(
                                 at: change.at,
                                 kind: "registry_changed".into(),
                                 actor: Some(change.actor.clone()),
+                                // Every pool change names the pool as its target.
+                                pool_id: change.kind.starts_with("pool_").then(|| change.target.clone()),
                                 detail: Some(json!({
                                     "kind": change.kind,
                                     "target": change.target,
@@ -299,19 +317,29 @@ mod tests {
             ),
             (Some("main"), Some("a"), Some(7), Some("cooldown"))
         );
+        assert_eq!(
+            e.agent_id.as_deref(),
+            Some("main"),
+            "the pin's agent has its own column beside the detail's copy"
+        );
         let e = event_of(&RouterEvent::CooldownSet {
             account_id: "a".into(),
             scope: "model:m".into(),
             until: 9,
             reason: "rate_limit".into(),
             window: "five_hour".into(),
-            source_request_id: None,
+            source_request_id: Some("r1".into()),
             at: 1,
         })
         .expect("a cooldown row");
         assert_eq!(
-            (e.kind.as_str(), e.account_id.as_deref(), e.model.as_deref()),
-            ("cooldown_set", Some("a"), Some("m"))
+            (
+                e.kind.as_str(),
+                e.account_id.as_deref(),
+                e.model.as_deref(),
+                e.request_id.as_deref()
+            ),
+            ("cooldown_set", Some("a"), Some("m"), Some("r1"))
         );
         let e = event_of(&RouterEvent::CooldownCleared {
             account_id: "a".into(),

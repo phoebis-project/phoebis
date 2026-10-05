@@ -956,6 +956,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         "ledger": {
             "schema_version": state.ledger.db().schema_version().await.ok(),
             "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),
+            "cache_map_orphans": load(&stats.cache_map_orphans), "mirror_lagged": load(&stats.mirror_lagged),
             "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
             "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
             "queued": state.ledger.queued(), "behind": state.ledger.behind(),
