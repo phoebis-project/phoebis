@@ -506,7 +506,7 @@ in the log), a session missing from memory after a restart or past `sessions.mem
 its next request, and rows older than `sessions.memory_retention_days` are dropped once an hour ([sessions](#sessions)).
 A request takes its revision fence from the router's in-memory snapshot and its credential from a cache of each
 account's current credential. The cache reads the registry file again when an account is paired, a credential rotates,
-or the registry reloads; a request the cache serves never waits behind the session memory's writes.
+or the registry reloads; a credential the cache serves never waits behind the session memory's writes.
 
 `stats.ledger_path` names a second SQLite file, the statistics ledger, under the same rules: the name is used
 as given, the parent directory is created at mode 0700 and the file at 0600. It runs in WAL mode with

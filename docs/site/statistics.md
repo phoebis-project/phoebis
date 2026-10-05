@@ -80,8 +80,9 @@ an idle account leaves, is the only source of extra-usage credit totals, and han
 
 A sample's window is one of the endpoint's keys: `five_hour`, `seven_day`, `seven_day_overage_included` (the head's
 overage-included week), `seven_day_fable` (the `limits` window) and any other `seven_day_*` key the poll reports; the
-metric's `window` label and the console use the same spelling. A head and a poll of the same five-minute bucket write
-one row per window, the head's where both read it.
+metric's `window` label uses the same spelling, and the console draws the windows it knows under its own labels and any
+other key as it is. A head and a poll of the same five-minute bucket write one row per window, the head's where both
+read it.
 
 The usage endpoint is also read once at startup for every OAuth account with a credential, before the proxy listener
 accepts requests and bounded by `routing.startup_fetch_seconds`, so selection holds a sample per account from the first
@@ -200,15 +201,13 @@ refusal drops it.
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
 
-The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction, so
-the writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute
-poll's reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per day. A parked
-record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while
-its cost is kept. The same pass cuts the registry's history at the requests' cutoff, in slices of 1,000 rows: its
-resolved credential refresh attempts and its change log. It keeps what is read whatever its age: an attempt whose
-outcome is still uncertain, each account's newest two resolved attempts, which the attention line reads, and its
-newest attempt, which the account view reads, and each key id's newest create and delete, which tell a re-created key
-from its predecessor.
+The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction, so the
+writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute poll's
+reading is kept for `stats.retention_days`, so an idle account adds 288 quota rows per window per day. The same pass
+cuts the registry's history at the requests' cutoff, in slices of 1,000 rows: its resolved credential refresh attempts
+and its change log. It keeps what is read whatever its age: an attempt whose outcome is still uncertain, each account's
+newest two resolved attempts, which the attention line reads, and its newest attempt, which the account view reads, and
+each key id's newest create and delete, which tell a re-created key from its predecessor.
 
 The analytics, the dashboard, the pool cards and the burn chart read the hourly rollups in pages of a day, each page
 its own read, so a 400-day range holds one day of rows in memory and the reader connection is free between pages.
@@ -280,8 +279,8 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 ### Dashboard
 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
-pool or key where it is fixed, or nothing for an item with no such place (one of the router's own writers, a parked
-record without a pool, a pool deleted since, a drift refusal that named no key); it reads the same conditions the
+pool or key where it is fixed, or nothing for an item with no such place (a drift refusal that named no key, a parked
+record without a pool, a pool deleted since, one of the router's own writers); it reads the same conditions the
 [`phoebis_attention` gauge](#conditions-and-gauges) exports. Four tiles report requests, tokens, estimated cost, and the
 error rate over the last 24 hours, and a line under them says when the figures were read, or that the last refresh
 failed and why. Two cards below show how much of the pooled 5-hour and 7-day capacity is left: each subscription account
@@ -340,50 +339,49 @@ closed without its `message_stop`, `stream_stalled` when the upstream went silen
 reads the family and version, with the whole id on hover. The client column shows the class the router derived from the
 user agent (`claude-code/<entrypoint>` or `other`), cut at 12 characters, whole on hover, and the agent
 type beneath it on a subagent's turn.
-One row is one
-client request however many attempts it took, and the attempt trail reads as "mail 429, business 200" when a 429 on the
-first account failed over to a 200 on the second. A request that did not succeed names how it ended beside its status:
-`canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request that waited for a slot while every account was
-at its cap carries a held marker beside its attempts with the time it waited. The search matches the request id, the
-session, the key, the model, the error code, and an attempt's account, upstream request id or upstream message id,
-literally: `_` and `%` are characters, not wildcards.
-Filters narrow the table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of
-characters, `?` for one, a backslash quoting either, and a value with no wildcard matching in full), the client filter
-takes a pattern over the class (`claude-code/*`), the agent type and turn origin filters pick from the values the
-client's hint headers and attribution line carry, the speed filter picks `fast` or `standard` by the speed the answer
-reported, else by whether the request asked for `fast`, the status filter offers the codes the router and Anthropic
-answer and any other code the page holds, the outcome filter picks how the request ended (`canceled`, `exhausted`,
-`failed`, `incomplete`, `rejected`, or `succeeded`), and the held toggle keeps the requests that waited for a slot. The
-search and the two pattern fields apply 400 milliseconds after the last keystroke, on Enter, or when the field loses
-focus. Every filter, the range and the page size live in the page's address, so a reload or a shared link keeps them. A
-filter whose list did not load is disabled and says why. Selecting a row opens a drawer with the request's detail, which
-shows the outcome beneath the status, the user agent, the model as
-the client spelled it and, when it differs, the canonical id the router recorded, its auto-mode standing (asked for a
-server-side check under an on setting; carried the safeguards member under an off setting, which the dispatch drops;
-refused for its body shape; or not requested), and the client hints: the agent type, the compaction and
-context-compacted markers, the turn origin, and the tool time before the turn; the trail names an account the model was
-rejected on and the one that served it, and each attempt names the upstream's request id under its head and, on the
-answer that served, the message id a Claude Code transcript's assistant entry carries. The drawer's effort is the level
-the upstream applies: when the client sends a per-turn control entry, the last entry's level, else the request's
-top-level `output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its
-own prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
-Refresh brings it up to now. When the session moved during the request, the drawer says from which account to which and
-why: rate limited, wound down, account marked, over its plan, back to plan, load shed, or window spent. When its pin was
-released without a move, the drawer says from which account and every reason the router found, among: already tried this
-request, the account at its spend budget, the creating request's own client error, an account cooldown, the account
-deleted, disconnected, idle past the affinity window, funding required, in overage, paused, needing reauthorization,
-released outright, window spent, the subscription ended, never paired, or no longer serving the model. The drawer also
-shows the strategy the selection used, the tier it drew from, whether the pin continued and was renewed, moved (naming
-the rule), or was placed afresh, whether the cache answered the request and by how many of its input tokens, and every
-candidate the selection passed over with the obstacle in its way: already tried, above the ceiling, at its in-flight
-cap, at its spend budget, an account cooldown, at the pace floor, an operator hold, in overage, ranked behind another
-candidate, its subscription ended, its window spent, or winding down. A placement names where it landed: by its messages
-or by its static prefix at the depth that matched, or with the main conversation. A request held while every account was
-at its cap names the account it was held on: its cohort's, or else the last one it waited on, and how long it waited.
-The cache line reads a placement as a hit or a miss against the prefix it was promised: a placement by its messages is a
-hit when the response read at least that prefix, one by its static prefix when it read anything, and one with the main
-conversation keeps the plain cache line. The drawer shows the captured request and response bodies, each with Copy,
-which copies the text as shown; a body past 256 KiB shows compact until Pretty-print is pressed.
+One row is one client request however many attempts it took, and the attempt trail reads as
+"mail 429, business 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
+succeed names how it ended beside its status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request
+that waited for a slot while every account was at its cap carries a held marker beside its attempts with the time it
+waited. The search matches the request id, the session, the key, the model, the error code, and an attempt's account,
+upstream request id or upstream message id, literally: `_` and `%` are characters, not wildcards. Filters narrow the
+table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for
+one, a backslash quoting either, and a value with no wildcard matching in full), the client filter takes a pattern over
+the class (`claude-code/*`), the agent type and turn origin filters pick from the values the client's hint headers and
+attribution line carry, the speed filter picks `fast` or `standard` by the speed the answer reported, else by whether
+the request asked for `fast`, the status filter offers the codes the router and Anthropic answer and any other code the
+page holds, the outcome filter picks how the request ended (`canceled`, `exhausted`, `failed`, `incomplete`, `rejected`,
+or `succeeded`), and the held toggle keeps the requests that waited for a slot. The search and the two pattern fields
+apply 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and
+the page size live in the page's address, so a reload or a shared link keeps them. A filter whose list did not load is
+disabled and says why. Selecting a row opens a drawer with the request's detail, which shows the outcome beneath the
+status, the user agent, the model as the client spelled it and, when
+it differs, the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on
+setting; carried the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or
+not requested), and the client hints: the agent type, the compaction and context-compacted markers, the turn origin, and
+the tool time before the turn; the trail names an account the model was rejected on and the one that served it, and each
+attempt names the upstream's request id under its head and, on the answer that served, the message id a Claude Code
+transcript's assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a
+per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
+with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
+moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved
+during the request, the drawer says from which account to which and why: rate limited, wound down, account marked, over
+its plan, back to plan, load shed, or window spent. When its pin was released without a move, the drawer says from which
+account and every reason the router found, among: already tried this request, the account at its spend budget, the
+creating request's own client error, an account cooldown, the account deleted, disconnected, idle past the affinity
+window, funding required, in overage, paused, needing reauthorization, released outright, window spent, the subscription
+ended, never paired, or no longer serving the model. The drawer also shows the strategy the selection used, the tier it
+drew from, whether the pin continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache
+answered the request and by how many of its input tokens, and every candidate the selection passed over with the
+obstacle in its way: already tried, above the ceiling, at its in-flight cap, at its spend budget, an account cooldown,
+at the pace floor, an operator hold, in overage, ranked behind another candidate, its subscription ended, its window
+spent, or winding down. A placement names where it landed: by its messages or by its static prefix at the depth that
+matched, or with the main conversation. A request held while every account was at its cap names the account it was held
+on: its cohort's, or else the last one it waited on, and how long it waited. The cache line reads a placement as a hit
+or a miss against the prefix it was promised: a placement by its messages is a hit when the response read at least that
+prefix, one by its static prefix when it read anything, and one with the main conversation keeps the plain cache line.
+The drawer shows the captured request and response bodies, each with Copy, which copies the text as shown; a body past
+256 KiB shows compact until Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

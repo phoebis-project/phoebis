@@ -46,24 +46,24 @@ behind the router](#auto-mode-behind-the-router)). The router reads the class he
 other hints are under [CLAUDE_CODE_GATEWAY_HINT_HEADERS](#claude_code_gateway_hint_headers). A main, subagent or
 compaction class keeps the session's pin warm and re-arms its keepalive recipe, and any other class does neither. The
 previous request id and the prompt id come from the router's session memory, keyed on the client's own session id,
-and the memory survives a restart: it is kept on disk for
-`sessions.memory_retention_days` ([installation](installation.md#sessions)). Three things are not restored, because the
-router cannot: the `advanced-tool-use-2025-11-20` beta (the client has to run its tool search; `ENABLE_TOOL_SEARCH=true`
-selects it), the global cache scope on the static system block, and `cc_turn_origin`, who started the turn, which the
-router records when the line carries it and never writes. The restoration applies to a request whose `User-Agent` is
-`claude-cli/` followed by a version the client itself would spell (digits and dots, optionally `-` and a prerelease
-suffix of letters, digits, dots, and hyphens) and to the client's own inference requests;
-a keepalive probe replays a request as the client sent it. Two self-checks guard the
-restoration against a client build the router was not pinned to: a stamped `cch` hash the router cannot reproduce, and a
-`cc_version` suffix that does not reproduce from the prompt and the client's version. Either refuses the request as
-client drift before anything is sent, and the request log names which (`hash` or `version_suffix`). Both run when the
-request is admitted, before any account is chosen, so the refusal names no account. A stamp the router cannot verify
-never travels under an account's credential, edited or not: a wrong hash is indistinguishable from tampering and the
-cost falls on the account rather than on the request, which is why neither relaying the body unedited under the client's
-stamp nor stripping the stamp is an answer. A reduced-shape line, which carries no stamp, is restored with the
-placeholder `cch=00000` and not signed: that placeholder is what the client itself sends wherever its native patch does
-not run, and the server accepts it; `proxy.sign_cch_placeholder` signs it instead, off until a server rejection proves
-it necessary. The variable is an internal one that a later client build may drop.
+and the memory survives a restart: it is kept on disk for `sessions.memory_retention_days`
+([installation](installation.md#sessions)). Three things are not restored, because the router cannot: the
+`advanced-tool-use-2025-11-20` beta (the client has to run its tool search; `ENABLE_TOOL_SEARCH=true` selects it), the
+global cache scope on the static system block, and `cc_turn_origin`, who started the turn, which the router records when
+the line carries it and never writes. The restoration applies to a request whose `User-Agent` is `claude-cli/` followed
+by a version the client itself would spell (digits and dots, optionally `-` and a prerelease suffix of letters, digits,
+dots, and hyphens) and to the client's own inference requests; a
+keepalive probe replays a request as the client sent it. Two self-checks guard the restoration against a client build
+the router was not pinned to: a stamped `cch` hash the router cannot reproduce, and a `cc_version` suffix that does not
+reproduce from the prompt and the client's version. Either refuses the request as client drift before anything is sent,
+and the request log names which (`hash` or `version_suffix`). Both run when the request is admitted, before any account
+is chosen, so the refusal names no account. A stamp the router cannot verify never travels under an account's
+credential, edited or not: a wrong hash is indistinguishable from tampering and the cost falls on the account rather
+than on the request, which is why neither relaying the body unedited under the client's stamp nor stripping the stamp is
+an answer. A reduced-shape line, which carries no stamp, is restored with the placeholder `cch=00000` and not signed:
+that placeholder is what the client itself sends wherever its native patch does not run, and the server accepts it;
+`proxy.sign_cch_placeholder` signs it instead, off until a server rejection proves it necessary. The variable is an
+internal one that a later client build may drop.
 
 The router also reads two cumulative boundary-hash chains off every request's body: a static chain over the
 tools array and the system blocks, and a message chain with one boundary per entry of `messages`, both computed
@@ -275,9 +275,9 @@ accepting requests right now` and `Retry-After: 5`.
 
 A conversation is identified by the `x-claude-code-session-id` header.
 A body the strict JSON reader refuses because a string was cut between two halves of a character is still read
-for its facts; the bytes sent on are the client's own. A client that forks a session under a new id, whose messages
-continue an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is recorded
-beside it, visible in the console, without moving the new session off the account its own history names.
+for its facts; the cut character travels as the client sent it. A client that forks a session under a new id, whose
+messages continue an earlier conversation of the same key, keeps the new id as that session's own identity; the fork is
+recorded beside it, visible in the console, without moving the new session off the account its own history names.
 
 ### The per-turn effort form
 
