@@ -402,8 +402,8 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
 }
 
 /// `5h NN%` and `7d NN%` (`-` with no sample), under `fable_column` `fable NN%` when the account has a Fable week and
-/// an empty cell when it has none, then `until HH:MM <reason>` under a cooldown or `resets HH:MM` for the nearest
-/// reset to come.
+/// an empty cell when it has none, then `until HH:MM <reason>` under a cooldown (`until HH:MM <scope> <reason>` for a
+/// scope narrower than the account) or `resets HH:MM` for the nearest reset to come.
 fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<String> {
     let windows = windows_of(account);
     let percent = |id: &str| {
@@ -435,8 +435,14 @@ fn windows_cells(account: &Value, clock: &Clock, fable_column: bool) -> Vec<Stri
         .filter(|c| c["until"].as_i64().is_some_and(|until| until > now))
         .max_by_key(|c| (c["scope"] == "account", c["until"].as_i64()));
     if let Some(cooldown) = cooldown {
+        // A narrower scope names itself ahead of the reason, so a cut line still says the member is held for one
+        // model or the fast lane rather than for everything.
+        let scope = match text(&cooldown["scope"]) {
+            "account" | "" => String::new(),
+            scope => format!("{scope} "),
+        };
         cells.push(format!(
-            "until {} {}",
+            "until {} {scope}{}",
             clock.time(&cooldown["until"]),
             text(&cooldown["reason"])
         ));
@@ -1024,7 +1030,7 @@ mod tests {
             pools_block[1].contains("5h 62%")
                 && pools_block[1].contains("7d 41%")
                 && pools_block[1].contains("fable 12%")
-                && pools_block[1].contains("until 00:46 model_rej")
+                && pools_block[1].contains("until 00:46 model:")
                 && pools_block[1].ends_with('…'),
             "{screen}"
         );
@@ -1223,6 +1229,54 @@ mod tests {
         for line in &lines {
             assert!(line.chars().count() <= WIDTH, "{line}");
         }
+    }
+
+    /// The first member line for the fixture reads with the business account's cooldowns replaced.
+    fn member_line_with(cooldowns: Value) -> String {
+        let mut accounts = fixture("accounts");
+        for account in accounts["accounts"].as_array_mut().unwrap() {
+            if account["id"] == "business" {
+                account["cooldowns"] = cooldowns.clone();
+            }
+        }
+        let reads = Reads {
+            accounts: Ok(accounts),
+            ..fixture_reads()
+        };
+        let screen = render(
+            &reads,
+            &listeners(None),
+            "9.9.9",
+            now(),
+            &TimeZone::UTC,
+            false,
+        );
+        let lines: Vec<&str> = screen.lines().collect();
+        block(&lines, "pools")[1].to_owned()
+    }
+
+    #[test]
+    fn a_cooldown_narrower_than_the_account_names_its_scope() {
+        let cooldown = |scope: &str, until: i64, reason: &str| json!({"scope": scope, "until": until, "reason": reason, "window": null, "set_at": 1_000_000});
+        // The fixture's own cooldown holds one model; its scope comes before the reason, so the cut keeps it.
+        let model = member_line_with(json!([cooldown(
+            "model:claude-haiku-4-5-20251001",
+            2_800_000,
+            "model_rejected"
+        )]));
+        assert!(model.contains("  until 00:46 model:"), "{model}");
+        let fast = member_line_with(json!([cooldown("fast", 2_800_000, "rate_limit")]));
+        assert!(fast.contains("  until 00:46 fast rate"), "{fast}");
+        // The account scope holds every request, names the line ahead of a narrower one, and reads without a scope.
+        let account = member_line_with(json!([
+            cooldown(
+                "model:claude-haiku-4-5-20251001",
+                2_800_000,
+                "model_rejected"
+            ),
+            cooldown("account", 1_800_000, "rate_limit"),
+        ]));
+        assert!(account.ends_with("  until 00:30 rate_limit"), "{account}");
     }
 
     #[test]
