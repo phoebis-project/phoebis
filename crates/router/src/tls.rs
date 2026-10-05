@@ -654,7 +654,8 @@ fn build_ca(hostname: &str, validity: Validity) -> Result<(X509, PKey<Private>),
     let name = common_name(&format!("Phoebis local CA {hostname}"))?;
     let mut builder = certificate(&name, &name, &key, validity)?;
     let extensions = [
-        BasicConstraints::new().critical().ca().build()?,
+        // The CA signs leaves only; `NODE_EXTRA_CA_CERTS` makes it a root for every connection the client opens.
+        BasicConstraints::new().critical().ca().pathlen(0).build()?,
         KeyUsage::new()
             .critical()
             .key_cert_sign()
