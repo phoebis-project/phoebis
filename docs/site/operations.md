@@ -145,8 +145,8 @@ accounts in no pool
 
 pins (one per session, the main agent's)
   session       agent  account            state
+  7b21aa90f3d1  a1     alice@example.com  shedding from bob@example.com, 12s ago
   3f9a0c12e4b7  -      alice@example.com  pinned 4m ago, claude-opus-4-1
-  7b21aa90f3d1  a1     carol@example.com  shedding from bob@example.com, 12s ago
 ```
 
 The header carries the version and the uptime from `GET /admin/system` and one of three readings: `ready`; `not ready:`
@@ -161,11 +161,12 @@ a batch `retrying`, and after `writer:` the state writer's `deferred` writes and
 `none`.
 
 Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24
-hours, then one line per member by priority: the account's label, its state (`paused` when routing is off on it), the
-member's eligibility, the five-hour and seven-day windows in whole percent (`-` with no sample) and the Fable week when
-the account has one, then the nearest reset as `resets <HH:MM>` or, under a cooldown, `until <HH:MM> <reason>`, with the
-scope ahead of the reason (`model:<id>`, `fast`, `fast_credits`) when the cooldown holds less than the whole account.
-`accounts in no pool` lists the accounts no pool holds, with their state, and is left out when there are none.
+hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is
+off on it), the member's eligibility, the five-hour and seven-day windows in whole percent (`-` with no sample) and the
+Fable week when the account has one, then the nearest reset as `resets <HH:MM>` or, under a cooldown, `until <HH:MM>
+<reason>`, with the scope ahead of the reason (`model:<id>`, `fast`, `fast_credits`) when the cooldown holds less than
+the whole account. The block reads `pools: none` when no pool exists. `accounts in no pool` lists the accounts no pool
+holds, with their state, and is left out when there are none.
 
 The pins block is the sessions route's answer, one line per session that holds a pin: the route groups pins by key
 generation and session and prefers the main agent's pin, so a session whose subagent is pinned to another account shows
@@ -173,7 +174,7 @@ its main agent's line. Each line carries the first twelve characters of the sess
 account, and `pinned <age> ago, <model>`, or `shedding from <account>, <age> ago` while the session moves off an
 account, followed by `, keepalive <state>` and `next probe <HH:MM>` while the keepalive engine tracks it. Times print in
 the local zone as `HH:MM`, with the date in front as `MM-DD` when it is not today; ages print as `12s`, `4m`, `3h` or
-`2d`.
+`2d`. The block reads `pins: none` when no session holds a pin.
 
 A read that fails prints one line in its section, such as `pools: the admin listener did not answer on <url>: <reason>`
 or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is down, the
@@ -189,8 +190,11 @@ listener to probe: it prints `proxy: not probed, no configuration file names the
 reads readiness from `/admin/system` alone.
 
 `status` exits 0 when the router answers `ready` and the probe, where it ran, answered; 1 otherwise; 2 for a usage
-error. Under the container, `docker compose exec phoebis phoebis status` runs it in the running container, which
-inherits the container's environment and so the admin secret.
+error. `ready` is the liveness of the router's components, the answer `/api/ready` gives, and not a promise that a
+request finds an account: a router whose every pool member is cooling down reads `ready` and exits 0, with
+`pool_exhausted` on the attention line, so a script that asks whether requests can be served reads the attention items
+too. Under the container, `docker compose exec phoebis phoebis status` runs it in the running container, which inherits
+the container's environment and so the admin secret.
 
 ## Upgrades
 
