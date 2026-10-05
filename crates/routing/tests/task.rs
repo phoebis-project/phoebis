@@ -6183,6 +6183,54 @@ async fn a_clock_reset_then_a_new_sample_names_one_row() {
 }
 
 #[tokio::test]
+async fn a_reading_with_no_reset_after_the_stored_reset_passed_announces_it_by_sample() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    handle
+        .report(observed(
+            "a",
+            sample_with(1_000, FIVE_HOUR, 0.6, Some(2_000)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    // Parked, so no purge tick runs between the clock passing the reset and the reading that replaces it.
+    let park = handle.park_loop().await;
+    now.store(3_000, Ordering::SeqCst);
+    handle
+        .report(observed("a", sample_with(3_000, FIVE_HOUR, 0.0, None)))
+        .await;
+    drop(park);
+    match next_event(&mut events).await {
+        RouterEvent::WindowReset {
+            account_id,
+            window,
+            utilization_before,
+            reset_at,
+            next_reset,
+            observed,
+            ..
+        } => assert_eq!(
+            (
+                account_id.as_str(),
+                window.as_str(),
+                utilization_before,
+                reset_at,
+                next_reset,
+                observed
+            ),
+            ("a", FIVE_HOUR, 0.6, 2_000, None, "sample")
+        ),
+        other => panic!("the passed reset, by the sample, not {other:?}"),
+    }
+    // A reload runs the purge, whose clock walk finds nothing left to announce.
+    handle.reload().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
 async fn a_member_entering_its_wind_down_emits_once() {
     use phoebis_routing::RouterEvent;
     let store = seeded(&["a"]);

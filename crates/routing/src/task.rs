@@ -186,8 +186,9 @@ pub enum RouterEvent {
         source_request_id: Option<String>,
         at: i64,
     },
-    /// A window's reset passed: a sample named a later reset (`observed` `sample`), or the purge tick found the clock
-    /// past a stored reset with no newer sample (`clock`), once per account, window and reset.
+    /// A window's reset passed: a sample named a later reset, or none once it was read past the stored one
+    /// (`observed` `sample`), or the purge tick found the clock past a stored reset with no newer sample (`clock`),
+    /// once per account, window and reset.
     WindowReset {
         account_id: String,
         window: String,
@@ -3187,7 +3188,8 @@ impl Task {
     }
 
     /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
-    /// reset names, then the window spent, which a reading at 1.0 or above names over one under it.
+    /// reset names, or no reset on a reading taken past it, then the window spent, which a reading at 1.0 or above
+    /// names over one under it.
     fn window_edges(
         &mut self,
         account_id: &str,
@@ -3198,12 +3200,16 @@ impl Task {
         now: i64,
     ) {
         let passed = stored.and_then(|stored| {
-            let (reset_at, next_reset) = (stored.reset?, reading.reset?);
-            (next_reset > reset_at.saturating_add(RESET_SLACK_MS)).then_some((
-                stored.utilization,
-                reset_at,
-                next_reset,
-            ))
+            let reset_at = stored.reset?;
+            let next_reset = match reading.reset {
+                Some(next) => {
+                    (next > reset_at.saturating_add(RESET_SLACK_MS)).then_some(Some(next))
+                }
+                // The reading replaces the stored one whole, so the clock walk would never see this reset: it is
+                // announced here or nowhere.
+                None => (reset_at <= reading.observed_at).then_some(None),
+            }?;
+            Some((stored.utilization, reset_at, next_reset))
         });
         if let Some((utilization_before, reset_at, next_reset)) = passed {
             if self.announce_reset(account_id, window, reset_at) {
@@ -3212,7 +3218,7 @@ impl Task {
                     window: window.to_string(),
                     utilization_before,
                     reset_at,
-                    next_reset: Some(next_reset),
+                    next_reset,
                     observed: "sample",
                     at: now,
                 });
