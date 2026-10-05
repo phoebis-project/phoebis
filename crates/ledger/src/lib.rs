@@ -22,7 +22,7 @@ mod usage;
 pub use assemble::{Assembler, Expired, Record, IN_FLIGHT_TTL_MS};
 pub use bodies::{run_retention, run_retention_blocking, Purged, MAX_CAPTURED_BODY, PURGE_SLICE};
 pub use db::LedgerDb;
-pub use events::{event_of, spawn_event_mirror};
+pub use events::{catalog_changed, event_of, poll_backoff, spawn_event_mirror};
 pub use generations::{reconcile_key_generations, LiveKeyLifetime, GENERATIONS_RECONCILED_KEY};
 pub use histogram::{bucket_edges, bucket_index, Histogram, BUCKET_COUNT};
 pub use metrics::{

@@ -392,6 +392,17 @@ impl LedgerDb {
     }
 }
 
+/// The newest `at` among the requests, the events and the decisions: when the router that wrote them last did
+/// anything, which is all a start can date its gap from, since nothing marks a clean stop.
+pub(crate) fn newest_row_at(conn: &Connection) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT MAX(at) FROM (SELECT MAX(received_at) AS at FROM requests UNION ALL SELECT MAX(at) FROM events \
+         UNION ALL SELECT MAX(at) FROM decisions)",
+        [],
+        |row| row.get(0),
+    )
+}
+
 /// A transaction that takes SQLite's write lock at `BEGIN`, where the busy timeout applies. A deferred one that
 /// reads before it writes is refused at once with `SQLITE_BUSY` while the other writing connection holds the lock,
 /// or once that one committed past its snapshot, and its batch would be lost rather than wait.

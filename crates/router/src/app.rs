@@ -214,6 +214,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             expire_interval: Duration::from_secs(60),
         },
     );
+    // Sent ahead of anything else this run records, so the gap it dates ends at the previous run's newest row.
+    ledger.record(phoebis_ledger::Record::RouterStarted {
+        version: env!("CARGO_PKG_VERSION").into(),
+        counts: router_task.load_counts(),
+        at: clock(),
+    });
     // Moved into the admin state below rather than kept here: a local holding its `Bus` clone to the end of
     // `run` would keep the subscribers' queues open past the shutdown's `drop(bus)`.
     let readiness = Arc::new(Readiness {
@@ -233,6 +239,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         DISCOVERY_TIMEOUT,
         Duration::from_secs(config.routing.startup_fetch_seconds),
     ));
+    catalog.set_on_change(Arc::new({
+        let ledger = ledger.clone();
+        move |change| ledger.record(phoebis_ledger::catalog_changed(&change))
+    }));
     let relay = Arc::new(
         Relay::new(
             store.clone(),

@@ -1,5 +1,6 @@
 //! Router and registry events reach the events table, and the account rollup counts what they say.
 mod common;
+use std::sync::Arc;
 use std::time::Duration;
 
 use common::*;
@@ -7,6 +8,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{event_of, recent_events_of_kind, EventRecord, LedgerConfig, LedgerDb};
 use phoebis_routing::RouterEvent;
+use phoebis_store::{AccountState, StorageKey, Store};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -406,4 +408,285 @@ fn two_agents_pin_created_rows_differ_in_their_detail() {
         ),
         (Some("main"), Some("worker"))
     );
+}
+
+/// The account rows the mirror wrote, in order: each kind with its detail.
+async fn account_rows(h: &Harness) -> Vec<(String, serde_json::Value)> {
+    h.db.events(0, i64::MAX, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|e| e.kind == "account_state_changed" || e.kind == "reauth_required")
+        .map(|e| {
+            assert_eq!(e.account_id.as_deref(), Some("a"));
+            let detail = e
+                .detail
+                .as_deref()
+                .map(|d| serde_json::from_str(d).unwrap())
+                .unwrap_or(serde_json::Value::Null);
+            (e.kind, detail)
+        })
+        .collect()
+}
+
+fn transition(
+    from: &str,
+    to: &str,
+    cause: &str,
+    detail: Option<&str>,
+) -> (String, serde_json::Value) {
+    (
+        "account_state_changed".to_string(),
+        serde_json::json!({ "from": from, "to": to, "cause": cause, "detail": detail }),
+    )
+}
+
+fn reauth() -> (String, serde_json::Value) {
+    ("reauth_required".to_string(), serde_json::Value::Null)
+}
+
+fn polled_every_50_ms() -> LedgerConfig {
+    LedgerConfig {
+        event_poll: Duration::from_millis(50),
+        ..LedgerConfig::default()
+    }
+}
+
+#[tokio::test]
+async fn every_account_transition_writes_its_row_and_a_re_auth_keeps_its_own() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    h.store
+        .set_state("a", AccountState::FundingRequired)
+        .unwrap();
+    wait_for_async(Duration::from_secs(5), || async {
+        (account_rows(&h).await.len() == 1).then_some(())
+    })
+    .await;
+    h.store
+        .set_state("a", AccountState::ReauthRequired)
+        .unwrap();
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = account_rows(&h).await;
+        (rows.len() == 3).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows,
+        [
+            transition("ready", "funding_required", "registry", None),
+            transition("funding_required", "reauth_required", "registry", None),
+            reauth(),
+        ]
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_routing_loop_s_cause_lands_on_the_transition_it_names() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    // Sent ahead of the write it describes, with the identity the write bumps the row to, so no tick can read the
+    // row before the event names its cause.
+    h.router.emit(RouterEvent::AccountStateChanged {
+        account_id: "a".into(),
+        to: AccountState::ReauthRequired,
+        incarnation: row.incarnation,
+        revision: row.revision + 1,
+        cause: "auth_failed",
+        detail: Some("invalid x-api-key".into()),
+        at: NOW,
+    });
+    let expected = [
+        transition(
+            "ready",
+            "reauth_required",
+            "auth_failed",
+            Some("invalid x-api-key"),
+        ),
+        reauth(),
+    ];
+    wait_for_async(Duration::from_secs(5), || async {
+        (account_rows(&h).await == expected).then_some(())
+    })
+    .await;
+    // The ticks before the write read the row the event already moved past: no move back to `ready`.
+    stays_for_async(Duration::from_millis(200), || async {
+        account_rows(&h).await == expected
+    })
+    .await;
+    h.store
+        .set_state("a", AccountState::ReauthRequired)
+        .unwrap();
+    assert_eq!(
+        h.store.account("a").unwrap().unwrap().revision,
+        row.revision + 1
+    );
+    stays_for_async(Duration::from_millis(200), || async {
+        account_rows(&h).await == expected
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_newer_watch_observation_drops_a_delayed_older_transition() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    // Both writes land before the mirror runs again, so one tick reads the second.
+    h.store
+        .set_state("a", AccountState::FundingRequired)
+        .unwrap();
+    h.store
+        .set_state("a", AccountState::ReauthRequired)
+        .unwrap();
+    let expected = [
+        transition("ready", "reauth_required", "registry", None),
+        reauth(),
+    ];
+    wait_for_async(Duration::from_secs(5), || async {
+        (account_rows(&h).await == expected).then_some(())
+    })
+    .await;
+    for (to, revision, cause) in [
+        (
+            AccountState::FundingRequired,
+            row.revision + 1,
+            "upstream_error",
+        ),
+        (
+            AccountState::ReauthRequired,
+            row.revision + 2,
+            "auth_failed",
+        ),
+    ] {
+        h.router.emit(RouterEvent::AccountStateChanged {
+            account_id: "a".into(),
+            to,
+            incarnation: row.incarnation,
+            revision,
+            cause,
+            detail: None,
+            at: NOW,
+        });
+    }
+    stays_for_async(Duration::from_millis(200), || async {
+        account_rows(&h).await == expected
+    })
+    .await;
+    up.shutdown().await;
+}
+
+/// A harness over a ledger whose newest row, the previous run's last, is at `down_since`.
+async fn harness_after_a_run(up: &FakeUpstream, down_since: i64) -> Harness {
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    db.insert_event(&EventRecord {
+        at: down_since,
+        kind: "pin_created".into(),
+        account_id: Some("a".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    harness_on(
+        Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap()),
+        db,
+        up,
+        &[oauth("a", A, 0)],
+        (0, None),
+        polled_every_50_ms(),
+        None,
+    )
+    .await
+}
+
+#[tokio::test]
+async fn a_clock_reset_the_previous_run_announced_is_not_written_again() {
+    let up = FakeUpstream::start(vec![]).await;
+    let down_since = NOW - 60_000;
+    let h = harness_after_a_run(&up, down_since).await;
+    let reset = |reset_at: i64, observed: &'static str| RouterEvent::WindowReset {
+        account_id: "a".into(),
+        window: "five_hour".into(),
+        utilization_before: 0.9,
+        reset_at,
+        next_reset: None,
+        observed,
+        at: NOW,
+    };
+    // The first purge after a start walks every restored reading: a reset that passed before the previous run's
+    // last row was that run's to announce, one that passed while the router was down is this run's.
+    h.router.emit(reset(down_since - 1, "clock"));
+    h.router.emit(reset(down_since - 1, "sample"));
+    h.router.emit(reset(down_since + 1, "clock"));
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows: Vec<(i64, String)> =
+            h.db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.kind == "window_reset")
+                .map(|e| {
+                    let detail: serde_json::Value =
+                        serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+                    (
+                        detail["reset_at"].as_i64().unwrap(),
+                        detail["observed"].as_str().unwrap().to_string(),
+                    )
+                })
+                .collect();
+        rows.iter()
+            .any(|(reset_at, _)| *reset_at == down_since + 1)
+            .then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows,
+        [
+            (down_since - 1, "sample".to_string()),
+            (down_since + 1, "clock".to_string())
+        ],
+        "a sample is a reading of this run, whatever the reset it names"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
+    let up = FakeUpstream::start(vec![]).await;
+    let down_since = NOW - 60_000;
+    let h = harness_after_a_run(&up, down_since).await;
+    let wind_down = |opened_at: i64| RouterEvent::WindDownStarted {
+        account_id: "a".into(),
+        pool_id: "main".into(),
+        ends_at: opened_at + 30 * 60_000,
+        wind_down_minutes: 30,
+        end_source: "cancelled",
+        at: NOW,
+    };
+    h.router.emit(wind_down(down_since - 1));
+    h.router.emit(wind_down(down_since + 1));
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows: Vec<i64> =
+            h.db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.kind == "wind_down_started")
+                .map(|e| {
+                    let detail: serde_json::Value =
+                        serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+                    detail["ends_at"].as_i64().unwrap()
+                })
+                .collect();
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows,
+        [down_since + 1 + 30 * 60_000],
+        "a window that opened before the previous run's last row was that run's to announce"
+    );
+    up.shutdown().await;
 }

@@ -11,7 +11,7 @@ use phoebis_bus::{
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
-use phoebis_routing::MODEL_REJECTED_REASON;
+use phoebis_routing::{LoadCounts, MODEL_REJECTED_REASON};
 use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
@@ -52,6 +52,12 @@ pub enum Record {
     },
     Decision(Box<DecisionRow>),
     CacheMap(CacheMapWrite),
+    /// The start row: the writer fills `down_since` from the newest row it holds when it lands this.
+    RouterStarted {
+        version: String,
+        counts: LoadCounts,
+        at: i64,
+    },
 }
 
 /// What `expire` aged out: the request ids whose completion never came, each of which the caller files as a gap.

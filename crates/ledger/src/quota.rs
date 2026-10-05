@@ -2,11 +2,11 @@
 //! every five minutes per account. Heads cost nothing and cover active accounts; the poll fills idle gaps and is
 //! the only source of extra-usage credit totals.
 
-use std::collections::{BTreeMap, BTreeSet};
-use std::sync::Arc;
+use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use phoebis_oauth::{UsageService, UsageSnapshot};
+use phoebis_oauth::{BackoffEdge, UsageService, UsageSnapshot};
 use phoebis_relay::UnifiedHeaders;
 use phoebis_routing::{
     credits_from_usage, sample_from_usage, Report, RouterHandle, FIVE_HOUR, SEVEN_DAY,
@@ -18,6 +18,7 @@ use tokio::task::JoinSet;
 use tokio::time::Instant;
 
 use crate::assemble::Record;
+use crate::events::poll_backoff;
 use crate::record::{ExtraUsageSampleRecord, QuotaSampleRecord};
 use crate::rollup::bucket_of;
 use crate::task::Ledger;
@@ -39,6 +40,8 @@ pub const PROFILE_EVERY_POLLS: u32 = 12;
 
 /// The usage endpoint's key for the week the head reports as `7d_oi`.
 const SEVEN_DAY_OVERAGE_INCLUDED: &str = "seven_day_overage_included";
+
+const OPEN_RUNS_POISONED: &str = "the poll backoff's open-run set poisoned by a prior panic";
 
 pub fn samples_from_head(
     account_id: &str,
@@ -302,6 +305,22 @@ impl QuotaPoll {
         ledger: Ledger,
         router: RouterHandle,
     ) -> tokio::task::JoinHandle<()> {
+        usage.set_on_backoff(Arc::new({
+            let ledger = ledger.clone();
+            // The accounts whose run this hook saw start: the startup step reads every account before this
+            // registers, so a run its 429 opened ends here without a start row, and that end is not written.
+            let open = Mutex::new(HashSet::new());
+            move |edge| {
+                let mut open = open.lock().expect(OPEN_RUNS_POISONED);
+                let write = match &edge {
+                    BackoffEdge::Started { account_id, .. } => open.insert(account_id.clone()),
+                    BackoffEdge::Ended { account_id, .. } => open.remove(account_id),
+                };
+                if write {
+                    ledger.record(poll_backoff(&edge));
+                }
+            }
+        }));
         tokio::spawn(async move {
             let mut slots: BTreeMap<String, Slot> = BTreeMap::new();
             // The scheduler owns its attempts: a completion is reaped here, and dropping the set when the

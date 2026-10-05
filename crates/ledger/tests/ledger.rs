@@ -4904,3 +4904,181 @@ async fn a_parked_charge_landed_at_the_start_is_in_the_first_spend_report() {
     assert_eq!(parked_rows(&h).await, 0);
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn the_start_row_dates_the_gap_from_the_newest_row_and_counts_the_load() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let start_rows = || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "router_started")
+            .map(|e| {
+                assert_eq!(e.account_id, None);
+                (
+                    e.at,
+                    serde_json::from_str::<serde_json::Value>(e.detail.as_deref().unwrap())
+                        .unwrap(),
+                )
+            })
+            .collect::<Vec<_>>()
+    };
+    let counts = phoebis_routing::LoadCounts {
+        pins: 3,
+        windows: 2,
+        affinity_entries: 5,
+    };
+    h.ledger.record(Record::RouterStarted {
+        version: "0.1.0".into(),
+        counts,
+        at: NOW,
+    });
+    let first = wait_for_async(Duration::from_secs(5), || async {
+        start_rows().await.pop()
+    })
+    .await;
+    assert_eq!(
+        first,
+        (
+            NOW,
+            serde_json::json!({
+                "version": "0.1.0",
+                "pins_loaded": 3,
+                "windows_loaded": 2,
+                "affinity_entries_loaded": 5,
+                "down_since": null,
+                "holds_lost": true,
+            })
+        ),
+        "a fresh file has no row to date the gap from"
+    );
+    for at in [NOW + 100, NOW + 200] {
+        h.ledger.record(Record::Event(EventRecord {
+            at,
+            kind: "pin_created".into(),
+            account_id: Some("a".into()),
+            ..Default::default()
+        }));
+    }
+    h.ledger.record(Record::RouterStarted {
+        version: "0.1.0".into(),
+        counts,
+        at: NOW + 300,
+    });
+    let second = wait_for_async(Duration::from_secs(5), || async {
+        let rows = start_rows().await;
+        (rows.len() == 2).then(|| rows[1].clone())
+    })
+    .await;
+    assert_eq!(second.0, NOW + 300);
+    assert_eq!(
+        (
+            &second.1["down_since"],
+            &second.1["holds_lost"],
+            &second.1["pins_loaded"]
+        ),
+        (
+            &serde_json::json!(NOW + 200),
+            &serde_json::json!(true),
+            &serde_json::json!(3)
+        ),
+        "the gap runs from the newest row the ledger held"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its_gap_alone() {
+    let up = FakeUpstream::start(vec![]).await;
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    // The previous run seeded the registry and stopped; its last request spent past a budget the member carries now.
+    let previous = harness_on(
+        store.clone(),
+        db.clone(),
+        &up,
+        &[api_key("a", C, 0)],
+        (0, None),
+        LedgerConfig::default(),
+        None,
+    )
+    .await;
+    previous.ledger.clone().shutdown().await.unwrap();
+    previous.router.shutdown().await.unwrap();
+    store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(1.0),
+            }],
+            "test",
+        )
+        .unwrap();
+    let last_request = NOW - 1_000;
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: last_request,
+            pool_id: Some("main".into()),
+            canonical_model: "claude-haiku-4-5".into(),
+            model: "claude-haiku-4-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(2_000_000),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+
+    let h = harness_on(
+        store,
+        db,
+        &up,
+        &[api_key("a", C, 0)],
+        (0, None),
+        LedgerConfig::default(),
+        None,
+    )
+    .await;
+    h.ledger.record(Record::RouterStarted {
+        version: "0.1.0".into(),
+        counts: phoebis_routing::LoadCounts::default(),
+        at: NOW,
+    });
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows: Vec<EventRecord> = h.db.events(0, i64::MAX, 100).await.unwrap();
+        rows.iter()
+            .any(|e| e.kind == "budget_reached")
+            .then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows.iter().map(|e| e.kind.as_str()).collect::<Vec<_>>(),
+        ["router_started", "budget_reached"],
+        "the start's own budget row follows the start row"
+    );
+    let detail: serde_json::Value =
+        serde_json::from_str(rows[0].detail.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        detail["down_since"],
+        serde_json::json!(last_request),
+        "the gap ends at the previous run's last request"
+    );
+    up.shutdown().await;
+}

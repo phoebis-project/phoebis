@@ -22,6 +22,6 @@ pub use session::{
     Started, SESSION_TTL_MS,
 };
 pub use usage::{
-    parse_usage, ExtraUsage, PollOutcome, PollStatus, UsageError, UsageService, UsageSnapshot,
-    UsageWindow, BACKOFF_CAP_MS,
+    parse_usage, BackoffEdge, BackoffHook, ExtraUsage, PollOutcome, PollStatus, UsageError,
+    UsageService, UsageSnapshot, UsageWindow, BACKOFF_CAP_MS,
 };

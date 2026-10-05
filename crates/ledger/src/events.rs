@@ -6,13 +6,15 @@ use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
 
-use phoebis_oauth::Clock;
+use phoebis_oauth::{BackoffEdge, Clock};
+use phoebis_relay::CatalogChange;
 use phoebis_routing::{CreditsState, RouterEvent, RouterHandle};
 use phoebis_store::{AccountState, Store};
 use serde_json::json;
 use tokio::sync::broadcast::error::RecvError;
 
 use crate::assemble::Record;
+use crate::db::newest_row_at;
 use crate::record::{CacheMapWrite, DecisionRow, EventRecord};
 use crate::task::Ledger;
 use crate::LedgerDb;
@@ -320,8 +322,145 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
     Some(row)
 }
 
+/// `poll_backoff_started` or `poll_backoff_ended`, on the account the usage service backs off.
+pub fn poll_backoff(edge: &BackoffEdge) -> Record {
+    let (at, kind, account_id, detail) = match edge {
+        BackoffEdge::Started {
+            account_id,
+            at,
+            endpoint,
+            reason,
+            attempts,
+            next_attempt_at,
+        } => (
+            *at,
+            "poll_backoff_started",
+            account_id,
+            json!({
+                "reason": reason,
+                "endpoint": endpoint,
+                "attempts": attempts,
+                "next_attempt_at": next_attempt_at,
+            }),
+        ),
+        BackoffEdge::Ended {
+            account_id,
+            at,
+            since,
+            attempts,
+            resumed_at,
+        } => (
+            *at,
+            "poll_backoff_ended",
+            account_id,
+            json!({
+                "duration_ms": at - since,
+                "attempts": attempts,
+                "resumed_at": resumed_at,
+            }),
+        ),
+    };
+    Record::Event(EventRecord {
+        at,
+        kind: kind.into(),
+        account_id: Some(account_id.clone()),
+        detail: Some(detail.to_string()),
+        ..Default::default()
+    })
+}
+
+/// `catalog_changed` on the account whose listing moved; the ids travel in the detail, since one row names many
+/// models.
+pub fn catalog_changed(change: &CatalogChange) -> Record {
+    Record::Event(EventRecord {
+        at: change.at,
+        kind: "catalog_changed".into(),
+        account_id: Some(change.account_id.clone()),
+        detail: Some(
+            json!({
+                "added": change.added,
+                "removed": change.removed,
+                "count": change.count,
+            })
+            .to_string(),
+        ),
+        ..Default::default()
+    })
+}
+
+/// An account's state as the mirror last observed it, through the registry or the routing loop's event, with the
+/// row's identity at that observation: an observation at or below it is older than what the mirror already wrote.
+#[derive(Clone, Copy)]
+struct Observed {
+    state: AccountState,
+    incarnation: u64,
+    revision: u64,
+}
+
+impl Observed {
+    fn newer_than(&self, held: &Observed) -> bool {
+        (self.incarnation, self.revision) > (held.incarnation, held.revision)
+    }
+}
+
+/// The transition row, and beside it the `reauth_required` row its readers keep reading, for a move into that state.
+fn record_transition(
+    ledger: &Ledger,
+    account_id: &str,
+    from: AccountState,
+    to: AccountState,
+    cause: &str,
+    detail: Option<&str>,
+    at: i64,
+) {
+    ledger.record(Record::Event(EventRecord {
+        at,
+        kind: "account_state_changed".into(),
+        account_id: Some(account_id.to_string()),
+        detail: Some(
+            json!({ "from": from.as_str(), "to": to.as_str(), "cause": cause, "detail": detail })
+                .to_string(),
+        ),
+        ..Default::default()
+    }));
+    if to == AccountState::ReauthRequired {
+        record_reauth(ledger, account_id, at);
+    }
+}
+
+fn record_reauth(ledger: &Ledger, account_id: &str, at: i64) {
+    ledger.record(Record::Event(EventRecord {
+        at,
+        kind: "reauth_required".into(),
+        account_id: Some(account_id.to_string()),
+        ..Default::default()
+    }));
+}
+
+/// Whether the previous run announced this already: the first purge after a start walks every restored reading
+/// and pool member, so a clock reset that passed, or a wind-down that opened, before that run's last row was that
+/// run's to announce. A fresh file has no previous run.
+fn announced_before(event: &RouterEvent, down_since: Option<i64>) -> bool {
+    let Some(down_since) = down_since else {
+        return false;
+    };
+    match event {
+        RouterEvent::WindowReset {
+            observed: "clock",
+            reset_at,
+            ..
+        } => *reset_at < down_since,
+        RouterEvent::WindDownStarted {
+            ends_at,
+            wind_down_minutes,
+            ..
+        } => ends_at - i64::from(*wind_down_minutes) * 60_000 < down_since,
+        _ => false,
+    }
+}
+
 pub fn spawn_event_mirror(
-    _db: Arc<LedgerDb>,
+    db: Arc<LedgerDb>,
     ledger: Ledger,
     store: Arc<Store>,
     router: RouterHandle,
@@ -343,10 +482,32 @@ pub fn spawn_event_mirror(
         .ok()
         .flatten()
         .unwrap_or((0, 0));
-    let mut states: HashMap<String, AccountState> = store
+    let mut states: HashMap<String, Observed> = store
         .accounts()
-        .map(|rows| rows.into_iter().map(|a| (a.id, a.state)).collect())
+        .map(|rows| {
+            rows.into_iter()
+                .map(|a| {
+                    let observed = Observed {
+                        state: a.state,
+                        incarnation: a.incarnation,
+                        revision: a.revision,
+                    };
+                    (a.id, observed)
+                })
+                .collect()
+        })
         .unwrap_or_default();
+    // Read before this run's writer lands anything, so it names the previous run's newest row.
+    let down_since = match db.read_blocking(|conn| Ok(newest_row_at(conn)?)) {
+        Ok(down_since) => down_since,
+        Err(error) => {
+            tracing::warn!(
+                %error,
+                "the ledger's newest row could not be read; a reset or a wind-down the previous run announced is written again"
+            );
+            None
+        }
+    };
     tokio::spawn(async move {
         let mut tick = tokio::time::interval(poll);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
@@ -359,7 +520,25 @@ pub fn spawn_event_mirror(
                     Ok(RouterEvent::CacheMapWritten { request_id, seq, attempt, entries, at }) => {
                         ledger.record(Record::CacheMap(CacheMapWrite { request_id, seq, attempt, entries, at }));
                     }
+                    Ok(RouterEvent::AccountStateChanged { account_id, to, incarnation, revision, cause, detail, at }) => {
+                        let observed = Observed { state: to, incarnation, revision };
+                        let held = states.get(&account_id).copied();
+                        // At or below the held identity, the event is older than what the mirror already observed.
+                        if held.is_none_or(|held| observed.newer_than(&held)) {
+                            match held.filter(|held| held.incarnation == incarnation) {
+                                Some(held) if held.state == to => {}
+                                Some(held) => record_transition(&ledger, &account_id, held.state, to, cause, detail.as_deref(), at),
+                                // A holder the mirror never saw: the registry's own row says it was created.
+                                None if to == AccountState::ReauthRequired => record_reauth(&ledger, &account_id, at),
+                                None => {}
+                            }
+                            states.insert(account_id, observed);
+                        }
+                    }
                     Ok(event) => {
+                        if announced_before(&event, down_since) {
+                            continue;
+                        }
                         if let Some(row) = event_of(&event) {
                             ledger.record(Record::Event(row));
                         }
@@ -413,15 +592,25 @@ pub fn spawn_event_mirror(
                     if let Ok(accounts) = store.accounts() {
                         let now = clock();
                         for account in accounts {
-                            let before = states.insert(account.id.clone(), account.state);
-                            if account.state == AccountState::ReauthRequired && before != Some(AccountState::ReauthRequired) {
-                                ledger.record(Record::Event(EventRecord {
-                                    at: now,
-                                    kind: "reauth_required".into(),
-                                    account_id: Some(account.id),
-                                    ..Default::default()
-                                }));
+                            let observed = Observed {
+                                state: account.state,
+                                incarnation: account.incarnation,
+                                revision: account.revision,
+                            };
+                            let held = states.get(&account.id).copied();
+                            // At or below the held identity, the row was observed already, by an earlier tick or by
+                            // the routing loop's event.
+                            if held.is_some_and(|held| !observed.newer_than(&held)) {
+                                continue;
                             }
+                            match held.filter(|held| held.incarnation == account.incarnation) {
+                                Some(held) if held.state == account.state => {}
+                                Some(held) => record_transition(&ledger, &account.id, held.state, account.state, "registry", None, now),
+                                // A holder the mirror never saw: the registry's own row says it was created.
+                                None if account.state == AccountState::ReauthRequired => record_reauth(&ledger, &account.id, now),
+                                None => {}
+                            }
+                            states.insert(account.id, observed);
                         }
                     }
                 }

@@ -9,8 +9,8 @@ use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RegistryLoad, RekeyWrite, RoutingTx, Store,
-    StoreError,
+    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RegistryLoad, RekeyWrite, RoutingLoad,
+    RoutingTx, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -755,6 +755,30 @@ struct WriterShared {
     failed_batches: AtomicU64,
 }
 
+/// What the routing task loaded from the registry at start, for the ledger's `router_started` row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LoadCounts {
+    pub pins: usize,
+    /// Accounts with a reading, whatever the number of windows each carries.
+    pub windows: usize,
+    pub affinity_entries: usize,
+}
+
+impl LoadCounts {
+    fn of(load: &RoutingLoad) -> LoadCounts {
+        LoadCounts {
+            pins: load.pins.len(),
+            windows: load
+                .windows
+                .iter()
+                .map(|row| row.account_id.as_str())
+                .collect::<HashSet<_>>()
+                .len(),
+            affinity_entries: load.affinity.len(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RouterHandle {
     affinity: Arc<RwLock<AffinityMap>>,
@@ -765,6 +789,7 @@ pub struct RouterHandle {
     dropped_refusals: Arc<AtomicU64>,
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
+    load_counts: LoadCounts,
     /// The replacing readings the loop has not drained yet, shared with the task.
     pending: Pending,
     reports: Arc<ReportSequence>,
@@ -792,6 +817,10 @@ impl RouterHandle {
     /// writes, without a command round trip.
     pub fn affinity(&self) -> Arc<RwLock<AffinityMap>> {
         self.affinity.clone()
+    }
+
+    pub fn load_counts(&self) -> LoadCounts {
+        self.load_counts
     }
 
     /// What changed in the routing state, as it changes. A receiver that falls behind loses the oldest
@@ -1147,6 +1176,12 @@ impl RouterHandle {
             release: Some(release),
         }
     }
+
+    /// Puts `event` on the broadcast as the loop puts its own, so a test can order what a subscriber receives
+    /// against a store write the loop never made.
+    pub fn emit(&self, event: RouterEvent) {
+        let _ = self.events.send(event);
+    }
 }
 
 /// The router loop parked from `RouterHandle::park_loop` until this drops.
@@ -1263,7 +1298,9 @@ pub fn spawn(
         now,
         1,
     ))));
-    let mut state = RoutingState::from_load(store.load_routing()?);
+    let load = store.load_routing()?;
+    let load_counts = LoadCounts::of(&load);
+    let mut state = RoutingState::from_load(load);
     // One table, shared by the handle (the relay's synchronous permits and tickets) and the state (the
     // selector's cap partition), so a count is exact wherever it is read.
     let in_flight = InFlight::default();
@@ -1287,6 +1324,7 @@ pub fn spawn(
         dropped_refusals: Arc::default(),
         events: events.clone(),
         in_flight,
+        load_counts,
         pending: pending.clone(),
         reports: reports.clone(),
         snapshot: snapshot.clone(),
@@ -3708,7 +3746,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::mpsc;
 
-    use phoebis_store::{AccountKind, AccountRow, ResolutionRow, StorageKey};
+    use phoebis_store::{AccountKind, AccountRow, ResolutionRow, StorageKey, WindowRow};
 
     use super::*;
 
@@ -3749,6 +3787,7 @@ mod tests {
             dropped_refusals: Arc::default(),
             events: broadcast::channel(1).0,
             in_flight: InFlight::default(),
+            load_counts: LoadCounts::default(),
             pending: Pending::default(),
             reports: Arc::default(),
             snapshot: Arc::new(RwLock::new(Arc::new(RegistrySnapshot::from_load(
@@ -3971,5 +4010,47 @@ mod tests {
         assert!(landed.stopped.expect("the busy store").is_database_wide());
         assert!(landed.refused.is_none());
         assert!(store.load_routing().unwrap().cooldowns.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_handle_counts_the_windows_by_account_as_the_load_carried_them() {
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        for id in ["a", "b"] {
+            store
+                .insert_account(&AccountRow {
+                    id: id.into(),
+                    kind: AccountKind::Oauth,
+                    label: id.into(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision: 1,
+                    state: AccountState::Ready,
+                })
+                .unwrap();
+        }
+        // Two windows of `a` and none of `b`: one account with a reading.
+        for window in [FIVE_HOUR, SEVEN_DAY] {
+            assert!(store
+                .upsert_window(&WindowRow {
+                    account_id: "a".into(),
+                    incarnation: 1,
+                    observed_at: 500,
+                    reset: Some(10_000),
+                    utilization: 0.5,
+                    window: window.into(),
+                })
+                .unwrap());
+        }
+        let handle = spawn(store, Arc::new(|| 1_000), RouterConfig::default()).unwrap();
+        assert_eq!(
+            handle.load_counts(),
+            LoadCounts {
+                pins: 0,
+                windows: 1,
+                affinity_entries: 0
+            }
+        );
     }
 }
