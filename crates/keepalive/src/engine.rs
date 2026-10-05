@@ -376,6 +376,9 @@ pub(crate) struct Agent {
     pub net: Net,
     pub grace_left: u32,
     pub unanswered: Vec<f64>,
+    /// The speed of the recipe a bus gap or a failed request left `unanswered` under: the recipe is gone by the time
+    /// the next request batches them, and its speed is what a warm return on them is read against.
+    pub left_fast: Option<bool>,
     /// The probes a superseding real request took over from `unanswered`, with the keys they were paid under: the
     /// request moves the agent's model, account, pool and key generation before its completion decides them. A
     /// probe sent while it is open lands on `unanswered`, for the request after it.
@@ -430,6 +433,7 @@ impl Agent {
             net: Net::default(),
             grace_left: 0,
             unanswered: Vec::new(),
+            left_fast: None,
             kept: Vec::new(),
             covered_since_real: false,
             covered_account: None,
@@ -572,8 +576,8 @@ pub(crate) enum Unanswered {
     Settle,
     /// A real request supersedes the recipe and keeps them until its completion decides them.
     Keep,
-    /// A bus gap ends the observation without its completion: the probes its request kept and those sent while it
-    /// was open wait where they are for the next request.
+    /// A bus gap or a failed request ends the observation without deciding the probes sent while it was open: they
+    /// wait where they are, with the recipe's speed, for the next request.
     Leave,
 }
 
@@ -855,8 +859,12 @@ impl Inner {
         agent.paused = false;
         agent.last_stop = wasted;
         if unanswered == Unanswered::Leave {
+            if !agent.unanswered.is_empty() {
+                agent.left_fast.get_or_insert(fast);
+            }
             return;
         }
+        let fast = agent.left_fast.take().unwrap_or(fast);
         let costs = std::mem::take(&mut agent.unanswered);
         if unanswered == Unanswered::Keep {
             // A batch apiece: a request whose completion never came leaves its batch for the next one, which may
@@ -1584,7 +1592,9 @@ impl Engine {
             if complete.ttfb_ms.is_some() {
                 inner.decide_unanswered(&key, &agent_id, read, false);
             }
-            inner.discard(&key, &agent_id, reason, None);
+            // A probe sent while this request was open pays for the request after it, whatever this one did.
+            inner.end_observation(&key, &agent_id, None, Unanswered::Leave);
+            inner.set_reason(&key, &agent_id, reason);
             return;
         }
         inner.pending.remove(&complete.request_id);

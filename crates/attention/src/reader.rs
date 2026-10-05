@@ -9,7 +9,9 @@ use phoebis_bus::{Event, Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{polled, ParkedSummary};
 use phoebis_oauth::UsageService;
 use phoebis_routing::RouterHandle;
-use phoebis_store::{AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Store};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, PoolRow, ResolvedAttempt, Store, StoreError,
+};
 use serde_json::json;
 
 use crate::AttentionError;
@@ -339,14 +341,37 @@ fn since_of(
     })
 }
 
+/// Each OAuth account's newest settled refresh attempts, read from the store rather than kept here, so a run of
+/// failures survives a restart.
+pub(crate) fn refresh_runs(
+    store: &Store,
+    accounts: &[AccountRow],
+) -> Result<HashMap<String, Vec<ResolvedAttempt>>, StoreError> {
+    accounts
+        .iter()
+        .filter(|account| account.kind == AccountKind::Oauth)
+        .map(|account| {
+            let attempts = store.newest_resolved_refresh_attempts(
+                &account.id,
+                account.incarnation,
+                REFRESH_RUN_READ,
+            )?;
+            Ok((account.id.clone(), attempts))
+        })
+        .collect()
+}
+
 /// Every condition the router can tell about now: a series for every subject the kind applies to, holding or clear,
 /// so a cleared condition reads 0 on the scrape rather than vanishing. The metrics listener and the admin route read
-/// this one function, so a scrape and the dashboard never disagree. A store read that fails fails the whole read, as
-/// the caller's parked read does, since a series answered without its evidence could clear a real alarm. `parked` is
-/// `None` where no ledger is built, and `ledger_record_parked` then has no series.
+/// this one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` and
+/// their `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the
+/// whole answer, since a series answered without its evidence could clear a real alarm. `parked` is `None` where no
+/// ledger is built, and `ledger_record_parked` then has no series.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
-    store: &Store,
+    accounts: &[AccountRow],
+    refresh_runs: &HashMap<String, Vec<ResolvedAttempt>>,
     router: &RouterHandle,
     ledger_degraded: bool,
     parked: Option<&[ParkedSummary]>,
@@ -354,7 +379,6 @@ pub(crate) fn conditions(
     now: i64,
 ) -> Result<Vec<Condition>, AttentionError> {
     let snapshot = router.snapshot();
-    let accounts = store.accounts()?;
     let mut out = Vec::new();
     // A deleted pool's exhaustion goes with it, so a pool created later under the same id starts clear.
     state.exhausted.retain(|id, _| snapshot.pool(id).is_some());
@@ -462,7 +486,7 @@ pub(crate) fn conditions(
             detail: json!({ "client_version": version, "key": drift.key, "trigger": drift.trigger }),
         });
     }
-    for account in &accounts {
+    for account in accounts {
         let mut pools: Vec<String> = snapshot
             .pools()
             .filter(|p| {
@@ -509,12 +533,10 @@ pub(crate) fn conditions(
             ));
         }
         if account.kind == AccountKind::Oauth {
-            // Read from the store rather than kept here, so a run of failures survives a restart.
-            let attempts = store.newest_resolved_refresh_attempts(
-                &account.id,
-                account.incarnation,
-                REFRESH_RUN_READ,
-            )?;
+            let attempts = refresh_runs
+                .get(&account.id)
+                .map(Vec::as_slice)
+                .unwrap_or_default();
             // A commit ends the run, and so does a `superseded` settlement, which exists only because a newer bundle
             // committed.
             let run: Vec<&ResolvedAttempt> = attempts

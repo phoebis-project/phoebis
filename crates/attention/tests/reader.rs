@@ -1201,3 +1201,50 @@ async fn a_degraded_ledger_holds_writer_degraded_from_the_first_read_that_saw_it
         "a later read keeps the date of the first read that saw it"
     );
 }
+
+/// A read waiting on the registry never holds the bus arm: the registry's reads come before the reader's state lock,
+/// so a stalled registry file leaves `observe` free while the read waits.
+#[tokio::test]
+async fn a_read_waiting_on_the_registry_leaves_the_bus_arm_free() {
+    let rig = rig().await;
+    let (attention, _arm) = rig.attention(None);
+    let (held_tx, held_rx) = std::sync::mpsc::channel();
+    let (release_tx, release_rx) = std::sync::mpsc::channel::<()>();
+    let holder = std::thread::spawn({
+        let store = rig.store.clone();
+        move || {
+            store
+                .write_routing(|_| {
+                    held_tx.send(()).unwrap();
+                    let _ = release_rx.recv();
+                    Ok(())
+                })
+                .unwrap();
+        }
+    });
+    held_rx.recv().unwrap();
+    let reading = std::thread::spawn({
+        let attention = attention.clone();
+        move || attention.conditions(NOW).map(|read| read.len())
+    });
+    // Long enough for the read to reach the registry's connection and wait on it.
+    std::thread::sleep(Duration::from_millis(200));
+    let observing = std::thread::spawn({
+        let attention = attention.clone();
+        move || refuse(&attention, "r1", "2.1.999", NOW)
+    });
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let free = loop {
+        if observing.is_finished() {
+            break true;
+        }
+        if std::time::Instant::now() > deadline {
+            break false;
+        }
+        std::thread::sleep(Duration::from_millis(5));
+    };
+    release_tx.send(()).unwrap();
+    holder.join().unwrap();
+    assert!(free, "observe waited on a read held by the registry");
+    assert!(!reading.is_finished() || reading.join().unwrap().is_ok());
+}

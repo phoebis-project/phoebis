@@ -573,6 +573,159 @@ async fn a_probe_sent_while_a_request_is_open_waits_for_the_request_after_it() {
     }
 }
 
+/// `completed`'s failed counterpart: the upstream answered with a head after `ttfb_ms`, or never answered at all.
+fn failed(r: &Rig, id: &str, ttfb_ms: Option<i64>) -> phoebis_bus::Event {
+    let mut event = r.complete(
+        id,
+        phoebis_bus::Outcome::Failed,
+        Some(phoebis_bus::Usage {
+            cache_read_tokens: Some(0),
+            ..Default::default()
+        }),
+    );
+    if let phoebis_bus::Event::RequestComplete(complete) = &mut event {
+        complete.ttfb_ms = ttfb_ms;
+    }
+    event
+}
+
+/// A failed request decides the probes it kept only once the upstream answered it: past a head the read is the
+/// cache's answer, while one that failed before any reached nothing and leaves them for the request after it.
+#[tokio::test]
+async fn a_failed_request_decides_the_probes_it_kept_only_past_a_head() {
+    for (head, left) in [(Some(40), 0), (None, 1)] {
+        let mut r = rig(RigSpec {
+            accounts: vec![api_key("a", A, 0)],
+            ..RigSpec::default()
+        })
+        .await;
+        open_request(&r, "first", 0, 2_000);
+        r.engine.observe(completed(&r, "first", 0));
+        r.advance_attended(270_000);
+        r.step().await;
+        assert_eq!(r.status("main").unanswered, 1, "a covering probe");
+        r.advance_attended(10_000);
+        open_request(&r, "second", 0, 2_000);
+        r.engine.observe(failed(&r, "second", head));
+        assert_eq!(r.status("main").unanswered, left, "head {head:?}");
+        if head.is_some() {
+            let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes > 0).await;
+            assert_eq!(
+                probe_rows(&rows).wasted_probe_reasons,
+                BTreeMap::from([("cold_return".to_string(), 1)])
+            );
+        }
+    }
+}
+
+/// A probe sent while a request streams pays for the request after it, so that request failing past its head leaves
+/// the probe on the books for the next request or the recipe's stop, as a bus gap does, rather than dropping it.
+#[tokio::test]
+async fn a_probe_sent_while_a_request_is_open_outlives_that_request_failing_past_its_head() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(60_000);
+    open_request(&r, "second", 0, 2_000);
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (1, 1),
+        "the probe landed while the second request streamed"
+    );
+    r.engine.observe(failed(&r, "second", Some(40)));
+    assert_eq!(
+        r.status("main").unanswered,
+        1,
+        "the probe waits for the request after the failed one"
+    );
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes > 0).await;
+    assert_eq!(
+        probe_rows(&rows).wasted_probe_reasons,
+        BTreeMap::from([("session_ended".to_string(), 1)])
+    );
+}
+
+/// `open_request` on a body of the test's choosing.
+fn open_request_with(r: &Rig, id: &str, body: &str, read: u64, write: u64) {
+    r.engine.observe(r.observed(id, "main", body));
+    r.engine.observe(r.selected(id, "a"));
+    r.engine.observe(phoebis_bus::Event::ResponseChunk(
+        phoebis_bus::ResponseChunk {
+            request_id: id.into(),
+            attempt: 1,
+            index: 0,
+            body: Default::default(),
+            phase: Some(phoebis_bus::Phase::MessageStart {
+                usage: phoebis_bus::Usage {
+                    cache_read_tokens: Some(read),
+                    cache_write_5m_tokens: Some(write),
+                    ..Default::default()
+                },
+            }),
+        },
+    ));
+}
+
+/// The probes a bus gap leaves keep the speed of the recipe that sent them: a fast recipe's warm return reads them
+/// on the fast lane they kept, though the gap took the recipe before the next request batched them.
+#[tokio::test]
+async fn the_probes_a_bus_gap_leaves_keep_their_recipes_speed() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
+    open_request_with(&r, "first", &fast, 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(60_000);
+    open_request_with(&r, "second", &fast, 2_000, 0);
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (1, 1),
+        "the probe landed while the second request streamed"
+    );
+    r.engine.bus_gap(1, 0);
+    r.advance_attended(10_000);
+    open_request_with(&r, "third", &fast, 2_000, 0);
+    r.engine.observe(completed(&r, "third", 2_000));
+    assert_eq!(
+        r.status("main").unanswered,
+        0,
+        "the warm return on the fast lane answered the probe"
+    );
+    r.event(Event {
+        event: "session_end".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    assert_eq!(
+        probe_rows(&rows).wasted_probe_reasons,
+        BTreeMap::new(),
+        "nothing settled as a cold return"
+    );
+}
+
 /// An entry that expires while the request it serves is still open is not lapsed under that request: the completion
 /// earns its credit and decides the probes it kept, and the next tick lapses the recipe.
 #[tokio::test]

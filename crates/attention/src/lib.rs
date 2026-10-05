@@ -66,10 +66,15 @@ impl Attention {
             .as_ref()
             .map(|ledger| ledger.db().read_blocking(parked_summary))
             .transpose()?;
+        // The registry's reads come before the lock for the same reason: a stalled registry file holds the store's
+        // connection mutex, and `observe` waits on this lock.
+        let accounts = self.store.accounts()?;
+        let refresh_runs = reader::refresh_runs(&self.store, &accounts)?;
         let mut state = self.state.lock().expect(STATE_POISONED);
         reader::conditions(
             &mut state,
-            &self.store,
+            &accounts,
+            &refresh_runs,
             &self.router,
             self.ledger.as_ref().is_some_and(Ledger::degraded),
             parked.as_deref(),
