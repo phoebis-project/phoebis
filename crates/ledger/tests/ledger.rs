@@ -5082,3 +5082,121 @@ async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its
     );
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_one() {
+    let up = FakeUpstream::start(vec![]).await;
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    let accounts = [api_key("a", C, 0)];
+    let run = || {
+        harness_on(
+            store.clone(),
+            db.clone(),
+            &up,
+            &accounts,
+            (0, None),
+            LedgerConfig::default(),
+            None,
+        )
+    };
+    let started = |h: &Harness, at: i64| {
+        h.ledger.record(Record::RouterStarted {
+            version: "0.1.0".into(),
+            counts: phoebis_routing::LoadCounts::default(),
+            at,
+        })
+    };
+    let kinds = |h: &Harness| {
+        let db = h.db.clone();
+        async move {
+            db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .map(|e| e.kind)
+                .collect::<Vec<_>>()
+        }
+    };
+    // A first run seeds the registry; the member then carries a budget its spend is past.
+    let seeding = run().await;
+    seeding.ledger.clone().shutdown().await.unwrap();
+    seeding.router.shutdown().await.unwrap();
+    store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(1.0),
+            }],
+            "test",
+        )
+        .unwrap();
+    db.insert_request(
+        &RequestRecord {
+            id: "r1".into(),
+            received_at: NOW - 1_000,
+            pool_id: Some("main".into()),
+            canonical_model: "claude-haiku-4-5".into(),
+            model: "claude-haiku-4-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "api_key".into(),
+            outcome: "succeeded".into(),
+            input_tokens: Some(2_000_000),
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+
+    // The next run announces the crossing it finds at its start.
+    let crossing = run().await;
+    started(&crossing, NOW);
+    wait_for_async(Duration::from_secs(5), || async {
+        (kinds(&crossing).await == ["router_started", "budget_reached"]).then_some(())
+    })
+    .await;
+    crossing.ledger.clone().shutdown().await.unwrap();
+    crossing.router.shutdown().await.unwrap();
+
+    // A restart in the same period finds the crossing in the ledger: its start's rows ride the start row's batch,
+    // and hold no second one.
+    let restart = run().await;
+    started(&restart, NOW + 1);
+    let after_restart = wait_for_async(Duration::from_secs(5), || async {
+        let kinds = kinds(&restart).await;
+        (kinds.iter().filter(|k| *k == "router_started").count() == 2).then_some(kinds)
+    })
+    .await;
+    assert_eq!(
+        after_restart,
+        ["router_started", "budget_reached", "router_started"],
+        "one crossing per period, whatever the restarts"
+    );
+    // The crossing the restart took from the ledger still ends with its period.
+    restart.clock.store(2_678_400_000 + 1_000, Ordering::SeqCst);
+    let ended = wait_for_async(Duration::from_secs(5), || async {
+        restart
+            .db
+            .events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| e.kind == "budget_period_ended")
+    })
+    .await;
+    let detail: serde_json::Value = serde_json::from_str(ended.detail.as_deref().unwrap()).unwrap();
+    assert_eq!(detail["previous_spent_usd"], serde_json::json!(2.0));
+    up.shutdown().await;
+}

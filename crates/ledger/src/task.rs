@@ -23,7 +23,7 @@ use crate::db::{
 use crate::events::spawn_event_mirror;
 use crate::metrics::Metrics;
 use crate::pricing::{price_attempts, PriceTable, Pricing};
-use crate::query::{member_spends, BudgetedMember};
+use crate::query::{member_spends, period_bounds, BudgetedMember};
 use crate::record::{
     AttemptRecord, EventRecord, ParkedRecord, ParkedRows, QuotaSampleRecord, RequestRecord,
 };
@@ -434,7 +434,7 @@ async fn writer(
     land_parked(&db, &pricing, &stats, &metrics, clock()).await;
     // The start's budget rows wait for the first batch and follow its records: the router's start row is the first
     // record it sends, and it dates the gap from the newest row before it, which must be the previous run's.
-    let mut spend_due = spends.read(None, &[]).await;
+    let mut spend_due = spends.start().await;
     // A batch whose transaction failed: while it is held the loop takes no new record, so order holds and the
     // channel fills behind it, which is what moves admission's mark before more money is spent.
     let mut held: Option<Held> = None;
@@ -930,6 +930,9 @@ struct Budgets {
     /// The members this run wrote `budget_reached` for in the period each is in: a period's end is announced only
     /// after its crossing was.
     reached: HashSet<SpendKey>,
+    /// The crossings the ledger held at the start, by the end of the period each was in, which the first refresh
+    /// takes as this run's own.
+    announced: HashMap<SpendKey, i64>,
 }
 
 impl Budgets {
@@ -943,6 +946,22 @@ impl Budgets {
         rows: Vec<SpentRow>,
         at: i64,
     ) -> Vec<EventRecord> {
+        // A crossing the previous run wrote for the period a row is in is held as if this run had read it, so a
+        // restart writes no second one and the period's end is still announced.
+        for row in &rows {
+            let key = (
+                row.spend.pool_id.clone(),
+                row.spend.account_id.clone(),
+                row.spend.period,
+            );
+            if self.announced.get(&key) == Some(&row.spend.period_end)
+                && !self.last.contains_key(&key)
+            {
+                self.reached.insert(key.clone());
+                self.last.insert(key, row.spend.clone());
+            }
+        }
+        self.announced.clear();
         let mut out = Vec::new();
         let mut last = HashMap::with_capacity(rows.len());
         for SpentRow {
@@ -986,6 +1005,39 @@ impl Budgets {
         self.last = last;
         out
     }
+}
+
+/// The newest `budget_reached` row since `from` per pool, account and period, as the end of the period it was written
+/// in.
+fn announced_crossings(
+    conn: &rusqlite::Connection,
+    from: i64,
+) -> Result<HashMap<SpendKey, i64>, LedgerError> {
+    let mut stmt = conn.prepare(
+        "SELECT pool_id, account_id, detail FROM events WHERE kind = 'budget_reached' AND at >= ?1 \
+         ORDER BY at, rowid",
+    )?;
+    let rows = stmt.query_map([from], |row| {
+        Ok((
+            row.get::<_, Option<String>>(0)?,
+            row.get::<_, Option<String>>(1)?,
+            row.get::<_, Option<String>>(2)?,
+        ))
+    })?;
+    let mut out = HashMap::new();
+    for row in rows {
+        let (Some(pool_id), Some(account_id), Some(detail)) = row? else {
+            continue;
+        };
+        let Ok(detail) = serde_json::from_str::<serde_json::Value>(&detail) else {
+            continue;
+        };
+        let period = detail["period"].as_str().and_then(BudgetPeriod::parse);
+        if let (Some(period), Some(period_end)) = (period, detail["period_end"].as_i64()) {
+            out.insert((pool_id, account_id, period), period_end);
+        }
+    }
+    Ok(out)
 }
 
 fn budget_reached(
@@ -1047,6 +1099,25 @@ struct Spends {
 }
 
 impl Spends {
+    /// The writer's first read, after taking the crossings the ledger holds since the current month began (every
+    /// period starts in it); a crossing without a row, such as one a budget set while the router was down made, is
+    /// announced.
+    async fn start(&mut self) -> Option<i64> {
+        let (from, _) = period_bounds(BudgetPeriod::Month, (self.clock)());
+        match self
+            .db
+            .read(move |conn| announced_crossings(conn, from))
+            .await
+        {
+            Ok(announced) => self.budgets.announced = announced,
+            Err(error) => tracing::warn!(
+                %error,
+                "the ledger's budget crossings could not be read; a member over its budget is announced again"
+            ),
+        }
+        self.read(None, &[]).await
+    }
+
     /// Runs `refresh_member_spends` and settles the ledger's standing on it. The writer calls this with nothing held,
     /// so a read that succeeded and reached the router clears `degraded`; one that did not, while degraded, runs again
     /// one `event_poll` later rather than at the period's end, since every budgeted member waits on it. The budget
