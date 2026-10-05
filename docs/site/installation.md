@@ -127,9 +127,11 @@ port logs in. Publishing the port on a LAN address is one edit to the `ports` li
 secret at login and the session cookie on every call cross that LAN in the clear; that is the same trust decision the
 proxy port's publication already makes. For TLS, `tls: self_signed` on a listener writes the material under
 `/var/lib/phoebis/tls` on the volume, and `docker compose cp phoebis:/var/lib/phoebis/tls/ca.pem .` brings the CA out
-for the clients; an operator's pair is a read-only mount beside the configuration. A front can terminate TLS instead:
-it forwards to the plain listener, passes `Host` through unchanged and sets `X-Forwarded-Proto: https`, so the cookie
-is issued with `Secure` and the Origin check sees the front's hostname in both headers.
+for the clients. The leaf names the container's own host name and address, so a client off the docker host needs
+`hostname: <the name clients dial>` on the `phoebis` service in `compose.yaml`, or an operator's pair, mounted
+read-only beside the configuration. A front can terminate TLS instead: it forwards to the plain listener, passes `Host`
+through unchanged and sets `X-Forwarded-Proto: https`, so the cookie is issued with `Secure` and the Origin check sees
+the front's hostname in both headers.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
 place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
