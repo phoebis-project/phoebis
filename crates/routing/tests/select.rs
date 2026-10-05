@@ -11143,6 +11143,22 @@ fn a_renewal_records_five_no_move_lines_and_their_facts() {
         ("idle", &FactValue::Int(1_000), Some("ms")),
         "a warm renewal on an account under no threshold names the pin's idle age"
     );
+    let epoch = pinned(&st, "s1").epoch;
+    let probe = SelectRequest {
+        probe: true,
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 2_000)
+    };
+    let d = decide(&mut st, &s, &probe, &mut rng());
+    assert_eq!(d.record.outcome.kind, "renewed");
+    assert_eq!(
+        d.summary
+            .fact
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.unit))
+            .collect::<Vec<_>>(),
+        vec![("epoch", FactValue::Int(epoch as i64), Some("count"))],
+        "a probe's renewal names the epoch of the pin it renewed"
+    );
 }
 
 #[test]
@@ -11556,17 +11572,22 @@ fn a_refusal_records_two_lines() {
 #[test]
 fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
     let s = with_member_budget(
-        &snapshot_over(
-            Pool {
-                strategy: Strategy::Pace,
-                members: vec![("a", 0), ("b", 0), ("c", 1), ("d", 1)],
-                ..Pool::default()
-            },
-            &["d"],
+        &with_member_budget(
+            &snapshot_over(
+                Pool {
+                    strategy: Strategy::Pace,
+                    members: vec![("a", 0), ("b", 0), ("c", 1), ("d", 1)],
+                    ..Pool::default()
+                },
+                &["d"],
+            ),
+            "c",
+            None,
+            Some(5.0),
         ),
-        "c",
+        "d",
+        Some(3.0),
         None,
-        Some(5.0),
     );
     let mut st = RoutingState::from_load(RoutingLoad::default());
     for (id, five_hour) in [("a", 0.2), ("b", 0.4), ("c", 0.1), ("d", 0.3)] {
@@ -11625,11 +11646,23 @@ fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
         vec![BudgetFacts {
             period: "month",
             budget_usd: 5.0,
-            spent_usd: 1.5,
-            period_start: 0,
-            period_end: T + 24 * HOUR,
-            observed_at: T - 500,
+            spent_usd: Some(1.5),
+            period_start: Some(0),
+            period_end: Some(T + 24 * HOUR),
+            observed_at: Some(T - 500),
         }]
+    );
+    assert_eq!(
+        candidate(&d.record, "d").budget,
+        vec![BudgetFacts {
+            period: "day",
+            budget_usd: 3.0,
+            spent_usd: None,
+            period_start: None,
+            period_end: None,
+            observed_at: None,
+        }],
+        "a budget the ledger has reported no spend for keeps its amount"
     );
     assert!(candidate(&d.record, "a").budget.is_empty());
     let chosen = picked(&d.result).to_string();
@@ -11904,4 +11937,317 @@ fn a_four_member_record_serializes_under_nine_kilobytes() {
     );
     let size = serde_json::to_vec(&d.record).unwrap().len();
     assert!(size < 9_216, "{size} bytes");
+}
+
+#[test]
+fn a_session_pin_placement_and_a_cohort_hold_name_no_strategy_score() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        agent_id: "worker".into(),
+        ..seeded_pin("s1", "b", T)
+    }]);
+    // Pace alone would pick a, the account with the more of its week left.
+    st.record_sample("a", sample(0.1, 0.1, T - 500));
+    st.record_sample("b", sample(0.1, 0.6, T - 500));
+    seed_affinity(
+        &st,
+        vec![AffinityRow {
+            written_at: T - 1_000,
+            ..static_row(&s, "s1", "b", 900)
+        }],
+    );
+    let _a = st.in_flight().dispatched("a", T - 1_000);
+    let _b = st.in_flight().dispatched("b", T - 1_000);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "session_pin")
+    );
+    assert_eq!(
+        (d.summary.score.clone(), d.summary.runner_up.clone()),
+        (None, None),
+        "the strategy's pick of a is not the account the row landed on"
+    );
+    let cohort = subagent(
+        placement_req(
+            request(&s, Some("s2"), "claude-sonnet-5", true, &[], T),
+            &[],
+            &["s1"],
+            true,
+        ),
+        "worker",
+    );
+    let d = decide(&mut st, &s, &cohort, &mut rng());
+    assert!(matches!(
+        &d.result,
+        SelectResult::Held { account_id, .. } if account_id == "b"
+    ));
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "cohort")
+    );
+    assert_eq!(
+        (
+            d.summary.score.clone(),
+            d.summary.runner_up.clone(),
+            d.record.outcome.tier
+        ),
+        (None, None, None),
+        "a hold on the cohort's account carries none of the strategy pick's standing"
+    );
+}
+
+#[test]
+fn a_placement_after_a_cohort_hold_reads_by_cohort_and_the_wait() {
+    let s = snapshot(Pool {
+        members: vec![("a", 0), ("b", 1)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    seed_affinity(&st, vec![static_row(&s, "s1", "b", 900)]);
+    let _a = st.in_flight().dispatched("a", 1_000);
+    let req = SelectRequest {
+        holds: vec![HoldFacts {
+            account_id: "b".into(),
+            cohort: Some("b".into()),
+            held_ms: 2_000,
+        }],
+        ..static_req(&s, &["s1"])
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(d.record.outcome.kind, "placed");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "cohort")
+    );
+    assert_eq!(
+        d.summary
+            .fact
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.unit))
+            .collect::<Vec<_>>(),
+        vec![("held", FactValue::Int(2_000), Some("ms"))]
+    );
+}
+
+#[test]
+fn a_pace_pick_names_its_gap_over_the_runner_up() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        ..Pool::default()
+    });
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    for (id, seven_day) in [("a", 0.1), ("b", 0.4), ("c", 0.7)] {
+        st.record_sample(id, sample(0.1, seven_day, T - 500));
+    }
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert_eq!(picked(&d.result), "a");
+    assert_eq!(
+        (
+            d.summary.by.kind,
+            d.summary.by.value.as_str(),
+            d.summary.by.tier
+        ),
+        ("strategy", "pace", Some((0, 0, 0)))
+    );
+    // With no reset named, each score is the week's remainder over a week of hours.
+    let (best, next) = (0.9 / 168.0, 0.6 / 168.0);
+    let [gap, over] = &d.summary.fact[..] else {
+        panic!("a gap and its runner-up: {:?}", d.summary.fact)
+    };
+    assert_eq!((gap.key, gap.unit), ("gap", Some("percent_per_hour")));
+    assert!((number(&gap.value) - (best - next)).abs() < 1e-12);
+    assert_eq!(
+        (over.key, &over.value, &over.entity),
+        (
+            "over",
+            &FactValue::Text("b".into()),
+            &Some(FactEntity {
+                kind: "account",
+                id: "b".into(),
+            })
+        )
+    );
+    let score = d.summary.score.as_ref().expect("the winner's score");
+    let runner_up = d.summary.runner_up.as_ref().expect("the runner-up's score");
+    assert_eq!(
+        (score.account_id.as_str(), runner_up.account_id.as_str()),
+        ("a", "b")
+    );
+    assert!((score.score - best).abs() < 1e-12 && (runner_up.score - next).abs() < 1e-12);
+}
+
+#[test]
+fn a_move_with_no_cool_destination_reads_pick_none_cool() {
+    let s = snapshot_over(
+        Pool {
+            migrate: Some(0.8),
+            members: vec![("a", 0), ("b", 1), ("c", 2), ("d", 3)],
+            ..Pool::default()
+        },
+        &["d"],
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    for id in ["b", "c", "d"] {
+        st.record_sample(id, sample(0.9, 0.3, T + 500));
+    }
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+        &mut rng(),
+    );
+    assert_eq!(
+        landed(d.result.clone()),
+        ("b".into(), Some(MigrateReason::Spent))
+    );
+    assert_eq!(line(&d.record, "cool").verdict, "fell_through");
+    for id in ["b", "c", "d"] {
+        assert_eq!(
+            fact_of(line(&d.record, "cool"), "cool", id),
+            &FactValue::Bool(false)
+        );
+    }
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("rule", "spent")
+    );
+    assert_eq!(
+        d.summary
+            .fact
+            .iter()
+            .map(|f| (f.key, f.value.clone(), f.unit))
+            .collect::<Vec<_>>(),
+        vec![("pick", FactValue::Text("none cool".into()), Some("text"))]
+    );
+}
+
+#[test]
+fn a_four_member_shed_move_serializes_under_sixteen_kilobytes() {
+    let s = with_member_budget(
+        &with_member_budget(
+            &snapshot_over(
+                Pool {
+                    strategy: Strategy::Pace,
+                    migrate: Some(0.2),
+                    session_placement: SessionPlacement::ByWarmPrefix,
+                    members: vec![("a", 0), ("b", 0), ("c", 0), ("d", 0)],
+                    ..Pool::default()
+                },
+                &["d"],
+            ),
+            "c",
+            Some(2.0),
+            Some(40.0),
+        ),
+        "d",
+        Some(3.0),
+        None,
+    );
+    let mut st = loaded(vec![
+        burning("s1", "a", 4.0, false, T),
+        burning("s2", "a", 3.0, false, T),
+        burning("s3", "a", 2.0, false, T),
+        burning("s0", "a", 1.0, false, T),
+    ]);
+    st.record_sample(
+        "a",
+        with_fable(weekly(0.1, 0.5, 9, T - 500), 0.4, Some(T + 96 * HOUR)),
+    );
+    for (id, seven_day) in [("b", 0.3), ("c", 0.25), ("d", 0.2)] {
+        st.record_sample(
+            id,
+            with_fable(weekly(0.1, seven_day, 4, T - 500), 0.4, Some(T + 96 * HOUR)),
+        );
+    }
+    st.record_member_spend(
+        &s,
+        [BudgetPeriod::Day, BudgetPeriod::Month]
+            .into_iter()
+            .map(|period| MemberSpend {
+                pool_id: "p".into(),
+                account_id: "c".into(),
+                period,
+                period_start: 0,
+                period_end: T + 24 * HOUR,
+                spent_usd: 1.5,
+                observed_at: T - 500,
+            })
+            .collect(),
+    );
+    st.record_cooldown(cooled(
+        "b",
+        "model:claude-opus-5",
+        T + HOUR,
+        "seven_day",
+        "rate_limit",
+    ));
+    // Every member holds an expired message entry and a static entry under the main conversation's size floor, so
+    // both rungs visit four lookups each and the pick decides.
+    let message: Vec<String> = ["5", "6", "7", "8"].map(|d| d.repeat(64)).to_vec();
+    let statics: Vec<String> = ["1", "2", "3", "4"].map(|d| d.repeat(64)).to_vec();
+    let mut rows = Vec::new();
+    for (i, account) in ["a", "b", "c", "d"].into_iter().enumerate() {
+        rows.push(AffinityRow {
+            chain: AffinityChain::Message,
+            written_at: T - HOUR,
+            ..static_row(&s, &message[i], account, 900)
+        });
+        rows.push(AffinityRow {
+            written_at: T - 1_000,
+            ..static_row(&s, &statics[i], account, 900)
+        });
+    }
+    seed_affinity(&st, rows);
+    let message: Vec<&str> = message.iter().map(String::as_str).collect();
+    let statics: Vec<&str> = statics.iter().map(String::as_str).collect();
+    let req = placement_req(auxiliary(&s, "s1", T), &message, &statics, true);
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(
+        landed(d.result.clone()),
+        ("d".into(), Some(MigrateReason::Shed)),
+        "Pace takes the cool destination with the most of its week left"
+    );
+    assert_eq!(
+        fact_of(line(&d.record, "cool"), "cool", "d"),
+        &FactValue::Bool(true)
+    );
+    assert_eq!(
+        d.summary.fact.iter().map(|f| f.key).collect::<Vec<_>>(),
+        vec!["gap", "over"],
+        "Pace among the cool destinations"
+    );
+    let size = serde_json::to_vec(&d.record).unwrap().len();
+    assert!(size < 16_384, "{size} bytes");
 }

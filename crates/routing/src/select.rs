@@ -779,8 +779,15 @@ struct Recorder {
     hold_place: Option<&'static str>,
     shed_marks: Option<Vec<PinKey>>,
     pick: Option<Pick>,
-    /// Whether the pin a renewal kept was cold on this request, which the summary's renewal fact reads.
-    cold: Option<bool>,
+    renewal: Option<Renewal>,
+}
+
+/// The pin a renewal kept, as the summary's renewal fact reads it: whether it was cold on this request, the cause
+/// `warmth_of` named, and its epoch before the write.
+struct Renewal {
+    cold: bool,
+    cause: Option<&'static str>,
+    epoch: u64,
 }
 
 /// The pick's account, its tier and every tier member's Pace score (empty under another strategy).
@@ -1029,7 +1036,7 @@ fn run(
                     pool,
                     current,
                     request,
-                    verdict,
+                    (verdict, cause),
                     &mut writes,
                     rec,
                 )),
@@ -1127,7 +1134,7 @@ fn run(
                     pool,
                     current,
                     request,
-                    verdict,
+                    (verdict, cause),
                     &mut writes,
                     rec,
                 )),
@@ -2212,7 +2219,7 @@ fn renew(
     pool: &PoolRow,
     current: &PinRow,
     request: &SelectRequest,
-    verdict: Warmth,
+    (verdict, cause): (Warmth, Option<WarmthCause>),
     writes: &mut Vec<StateWrite>,
     rec: &mut Recorder,
 ) -> Selection {
@@ -2238,7 +2245,11 @@ fn renew(
         verdict == Warmth::Refresh,
         verdict != Warmth::Untouched && chained,
     );
-    rec.cold = Some(!warm_on(current, verdict, now));
+    rec.renewal = Some(Renewal {
+        cold: !warm_on(current, verdict, now),
+        cause: cause.map(WarmthCause::as_str),
+        epoch: current.epoch,
+    });
     rec.step(
         "renew",
         "renewed",
@@ -3214,16 +3225,16 @@ fn candidate_facts(
             let spends: Vec<&MemberSpend> = state.member_spends_of(&pool.id, id).collect();
             member
                 .budgets()
-                .filter_map(|(period, budget_usd)| {
-                    let spend = spends.iter().find(|s| s.period == period)?;
-                    Some(BudgetFacts {
+                .map(|(period, budget_usd)| {
+                    let spend = spends.iter().find(|s| s.period == period);
+                    BudgetFacts {
                         period: period.as_str(),
                         budget_usd,
-                        spent_usd: spend.spent_usd,
-                        period_start: spend.period_start,
-                        period_end: spend.period_end,
-                        observed_at: spend.observed_at,
-                    })
+                        spent_usd: spend.map(|s| s.spent_usd),
+                        period_start: spend.map(|s| s.period_start),
+                        period_end: spend.map(|s| s.period_end),
+                        observed_at: spend.map(|s| s.observed_at),
+                    }
                 })
                 .collect()
         })
@@ -3378,7 +3389,7 @@ fn finish(
         hold_place,
         shed_marks,
         pick,
-        cold,
+        renewal,
     } = rec;
     let key = snapshot.key(&request.key_id);
     let settings = pool.zip(key).map(|(pool, _)| settings_of(pool));
@@ -3433,7 +3444,11 @@ fn finish(
         SelectResult::Held { account_id, hold } => {
             outcome.kind = "held";
             outcome.account_id = Some(account_id.clone());
-            outcome.tier = pick.as_ref().map(|pick| pick.tier);
+            // The pick's tier is the hold's only when the hold waits on the pick's account.
+            outcome.tier = pick
+                .as_ref()
+                .filter(|_| hold_place == Some("strategy_pick"))
+                .map(|pick| pick.tier);
             outcome.hold = Some(HoldOutcome {
                 account_id: hold.account_id.clone(),
                 cohort: hold.cohort.clone(),
@@ -3487,7 +3502,7 @@ fn finish(
         candidates: &candidates,
         walk: &walk,
         pin: pin.as_ref(),
-        cold,
+        renewal: renewal.as_ref(),
         hold_place,
         pick: pick.as_ref(),
     };
@@ -3543,7 +3558,7 @@ struct Readings<'r> {
     candidates: &'r [CandidateFacts],
     walk: &'r [WalkStep],
     pin: Option<&'r PinFacts>,
-    cold: Option<bool>,
+    renewal: Option<&'r Renewal>,
     hold_place: Option<&'static str>,
     pick: Option<&'r Pick>,
 }
@@ -3591,25 +3606,33 @@ impl Readings<'_> {
             "placed" if self.hold_place == Some("session_pin") => {
                 (by("hold", "session_pin"), self.in_flight_fact())
             }
-            "placed" => {
-                let by = match &outcome.rung {
-                    Some(rung) => by("rung", rung.rung),
-                    None => By {
-                        kind: "strategy",
-                        value: outcome.strategy.to_string(),
-                        tier: outcome.tier,
-                    },
-                };
-                let fact = match self.request.holds.last() {
-                    Some(hold) => vec![summary_fact(
-                        "held",
-                        FactValue::Int(i64::try_from(hold.held_ms).unwrap_or(i64::MAX)),
-                        "ms",
-                    )],
-                    None => self.placement_fact(),
-                };
-                (by, fact)
-            }
+            "placed" => match self.request.holds.last() {
+                // The wait explains the placement more than where it landed: the row names the hold it followed
+                // and how long it lasted.
+                Some(hold) => {
+                    let place = if hold.cohort.is_some() {
+                        "cohort"
+                    } else {
+                        "strategy_pick"
+                    };
+                    let held = i64::try_from(hold.held_ms).unwrap_or(i64::MAX);
+                    (
+                        by("hold", place),
+                        vec![summary_fact("held", FactValue::Int(held), "ms")],
+                    )
+                }
+                None => {
+                    let by = match &outcome.rung {
+                        Some(rung) => by("rung", rung.rung),
+                        None => By {
+                            kind: "strategy",
+                            value: outcome.strategy.to_string(),
+                            tier: outcome.tier,
+                        },
+                    };
+                    (by, self.placement_fact())
+                }
+            },
             "held" => (
                 by("hold", self.hold_place.unwrap_or("strategy_pick")),
                 self.in_flight_fact(),
@@ -3645,12 +3668,24 @@ impl Readings<'_> {
         }
     }
 
-    /// The warmth's cause when the pin was cold, else the hottest shared window at or above the shed threshold,
-    /// else the pin's idle age.
+    /// A probe's renewal names the pin's epoch. Any other names the warmth's cause when the pin was cold, else the
+    /// hottest shared window at or above the shed threshold, else the pin's idle age.
     fn renewal_fact(&self) -> Vec<SummaryFact> {
-        if self.cold == Some(true) {
-            if let Some(cause) = self.pin.and_then(|p| p.warmth_cause) {
-                return vec![summary_fact("cause", FactValue::Text(cause.into()), "text")];
+        let Some(renewal) = self.renewal else {
+            return Vec::new();
+        };
+        let cause = || {
+            renewal
+                .cause
+                .map(|cause| vec![summary_fact("cause", FactValue::Text(cause.into()), "text")])
+        };
+        if self.request.probe {
+            let epoch = i64::try_from(renewal.epoch).unwrap_or(i64::MAX);
+            return vec![summary_fact("epoch", FactValue::Int(epoch), "count")];
+        }
+        if renewal.cold {
+            if let Some(fact) = cause() {
+                return fact;
             }
         }
         let threshold = self.pool.and_then(|p| p.migrate_above_utilization);
@@ -3679,6 +3714,7 @@ impl Readings<'_> {
         self.pin
             .and_then(|p| p.idle_ms)
             .map(|idle| vec![summary_fact("idle", FactValue::Int(idle), "ms")])
+            .or_else(cause)
             .unwrap_or_default()
     }
 
@@ -3759,7 +3795,8 @@ impl Readings<'_> {
             .unwrap_or_default()
     }
 
-    /// The pick's winning Pace score and the best of the rest of its tier; `None` without a Pace pick.
+    /// The pick's winning Pace score and the best of the rest of its tier; `None` without a Pace pick, and when the
+    /// row landed elsewhere than the pick (a session's pin, a cohort's account), whose standing the scores are not.
     fn scores(&self) -> (Option<Score>, Option<Score>) {
         let Some(Pick {
             account_id: chosen,
@@ -3769,6 +3806,9 @@ impl Readings<'_> {
         else {
             return (None, None);
         };
+        if self.outcome.account_id.as_ref() != Some(chosen) {
+            return (None, None);
+        }
         let score_of = |(id, score): &(String, f64)| Score {
             account_id: id.clone(),
             score: *score,

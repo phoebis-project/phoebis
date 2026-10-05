@@ -198,14 +198,16 @@ pub struct PaceFacts {
     pub score: f64,
 }
 
+/// The spend and its period are the ledger's spend row for the budget's period, all `None` while the ledger has
+/// reported none; the budget stays listed.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct BudgetFacts {
     pub period: &'static str,
     pub budget_usd: f64,
-    pub spent_usd: f64,
-    pub period_start: i64,
-    pub period_end: i64,
-    pub observed_at: i64,
+    pub spent_usd: Option<f64>,
+    pub period_start: Option<i64>,
+    pub period_end: Option<i64>,
+    pub observed_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
