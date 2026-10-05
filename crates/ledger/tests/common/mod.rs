@@ -18,8 +18,8 @@ use phoebis_profile::{
 use phoebis_relay::{router, Accounting, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, MemberWrite,
-    NewBundle, PoolRow, RulesMode, Secret, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Identity,
+    MemberWrite, NewBundle, PoolRow, RulesMode, Secret, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -354,6 +354,32 @@ pub async fn harness_on(
 pub fn clock_of(h: &Harness) -> Clock {
     let c = h.clock.clone();
     Arc::new(move || c.load(Ordering::SeqCst))
+}
+
+/// A label edit through the one account write, fenced on the revision the caller read, as the admin route fences.
+pub fn rename(
+    h: &Harness,
+    id: &str,
+    revision: u64,
+    label: &str,
+    actor: &str,
+) -> Result<(), StoreError> {
+    let generation = h
+        .store
+        .account(id)?
+        .map_or(0, |row| row.lifecycle_generation);
+    h.store.commit_account_update(&AccountUpdate {
+        id,
+        expected_revision: revision,
+        lifecycle_generation: generation,
+        label,
+        secret: None,
+        state: None,
+        at: h.clock.load(Ordering::SeqCst),
+        actor,
+        enabled: None,
+        cancellation: None,
+    })
 }
 
 /// The head fixture captured together with a body fixture: a first-party body checked against a non-first-

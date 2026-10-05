@@ -222,6 +222,29 @@ fn member(account_id: &str, priority: u32) -> MemberWrite {
     }
 }
 
+/// A label edit through the one account write, fenced on the revision the caller read, as the admin route fences.
+fn rename(
+    store: &Store,
+    id: &str,
+    revision: u64,
+    label: &str,
+    actor: &str,
+) -> Result<(), StoreError> {
+    let generation = store.account(id)?.map_or(0, |row| row.lifecycle_generation);
+    store.commit_account_update(&AccountUpdate {
+        id,
+        expected_revision: revision,
+        lifecycle_generation: generation,
+        label,
+        secret: None,
+        state: None,
+        at: jiff::Timestamp::now().as_millisecond(),
+        actor,
+        enabled: None,
+        cancellation: None,
+    })
+}
+
 #[test]
 fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let dir = tempfile::tempdir().unwrap();
@@ -1967,9 +1990,7 @@ fn a_stale_account_update_carrying_enabled_and_a_cancellation_writes_nothing() {
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
     let read = store.account("a").unwrap().unwrap();
-    store
-        .update_account("a", read.revision, "Moved", "admin")
-        .unwrap();
+    rename(&store, "a", read.revision, "Moved", "admin").unwrap();
     let stale = AccountUpdate {
         id: "a",
         expected_revision: read.revision,
@@ -2145,7 +2166,7 @@ fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
         (revision(), store.account_revision("a").unwrap()),
         (1, Some(1))
     );
-    store.update_account("a", 1, "Renamed", "admin").unwrap();
+    rename(&store, "a", 1, "Renamed", "admin").unwrap();
     assert_eq!(revision(), 2, "a label update");
     store.set_enabled("a", false).unwrap();
     assert_eq!(revision(), 3, "an enable flip");
@@ -2187,8 +2208,8 @@ fn the_newest_change_id_is_the_mirrors_starting_watermark() {
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
-    store.update_account("a", 1, "first", "admin").unwrap();
-    store.update_account("a", 2, "second", "admin").unwrap();
+    rename(&store, "a", 1, "first", "admin").unwrap();
+    rename(&store, "a", 2, "second", "admin").unwrap();
     let newest = store.newest_registry_change_id().unwrap().unwrap();
     let changes = store.registry_changes_after(0, 100).unwrap();
     assert_eq!(changes.len(), 2);
@@ -2502,23 +2523,21 @@ fn an_account_update_is_fenced_on_the_revision_it_was_built_from() {
         .create_account(&row, Some(&Secret::new("k1")), 1, "admin")
         .unwrap();
     let built_from = store.account_revision("vendor").unwrap().unwrap();
-    store
-        .update_account("vendor", built_from, "Renamed", "admin")
-        .unwrap();
+    rename(&store, "vendor", built_from, "Renamed", "admin").unwrap();
     assert_eq!(
         store.account("vendor").unwrap().unwrap().label.as_str(),
         "Renamed"
     );
     assert!(
         matches!(
-            store.update_account("vendor", built_from, "Renamed Again", "admin"),
+            rename(&store, "vendor", built_from, "Renamed Again", "admin"),
             Err(StoreError::Stale)
         ),
         "the revision the caller read is gone, so the edit it assembled is about a row that moved"
     );
     assert_eq!(store.account("vendor").unwrap().unwrap().label, "Renamed");
     assert!(matches!(
-        store.update_account("nobody", 1, "x", "admin"),
+        rename(&store, "nobody", 1, "x", "admin"),
         Err(StoreError::AccountNotFound(_))
     ));
 }

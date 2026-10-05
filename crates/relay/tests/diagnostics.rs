@@ -576,8 +576,8 @@ async fn a_400_naming_the_injected_beta_strips_it_retries_once_on_the_same_accou
     // The account's label patched twice, with no request in between: the revision moved twice, so a reload
     // clears the latch and the beta is injected again.
     // `set_api_key_secret` already bumped the row to revision 2 when the harness sealed its secret.
-    h.store.update_account("acct", 2, "acct", "test").unwrap();
-    h.store.update_account("acct", 3, "acct", "test").unwrap();
+    rename(&h, "acct", 2, "acct", "test").unwrap();
+    rename(&h, "acct", 3, "acct", "test").unwrap();
     h.router.reload().await.unwrap();
     up.push_credential_rule(ACCT_SECRET, "/v1/messages", json_200());
     let resp4 = h

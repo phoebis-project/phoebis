@@ -24,9 +24,9 @@ use phoebis_relay::{
 };
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Failover, Identity,
-    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey,
-    Store, Strategy,
+    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Failover,
+    Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret,
+    StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use tower::ServiceExt;
@@ -895,6 +895,32 @@ pub async fn step_to_backoff(h: &Harness, up: &FakeUpstream, account: &str) {
     })
     .await;
     h.clock.store(until, Ordering::SeqCst);
+}
+
+/// A label edit through the one account write, fenced on the revision the caller read, as the admin route fences.
+pub fn rename(
+    h: &Harness,
+    id: &str,
+    revision: u64,
+    label: &str,
+    actor: &str,
+) -> Result<(), StoreError> {
+    let generation = h
+        .store
+        .account(id)?
+        .map_or(0, |row| row.lifecycle_generation);
+    h.store.commit_account_update(&AccountUpdate {
+        id,
+        expected_revision: revision,
+        lifecycle_generation: generation,
+        label,
+        secret: None,
+        state: None,
+        at: h.clock.load(Ordering::SeqCst),
+        actor,
+        enabled: None,
+        cancellation: None,
+    })
 }
 
 /// A fake serving plain HTTP has no certificate to trust, and `X509::from_pem` refuses the empty string.

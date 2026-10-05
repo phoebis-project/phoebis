@@ -2132,9 +2132,7 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
     })
     .await;
     // The relay is inside `credential` for `a`; the row it selected is revision 1, and this makes it 2.
-    h.store
-        .update_account("a", 1, "a (edited)", "test")
-        .unwrap();
+    rename(&h, "a", 1, "a (edited)", "test").unwrap();
     h.router.reload().await.unwrap();
     up.release();
     let resp = inflight.await.unwrap();
