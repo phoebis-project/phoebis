@@ -295,7 +295,8 @@ impl QuotaPoll {
     /// and reported to the router as `poll_account` does with a router.
     ///
     /// Spawned once the startup step is done: that step has just read every account, so an account the first
-    /// pass finds is next read an interval after the start, on its phase, and its profile an hour on.
+    /// pass finds is next read an interval after the start, on its phase, or when its hold ends after a 429, and
+    /// its profile an hour on.
     pub fn spawn(
         store: Arc<Store>,
         usage: Arc<UsageService>,

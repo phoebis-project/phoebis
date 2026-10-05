@@ -1274,7 +1274,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     });
     json!({
         "id": row.id,
-        "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
+        "kind": kind_name(row.kind),
         "label": row.label,
         "enabled": row.enabled,
         "cancelled": term.cancelled,
@@ -1477,6 +1477,13 @@ fn usage_json(
         "raw_keys": snapshot.raw_keys,
         "windows": snapshot.windows.iter().map(&window).collect::<Vec<_>>(),
     })
+}
+
+pub(crate) fn kind_name(kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::ApiKey => "api_key",
+        AccountKind::Oauth => "oauth",
+    }
 }
 
 fn state_name(state: AccountState) -> &'static str {

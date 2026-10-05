@@ -736,8 +736,9 @@ const IN_FLOW: MenuPlacement = { kind: 'down' };
 const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
 
 /**
- * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's first column
- * opens rightward, since a list aligned to its right edge would run past the table wrap's left edge, which clips it.
+ * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's
+ * first column opens rightward, since a list aligned to its right edge would run past the table wrap's left edge,
+ * which clips it.
  */
 export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }: { align?: MenuAlign; items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
@@ -784,9 +785,9 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
     setPlacement(next.kind === 'down' ? IN_FLOW : next);
   }, [open]);
   const floating = open && placement.kind === 'float';
-  // The list in flow can overflow a clipping wrap and give it a scrollbar that pushes the trigger aside; leaving for the
-  // portal takes the scrollbar away. So the layer is placed again from the trigger at rest, measured once it floats,
-  // and that measurement is where the close-on-move checks below start.
+  // The list in flow can overflow a clipping wrap and give it a scrollbar that pushes the trigger aside; leaving for
+  // the portal takes the scrollbar away. So the layer is placed again from the trigger at rest, measured once it
+  // floats, and that measurement is where the close-on-move checks below start.
   useLayoutEffect(() => {
     if (!floating || !ref.current) return;
     const trigger = ref.current.getBoundingClientRect();

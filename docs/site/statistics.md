@@ -89,7 +89,8 @@ accepts requests and bounded by `routing.startup_fetch_seconds`, so selection ho
 request after a restart; an account whose first answer is a 429 serves from the windows kept in the registry from its
 last run, predicted forward, and its backoff starts at once, and one whose first answer is a transport failure or
 another error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each
-account five minutes after the startup step, on the account's phase, and its profile an hour after.
+account five minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile
+an hour after.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honoured up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next

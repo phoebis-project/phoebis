@@ -1,6 +1,8 @@
 export type MenuPlacement = { kind: 'down' } | { kind: 'up' } | { kind: 'float'; left: number; top: number };
 
-/** Which edge of its trigger a list lines up with: the right for a menu at a row's end, the left for one at its start. */
+/**
+ * Which edge of its trigger a list lines up with: the right for a menu at a row's end, the left for one at its start.
+ */
 export type MenuAlign = 'left' | 'right';
 
 /** The parts of a clipping table wrap the placement reads, so a test can stand one in. */
@@ -28,7 +30,9 @@ export function menuPlacement(trigger: { bottom: number; left: number; right: nu
   return floatAt(trigger, list, viewportHeight, align);
 }
 
-/** The fixed layer at a trigger: below it when the viewport has the room and above it otherwise, on the `align` edge. */
+/**
+ * The fixed layer at a trigger: below it when the viewport has the room and above it otherwise, on the `align` edge.
+ */
 export function floatAt(trigger: { bottom: number; left: number; right: number; top: number }, list: { height: number; width: number }, viewportHeight: number, align: MenuAlign = 'right'): Extract<MenuPlacement, { kind: 'float' }> {
   const need = list.height + 4;
   const below = viewportHeight - trigger.bottom >= need;

@@ -103,6 +103,8 @@ async function emailLines(name, rows) {
   results.push({ name, ok: rows.length > 0 && wrong.length === 0, missing: wrong.map(([id, line]) => `${id}: ${JSON.stringify(line)}`) });
 }
 const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
+/** A wait as the TTFB column reads a duration, spelled out here so the checks hold the console's formatter to it. */
+const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 /** A live row's cell under the header that reads `header` in the mount's live table, so a check names its column. */
 const liveCell = (m, tr, header) => {
   const i = [...m.container.querySelectorAll('.live-table thead th')].findIndex((th) => th.textContent?.trim() === header);
@@ -5200,7 +5202,6 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
 
   // The marker follows the trail on a row held and served and on a row held with nothing dispatched, and the
   // switch keeps the held rows alone; the wait reads as the TTFB column reads a duration.
-  const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
   const servedHeld = requests.find((r) => r.held?.heldMs === 1250 && r.attempts.length === 1);
   const heldAtCap = requests.find((r) => r.held !== null && r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
   results.push({ name: 'fixture: a request served after a hold and one held with nothing dispatched', ok: servedHeld !== undefined && heldAtCap !== undefined, missing: [String(servedHeld?.id), String(heldAtCap?.id)] });
@@ -5735,7 +5736,7 @@ if (failoverRow) {
     await m.settle(300);
     const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
     const { cohort, heldMs } = held.attempts[0].selection.cohortHold;
-    const wait = heldMs >= 1000 ? `${(heldMs / 1000).toFixed(heldMs >= 10_000 ? 0 : 1)} s` : `${Math.round(heldMs)} ms`;
+    const wait = waitText(heldMs);
     results.push({ name: '/requests drawer names the account a hold waited on and how long it waited', ok: drawn.head.includes(`held ${wait} on ${cohort} before placing`), missing: [wait, drawn.head] });
   }
   // The lines a trace draws more rarely: a placement beside a move, a placement with the main conversation, which
@@ -5790,7 +5791,7 @@ if (failoverRow) {
     const line = m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line';
     const on = heldAfter.held.cohort ?? heldAfter.held.waitedOn.at(-1);
     const { heldMs } = heldAfter.held;
-    const wait = heldMs >= 1000 ? `${(heldMs / 1000).toFixed(heldMs >= 10_000 ? 0 : 1)} s` : `${Math.round(heldMs)} ms`;
+    const wait = waitText(heldMs);
     results.push({
       name: '/requests drawer of a request held after an attempt names the hold its attempt never followed under Attempts',
       ok: line === `held ${wait} on ${on}` && m.container.querySelectorAll('.drawer .attempt').length === heldAfter.attempts.length,
@@ -5805,7 +5806,7 @@ if (failoverRow) {
     await m.settle(300);
     const line = m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line';
     const on = unplaced.held.cohort ?? unplaced.held.waitedOn.at(-1);
-    const wait = unplaced.held.heldMs >= 1000 ? `${(unplaced.held.heldMs / 1000).toFixed(unplaced.held.heldMs >= 10_000 ? 0 : 1)} s` : `${Math.round(unplaced.held.heldMs)} ms`;
+    const wait = waitText(unplaced.held.heldMs);
     results.push({
       name: '/requests drawer of a request held with nothing dispatched names the hold and its wait under Attempts',
       ok: line === `held ${wait} on ${on}` && m.container.querySelectorAll('.drawer .attempt').length === 0 && m.container.querySelectorAll('.drawer .selection-trace').length === 0,

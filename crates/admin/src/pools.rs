@@ -683,10 +683,7 @@ fn member_json(
     let kind = accounts
         .iter()
         .find(|a| a.id == m.account_id)
-        .map(|a| match a.kind {
-            phoebis_store::AccountKind::ApiKey => "api_key",
-            phoebis_store::AccountKind::Oauth => "oauth",
-        });
+        .map(|a| crate::routes::kind_name(a.kind));
     let rows = crate::routes::spend_rows(spends, &m.pool_id, &m.account_id);
     let reports: Vec<Value> = rows
         .iter()
