@@ -1188,16 +1188,24 @@ async fn backoff_rows(h: &Harness) -> Vec<(String, Option<String>, i64, serde_js
 async fn a_rate_limited_poll_writes_the_backoff_s_start_and_the_clean_one_its_end() {
     let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
     up.add_credential_rule(A, "/api/oauth/usage", usage_rule().respond);
-    up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
     let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    // A clean read ahead of the run, the startup step's, which the run's start names.
+    let usage = h
+        .usage
+        .clone()
+        .expect("the harness was built with the poll");
+    usage.poll("a").await.unwrap();
+    let clean_at = usage.poll_status("a").unwrap().last_clean_at;
+    assert!(clean_at.is_some());
+    up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
     let paused = start_polling(&h, &up).await;
 
     // The first slot at 300 s meets the 429 and holds the account for the ladder's two minutes; the read when
     // the hold ends is clean.
     step_to(&h, &up, &paused, secs(302)).await;
-    assert_eq!(usage_asked(&up, A), 1);
-    step_to(&h, &up, &paused, secs(424)).await;
     assert_eq!(usage_asked(&up, A), 2);
+    step_to(&h, &up, &paused, secs(424)).await;
+    assert_eq!(usage_asked(&up, A), 3);
     let rows = resumed(wait_for_async(Duration::from_secs(5), || async {
         let rows = backoff_rows(&h).await;
         (rows.len() == 2).then_some(rows)
@@ -1222,10 +1230,11 @@ async fn a_rate_limited_poll_writes_the_backoff_s_start_and_the_clean_one_its_en
         (
             started.3["endpoint"].as_str(),
             started.3["attempts"].as_u64(),
-            started.3["next_attempt_at"].as_i64()
+            started.3["next_attempt_at"].as_i64(),
+            started.3["last_clean_poll_at"].as_i64()
         ),
-        (Some("usage"), Some(1), Some(started.2 + 120_000)),
-        "the first 429 of a run, held for the ladder's first step"
+        (Some("usage"), Some(1), Some(started.2 + 120_000), clean_at),
+        "the first 429 of a run, held for the ladder's first step, after the last clean read"
     );
     assert!(
         started.3["reason"]

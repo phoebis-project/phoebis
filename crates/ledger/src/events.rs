@@ -332,6 +332,7 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
             reason,
             attempts,
             next_attempt_at,
+            last_clean_at,
         } => (
             *at,
             "poll_backoff_started",
@@ -341,6 +342,7 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
                 "endpoint": endpoint,
                 "attempts": attempts,
                 "next_attempt_at": next_attempt_at,
+                "last_clean_poll_at": last_clean_at,
             }),
         ),
         BackoffEdge::Ended {

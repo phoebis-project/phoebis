@@ -81,6 +81,8 @@ pub enum BackoffEdge {
         reason: String,
         attempts: u32,
         next_attempt_at: i64,
+        /// When the last clean usage answer before the run was read; `None` when none was this process.
+        last_clean_at: Option<i64>,
     },
     Ended {
         account_id: String,
@@ -315,6 +317,7 @@ impl CachedEntry {
             reason: self.hold_message(),
             attempts: self.rate_limited_in_a_row,
             next_attempt_at: self.not_before,
+            last_clean_at: self.last_clean_at,
         })
     }
 
