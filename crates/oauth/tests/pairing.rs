@@ -144,7 +144,7 @@ fn a_pasted_callback_url_is_validated_against_the_session() {
         after_debug.contains(r#"code: "***""#),
         "the stored code prints redacted: {after_debug}"
     );
-    assert!(!after_debug.contains("abc#xyz"));
+    assert!(!after_debug.contains("abc#"));
     assert!(matches!(
         s.accept_callback(&sess.id, "admin-1", CallbackInput::Url(ok), 1_002),
         Err(PairingError::AlreadyConsumed)
