@@ -918,6 +918,35 @@ async fn no_confirm_stops_after_the_callback_and_account_confirm_finishes_it() {
         (String::new(), "paired erin\n".to_owned())
     );
     assert_eq!(running.get("/admin/accounts/erin").await["state"], "ready");
+
+    // A second pairing of the same slot, the paste as `<code> <state>` and the confirm under `--json`.
+    let (pairing, start) = running.pair(&["erin", "--no-confirm"]).await;
+    let id = start["id"].as_str().unwrap().to_owned();
+    let state = start["authorization_url"]
+        .as_str()
+        .unwrap()
+        .split("state=")
+        .nth(1)
+        .unwrap()
+        .to_owned();
+    let ended = pairing.end(Some(&format!("CODE-erin {state}\n"))).await;
+    assert_eq!(ended.code, Some(0), "stderr:\n{}", ended.stderr);
+    assert_eq!(ended.answers.len(), 1, "{:?}", ended.answers);
+    assert_eq!(ended.answers[0]["status"], "exchanged");
+    assert_eq!(ended.answers[0]["pending"]["email"], FIXTURE_EMAIL);
+
+    let confirmed = running.run(&["account", "confirm", &id, "--json"]).await;
+    assert_exit(&confirmed, 0);
+    let (stdout, stderr) = text(&confirmed);
+    assert_eq!(stderr, "", "nothing but errors on stderr under --json");
+    assert_eq!(
+        (stdout.matches('\n').count(), stdout.ends_with('\n')),
+        (1, true),
+        "the answer is one line: {stdout:?}"
+    );
+    let answer: Value = serde_json::from_str(&stdout).unwrap();
+    assert_eq!(answer["account_id"], "erin");
+    assert_eq!(answer["status"], "confirmed");
     running.stop().await;
 }
 

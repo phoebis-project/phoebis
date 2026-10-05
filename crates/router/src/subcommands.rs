@@ -13,6 +13,11 @@ use serde_json::{json, Map, Value};
 
 use crate::admin_client::{self, AdminClient, Answer, ClientError, Common};
 
+/// `--json` under `account pair`, where the shared line would promise a quiet stderr the prompts still use. No closing
+/// period, as clap prints the doc-comment help lines beside it.
+const PAIR_JSON_HELP: &str =
+    "Print each route's answer on stdout as one line as it arrives; the prompts stay on stderr";
+
 #[derive(clap::Subcommand, Debug)]
 pub enum AccountCommand {
     /// Create an account: `POST /admin/accounts`. Prints the id on stdout.
@@ -54,6 +59,7 @@ pub enum AccountCommand {
         common: Common,
     },
     /// Pair an OAuth account: start, paste the callback URL, confirm.
+    #[command(mut_arg("json", |arg| arg.help(PAIR_JSON_HELP)))]
     Pair {
         /// The account's id.
         id: String,
@@ -730,12 +736,13 @@ fn refused(error: ClientError, err: &mut dyn Write) -> i32 {
     error.exit_code()
 }
 
-/// The callback's body from one pasted line: `<code> <state>` for a line with exactly one space and no `://`, the
-/// URL otherwise; `None` for an empty line, which cancels as the end of input does.
+/// The callback's body from one pasted line, trimmed of ASCII whitespace at both ends: `<code> <state>` for a line
+/// with exactly one space and no `://`, the URL otherwise; `None` for a line that trims to nothing, which cancels as
+/// the end of input does.
 fn paste(line: &str) -> Option<Value> {
-    // A Windows terminal pastes a carriage return before the newline.
-    let line = line.strip_suffix('\n').unwrap_or(line);
-    let line = line.strip_suffix('\r').unwrap_or(line);
+    // A terminal paste can carry a space at either end and a Windows carriage return, and a padded `<code> <state>`
+    // must still split into the pair rather than travel as a URL.
+    let line = line.trim_matches(|c: char| c.is_ascii_whitespace());
     if line.is_empty() {
         return None;
     }
@@ -982,10 +989,13 @@ mod tests {
         for line in [format!("{url}\n"), format!("{url}\r\n"), url.to_owned()] {
             assert_eq!(paste(&line), Some(json!({ "url": url })), "{line:?}");
         }
-        assert_eq!(
-            paste("CODE-a#st st\r\n"),
-            Some(json!({ "code": "CODE-a#st", "state": "st" }))
-        );
+        for pair in ["CODE-a#st st\r\n", " CODE-a#st st\n", "CODE-a#st st \t\n"] {
+            assert_eq!(
+                paste(pair),
+                Some(json!({ "code": "CODE-a#st", "state": "st" })),
+                "{pair:?}"
+            );
+        }
         for other in ["http://localhost:4123/callback?code=a b", "a b c", "CODE-a"] {
             assert_eq!(
                 paste(&format!("{other}\n")),
@@ -993,9 +1003,30 @@ mod tests {
                 "{other:?}"
             );
         }
-        for empty in ["", "\n", "\r\n"] {
+        for empty in ["", "\n", "\r\n", " \t\n"] {
             assert_eq!(paste(empty), None, "{empty:?}");
         }
+    }
+
+    #[test]
+    fn pair_describes_json_as_one_line_per_route_with_the_prompts_on_stderr() {
+        use clap::Subcommand;
+        let account = AccountCommand::augment_subcommands(clap::Command::new("account"));
+        let json_help = |name: &str| {
+            account
+                .find_subcommand(name)
+                .unwrap()
+                .get_arguments()
+                .find(|arg| arg.get_id() == "json")
+                .and_then(|arg| arg.get_help())
+                .map(ToString::to_string)
+        };
+        assert_eq!(json_help("pair").as_deref(), Some(PAIR_JSON_HELP));
+        assert_ne!(
+            json_help("confirm").as_deref(),
+            Some(PAIR_JSON_HELP),
+            "the other commands keep the shared line"
+        );
     }
 
     #[test]

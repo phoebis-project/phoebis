@@ -331,13 +331,14 @@ pairing it left standing. The command keeps no state: the pairing lives in the r
 after the start.
 
 `--no-confirm` stops after the callback and prints `pairing {pairing id} exchanged; finish it with: phoebis account
-confirm {pairing id}`. `account confirm` posts the confirm route for that id and prints `paired {id}`, or `404 pairing
-session not found` for a pairing another credential started or one past its expiry. A pairing is the starting
-credential's to finish, and every command holding the admin secret is the same caller, so a pairing that `--no-confirm`
-leaves is finished from any shell with the admin secret and not from the console, whose login is another caller. Under
-`--json` stdout carries each route's answer as its own line, the start's first, so a script holds the pairing id and the
-redirect while the command waits for the paste; the lines on stderr stay as they are. Both commands exit 0 once the
-pairing is confirmed, or exchanged under `--no-confirm`, and 1 otherwise.
+confirm {pairing id}`. `account confirm` posts the confirm route for that id and prints `paired {account id}`; a pairing
+another caller started answers `404 admin session does not own this pairing session`, and one past its expiry `409
+pairing session expired`. A pairing is the starting credential's to finish, and every command holding the admin secret
+is the same caller, so a pairing that `--no-confirm` leaves is finished from any shell with the admin secret and not
+from the console, whose login is another caller. Under `--json` stdout carries each route's answer as its own line, the
+start's first, so a script holds the pairing id and the redirect while the command waits for the paste; the lines on
+stderr stay as they are. Both commands exit 0 once the pairing is confirmed, or exchanged under `--no-confirm`, and 1
+otherwise.
 
 `account clear-cooldown` clears one cooldown through `DELETE /admin/accounts/{id}/cooldowns/{scope}`, one call with no
 body. `--scope` is `account` (the default), `fast`, `fast_credits` or `model:<canonical>`. It prints `cleared {scope} on
@@ -362,12 +363,12 @@ route's `400` prints as it comes.
 
 These six commands take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line
 the route wrote and nothing on stderr but errors; `account pair` prints one such line per route and keeps its own lines
-on stderr. A refused call prints `{status} {message}` from the route's answer on
-stderr and exits 1, a refused secret as `the admin secret was refused`; a call that does not reach the listener prints
-one line naming the URL and exits 1. The commands' own refusals exit 1 before any call: `an api_key account needs
---api-key-env or --secret-stdin`, `environment variable {name} is unset or empty` for `--api-key-env`, `--secret-stdin
-read no secret from stdin`, and `--body {path}: {reason}` or `--member {member}: {reason}`. Each exits 0 when the route
-accepts the call, and 2 for a usage error. No output carries the admin secret or an upstream key.
+on stderr. A refused call prints `{status} {message}` from the route's answer on stderr and exits 1, a refused secret as
+`the admin secret was refused`; a call that does not reach the listener prints one line naming the URL and exits 1. The
+commands' own refusals exit 1 before any call: `an api_key account needs --api-key-env or --secret-stdin`, `environment
+variable {name} is unset or empty` for `--api-key-env`, `--secret-stdin read no secret from stdin`, and `--body {path}:
+{reason}` or `--member {member}: {reason}`. Each exits 0 when the route accepts the call, and 2 for a usage error. No
+output carries the admin secret or an upstream key.
 
 ## Environment variables
 
