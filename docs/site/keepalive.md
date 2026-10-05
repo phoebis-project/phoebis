@@ -219,7 +219,7 @@ over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight; or `held`, with no probe scheduled and one of nineteen reasons attached.
+`probing`, with a probe in flight; or `held`, with no probe scheduled and one of twenty reasons attached.
 
 ### The guard field
 
@@ -241,6 +241,7 @@ probe that made its net negative, not a contradiction.
 | `evicted` | evicted | The engine reached its retained-bytes cap and this recipe was the oldest idle one. |
 | `expired` | entry expired | The cache entry expired before its probe was due; no probe was sent. |
 | `idle_limit` | idle limit | The pool's idle time or idle probe budget ran out since the last real request. |
+| `ledger_behind` | ledger behind | The router's ledger was behind; the probe is sent again after the answer's wait. |
 | `net_negative` | net negative | Probes cost more than they saved; a real request grants the grace probes again. |
 | `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
 | `paused` | paused | The account is paused or its subscription has ended, the pool is disabled, or the key opted out. |
@@ -275,6 +276,11 @@ A probe answered `429 accounts_at_cap`, every account of its pool at the in-flig
 under `quota_exhausted`: its next attempt waits out that answer's `Retry-After` in place of the backoff, since a slot
 frees within seconds. A probe answered `503 accounts_unavailable` because its key moved to another pool while it was in
 flight is `retrying` rather than paused under `pool_exhausted`: its next attempt admits under the new pool.
+
+A probe the router refused with `503 ledger_behind`, its ledger catching up, holds under `ledger_behind` rather than
+`retrying`: its next attempt waits out that answer's `Retry-After`, or the pool's `retry_seconds` without one, and
+counts no failure toward `cold_probe_limit`, so a ledger that stays behind never pauses the recipe. The entry's expiry
+still bounds the re-sends: once it passes, the recipe ends under `expired`, as under any other hold.
 
 A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
 lapses or is evicted, or when the next request after the probe reads nothing from the entry it kept:

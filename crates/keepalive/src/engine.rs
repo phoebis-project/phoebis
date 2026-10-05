@@ -134,6 +134,7 @@ reasons! {
     KeepaliveOff => "keepalive_off",
     KeyOptedOut => "key_opted_out",
     LeaseExpired => "lease_expired",
+    LedgerBehind => "ledger_behind",
     MissingAccount => "missing_account",
     NetNegative => "net_negative",
     NoCacheEvidence => "no_cache_evidence",

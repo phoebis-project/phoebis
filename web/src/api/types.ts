@@ -954,6 +954,7 @@ export type RecipeReason =
   | 'evicted'
   | 'expired'
   | 'idle_limit'
+  | 'ledger_behind'
   | 'net_negative'
   | 'overage'
   | 'paused'

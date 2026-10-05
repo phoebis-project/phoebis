@@ -48,7 +48,7 @@ pub use classify::{
     SPEND_CAP_REASON,
 };
 pub use drift::DriftGuard;
-pub use errors::{anthropic_error, auth_error_response, key_refusal_response};
+pub use errors::{anthropic_error, auth_error_response, key_refusal_response, LEDGER_BEHIND};
 pub use exhaustion::exhaustion_response;
 pub use headers::{outbound_headers, CredentialKind};
 pub use hold::{hold, Commit, Held, HeldRead, Inspect, INSPECT_BUFFER};

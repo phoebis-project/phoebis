@@ -576,13 +576,14 @@ pub async fn harness_with_catalog(
 
 /// `harness_with_bus`, with the caller's own catalog fake in place of `catalog_rules()`'s: for a suite (like
 /// keepalive's) built around a session's pin and account continuity, where a spelling resolving to a dated id
-/// mid-test is not what the suite is about.
+/// mid-test is not what the suite is about. `accounting`, when named, is the ledger's standing admission reads.
 pub async fn harness_with_bus_and_catalog(
     up: &FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
     bus: Bus,
     catalog_up: FakeUpstream,
+    accounting: Option<AccountingSource>,
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     build(
@@ -596,7 +597,7 @@ pub async fn harness_with_bus_and_catalog(
         None,
         Some(catalog_up),
         RouterConfig::default(),
-        None,
+        accounting,
     )
     .await
 }
