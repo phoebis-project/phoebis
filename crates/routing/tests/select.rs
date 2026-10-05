@@ -4822,7 +4822,8 @@ fn an_accounts_cooldown_outlives_the_shedding_pools_purged_marks() {
         None,
         "p1's round leaves with its dwell"
     );
-    assert!(!st.shed_marked("p1", &key("k1", "s1"), purged, 600_000));
+    // Read against a dwell the mark is still inside, so only the purge can answer false.
+    assert!(!st.shed_marked("p1", &key("k1", "s1"), purged, 1_800_000));
     assert_eq!(
         st.newest_shed("a"),
         Some(T),
