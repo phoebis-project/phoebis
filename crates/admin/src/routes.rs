@@ -249,11 +249,11 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         .get(UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
-    // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake. One rule in every
-    // mode: a presented `Origin` must name the request's own `Host`, since another authority is another page on
-    // this host driving the console, while a request with no `Origin` (curl, a subcommand, the health probe) is
-    // the operator's own hand. A front that terminates TLS passes `Host` through, so both headers name the front.
-    // The login is checked too: a forced login is the one mutation an unauthenticated caller can reach.
+    // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake. A presented `Origin`
+    // must name the request's own `Host`, since another authority is another page on this host driving the console,
+    // while a request with no `Origin` (curl, a subcommand, the health probe) is the operator's own hand. A front
+    // that terminates TLS passes `Host` through, so both headers name the front. The login is checked too: a forced
+    // login is the one mutation an unauthenticated caller can reach.
     if mutation || websocket {
         if let Some(origin) = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok()) {
             let host = request
