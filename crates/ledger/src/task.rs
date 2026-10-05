@@ -510,13 +510,19 @@ async fn writer(
             // counts and the metrics would take it twice. The start-up pass ran on this task before the loop, under
             // the same rule.
             Some(Control::ReplayParked { now, reply }) = control.recv() => {
-                let (landed, _) = land_parked(&db, &pricing, &stats, &metrics, now).await;
-                // The refresh the start runs after its own pass: the landed money reaches the routing table before
-                // the caller hears the counts, so a selection after a replay that crossed a budget is refused.
-                member_revision = router.snapshot().revision;
-                spend_due = refresh_spend(spend_due).await;
-                let remaining = db.read(crate::query::parked_count).await;
-                let _ = reply.send(remaining.map(|remaining| Replayed { landed, remaining }));
+                let replayed = match land_parked(&db, &pricing, &stats, &metrics, now).await {
+                    Ok((landed, _)) => {
+                        // The refresh the start runs after its own pass: the landed money reaches the routing table
+                        // before the caller hears the counts, so a selection after a replay that crossed a budget is
+                        // refused.
+                        member_revision = router.snapshot().revision;
+                        spend_due = refresh_spend(spend_due).await;
+                        let remaining = db.read(crate::query::parked_count).await;
+                        remaining.map(|remaining| Replayed { landed, remaining })
+                    }
+                    Err(error) => Err(error),
+                };
+                let _ = reply.send(replayed);
                 continue;
             }
             // The flag stays set once flipped, so the arm is guarded to the one round that moves the handle.
@@ -835,23 +841,20 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
 /// Every parked record is tried once at start and on each replay, in the order it was parked, each in its own
 /// transaction, which deletes the parked row as it lands the record, so a replay is charged once however the process
 /// fares between the two: one that lands leaves the table and is observed as a landed record; one that fails keeps its
-/// row with the error it met this time. Answers how many landed and how many were kept.
+/// row with the error it met this time. Answers how many landed and how many were kept, or the error of a row read
+/// that failed, since a pass that never ran is not one that kept every row.
 async fn land_parked(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
     now: i64,
-) -> (u64, u64) {
-    let rows = match blocking(db, |db| db.parked_rows()).await {
-        Ok(rows) => rows,
-        Err(error) => {
-            tracing::warn!(%error, "the parked records could not be read; they wait for the next start or replay");
-            return (0, 0);
-        }
-    };
+) -> Result<(u64, u64), LedgerError> {
+    let rows = blocking(db, |db| db.parked_rows()).await.inspect_err(|error| {
+        tracing::warn!(%error, "the parked records could not be read; they wait for the next start or replay");
+    })?;
     if rows.is_empty() {
-        return (0, 0);
+        return Ok((0, 0));
     }
     let (mut landed, mut kept) = (0u64, 0u64);
     for row in rows {
@@ -897,7 +900,7 @@ async fn land_parked(
         }
     }
     tracing::info!(landed, kept, "the parked records were tried");
-    (landed, kept)
+    Ok((landed, kept))
 }
 
 /// Runs `f` against the ledger on a blocking worker; a worker that died answers as an I/O error.

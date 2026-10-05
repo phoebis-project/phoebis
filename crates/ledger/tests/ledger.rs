@@ -4543,6 +4543,49 @@ async fn replay_parked_lands_a_parked_record_whose_cause_is_gone() {
     up.shutdown().await;
 }
 
+/// A replay that cannot read the parked rows ran no pass, so it answers the error rather than nothing landed and every
+/// row kept; the row stays for the replay after it.
+#[tokio::test]
+async fn a_replay_whose_parked_rows_cannot_be_read_answers_the_error() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_poison(&h).await;
+    drop_trigger(&h.db, "refuse");
+    // The row read names the column; the count a reply carries does not, so only the pass itself fails.
+    rename_parked_record(&h.db, "record", "record_held");
+    let now = h.clock.load(Ordering::SeqCst);
+    let error = h.ledger.replay_parked(now).await.unwrap_err();
+    assert!(error.to_string().contains("record"), "{error}");
+    assert_eq!(parked_rows(&h).await, 1);
+
+    rename_parked_record(&h.db, "record_held", "record");
+    assert_eq!(
+        h.ledger.replay_parked(now).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    up.shutdown().await;
+}
+
+fn rename_parked_record(db: &LedgerDb, from: &str, to: &str) {
+    db.write(|c| {
+        c.execute_batch(&format!(
+            "ALTER TABLE parked_records RENAME COLUMN {from} TO {to};"
+        ))?;
+        Ok(())
+    })
+    .unwrap();
+}
+
 /// The parked row leaves in the transaction that lands its record, on a replay as at the start: a replay whose
 /// acknowledgement the database refuses lands nothing and keeps the row, and the replay after it charges the record
 /// once.

@@ -372,6 +372,29 @@ async fn the_replay_route_counts_a_row_it_could_not_land_as_remaining() {
     );
 }
 
+/// A pass that could not read the parked rows never ran, so it is a failure rather than an answer of nothing landed
+/// and every row kept: a caller reading the counts would stop retrying.
+#[tokio::test]
+async fn the_replay_route_answers_500_when_the_parked_rows_cannot_be_read() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    common::park_unreadable(&parts.db, "main", "business", common::NOW);
+    // The row read names the column; the count the answer would carry does not, so it still reads.
+    parts
+        .db
+        .write(|c| {
+            c.execute_batch("ALTER TABLE parked_records RENAME COLUMN record TO record_held;")?;
+            Ok(())
+        })
+        .unwrap();
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 500);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"error": "ledger failure"})
+    );
+}
+
 #[tokio::test]
 async fn the_replay_route_answers_500_once_the_ledger_writer_has_stopped() {
     let parts = common::admin_parts_full().await;
