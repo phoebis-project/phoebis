@@ -88,6 +88,10 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/keys/{id}/models", get(models::key_models))
         .route("/admin/keys/{id}/revoke", post(keys::revoke))
         .route("/admin/keys/{id}/rotate", post(keys::rotate))
+        .route(
+            "/admin/ledger/parked/replay",
+            post(crate::ledger::replay_parked),
+        )
         .route("/admin/live", get(live::upgrade))
         .route("/admin/live/snapshot", get(live::past))
         .route("/admin/models/state", get(models::state))
@@ -229,6 +233,7 @@ fn entity_of(
     match pattern.get(2).copied() {
         Some("accounts") => ("account", segment("{id}").or(created)),
         Some("keys") => ("key", segment("{id}").or(created)),
+        Some("ledger") => ("ledger", None),
         Some("pools") => ("pool", segment("{id}").or(created)),
         Some("oauth") => ("pairing", segment("{id}").or(created)),
         Some("sessions") => (

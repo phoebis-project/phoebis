@@ -65,7 +65,7 @@ pub use rollup::{
     PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
 };
 pub use task::{
-    spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, BATCH_RETRY_DELAYS,
+    spawn, Admission, Ledger, LedgerConfig, LedgerGone, LedgerStats, Replayed, BATCH_RETRY_DELAYS,
     BATCH_RETRY_HOLD, CHANNEL_DEPTH, LEDGER_BEHIND_DEPTH,
 };
 pub use usage::{key_usage_windows, usage_router, KeyUsageWindow, ModelUsage, UsageTokens};

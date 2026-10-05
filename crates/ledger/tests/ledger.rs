@@ -16,7 +16,7 @@ use phoebis_bus::{
 use phoebis_ledger::{
     list_requests, member_spends, parked_count, parked_summary, run_retention, Assembler,
     AttemptRecord, AttentionGauges, BodyRecord, BudgetedMember, EventRecord, LedgerConfig,
-    LedgerDb, LedgerError, LiveKeys, ParkedSummary, PriceTable, Record, RequestFilter,
+    LedgerDb, LedgerError, LiveKeys, ParkedSummary, PriceTable, Record, Replayed, RequestFilter,
     RequestRecord, BATCH_RETRY_DELAYS, BATCH_RETRY_HOLD, LEDGER_BEHIND_DEPTH,
 };
 use phoebis_profile::fixtures::BodyFixture;
@@ -4470,6 +4470,234 @@ async fn a_parked_record_whose_acknowledgement_is_refused_is_charged_once() {
         .await
         .unwrap();
     assert_eq!(charged, 1_000_000, "the parked charge contributes once");
+    up.shutdown().await;
+}
+
+/// Parks the priced record `poison` through the writer's own path: the `refuse` trigger refuses its row, the in-place
+/// retries run out and the pass one record at a time parks it. The trigger stays until the test drops it.
+async fn park_poison(h: &Harness) {
+    refuse_requests(&h.db, Some("poison"));
+    h.ledger.record_request(finished("poison", true)).await;
+    through_the_retries(h).await;
+    wait_for_async(Duration::from_secs(5), || async {
+        (parked_rows(h).await == 1).then_some(())
+    })
+    .await;
+}
+
+/// The input tokens the rollups hold for member `a` of pool `main`: what a charge contributes, once per landing.
+async fn charged_to_a(h: &Harness) -> i64 {
+    h.db.read(|c| {
+        Ok(c.query_row(
+            "SELECT COALESCE(SUM(input_tokens), 0) FROM rollups_hourly WHERE pool_id = 'main' AND account_id = 'a'",
+            [],
+            |r| r.get(0),
+        )?)
+    })
+    .await
+    .unwrap()
+}
+
+async fn rows_of(h: &Harness, table: &'static str, column: &'static str, id: &'static str) -> i64 {
+    h.db.read(move |c| {
+        Ok(c.query_row(
+            &format!("SELECT COUNT(*) FROM {table} WHERE {column} = ?1"),
+            [id],
+            |r| r.get(0),
+        )?)
+    })
+    .await
+    .unwrap()
+}
+
+/// A parked record whose cause is gone lands on a replay, with no restart: its row leaves the table and the request is
+/// in the ledger.
+#[tokio::test]
+async fn replay_parked_lands_a_parked_record_whose_cause_is_gone() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_poison(&h).await;
+    drop_trigger(&h.db, "refuse");
+    let now = h.clock.load(Ordering::SeqCst);
+    assert_eq!(
+        h.ledger.replay_parked(now).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(parked_rows(&h).await, 0);
+    let (_, attempts) =
+        h.db.request("poison")
+            .await
+            .unwrap()
+            .expect("the replay landed the parked record");
+    assert_eq!(attempts[0].input_tokens, Some(1_000_000));
+    up.shutdown().await;
+}
+
+/// The parked row leaves in the transaction that lands its record, on a replay as at the start: a replay whose
+/// acknowledgement the database refuses lands nothing and keeps the row, and the replay after it charges the record once.
+#[tokio::test]
+async fn a_replay_whose_acknowledgement_is_refused_keeps_the_row_and_a_retry_charges_once() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_poison(&h).await;
+    drop_trigger(&h.db, "refuse");
+    refuse_parked_deletes(&h.db);
+    let charged = charged_to_a(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    assert_eq!(
+        h.ledger.replay_parked(now).await.unwrap(),
+        Replayed {
+            landed: 0,
+            remaining: 1
+        }
+    );
+    assert!(
+        h.db.request("poison").await.unwrap().is_none(),
+        "the record rolled back with its acknowledgement"
+    );
+    assert_eq!(charged_to_a(&h).await, charged, "and charged nothing");
+
+    drop_trigger(&h.db, "refuse_ack");
+    assert_eq!(
+        h.ledger.replay_parked(now).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(rows_of(&h, "requests", "id", "poison").await, 1);
+    assert_eq!(rows_of(&h, "attempts", "request_id", "poison").await, 1);
+    assert_eq!(
+        charged_to_a(&h).await,
+        1_000_000,
+        "the parked charge contributes once"
+    );
+    up.shutdown().await;
+}
+
+/// A replay reports the members' spend before it answers, so a selection right after a replay whose charge crossed a
+/// member's budget is refused on the landed money rather than admitted on the old balance.
+#[tokio::test]
+async fn a_replay_that_crosses_a_budget_is_followed_by_a_refused_selection() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    h.store
+        .set_pool_members(
+            "main",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: Some(0.01),
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+    h.router.reload().await.unwrap();
+    // The mirror's record of the edit lands first, so no event of it reaches the writer behind the batch the test
+    // refuses.
+    wait_for_async(Duration::from_secs(5), || async {
+        h.db.read(|c| phoebis_ledger::recent_events_of_kind(c, "registry_changed", 5))
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|e| {
+                e.detail
+                    .as_deref()
+                    .is_some_and(|d| d.contains("pool_members_set"))
+            })
+    })
+    .await;
+    park_poison(&h).await;
+    drop_trigger(&h.db, "refuse");
+    wait_for(Duration::from_secs(5), || {
+        (!h.ledger.degraded()).then_some(())
+    })
+    .await;
+    let day = wait_for_async(Duration::from_secs(5), || async {
+        h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .into_iter()
+            .find(|r| r.pool_id == "main" && r.account_id == "a" && r.period == BudgetPeriod::Day)
+    })
+    .await;
+    assert!(
+        day.spent_usd < 0.01,
+        "the parked charge is not spend yet: {day:?}"
+    );
+
+    let now = h.clock.load(Ordering::SeqCst);
+    let replayed = h.ledger.replay_parked(now).await.unwrap();
+    assert_eq!(replayed.landed, 1, "{replayed:?}");
+    let refused = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-5[1m]", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(refused.status(), 429);
+    assert_eq!(
+        refused
+            .headers()
+            .get("anthropic-ratelimit-unified-representative-claim")
+            .map(|v| v.to_str().unwrap()),
+        Some("overage")
+    );
+    up.shutdown().await;
+}
+
+/// The writer's turn is what serializes replays: two asked for at once land the row once between them.
+#[tokio::test]
+async fn two_replays_at_once_land_the_row_once() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_poison(&h).await;
+    drop_trigger(&h.db, "refuse");
+    let now = h.clock.load(Ordering::SeqCst);
+    let (first, second) = tokio::join!(h.ledger.replay_parked(now), h.ledger.replay_parked(now));
+    let (first, second) = (first.unwrap(), second.unwrap());
+    assert_eq!(first.landed + second.landed, 1, "{first:?} {second:?}");
+    assert_eq!((first.remaining, second.remaining), (0, 0));
+    assert_eq!(rows_of(&h, "requests", "id", "poison").await, 1);
+    assert_eq!(rows_of(&h, "attempts", "request_id", "poison").await, 1);
+    assert_eq!(charged_to_a(&h).await, 1_000_000);
     up.shutdown().await;
 }
 

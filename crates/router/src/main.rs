@@ -1,7 +1,7 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
 //! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins,
-//! copy both databases into a backup, or create or pair an account, create a pool or a key and clear a cooldown over
-//! the admin API.
+//! copy both databases into a backup, or create or pair an account, create a pool or a key, clear a cooldown and land
+//! the ledger's parked records over the admin API.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -12,7 +12,7 @@ use clap::{Parser, Subcommand};
 use phoebis_router::admin_client::{self, AdminClient};
 use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
-use phoebis_router::subcommands::{self, AccountCommand, KeyCommand, PoolCommand};
+use phoebis_router::subcommands::{self, AccountCommand, KeyCommand, LedgerCommand, PoolCommand};
 use phoebis_router::{init, tls};
 
 #[derive(Parser)]
@@ -55,6 +55,9 @@ enum Command {
     /// Create a key over the admin API.
     #[command(subcommand)]
     Key(KeyCommand),
+    /// Land the ledger's parked priced records over the admin API.
+    #[command(subcommand)]
+    Ledger(LedgerCommand),
     /// Create a pool over the admin API.
     #[command(subcommand)]
     Pool(PoolCommand),
@@ -268,6 +271,15 @@ fn main() -> anyhow::Result<()> {
                 command,
                 &cli.config,
                 &mut std::io::stdin().lock(),
+                &mut std::io::stdout().lock(),
+                &mut std::io::stderr().lock(),
+            );
+            std::process::exit(code)
+        }
+        Some(Command::Ledger(command)) => {
+            let code = subcommands::run_ledger(
+                command,
+                &cli.config,
                 &mut std::io::stdout().lock(),
                 &mut std::io::stderr().lock(),
             );

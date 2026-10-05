@@ -298,6 +298,93 @@ async fn the_system_document_reads_a_degraded_ledger_its_retry_and_its_parked_re
     );
 }
 
+/// `POST` with the admin secret as a bearer and no cookie, the subcommands' own call.
+async fn post_bearer(
+    app: &axum::Router,
+    path: &str,
+    bearer: &str,
+) -> axum::http::Response<axum::body::Body> {
+    use tower::ServiceExt;
+    app.clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("authorization", format!("Bearer {bearer}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_replay_route_answers_the_counts_on_an_empty_table() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 200);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"landed": 0, "remaining": 0})
+    );
+    let scripted = post_bearer(&parts.app, "/admin/ledger/parked/replay", "admin-secret").await;
+    assert_eq!(scripted.status(), 200);
+    assert_eq!(
+        json(scripted).await,
+        serde_json::json!({"landed": 0, "remaining": 0})
+    );
+    let anonymous = post(&parts.app, "/admin/ledger/parked/replay", "", None).await;
+    assert_eq!(anonymous.status(), 401);
+}
+
+/// A parked row the replay tries and cannot land stays in the table with the error it met this time, and the answer
+/// and the system document count it.
+#[tokio::test]
+async fn the_replay_route_counts_a_row_it_could_not_land_as_remaining() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    common::park_unreadable(&parts.db, "main", "business", common::NOW);
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 200);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"landed": 0, "remaining": 1})
+    );
+    let error = parts
+        .db
+        .read(|c| {
+            Ok(c.query_row("SELECT error FROM parked_records", [], |r| {
+                r.get::<_, String>(0)
+            })?)
+        })
+        .await
+        .unwrap();
+    assert_ne!(
+        error, "refused by test",
+        "the replay tried the row and kept the error it met"
+    );
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        system["ledger"]["parked_priced"].as_u64(),
+        Some(1),
+        "{system}"
+    );
+}
+
+#[tokio::test]
+async fn the_replay_route_answers_500_once_the_ledger_writer_has_stopped() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.clone().shutdown().await.unwrap();
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 500);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"error": "ledger failure"})
+    );
+}
+
 #[tokio::test]
 async fn a_store_whose_read_fails_reads_not_ready_on_the_system_document_until_it_answers_again() {
     let parts = common::admin_parts_full().await;

@@ -109,6 +109,21 @@ pub struct Admission {
 #[error("the ledger task has stopped")]
 pub struct LedgerGone;
 
+/// What a replay of the parked records did.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize)]
+pub struct Replayed {
+    pub landed: u64,
+    pub remaining: u64,
+}
+
+/// What a caller asks the writer to do on its own turn, between two batches.
+enum Control {
+    ReplayParked {
+        now: i64,
+        reply: oneshot::Sender<Result<Replayed, LedgerError>>,
+    },
+}
+
 #[derive(Clone)]
 pub struct Ledger {
     db: Arc<LedgerDb>,
@@ -123,6 +138,8 @@ pub struct Ledger {
     /// Background tasks the ledger owns beyond the writer, such as the quota poll. Aborted by `shutdown`
     /// before the stop signal goes out, so none of them can enqueue into a channel that is closing.
     tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
+    /// The writer's control channel: a replay asks for the writer's own turn through it.
+    control: mpsc::Sender<Control>,
 }
 
 impl Ledger {
@@ -213,6 +230,21 @@ impl Ledger {
         }
     }
 
+    /// The start-up pass on demand, run by the writer task between two of its batches: every parked row once, in
+    /// parking order, each in its own transaction with its row's deletion (`land_acknowledging`), then the spend
+    /// refresh the start runs after its own pass, so the routing table holds the landed money before this answers.
+    /// The writer's turn is the serialization: no row is landed twice by two passes, or by a pass and a batch, at
+    /// once. `remaining` is the table's count after the pass; `Err` when the writer has stopped.
+    pub async fn replay_parked(&self, now: i64) -> Result<Replayed, LedgerError> {
+        let stopped = || LedgerError::Io(std::io::Error::other("the ledger task has stopped"));
+        let (reply, answer) = oneshot::channel();
+        self.control
+            .send(Control::ReplayParked { now, reply })
+            .await
+            .map_err(|_| stopped())?;
+        answer.await.map_err(|_| stopped())?
+    }
+
     /// Asks the assembler to drain what the bus already delivered, then the writer to close the channel and
     /// land what it holds. A record offered after the close counts as a drop, which is what the spec's "at
     /// most the channel's contents" allows for.
@@ -238,6 +270,7 @@ pub fn spawn(
     config: LedgerConfig,
 ) -> Ledger {
     let (tx, rx) = mpsc::channel(CHANNEL_DEPTH);
+    let (control, control_rx) = mpsc::channel::<Control>(1);
     let stats = Arc::new(LedgerStats::default());
     let (done_tx, done_rx) = oneshot::channel();
     let (stop, stopped) = watch::channel(false);
@@ -249,6 +282,7 @@ pub fn spawn(
         stop: Arc::new(stop),
         done: Arc::new(Mutex::new(Some(done_rx))),
         tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
+        control,
     };
     let purge_store = store.clone();
     let mirror = spawn_event_mirror(
@@ -303,6 +337,7 @@ pub fn spawn(
         pricing,
         router,
         rx,
+        control_rx,
         stopped,
         assembler,
         stats,
@@ -387,6 +422,7 @@ async fn writer(
     pricing: Arc<Pricing>,
     router: RouterHandle,
     mut rx: mpsc::Receiver<Record>,
+    mut control: mpsc::Receiver<Control>,
     mut stopped: watch::Receiver<bool>,
     assembler: tokio::task::JoinHandle<()>,
     stats: Arc<LedgerStats>,
@@ -422,7 +458,7 @@ async fn writer(
         )
     };
     // Ahead of the start's spend read, so a parked priced record that lands now is in the first report.
-    land_parked(&db, &pricing, &stats, &metrics, clock()).await;
+    let _ = land_parked(&db, &pricing, &stats, &metrics, clock()).await;
     let mut spend_due = refresh_spend(None).await;
     // A batch whose transaction failed: while it is held the loop takes no new record, so order holds and the
     // channel fills behind it, which is what moves admission's mark before more money is spent.
@@ -468,6 +504,20 @@ async fn writer(
         let first = tokio::select! {
             // `recv` on a closed channel still yields what was queued before the close, then `None`.
             record = rx.recv() => match record { Some(record) => record, None => break },
+            // On the writer's own turn, between two batches, so a replay never runs beside the start-up pass, another
+            // replay or a batch: two passes that read the table at once would each land the same row, and the landed
+            // counts and the metrics would take it twice. The start-up pass ran on this task before the loop, under
+            // the same rule.
+            Some(Control::ReplayParked { now, reply }) = control.recv() => {
+                let (landed, _) = land_parked(&db, &pricing, &stats, &metrics, now).await;
+                // The refresh the start runs after its own pass: the landed money reaches the routing table before
+                // the caller hears the counts, so a selection after a replay that crossed a budget is refused.
+                member_revision = router.snapshot().revision;
+                spend_due = refresh_spend(spend_due).await;
+                let remaining = db.read(crate::query::parked_count).await;
+                let _ = reply.send(remaining.map(|remaining| Replayed { landed, remaining }));
+                continue;
+            }
             // The flag stays set once flipped, so the arm is guarded to the one round that moves the handle.
             _ = stop_requested(&mut stopped), if assembler.is_some() => {
                 ending = assembler.take();
@@ -781,26 +831,26 @@ async fn drain_held(ctx: &mut WriterCtx<'_>, held: Held) {
     }
 }
 
-/// Every parked record is tried once at start, in the order it was parked, each in its own transaction, which deletes
-/// the parked row as it lands the record, so a replay is charged once however the process fares between the two: one
-/// that lands leaves the table and is observed as a landed record; one that fails keeps its row with the error it met
-/// this time.
+/// Every parked record is tried once at start and on each replay, in the order it was parked, each in its own
+/// transaction, which deletes the parked row as it lands the record, so a replay is charged once however the process
+/// fares between the two: one that lands leaves the table and is observed as a landed record; one that fails keeps its
+/// row with the error it met this time. Answers how many landed and how many were kept.
 async fn land_parked(
     db: &Arc<LedgerDb>,
     pricing: &Arc<Pricing>,
     stats: &Arc<LedgerStats>,
     metrics: &Arc<Metrics>,
     now: i64,
-) {
+) -> (u64, u64) {
     let rows = match blocking(db, |db| db.parked_rows()).await {
         Ok(rows) => rows,
         Err(error) => {
-            tracing::warn!(%error, "the parked records could not be read; they wait for the next start");
-            return;
+            tracing::warn!(%error, "the parked records could not be read; they wait for the next start or replay");
+            return (0, 0);
         }
     };
     if rows.is_empty() {
-        return;
+        return (0, 0);
     }
     let (mut landed, mut kept) = (0u64, 0u64);
     for row in rows {
@@ -845,7 +895,8 @@ async fn land_parked(
             tracing::warn!(%error, id, "a parked record's row could not be updated");
         }
     }
-    tracing::info!(landed, kept, "the parked records were tried at start");
+    tracing::info!(landed, kept, "the parked records were tried");
+    (landed, kept)
 }
 
 /// Runs `f` against the ledger on a blocking worker; a worker that died answers as an I/O error.
@@ -1197,6 +1248,7 @@ mod tests {
             stop: Arc::new(stop),
             done: Arc::new(Mutex::new(None)),
             tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
+            control: mpsc::channel::<Control>(1).0,
         };
         (ledger, rx)
     }

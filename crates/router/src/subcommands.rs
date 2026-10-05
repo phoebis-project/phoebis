@@ -1,7 +1,7 @@
-//! The subcommands that create an account, a pool or a key, pair an account and clear a cooldown over the admin API:
-//! each builds the route's body from its flags, calls the route through the admin client and prints the answer, the
-//! created id or secret on stdout and the rest on stderr. A pairing reads the callback URL from stdin between its calls
-//! and talks to the operator on stderr.
+//! The subcommands that create an account, a pool or a key, pair an account, clear a cooldown and land the ledger's
+//! parked records over the admin API: each builds the route's body from its flags, calls the route through the admin
+//! client and prints the answer, the created id or secret on stdout and the rest on stderr. A pairing reads the callback
+//! URL from stdin between its calls and talks to the operator on stderr.
 
 use std::collections::BTreeMap;
 use std::future::Future;
@@ -121,6 +121,15 @@ pub enum KeyCommand {
         /// A JSON object of the route's fields, a file or `-` for stdin; a flag wins over the same field.
         #[arg(long, value_name = "PATH|-")]
         body: Option<String>,
+        #[command(flatten)]
+        common: Common,
+    },
+}
+
+#[derive(clap::Subcommand, Debug)]
+pub enum LedgerCommand {
+    /// Land the parked priced records now: `POST /admin/ledger/parked/replay`.
+    ReplayParked {
         #[command(flatten)]
         common: Common,
     },
@@ -292,6 +301,16 @@ pub fn run_key(
     err: &mut dyn Write,
 ) -> i32 {
     let done = create_key(cmd, config_path, stdin, out, err).map(|()| 0);
+    finish(done, out, err)
+}
+
+pub fn run_ledger(
+    cmd: LedgerCommand,
+    config_path: &Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> i32 {
+    let done = replay_parked(cmd, config_path, out, err).map(|()| 0);
     finish(done, out, err)
 }
 
@@ -543,6 +562,27 @@ fn create_pool(
     let answer = block_on(client.expect(Method::POST, "/admin/pools", Some(&body)))??;
     let created = answer.body["id"].as_str().unwrap_or(&id).to_owned();
     print_answer(&answer, &created, &[], common.json, out, err);
+    Ok(())
+}
+
+fn replay_parked(
+    cmd: LedgerCommand,
+    config_path: &Path,
+    out: &mut dyn Write,
+    err: &mut dyn Write,
+) -> Result<(), Failed> {
+    let LedgerCommand::ReplayParked { common } = cmd;
+    let client = AdminClient::from_flags(&common, config_path)?;
+    let answer = block_on(client.expect(Method::POST, "/admin/ledger/parked/replay", None))??;
+    if common.json {
+        print_answer(&answer, "", &[], true, out, err);
+    } else {
+        let _ = writeln!(
+            err,
+            "landed {}, remaining {}",
+            answer.body["landed"], answer.body["remaining"]
+        );
+    }
     Ok(())
 }
 

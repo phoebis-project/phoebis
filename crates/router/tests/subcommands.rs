@@ -1,8 +1,8 @@
-//! `account add`, `account clear-cooldown`, `account pair`, `account confirm`, `pool create` and `key create` from the
-//! outside: the binary against a router started in-process on loopback, over plain HTTP and over TLS, with the file,
-//! without it, and with a refused secret, the fake upstream standing in for the provider a pairing exchanges its code
-//! with; and `clear-cooldown` and `key create` against a scripted admin listener for the one request each sends and the
-//! answer each cannot print.
+//! `account add`, `account clear-cooldown`, `account pair`, `account confirm`, `pool create`, `key create` and `ledger
+//! replay-parked` from the outside: the binary against a router started in-process on loopback, over plain HTTP and
+//! over TLS, with the file, without it, and with a refused secret, the fake upstream standing in for the provider a
+//! pairing exchanges its code with; and `clear-cooldown` and `key create` against a scripted admin listener for the one
+//! request each sends and the answer each cannot print.
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
@@ -971,6 +971,26 @@ async fn a_refused_start_prints_the_routes_line_and_exits_one() {
         text(&refused),
         (String::new(), "404 account not found\n".to_owned())
     );
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn ledger_replay_parked_answers_the_counts() {
+    let running = start(None, "TEST_SUB_REPLAY").await;
+    let replayed = running.run(&["ledger", "replay-parked"]).await;
+    assert_exit(&replayed, 0);
+    assert_eq!(
+        text(&replayed),
+        (String::new(), "landed 0, remaining 0\n".to_owned())
+    );
+    let answered = running.run(&["ledger", "replay-parked", "--json"]).await;
+    assert_exit(&answered, 0);
+    assert_eq!(
+        text(&answered),
+        ("{\"landed\":0,\"remaining\":0}\n".to_owned(), String::new())
+    );
+    assert_no_secret(&replayed, &[ADMIN_SECRET]);
+    assert_no_secret(&answered, &[ADMIN_SECRET]);
     running.stop().await;
 }
 

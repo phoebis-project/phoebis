@@ -10,6 +10,7 @@ mod attention;
 mod dashboard;
 mod keepalive;
 mod keys;
+mod ledger;
 mod live;
 mod models;
 mod pools;

@@ -156,6 +156,7 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | `phoebis account clear-cooldown <id>` | Clears one of the account's cooldowns, the account-wide one by default. |
 | `phoebis pool create <id>` | Creates a pool and prints its id. |
 | `phoebis key create <id> --pool <id>` | Creates a key in the pool and prints its secret, once. |
+| `phoebis ledger replay-parked` | Lands the ledger's parked priced records now, without a restart. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
@@ -361,7 +362,11 @@ fills only a field neither names, so every field [the pool route](api.md#post-ad
 route](api.md#post-adminkeys) accept is reachable without a flag of its own. The subcommand validates no field, and the
 route's `400` prints as it comes.
 
-These six commands take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line
+`ledger replay-parked` lands the priced records the ledger parked, the pass every start runs, through [the replay
+route](api.md#post-adminledgerparkedreplay) rather than a restart. It prints `landed {n}, remaining {m}` on stderr,
+`remaining` the parked records the ledger still refuses.
+
+These seven take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line
 the route wrote and nothing on stderr but errors; `account pair` prints one such line per route and keeps its own lines
 on stderr. A refused call prints `{status} {message}` from the route's answer on stderr and exits 1, a refused secret as
 `the admin secret was refused`; a call that does not reach the listener prints one line naming the URL and exits 1. The
