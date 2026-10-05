@@ -834,6 +834,12 @@ async fn an_unreachable_upstream_does_not_quarantine() {
         "still-good"
     );
     assert!(store.pending_refresh_attempts().unwrap().is_empty());
+    assert_eq!(
+        store.refresh_attempts_resolved_after(0, 0, 10).unwrap().len(),
+        2,
+        "the second call read the committed bundle and opened a refresh of its own, rather than answering the \
+         stored generation as a refresh that moved past the cached one"
+    );
 }
 
 #[tokio::test]

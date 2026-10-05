@@ -746,18 +746,18 @@ impl Store {
         .map_err(StoreError::from)
     }
 
-    pub fn insert_pool(&self, row: &PoolRow, actor: &str) -> Result<(), StoreError> {
+    pub fn insert_pool(&self, row: &PoolRow, actor: &str) -> Result<i64, StoreError> {
         self.insert_pool_with_members(row, None, actor)
     }
 
     /// The pool row and its members under one `BEGIN IMMEDIATE`: a refused member (a duplicate, an unknown
-    /// account) leaves no row.
+    /// account) leaves no row. Answers the stamp the row was created and last updated at.
     pub fn insert_pool_with_members(
         &self,
         row: &PoolRow,
         members: Option<&[MemberWrite]>,
         actor: &str,
-    ) -> Result<(), StoreError> {
+    ) -> Result<i64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
@@ -802,7 +802,7 @@ impl Store {
             set_pool_members_in(&tx, &row.id, members, now, actor)?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(now)
     }
 
     /// The policy write fenced on the `updated_at` the caller read: `Stale` when another write moved the row since.
@@ -811,18 +811,19 @@ impl Store {
         row: &PoolRow,
         expected_updated_at: i64,
         actor: &str,
-    ) -> Result<(), StoreError> {
+    ) -> Result<i64, StoreError> {
         self.update_pool_with_members(row, expected_updated_at, None, actor)
     }
 
-    /// The policy and the members under one transaction, fenced on the `updated_at` the handler read.
+    /// The policy and the members under one transaction, fenced on the `updated_at` the handler read. Answers the
+    /// stamp written, which the next fenced edit reads.
     pub fn update_pool_with_members(
         &self,
         row: &PoolRow,
         expected_updated_at: i64,
         members: Option<&[MemberWrite]>,
         actor: &str,
-    ) -> Result<(), StoreError> {
+    ) -> Result<i64, StoreError> {
         #[cfg(any(test, feature = "debug-hooks"))]
         self.park_on_pool_write_hold();
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
@@ -881,7 +882,7 @@ impl Store {
             set_pool_members_in(&tx, &row.id, members, at, actor)?;
         }
         tx.commit()?;
-        Ok(())
+        Ok(at)
     }
 
     pub fn delete_pool(&self, id: &str, actor: &str) -> Result<(), StoreError> {
@@ -921,12 +922,13 @@ impl Store {
             .map_err(StoreError::from)
     }
 
+    /// Answers the pool's new `updated_at`.
     pub fn set_pool_members(
         &self,
         pool_id: &str,
         members: &[MemberWrite],
         actor: &str,
-    ) -> Result<(), StoreError> {
+    ) -> Result<i64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let current: Option<i64> = tx
@@ -939,9 +941,10 @@ impl Store {
         let Some(current) = current else {
             return Err(StoreError::PoolNotFound(pool_id.to_string()));
         };
-        set_pool_members_in(&tx, pool_id, members, stamp_past(current), actor)?;
+        let at = stamp_past(current);
+        set_pool_members_in(&tx, pool_id, members, at, actor)?;
         tx.commit()?;
-        Ok(())
+        Ok(at)
     }
 
     pub fn api_keys(&self) -> Result<Vec<ApiKeyRow>, StoreError> {

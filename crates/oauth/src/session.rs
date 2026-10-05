@@ -389,9 +389,11 @@ fn expire_if_stale(session: &mut PairingSession, now: i64) {
     }
 }
 
+/// The first end keeps its stamp: the sweep counts a session's lifetime from it, so a repeated owner `DELETE` never
+/// extends how long an ended session is kept.
 fn end(session: &mut PairingSession, status: PairingStatus, now: i64) {
     session.status = status;
-    session.ended_at = Some(now);
+    session.ended_at.get_or_insert(now);
 }
 
 fn extract_code(url: &str, redirect_uri: &str, state: &str) -> Result<String, PairingError> {

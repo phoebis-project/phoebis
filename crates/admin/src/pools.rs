@@ -529,7 +529,10 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         .store
         .insert_pool_with_members(&row, writes.as_deref(), ACTOR)
     {
-        Ok(()) => {}
+        Ok(at) => {
+            row.created_at = at;
+            row.updated_at = at;
+        }
         // The row and its members are one transaction, so a refused member leaves no pool to name.
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
@@ -580,7 +583,7 @@ pub(crate) async fn patch(
         .store
         .update_pool_with_members(&row, read_at, writes.as_deref(), ACTOR)
     {
-        Ok(()) => {}
+        Ok(at) => row.updated_at = at,
         Err(StoreError::Stale) => {
             return failure(
                 StatusCode::CONFLICT,
@@ -631,7 +634,7 @@ pub(crate) async fn set_members(
     let Ok(input) = serde_json::from_slice::<Input>(&body) else {
         return failure(StatusCode::BAD_REQUEST, "body must carry a members list");
     };
-    let row = match state.store.pool(&id) {
+    let mut row = match state.store.pool(&id) {
         Ok(Some(row)) => row,
         Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
         Err(e) => return store_failure(e),
@@ -641,7 +644,7 @@ pub(crate) async fn set_members(
         Err(refusal) => return refusal,
     };
     match state.store.set_pool_members(&id, &writes, ACTOR) {
-        Ok(()) => {}
+        Ok(at) => row.updated_at = at,
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
         }

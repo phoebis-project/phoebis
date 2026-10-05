@@ -23,6 +23,11 @@ fn holder_pending_query() -> String {
     )
 }
 
+// A holder's newest attempt, read through `refresh_attempts_account`: its two equality columns and then `id`, so the
+// newest is the index's last entry under them rather than a sort of every attempt the holder made.
+const LAST_REFRESH_ATTEMPT: &str = "SELECT resolved_at, outcome, detail FROM refresh_attempts \
+     WHERE account_id = ?1 AND incarnation = ?2 ORDER BY id DESC LIMIT 1";
+
 /// A secret string that zeroizes its buffer on drop and never prints its value.
 #[derive(Zeroize, ZeroizeOnDrop)]
 pub struct Secret(String);
@@ -794,9 +799,15 @@ impl Store {
     ) -> Result<Option<LastAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
-            "SELECT resolved_at, outcome, detail FROM refresh_attempts WHERE account_id = ?1 AND incarnation = ?2 ORDER BY id DESC LIMIT 1",
+            LAST_REFRESH_ATTEMPT,
             params![account_id, incarnation as i64],
-            |row| Ok(LastAttempt { resolved_at: row.get(0)?, outcome: row.get(1)?, detail: row.get(2)? }),
+            |row| {
+                Ok(LastAttempt {
+                    resolved_at: row.get(0)?,
+                    outcome: row.get(1)?,
+                    detail: row.get(2)?,
+                })
+            },
         )
         .optional()
         .map_err(StoreError::from)
@@ -855,6 +866,28 @@ mod tests {
         assert!(
             plan.iter()
                 .any(|detail| detail.contains("USING INDEX refresh_attempts_pending")),
+            "{plan:?}"
+        );
+    }
+
+    #[test]
+    fn a_holders_newest_attempt_is_read_through_the_account_index() {
+        let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+        let conn = store.conn.lock().unwrap();
+        let plan: Vec<String> = conn
+            .prepare(&format!("EXPLAIN QUERY PLAN {LAST_REFRESH_ATTEMPT}"))
+            .unwrap()
+            .query_map(params!["a", 1], |row| row.get(3))
+            .unwrap()
+            .collect::<rusqlite::Result<_>>()
+            .unwrap();
+        assert!(
+            plan.iter()
+                .any(|detail| detail.contains("USING INDEX refresh_attempts_account")),
+            "{plan:?}"
+        );
+        assert!(
+            !plan.iter().any(|detail| detail.contains("TEMP B-TREE")),
             "{plan:?}"
         );
     }

@@ -897,9 +897,6 @@ INSERT INTO affinity (model, hash, chain, account_id, incarnation, written_at, t
 INSERT INTO affinity (model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, key_id, key_generation, root, lane) VALUES ('m', 'req_1', 'request', 'a', 1, 1, 0, 0, 'k', 1, 'b1', '');
 "#;
 
-/// The read `Store::last_refresh_attempt` runs, kept in step with it by hand.
-const LAST_REFRESH_ATTEMPT: &str = "SELECT resolved_at, outcome, detail FROM refresh_attempts WHERE account_id = ?1 AND incarnation = ?2 ORDER BY id DESC LIMIT 1";
-
 #[test]
 fn a_store_left_at_43_is_carried_to_44_with_the_key_column_the_index_and_no_parent_chain_rows() {
     let dir = tempfile::tempdir().unwrap();
@@ -958,17 +955,17 @@ fn a_store_left_at_43_is_carried_to_44_with_the_key_column_the_index_and_no_pare
             .all(|at| (before - before % 1_000..=after).contains(at)),
         "every key carries the migration's instant: {stamped:?} outside {before}..={after}"
     );
-    let plan: Vec<String> = conn
-        .prepare(&format!("EXPLAIN QUERY PLAN {LAST_REFRESH_ATTEMPT}"))
+    let columns: Vec<String> = conn
+        .prepare("SELECT name FROM pragma_index_info('refresh_attempts_account') ORDER BY seqno")
         .unwrap()
-        .query_map(rusqlite::params!["a", 1], |r| r.get(3))
+        .query_map([], |r| r.get(0))
         .unwrap()
         .collect::<rusqlite::Result<_>>()
         .unwrap();
-    assert!(
-        plan.iter()
-            .any(|detail| detail.contains("USING INDEX refresh_attempts_account")),
-        "{plan:?}"
+    assert_eq!(
+        columns,
+        ["account_id", "incarnation", "id"],
+        "the index a holder's newest attempt is read through"
     );
 }
 

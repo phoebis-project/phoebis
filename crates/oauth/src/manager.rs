@@ -297,7 +297,7 @@ impl CredentialManager {
     }
 
     /// `acquire_for` over the row read from the store, for a caller that holds an id alone (the usage service).
-    /// Its reads run inline on the caller's task, as `Read::Inline` says why.
+    /// Its reads run inline on the caller's task, for the reason `Read::Inline` gives.
     pub async fn acquire(&self, account_id: &str) -> Result<AccessToken, AcquireError> {
         let account = self.inner.store.account(account_id)?.ok_or_else(|| {
             AcquireError::Store(StoreError::AccountNotFound(account_id.to_string()))

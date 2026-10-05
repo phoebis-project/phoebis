@@ -1439,19 +1439,47 @@ async fn a_confirmed_pairing_leaves_the_vault_ten_minutes_after_its_confirm() {
         "inside its ten minutes the ended pairing stays readable"
     );
     assert_eq!(get(&parts.app, &path, Some(&cookie)).await.status(), 200);
-    let after = common::NOW + 11 * 60_000;
-    parts.clock_cell.store(after, Ordering::SeqCst);
+    let at = common::NOW + 600_000;
+    parts.clock_cell.store(at, Ordering::SeqCst);
     assert_eq!(
-        parts.vault.sweep(after),
+        parts.vault.sweep(at),
         1,
-        "the confirmed record leaves the vault"
+        "the confirmed record leaves the vault at its ten minutes exactly"
     );
     assert_eq!(
-        parts.pairing.sweep(after),
+        parts.pairing.sweep(at),
         1,
         "and the ended session leaves the pairings"
     );
     assert_eq!(get(&parts.app, &path, Some(&cookie)).await.status(), 404);
+    let after = common::NOW + 11 * 60_000;
+    assert_eq!(
+        (parts.vault.sweep(after), parts.pairing.sweep(after)),
+        (0, 0)
+    );
+}
+
+/// An ended pairing's lifetime runs from its first end: a repeated owner `DELETE` answers as the first did and
+/// never extends how long the session and its vault record are kept.
+#[tokio::test]
+async fn a_repeated_delete_of_an_ended_pairing_keeps_its_first_end() {
+    use common::{delete, login};
+    use std::sync::atomic::Ordering;
+    let parts = common::admin_parts_sweepable().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let id = common::exchanged_session_for(&parts.app, &cookie, "business").await;
+    let path = format!("/admin/oauth/sessions/{id}");
+    assert_eq!(delete(&parts.app, &path, Some(&cookie)).await.status(), 204);
+    parts
+        .clock_cell
+        .store(common::NOW + 300_000, Ordering::SeqCst);
+    assert_eq!(delete(&parts.app, &path, Some(&cookie)).await.status(), 204);
+    let at = common::NOW + 600_000;
+    assert_eq!(
+        (parts.vault.sweep(at), parts.pairing.sweep(at)),
+        (1, 1),
+        "both leave ten minutes after the first DELETE"
+    );
 }
 
 #[tokio::test]

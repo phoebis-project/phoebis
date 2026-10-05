@@ -295,8 +295,12 @@ impl PairingVault {
 }
 
 impl PairingRecord {
+    /// An ended record keeps the stamp of its first end, which the sweep counts its lifetime from, so a repeated
+    /// owner `DELETE` never extends how long it is kept.
     fn move_to(&mut self, status: VaultStatus, now: i64) {
+        if matches!(self.status, VaultStatus::Started | VaultStatus::Exchanged) {
+            self.status_at = now;
+        }
         self.status = status;
-        self.status_at = now;
     }
 }

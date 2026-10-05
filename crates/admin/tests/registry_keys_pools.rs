@@ -2871,3 +2871,70 @@ async fn two_key_edits_from_one_read_answer_409_on_the_second() {
         "the edit read before the other landed wrote nothing"
     );
 }
+
+/// Each pool write answers the stamp it wrote, the one the next fenced edit reads back; a pool created from an id
+/// and a label alone holds the shipped defaults `PoolRow::for_tests` holds.
+#[tokio::test]
+async fn every_pool_write_answers_the_stamp_it_wrote_and_a_bare_create_holds_the_shipped_defaults()
+{
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let stored = |store: &phoebis_store::Store| store.pool("bare").unwrap().unwrap();
+
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"bare","label":"Bare"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let created = json(created).await;
+    let row = stored(&store);
+    assert_eq!(
+        format!("{row:?}"),
+        format!(
+            "{:?}",
+            phoebis_store::PoolRow {
+                label: "Bare".into(),
+                created_at: row.created_at,
+                updated_at: row.updated_at,
+                ..phoebis_store::PoolRow::for_tests("bare")
+            }
+        ),
+        "the create's defaults are the shipped ones"
+    );
+    assert_eq!(
+        (
+            created["created_at"].as_i64(),
+            created["updated_at"].as_i64()
+        ),
+        (Some(row.created_at), Some(row.updated_at))
+    );
+
+    let patched = json(
+        patch(
+            &app,
+            "/admin/pools/bare",
+            r#"{"label":"Renamed"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let row = stored(&store);
+    assert_eq!(patched["updated_at"].as_i64(), Some(row.updated_at));
+
+    let members = json(
+        put(
+            &app,
+            "/admin/pools/bare/members",
+            r#"{"members":[{"account_id":"direct","priority":0}]}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let row = stored(&store);
+    assert_eq!(members["updated_at"].as_i64(), Some(row.updated_at));
+}
