@@ -6091,6 +6091,28 @@ async fn a_sample_with_a_later_reset_emits_window_reset_by_sample() {
 }
 
 #[tokio::test]
+async fn a_poll_naming_a_head_s_reset_to_the_millisecond_names_the_same_reset() {
+    let store = seeded_oauth(&["a"]);
+    let now = Arc::new(AtomicI64::new(4_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    // A head names the reset in whole seconds; the poll names the same reset to the millisecond.
+    let reset = 5 * HOUR;
+    handle
+        .report(head_reading(1_000, 0.4, Some(reset), "r-1"))
+        .await;
+    handle.samples().await.unwrap();
+    handle
+        .report(observed(
+            "a",
+            sample_with(2_000, FIVE_HOUR, 0.4, Some(reset + 400)),
+        ))
+        .await;
+    handle.samples().await.unwrap();
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
 async fn the_purge_tick_emits_a_clock_reset_once_per_window() {
     use phoebis_routing::RouterEvent;
     let store = seeded_oauth(&["a"]);
@@ -6112,6 +6134,8 @@ async fn the_purge_tick_emits_a_clock_reset_once_per_window() {
         ))
         .await;
     handle.samples().await.unwrap();
+    // The ticks before the reset find it ahead and announce nothing.
+    no_further_event(&mut events).await;
     now.store(2_000, Ordering::SeqCst);
     match next_event(&mut events).await {
         RouterEvent::WindowReset {
@@ -6248,6 +6272,8 @@ async fn a_member_entering_its_wind_down_emits_once() {
     )
     .unwrap();
     let mut events = handle.subscribe_events();
+    // The ticks before the end comes inside the window find the member outside it.
+    no_further_event(&mut events).await;
     let inside = end - 20 * 60_000;
     now.store(inside, Ordering::SeqCst);
     match next_event(&mut events).await {
