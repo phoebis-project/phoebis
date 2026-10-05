@@ -127,7 +127,7 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
     assert_eq!(
         refreshing.status(),
         201,
-        "the bounds are closed as they are for the migrate threshold"
+        "the bounds are closed as they are for shed_ahead_of_pace"
     );
     let body = json(refreshing).await;
     assert_eq!(
