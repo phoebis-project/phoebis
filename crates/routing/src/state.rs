@@ -905,8 +905,8 @@ impl RoutingState {
     }
 
     fn spend_mark(&mut self, pin: &PinRow) {
-        // A key belongs to one pool, so the pin sits in one round at most; the account's rounds are walked
-        // rather than resolved through a snapshot this state does not hold.
+        // The account's rounds are walked rather than the pin's pool resolved through a snapshot this state does
+        // not hold; the walk also spends a mark left in the round of a pool the key moved out of inside its dwell.
         for ((_, account_id), (_, marks)) in self.shed_rounds.iter_mut() {
             if account_id == &pin.account_id {
                 marks.remove(&pin.key());
