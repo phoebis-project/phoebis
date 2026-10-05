@@ -208,7 +208,9 @@ reports the router's state and carries the readiness body instead. The two keepa
 created again reaches none of the sessions its previous holder left behind.
 
 pool's members are unusable for the moment, and the answer when an account's authentication failure is the request's
-last word: the router never forwards an upstream `401`, and the answer names no account and no reason.
+last word: the router never forwards an upstream `401`, and the answer names no account and no reason. `phoebis status`
+prints the live pins, one line per session with its account and pin state, which is the terminal read of which account a
+session holds.
 
 A token count (`POST /v1/messages/count_tokens`) is relayed through the same selection and failover loop as a
 message and travels as the client sent it under every policy: the markers it carries keep their TTLs, no

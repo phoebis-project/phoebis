@@ -53,3 +53,4 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 reqwest = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

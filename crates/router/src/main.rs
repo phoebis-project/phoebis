@@ -1,12 +1,15 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
-//! starting anything, or probe a running proxy listener.
+//! starting anything, probe a running proxy listener, or read a running router's readiness, pools, accounts and pins.
 
-use std::io::IsTerminal;
-use std::path::PathBuf;
+use std::io::{IsTerminal, Write};
+use std::path::{Path, PathBuf};
+use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
+use phoebis_router::admin_client::{self, AdminClient};
 use phoebis_router::config::ListenerTls;
+use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::{init, tls};
 
 #[derive(Parser)]
@@ -40,6 +43,9 @@ enum Command {
     Health,
     /// Write the bootstrap file, the storage key and the admin secret, once, refusing anything that exists.
     Init(init::InitArgs),
+    /// Probe the proxy listener, read the admin API and print one screen of readiness, pools, accounts and live pins:
+    /// exit 0 when ready, 1 otherwise.
+    Status(StatusArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -253,6 +259,7 @@ fn main() -> anyhow::Result<()> {
             )?;
             Ok(())
         }
+        Some(Command::Status(args)) => run_status(&cli.config, &args),
         None => {
             let config = phoebis_router::config::load(&cli.config)?;
             tokio::runtime::Builder::new_multi_thread()
@@ -291,4 +298,98 @@ fn main() -> anyhow::Result<()> {
                 }))
         }
     }
+}
+
+/// `phoebis status`. It never returns: the result is printed and the process exits while the runtime is still alive,
+/// since dropping the runtime would wait for a name lookup the deadline abandoned.
+fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
+    let client = AdminClient::from_flags(&args.common, config_path).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(error.exit_code())
+    });
+    // `from_flags` read the file unless `--url` and `--secret-env` stand in for it; the listeners line and the probe
+    // come from the same file, and without one only the admin URL is known.
+    let file = if args.common.url.is_some() && args.common.secret_env.is_some() {
+        None
+    } else {
+        Some(
+            phoebis_router::config::load_unresolved(config_path).unwrap_or_else(|error| {
+                eprintln!("{error}");
+                std::process::exit(1)
+            }),
+        )
+    };
+    let base = client.base();
+    let called = format!(
+        "{}://{}",
+        base.scheme_str().unwrap_or_default(),
+        base.authority().map(|a| a.as_str()).unwrap_or_default()
+    );
+    let listeners = match &file {
+        Some(config) => {
+            let self_signed = [&config.proxy.tls, &config.admin.tls]
+                .into_iter()
+                .any(|value| matches!(value, Some(ListenerTls::SelfSigned)));
+            Listeners {
+                admin: match args.common.url {
+                    Some(_) => called,
+                    None => format!(
+                        "{}://{}",
+                        tls::scheme(&config.admin.tls),
+                        config.admin.listen
+                    ),
+                },
+                ca: self_signed.then(|| tls::ca_path(&config.storage.path)),
+                metrics: Some(format!("http://{}", config.stats.metrics_listen)),
+                proxy: Some(format!(
+                    "{}://{}",
+                    tls::scheme(&config.proxy.tls),
+                    config.proxy.listen
+                )),
+            }
+        }
+        None => Listeners {
+            admin: called,
+            ca: None,
+            metrics: None,
+            proxy: None,
+        },
+    };
+    let proxy = file.as_ref().map(|config| {
+        (
+            config.proxy.listen,
+            ListenerTls::effective(&config.proxy.tls).terminates_tls(),
+        )
+    });
+    // Bound to a local that outlives the exit below: a temporary runtime would drop at the end of its statement and
+    // wait there for every blocking thread.
+    let runtime = admin_client::runtime().unwrap_or_else(|error| {
+        eprintln!("cannot start the runtime: {error}");
+        std::process::exit(1)
+    });
+    let reads = runtime.block_on(status::read(
+        &client,
+        proxy,
+        Duration::from_secs(args.common.timeout),
+    ));
+    let printed = if args.common.json {
+        serde_json::to_string_pretty(&status::render_json(&reads))
+            .map(|json| format!("{json}\n"))
+            .unwrap_or_default()
+    } else {
+        status::render(
+            &reads,
+            &listeners,
+            env!("CARGO_PKG_VERSION"),
+            jiff::Timestamp::now(),
+            &jiff::tz::TimeZone::system(),
+            args.all,
+        )
+    };
+    let mut stdout = std::io::stdout().lock();
+    // A reader that went away (`| head`) is not a failure of the read, so the exit code stays the readiness answer.
+    let _ = stdout
+        .write_all(printed.as_bytes())
+        .and_then(|()| stdout.flush());
+    std::process::exit(status::exit_code(&reads))
 }

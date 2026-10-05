@@ -117,6 +117,79 @@ untouched. The next start under the new key finds nothing sealed and seals a new
 An operator who would rather start over moves the registry file aside instead, with its `-wal` and `-shm` files if
 present, and lets the next start create an empty registry, in which every account, pool and key is created again.
 
+## Is it up?
+
+`phoebis status` is the operator's read and `phoebis health` the orchestrator's: `health` asks the proxy listener one
+question and prints one line, `status` runs `health` first and then reads the admin API with the admin secret from the
+environment, and prints one screen:
+
+```text title="phoebis status"
+phoebis 0.1.0, up 3d 4h, ready
+  proxy https://0.0.0.0:8317  admin http://127.0.0.1:8081
+  metrics http://127.0.0.1:9464
+  tls: clients trust /var/lib/phoebis/tls/ca.pem
+  ledger: 2 parked
+  attention: pool_exhausted work since 12:03;
+    refresh_failed alice@example.com since 11:40
+
+pools
+  home  disabled  1 member, 0 keys, 0 pins, 0 requests/24h
+    erin@example.com  ready  unavailable  5h -  7d -
+  work  active    3 members, 2 keys, 2 pins, 41 requests/24h
+    alice@example.com  ready   eligible     5h 42%   7d 18%  resets 14:00
+    bob@example.com    ready   cooldown     5h 100%  7d 61%  until 15:30 rate_l…
+    carol@example.com  paused  unavailable  5h -     7d -
+
+accounts in no pool
+  dave@example.com  unpaired
+
+pins (one per session, the main agent's)
+  session       agent  account            state
+  3f9a0c12e4b7  -      alice@example.com  pinned 4m ago, claude-opus-4-1
+  7b21aa90f3d1  a1     carol@example.com  shedding from bob@example.com, 12s ago
+```
+
+The header carries the version and the uptime from `GET /admin/system` and one of three readings: `ready`; `not ready:`
+with each dead component (`ledger`, `router`, `store`); or `proxy down:` with the probe's line when the proxy listener
+did not answer `200`, which wins over the other two. When the admin API could not be read, the header carries the
+binary's own version and `readiness unknown`, unless the proxy is down. The listeners follow with their schemes as the
+file names them. `tls: clients trust <path>` names the CA to hand the clients when a listener is `self_signed` and the
+file exists. `ledger:` prints only when a figure needs a look, and names each one: records `queued` in the writer
+channel, `behind` while admission refuses, `degraded` after a failed batch, priced records `parked` in the ledger file,
+a batch `retrying`, and after `writer:` the state writer's `deferred` writes and its `degraded` flag.
+`attention:` lists every attention item as `<kind> <subject> since <HH:MM>`, or reads
+`none`.
+
+Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24
+hours, then one line per member by priority: the account's label, its state (`paused` when routing is off on it), the
+member's eligibility, the five-hour and seven-day windows in whole percent (`-` with no sample) and the Fable week when
+the account has one, then the nearest reset as `resets <HH:MM>` or, under a cooldown, `until <HH:MM> <reason>`.
+`accounts in no pool` lists the accounts no pool holds, with their state, and is left out when there are none.
+
+The pins block is the sessions route's answer, one line per session that holds a pin: the route groups pins by key
+generation and session and prefers the main agent's pin, so a session whose subagent is pinned to another account shows
+its main agent's line. Each line carries the first twelve characters of the session id, the agent id or `-`, the
+account, and `pinned <age> ago, <model>`, or `shedding from <account>, <age> ago` while the session moves off an
+account, followed by `, keepalive <state>` and `next probe <HH:MM>` while the keepalive engine tracks it. Times print in
+the local zone as `HH:MM`, with the date in front as `MM-DD` when it is not today; ages print as `12s`, `4m`, `3h` or
+`2d`.
+
+A read that fails prints one line in its section, such as `pools: the admin listener did not answer on <url>:
+<reason>` or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is
+down, the screen is the header with the binary's version and `proxy down: proxy does not answer on <addr>: <error>`,
+the listeners, and one such line per read. A label past its column ends in `…`, a table line past 80 columns is cut
+and ends in `…`, and a line of text past 80 columns wraps. The pins and the accounts in no pool print 20 lines each
+and then `and N more`; `--all` prints every one. `--json` prints the same reads as one object for a script, each answer
+verbatim ([commands](installation.md#commands)).
+
+With `--url` and `--secret-env` standing in for the file, as for a router on another machine, `status` has no proxy
+listener to probe: it prints `proxy: not probed, no configuration file names the listener` under the listeners and
+reads readiness from `/admin/system` alone.
+
+`status` exits 0 when the router answers `ready` and the probe, where it ran, answered; 1 otherwise; 2 for a usage
+error. Under the container, `docker compose exec phoebis phoebis status` runs it in the running container, which
+inherits the container's environment and so the admin secret.
+
 ## Upgrades
 
 1. Build the new binary: `cargo build --release`.
@@ -130,10 +203,11 @@ present, and lets the next start create an empty registry, in which every accoun
 5. Install the new binary: `sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis`.
 6. Restart the service: `sudo systemctl restart phoebis`. The service drains in-flight requests for up to 30 seconds;
    the unit's `TimeoutStopSec=40` covers that drain.
-7. Confirm the upgrade with `phoebis --version`, then `GET /admin/system` for `version`, `storage_ok`, `ready`,
-   `ledger.write_failures` reading `0` and `router.dropped_reports` all reading `0`. `router.dropped_reports` counts the
-   reports a closed queue refused at shutdown, zero on a running router; a loop that stopped keeping up shows as
-   `router.queued` at `command_depth` and as keys holding their requests past the answer.
+7. Confirm the upgrade with `phoebis --version`, then `phoebis status` for `ready`, or `GET /admin/system` for
+   `version`, `storage_ok`, `ready`, `ledger.write_failures` reading `0` and `router.dropped_reports` all reading `0`.
+   `router.dropped_reports` counts the reports a closed queue refused at shutdown, zero on a running router; a loop
+   that stopped keeping up shows as `router.queued` at `command_depth` and as keys holding their requests past the
+   answer.
 
 Under the container, the same sequence is: read the changelog, take the backup, set `image:` in `compose.yaml` to
 the new version, validate the mounted configuration with the new image (`docker compose run --rm phoebis

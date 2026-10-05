@@ -147,6 +147,7 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
 | `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
+| `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
@@ -262,6 +263,35 @@ directory, since `/var/lib/phoebis` is the volume inside the container. The list
 `--data-dir`, `--env-file` and `--key-file` are usage errors beside it. The summary ends with the two steps that remain,
 the key file's owner and mode and the image tag in `compose.yaml`, and with
 `docker compose run --rm phoebis check-config` as the next command, since the key's path in the file is the container's.
+
+`status` probes the proxy listener, reads the admin API and prints one screen of readiness, pools, accounts and live
+pins ([Is it up?](operations.md#is-it-up) shows the screen and reads it line by line). It probes `proxy.listen` as
+`health` does, then reads `GET /admin/system`, `/admin/attention`, `/admin/pools`, `/admin/accounts` and
+`/admin/sessions`, each call under the `--timeout` deadline; a read that fails prints one line in its section, and the
+rest of the screen still prints. No line passes 80 columns, and `--all` prints every pin and every account in no pool
+rather than the first 20 of each. `--json` prints one object instead: `health` (`ready`, `addr` and `reason`, or `null`
+when no probe ran), the five answers verbatim (`null` for a read that failed) and `errors`, each failed read's reason
+under its name. Neither output carries the admin secret. `status` exits 0 when the probe, where it ran, answered `200`
+and `/admin/system` answered `ready`; 1 when the proxy does not answer, a component is dead, the secret is refused (`the
+admin secret was refused`), the admin listener does not answer, or the file does not load; 2 for a usage error.
+
+The commands that call the admin API, `status` among them, send the admin secret as `Authorization: Bearer`, one
+connection per call, and share five flags:
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--ca PATH` | `<data dir>/tls/ca.pem` under `self_signed` | The CA bundle trusted in place of the system roots. |
+| `--json` | off | Prints the answer as JSON on stdout. |
+| `--secret-env NAME` | `admin.secret_env` | The variable the admin secret is read from; unset, the call is refused. |
+| `--timeout SECONDS` | `10` | Each call's deadline, the connect and the TLS handshake included. |
+| `--url URL` | from `admin.listen` and `admin.tls` | The admin listener's base, `http://` or `https://` and a host. |
+
+`--url` defaults to the scheme `admin.tls` gives and the address of `admin.listen`, on the loopback of its family when
+the listener is bound on every interface, as `health` reaches the proxy; `--ca` defaults to the router's own CA when
+`admin.tls` is `self_signed` and the file is readable, and to the system roots otherwise. With `--url` and
+`--secret-env` both given the file is not read, so the binary reads a router on another machine: `status` then has no
+proxy listener to probe, prints `proxy: not probed, no configuration file names the listener`, and reads readiness from
+`/admin/system` alone. Without both, the file at `--config` must load.
 
 ## Environment variables
 
