@@ -201,21 +201,12 @@ fn ip_text(octets: &[u8]) -> Option<String> {
 mod tests {
     use super::*;
 
-    use fake_upstream::{generate_pair, generate_pair_valid_between, GeneratedPair};
-
-    /// Writes a generated pair where an operator's pair would sit, the certificate and its key side by side.
-    fn written(dir: &Path, name: &str, pair: &GeneratedPair) -> (PathBuf, PathBuf) {
-        let cert = dir.join(format!("{name}.pem"));
-        let key = dir.join(format!("{name}.key"));
-        std::fs::write(&cert, &pair.cert_pem).unwrap();
-        std::fs::write(&key, &pair.key_pem).unwrap();
-        (cert, key)
-    }
+    use fake_upstream::{generate_pair, generate_pair_valid_between};
 
     #[test]
     fn a_pair_loads_with_its_leafs_names_and_the_days_it_has_left() {
         let dir = tempfile::tempdir().unwrap();
-        let (cert, key) = written(dir.path(), "proxy", &generate_pair(&["localhost"]));
+        let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
         let loaded = load_pair("proxy.tls", &cert, &key).unwrap();
         assert_eq!(loaded.leaf.names, ["localhost"]);
         assert!(loaded.leaf.days_left > 0, "{:?}", loaded.leaf);
@@ -225,7 +216,7 @@ mod tests {
     fn the_leafs_ip_addresses_are_named_beside_its_dns_names() {
         let dir = tempfile::tempdir().unwrap();
         let pair = generate_pair(&["localhost", "127.0.0.1", "::1"]);
-        let (cert, key) = written(dir.path(), "admin", &pair);
+        let (cert, key) = pair.write_to(dir.path(), "admin");
         let loaded = load_pair("admin.tls", &cert, &key).unwrap();
         assert_eq!(loaded.leaf.names, ["localhost", "127.0.0.1", "::1"]);
     }
@@ -233,8 +224,8 @@ mod tests {
     #[test]
     fn a_key_from_another_pair_is_refused_as_a_mismatch_naming_both_files() {
         let dir = tempfile::tempdir().unwrap();
-        let (cert, _) = written(dir.path(), "proxy", &generate_pair(&["localhost"]));
-        let (_, other_key) = written(dir.path(), "other", &generate_pair(&["localhost"]));
+        let (cert, _) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
+        let (_, other_key) = generate_pair(&["localhost"]).write_to(dir.path(), "other");
         let error = load_pair("proxy.tls", &cert, &other_key).err().unwrap();
         assert!(
             matches!(&error, TlsError::KeyMismatch { key: "proxy.tls", path, cert: named }
@@ -254,7 +245,7 @@ mod tests {
     #[test]
     fn a_missing_certificate_file_is_refused_as_unreadable_naming_the_path() {
         let dir = tempfile::tempdir().unwrap();
-        let (_, key) = written(dir.path(), "proxy", &generate_pair(&["localhost"]));
+        let (_, key) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
         let missing = dir.path().join("absent.pem");
         let error = load_pair("proxy.tls", &missing, &key).err().unwrap();
         assert!(
@@ -277,7 +268,7 @@ mod tests {
     #[test]
     fn a_certificate_file_without_a_pem_block_is_refused_as_holding_none() {
         let dir = tempfile::tempdir().unwrap();
-        let (cert, key) = written(dir.path(), "proxy", &generate_pair(&["localhost"]));
+        let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
         std::fs::write(&cert, "not a pem").unwrap();
         let error = load_pair("proxy.tls", &cert, &key).err().unwrap();
         assert_eq!(
@@ -292,7 +283,7 @@ mod tests {
     #[test]
     fn a_key_file_without_a_pem_block_is_refused_as_holding_none() {
         let dir = tempfile::tempdir().unwrap();
-        let (cert, key) = written(dir.path(), "admin", &generate_pair(&["localhost"]));
+        let (cert, key) = generate_pair(&["localhost"]).write_to(dir.path(), "admin");
         std::fs::write(&key, "not a pem").unwrap();
         let error = load_pair("admin.tls", &cert, &key).err().unwrap();
         assert_eq!(
@@ -308,7 +299,7 @@ mod tests {
     fn a_leaf_past_its_not_after_is_refused_as_expired_with_the_date() {
         let dir = tempfile::tempdir().unwrap();
         let pair = generate_pair_valid_between(&["localhost"], (2020, 1, 1), (2021, 1, 1));
-        let (cert, key) = written(dir.path(), "proxy", &pair);
+        let (cert, key) = pair.write_to(dir.path(), "proxy");
         let error = load_pair("proxy.tls", &cert, &key).err().unwrap();
         let text = error.to_string();
         assert!(matches!(error, TlsError::Expired { .. }), "{error:?}");
@@ -335,7 +326,7 @@ mod tests {
             ),
             (2100, 1, 1),
         );
-        let (cert, key) = written(dir.path(), "proxy", &pair);
+        let (cert, key) = pair.write_to(dir.path(), "proxy");
         let error = load_pair("proxy.tls", &cert, &key).err().unwrap();
         assert!(matches!(error, TlsError::NotYetValid { .. }), "{error:?}");
         assert!(
@@ -356,7 +347,7 @@ mod tests {
         assert_eq!(scheme(&None), "http");
         assert_eq!(scheme(&Some(ListenerTls::PlainHttp)), "http");
         let dir = tempfile::tempdir().unwrap();
-        let (cert_file, key_file) = written(dir.path(), "proxy", &generate_pair(&["localhost"]));
+        let (cert_file, key_file) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
         let pair = Some(ListenerTls::Pair {
             cert_file,
             key_file,

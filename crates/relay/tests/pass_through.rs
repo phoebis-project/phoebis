@@ -5,8 +5,7 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use boring::ssl::{ConnectConfiguration, SslAcceptor, SslConnector, SslMethod};
-use boring::x509::X509;
+use boring::ssl::SslAcceptor;
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
 use phoebis_relay::Relay;
 use phoebis_store::{AccountKind, ApiKeyRow, RulesMode};
@@ -276,17 +275,6 @@ async fn listening(
     (addr, stop)
 }
 
-/// A client of a TLS listener that trusts the test's own CA alone and offers HTTP/1.1.
-fn trusting(ca_pem: &str) -> ConnectConfiguration {
-    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    builder
-        .cert_store_mut()
-        .add_cert(X509::from_pem(ca_pem.as_bytes()).unwrap())
-        .unwrap();
-    builder.set_alpn_protos(b"\x08http/1.1").unwrap();
-    builder.build().configure().unwrap()
-}
-
 fn raw_request(addr: SocketAddr, trace: &str) -> Vec<u8> {
     let mut out = format!(
         "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAccePT: application/json\r\n\
@@ -379,9 +367,13 @@ async fn the_callers_header_spelling_survives_a_tls_connection() {
     )
     .await;
     let socket = TcpStream::connect(addr).await.unwrap();
-    let mut tls = tokio_boring::connect(trusting(&pair.ca_pem), "localhost", socket)
-        .await
-        .unwrap();
+    let mut tls = tokio_boring::connect(
+        fake_upstream::connector_trusting(&pair),
+        "localhost",
+        socket,
+    )
+    .await
+    .unwrap();
     tls.write_all(&raw_request(addr, "first")).await.unwrap();
     assert!(read_response(&mut tls).await.starts_with("HTTP/1.1 200 "));
     assert_eq!(

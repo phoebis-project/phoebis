@@ -6,8 +6,7 @@ use std::time::Duration;
 
 use axum::extract::ws::WebSocketUpgrade;
 use axum::routing::get;
-use boring::ssl::{ConnectConfiguration, SslAcceptor, SslConnector, SslMethod};
-use boring::x509::X509;
+use boring::ssl::SslAcceptor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn app() -> axum::Router {
@@ -38,17 +37,6 @@ async fn listening(
         acceptor,
     ));
     (addr, stop)
-}
-
-/// A client of a TLS listener that trusts the test's own CA alone and offers HTTP/1.1.
-fn trusting(ca_pem: &str) -> ConnectConfiguration {
-    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    builder
-        .cert_store_mut()
-        .add_cert(X509::from_pem(ca_pem.as_bytes()).unwrap())
-        .unwrap();
-    builder.set_alpn_protos(b"\x08http/1.1").unwrap();
-    builder.build().configure().unwrap()
 }
 
 #[tokio::test]
@@ -93,7 +81,11 @@ async fn a_tls_listener_drops_a_silent_peer_at_the_bound_and_serves_a_finished_h
         let socket = tokio::net::TcpStream::connect(addr).await.unwrap();
         let mut tls = tokio::time::timeout(
             Duration::from_secs(3),
-            tokio_boring::connect(trusting(&pair.ca_pem), "localhost", socket),
+            tokio_boring::connect(
+                fake_upstream::connector_trusting(&pair),
+                "localhost",
+                socket,
+            ),
         )
         .await
         .expect("the slot came back and the handshake finished")
@@ -234,9 +226,13 @@ async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
         ));
         let _silent = tokio::net::TcpStream::connect(addr).await.unwrap();
         let socket = tokio::net::TcpStream::connect(addr).await.unwrap();
-        let mut tls = tokio_boring::connect(trusting(&pair.ca_pem), "localhost", socket)
-            .await
-            .unwrap();
+        let mut tls = tokio_boring::connect(
+            fake_upstream::connector_trusting(&pair),
+            "localhost",
+            socket,
+        )
+        .await
+        .unwrap();
         tls.write_all(b"GET /ping HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
             .await
             .unwrap();

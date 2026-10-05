@@ -9,12 +9,15 @@ pub use capture::capture_tracing;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use boring::pkey::PKey;
-use boring::ssl::{select_next_proto, AlpnError, SslAcceptor, SslMethod};
+use boring::ssl::{
+    select_next_proto, AlpnError, ConnectConfiguration, SslAcceptor, SslConnector, SslMethod,
+};
 use boring::x509::X509;
 use bytes::{Buf, BytesMut};
 use rcgen::{
@@ -1179,6 +1182,18 @@ pub struct GeneratedPair {
     pub key_pem: String,
 }
 
+impl GeneratedPair {
+    /// Writes the pair where an operator's would sit, `<name>.pem` and `<name>.key` under `dir`, and answers the
+    /// two paths in that order.
+    pub fn write_to(&self, dir: &Path, name: &str) -> (PathBuf, PathBuf) {
+        let cert = dir.join(format!("{name}.pem"));
+        let key = dir.join(format!("{name}.key"));
+        std::fs::write(&cert, &self.cert_pem).expect("write the generated leaf");
+        std::fs::write(&key, &self.key_pem).expect("write the generated key");
+        (cert, key)
+    }
+}
+
 pub fn generate_pair(hosts: &[&str]) -> GeneratedPair {
     signed_pair(leaf_params(hosts))
 }
@@ -1213,6 +1228,24 @@ pub fn acceptor_for(pair: &GeneratedPair) -> SslAcceptor {
         select_next_proto(b"\x08http/1.1", offered).ok_or(AlpnError::NOACK)
     });
     acceptor.build()
+}
+
+/// A client of a listener serving `pair`: it trusts the pair's CA alone and offers HTTP/1.1, as a listener's
+/// clients do.
+pub fn connector_trusting(pair: &GeneratedPair) -> ConnectConfiguration {
+    let mut builder = SslConnector::builder(SslMethod::tls()).expect("build TLS connector");
+    let ca = X509::from_pem(pair.ca_pem.as_bytes()).expect("parse the generated CA");
+    builder
+        .cert_store_mut()
+        .add_cert(ca)
+        .expect("trust the generated CA");
+    builder
+        .set_alpn_protos(b"\x08http/1.1")
+        .expect("offer http/1.1");
+    builder
+        .build()
+        .configure()
+        .expect("configure a TLS connection")
 }
 
 fn leaf_params(hosts: &[&str]) -> CertificateParams {

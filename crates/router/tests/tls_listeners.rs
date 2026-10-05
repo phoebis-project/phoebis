@@ -2,13 +2,11 @@
 //! pair the test generates and trusts from its own clients alone, and a pair the start cannot serve refused before
 //! any port is taken.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use boring::ssl::{ConnectConfiguration, SslConnector, SslMethod};
-use boring::x509::X509;
-use fake_upstream::{generate_pair, FakeUpstream, GeneratedPair};
+use fake_upstream::{connector_trusting, generate_pair, FakeUpstream};
 use phoebis_router::config::Config;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -32,26 +30,6 @@ fn free_port() -> u16 {
             return base + offset;
         }
     }
-}
-
-/// A client of a TLS listener that trusts the test's own CA alone and offers HTTP/1.1.
-fn trusting(ca_pem: &str) -> ConnectConfiguration {
-    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    builder
-        .cert_store_mut()
-        .add_cert(X509::from_pem(ca_pem.as_bytes()).unwrap())
-        .unwrap();
-    builder.set_alpn_protos(b"\x08http/1.1").unwrap();
-    builder.build().configure().unwrap()
-}
-
-/// Writes a generated pair where an operator's pair would sit, the certificate and its key side by side.
-fn written(dir: &Path, name: &str, pair: &GeneratedPair) -> (PathBuf, PathBuf) {
-    let cert = dir.join(format!("{name}.pem"));
-    let key = dir.join(format!("{name}.key"));
-    std::fs::write(&cert, &pair.cert_pem).unwrap();
-    std::fs::write(&key, &pair.key_pem).unwrap();
-    (cert, key)
 }
 
 /// Both listeners on loopback under the one pair; the upstream overrides point at the fake, so nothing leaves the
@@ -114,7 +92,7 @@ async fn both_listeners_serve_an_operators_pair_and_a_plain_request_gets_no_http
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
     let pair = generate_pair(&["localhost", "127.0.0.1"]);
-    let (cert, key) = written(dir.path(), "proxy", &pair);
+    let (cert, key) = pair.write_to(dir.path(), "proxy");
     let (proxy_port, admin_port) = (free_port(), free_port());
     let config = configured(dir.path(), &up, (proxy_port, admin_port), &cert, &key);
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
@@ -129,7 +107,7 @@ async fn both_listeners_serve_an_operators_pair_and_a_plain_request_gets_no_http
     .await;
     let mut ready = tokio::time::timeout(
         SETTLE,
-        tokio_boring::connect(trusting(&pair.ca_pem), "localhost", socket),
+        tokio_boring::connect(connector_trusting(&pair), "localhost", socket),
     )
     .await
     .expect("the handshake finished")
@@ -183,8 +161,8 @@ async fn both_listeners_serve_an_operators_pair_and_a_plain_request_gets_no_http
 async fn a_key_that_does_not_match_the_certificate_refuses_the_start_naming_the_key_file() {
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
-    let (cert, _) = written(dir.path(), "proxy", &generate_pair(&["localhost"]));
-    let (_, other_key) = written(dir.path(), "other", &generate_pair(&["localhost"]));
+    let (cert, _) = generate_pair(&["localhost"]).write_to(dir.path(), "proxy");
+    let (_, other_key) = generate_pair(&["localhost"]).write_to(dir.path(), "other");
     let (proxy_port, admin_port) = (free_port(), free_port());
     let config = configured(dir.path(), &up, (proxy_port, admin_port), &cert, &other_key);
     let refused = tokio::time::timeout(
