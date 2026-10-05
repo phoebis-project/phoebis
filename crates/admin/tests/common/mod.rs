@@ -583,6 +583,32 @@ pub async fn send_with_host(
     .await
 }
 
+/// A request naming its own `Origin` and `Host` behind a front, with `X-Forwarded-Proto` as the front sets it.
+#[allow(clippy::too_many_arguments)]
+pub async fn send_fronted(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    origin: &str,
+    host: &str,
+    proto: &str,
+) -> Response<Body> {
+    send_ex(
+        app,
+        method,
+        path,
+        body,
+        cookie,
+        Some(origin),
+        Some(host),
+        Some("application/json"),
+        Some(proto),
+    )
+    .await
+}
+
 /// A request whose `Content-Type` is the given value, or none at all.
 pub async fn send_typed(
     app: &Router,

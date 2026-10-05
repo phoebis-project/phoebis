@@ -266,9 +266,12 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         .flatten();
     // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake. A presented `Origin`
     // must name the request's own `Host`, since another authority is another page on this host driving the console,
-    // while a request with no `Origin` (curl, a subcommand, the health probe) is the operator's own hand. A front
-    // that terminates TLS passes `Host` through, so both headers name the front. The login is checked too: a forced
-    // login is the one mutation an unauthenticated caller can reach.
+    // while a request with no `Origin` (curl, a subcommand, the health probe) is the operator's own hand. Where this
+    // listener terminates TLS, or a front says the browser's leg does, the `Origin` must be `https://` too: a page
+    // on this host over plain HTTP could otherwise drive a bodiless write with a cookie some browsers send across
+    // schemes. A front that terminates TLS passes `Host` through beside `X-Forwarded-Proto`, so both headers name
+    // the front; a forged header on a plain listener only costs the forger the `http://` origin it would need. The
+    // login is checked too: a forced login is the one mutation an unauthenticated caller can reach.
     if bearer.is_none() && (mutation || websocket) {
         if let Some(origin) = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok()) {
             let host = request
@@ -276,7 +279,8 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
                 .get(HOST)
                 .and_then(|v| v.to_str().ok())
                 .unwrap_or("");
-            if !same_authority(origin, host) {
+            let https_only = state.tls || forwarded_https(request.headers());
+            if !same_authority(origin, host, https_only) {
                 return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
             }
         }
@@ -349,18 +353,22 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     }
 }
 
-/// `origin` names the request's own authority: its scheme stripped, the rest equals `host` ignoring case.
-pub(crate) fn same_authority(origin: &str, host: &str) -> bool {
-    let authority = origin
-        .get(..7)
+/// `origin` names the request's own authority: its scheme stripped, the rest equals `host` ignoring case. Under
+/// `https_only` the scheme must be `https`, the rule when the listener terminates TLS or a front reports that the
+/// browser's leg does, since a page on this host over plain HTTP could otherwise drive a bodiless write with a
+/// cookie some browsers send across schemes; a plain listener behind no front admits either scheme.
+pub(crate) fn same_authority(origin: &str, host: &str, https_only: bool) -> bool {
+    let http = (!https_only)
+        .then(|| origin.get(..7))
+        .flatten()
         .filter(|p| p.eq_ignore_ascii_case("http://"))
-        .map(|_| &origin[7..])
-        .or_else(|| {
-            origin
-                .get(..8)
-                .filter(|p| p.eq_ignore_ascii_case("https://"))
-                .map(|_| &origin[8..])
-        });
+        .map(|_| &origin[7..]);
+    let authority = http.or_else(|| {
+        origin
+            .get(..8)
+            .filter(|p| p.eq_ignore_ascii_case("https://"))
+            .map(|_| &origin[8..])
+    });
     authority.is_some_and(|a| !a.is_empty() && a.eq_ignore_ascii_case(host))
 }
 
@@ -1662,13 +1670,53 @@ mod tests {
     use phoebis_store::BudgetPeriod;
 
     #[test]
-    fn same_authority_names_the_requests_own_host_case_insensitively() {
-        assert!(same_authority("http://localhost:8081", "localhost:8081"));
-        assert!(same_authority("HTTP://LocalHost:8081", "localhost:8081"));
-        assert!(!same_authority("http://localhost:5173", "localhost:8081"));
-        assert!(!same_authority("null", "localhost:8081"));
-        assert!(!same_authority("https://localhost:8081", "localhost"));
-        assert!(!same_authority("ftp://localhost:8081", "localhost:8081"));
+    fn same_authority_names_the_requests_own_host_and_requires_https_when_asked() {
+        assert!(same_authority(
+            "http://localhost:8081",
+            "localhost:8081",
+            false
+        ));
+        assert!(same_authority(
+            "HTTP://LocalHost:8081",
+            "localhost:8081",
+            false
+        ));
+        assert!(!same_authority(
+            "http://localhost:5173",
+            "localhost:8081",
+            false
+        ));
+        assert!(!same_authority("null", "localhost:8081", false));
+        assert!(!same_authority(
+            "https://localhost:8081",
+            "localhost",
+            false
+        ));
+        assert!(!same_authority(
+            "ftp://localhost:8081",
+            "localhost:8081",
+            false
+        ));
+        assert!(same_authority(
+            "https://localhost:8081",
+            "localhost:8081",
+            true
+        ));
+        assert!(same_authority(
+            "HTTPS://LocalHost:8081",
+            "localhost:8081",
+            true
+        ));
+        assert!(!same_authority(
+            "http://localhost:8081",
+            "localhost:8081",
+            true
+        ));
+        assert!(!same_authority(
+            "https://localhost:5173",
+            "localhost:8081",
+            true
+        ));
     }
 
     #[test]

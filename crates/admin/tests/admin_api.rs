@@ -175,6 +175,193 @@ async fn a_foreign_origin_is_refused_and_a_missing_one_is_admitted() {
     assert_ne!(none.status(), 403, "curl sends no Origin");
 }
 
+/// A page on this host over plain HTTP could drive a bodiless write with a cookie some browsers send across
+/// schemes, so a listener that terminates TLS admits only its own `https://` origin.
+#[tokio::test]
+async fn an_origin_must_be_https_when_the_admin_listener_terminates_tls() {
+    use common::{cookie_of, json, post, send_with_host};
+    const HOST: &str = "phoebis.example";
+    let (tls, _up) = common::admin_app_tls().await;
+    let forced = send_with_host(
+        &tls,
+        "POST",
+        "/admin/session",
+        r#"{"secret":"admin-secret"}"#,
+        None,
+        "http://phoebis.example",
+        HOST,
+    )
+    .await;
+    assert_eq!(forced.status(), 403);
+    assert!(
+        forced.headers().get("set-cookie").is_none(),
+        "a refused login sets no cookie"
+    );
+    assert_eq!(json(forced).await["error"], "origin is not allowed");
+    let login = post(&tls, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
+    assert_eq!(login.status(), 204);
+    let cookie = cookie_of(&login);
+    let pause = "/admin/accounts/business/pause";
+    let plain = send_with_host(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+    )
+    .await;
+    assert_eq!(plain.status(), 403);
+    assert_eq!(json(plain).await["error"], "origin is not allowed");
+    let secure = send_with_host(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "https://phoebis.example",
+        HOST,
+    )
+    .await;
+    assert_ne!(
+        secure.status(),
+        403,
+        "the listener's own https origin is admitted"
+    );
+    let upgrade = handshake(&tls, &cookie, "http://phoebis.lan:8081").await;
+    assert_eq!(upgrade.status(), 403);
+    assert_eq!(json(upgrade).await["error"], "origin is not allowed");
+    let upgrade = handshake(&tls, &cookie, "https://phoebis.lan:8081").await;
+    assert_eq!(upgrade.status(), 400);
+    assert_eq!(
+        json(upgrade).await["error"],
+        "this route upgrades to a WebSocket"
+    );
+}
+
+/// A front that terminates TLS reports the browser's leg in `X-Forwarded-Proto`, and an https leg needs an https
+/// origin as a listener that terminates TLS does.
+#[tokio::test]
+async fn a_fronts_https_makes_the_origin_https_only_on_a_plain_listener() {
+    use common::{json, login, send_fronted};
+    const HOST: &str = "phoebis.example";
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pause = "/admin/accounts/business/pause";
+    let plain = send_fronted(
+        &app,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+        "https",
+    )
+    .await;
+    assert_eq!(plain.status(), 403);
+    assert_eq!(json(plain).await["error"], "origin is not allowed");
+    let secure = send_fronted(
+        &app,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "https://phoebis.example",
+        HOST,
+        "https",
+    )
+    .await;
+    assert_ne!(secure.status(), 403, "the front's https origin is admitted");
+    let chained = send_fronted(
+        &app,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+        "http, https",
+    )
+    .await;
+    assert_ne!(
+        chained.status(),
+        403,
+        "the first value is the browser's leg"
+    );
+}
+
+#[tokio::test]
+async fn a_plain_listener_behind_no_front_admits_an_origin_of_either_scheme() {
+    use common::{login, send_with_host};
+    const HOST: &str = "phoebis.example";
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pause = "/admin/accounts/business/pause";
+    for origin in ["http://phoebis.example", "https://phoebis.example"] {
+        let response = send_with_host(&app, "POST", pause, "", Some(&cookie), origin, HOST).await;
+        assert_ne!(
+            response.status(),
+            403,
+            "{origin} names the request's own host"
+        );
+    }
+}
+
+/// The scheme is required on a listener that terminates TLS whatever a front says, so a downgrade word relaxes
+/// nothing.
+#[tokio::test]
+async fn a_forwarded_header_on_a_listener_that_terminates_tls_changes_nothing() {
+    use common::{json, login, send_fronted};
+    const HOST: &str = "phoebis.example";
+    let (tls, _up) = common::admin_app_tls().await;
+    let cookie = login(&tls, "admin-secret").await;
+    let pause = "/admin/accounts/business/pause";
+    let downgraded = send_fronted(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+        "http",
+    )
+    .await;
+    assert_eq!(downgraded.status(), 403, "a downgrade word relaxes nothing");
+    assert_eq!(json(downgraded).await["error"], "origin is not allowed");
+    let secure = send_fronted(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "https://phoebis.example",
+        HOST,
+        "http",
+    )
+    .await;
+    assert_ne!(
+        secure.status(),
+        403,
+        "the listener's own https origin is admitted"
+    );
+    let plain = send_fronted(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+        "https",
+    )
+    .await;
+    assert_eq!(plain.status(), 403);
+    assert_eq!(json(plain).await["error"], "origin is not allowed");
+}
+
 #[tokio::test]
 async fn a_body_carrying_mutation_needs_the_json_content_type() {
     use common::{json, login, send_typed};

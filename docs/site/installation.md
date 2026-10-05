@@ -155,8 +155,9 @@ directory at `0755` and both certificates at `0644` so uid 65532 reads them thro
 `tls/proxy.key` and `tls/admin.key` by uid 65532 at `0400`, as the summary says, and hand the clients `tls/ca.pem`.
 `tls/ca.key` stays at `0600` and yours, so the container cannot read the CA's key though the directory is mounted;
 renewing the leaves there runs under `sudo`, as [Commands](#commands) says. A front can terminate TLS instead: it
-forwards to the plain listener, passes `Host` through unchanged and sets `X-Forwarded-Proto: https`, so the cookie is
-issued with `Secure` and the Origin check sees the front's hostname in both headers.
+forwards to the plain listener and passes `Host` through unchanged beside `X-Forwarded-Proto: https`, so the cookie is
+issued with `Secure` and the Origin check sees the front's hostname in both headers and requires the `https://` scheme
+in `Origin`, as it does on a listener that terminates TLS itself.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
 place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
@@ -542,10 +543,11 @@ The `tls` key is optional on every address. Without it the listener serves plain
 `Secure`, which costs nothing behind an SSH tunnel and sends the admin secret at login and the session cookie on every
 call in the clear on a network address; a front's `X-Forwarded-Proto: https`, below, is the one exception. A certificate
 pair terminates TLS on the listener on any address and the cookie carries `Secure`. Every mutation and every WebSocket
-upgrade that carries an `Origin` must name the request's own `Host` with it; a request with no `Origin` is admitted. A
-front that terminates TLS forwards to a loopback listener over plain HTTP, passes `Host` through unchanged and sets
-`X-Forwarded-Proto: https`; the cookie is then issued with `Secure` and the Origin check sees the front's hostname in
-both headers.
+upgrade that carries an `Origin` must name the request's own `Host` with it, and with the `https://` scheme where the
+listener terminates TLS; a request with no `Origin` is admitted. A front that terminates TLS forwards to a loopback
+listener over plain HTTP and passes `Host` through unchanged beside `X-Forwarded-Proto: https`; the cookie is then
+issued with `Secure`, and the Origin check sees the front's hostname in both headers and requires the `https://` scheme
+in `Origin`, as it does on a listener that terminates TLS itself.
 
 Refused with:
 
