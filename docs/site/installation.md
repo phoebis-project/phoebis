@@ -210,6 +210,8 @@ the registry, not the bootstrap file.
 # file can be committed and read by anyone who may read the deployment.
 admin:
   listen: 127.0.0.1:8081
+  # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
+  # A loopback listener needs no tls key and runs plain HTTP.
   origin: https://phoebis.example
   # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
   # false here, so origin is required and TLS is terminated in front.
@@ -223,6 +225,8 @@ keepalive:
   max_sessions: 128
 proxy:
   listen: 127.0.0.1:8317
+  # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
+  # A loopback listener needs no tls key and runs plain HTTP.
   # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
   # body_budget_bytes: 536870912
   # body_read_seconds: 60
@@ -293,6 +297,7 @@ is the trail.
 | `origin` | unset | the origin every mutation's `Origin` header must equal; required unless `plain_http` |
 | `plain_http` | `false` | `true` serves the console over plain HTTP on any address |
 | `secret_env` | required | the variable holding the admin secret |
+| `tls` | unset on loopback, required off it | `plain_http`, or `{cert_file, key_file}` |
 
 With `plain_http: true` the session cookie is issued without `Secure` and `origin` may be left unset. On a
 loopback listener behind an SSH tunnel that costs nothing. On any other address the admin secret at login and
@@ -308,6 +313,9 @@ Refused with:
 - `listen`: a YAML error
 - `origin`: `admin.origin is required unless admin.plain_http is set`
 - `secret_env`: `environment variable {name} is unset or empty`
+- `tls`: `admin.tls is required when admin.listen leaves loopback; name a certificate pair or plain_http`, and
+  `admin.tls: must be plain_http or a mapping with cert_file and key_file` under `the configuration is not valid YAML`
+  for any other value ([TLS on the listeners](#tls-on-the-listeners))
 
 ### keepalive
 
@@ -326,9 +334,10 @@ the session expiry sweeps it. The companion's lease is 90 seconds and four probe
 
 ### proxy
 
-Required: `listen`, a socket address, refused with a YAML error. Four keys bound the request bodies the proxy holds;
-`sign_cch_placeholder` decides whether a restored billing placeholder is signed, and `upstream_gzip` how the edited body
-leaves toward the upstream. All six are tunable in the file for power users and have no console control.
+Required: `listen`, a socket address, refused with a YAML error. `tls` names what the listener serves ([TLS on the
+listeners](#tls-on-the-listeners)). Four keys bound the request bodies the proxy holds; `sign_cch_placeholder` decides
+whether a restored billing placeholder is signed, and `upstream_gzip` how the edited body leaves toward the upstream.
+All six are tunable in the file for power users and have no console control.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
@@ -337,6 +346,7 @@ leaves toward the upstream. All six are tunable in the file for power users and 
 | `key_body_reads` | `128` | 1 to 4096 |
 | `max_request_bytes` | `33554432` | 1024 to 33554432 |
 | `sign_cch_placeholder` | `false` | `true` or `false` |
+| `tls` | unset on loopback, required off it | `plain_http`, or `{cert_file, key_file}` |
 | `upstream_gzip` | `auto` | `auto`, `on` or `off` |
 
 Refused with:
@@ -347,6 +357,9 @@ Refused with:
 - `key_body_reads`: `proxy.key_body_reads must be between 1 and 4096, not {value}`
 - `max_request_bytes`: `proxy.max_request_bytes must be between 1024 and 33554432, not {value}`
 - `sign_cch_placeholder`: a YAML error for anything but a boolean
+- `tls`: `proxy.tls is required when proxy.listen leaves loopback; name a certificate pair or plain_http`, and
+  `proxy.tls: must be plain_http or a mapping with cert_file and key_file` under `the configuration is not valid YAML`
+  for any other value ([TLS on the listeners](#tls-on-the-listeners))
 - `upstream_gzip`: `proxy.upstream_gzip must be auto, on or off, not {value}`
 
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
@@ -368,6 +381,66 @@ worst case is reserved against `body_budget_bytes` before the body is inflated);
 refused. `upstream_gzip` says how the edited body leaves toward the upstream: `auto` sends gzip when the client sent
 gzip and identity otherwise, `on` always gzip, `off` always identity; the `content-encoding` and `content-length` toward
 the upstream follow the bytes actually sent.
+
+### TLS on the listeners
+
+The proxy and the admin listener each take one `tls` key under their block, in one of two shapes. `plain_http` serves
+plain HTTP on the address named, the operator's trust decision for that network:
+
+```yaml title="config.yaml"
+proxy:
+  listen: 0.0.0.0:8317
+  tls: plain_http
+```
+
+A mapping with `cert_file` and `key_file` names an operator's certificate pair, and the listener terminates TLS itself:
+
+```yaml title="config.yaml"
+proxy:
+  listen: 0.0.0.0:8317
+  tls:
+    cert_file: /etc/phoebis/proxy.pem
+    key_file: /etc/phoebis/proxy.key
+```
+
+On a loopback address the key is optional, and a listener without it runs plain HTTP; `tls: plain_http` may be spelled
+there and changes nothing. Off loopback, the unspecified `0.0.0.0` and `::` included, the key is required: you name the
+trust decision for a listener published to a network in the file, and the start never guesses it. Both listeners speak
+HTTP/1.1 only, and the handshake steers a client that offers HTTP/2 to HTTP/1.1.
+
+`cert_file` is PEM with the leaf first and any intermediates after it; `key_file` is the matching private key in PEM,
+PKCS#8 or the traditional RSA and EC forms. Under the service unit, keep both under `/etc/phoebis`: the certificate at
+`0644 root:root`, the key at `0640 root:phoebis` or `0600 phoebis:phoebis`. In the container, mount them read-only
+beside the configuration, with the key at `0400` owned by uid 65532. A Tailscale certificate, a certificate from a LAN
+CA, or one an ACME client renews all serve.
+
+The start reads the pair once and never watches it; a renewal is stop, replace, start, and the 40-second drain bounds
+the gap.
+
+`check-config` and the start refuse a listener off loopback without a `tls` value, and any value outside the two
+shapes, with:
+
+- `proxy.tls is required when proxy.listen leaves loopback; name a certificate pair or plain_http`, and the admin twin
+  with `admin.tls` and `admin.listen`
+- `proxy.tls: must be plain_http or a mapping with cert_file and key_file`, under `the configuration is not valid YAML`,
+  for any other word, a third key, or a mapping that lacks one of the two
+
+The start reads the pair before it binds a port and refuses it with one line naming the key and the path:
+
+- `proxy.tls.cert_file {path}: {OS error}` or `proxy.tls.key_file {path}: {OS error}` for a file it cannot read
+- `proxy.tls.cert_file {path}: holds no PEM certificate`
+- `proxy.tls.key_file {path}: holds no PEM private key`
+- `proxy.tls.key_file {path}: does not match the certificate in {cert_file}`
+- `proxy.tls.cert_file {path}: expired on {date}`
+- `proxy.tls.cert_file {path}: not valid before {date}`
+
+The admin listener's lines carry `admin.tls` in place of `proxy.tls`. The start logs `serving TLS` for each listener
+that serves a pair, with its leaf's names and `not_after`, and the `listening` line names each listener's scheme.
+
+A plain-HTTP request to a listener that terminates TLS gets no HTTP answer: the handshake fails and the connection
+closes, so `curl` reports `curl: (35)` and a Node client `ECONNRESET` or `EPROTO`. Put `https://` in the caller's URL.
+
+The metrics listener has no `tls` key and serves plain HTTP.
 
 ### routing
 
@@ -475,8 +548,9 @@ Refused with:
 - `cache_ttl_seconds`: `usage.cache_ttl_seconds must be between 1 and 3600, not {value}`
 - `refresh_concurrency`: `usage.refresh_concurrency must be between 1 and 16, not {value}`
 
-The checks above run in a fixed order at load, not block by block: `admin`'s loopback-or-origin rule, then
-`usage.cache_ttl_seconds`, `usage.refresh_concurrency`, `storage.path`, the `proxy` bounds,
+The checks above run in a fixed order at load, not block by block: the two listeners' `tls` rule against their
+addresses, then `admin`'s loopback-or-origin rule, then `usage.cache_ttl_seconds`, `usage.refresh_concurrency`,
+`storage.path`, the `proxy` bounds,
 `routing.model_rejection_seconds`, `routing.cooldown_fallback_seconds`, the `keepalive` bounds,
 `routing.startup_fetch_seconds`, `routing.catalog_refresh_seconds`, the four `sessions` keys,
 `stats.body_capture_max_hours`, `stats.rollup_retention_days`, `stats.ledger_path`, and last whether
@@ -536,7 +610,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Cooldown booking | Seven days ahead of each announcement; a later announcement books the next stretch. |
 | Decoded output | 1 MiB per stream chunk, 64 KiB for an inspected or buffered body, 4 MiB for a control-plane answer. |
 | Drain window | 30 seconds for requests still in flight on shutdown; a request still running then is ended. |
-| Header read timeout | 30 seconds for a connection to send its request head, on all three listeners. |
+| Header read timeout | 30 seconds for a connection's request head on all three listeners, the TLS handshake included. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
 | Ledger channel | 4,096 records; `ledger_behind` at 2,048 queued; an event or sample past it drops as a `ledger_gap`. |
@@ -544,6 +618,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
+| TLS handshake | Bounded by the header read timeout, 30 seconds. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |
 | User agent | 256 bytes kept on a request row and a live entry; a longer value is cut. |
 

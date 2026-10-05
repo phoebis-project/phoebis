@@ -17,9 +17,9 @@ CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1
 
 ### ANTHROPIC_BASE_URL
 
-Points Claude Code at the router's proxy listener, through the reverse proxy that terminates TLS when there is
-one. Every model request and the keepalive companion's reports go here. Plain HTTP is accepted on any address, by
-the router and by the companion alike.
+Points Claude Code at the router's proxy listener. The scheme follows the listener: `http://127.0.0.1:8317` on the
+loopback shape, `https://<host>:8317` when the proxy listener terminates TLS. Every model request and the keepalive
+companion's reports go here. Plain HTTP is accepted on any address, by the router and by the companion alike.
 
 ### CLAUDE_CODE_OAUTH_TOKEN
 

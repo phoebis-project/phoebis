@@ -1597,11 +1597,11 @@ fn plain_http_is_allowed_on_any_address_and_a_secure_listener_needs_an_origin() 
     let loopback_plain =
         "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
     let public_plain =
-        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
+        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\n  tls: plain_http";
     let public_plain_with_origin =
-        "  listen: 0.0.0.0:8081\n  origin: http://phoebis.lan:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
+        "  listen: 0.0.0.0:8081\n  origin: http://phoebis.lan:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\n  tls: plain_http";
     let public_secure =
-        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: false";
+        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: false\n  tls: plain_http";
     assert!(load(&config_with(dir.path(), "ok", loopback_plain)).is_ok());
     assert!(load(&config_with(dir.path(), "public", public_plain)).is_ok());
     let pinned = load(&config_with(dir.path(), "pinned", public_plain_with_origin)).unwrap();

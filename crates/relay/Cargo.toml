@@ -12,6 +12,7 @@ debug-hooks = []
 
 [dependencies]
 axum = { workspace = true }
+boring = { workspace = true }
 bytes = { workspace = true }
 futures = { workspace = true }
 hmac = { workspace = true }
@@ -34,12 +35,12 @@ sha2 = { workspace = true }
 subtle = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-boring = { workspace = true }
 tokio-util = { workspace = true }
 tracing = { workspace = true }
 url = { workspace = true }
 
 [dev-dependencies]
-boring = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 flate2 = { workspace = true }
 phoebis-bus = { path = "../bus" }
@@ -52,7 +53,6 @@ phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] 
 reqwest = { workspace = true }
 tempfile = { workspace = true }
 tokio = { workspace = true, features = ["test-util"] }
-tokio-boring = { workspace = true }
 tokio-stream = { workspace = true }
 tower = { workspace = true }
 xxhash-rust = { workspace = true }

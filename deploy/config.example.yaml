@@ -2,6 +2,8 @@
 # file can be committed and read by anyone who may read the deployment.
 admin:
   listen: 127.0.0.1:8081
+  # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
+  # A loopback listener needs no tls key and runs plain HTTP.
   origin: https://phoebis.example
   # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
   # false here, so origin is required and TLS is terminated in front.
@@ -15,6 +17,8 @@ keepalive:
   max_sessions: 128
 proxy:
   listen: 127.0.0.1:8317
+  # tls: plain_http on an address off loopback, or a pair: tls: {cert_file: ..., key_file: ...}
+  # A loopback listener needs no tls key and runs plain HTTP.
   # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
   # body_budget_bytes: 536870912
   # body_read_seconds: 60

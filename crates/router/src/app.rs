@@ -25,7 +25,7 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinHandle;
 
 use crate::config::{Config, UpstreamConfig};
-use crate::listen;
+use crate::{listen, tls};
 
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
 /// going to end sooner because the process keeps waiting.
@@ -414,6 +414,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         Duration::from_secs(config.routing.catalog_refresh_seconds),
         REFRESH_TICK,
     );
+    // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken.
+    let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
+    let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
+    for (listener, loaded) in [("proxy", &proxy_tls), ("admin", &admin_tls)] {
+        if let Some(loaded) = loaded {
+            tracing::info!(listener, names = ?loaded.leaf.names, not_after = %loaded.leaf.not_after, "serving TLS");
+        }
+    }
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;
@@ -429,9 +437,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             )
         })?;
     tracing::info!(
-        proxy = %config.proxy.listen,
-        admin = %config.admin.listen,
-        metrics = %config.stats.metrics_listen,
+        proxy = %format_args!("{}://{}", tls::scheme(&config.proxy.tls), config.proxy.listen),
+        admin = %format_args!("{}://{}", tls::scheme(&config.admin.tls), config.admin.listen),
+        metrics = %format_args!("http://{}", config.stats.metrics_listen),
         profile = profile.name,
         "listening"
     );
@@ -488,6 +496,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: PROXY_MAX_CONNECTIONS,
         },
+        proxy_tls.map(|l| Arc::new(l.acceptor)),
     ));
     let mut admin_server = tokio::spawn(listen::serve(
         admin_listener,
@@ -499,6 +508,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             max_connections: ADMIN_MAX_CONNECTIONS,
         },
         true,
+        admin_tls.map(|l| Arc::new(l.acceptor)),
     ));
     let mut metrics_server = tokio::spawn(listen::serve(
         metrics_listener,
@@ -520,6 +530,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             max_connections: METRICS_MAX_CONNECTIONS,
         },
         false,
+        None,
     ));
 
     // A listener that ends on its own is read here, once: a `JoinHandle` polled again after it completed

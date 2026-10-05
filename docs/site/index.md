@@ -37,6 +37,9 @@ sibling inside the same call. The request, each attempt, and the usage land in t
 | Admin | `admin.listen` | The console and `/admin/*` |
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
 
+The proxy and the admin listener terminate TLS natively or run plain HTTP by their `tls` key; the metrics listener is
+plain HTTP ([TLS on the listeners](installation.md#tls-on-the-listeners)).
+
 The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST /v1/messages`, `POST
 /v1/messages/count_tokens`, `GET /v1/usage` for the key's own usage, the two keepalive companion routes, and `GET
 /v1/models` with the caller's own routable models ([models listing](client.md#the-models-listing)).
@@ -77,7 +80,6 @@ bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachabl
 ## What this build does not do
 
 - Claude Code's Remote Control is unavailable behind the router.
-- The listeners speak HTTP/1.1 and terminate no TLS; a reverse proxy does that in front.
 
 ## Status
 

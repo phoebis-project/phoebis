@@ -6,6 +6,7 @@ admin:
   # to pin. On the loopback publication of the compose example that costs nothing; on a LAN publication the admin
   # secret at login and the session cookie on every call cross that LAN in the clear.
   listen: 0.0.0.0:8081
+  tls: plain_http
   plain_http: true
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
@@ -16,6 +17,8 @@ keepalive:
   max_sessions: 128
 proxy:
   listen: 0.0.0.0:8317
+  # The container network is plain HTTP by default; the host decides what it publishes.
+  tls: plain_http
   # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
   # body_budget_bytes: 536870912
   # body_read_seconds: 60

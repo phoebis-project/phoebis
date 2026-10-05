@@ -50,6 +50,8 @@ pub struct AdminConfig {
     #[serde(default = "unresolved", skip)]
     pub secret: Secret,
     pub secret_env: String,
+    #[serde(default)]
+    pub tls: Option<ListenerTls>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,9 +74,86 @@ pub struct ProxyConfig {
     /// rejection of the placeholder proves it necessary.
     #[serde(default)]
     pub sign_cch_placeholder: bool,
+    #[serde(default)]
+    pub tls: Option<ListenerTls>,
     /// How the edited body leaves toward the upstream: `auto` mirrors the client, `on` always gzip, `off` never.
     #[serde(default = "default_upstream_gzip")]
     pub upstream_gzip: String,
+}
+
+/// One public listener's `tls` key. Optional on a loopback address, where its absence is plain HTTP; required off
+/// it, since an unspecified or LAN bind is published to a network and the file names the trust decision.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ListenerTls {
+    /// An operator's pair: the leaf first with any intermediates after it, and the matching key, both PEM.
+    Pair {
+        cert_file: PathBuf,
+        key_file: PathBuf,
+    },
+    /// Plain HTTP on the address named, the operator's trust decision for that network.
+    PlainHttp,
+}
+
+impl ListenerTls {
+    /// The value a listener runs under: the key's, or plain HTTP where the key is absent.
+    pub fn effective(tls: &Option<ListenerTls>) -> &ListenerTls {
+        tls.as_ref().unwrap_or(&ListenerTls::PlainHttp)
+    }
+
+    /// Whether the listener terminates TLS; what the cookie, `health` and `status` derive their scheme from.
+    pub fn terminates_tls(&self) -> bool {
+        matches!(self, ListenerTls::Pair { .. })
+    }
+}
+
+/// A word or a key outside the two shapes earns this one line; serde puts the key's path in front of it.
+const TLS_SHAPES: &str = "must be plain_http or a mapping with cert_file and key_file";
+
+impl<'de> Deserialize<'de> for ListenerTls {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Shapes;
+
+        impl<'de> serde::de::Visitor<'de> for Shapes {
+            type Value = ListenerTls;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("plain_http or a mapping with cert_file and key_file")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, word: &str) -> Result<ListenerTls, E> {
+                match word {
+                    "plain_http" => Ok(ListenerTls::PlainHttp),
+                    _ => Err(E::custom(TLS_SHAPES)),
+                }
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<ListenerTls, M::Error> {
+                let (mut cert_file, mut key_file) = (None, None);
+                while let Some(key) = map.next_key::<String>()? {
+                    let slot = match key.as_str() {
+                        "cert_file" => &mut cert_file,
+                        "key_file" => &mut key_file,
+                        _ => return Err(serde::de::Error::custom(TLS_SHAPES)),
+                    };
+                    if slot.replace(map.next_value::<PathBuf>()?).is_some() {
+                        return Err(serde::de::Error::custom(TLS_SHAPES));
+                    }
+                }
+                match (cert_file, key_file) {
+                    (Some(cert_file), Some(key_file)) => Ok(ListenerTls::Pair {
+                        cert_file,
+                        key_file,
+                    }),
+                    _ => Err(serde::de::Error::custom(TLS_SHAPES)),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(Shapes)
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -224,6 +303,13 @@ pub enum ConfigError {
     StoragePath { path: PathBuf },
     #[error("the configuration is not valid YAML")]
     Syntax(#[from] serde_norway::Error),
+    #[error(
+        "{key} is required when {listen} leaves loopback; name a certificate pair or plain_http"
+    )]
+    TlsRequired {
+        key: &'static str,
+        listen: &'static str,
+    },
     #[error("proxy.upstream_gzip must be auto, on or off, not {value}")]
     UpstreamGzipInvalid { value: String },
     #[error("usage.cache_ttl_seconds must be between 1 and 3600, not {value}")]
@@ -257,6 +343,7 @@ impl fmt::Debug for AdminConfig {
             .field("plain_http", &self.plain_http)
             .field("secret", &"***")
             .field("secret_env", &self.secret_env)
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -306,6 +393,29 @@ impl Default for UsageConfig {
 }
 
 fn check_shape(config: &Config) -> Result<(), ConfigError> {
+    // An unspecified or LAN bind is published to a network; the file names the trust decision rather than the
+    // start guessing it.
+    for (key, listen_key, listen, tls) in [
+        (
+            "admin.tls",
+            "admin.listen",
+            config.admin.listen,
+            &config.admin.tls,
+        ),
+        (
+            "proxy.tls",
+            "proxy.listen",
+            config.proxy.listen,
+            &config.proxy.tls,
+        ),
+    ] {
+        if !listen.ip().is_loopback() && tls.is_none() {
+            return Err(ConfigError::TlsRequired {
+                key,
+                listen: listen_key,
+            });
+        }
+    }
     if !config.admin.plain_http && config.admin.origin.is_none() {
         // Without an origin to compare against, the admin API has nothing to tell a browser's cross-site
         // write from an operator's own.
@@ -744,6 +854,115 @@ mod tests {
             (1_024, "on"),
             "a budget of one body at the per-body bound is enough"
         );
+    }
+
+    #[test]
+    fn the_tls_key_takes_plain_http_or_a_pair_and_refuses_the_rest() {
+        let dir = tempfile::tempdir().unwrap();
+        let plain = load_unresolved(&file_with_proxy(dir.path(), "plain", "  tls: plain_http\n"))
+            .unwrap()
+            .proxy;
+        assert_eq!(plain.tls, Some(ListenerTls::PlainHttp));
+        let pair = load_unresolved(&file_with_proxy(
+            dir.path(),
+            "pair",
+            "  tls:\n    cert_file: /a\n    key_file: /b\n",
+        ))
+        .unwrap()
+        .proxy;
+        assert_eq!(
+            pair.tls,
+            Some(ListenerTls::Pair {
+                cert_file: PathBuf::from("/a"),
+                key_file: PathBuf::from("/b"),
+            })
+        );
+        for (name, keys) in [
+            ("word", "  tls: mutual\n"),
+            ("stray", "  tls:\n    cert_file: /a\n    chain: /c\n"),
+            ("half", "  tls:\n    cert_file: /a\n"),
+        ] {
+            let error = load_unresolved(&file_with_proxy(dir.path(), name, keys)).unwrap_err();
+            let mut chain = error.to_string();
+            let mut source = std::error::Error::source(&error);
+            while let Some(cause) = source {
+                chain.push_str(": ");
+                chain.push_str(&cause.to_string());
+                source = cause.source();
+            }
+            assert!(
+                matches!(error, ConfigError::Syntax(_))
+                    && chain.contains("proxy.tls")
+                    && chain
+                        .contains("must be plain_http or a mapping with cert_file and key_file"),
+                "{name}: {chain}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_listener_off_loopback_needs_a_tls_value() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("storage.key");
+        std::fs::write(
+            &key,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let binding = |name: &str, admin: &str, proxy: &str| {
+            let path = dir.path().join(format!("{name}.yaml"));
+            let yaml = format!(
+                "admin:\n{admin}  secret_env: TEST_CFG_ADMIN\n  plain_http: true\nproxy:\n{proxy}\
+                 storage:\n  encryption_key_file: {}\n  path: {}\n",
+                key.display(),
+                dir.path().join("router.sqlite").display()
+            );
+            std::fs::write(&path, yaml).unwrap();
+            path
+        };
+        let loopback = "  listen: 127.0.0.1:0\n";
+        for unspecified in ["0.0.0.0:0", "\"[::]:0\""] {
+            let bare = format!("  listen: {unspecified}\n");
+            let plain = format!("{bare}  tls: plain_http\n");
+            let proxy = load_unresolved(&binding("proxy-bare", loopback, &bare)).unwrap_err();
+            assert!(
+                matches!(
+                    proxy,
+                    ConfigError::TlsRequired {
+                        key: "proxy.tls",
+                        listen: "proxy.listen"
+                    }
+                ),
+                "{unspecified}: {proxy:?}"
+            );
+            assert_eq!(
+                proxy.to_string(),
+                "proxy.tls is required when proxy.listen leaves loopback; name a certificate pair or plain_http"
+            );
+            let admin = load_unresolved(&binding("admin-bare", &bare, loopback)).unwrap_err();
+            assert!(
+                matches!(
+                    admin,
+                    ConfigError::TlsRequired {
+                        key: "admin.tls",
+                        listen: "admin.listen"
+                    }
+                ),
+                "{unspecified}: {admin:?}"
+            );
+            assert_eq!(
+                admin.to_string(),
+                "admin.tls is required when admin.listen leaves loopback; name a certificate pair or plain_http"
+            );
+            assert!(
+                load_unresolved(&binding("proxy-plain", loopback, &plain)).is_ok(),
+                "{unspecified}: plain_http is the operator's decision for the proxy"
+            );
+            assert!(
+                load_unresolved(&binding("admin-plain", &plain, loopback)).is_ok(),
+                "{unspecified}: plain_http is the operator's decision for the admin listener"
+            );
+        }
     }
 
     #[test]
