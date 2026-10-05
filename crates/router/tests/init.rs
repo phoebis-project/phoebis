@@ -1,0 +1,578 @@
+//! `phoebis init` writes the storage key, the environment file when one is named, and the bootstrap file, once and at
+//! their modes, and prints the admin secret once on stdout unless the environment file takes it. It refuses a file that
+//! exists, a data directory that holds a registry, an address off loopback without a TLS choice and `--owner` off root,
+//! and every refusal leaves nothing behind.
+
+use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::path::{Path, PathBuf};
+use std::process::{Command, Output};
+
+use phoebis_router::config::ListenerTls;
+
+fn phoebis(dir: &Path) -> Command {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_phoebis"));
+    command
+        .current_dir(dir)
+        .env_remove("PHOEBIS_ADMIN_SECRET")
+        .env_remove("PHOEBIS_CONFIG");
+    command
+}
+
+fn init(dir: &Path, args: &[&str]) -> Output {
+    phoebis(dir).arg("init").args(args).output().unwrap()
+}
+
+fn printed(out: &Output) -> String {
+    format!(
+        "exit {:?}\nstdout:\n{}\nstderr:\n{}",
+        out.status.code(),
+        String::from_utf8_lossy(&out.stdout),
+        String::from_utf8_lossy(&out.stderr)
+    )
+}
+
+fn mode(path: &Path) -> u32 {
+    std::fs::metadata(path).unwrap().permissions().mode() & 0o777
+}
+
+fn text(path: &Path) -> String {
+    std::fs::read_to_string(path).unwrap()
+}
+
+/// Every entry under `dir`, sorted, so a refusal can be shown to have left the tree as it was.
+fn entries(dir: &Path) -> Vec<String> {
+    let mut names: Vec<String> = std::fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| entry.unwrap().file_name().to_string_lossy().into_owned())
+        .collect();
+    names.sort();
+    names
+}
+
+/// The secret from the one stdout line `<NAME>=<secret>`, asserting that the line is all stdout carries and that the
+/// secret is 43 characters of base64url.
+fn secret_line(stdout: &[u8], name: &str) -> String {
+    let stdout = std::str::from_utf8(stdout).unwrap();
+    let secret = stdout
+        .strip_prefix(&format!("{name}="))
+        .and_then(|rest| rest.strip_suffix('\n'))
+        .unwrap_or_else(|| panic!("stdout is not one {name} line: {stdout:?}"));
+    assert_eq!(secret.len(), 43, "{stdout:?}");
+    assert!(
+        secret
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-'),
+        "{stdout:?}"
+    );
+    secret.to_string()
+}
+
+fn is_key_text(key: &str) -> bool {
+    key.len() == 65
+        && key.ends_with('\n')
+        && key[..64]
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+}
+
+fn path_arg(path: &Path) -> &str {
+    path.to_str().unwrap()
+}
+
+#[test]
+fn init_writes_the_three_artifacts_at_their_modes_and_prints_the_secret_once() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let out = init(
+        dir.path(),
+        &["--non-interactive", "--config", path_arg(&config)],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    let secret = secret_line(&out.stdout, "PHOEBIS_ADMIN_SECRET");
+    let key = dir.path().join("storage.key");
+    let data = dir.path().join("data");
+    assert_eq!(mode(&config), 0o644);
+    assert_eq!(mode(&key), 0o600);
+    let key_text = text(&key);
+    assert!(is_key_text(&key_text), "{key_text:?}");
+    assert_eq!(mode(&data), 0o700);
+    assert!(entries(&data).is_empty());
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains(&secret), "{stderr}");
+    for stream in [&out.stdout, &out.stderr] {
+        assert!(!String::from_utf8_lossy(stream).contains(key_text.trim_end()));
+    }
+
+    let check = |path: &Path| {
+        phoebis(dir.path())
+            .env("PHOEBIS_ADMIN_SECRET", &secret)
+            .args(["check-config", "--config"])
+            .arg(path)
+            .output()
+            .unwrap()
+    };
+    let checked = check(&config);
+    assert_eq!(checked.status.code(), Some(0), "{}", printed(&checked));
+    // The required keys alone and the two database paths: whatever this file prints from the fifth line on is the
+    // binary's own defaults, so the written file spells no value that differs from them.
+    let minimal = dir.path().join("minimal.yaml");
+    std::fs::write(
+        &minimal,
+        format!(
+            "admin:\n  listen: 127.0.0.1:8081\n  secret_env: PHOEBIS_ADMIN_SECRET\n\
+             proxy:\n  listen: 127.0.0.1:8317\n\
+             stats:\n  ledger_path: {}\n\
+             storage:\n  encryption_key_file: {}\n  path: {}\n",
+            data.join("ledger.sqlite").display(),
+            key.display(),
+            data.join("router.sqlite").display()
+        ),
+    )
+    .unwrap();
+    let defaults = check(&minimal);
+    assert_eq!(defaults.status.code(), Some(0), "{}", printed(&defaults));
+    let from_the_fifth = |out: &Output| {
+        String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .skip(4)
+            .map(str::to_string)
+            .collect::<Vec<_>>()
+    };
+    let written = from_the_fifth(&checked);
+    assert!(
+        written[0].starts_with("proxy: body budget"),
+        "{}",
+        printed(&checked)
+    );
+    assert_eq!(written, from_the_fifth(&defaults));
+}
+
+#[test]
+fn a_second_run_refuses_and_leaves_every_byte() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let args = ["--non-interactive", "--config", path_arg(&config)];
+    let first = init(dir.path(), &args);
+    assert_eq!(first.status.code(), Some(0), "{}", printed(&first));
+    let key = dir.path().join("storage.key");
+    let data = dir.path().join("data");
+    let (config_bytes, key_bytes) = (
+        std::fs::read(&config).unwrap(),
+        std::fs::read(&key).unwrap(),
+    );
+
+    let second = init(dir.path(), &args);
+    assert_eq!(second.status.code(), Some(1), "{}", printed(&second));
+    let stderr = String::from_utf8_lossy(&second.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "Error: {} already exists; init never overwrites a configuration",
+            config.display()
+        )),
+        "{stderr}"
+    );
+    assert!(second.stdout.is_empty(), "{}", printed(&second));
+    assert_eq!(std::fs::read(&config).unwrap(), config_bytes);
+    assert_eq!(std::fs::read(&key).unwrap(), key_bytes);
+    assert_eq!(
+        (mode(&config), mode(&key), mode(&data)),
+        (0o644, 0o600, 0o700)
+    );
+    assert!(entries(&data).is_empty());
+    assert_eq!(entries(dir.path()), ["config.yaml", "data", "storage.key"]);
+}
+
+#[test]
+fn a_registry_in_the_data_directory_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let data = dir.path().join("data");
+    std::fs::create_dir(&data).unwrap();
+    let registry = data.join("router.sqlite");
+    std::fs::write(&registry, b"").unwrap();
+    let config = dir.path().join("config.yaml");
+    let out = init(
+        dir.path(),
+        &["--non-interactive", "--config", path_arg(&config)],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "{} exists and a new key cannot open it",
+            registry.display()
+        )),
+        "{stderr}"
+    );
+    assert!(out.stdout.is_empty());
+    assert_eq!(entries(dir.path()), ["data"]);
+    assert_eq!(entries(&data), ["router.sqlite"]);
+}
+
+#[test]
+fn an_address_off_loopback_needs_a_tls_choice() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let out = init(
+        dir.path(),
+        &[
+            "--proxy-listen",
+            "0.0.0.0:0",
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(
+            "--proxy-listen 0.0.0.0:0 leaves loopback; name --proxy-tls self_signed or plain_http, or --proxy-cert \
+             and --proxy-key"
+        ),
+        "{stderr}"
+    );
+    assert!(out.stdout.is_empty());
+    assert!(entries(dir.path()).is_empty());
+}
+
+#[test]
+fn a_failure_after_the_first_write_removes_what_the_run_wrote() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("new").join("config.yaml");
+    // One path for both files passes every check before the first write, and the second write then fails, even
+    // under root, which a read-only directory would not stop.
+    let same = dir.path().join("new").join("secrets");
+    let out = init(
+        dir.path(),
+        &[
+            "--key-file",
+            path_arg(&same),
+            "--env-file",
+            path_arg(&same),
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert!(out.stdout.is_empty(), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(stderr.lines().count(), 1, "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "removed what this run wrote: {}, {}",
+            same.display(),
+            dir.path().join("new").display()
+        )),
+        "{stderr}"
+    );
+    assert!(entries(dir.path()).is_empty());
+}
+
+#[test]
+fn a_tls_word_and_a_pair_are_written_as_given() {
+    let word = tempfile::tempdir().unwrap();
+    let config = word.path().join("config.yaml");
+    let out = init(
+        word.path(),
+        &[
+            "--proxy-tls",
+            "self_signed",
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    let written = text(&config);
+    assert!(
+        written.contains("proxy:\n  listen: 127.0.0.1:8317\n  tls: self_signed\n"),
+        "{written}"
+    );
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("ca.pem there is the file each client trusts through NODE_EXTRA_CA_CERTS"),
+        "{stderr}"
+    );
+
+    let pair = tempfile::tempdir().unwrap();
+    let config = pair.path().join("config.yaml");
+    let out = init(
+        pair.path(),
+        &[
+            "--proxy-cert",
+            "a.pem",
+            "--proxy-key",
+            "a.key",
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    // A relative path is taken against the directory `init` ran in, which is what the operator typed it against.
+    let here = pair.path().canonicalize().unwrap();
+    let (cert, key) = (here.join("a.pem"), here.join("a.key"));
+    let written = text(&config);
+    assert!(
+        written.contains(&format!(
+            "proxy:\n  listen: 127.0.0.1:8317\n  tls:\n    cert_file: {}\n    key_file: {}\n",
+            cert.display(),
+            key.display()
+        )),
+        "{written}"
+    );
+    let loaded = phoebis_router::config::load_unresolved(&config).unwrap();
+    assert_eq!(
+        loaded.proxy.tls,
+        Some(ListenerTls::Pair {
+            cert_file: cert,
+            key_file: key
+        })
+    );
+
+    let both = tempfile::tempdir().unwrap();
+    let config = both.path().join("config.yaml");
+    let out = init(
+        both.path(),
+        &[
+            "--proxy-tls",
+            "self_signed",
+            "--proxy-cert",
+            "a.pem",
+            "--proxy-key",
+            "a.key",
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(2), "{}", printed(&out));
+    assert!(entries(both.path()).is_empty());
+}
+
+#[test]
+fn an_env_file_takes_the_secret_off_stdout() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let env_file = dir.path().join("phoebis.env");
+    let out = init(
+        dir.path(),
+        &[
+            "--env-file",
+            path_arg(&env_file),
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert!(out.stdout.is_empty(), "{}", printed(&out));
+    assert_eq!(mode(&env_file), 0o600);
+    let env = text(&env_file);
+    let (first, rest) = env.split_once('\n').unwrap();
+    let secret = secret_line(format!("{first}\n").as_bytes(), "PHOEBIS_ADMIN_SECRET");
+    assert_eq!(rest, "RUST_LOG=info\n");
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(!stderr.contains(&secret), "{stderr}");
+    assert!(
+        stderr.contains(&format!(
+            "the admin secret is in PHOEBIS_ADMIN_SECRET, written to {}",
+            env_file.display()
+        )),
+        "{stderr}"
+    );
+}
+
+#[test]
+fn the_container_shape_writes_the_compose_directory() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let out = init(dir.path(), &["--container", "--config", path_arg(&config)]);
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert!(out.stdout.is_empty(), "{}", printed(&out));
+    // Nothing of the container's data directory exists on the host, so none is created here.
+    assert_eq!(
+        entries(dir.path()),
+        ["config.yaml", "phoebis.env", "storage.key"]
+    );
+    assert_eq!(mode(&dir.path().join("storage.key")), 0o600);
+    assert!(is_key_text(&text(&dir.path().join("storage.key"))));
+    assert_eq!(mode(&dir.path().join("phoebis.env")), 0o600);
+    let written = text(&config);
+    for line in [
+        "  encryption_key_file: /run/secrets/router-storage-key\n",
+        "  path: /var/lib/phoebis/router.sqlite\n",
+        "  ledger_path: /var/lib/phoebis/ledger.sqlite\n",
+        "  pricing_path: /var/lib/phoebis/pricing.yaml\n",
+        "  listen: 0.0.0.0:8317\n  tls: plain_http\n",
+        "  listen: 0.0.0.0:8081\n  tls: plain_http\n",
+        "  metrics_listen: 0.0.0.0:9464\n",
+    ] {
+        assert!(written.contains(line), "{line:?} in\n{written}");
+    }
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains("own storage.key by uid 65532 at mode 0400; copy deploy/compose.yaml with the image tag set"),
+        "{stderr}"
+    );
+
+    // The loader reads the YAML and checks its shape, never the key file, which lives inside the container.
+    let loaded = phoebis_router::config::load_unresolved(&config).unwrap();
+    assert_eq!(
+        loaded.storage.encryption_key_file,
+        Path::new("/run/secrets/router-storage-key")
+    );
+    assert_eq!(
+        loaded.storage.path,
+        Path::new("/var/lib/phoebis/router.sqlite")
+    );
+    assert_eq!(
+        loaded.stats.ledger_path,
+        Path::new("/var/lib/phoebis/ledger.sqlite")
+    );
+    assert_eq!(
+        loaded.stats.pricing_path.as_deref(),
+        Some(Path::new("/var/lib/phoebis/pricing.yaml"))
+    );
+    assert_eq!(loaded.proxy.listen, "0.0.0.0:8317".parse().unwrap());
+    assert_eq!(loaded.admin.listen, "0.0.0.0:8081".parse().unwrap());
+    assert_eq!(loaded.proxy.tls, Some(ListenerTls::PlainHttp));
+    assert_eq!(loaded.admin.tls, Some(ListenerTls::PlainHttp));
+    assert_eq!(loaded.stats.metrics_listen, "0.0.0.0:9464".parse().unwrap());
+}
+
+#[test]
+fn the_parents_this_run_creates_are_0700_and_an_existing_one_is_untouched() {
+    let dir = tempfile::tempdir().unwrap();
+    let have = dir.path().join("have");
+    std::fs::create_dir(&have).unwrap();
+    std::fs::set_permissions(&have, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let new = dir.path().join("new");
+    let secrets = new.join("secrets");
+    let key = secrets.join("storage.key");
+    let data = have.join("data");
+    let config = dir.path().join("config.yaml");
+    let args = [
+        "--key-file",
+        path_arg(&key),
+        "--data-dir",
+        path_arg(&data),
+        "--non-interactive",
+        "--config",
+        path_arg(&config),
+    ];
+    let out = init(dir.path(), &args);
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert_eq!(
+        (mode(&new), mode(&secrets), mode(&have), mode(&data)),
+        (0o700, 0o700, 0o755, 0o700)
+    );
+    assert_eq!(mode(&key), 0o600);
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    for created in [&new, &secrets, &data] {
+        assert!(
+            stderr.contains(&format!(
+                "created {} (directory, mode 0700",
+                created.display()
+            )),
+            "{} in\n{stderr}",
+            created.display()
+        );
+    }
+    assert!(
+        !stderr.contains(&format!("{} (", have.display())),
+        "{stderr}"
+    );
+
+    let second = init(dir.path(), &args);
+    assert_eq!(second.status.code(), Some(1), "{}", printed(&second));
+    assert_eq!(
+        (mode(&new), mode(&secrets), mode(&have), mode(&data)),
+        (0o700, 0o700, 0o755, 0o700)
+    );
+    assert_eq!(entries(dir.path()), ["config.yaml", "have", "new"]);
+    assert_eq!(entries(&new), ["secrets"]);
+    assert_eq!(entries(&secrets), ["storage.key"]);
+    assert_eq!(entries(&have), ["data"]);
+    assert!(entries(&data).is_empty());
+}
+
+/// The uid and the primary gid of `nobody`.
+fn nobody() -> (u32, u32) {
+    let entry = unsafe { libc::getpwnam(c"nobody".as_ptr()) };
+    assert!(!entry.is_null(), "this host has no user nobody");
+    unsafe { ((*entry).pw_uid, (*entry).pw_gid) }
+}
+
+#[test]
+#[ignore = "needs uid 0; the owner runs it"]
+fn the_owner_receives_the_key_file_the_data_directory_and_the_created_parents() {
+    use std::os::unix::process::CommandExt;
+
+    assert_eq!(unsafe { libc::geteuid() }, 0, "run this test as root");
+    let (uid, gid) = nobody();
+    let dir = tempfile::tempdir().unwrap();
+    // The test's own directory stands where /etc does for the service: an existing parent the owner may traverse.
+    std::fs::set_permissions(dir.path(), std::fs::Permissions::from_mode(0o755)).unwrap();
+    let new = dir.path().join("new");
+    let secrets = new.join("secrets");
+    let key = secrets.join("storage.key");
+    let data = dir.path().join("data");
+    let config = dir.path().join("config.yaml");
+    let out = init(
+        dir.path(),
+        &[
+            "--owner",
+            "nobody",
+            "--key-file",
+            path_arg(&key),
+            "--data-dir",
+            path_arg(&data),
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    for path in [&new, &secrets, &key, &data] {
+        let metadata = std::fs::metadata(path).unwrap();
+        assert_eq!(
+            (metadata.uid(), metadata.gid()),
+            (uid, gid),
+            "{}",
+            path.display()
+        );
+    }
+    assert_eq!((mode(&new), mode(&secrets)), (0o700, 0o700));
+    assert_eq!(std::fs::metadata(dir.path()).unwrap().uid(), 0);
+    assert_eq!(std::fs::metadata(&config).unwrap().uid(), 0);
+    let read = Command::new("cat")
+        .uid(uid)
+        .gid(gid)
+        .arg(&key)
+        .output()
+        .unwrap();
+    assert_eq!(read.status.code(), Some(0), "{}", printed(&read));
+    assert!(is_key_text(&String::from_utf8_lossy(&read.stdout)));
+}
+
+#[test]
+fn owner_off_root_refuses() {
+    let dir = tempfile::tempdir().unwrap();
+    let config: PathBuf = dir.path().join("config.yaml");
+    let out = init(
+        dir.path(),
+        &[
+            "--owner",
+            "nobody",
+            "--non-interactive",
+            "--config",
+            path_arg(&config),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("Error: --owner needs root"), "{stderr}");
+    assert!(entries(dir.path()).is_empty());
+}

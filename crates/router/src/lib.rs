@@ -3,5 +3,6 @@
 pub mod app;
 pub mod config;
 pub mod health;
+pub mod init;
 pub mod listen;
 pub mod tls;

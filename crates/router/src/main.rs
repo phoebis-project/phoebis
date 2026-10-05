@@ -1,12 +1,13 @@
-//! The `phoebis` command line: run the router, check a configuration without starting anything, or probe a
-//! running proxy listener.
+//! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
+//! starting anything, or probe a running proxy listener.
 
+use std::io::IsTerminal;
 use std::path::PathBuf;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
 use phoebis_router::config::ListenerTls;
-use phoebis_router::tls;
+use phoebis_router::{init, tls};
 
 #[derive(Parser)]
 #[command(
@@ -28,6 +29,8 @@ struct Cli {
     command: Option<Command>,
 }
 
+// Parsed once per process, so the init flags' size costs nothing worth a box.
+#[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
     /// Validate the configuration, the key file, the registry's key canary, the registry's and the ledger's schema
@@ -35,16 +38,15 @@ enum Command {
     CheckConfig,
     /// Probe the proxy listener's `/api/ready`: exit 0 when it answers 200, 1 otherwise.
     Health,
+    /// Write the bootstrap file, the storage key and the admin secret, once, refusing anything that exists.
+    Init(init::InitArgs),
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
-    let mut config = match cli.command {
-        Some(Command::CheckConfig) => phoebis_router::config::load_unresolved(&cli.config)?,
-        _ => phoebis_router::config::load(&cli.config)?,
-    };
     match cli.command {
         Some(Command::CheckConfig) => {
+            let mut config = phoebis_router::config::load_unresolved(&cli.config)?;
             // Read before the first line, so a pair the start would refuse is the one line the check prints. Nothing
             // is written: `self_signed` material the first start would generate prints its pending shape.
             let proxy_tls = tls::load(
@@ -103,18 +105,26 @@ fn main() -> anyhow::Result<()> {
             );
             println!("ledger at {}", config.stats.ledger_path.display());
             // The start refuses a price file an estimate cannot use, so the check reads it the same way.
-            phoebis_ledger::Pricing::load(config.stats.pricing_path.as_deref()).with_context(|| {
-                format!(
-                    "loading the price table from {}",
-                    config
-                        .stats
-                        .pricing_path
-                        .as_deref()
-                        .map(|p| p.display().to_string())
-                        .unwrap_or_else(|| "the built-in table".to_string())
-                )
-            })?;
-            let days = |n: u32| if n == 0 { "forever".to_string() } else { format!("{n} days") };
+            phoebis_ledger::Pricing::load(config.stats.pricing_path.as_deref()).with_context(
+                || {
+                    format!(
+                        "loading the price table from {}",
+                        config
+                            .stats
+                            .pricing_path
+                            .as_deref()
+                            .map(|p| p.display().to_string())
+                            .unwrap_or_else(|| "the built-in table".to_string())
+                    )
+                },
+            )?;
+            let days = |n: u32| {
+                if n == 0 {
+                    "forever".to_string()
+                } else {
+                    format!("{n} days")
+                }
+            };
             println!(
                 "retention {}, rollups {}",
                 days(config.stats.retention_days),
@@ -133,11 +143,12 @@ fn main() -> anyhow::Result<()> {
             let registry = &config.storage.path;
             // The mismatch names the registry itself and is the whole finding; any other failure (an unreadable
             // directory, a file that is not a database) says nothing of which file it met.
-            let canary = phoebis_store::Store::read_canary(registry, &key).map_err(|error| match error {
-                phoebis_store::StoreError::KeyMismatch { .. } => anyhow::Error::new(error),
-                error => anyhow::Error::new(error)
-                    .context(format!("reading the registry at {}", registry.display())),
-            })?;
+            let canary =
+                phoebis_store::Store::read_canary(registry, &key).map_err(|error| match error {
+                    phoebis_store::StoreError::KeyMismatch { .. } => anyhow::Error::new(error),
+                    error => anyhow::Error::new(error)
+                        .context(format!("reading the registry at {}", registry.display())),
+                })?;
             match canary {
                 phoebis_store::CanaryRead::NoRegistry => println!(
                     "registry at {} does not exist yet; the first start creates it",
@@ -181,7 +192,10 @@ fn main() -> anyhow::Result<()> {
                 Ok(()) | Err(phoebis_router::config::ConfigError::MissingSecret { .. }) => {}
                 Err(error) => return Err(error.into()),
             }
-            for warning in phoebis_store::permissions::check_private_file(&config.storage.encryption_key_file, 0o600) {
+            for warning in phoebis_store::permissions::check_private_file(
+                &config.storage.encryption_key_file,
+                0o600,
+            ) {
                 println!("warning: {warning}");
             }
             for warning in tls::warnings("proxy.tls", &config.proxy.tls, &proxy_tls)
@@ -194,55 +208,86 @@ fn main() -> anyhow::Result<()> {
             for warning in phoebis_store::permissions::check_private_dir(data_dir) {
                 println!("warning: {warning}");
             }
-            for warning in phoebis_store::permissions::check_private_file(&config.storage.path, 0o600) {
+            for warning in
+                phoebis_store::permissions::check_private_file(&config.storage.path, 0o600)
+            {
                 println!("warning: {warning}");
             }
             Ok(())
         }
-        Some(Command::Health) => match phoebis_router::health::probe(
-            config.proxy.listen,
-            ListenerTls::effective(&config.proxy.tls).terminates_tls(),
-            phoebis_router::health::TIMEOUT,
-        ) {
-            Ok(addr) => {
-                println!("proxy answers on {addr}");
-                Ok(())
+        Some(Command::Health) => {
+            let config = phoebis_router::config::load(&cli.config)?;
+            match phoebis_router::health::probe(
+                config.proxy.listen,
+                ListenerTls::effective(&config.proxy.tls).terminates_tls(),
+                phoebis_router::health::TIMEOUT,
+            ) {
+                Ok(addr) => {
+                    println!("proxy answers on {addr}");
+                    Ok(())
+                }
+                Err(reason) => {
+                    println!("{reason}");
+                    std::process::exit(1)
+                }
             }
-            Err(reason) => {
-                println!("{reason}");
-                std::process::exit(1)
+        }
+        Some(Command::Init(args)) => {
+            let interactive = std::io::stdin().is_terminal()
+                && std::io::stderr().is_terminal()
+                && !args.non_interactive;
+            let mut plan = init::plan(&cli.config, &args, interactive)?;
+            if interactive {
+                plan = init::ask(
+                    &args,
+                    &plan,
+                    &mut std::io::stdin().lock(),
+                    &mut std::io::stderr().lock(),
+                )?;
             }
-        },
-        None => tokio::runtime::Builder::new_multi_thread()
-            .enable_all()
-            .build()?
-            .block_on(phoebis_router::app::run(config, async {
-                let ctrl_c = tokio::signal::ctrl_c();
-                let mut terminate =
-                    match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
-                        Ok(signal) => signal,
-                        Err(error) => {
-                            tracing::error!(%error, "no SIGTERM handler; a service manager's stop will not drain");
-                            match ctrl_c.await {
-                                Ok(()) => return,
-                                Err(error) => {
-                                    tracing::error!(%error, "no interrupt handler; stop this process by other means");
-                                    return std::future::pending::<()>().await;
+            init::run(
+                &plan,
+                &mut std::io::stdout().lock(),
+                &mut std::io::stderr().lock(),
+            )?;
+            Ok(())
+        }
+        None => {
+            let config = phoebis_router::config::load(&cli.config)?;
+            tokio::runtime::Builder::new_multi_thread()
+                .enable_all()
+                .build()?
+                .block_on(phoebis_router::app::run(config, async {
+                    let ctrl_c = tokio::signal::ctrl_c();
+                    let mut terminate =
+                        match tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()) {
+                            Ok(signal) => signal,
+                            Err(error) => {
+                                tracing::error!(%error, "no SIGTERM handler; a service manager's stop will not drain");
+                                match ctrl_c.await {
+                                    Ok(()) => return,
+                                    Err(error) => {
+                                        tracing::error!(
+                                            %error,
+                                            "no interrupt handler; stop this process by other means"
+                                        );
+                                        return std::future::pending::<()>().await;
+                                    }
                                 }
                             }
+                        };
+                    tokio::select! {
+                        result = ctrl_c => {
+                            if let Err(error) = result {
+                                // A handler that could not be installed is not a request to stop, so the process
+                                // keeps serving and says why no interrupt will reach it.
+                                tracing::error!(%error, "no interrupt handler; stop this process by other means");
+                                std::future::pending::<()>().await;
+                            }
                         }
-                    };
-                tokio::select! {
-                    result = ctrl_c => {
-                        if let Err(error) = result {
-                            // A handler that could not be installed is not a request to stop, so the process
-                            // keeps serving and says why no interrupt will reach it.
-                            tracing::error!(%error, "no interrupt handler; stop this process by other means");
-                            std::future::pending::<()>().await;
-                        }
+                        _ = terminate.recv() => {}
                     }
-                    _ = terminate.recv() => {}
-                }
-            })),
+                }))
+        }
     }
 }

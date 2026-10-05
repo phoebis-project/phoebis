@@ -57,13 +57,13 @@ care as the registry.
 A lost key loses every credential the registry holds and every downstream key it authenticates: without it, no
 sealed credential can be opened again, and no downstream key's digest can be reproduced to check a client's secret.
 
-The key is 32 raw bytes or 64 hex characters, held in the file `storage.encryption_key_file` names. A fresh
-installation creates it with `head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'`, written into a file created
-empty at mode `0600` before the key ever reaches it. Writing through a redirect under the usual umask would leave
-the key world-readable for the moment between the file's creation and a later `chmod`, and an interrupted run would
-leave it that way for good. The key file may end in one newline after the 64 hex characters, so a key written as a
-line is accepted too, such as `printf '%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"` written into
-that same empty file.
+The key is 32 raw bytes or 64 hex characters, held in the file `storage.encryption_key_file` names. A fresh installation
+creates it with `phoebis init`, which writes the 64 hex characters into a file created at mode `0600` in one open; where
+the binary is not at hand, `head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n'` written into a file created empty at
+`0600` is the same key. Writing through a redirect under the usual umask would leave the key world-readable for the
+moment between the file's creation and a later `chmod`, and an interrupted run would leave it that way for good. The key
+file may end in one newline after the 64 hex characters, so a key written as a line is accepted too, such as
+`printf '%s\n' "$(head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n')"` written into that same empty file.
 
 The registry carries a canary sealed under the key at its first open, and every open proves the key against it before
 any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
@@ -71,6 +71,8 @@ is refused at start and by `check-config` with `the storage key does not match t
 from before the canary existed is proved against its sealed rows instead, up to the first 32 of each kind (credentials
 and Anthropic-key secrets), passing when any of them opens, by `check-config` and at start, and is sealed at that
 start.
+
+`init` refuses a data directory that already holds a registry, so a lost key is never papered over by a new one.
 
 The key seals OAuth credential bundles and Anthropic-key secrets. `Store::digest_key` also derives, from this same key,
 the digest every downstream key authenticates against: the secrets the admin API mints and hands to clients and the

@@ -203,6 +203,19 @@ impl StorageKey {
         Self(bytes)
     }
 
+    /// The key as the 64 lowercase hex characters `from_file` reads, zeroed when dropped; `init` writes it and nothing
+    /// else reads it.
+    pub fn to_hex(&self) -> zeroize::Zeroizing<String> {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        // Sized up front, so pushing never reallocates and leaves an unzeroed copy of the key behind.
+        let mut hex = zeroize::Zeroizing::new(String::with_capacity(64));
+        for byte in self.0.iter() {
+            hex.push(char::from(DIGITS[usize::from(byte >> 4)]));
+            hex.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+        }
+        hex
+    }
+
     /// Reads a key file holding exactly 32 raw bytes, or 64 ASCII hex characters with at most one trailing `\n`
     /// or `\r\n`.
     pub fn from_file(path: &Path) -> Result<Self, StoreError> {
@@ -1583,6 +1596,24 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn a_key_written_as_its_hex_and_a_newline_reads_back_as_the_same_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("storage.key");
+        let key = StorageKey::generate();
+        let hex = key.to_hex();
+        assert_eq!(hex.len(), 64);
+        assert!(
+            hex.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "lowercase hex"
+        );
+        std::fs::write(&path, format!("{}\n", hex.as_str())).unwrap();
+        let read = StorageKey::from_file(&path).unwrap();
+        assert_eq!(read.to_hex(), hex);
+        assert_eq!(read.0, key.0);
     }
 
     #[test]

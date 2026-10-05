@@ -22,49 +22,43 @@ clang, and libclang.
 
 ```sh
 cargo build --release
-install -d -m 0700 ~/.config/phoebis
-[ -e ~/.config/phoebis/storage.key ] ||
-  (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/.config/phoebis/storage.key)
-sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
-  deploy/config.example.yaml > ~/.config/phoebis/config.yaml
+target/release/phoebis init --config ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
-export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36)
+export PHOEBIS_ADMIN_SECRET=<the printed secret>
 target/release/phoebis
 ```
 
-The key is created once and never replaced: every stored credential is sealed under it and there is no re-key.
-`PHOEBIS_CONFIG` names the file for every `phoebis` call in that shell ([commands](#commands)).
+`init` writes the bootstrap file, the storage key beside it and an empty `data/` directory, and prints the admin secret
+once as `PHOEBIS_ADMIN_SECRET=<secret>` ([commands](#commands)). The key is created once and never replaced: every
+stored credential is sealed under it and there is no re-key. `PHOEBIS_CONFIG` names the file for every `phoebis` call in
+that shell. `init` refuses to replace a key, and refuses a data directory that already holds a registry.
 
 ## Install as a service
 
-```sh title="Install the binary, the unit, and the key file"
+```sh title="Install the binary, the unit, and the bootstrap files"
 sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis
 sudo useradd --system --home /var/lib/phoebis --shell /usr/sbin/nologin phoebis
-sudo install -d -m 0700 -o phoebis -g phoebis /var/lib/phoebis
 sudo install -d -m 0755 /etc/phoebis
 sudo install -m 0644 deploy/phoebis.service /etc/systemd/system/phoebis.service
-sudo install -m 0600 deploy/phoebis.env.example /etc/phoebis/phoebis.env
-sudo install -m 0600 -o phoebis -g phoebis /dev/null /etc/phoebis/storage.key
-head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | sudo tee /etc/phoebis/storage.key >/dev/null
-sudo install -m 0644 deploy/config.example.yaml /etc/phoebis/config.yaml
 sudo install -m 0644 crates/ledger/pricing.yaml /etc/phoebis/pricing.yaml
+sudo phoebis init --config /etc/phoebis/config.yaml --data-dir /var/lib/phoebis \
+  --env-file /etc/phoebis/phoebis.env --owner phoebis
 sudo systemctl daemon-reload
 ```
 
-Edit `/etc/phoebis/phoebis.env` and replace the secret with a long random string. The key file is created empty at
-0600 before the key is written, rather than through a redirect, because a `tee` under `umask 022` would leave it
-world-readable between the write and a later `chmod`. The key seals every credential in
-`router.sqlite`, so it stays out of any backup that carries the database.
+Where the proxy serves the LAN, add `--proxy-listen 0.0.0.0:8317` and `--proxy-tls self_signed` (or `plain_http`, or
+`--proxy-cert` and `--proxy-key`) to the `init` line. `init` creates the key file at `0600` in one open, so no moment
+exists in which the key is readable by anyone else, and the environment file at `0600` with the secret it generated. The
+bootstrap file and the environment file are root's; the key file and the data directory are owned by `phoebis`. The key
+seals every credential in `router.sqlite`, so it stays out of any backup that carries the database.
 
 `deploy/phoebis.service` runs the process as the `phoebis` user with `EnvironmentFile=/etc/phoebis/phoebis.env`;
 `phoebis` never reads the environment file itself, systemd hands the values over. `TimeoutStopSec=40` covers the
 30-second drain, and `ProtectSystem=strict` with `StateDirectory=phoebis` is the hardening around it.
 
-Edit `/etc/phoebis/config.yaml` next. The installed file's paths are relative and its key file is
-`/run/secrets/router-storage-key`, so point `storage.encryption_key_file` at `/etc/phoebis/storage.key`,
-`storage.path` and `stats.ledger_path` under `/var/lib/phoebis/`, and `stats.pricing_path` at
-`/etc/phoebis/pricing.yaml`. To reach the console from another machine, move `admin.listen` off loopback with a `tls`
-value, as [TLS on the listeners](#tls-on-the-listeners) says. Then validate it before enabling the service:
+The file `init` wrote names your listeners; to reach the console or the proxy from another machine, pass
+`--admin-listen` or `--proxy-listen` with a `tls` choice, or edit the `tls` key as [TLS on the
+listeners](#tls-on-the-listeners) says. Then validate it before enabling the service:
 
 ```sh
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
@@ -89,16 +83,22 @@ host's loopback only. In an empty directory:
 
 ```sh title="Set up the compose directory"
 install -m 0644 deploy/compose.yaml compose.yaml
-install -m 0644 deploy/config.container.yaml config.yaml
-install -m 0600 deploy/phoebis.env.example phoebis.env
-sudo install -m 0400 -o 65532 -g 65532 /dev/null storage.key
-head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | sudo tee storage.key >/dev/null
+phoebis init --container
+sudo chown 65532:65532 storage.key && sudo chmod 0400 storage.key
 ```
 
-Edit `phoebis.env` and replace the secret with a long random string; both it and `storage.key` hold secrets and
-stay out of version control. The key file is owned by uid 65532 at mode `0400` because Compose
-mounts a file secret with the host file's owner and mode, and that uid is the one the process runs as. Set
-`image:` in `compose.yaml` to the version you want, then:
+`init --container` writes three files beside `compose.yaml`: `config.yaml` with the container's paths and both listeners
+on every interface over `tls: plain_http`, `storage.key`, and `phoebis.env` with a generated admin secret. `storage.key`
+and `phoebis.env` hold secrets and stay out of version control. Without the binary on the host, the image runs the same
+command against the directory:
+
+```sh title="Write the compose directory's files from the image"
+docker run --rm -it -u "$(id -u)" -v "$PWD:/work" ghcr.io/daystrom-labs/phoebis:<version> \
+  init --container --config /work/config.yaml
+```
+
+The key file is owned by uid 65532 at mode `0400` because Compose mounts a file secret with the host file's owner and
+mode, and that uid is the one the process runs as. Set `image:` in `compose.yaml` to the version you want, then:
 
 ```sh title="Start, watch, and stop"
 docker compose up -d
@@ -144,6 +144,7 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | Command | Effect |
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
+| `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
 | `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis --version` | Prints the version. |
@@ -202,6 +203,63 @@ when `proxy.tls` terminates it, without checking the certificate (the probe dial
 probe, connect included, is bounded by three seconds. `/api/hello` stays the liveness answer the client itself probes.
 The container image runs `health` as its health check every 30 seconds ([the container](#run-the-container)).
 
+`init` writes a first installation and refuses to touch anything that exists. It writes, in this order, the storage key
+file (64 hex characters and a newline, created at `0600` in one open), the environment file when `--env-file` names one
+(`0600`, `<NAME>=<secret>` and `RUST_LOG=info`), and the bootstrap file at `--config` (`0644`); it creates the data
+directory and every missing parent of those paths at `0700`. It opens no database, so the first start creates both and
+seals the key canary. The bootstrap file is [the example](#the-bootstrap-file) with the two listeners,
+`admin.secret_env`, the key file, both databases under the data directory and `stats.pricing_path` (`pricing.yaml`
+beside the bootstrap file) filled in, every path absolute and every other line as the example spells it. The admin
+secret is 32 random bytes in base64url, 43 characters, and never lands in the bootstrap file. `init` loads the written
+file the way `check-config` does before it answers.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--admin-cert PATH`, `--admin-key PATH` | unset | An operator's pair as `admin.tls`, both paths made absolute. |
+| `--admin-listen ADDR` | `127.0.0.1:8081` | The admin listener's address. |
+| `--admin-tls WORD` | unset | `self_signed` or `plain_http`, written as `admin.tls`. |
+| `--container` | off | Writes the compose directory's shape, below. |
+| `--data-dir PATH` | `data` beside the file | Holds `router.sqlite`, `ledger.sqlite` and the self-signed material. |
+| `--env-file PATH` | unset | Writes the admin secret there rather than printing it. |
+| `--key-file PATH` | `storage.key` beside the file | The storage key file. |
+| `--non-interactive` | off | Asks nothing, even on a terminal. |
+| `--owner USER` | unset | Hands the key file and the directories `init` created to that user; needs root. |
+| `--proxy-cert PATH`, `--proxy-key PATH` | unset | An operator's pair as `proxy.tls`, both paths made absolute. |
+| `--proxy-listen ADDR` | `127.0.0.1:8317` | The proxy listener's address. |
+| `--proxy-tls WORD` | unset | `self_signed` or `plain_http`, written as `proxy.tls`. |
+| `--secret-env NAME` | `PHOEBIS_ADMIN_SECRET` | The admin secret's variable, written as `admin.secret_env`. |
+
+`init` reads neither file of a pair; `check-config` and the start check it. A TLS flag on a loopback address is written
+as given. `--owner` hands over the key file, the data directory when `init` created it, and every parent `init` created
+on the way, all to the user and its primary group, so the service can traverse them; a directory that existed keeps its
+owner, and the bootstrap file and the environment file stay the caller's.
+
+Without `--env-file`, stdout carries one line, `PHOEBIS_ADMIN_SECRET=<secret>` under the default name, and the secret is
+printed nowhere else, so `phoebis init --non-interactive > phoebis.env` writes a usable environment file. Everything
+else goes to stderr. On a terminal (stdin and stderr both) and without `--non-interactive`, `init` asks for what the
+flags did not give, in this order: the proxy address, the admin address, and for each that leaves loopback its TLS
+choice (`self_signed`, the default, `plain_http`, or `files` and then the two paths). An empty answer takes the default
+shown in brackets, and an address that does not parse is asked again. Then it prints one line per path written with its
+mode and owner, where the secret went, under `self_signed` where the first start writes the CA, and the next command,
+`phoebis check-config --config <path>`.
+
+`init` exits 1 with one `Error:` line and nothing written when the bootstrap file, the key file or the environment file
+already exists, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory (`{path} exists and a new
+key cannot open it; keep the key that sealed it, or name an empty --data-dir`), when an address leaves loopback with no
+TLS choice and no terminal to ask (`--proxy-listen 0.0.0.0:8317 leaves loopback; name --proxy-tls self_signed or
+plain_http, or --proxy-cert and --proxy-key`), when input ends before a question is answered, and when `--owner` runs
+off root or names no user. A directory or a file it cannot write exits 1 too, after removing what the run wrote, which
+the line names. A usage error, such as `--proxy-tls` beside `--proxy-cert` or an address that does not parse, exits 2.
+
+Under `--container` the bootstrap file's directory is the compose directory: `init` writes `storage.key` and
+`phoebis.env` beside the file, the container's paths inside it (`/run/secrets/router-storage-key`,
+`/var/lib/phoebis/router.sqlite`, `/var/lib/phoebis/ledger.sqlite` and `/var/lib/phoebis/pricing.yaml`), both listeners
+on every interface with `tls: plain_http`, and `metrics_listen: 0.0.0.0:9464`. It asks nothing and creates no data
+directory, since `/var/lib/phoebis` is the volume inside the container. The listen and TLS flags still apply;
+`--data-dir`, `--env-file` and `--key-file` are usage errors beside it. The summary ends with the two steps that remain,
+the key file's owner and mode and the image tag in `compose.yaml`, and with
+`docker compose run --rm phoebis check-config` as the next command, since the key's path in the file is the container's.
+
 ## Environment variables
 
 The bootstrap file names the admin secret's environment variable and never holds a secret. `phoebis` resolves it at
@@ -219,6 +277,8 @@ Pick your own name; `PHOEBIS_ADMIN_SECRET` is what the example file happens to u
 and defaults to `info`.
 Nothing else is named here: an account's upstream credential and the keys downstream clients present belong to
 the registry, not the bootstrap file.
+
+`init --env-file` writes the file the service reads with a generated secret; without it, `init` prints the secret once.
 
 ## The bootstrap file
 
