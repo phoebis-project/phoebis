@@ -3793,6 +3793,16 @@ localStorage.removeItem('phoebis.expertView');
   await k.settle(300);
   results.push({ name: '/keys Create key carries no mark', ok: [...k.container.querySelectorAll('dialog[open]')].pop()?.querySelector('.dialog-rail__mark') === null, missing: [] });
   k.unmount();
+  // With no pool to choose, a new key opens on an empty pool, which its Pool control reads as refused.
+  const { listPools } = api;
+  api.listPools = async () => [];
+  const bare = await mount('/keys');
+  [...bare.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Create key')?.click();
+  await bare.settle(300);
+  const poolControl = group([...bare.container.querySelectorAll('dialog[open]')].pop(), 'Key')?.querySelector('select');
+  results.push({ name: "/keys with no pool to choose a new key's Pool control reads refused", ok: poolControl?.getAttribute('aria-invalid') === 'true', missing: [poolControl ? String(poolControl.getAttribute('aria-invalid')) : 'no Pool control'] });
+  bare.unmount();
+  api.listPools = listPools;
 }
 
 // The expert view: a browser preference switched from the sidebar, read by the dialogs alone.
@@ -3875,7 +3885,12 @@ localStorage.removeItem('phoebis.expertView');
   });
   x.unmount();
   x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode&refused=autoMode');
-  results.push({ name: 'a refused expert-only group stays on the rail', ok: labels(x).includes('Auto mode') && rail(dialogOf(x), 'autoMode')?.querySelector('.dialog-rail__dot') !== null, missing: labels(x) });
+  const autoModeEntry = rail(dialogOf(x), 'autoMode');
+  results.push({
+    name: 'a refused expert-only group stays on the rail',
+    ok: labels(x).includes('Auto mode') && !!autoModeEntry?.querySelector('.dialog-rail__dot'),
+    missing: [...labels(x), autoModeEntry ? 'no refusal dot on autoMode' : 'no autoMode rail entry'],
+  });
   x.unmount();
   localStorage.removeItem('phoebis.expertView');
 }
@@ -4739,6 +4754,19 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
       JSON.stringify(drawn) === JSON.stringify(expected),
     missing: [JSON.stringify(drawn), JSON.stringify(expected)],
   });
+  // A refused rule of the key's own marks Models on the rail; the Cancel below keeps it out of the key.
+  const editor = group(dlg, 'Models')?.querySelector('.pattern-editor');
+  [...(editor?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Add rule')?.click();
+  await m.settle(120);
+  const added = [...(editor?.querySelectorAll('input[aria-label^="Rule "]') ?? [])].at(-1);
+  if (added) {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(added, 'a***');
+    added.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+  }
+  const modelsEntry = rail(dlg, 'models');
+  const refusedRule = [modelsEntry ? (modelsEntry.querySelector('.dialog-rail__dot') ? 'marked' : 'clear') : 'no models rail entry', String(added?.getAttribute('aria-invalid'))];
+  results.push({ name: '/keys a refused model rule marks Models on the rail', ok: refusedRule[0] === 'marked' && refusedRule[1] === 'true', missing: refusedRule });
   foot(dlg, 'Cancel')?.click();
   await m.settle(200);
 }
