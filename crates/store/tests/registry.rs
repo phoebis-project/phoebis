@@ -464,7 +464,14 @@ fn a_pool_and_a_pin_from_before_the_engine_columns_read_the_mapped_strategy_and_
         "the migration turns the free toggle on for every existing pool"
     );
     assert_eq!(legacy.shedding, Shedding::default());
-    assert_eq!(legacy.failover, Failover::default());
+    assert_eq!(
+        legacy.failover,
+        Failover {
+            retry_in_place_seconds: 10,
+            ..Failover::default()
+        },
+        "a pool from before the column keeps the column's own default, as an existing pool keeps its stored bound"
+    );
     let pin = migrated
         .load_routing()
         .unwrap()
@@ -1788,6 +1795,17 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
             "pool_deleted"
         ]
     );
+}
+
+#[test]
+fn a_new_pool_waits_out_a_throttle_of_up_to_a_minute_by_default() {
+    assert_eq!(Failover::default().retry_in_place_seconds, 60);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("router.sqlite"), &StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let pools = store.pools().unwrap();
+    let main = pools.iter().find(|p| p.id == "main").unwrap();
+    assert_eq!(main.failover.retry_in_place_seconds, 60);
 }
 
 #[test]

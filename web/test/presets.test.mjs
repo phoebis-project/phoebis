@@ -12,9 +12,9 @@ test('a preset is derived from the values and custom when none matches', () => {
   assert.equal(d.sheddingPresetOf({ ...d.SHEDDING_PRESETS.conservative, shedShare: 0.1 + 0.2 }), 'conservative', 'a share that reads back a rounding off still names its preset');
   assert.deepEqual(
     [
-      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 10 }),
+      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 60 }),
+      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 120 }),
       d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 20 }),
-      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 15 }),
     ],
     ['balanced', 'conservative', 'custom'],
     'balanced and conservative share the cap and the floor, so the retry-in-place bound alone tells them apart',

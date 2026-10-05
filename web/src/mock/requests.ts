@@ -694,7 +694,7 @@ function seedDrawerBranches() {
  */
 function seedHolds() {
   for (const r of REQUESTS) r.held = [...r.attempts].reverse().find((a) => a.selection?.cohortHold)?.selection?.cohortHold ?? null;
-  const boundOf = (r: RequestLog) => (poolById.get(r.poolId ?? '')?.retryInPlaceSeconds ?? 10) * 1_000;
+  const boundOf = (r: RequestLog) => (poolById.get(r.poolId ?? '')?.retryInPlaceSeconds ?? 60) * 1_000;
   const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && !REQUEST_EVENTS.has(r.id));
   if (atCap) {
     const waitedOn = LANES.find((l) => l.keyId === atCap.keyId)?.accountIds.slice(0, 1) ?? [];

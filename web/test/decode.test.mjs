@@ -416,7 +416,7 @@ test('a pool decodes the engine fields and encodes them back', () => {
     [0.5, 600, 900, true, 'when_needed'],
     'the captured pool holds the balanced shedding preset',
   );
-  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.paceFloor, p.overageMoveGraceMinutes, p.windDownMinutes], [10, 16, 0.05, 30, 30], 'and the balanced failover preset');
+  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.paceFloor, p.overageMoveGraceMinutes, p.windDownMinutes], [60, 16, 0.05, 30, 30], 'and the balanced failover preset');
   assert.deepEqual(p.movesPerHour, { spent: 1 });
   const wire = {
     ...row,

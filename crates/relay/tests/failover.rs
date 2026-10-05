@@ -612,7 +612,7 @@ async fn cooldowns_are_partitioned_by_account_kind() {
         "/v1/messages",
         Respond::Json {
             status: 429,
-            headers: vec![("retry-after".into(), "30".into())],
+            headers: vec![("retry-after".into(), "90".into())],
             body: b"{}".to_vec(),
         },
     );
@@ -649,7 +649,7 @@ async fn cooldowns_are_partitioned_by_account_kind() {
     let k1 = c.iter().find(|c| c.account_id == "k1").unwrap();
     assert_eq!(
         (k1.scope.as_str(), k1.until),
-        ("model:claude-sonnet-4-5-20250929", NOW + 30_000 + 1_000),
+        ("model:claude-sonnet-4-5-20250929", NOW + 90_000 + 1_000),
         "an api_key 429 with Retry-After cools the model"
     );
     assert!(

@@ -6348,7 +6348,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "source_dwell_seconds": 900,
           "migrate_when_spent": true,
           "warm_sessions": "when_needed",
-          "retry_in_place_seconds": 10,
+          "retry_in_place_seconds": 60,
           "in_flight_cap": 16,
           "pace_floor": 0.05,
           "overage_move_grace_minutes": 30,
@@ -6390,8 +6390,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1791199175055,
-          "updated_at": 1791199175055,
+          "created_at": 1791218440236,
+          "updated_at": 1791218440236,
           "members": [
             {
               "account_id": "business",
@@ -6430,7 +6430,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "QLU16leo",
+              "prefix": "eBdcAWys",
               "enabled": true
             }
           ],

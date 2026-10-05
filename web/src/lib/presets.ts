@@ -14,11 +14,11 @@ export const SHEDDING_PRESETS: Record<Exclude<SheddingPreset, 'custom'>, { burnW
 
 export type FailoverPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
-/** balanced 16, 10 s, 5 % (the default); fast 8, 5 s, 10 %; conservative 16, 20 s, 5 %. */
+/** balanced 16, 60 s, 5 % (the default); fast 8, 20 s, 10 %; conservative 16, 120 s, 5 %. */
 export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFlightCap: number; paceFloor: number; retryInPlaceSeconds: number }> = {
-  balanced: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 10 },
-  conservative: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 20 },
-  fast: { inFlightCap: 8, paceFloor: 0.1, retryInPlaceSeconds: 5 },
+  balanced: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 60 },
+  conservative: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 120 },
+  fast: { inFlightCap: 8, paceFloor: 0.1, retryInPlaceSeconds: 20 },
 };
 
 /**

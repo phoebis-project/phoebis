@@ -2137,7 +2137,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await pick('Failover preset', 'Balanced');
     results.push({
       name: '/pools a failover pill says what it trades and shows its values in the disabled fields, and Custom enables them from there',
-      ok: JSON.stringify(conservative) === '[true,["16","20","5"],[true,true,true]]' && JSON.stringify(fromConservative) === '[["16","20","5"],[false,false,false]]' && JSON.stringify(pressed('Failover preset')) === '["Balanced"]',
+      ok: JSON.stringify(conservative) === '[true,["16","120","5"],[true,true,true]]' && JSON.stringify(fromConservative) === '[["16","120","5"],[false,false,false]]' && JSON.stringify(pressed('Failover preset')) === '["Balanced"]',
       missing: [JSON.stringify(conservative), JSON.stringify(fromConservative), JSON.stringify(pressed('Failover preset'))],
     });
     expect('/pools the overage group states the grace and the wind down', card('Overage and plan end')?.textContent ?? '', [

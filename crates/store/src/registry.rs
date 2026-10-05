@@ -120,7 +120,7 @@ pub struct Failover {
 impl Default for Failover {
     fn default() -> Self {
         Failover {
-            retry_in_place_seconds: 10,
+            retry_in_place_seconds: 60,
             in_flight_cap: 16,
             pace_floor: 0.05,
             overage_move_grace_minutes: 30,

@@ -69,7 +69,7 @@ Every field, in the order the request body takes them:
 | `source_dwell_seconds` | `900` | at least 60 |
 | `migrate_when_spent` | `true` | `true` or `false` |
 | `warm_sessions` | `when_needed` | `never`, `when_needed`, or `always` |
-| `retry_in_place_seconds` | `10` | 0 to 300; see Retry in place |
+| `retry_in_place_seconds` | `60` | 0 to 300; see Retry in place |
 | `in_flight_cap` | `16` | at least 1; see In-flight caps |
 | `pace_floor` | `0.05` | 0 to 1; see Selection |
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
@@ -652,12 +652,12 @@ account or one model, with the reason, the deadline, and a clear button; the Mod
 by model.
 
 The console's Pools form offers, in its expert view, `in_flight_cap`, `retry_in_place_seconds`, and `pace_floor`
-together as three presets beside custom: balanced (16, 10 s, 5 %, the default), fast (8, 5 s, 10 %), and conservative
-(16, 20 s, 5 %); balanced and conservative differ in the retry-in-place bound alone.
+together as three presets beside custom: balanced (16, 60 s, 5 %, the default), fast (8, 20 s, 10 %), and conservative
+(16, 120 s, 5 %); balanced and conservative differ in the retry-in-place bound alone.
 
 ### Retry in place
 
-A throttle on a portable request whose `Retry-After` is at or under the pool's `retry_in_place_seconds` (default 10) is
+A throttle on a portable request whose `Retry-After` is at or under the pool's `retry_in_place_seconds` (default 60) is
 waited out on the same account and retried there once, with the same credential. The cooldown row is still recorded, so
 a sibling request selecting meanwhile skips the account, and the session's pin stays where it is. The retry is a wire
 submission like any other and runs once per leg. A second throttle on the retry, a `Retry-After` past the bound or past
