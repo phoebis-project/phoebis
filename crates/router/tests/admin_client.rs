@@ -164,9 +164,21 @@ async fn the_client_calls_a_plain_listener_with_the_bearer() {
         Some("TEST_CLIENT_PLAIN_CALLER"),
     );
     let client = client_with(&common, &absent, "TEST_CLIENT_PLAIN_CALLER", ADMIN_SECRET).unwrap();
-    assert!(
-        !absent.exists(),
-        "with --url and --secret-env the file is not read"
+    // The same URL without `--secret-env` needs the file and is refused on its absent path, so the client above was
+    // built without reading it.
+    let url_alone = flags(common.url.clone(), None);
+    let Err(refusal) = client_with(
+        &url_alone,
+        &absent,
+        "TEST_CLIENT_PLAIN_CALLER",
+        ADMIN_SECRET,
+    ) else {
+        panic!("a client was built from --url alone with no configuration file");
+    };
+    assert!(matches!(refusal, ClientError::Config(_)), "{refusal}");
+    assert_eq!(
+        refusal.to_string(),
+        format!("cannot read {}", absent.display())
     );
     let answer = answered(client.expect(Method::GET, "/admin/system", None).await);
     assert_eq!(answer.status, 200);
