@@ -95,6 +95,8 @@ export interface Account {
   plan: string | null;
   pools: PoolMembership[];
   requests: { last24h: number; last7d: number; lifetime: number };
+  /** The row's edit counter, which an edit sends back as `expected_revision`. */
+  revision: number;
   routingEnabled: boolean;
   status: AccountStatus;
   subscription: Subscription | null;

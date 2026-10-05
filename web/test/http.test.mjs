@@ -91,6 +91,27 @@ test('updateAccount is one PATCH that carries the cancelled flag and the end in 
   assert.equal(account.cancelled, true, 'the answer decodes as the account');
 });
 
+test('an account edit sends the revision it read as expected_revision, and none for a save that read no row', async () => {
+  const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const api = new HttpApi();
+  const end = '2026-10-19T09:15:00.000Z';
+  const patch = { cancelled: true, subscriptionEndsAt: end };
+  await api.updateAccount('business', patch, 3);
+  await api.renameAccount('business', 'x', 3);
+  await api.updateAccount('business', patch);
+  await api.renameAccount('business', 'x');
+  assert.deepEqual(
+    calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body)]),
+    [
+      ['PATCH', '/admin/accounts/business', { cancelled: true, subscription_ends_at: Date.parse(end), expected_revision: 3 }],
+      ['PATCH', '/admin/accounts/business', { label: 'x', expected_revision: 3 }],
+      ['PATCH', '/admin/accounts/business', { cancelled: true, subscription_ends_at: Date.parse(end) }],
+      ['PATCH', '/admin/accounts/business', { label: 'x' }],
+    ],
+  );
+});
+
 test('listRequests passes the user agent pattern as user_agent', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ userAgent: 'claude-cli/2.1.*' });

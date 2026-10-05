@@ -1493,6 +1493,99 @@ m.unmount();
   });
   identityButton('Cancel')?.click();
   await page.settle(100);
+
+  // Each editor fences on the revision it opened with. A write through the API while one is open moves the mock's
+  // revision past it, so its save is refused as stale with a Reload of its own, and nothing reloads until it is pressed.
+  const sentence = 'the account changed while the edit was being saved';
+  const business = async () => (await api.listAccounts()).find((a) => a.id === 'business');
+  const accountReads = async (click) => {
+    const reads = countCalls('listAccounts');
+    click();
+    await page.settle(400);
+    reads.restore();
+    return reads.calls.length;
+  };
+  const reloadIn = (callout) => [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');
+  const identityLabels = () => [...(identity()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
+
+  let opened = (await business())?.revision ?? null;
+  await editLabel();
+  await typeInto(labelInput(), 'business 2');
+  await api.updateAccount('business', { cancelled: true, subscriptionEndsAt: '2027-03-01T10:00:00.000Z' });
+  let written = (await business())?.revision ?? null;
+  titleButton('Save')?.click();
+  await page.settle(600);
+  const labelCallout = page.container.querySelector('.detail__ident [role="alert"]');
+  const labelReload = reloadIn(labelCallout);
+  const renameRefused = { callout: labelCallout?.textContent ?? '', input: labelInput()?.value ?? null, stored: (await business())?.label, toast: toast() };
+  results.push({
+    name: '/accounts a rename over an account written since the label editor opened is refused as stale with a Reload in the callout',
+    ok: written === opened + 1 && renameRefused.input === 'business 2' && renameRefused.callout === `${sentence} Reload` && !!labelReload && renameRefused.toast === '' && renameRefused.stored === 'business',
+    missing: [`written ${written}, opened ${opened}`, `input ${renameRefused.input}`, renameRefused.callout || 'no callout', `reload ${!!labelReload}`, `toast ${renameRefused.toast}`, `stored ${renameRefused.stored}`],
+  });
+  const labelReads = await accountReads(() => labelReload?.click());
+  results.push({
+    name: '/accounts Reload closes the label editor, reads the accounts once, and the identity card reads the written end',
+    ok: labelReads === 1 && labelInput() === null && identityLabels().includes('Ends'),
+    missing: [`listAccounts ${labelReads}`, `input ${labelInput()?.value ?? null}`, ...identityLabels()],
+  });
+  await editLabel();
+  await typeInto(labelInput(), 'business 2');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  const renameSaved = { header: title()?.textContent?.trim() ?? '', input: labelInput() !== null, revision: (await business())?.revision ?? null, toast: toast() };
+  results.push({
+    name: '/accounts a rename opened after Reload saves over the fresh row',
+    ok: !renameSaved.input && renameSaved.header === 'business 2' && renameSaved.toast === 'Label saved' && renameSaved.revision === opened + 2,
+    missing: [`input ${renameSaved.input}`, `header ${renameSaved.header}`, `toast ${renameSaved.toast}`, `revision ${renameSaved.revision}, opened ${opened}`],
+  });
+  await api.renameAccount('business', 'business');
+  await api.updateAccount('business', { cancelled: false, subscriptionEndsAt: null });
+  // The list's own 30-second read takes the put-back row in, and the confirmation down, so the end editor opens on the
+  // stored row with no toast left over.
+  tick(30_000);
+  await page.settle(400);
+
+  opened = (await business())?.revision ?? null;
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  box()?.click();
+  await page.settle(100);
+  await typeInto(field(), '2027-03-01T10:00');
+  await api.renameAccount('business', 'business (written)');
+  written = (await business())?.revision ?? null;
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const endCallout = identity()?.querySelector('[role="alert"]');
+  const endReload = reloadIn(endCallout);
+  const endRefused = { callout: endCallout?.textContent ?? '', field: field() !== null, stored: (await business())?.cancelled, toast: toast() };
+  results.push({
+    name: '/accounts a save over an account written since the end editor opened is refused as stale with a Reload in the callout',
+    ok: written === opened + 1 && endRefused.field && endRefused.callout === `${sentence} Reload` && !!endReload && endRefused.toast === '' && endRefused.stored === false,
+    missing: [`written ${written}, opened ${opened}`, `field ${endRefused.field}`, endRefused.callout || 'no callout', `reload ${!!endReload}`, `toast ${endRefused.toast}`, `stored cancelled ${endRefused.stored}`],
+  });
+  const endReads = await accountReads(() => endReload?.click());
+  results.push({
+    name: '/accounts Reload closes the end editor, reads the accounts once, and the title reads the written label',
+    ok: endReads === 1 && field() === null && title()?.textContent?.trim() === 'business (written)',
+    missing: [`listAccounts ${endReads}`, `field ${field() !== null}`, `title ${title()?.textContent?.trim() ?? ''}`],
+  });
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  box()?.click();
+  await page.settle(100);
+  await typeInto(field(), '2027-03-01T10:00');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const endStored = await business();
+  const endSaved = { field: field() !== null, toast: toast() };
+  results.push({
+    name: '/accounts an end edit opened after Reload saves over the fresh row',
+    ok: !endSaved.field && endSaved.toast === 'Subscription end saved' && endStored?.cancelled === true && endStored?.revision === opened + 2,
+    missing: [`field ${endSaved.field}`, `toast ${endSaved.toast}`, `stored cancelled ${endStored?.cancelled}`, `revision ${endStored?.revision}, opened ${opened}`],
+  });
+  await api.renameAccount('business', 'business');
+  await api.updateAccount('business', { cancelled: false, subscriptionEndsAt: null });
   page.unmount();
 }
 {

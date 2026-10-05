@@ -146,6 +146,10 @@ function fenced(body: Record<string, unknown>, updatedAt?: string): Record<strin
   return { ...body, expected_revision: stamp };
 }
 
+// The account fence is a number the decoder read, so there is nothing to parse and nothing to refuse.
+const withRevision = (body: Record<string, unknown>, revision?: number) =>
+  revision === undefined ? body : { ...body, expected_revision: revision };
+
 export class HttpApi implements Api {
   analyticsBudgets = async () => (await call<{ members: unknown[] }>('GET', '/admin/analytics/budgets')).members.map(d.decodeMemberBudget);
   analyticsPlacements = async (q: Pick<AnalyticsQuery, 'from' | 'keyIds' | 'poolIds' | 'to'>) => (await call<{ rows: unknown[] }>('GET', `/admin/analytics/placements${qs({ keys: q.keyIds, pools: q.poolIds, range: range(q.from, q.to) })}`)).rows.map(d.decodePlacementRow);
@@ -240,7 +244,8 @@ export class HttpApi implements Api {
     await call('POST', `/admin/accounts/${enc(accountId)}/usage/refresh`);
   };
   releaseSession = (keyId: string, sessionId: string) => call<void>('POST', `/admin/sessions/${enc(keyId)}/${enc(sessionId)}/release`);
-  renameAccount = async (accountId: string, label: string) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, { label }));
+  renameAccount = async (accountId: string, label: string, revision?: number) =>
+    d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision({ label }, revision)));
   resumeAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/resume`);
   revokeKey = (id: string) => call<void>('POST', `/admin/keys/${enc(id)}/revoke`);
   rotateKey = async (id: string): Promise<CreatedApiKey> => {
@@ -310,7 +315,10 @@ export class HttpApi implements Api {
       socket?.close();
     };
   };
-  updateAccount = async (accountId: string, patch: AccountPatch) => d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, d.encodeAccountPatch(patch)));
+  updateAccount = async (accountId: string, patch: AccountPatch, revision?: number) =>
+    d.decodeAccount(
+      await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision)),
+    );
   updateKey = async (id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, fenced(d.encodeKey(input), updatedAt)));
   // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409
   // `stale_edit` means the row moved since the dialog read it, which the dialog answers with Reload.

@@ -35,6 +35,10 @@ const POOL_TAKEN = 'a pool with this id exists';
  * moves it and an edit read before it cannot pass. */
 const stamped = (previous: string) => iso(Math.max(Date.now(), Date.parse(previous) + 1));
 
+/** One past the row's, as every store write of the account row moves the counter, so an edit read before it cannot
+ * pass. */
+const revised = (a: Account): Account => ({ ...a, revision: a.revision + 1 });
+
 /**
  * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
  * drifts from the route is refused here rather than agreed with.
@@ -418,7 +422,7 @@ export class MockApi implements Api {
 
   async clearFunding(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status });
+    this.putAccount(revised({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status }));
     return latency(undefined, 200);
   }
 
@@ -453,6 +457,7 @@ export class MockApi implements Api {
       plan: null,
       pools: [],
       requests: { last24h: 0, last7d: 0, lifetime: 0 },
+      revision: 1,
       routingEnabled: true,
       status,
       subscription: null,
@@ -551,7 +556,7 @@ export class MockApi implements Api {
     const a = this.account(accountId);
     // The route drops the credential and leaves the identity, so the row still says whose it was; with no credential
     // the poll's standing goes too.
-    this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) });
+    this.putAccount(revised({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) }));
     return latency(undefined, 250);
   }
 
@@ -765,7 +770,7 @@ export class MockApi implements Api {
 
   async pauseAccount(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, routingEnabled: false, status: statusOf(a, false) });
+    this.putAccount(revised({ ...a, routingEnabled: false, status: statusOf(a, false) }));
     return latency(undefined, 250);
   }
 
@@ -778,13 +783,17 @@ export class MockApi implements Api {
     return latency(undefined, 250);
   }
 
-  async renameAccount(accountId: string, label: string) {
-    return latency(this.putAccount({ ...this.account(accountId), label }), 250);
+  async renameAccount(accountId: string, label: string, revision?: number) {
+    const a = this.account(accountId);
+    if (revision !== undefined && revision !== a.revision) {
+      return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
+    }
+    return latency(this.putAccount(revised({ ...a, label })), 250);
   }
 
   async resumeAccount(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, routingEnabled: true, status: statusOf(a, true) });
+    this.putAccount(revised({ ...a, routingEnabled: true, status: statusOf(a, true) }));
     return latency(undefined, 250);
   }
 
@@ -836,16 +845,19 @@ export class MockApi implements Api {
   }
 
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
-  async updateAccount(accountId: string, patch: AccountPatch): Promise<Account> {
+  async updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account> {
     const a = this.account(accountId);
     if (patch.cancelled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is cancelled', null);
     if (!patch.cancelled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs cancelled', null);
     if (patch.cancelled && patch.subscriptionEndsAt === null) throw new ApiError(400, 'cancelled needs subscription_ends_at', null);
+    if (revision !== undefined && revision !== a.revision) {
+      return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
+    }
     // The route answers a subscription block for a cancelled OAuth row even before it pairs, so its end has a place.
     const blank: Subscription = { billingType: '', derivedEndsAt: null, endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
     const base = a.subscription ?? (patch.cancelled ? blank : null);
     const subscription = base ? { ...base, endsAt: patch.cancelled ? patch.subscriptionEndsAt : null } : null;
-    return latency(this.putAccount({ ...a, cancelled: patch.cancelled, subscription }), 250);
+    return latency(this.putAccount(revised({ ...a, cancelled: patch.cancelled, subscription })), 250);
   }
 
   async updateKey(id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey> {

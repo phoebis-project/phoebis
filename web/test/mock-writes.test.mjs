@@ -297,6 +297,46 @@ test('an account patch is refused where the account route refuses it, and a canc
   assert.equal(unpaired.subscription?.endsAt, end, 'an OAuth account that never paired still reports the end it was cancelled with');
 });
 
+const ACCOUNT_STALE = 'the account changed while the edit was being saved';
+const storyAccount = async (api, id) => (await api.listAccounts()).find((a) => a.id === id);
+
+test('an account save over a revision the row no longer carries is refused as stale and stores nothing, and one over its own revision moves it', async () => {
+  const api = await signedIn();
+  const patch = { cancelled: true, subscriptionEndsAt: '2026-10-19T09:15:00.000Z' };
+  const listed = await api.listAccounts();
+  const before = listed.find((a) => a.id === 'business');
+  await assert.rejects(() => api.updateAccount('business', patch, before.revision + 1), staleAs(ACCOUNT_STALE));
+  assert.deepEqual(await api.listAccounts(), listed, 'a stale save stores nothing');
+  const landed = await api.updateAccount('business', patch, before.revision);
+  assert.deepEqual([landed.cancelled, landed.revision], [true, before.revision + 1]);
+  await assert.rejects(() => api.updateAccount('business', patch, before.revision), staleAs(ACCOUNT_STALE), 'the counter moved past the sent revision');
+  await assert.rejects(() => api.renameAccount('business', 'x', landed.revision + 1), staleAs(ACCOUNT_STALE));
+  assert.equal((await storyAccount(api, 'business')).label, before.label);
+  const renamed = await api.renameAccount('business', 'x', landed.revision);
+  assert.deepEqual([renamed.label, renamed.revision], ['x', landed.revision + 1]);
+  const created = await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'fresh', secret: null });
+  assert.equal(created.revision, 1, 'a new row starts at the revision the route gives it');
+});
+
+test('a rename, an end edit or a pause moves the account\'s revision, so an edit read before it is refused as stale', async () => {
+  const api = await signedIn();
+  const end = '2026-10-19T09:15:00.000Z';
+  let read = await storyAccount(api, 'business');
+  await api.renameAccount('business', 'x');
+  await assert.rejects(() => api.updateAccount('business', { cancelled: true, subscriptionEndsAt: end }, read.revision), staleAs(ACCOUNT_STALE), 'after a rename');
+  assert.equal((await storyAccount(api, 'business')).cancelled, read.cancelled);
+  read = await storyAccount(api, 'business');
+  await api.updateAccount('business', { cancelled: false, subscriptionEndsAt: null });
+  await assert.rejects(() => api.renameAccount('business', 'y', read.revision), staleAs(ACCOUNT_STALE), 'after an end edit');
+  assert.equal((await storyAccount(api, 'business')).label, read.label);
+  const mail = await storyAccount(api, 'mail');
+  await api.pauseAccount('mail');
+  await assert.rejects(() => api.updateAccount('mail', { cancelled: false, subscriptionEndsAt: null }, mail.revision), staleAs(ACCOUNT_STALE), 'an end edit after a pause');
+  await assert.rejects(() => api.renameAccount('mail', 'y', mail.revision), staleAs(ACCOUNT_STALE), 'a rename after a pause');
+  const paused = await storyAccount(api, 'mail');
+  assert.deepEqual([paused.cancelled, paused.label], [mail.cancelled, mail.label]);
+});
+
 test('a model-scoped cooldown reads its window from its reason, not a fixed model_rejection value', async () => {
   const api = await signedIn();
   const business = api.accounts.find((a) => a.id === 'business');

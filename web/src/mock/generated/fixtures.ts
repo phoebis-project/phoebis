@@ -30,6 +30,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "quarantined": false
       },
       "lifecycle_generation": 1,
+      "revision": 3,
       "cooldowns": [
         {
           "scope": "model:claude-haiku-4-5-20251001",
@@ -290,6 +291,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "quarantined": false
           },
           "lifecycle_generation": 1,
+          "revision": 3,
           "cooldowns": [
             {
               "scope": "model:claude-haiku-4-5-20251001",
@@ -399,6 +401,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "identity": null,
           "credential": null,
           "lifecycle_generation": 1,
+          "revision": 2,
           "cooldowns": [],
           "overage": null,
           "profile": null,

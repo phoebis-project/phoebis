@@ -164,6 +164,9 @@ export function decodeAccount(v: unknown): Account {
     plan: planName(subscription),
     pools: list(a.pools).map(rec).map((p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
+    // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
+    // than landing over a row it could not vouch for.
+    revision: num(a.revision),
     routingEnabled: bool(a.enabled, true),
     status: accountStatus(a, cooldowns),
     subscription,

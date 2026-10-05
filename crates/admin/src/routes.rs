@@ -1302,6 +1302,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "quarantined": quarantined,
         })),
         "lifecycle_generation": row.lifecycle_generation,
+        "revision": row.revision,
         "cooldowns": ctx.cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
             "scope": cooldown.scope,
             "until": cooldown.until,
@@ -1609,6 +1610,26 @@ pub(crate) fn fence_stamp(sent: Option<&serde_json::Value>, current: i64) -> Res
             "expected_revision is the updated_at the row was read at",
         )),
     }
+}
+
+/// The revision an account edit fences on: the row's own when the body sent none, else the body's integer, refused
+/// when it is not one. No upper bound: the store adds to the row's own counter, never to the sent value.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn fence_revision(
+    sent: Option<&serde_json::Value>,
+    current: u64,
+) -> Result<u64, Response> {
+    let Some(value) = sent else {
+        return Ok(current);
+    };
+    value.as_u64().ok_or_else(|| {
+        failure(
+            StatusCode::BAD_REQUEST,
+            "expected_revision is the revision the row was read at",
+        )
+    })
 }
 
 /// A refusal an operator console can branch on without reading the prose, in the same header slot the relay

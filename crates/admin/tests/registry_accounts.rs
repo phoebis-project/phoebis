@@ -1297,3 +1297,217 @@ async fn two_account_editors_from_one_read_meet_one_409() {
         "the edit read before the other landed wrote nothing"
     );
 }
+
+/// The body an account edit sends: its fields, then the revision it read, written into the JSON object.
+fn fenced(fields: &str, revision: impl std::fmt::Display) -> String {
+    format!(r#"{{{fields},"expected_revision":{revision}}}"#)
+}
+
+#[tokio::test]
+async fn an_account_edit_with_a_stale_expected_revision_answers_409_and_writes_nothing() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().revision;
+
+    let read = revision("business");
+    let other = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"label":"Someone else"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(other.status(), 200);
+    let stale = patch(
+        &app,
+        "/admin/accounts/business",
+        &fenced(r#""label":"Moved""#, read),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
+        json(stale).await["error"],
+        "the account changed while the edit was being saved"
+    );
+    let row = store.account("business").unwrap().unwrap();
+    assert_eq!(
+        (row.label.as_str(), row.revision),
+        ("Someone else", read + 1),
+        "the edit read before the other landed wrote nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_account_edit_with_the_fresh_revision_lands_and_the_revision_moves() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().revision;
+
+    let detail = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let read = detail["revision"]
+        .as_u64()
+        .expect("the account JSON carries the row's revision");
+    assert_eq!(read, revision("business"));
+    let list = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let listed = list["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap();
+    assert_eq!(listed["revision"].as_u64(), Some(read));
+
+    let body = fenced(r#""label":"Moved""#, read);
+    let landed = patch(&app, "/admin/accounts/business", &body, Some(&cookie)).await;
+    assert_eq!(landed.status(), 200);
+    let landed = json(landed).await;
+    assert_eq!(
+        (landed["label"].as_str(), landed["revision"].as_u64()),
+        (Some("Moved"), Some(read + 1))
+    );
+    let again = patch(&app, "/admin/accounts/business", &body, Some(&cookie)).await;
+    assert_eq!(
+        again.status(),
+        409,
+        "the counter moved past the sent revision"
+    );
+    assert_eq!(
+        again.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_expected_revision_on_an_account_answers_400_and_writes_nothing() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+
+    let before = store.account("business").unwrap().unwrap();
+    // A present null is not an absent field, and a string, a fraction and a negative are not a revision.
+    for value in ["null", r#""later""#, "1.5", "-1"] {
+        let refused = patch(
+            &app,
+            "/admin/accounts/business",
+            &fenced(r#""label":"Moved""#, value),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "{value}");
+        assert_eq!(
+            json(refused).await["error"],
+            "expected_revision is the revision the row was read at",
+            "{value}"
+        );
+        let row = store.account("business").unwrap().unwrap();
+        assert_eq!(
+            (row.label.as_str(), row.revision),
+            (before.label.as_str(), before.revision),
+            "{value} wrote nothing"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_account_edit_without_expected_revision_lands_as_today() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+
+    let read = store.account("business").unwrap().unwrap().revision;
+    let plain = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"label":"Plain"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(plain.status(), 200);
+    let row = store.account("business").unwrap().unwrap();
+    assert_eq!((row.label.as_str(), row.revision), ("Plain", read + 1));
+}
+
+#[tokio::test]
+async fn a_body_naming_no_field_writes_nothing_whatever_revision_it_sends() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+
+    let before = store.account("business").unwrap().unwrap();
+    let empty = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"expected_revision":0}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(empty.status(), 200);
+    let body = json(empty).await;
+    assert_eq!(
+        (body["id"].as_str(), body["label"].as_str()),
+        (Some("business"), Some(before.label.as_str()))
+    );
+    let row = store.account("business").unwrap().unwrap();
+    assert_eq!(
+        (row.label.as_str(), row.revision),
+        (before.label.as_str(), before.revision),
+        "nothing is written, so nothing is fenced"
+    );
+}
+
+#[tokio::test]
+async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().revision;
+    let end = |revision: u64| {
+        fenced(
+            r#""cancelled":true,"subscription_ends_at":2000000"#,
+            revision,
+        )
+    };
+
+    let read = revision("business");
+    let other = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"label":"Someone else"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(other.status(), 200);
+    let stale = patch(&app, "/admin/accounts/business", &end(read), Some(&cookie)).await;
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
+        json(stale).await["error"],
+        "the account changed while the edit was being saved"
+    );
+    assert!(
+        !store
+            .subscription_term("business")
+            .unwrap()
+            .unwrap_or_default()
+            .cancelled,
+        "the end edit read before the rename wrote nothing"
+    );
+
+    let fresh = patch(
+        &app,
+        "/admin/accounts/business",
+        &end(read + 1),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(fresh.status(), 200);
+    let term = store.subscription_term("business").unwrap().unwrap();
+    assert_eq!(
+        (term.cancelled, term.ends_at, revision("business")),
+        (true, Some(2_000_000), read + 2)
+    );
+}

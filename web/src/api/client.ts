@@ -196,14 +196,16 @@ export interface Api {
   pauseAccount(accountId: string): Promise<void>;
   refreshUsage(accountId: string): Promise<void>;
   releaseSession(keyId: string, sessionId: string): Promise<void>;
-  renameAccount(accountId: string, label: string): Promise<Account>;
+  /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
+  renameAccount(accountId: string, label: string, revision?: number): Promise<Account>;
   resumeAccount(accountId: string): Promise<void>;
   revokeKey(id: string): Promise<void>;
   rotateKey(id: string): Promise<CreatedApiKey>;
   startPairing(accountId: string): Promise<PairingSession>;
   /** Delivers a snapshot first, then deltas; returns the unsubscribe function. */
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
-  updateAccount(accountId: string, patch: AccountPatch): Promise<Account>;
+  /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
+  updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account>;
   /** `updatedAt` is the stamp the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
   updateKey(id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey>;
   updatePool(id: string, input: PoolInput, updatedAt?: string): Promise<Pool>;

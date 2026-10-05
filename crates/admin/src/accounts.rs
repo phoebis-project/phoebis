@@ -14,8 +14,8 @@ use phoebis_store::{AccountKind, AccountRow, AccountState, AccountUpdate, Secret
 use serde_json::{json, Value};
 
 use crate::routes::{
-    account, account_json, double_option, failure, failure_with_code, reload_or_refuse,
-    store_failure, CreatedId,
+    account, account_json, double_option, failure, failure_with_code, fence_revision, present,
+    reload_or_refuse, store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -44,6 +44,12 @@ struct PatchInput {
     cancelled: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     subscription_ends_at: Option<Option<i64>>,
+    // The raw value, kept apart from an absent field as `PoolInput` and `KeyInput` keep theirs, so a present null is
+    // refused with its own sentence rather than read as "not sent".
+    /// The revision the row was read at; the write lands only while the row still carries it. Absent, the route fences
+    /// on its own read.
+    #[serde(default, deserialize_with = "present")]
+    expected_revision: Option<Value>,
 }
 
 /// The longest `label` or `notes` an account or key route accepts, in bytes.
@@ -194,6 +200,10 @@ pub(crate) async fn patch(
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
+    let expected_revision = match fence_revision(input.expected_revision.as_ref(), row.revision) {
+        Ok(revision) => revision,
+        Err(refusal) => return refusal,
+    };
     if row.kind == AccountKind::Oauth && input.secret.is_some() {
         return failure(
             StatusCode::BAD_REQUEST,
@@ -255,11 +265,11 @@ pub(crate) async fn patch(
         || input.enabled.is_some()
         || cancellation.is_some();
     if edits {
-        // One commit for every field, fenced on the revision the row was read at: an edit built from a stale
-        // read lands nothing, and a combined edit never fences against its own earlier write.
+        // One commit for every field, fenced on the revision the body sent, else the one the row was read at: an
+        // edit built from a stale read lands nothing, and a combined edit never fences against its own earlier write.
         let update = AccountUpdate {
             id: &id,
-            expected_revision: row.revision,
+            expected_revision,
             lifecycle_generation: row.lifecycle_generation,
             label,
             secret: secret.as_ref(),
