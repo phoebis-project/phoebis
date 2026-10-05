@@ -1793,6 +1793,35 @@ fn a_fast_rate_limit_answers_its_reset_only_where_it_is_the_candidates_one_block
         }),
         "nor a budget at its limit, whose period's end is the wait"
     );
+
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled("a", "fast", 5_000, "fast", FAST_RATE_LIMIT_REASON));
+    st.record_member_spend(
+        &budgeted,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 3_000,
+            spent_usd: 5.0,
+            observed_at: 1_000,
+        }],
+    );
+    assert_eq!(
+        select(
+            &mut st,
+            &budgeted,
+            &fast(request(&budgeted, None, "claude-opus-5", true, &[], 2_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 5_000,
+            window: "overage".into(),
+        }),
+        "a budget whose period ends inside the fast window waits for the fast reset, which would still refuse it"
+    );
 }
 
 #[test]

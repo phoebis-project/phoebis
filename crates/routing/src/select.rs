@@ -1633,7 +1633,10 @@ fn obstacle(
         return Some(Obstacle::BudgetUnknown);
     }
     if let Some(until) = budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now) {
-        return Some(Obstacle::Budget { until });
+        // A period that ends inside the fast window would answer a retry the fast lane still refuses.
+        return Some(Obstacle::Budget {
+            until: fast_limited.map_or(until, |row| until.max(row.until)),
+        });
     }
     if let Some(row) = fast_limited {
         return Some(cooldown(row));

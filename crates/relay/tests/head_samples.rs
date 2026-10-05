@@ -237,6 +237,9 @@ async fn a_fast_answers_six_headers_read_into_two_fast_readings_beside_the_kinds
             .is_some_and(|r| (r.utilization - 0.2).abs() < CLOSE),
         "the fast pair never reads as the worst api_key bucket"
     );
+    // The shutdown drains the router's queue and its writer, so the empty table is read after any write this head
+    // could have queued.
+    ha.router.shutdown().await.unwrap();
     assert!(
         ha.store.load_routing().unwrap().windows.is_empty(),
         "an api_key account persists no window"
