@@ -308,12 +308,17 @@ impl QuotaPoll {
         usage.set_on_backoff(Arc::new({
             let ledger = ledger.clone();
             // The accounts whose run this hook saw start: the startup step reads every account before this
-            // registers, so a run its 429 opened ends here without a start row, and that end is not written.
+            // registers, so a run its 429 opened ends here without a start row, and that end is not written. Every
+            // start is written, since the service fires one only when a run opens: a run an `invalidate` dropped
+            // never ends, and the next one's start still lands.
             let open = Mutex::new(HashSet::new());
             move |edge| {
                 let mut open = open.lock().expect(OPEN_RUNS_POISONED);
                 let write = match &edge {
-                    BackoffEdge::Started { account_id, .. } => open.insert(account_id.clone()),
+                    BackoffEdge::Started { account_id, .. } => {
+                        open.insert(account_id.clone());
+                        true
+                    }
                     BackoffEdge::Ended { account_id, .. } => open.remove(account_id),
                 };
                 if write {

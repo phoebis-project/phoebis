@@ -1327,3 +1327,48 @@ async fn a_run_the_poll_never_saw_start_ends_without_a_row() {
     assert_eq!(resumed(backoff_rows(&h)).await, []);
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_run_after_an_invalidated_one_writes_its_own_start_and_end() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", usage_rule().respond);
+    up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
+    up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
+    let h = harness_with_poll(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    let _paused = start_polling(&h, &up).await;
+    let usage = h
+        .usage
+        .clone()
+        .expect("the harness was built with the poll");
+
+    // A run starts, and a re-pairing drops the account's entry mid-run, so that run never ends.
+    resumed(usage.poll("a")).await.unwrap();
+    usage.invalidate("a");
+    // A second run starts on the next 429 and ends on the clean read after its two-minute hold.
+    resumed(usage.poll("a")).await.unwrap();
+    h.clock.store(NOW + 121_000, Ordering::SeqCst);
+    resumed(usage.poll("a")).await.unwrap();
+    assert_eq!(usage_asked(&up, A), 3);
+    let rows = resumed(wait_for_async(Duration::from_secs(5), || async {
+        let rows = backoff_rows(&h).await;
+        rows.iter()
+            .any(|row| row.0 == "poll_backoff_ended")
+            .then_some(rows)
+    }))
+    .await;
+    assert_eq!(
+        rows.iter().map(|row| row.0.as_str()).collect::<Vec<_>>(),
+        [
+            "poll_backoff_started",
+            "poll_backoff_started",
+            "poll_backoff_ended"
+        ],
+        "the second run's start is written beside the first's"
+    );
+    assert_eq!(
+        rows[2].3["duration_ms"].as_i64(),
+        Some(rows[2].2 - rows[1].2),
+        "the end measures the second run"
+    );
+    up.shutdown().await;
+}
