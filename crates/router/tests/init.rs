@@ -246,29 +246,53 @@ fn a_second_run_refuses_and_leaves_every_byte() {
 }
 
 #[test]
-fn a_registry_in_the_data_directory_refuses() {
+fn a_registry_or_a_ledger_in_the_data_directory_refuses_naming_it() {
+    for name in ["router.sqlite", "ledger.sqlite"] {
+        let dir = tempfile::tempdir().unwrap();
+        let data = dir.path().join("data");
+        std::fs::create_dir(&data).unwrap();
+        let database = data.join(name);
+        std::fs::write(&database, b"").unwrap();
+        let config = dir.path().join("config.yaml");
+        let out = init(
+            dir.path(),
+            &["--non-interactive", "--config", path_arg(&config)],
+        );
+        assert_eq!(out.status.code(), Some(1), "{name}: {}", printed(&out));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains(&format!(
+                "Error: {} exists and a new key cannot open it",
+                database.display()
+            )),
+            "{name}: {stderr}"
+        );
+        assert!(out.stdout.is_empty());
+        assert_eq!(entries(dir.path()), ["data"]);
+        assert_eq!(entries(&data), [name]);
+    }
+}
+
+#[test]
+fn an_existing_empty_data_directory_is_used_as_it_is() {
     let dir = tempfile::tempdir().unwrap();
     let data = dir.path().join("data");
     std::fs::create_dir(&data).unwrap();
-    let registry = data.join("router.sqlite");
-    std::fs::write(&registry, b"").unwrap();
+    std::fs::set_permissions(&data, std::fs::Permissions::from_mode(0o750)).unwrap();
     let config = dir.path().join("config.yaml");
     let out = init(
         dir.path(),
         &["--non-interactive", "--config", path_arg(&config)],
     );
-    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    assert_eq!(mode(&data), 0o750);
+    assert!(entries(&data).is_empty());
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stderr.contains(&format!(
-            "{} exists and a new key cannot open it",
-            registry.display()
-        )),
+        !stderr.contains(&format!("{} (", data.display())),
         "{stderr}"
     );
-    assert!(out.stdout.is_empty());
-    assert_eq!(entries(dir.path()), ["data"]);
-    assert_eq!(entries(&data), ["router.sqlite"]);
+    assert_eq!(entries(dir.path()), ["config.yaml", "data", "storage.key"]);
 }
 
 #[test]
