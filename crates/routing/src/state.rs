@@ -15,7 +15,7 @@ use tokio::time::Instant;
 
 use crate::affinity::AffinityMap;
 use crate::listing::{row_for, snapshot_date};
-use crate::select::affinity_ttl_ms;
+use crate::select::{affinity_ttl_ms, seconds_ms};
 use crate::task::BurnRates;
 use crate::windows::window_for;
 use crate::RegistrySnapshot;
@@ -1738,12 +1738,7 @@ impl RoutingState {
         // A pool's marks are read within its own dwell alone, and a pool that left the registry has no round to
         // read. The account's newest round is read by every pool holding the account, each against its own dwell,
         // so its stamp stays until the longest of those has passed.
-        let dwell_ms = |pool: &PoolRow| {
-            i64::try_from(pool.shedding.source_dwell_seconds)
-                .ok()
-                .and_then(|s| s.checked_mul(1_000))
-                .unwrap_or(i64::MAX)
-        };
+        let dwell_ms = |pool: &PoolRow| seconds_ms(pool.shedding.source_dwell_seconds);
         self.shed_rounds.retain(|(pool_id, _), (at, _)| {
             snapshot
                 .pool(pool_id)
