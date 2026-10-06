@@ -373,7 +373,8 @@ function buildRequests(): RequestLog[] {
   // the session the live key holds now, so the Sessions view lists that id once under each holder.
   const holderRows = rows.filter((r) => r.keyId === 'desktop' && Date.parse(r.at) < DELETED_HOLDER_END);
   for (const r of holderRows) r.keyGeneration = DELETED_HOLDER_GENERATION;
-  if (holderRows[0]) Object.assign(holderRows[0], { sessionId: SESSION_IDS[0] });
+  const holderLast = holderRows.find((r) => r.kind !== 'probe');
+  if (holderLast) Object.assign(holderLast, { sessionId: SESSION_IDS[0] });
   // A stream can commit its 200 head and fail after it: the newest such desktop stream keeps the status and
   // carries the error, which is the row Observe and the drawer must not draw as a success.
   const failedAfterHead = rows.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);

@@ -919,7 +919,7 @@ export function PoolDialog({
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];
   models: { label: string; value: string }[];
-  /** `reload` is true from the stale save's Reload, and on a close after any other refusal, whose cause may be lists that are out of date. */
+  /** `reload` is true from the stale save's Reload, and on a close after any refused save or a key move refused as stale, whose cause may be lists that are out of date. */
   onClose: (reload: boolean) => void;
   onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;

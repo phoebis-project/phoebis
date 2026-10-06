@@ -19,7 +19,7 @@ test('a preset is derived from the values and custom when none matches', () => {
     ['balanced', 'conservative', 'custom'],
     'balanced and conservative share the cap and the floor, so the retry-in-place bound alone tells them apart',
   );
-  for (const off of [{ inFlightCap: 9 }, { paceFloor: 0.05 }, { retryInPlaceSeconds: 6 }]) assert.equal(d.failoverPresetOf({ ...d.FAILOVER_PRESETS.fast, ...off }), 'custom', JSON.stringify(off));
+  for (const off of [{ inFlightCap: 9 }, { paceFloor: 0.05 }, { retryInPlaceSeconds: 21 }]) assert.equal(d.failoverPresetOf({ ...d.FAILOVER_PRESETS.fast, ...off }), 'custom', JSON.stringify(off));
 });
 
 const NOW = Date.parse('2026-09-16T14:30:00Z');

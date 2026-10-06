@@ -318,7 +318,7 @@ test('an account save over a revision the row no longer carries is refused as st
   assert.equal(created.revision, 1, 'a new row starts at the revision the route gives it');
 });
 
-test('a rename, an end edit or a pause moves the account\'s revision, so an edit read before it is refused as stale', async () => {
+test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect moves the account\'s revision, so an edit read before it is refused as stale', async () => {
   const api = await signedIn();
   const end = '2026-10-19T09:15:00.000Z';
   let read = await storyAccount(api, 'primary');
@@ -335,6 +335,17 @@ test('a rename, an end edit or a pause moves the account\'s revision, so an edit
   await assert.rejects(() => api.renameAccount('secondary', 'y', secondary.revision), staleAs(ACCOUNT_STALE), 'a rename after a pause');
   const paused = await storyAccount(api, 'secondary');
   assert.deepEqual([paused.cancelled, paused.label], [secondary.cancelled, secondary.label]);
+  await api.resumeAccount('secondary');
+  await assert.rejects(() => api.renameAccount('secondary', 'y', paused.revision), staleAs(ACCOUNT_STALE), 'a rename after a resume');
+  assert.equal((await storyAccount(api, 'secondary')).label, secondary.label);
+  const funding = await storyAccount(api, 'overflow');
+  await api.clearFunding('overflow');
+  await assert.rejects(() => api.renameAccount('overflow', 'y', funding.revision), staleAs(ACCOUNT_STALE), 'a rename after a funding clear');
+  assert.equal((await storyAccount(api, 'overflow')).label, funding.label);
+  const connected = await storyAccount(api, 'legacy');
+  await api.disconnectAccount('legacy');
+  await assert.rejects(() => api.renameAccount('legacy', 'y', connected.revision), staleAs(ACCOUNT_STALE), 'a rename after a disconnect');
+  assert.equal((await storyAccount(api, 'legacy')).label, connected.label);
 });
 
 test('a model-scoped cooldown reads its window from its reason, not a fixed model_rejection value', async () => {

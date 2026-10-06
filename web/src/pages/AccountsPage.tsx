@@ -263,6 +263,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   disabled={busy}
                   onClick={() => {
                     setEditing(false);
+                    if (labelStale) onChanged();
                     setLabelStale(null);
                   }}
                 >
@@ -524,6 +525,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   disabled={busy}
                   onClick={() => {
                     setEndForm(null);
+                    if (endStale) onChanged();
                     setEndStale(null);
                   }}
                 >

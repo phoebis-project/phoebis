@@ -227,6 +227,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const holder = rows.filter((r) => Date.parse(r.hour) < created);
     const earlier = new Set(holder.map((r) => r.keyGeneration));
     assert.ok(holder.some((r) => r.kind === 'inference') && holder.some((r) => r.kind === 'probe'), 'the earlier holder has rows, probes among them');
+    assert.equal(created, Math.max(...holder.map((r) => Date.parse(r.hour))) + HOUR, "the live key starts the hour after the holder's last rollup hour");
     assert.equal(earlier.size, 1, 'one earlier generation');
     const [generation] = earlier;
     assert.ok(generation < created, 'the earlier generation is the older one');
@@ -234,14 +235,14 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.ok(s.requests.filter((r) => r.keyId === 'desktop').every((r) => r.keyGeneration === (Date.parse(r.at) < created ? generation : created)), 'each request row carries the holder it ran under');
   });
 
-  test(`the earlier holder's session row reads its own requests and drops off a day after its last one, at ${at}`, async () => {
+  test(`the earlier holder's session row reads its own requests and stays listed inside the session expiry, at ${at}`, async () => {
     const s = await story;
     const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
     const historical = s.sessions.filter((x) => x.historical);
     assert.deepEqual(historical.map((x) => x.keyId), ['desktop'], 'one earlier holder is listed');
     const [held] = historical;
     // The rows run newest first.
-    const holders = s.requests.filter((r) => r.keyId === 'desktop' && r.keyGeneration === held.keyGeneration);
+    const holders = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === held.keyGeneration);
     const own = holders.filter((r) => r.sessionId === held.sessionId);
     assert.ok(held.keyGeneration < created && own.length > 0, 'the row is the earlier generation, with rows of its own');
     assert.deepEqual([held.requests, held.lastRequestAt], [own.length, own[0].at], "the row's figures are its own rows'");
@@ -250,6 +251,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([held.lastUsedAt, held.pinned, held.agents], [null, false, 0], 'no pin and no activity of its own past the ledger');
     assert.ok(Date.parse(held.lastRequestAt) + s.settings.sessions.expireAfterSeconds * 1000 > s.now, 'still inside the session expiry');
     assert.ok(s.sessions.some((x) => !x.historical && x.keyId === 'desktop' && x.sessionId === held.sessionId), 'the live key holds the same session id');
+  });
+
+  test(`a live session row counts the non-probe requests of its own key, generation and session, at ${at}`, async () => {
+    const s = await story;
+    for (const x of s.sessions.filter((row) => !row.historical)) {
+      const own = s.requests.filter((r) => r.kind !== 'probe' && r.keyId === x.keyId && r.keyGeneration === x.keyGeneration && r.sessionId === x.sessionId);
+      const newest = own.reduce((last, r) => (last === null || Date.parse(r.at) > Date.parse(last) ? r.at : last), null);
+      assert.deepEqual([x.requests, x.lastRequestAt], [own.length, newest], `${x.keyId}'s ${x.sessionId}`);
+    }
   });
 
   test(`a switched-off key was last used before its last write, and a pool's one member holds what its keys sent, at ${at}`, async () => {

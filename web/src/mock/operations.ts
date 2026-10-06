@@ -55,13 +55,16 @@ const sessionSpec: {
 /** How long the router lists a session after its last request, which the settings answer as well. */
 const SESSION_EXPIRE_SECONDS = 86_400;
 
-// The earlier holder's rows count for its own row below, never for the live session that shares their id.
+// Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
+// so the earlier holder's rows count for its own row below, never for the live session that shares their id.
+const activityOf = (keyId: string | null, keyGeneration: number, sessionId: string) => `${keyId}|${keyGeneration}|${sessionId}`;
 const ledgered = new Map<string, { last: string; requests: number }>();
 for (const r of REQUESTS) {
-  if (r.sessionId === null || (r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION)) continue;
-  const seen = ledgered.get(r.sessionId);
-  if (!seen) ledgered.set(r.sessionId, { last: r.at, requests: 1 });
-  else ledgered.set(r.sessionId, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
+  if (r.sessionId === null || r.kind === 'probe') continue;
+  const id = activityOf(r.keyId, r.keyGeneration, r.sessionId);
+  const seen = ledgered.get(id);
+  if (!seen) ledgered.set(id, { last: r.at, requests: 1 });
+  else ledgered.set(id, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
 }
 
 /** A 20k-token prefix read back at Fable 5.1's cache-read cell, 0.001675 of the Max 20x window per million, rounded. */
@@ -82,7 +85,8 @@ const PIN_TYPES: (keyof PlanModelCells)[] = ['cacheRead', 'cacheWrite1h', 'cache
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // The last entry deliberately falls outside the ledgered ids.
   const sessionId = i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
-  const seen = ledgered.get(sessionId) ?? null;
+  const keyGeneration = Date.parse(keyById.get(spec.keyId)!.createdAt);
+  const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
   // Both rolls are drawn whatever the spec says, so pinning one session's idle
   // does not shift the seeded stream the rest of these fixtures read from.
   const createdRoll = rng.int(8, 9 * 60) * MINUTE;
@@ -118,7 +122,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     model: spec.model,
     epoch: i < 3 ? 2 : 1,
     historical: false,
-    keyGeneration: Date.parse(keyById.get(spec.keyId)!.createdAt),
+    keyGeneration,
     createdAt: ago(createdAgo),
     lastUsedAt: ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
@@ -269,7 +273,7 @@ for (const pin of SESSIONS) {
 // own requests and no pin or recipe. The holder's last request ran on the session the live key holds now, so the row
 // carries that id, and it joins the list after the probe times are filled in, which would otherwise hand it that
 // session's next probe.
-const holderRows = REQUESTS.filter((r) => r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
+const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
 const holderLast = holderRows[0];
 if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NOW) {
   SESSIONS.push({

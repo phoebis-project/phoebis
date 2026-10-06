@@ -1586,6 +1586,32 @@ m.unmount();
     ok: !endSaved.field && endSaved.toast === 'Subscription end saved' && endStored?.cancelled === true && endStored?.revision === opened + 2,
     missing: [`field ${endSaved.field}`, `toast ${endSaved.toast}`, `stored cancelled ${endStored?.cancelled}`, `revision ${endStored?.revision}, opened ${opened}`],
   });
+  // Cancel after a stale refusal reads the lists again as Reload does, since the refusal says the view is out of date.
+  await editLabel();
+  await typeInto(labelInput(), 'primary 3');
+  await api.renameAccount('primary', 'primary (written again)');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  const labelStaleShown = page.container.querySelector('.detail__ident [role="alert"]')?.textContent === `${sentence} Reload`;
+  const labelCancelReads = await accountReads(() => titleButton('Cancel')?.click());
+  results.push({
+    name: '/accounts Cancel after a rename refused as stale reads the accounts once',
+    ok: labelStaleShown && labelCancelReads === 1 && labelInput() === null,
+    missing: [`callout ${labelStaleShown}`, `listAccounts ${labelCancelReads}`, `input ${labelInput()?.value ?? null}`],
+  });
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  await typeInto(field(), '2027-04-01T10:00');
+  await api.renameAccount('primary', 'primary (written)');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const endStaleShown = identity()?.querySelector('[role="alert"]')?.textContent === `${sentence} Reload`;
+  const endCancelReads = await accountReads(() => identityButton('Cancel')?.click());
+  results.push({
+    name: '/accounts Cancel after an end edit refused as stale reads the accounts once',
+    ok: endStaleShown && endCancelReads === 1 && field() === null,
+    missing: [`callout ${endStaleShown}`, `listAccounts ${endCancelReads}`, `field ${field() !== null}`],
+  });
   await api.renameAccount('primary', 'primary');
   await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
   page.unmount();
@@ -7202,8 +7228,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await m.settle(700);
   }
   {
-    // The earlier holder of `desktop` held its id until twenty hours back, so every range holds both groups; the
-    // month is read here, and the later checks read the day, which it is put back to at the end.
+    // The earlier holder of `desktop` held its id until twenty hours back, so every range that reaches past that hour
+    // holds both groups; the month is read here, and the later checks read the day, which it is put back to at the end.
     await tab(m, 'Traffic');
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
     range('30d')?.click();
@@ -8094,7 +8120,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     {
       // The earlier holder's row reads its own generation's requests on that session, never the live holder's.
       const held = (await api.listSessions()).find((s) => s.historical);
-      const own = requests.filter((r) => r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === held?.sessionId);
+      const own = requests.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === held?.sessionId);
       results.push({
         name: "/sessions the earlier holder's row counts its own requests and ends at its last one",
         ok: own.length > 0 && cell(gone, 'Requests')?.textContent?.trim() === String(own.length) && held?.requests === own.length && held?.lastRequestAt === own[0].at,
