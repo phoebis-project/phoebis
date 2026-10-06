@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { planLabel } from '@/api/decode';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, familyOrder, isWeighted, modelWeeks, shareOf, tierCapacity, unreachableBand, weightedWindows, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { anchorTier, bandNow, familyOrder, isWeighted, modelWeeks, shareIn, tierCapacity, unreachableBand, weightedWindows, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
@@ -33,19 +33,19 @@ const windowLabel = (window: string) => WINDOWS.find((w) => w.key === window)?.l
 export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; now: number; prices: ModelPrice[] }) {
   const tiers = Object.keys(costs.capacity).filter((tier) => WINDOWS.some((w) => tierCapacity(costs, tier, w.key) !== null));
   const [tier, setTier] = useState(() => anchorTier(costs));
-  const [inside, setInside] = useState(false);
+  const next = bandNow(costs, now);
+  const unresolved = 'unresolved' in next ? next.unresolved : null;
+  // With no state to read the viewer picks one, Inside first, so a share never reads below what the band may charge.
+  const [inside, setInside] = useState(() => unresolved !== null);
   const [tokens, setTokens] = useState(1);
   const [typed, setTyped] = useState('1');
   const pick = (millions: number) => {
     setTokens(millions);
     setTyped(String(millions));
   };
-  // The band's state now, or the instant it next flips, prices every cell as a request completing then.
-  const next = bandNow(costs, now);
   const unreachable = unreachableBand(next);
-  // A band that never flips offers one state alone, so the choice follows it rather than pricing the other at now.
-  const chosen = unreachable === null ? inside : next.inside;
-  const at = next.inside === chosen ? now : (next.at ?? now);
+  // A band that never flips offers one state alone, so the choice follows it.
+  const chosen = unreachable === null ? inside : !unreachable.inside;
 
   const weighted = familyOrder(Object.keys(costs.modelWeight).filter((model) => isWeighted(costs, model)));
   const unweighted = familyOrder([
@@ -62,7 +62,7 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
 
   /** `what` names the window in the cell's title: "5-hour window", "Fable week". */
   const cell = (model: string, window: string, what: string, type: (typeof TOKEN_TYPES)[number], i: number) => {
-    const share = shareOf(costs, window, tier, model, { ...ZERO, [type.key]: tokens * 1_000_000 }, at);
+    const share = shareIn(costs, window, tier, model, { ...ZERO, [type.key]: tokens * 1_000_000 }, chosen);
     const sep = i === 0 ? 'cost-ref__sep' : '';
     if (share === null) {
       return (
@@ -177,7 +177,7 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
             ))}
           </span>
         </span>
-        <span className="cost-ref__now">{nowLine(costs, now)}</span>
+        <span className="cost-ref__now">{unresolved === null ? nowLine(costs, now) : `This browser cannot read the zone ${unresolved}, so pick the band state yourself.`}</span>
       </div>
       <div className="cost-ref__caption">
         <b>

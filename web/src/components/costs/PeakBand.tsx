@@ -29,6 +29,7 @@ const fmtSpan = (ms: number) => {
 /** Whether the band runs now and when that changes, beside the band's grid and the plan rates' band control. */
 export const nowLine = (costs: SubscriptionCosts, now: number): string => {
   const next = bandNow(costs, now);
+  if ('unresolved' in next) return `This browser cannot read the zone ${next.unresolved}.`;
   if (next.at === null) return next.inside ? 'Inside the peak band now, with no end in the next eight days.' : 'Outside the peak band now, with no start in the next eight days.';
   return next.inside ? `Inside the peak band now, until ${clockAt(next.at)} (${fmtSpan(next.at - now)})` : `Outside the peak band now. It starts at ${clockAt(next.at)} (in ${fmtSpan(next.at - now)})`;
 };
@@ -56,44 +57,49 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
     return Number(parts.find((p) => p.type === 'hour')?.value) * 60 + Number(parts.find((p) => p.type === 'minute')?.value);
   }, [now, zone]);
   const { fiveHour, sevenDay } = costs.peak.capacityFactor;
+  const state = bandNow(costs, now);
+  // A zone this browser cannot read gives no hours here, so the card draws no grid, no swatch and no change.
+  const unresolved = 'unresolved' in state;
   return (
     <Card title="Peak band" subtitle="This week. A request completing inside the band spends more of its 5-hour window.">
       <div className="cost-ref__band-side">
         <div>
           <p className="cost-ref__band-lead">{caption}</p>
-          <div className="cost-ref__band">
-            {week.map((day) => (
-              <Fragment key={day.date}>
-                <span className={`cost-ref__band-day${day.today ? ' is-today' : ''}`}>{day.label}</span>
-                <span className="cost-ref__band-track">
-                  {day.runs.map((r) => (
-                    <span
-                      key={r.from}
-                      className="cost-ref__band-run"
-                      style={{ left: atMinute(r.from), width: atMinute(r.to - r.from) }}
-                      title={`${day.label}, ${minuteClock(r.from)} to ${minuteClock(r.to)} here. A 5-hour share costs ${shareCost(fiveHour)}.`}
-                    />
-                  ))}
-                  {day.today && <span className={`cost-ref__band-now${nowMinute > LATE ? ' is-late' : ''}`} style={{ left: atMinute(nowMinute) }} title={`Now, ${clockAt(now)}`} />}
-                </span>
-              </Fragment>
-            ))}
-            <span />
-            <span className="cost-ref__band-axis" aria-hidden="true">
-              {HOUR_TICKS.map((h) => (
-                <span key={h} style={{ left: `${(h / 24) * 100}%` }}>
-                  {pad(h)}
-                </span>
+          {!unresolved && (
+            <div className="cost-ref__band">
+              {week.map((day) => (
+                <Fragment key={day.date}>
+                  <span className={`cost-ref__band-day${day.today ? ' is-today' : ''}`}>{day.label}</span>
+                  <span className="cost-ref__band-track">
+                    {day.runs.map((r) => (
+                      <span
+                        key={r.from}
+                        className="cost-ref__band-run"
+                        style={{ left: atMinute(r.from), width: atMinute(r.to - r.from) }}
+                        title={`${day.label}, ${minuteClock(r.from)} to ${minuteClock(r.to)} here. A 5-hour share costs ${shareCost(fiveHour)}.`}
+                      />
+                    ))}
+                    {day.today && <span className={`cost-ref__band-now${nowMinute > LATE ? ' is-late' : ''}`} style={{ left: atMinute(nowMinute) }} title={`Now, ${clockAt(now)}`} />}
+                  </span>
+                </Fragment>
               ))}
-            </span>
-          </div>
+              <span />
+              <span className="cost-ref__band-axis" aria-hidden="true">
+                {HOUR_TICKS.map((h) => (
+                  <span key={h} style={{ left: `${(h / 24) * 100}%` }}>
+                    {pad(h)}
+                  </span>
+                ))}
+              </span>
+            </div>
+          )}
         </div>
         <div className="cost-ref__band-text">
           <p className="cost-ref__now">
-            {bandNow(costs, now).inside && <span className="cost-ref__swatch" aria-hidden="true" />}
+            {!('unresolved' in state) && state.inside && <span className="cost-ref__swatch" aria-hidden="true" />}
             {nowLine(costs, now)}
           </p>
-          {change && (
+          {change && !unresolved && (
             <p className="cost-ref__note">
               {change.lasting
                 ? `From ${change.from} the band runs ${change.text} here, once ${change.moved ? `${zoneCity(costs.peak.zone)} changes its clocks` : 'your clocks change'}.`

@@ -96,10 +96,35 @@ test('a week the file does not list prices as the 7-day share once', () => {
   close(d.shareOf(costs, 'seven_day_other', MAX_20X, OPUS, usage({ input: 1 }), OUT), 0.002, 'the 7-day share, 2 / 1000');
 });
 
-test('a peak zone the browser cannot resolve prices out of band', () => {
-  const unzoned = { ...costs, peak: { ...costs.peak, zone: 'Nowhere/Unknown' } };
-  assert.equal(d.inBand(unzoned, IN), false);
-  close(d.shareOf(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), IN), 0.02, 'the out-of-band share inside the hours, 2 / 100');
+test('a peak zone the browser cannot read leaves the band state unknown, so a share prices on a given state alone', () => {
+  const unzoned = { ...costs, peak: { ...costs.peak, zone: 'Not/AZone' } };
+  assert.equal(d.inBand(unzoned, IN), null);
+  assert.equal(d.inBand({ ...costs, peak: { ...costs.peak, zone: '' } }, IN), null, 'the empty zone reads the same');
+  assert.deepEqual(d.bandNow(unzoned, IN), { unresolved: 'Not/AZone' });
+  assert.equal(d.unreachableBand(d.bandNow(unzoned, IN)), null, 'both states stay in reach');
+  assert.equal(d.shareOf(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), IN), null, 'no share on an assumed state');
+  close(d.shareIn(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), true), 0.04, 'inside the band, 2 / 100 / 0.5');
+  close(d.shareIn(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), false), 0.02, 'outside it, 2 / 100');
+  assert.deepEqual(d.bandRuns(unzoned, IN - 86_400_000, IN + 86_400_000), [], 'no hours to shade');
+  assert.equal(d.nextLocalChange(unzoned, IN, 'Europe/Berlin'), null);
+  const clock = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+  assert.equal(d.bandCaption(unzoned, IN, 'Europe/Berlin', clock), 'Mon to Fri, 05:00 to 11:00 in AZone (Not/AZone), the zone the cost model names.', 'the hours in the zone the file names alone');
+});
+
+test("a band day's interval is its hours in the band's own zone, read through that day's clock change", () => {
+  const span = (peak, date) => d.bandSpan({ ...costs, peak: { ...costs.peak, ...peak } }, date);
+  // Los Angeles leaves summer time on Sunday 1 November 2026 at 02:00: 5 to 11 there reads at UTC-8, 13:00 to 19:00 UTC.
+  assert.deepEqual(span({ weekdays: false }, '2026-11-01'), { end: Date.parse('2026-11-01T19:00:00Z'), start: Date.parse('2026-11-01T13:00:00Z') });
+  // It enters summer time on Sunday 14 March 2027, 02:00 becoming 03:00 at 10:00 UTC: 5 to 11 reads at UTC-7.
+  assert.deepEqual(span({ weekdays: false }, '2027-03-14'), { end: Date.parse('2027-03-14T18:00:00Z'), start: Date.parse('2027-03-14T12:00:00Z') });
+  // A band from 2 starts at the change, 03:00 at UTC-7, since 02:00 never reads that day.
+  assert.deepEqual(span({ fromHour: 2, toHour: 4, weekdays: false }, '2027-03-14'), { end: Date.parse('2027-03-14T11:00:00Z'), start: Date.parse('2027-03-14T10:00:00Z') });
+  // On 7 November 2027 01:00 to 02:00 reads twice, at UTC-7 from 08:00 UTC and at UTC-8 from 09:00 UTC: the band from 1
+  // to 2 holds both and ends at 02:00 at UTC-8.
+  assert.deepEqual(span({ fromHour: 1, toHour: 2, weekdays: false }, '2027-11-07'), { end: Date.parse('2027-11-07T10:00:00Z'), start: Date.parse('2027-11-07T08:00:00Z') });
+  assert.equal(span({}, '2026-09-19'), null, 'a Saturday under weekdays');
+  assert.deepEqual(span({ fromHour: 0, toHour: 24, weekdays: false }, '2026-09-19'), { end: Date.parse('2026-09-20T07:00:00Z'), start: Date.parse('2026-09-19T07:00:00Z') }, 'to 24 is the next midnight');
+  assert.deepEqual(d.bandSpan({ ...costs, peak: { ...costs.peak, zone: 'Not/AZone' } }, '2026-09-16'), { unresolved: 'Not/AZone' });
 });
 
 // The band in a zone. Wednesday 16 September 2026 at 14:30 UTC, 07:30 in Los Angeles: inside the test table's band of
@@ -158,9 +183,9 @@ test("the band's runs between two instants are its own hours, clipped to the bou
   assert.deepEqual(d.bandRuns(costs, at(7, 15), at(7, 17)), [run(at(7, 15), at(7, 17))]);
 });
 
-test("the next change of the band's local hours runs from the first later day that differs until a day reads as this week's, and none in its own zone", () => {
+test("the next change of the band's local hours runs from the first later band day that differs from today's until one reads as today's, and none in its own zone", () => {
   // Berlin leaves summer time on 25 October and Los Angeles on 1 November: for that one week the band reads an hour
-  // earlier in Berlin, and the Monday after reads as this week's.
+  // earlier in Berlin, and the Monday after reads as today.
   assert.deepEqual(d.nextLocalChange(costs, NOW, 'Europe/Berlin'), { from: 'Mon 26 Oct', lasting: false, moved: false, text: '13:00 to 19:00', to: 'Fri 30 Oct' });
   // Los Angeles enters summer time on 14 March 2027 and Berlin on 28 March: the two weeks between read an hour
   // earlier in Berlin, the weekend inside them continuing the stretch, and 29 March reads as this week again.
@@ -168,20 +193,35 @@ test("the next change of the band's local hours runs from the first later day th
   assert.equal(d.nextLocalChange(costs, NOW, 'America/Los_Angeles'), null);
 });
 
-test('a change that starts late in the ten weeks reads past them to the day that reads as this week again', () => {
+test('a change opens on the first band day that differs from today, this week included, and reads to its own end however far apart the two zones change', () => {
+  // Every day from Wednesday 21 October 2026, 12:00 to 18:00 UTC and 14:00 to 20:00 in Berlin: Berlin leaves summer
+  // time on Sunday 25 October, so the band reads 13:00 to 19:00 there from that day, and on Sunday 1 November Los
+  // Angeles leaves it too, 13:00 to 19:00 UTC and 14:00 to 20:00 in Berlin again. The change opens this week.
+  assert.deepEqual(d.nextLocalChange({ ...costs, peak: { ...costs.peak, weekdays: false } }, Date.parse('2026-10-21T12:00:00Z'), 'Europe/Berlin'), { from: 'Sun 25 Oct', lasting: false, moved: false, text: '13:00 to 19:00', to: 'Sat 31 Oct' });
+  // Monday 4 January 2027 in Cairo, at UTC+2: 13:00 to 19:00 UTC, 15:00 to 21:00 there. From Monday 15 March, exactly
+  // ten weeks on, Los Angeles keeps summer time and the band reads 14:00 to 20:00; Cairo enters summer time, UTC+3, on
+  // Friday 30 April at 00:00, so that day reads 15:00 to 21:00 again, seven weeks after the change opened.
+  assert.deepEqual(d.nextLocalChange(costs, Date.parse('2027-01-04T12:00:00Z'), 'Africa/Cairo'), { from: 'Mon 15 Mar', lasting: false, moved: true, text: '14:00 to 20:00', to: 'Thu 29 Apr' });
+});
+
+test('a change that starts late in the ten weeks reads past them to the day that reads as today again', () => {
   // Seen from 6 January 2027, the gap between the two spring changes opens on 15 March, inside the ten weeks, and
-  // Monday 29 March, the first day that reads as this week again, falls past them: the stretch seen from 24 February.
+  // Monday 29 March, the first day that reads as today again, falls past them: the stretch seen from 24 February.
   assert.deepEqual(d.nextLocalChange(costs, Date.parse('2027-01-06T12:00:00Z'), 'Europe/Berlin'), { from: 'Mon 15 Mar', lasting: false, moved: true, text: '13:00 to 19:00', to: 'Fri 26 Mar' });
 });
 
-test("a change of the band's local hours that runs to the end of the scan lasts, and names whose clocks move", () => {
-  // UTC keeps its clock, so once Los Angeles leaves summer time the band reads an hour later for good; the stretch
-  // runs to the last whole day the scan reads, three weeks and a weekend past the ten weeks: Friday 25 December.
-  assert.deepEqual(d.nextLocalChange(costs, NOW, 'UTC'), { from: 'Mon 2 Nov', lasting: true, moved: true, text: '13:00 to 19:00', to: 'Fri 25 Dec' });
-  // Auckland enters summer time on 27 September while Los Angeles keeps its clock: the band starts at 01:00 there,
-  // on the Tuesday a Monday in Los Angeles falls on, and Los Angeles' own change in November moves it once more. The
-  // scan's last whole day there is Saturday 26 December.
-  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Pacific/Auckland'), { from: 'Tue 29 Sep', lasting: true, moved: false, text: '01:00 to 07:00', to: 'Sat 26 Dec' });
+test("a change of the band's local hours whose hours have not returned 26 weeks on lasts, and names whose clocks move", () => {
+  // UTC keeps its clock: Los Angeles leaves summer time on 1 November, so from Monday 2 November the band reads 13:00
+  // to 19:00, and returns to 12:00 to 18:00 on Monday 15 March, 19 weeks on. The stretch ends on Friday 12 March.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'UTC'), { from: 'Mon 2 Nov', lasting: false, moved: true, text: '13:00 to 19:00', to: 'Fri 12 Mar' });
+  // From Wednesday 6 January 2027, 13:00 to 19:00 UTC: Los Angeles enters summer time on 14 March, so from Monday 15
+  // March the band reads 12:00 to 18:00, and back on Monday 8 November, 34 weeks on.
+  assert.deepEqual(d.nextLocalChange(costs, Date.parse('2027-01-06T12:00:00Z'), 'UTC'), { from: 'Mon 15 Mar', lasting: true, moved: true, text: '12:00 to 18:00', to: null });
+  // Today's band reads 00:00 to 06:00 on Thursday 17 September in Auckland, at UTC+12. Auckland enters summer time on
+  // 27 September, so from Tuesday 29 September, the Tuesday a Monday in Los Angeles falls on, it reads 01:00 to 07:00,
+  // from 3 November 02:00 to 08:00, from 16 March 01:00 to 07:00, and 00:00 to 06:00 again on Tuesday 6 April, 27
+  // weeks on.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Pacific/Auckland'), { from: 'Tue 29 Sep', lasting: true, moved: false, text: '01:00 to 07:00', to: null });
 });
 
 test("the band's local hours read on the clock a caller passes, and a run past midnight says it ends the next day", () => {
@@ -201,6 +241,8 @@ test('the models list family by family, Fable, Opus, Sonnet, Haiku, the newest v
 test("the caption names the band in the viewing zone beside the zone the file defines it in, or once where they are one", () => {
   assert.equal(d.bandCaption(costs, NOW, 'UTC', clock24), 'Mon to Fri, 12:00 to 18:00 here (UTC). In Los Angeles: Mon to Fri, 05:00 to 11:00.');
   assert.equal(d.bandCaption(costs, NOW, 'America/Los_Angeles', clock24), 'Mon to Fri, 05:00 to 11:00 in Los Angeles (America/Los_Angeles), the zone the cost model names.');
+  // Monday 26 October 2026, the week after Berlin leaves summer time and before Los Angeles does: 12:00 to 18:00 UTC.
+  assert.equal(d.bandCaption(costs, Date.parse('2026-10-26T08:00:00Z'), 'Europe/Berlin', clock24), 'Mon to Fri, 13:00 to 19:00 here (Europe/Berlin). In Los Angeles: Mon to Fri, 05:00 to 11:00.');
 });
 
 test("a tier's window reads as a multiple of the smallest sized tier's on that window", () => {

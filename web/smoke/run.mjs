@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, planLabel, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -8237,7 +8237,8 @@ m.unmount();
         JSON.stringify(factors) === JSON.stringify([factorText(factor.five_hour), factorText(factor.seven_day)]),
       missing: [JSON.stringify(days.map((d) => d.textContent)), JSON.stringify(tracks.map((t) => t.querySelectorAll('.cost-ref__band-run').length)), band?.querySelector('.cost-ref__band-lead')?.textContent ?? 'no caption', wantCaption, band?.querySelector('.cost-ref__band-text .cost-ref__now')?.textContent ?? 'no now line', wantNow, JSON.stringify(factors)],
     });
-    // UTC keeps its clock, so the band's hours here move for good once the cost model's zone changes its clocks.
+    // UTC keeps its clock, and Los Angeles leaves summer time on 1 November and returns on 14 March, 19 weeks on: the
+    // band reads an hour later here, at UTC-8, from Monday 2 November to Friday 12 March.
     const change = nextLocalChange(costs, CLOCK_ORIGIN, 'UTC');
     const wantChange =
       change === null
@@ -8246,10 +8247,11 @@ m.unmount();
           ? `From ${change.from} the band runs ${change.text} here, once ${change.moved ? `${city} changes its clocks` : 'your clocks change'}.`
           : `${change.from} to ${change.to}: ${change.text} here, while the two zones change their clocks on different dates.`;
     const changeLine = band?.querySelector('.cost-ref__band-text .cost-ref__note')?.textContent ?? 'no change line';
+    const byHand = `Mon 2 Nov to Fri 12 Mar: ${pad(fromHour + 8)}:00 to ${pad(toHour + 8)}:00 here, while the two zones change their clocks on different dates.`;
     results.push({
-      name: "/sessions the peak band names the next change of its local hours, one that lasts once the cost model's zone changes its clocks",
-      ok: change !== null && change.lasting && change.moved && changeLine === wantChange,
-      missing: [changeLine, String(wantChange)],
+      name: "/sessions the peak band names the next change of its local hours, a stretch from the cost model's zone leaving summer time to its return",
+      ok: zone === 'America/Los_Angeles' && costs.peak.weekdays && change !== null && !change.lasting && change.moved && changeLine === wantChange && changeLine === byHand,
+      missing: [changeLine, String(wantChange), byHand],
     });
   }
   {
@@ -8437,6 +8439,65 @@ m.unmount();
         drawn.opus5.weight.text === 'by window' &&
         drawn.opus5.weight.title === 'claude-opus-5 carries no shared weight, only a weight per window: 3 on the 7-day window',
       missing: [JSON.stringify(drawn)],
+    });
+  }
+
+  // The band on the test tables, Los Angeles weekdays 5 to 11, seen from UTC.
+  {
+    const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
+    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: tables.subscription_costs });
+    const tested = wired.subscriptionCosts;
+    // From Wednesday 6 January 2027, 13:00 to 19:00 at UTC-8: Los Angeles enters summer time on 14 March, so from
+    // Monday 15 March the band reads 12:00 to 18:00, and back on 8 November, 34 weeks on.
+    const lasting = await mountNode(React.createElement(PeakBand, { costs: tested, now: Date.parse('2027-01-06T12:00:00Z') }));
+    const note = lasting.container.querySelector('.cost-ref__note')?.textContent ?? 'no change line';
+    lasting.unmount();
+    results.push({ name: "/sessions the peak band names a change of its local hours that lasts past 26 weeks once the cost model's zone changes its clocks", ok: note === 'From Mon 15 Mar the band runs 12:00 to 18:00 here, once Los Angeles changes its clocks.', missing: [note] });
+
+    // A zone this browser cannot read: the card gives the band's hours in that zone and says it cannot read it, and Plan
+    // rates leaves the state to the viewer, Inside first. One Opus 5.5 input token on the Max 20x 5-hour window is 2 /
+    // 100 / 0.5 inside the band and 2 / 100 outside, a million of them 40,000 and 20,000 windows.
+    const unzoned = { ...tested, peak: { ...tested.peak, zone: 'Not/AZone' } };
+    const card = await mountNode(React.createElement(PeakBand, { costs: unzoned, now: CLOCK_ORIGIN }));
+    const drawnCard = {
+      factors: card.container.querySelectorAll('.cost-ref__factor .cost-ref__val').length,
+      lead: card.container.querySelector('.cost-ref__band-lead')?.textContent ?? 'no caption',
+      notes: card.container.querySelectorAll('.cost-ref__note').length,
+      now: card.container.querySelector('.cost-ref__now')?.textContent ?? 'no now line',
+      swatches: card.container.querySelectorAll('.cost-ref__swatch').length,
+      tracks: card.container.querySelectorAll('.cost-ref__band-track').length,
+    };
+    card.unmount();
+    results.push({
+      name: '/sessions the peak band with a zone this browser cannot read gives its hours in that zone, says so, and draws no grid, swatch or change',
+      ok:
+        drawnCard.lead === 'Mon to Fri, 05:00 to 11:00 in AZone (Not/AZone), the zone the cost model names.' &&
+        drawnCard.now === 'This browser cannot read the zone Not/AZone.' &&
+        drawnCard.tracks === 0 &&
+        drawnCard.swatches === 0 &&
+        drawnCard.notes === 0 &&
+        drawnCard.factors === 2,
+      missing: [JSON.stringify(drawnCard)],
+    });
+    const rates = await mountNode(React.createElement(PlanRates, { costs: unzoned, now: CLOCK_ORIGIN, prices: wired.apiPrices.models }));
+    const band = () => [...rates.container.querySelectorAll('[aria-label="Peak band"] button')];
+    const opusInput = () => [...rates.container.querySelectorAll('tbody tr')].find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5')?.children[2]?.textContent?.trim() ?? 'no cell';
+    const read = () => ({ cell: opusInput(), disabled: band().filter((b) => b.disabled).length, now: rates.container.querySelector('.cost-ref__now')?.textContent ?? 'no now line', pressed: band().filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent?.trim()) });
+    const first = read();
+    band().find((b) => b.textContent?.trim() === 'Outside')?.click();
+    await rates.settle(200);
+    const outside = read();
+    rates.unmount();
+    results.push({
+      name: '/sessions plan rates with a zone this browser cannot read keep both band states, Inside first, and price each cell on the state picked',
+      ok:
+        JSON.stringify(first.pressed) === JSON.stringify(['Inside']) &&
+        first.disabled === 0 &&
+        first.now === 'This browser cannot read the zone Not/AZone, so pick the band state yourself.' &&
+        first.cell === fmtShare(40_000) &&
+        JSON.stringify(outside.pressed) === JSON.stringify(['Outside']) &&
+        outside.cell === fmtShare(20_000),
+      missing: [JSON.stringify(first), JSON.stringify(outside)],
     });
   }
 }

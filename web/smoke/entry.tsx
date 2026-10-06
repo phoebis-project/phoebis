@@ -21,6 +21,9 @@ export { AttentionRows } from '@/components/AttentionRows';
 export { ATTENTION_REFRESH_MS } from '@/lib/attention';
 export { default as React } from 'react';
 export { AttemptTrail } from '@/components/ui/AttemptTrail';
+// The two cost panels a check mounts alone, on a cost model the mock does not answer.
+export { PeakBand } from '@/components/costs/PeakBand';
+export { PlanRates } from '@/components/costs/PlanRates';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
