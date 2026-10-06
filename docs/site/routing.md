@@ -417,19 +417,19 @@ round orders every pin on the account, cold ones first by burn, then warm ones b
 prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share` (default 0.5) of the
 account's burn over `burn_window_seconds` (default 600). It never marks the account's last unmarked pin, so an account
 with one session sheds nothing and no round takes all of an account's burn. A pin whose burn carries the total past the
-share stays marked, and the round stops there. A pin whose burn the table cannot price ranks after every priced pin of
-its group, counts nothing toward the share, and is never marked, so a session is never shed on a guess. `warm_sessions`
-bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always`
-orders every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last
-refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the
-pin has no share to shed. In dollars, on an Anthropic-key account or one in overage, it stays in the round. A session
-that returns to standard requests brings its pin back with the plan burn it still carries.
+share stays marked, and the round stops there. A pin whose burn the cost model cannot price ranks after every priced pin
+of its group, counts nothing toward the share, and is never marked, so a session is never shed on a guess.
+`warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm
+ones, and `always` orders every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin
+whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan
+window, so the pin has no share to shed. In dollars, on an Anthropic-key account or one in overage, it stays in the
+round. A session that returns to standard requests brings its pin back with the plan burn it still carries.
 
 The console's Pools form offers, in its expert view, `shed_share`, `burn_window_seconds`, and `source_dwell_seconds`
 together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and
 conservative (0.3, 900 s, 1800 s). The form's preview of what a shedding round would move leaves out the pins of a
 subscription account on its plan whose tier the cost model does not size, which the round still ranks on the model's
-anchor rates and sheds, and keeps a pin whose burn the table cannot price in the order unmarked, as the round does.
+anchor rates and sheds, and keeps a pin whose burn the cost model cannot price in the order unmarked, as the round does.
 
 A marked session moves at its next request, onto a cool sibling (see above) that did not shed this pin within
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the

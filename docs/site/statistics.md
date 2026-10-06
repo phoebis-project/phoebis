@@ -119,17 +119,17 @@ or `NaN`, which no budget trips on.
 A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
 with the window named; an Anthropic-key account, and a subscription account in overage, read dollars.
 
-A fast answer draws no plan window: it adds nothing to the share, the prediction, the burn a shedding round ranks by, or
-the reconciliation. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`,
-which Spend per minute charts under every grouping; a member's budget counts them at the fast cells, a subscription
-member's as an Anthropic-key member's.
+A fast answer draws no plan window: it adds nothing to the share, the prediction, or the burn a shedding round ranks by.
+It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which Spend per minute
+charts under every grouping; a member's budget counts them at the fast cells, a subscription member's as an
+Anthropic-key member's.
 
-The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants
-rather than cells: a token costs its model's weight times its type's multiplier in units on every window, a window holds
-a capacity in units per tier, and a request's share of a window is the units it spent over that capacity, over the peak
-band's capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window
-outside the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. Nothing the
-console shows is a unit count.
+The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
+a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
+units per tier, and a request's share of a window is the units it spent over that capacity, over the peak band's
+capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window outside
+the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. Nothing the console
+shows is a unit count.
 
 The capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro subscription
 reports `default_claude_ai`):
@@ -167,10 +167,13 @@ shedding round prices on plan quota so the order reads what the meter charges.
 The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window on every tier, so a
 Fable request's share of it is twice its 7-day share.
 
-A model without a weight, or a tier without a capacity on a window, prices no share there: the prediction adds no
-charge, the shedding round ranks the pin after every priced one, a plan-funded probe settles in dollars, the analytics
-list the share under model unlisted and the cost reference shows a dash. The file carries one date, `effective`. A dated
-model id reads the weight of its undated name.
+A model without a weight prices no share: the prediction adds no charge, the shedding round ranks the pin after every
+priced one, a plan-funded probe settles in dollars, the analytics list the share under model unlisted and the cost
+reference shows a dash. A tier without a capacity on a window prices no share there either, and the prediction adds no
+charge on that window. A plan-funded probe on a tier without a 5-hour capacity settles in dollars. The shedding round
+ranks that tier's pins like any other, on the model's anchor rates, and in the analytics an account on a tier the file
+lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. The file carries
+one date, `effective`. A dated model id reads the weight of its undated name.
 
 A new model is one weight line: its plain input rate in percent of the Max 20x 5-hour window per million tokens,
 measured outside the band, times 1.5. An operator who cannot wait for a release copies the shipped file, adds the line
