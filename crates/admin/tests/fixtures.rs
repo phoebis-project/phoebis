@@ -632,6 +632,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cooldown_scope: Some("account".into()),
                 cooldown_until: Some(now + 1_800_000),
                 selection: Some(placed_json),
+                stop_reason: None,
                 ..attempt("r-failover", 1, "direct", 429, "rate_limited", hour_ago)
             },
             AttemptRecord {

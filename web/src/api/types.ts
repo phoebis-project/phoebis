@@ -95,6 +95,9 @@ export interface Account {
   plan: string | null;
   pools: PoolMembership[];
   requests: { last24h: number; last7d: number; lifetime: number };
+  /** The row's edit token, which an edit sends back as `expected_revision`; an account deleted and created again
+   * under its id never answers one its predecessor did. */
+  revision: number;
   routingEnabled: boolean;
   status: AccountStatus;
   subscription: Subscription | null;
@@ -379,8 +382,6 @@ export interface Pool {
   keepalive: PoolKeepalive;
   keys: PoolKey[];
   members: PoolMember[];
-  /** Null disables the shedding round. */
-  migrateAboveUtilization: number | null;
   /** Whether a pin moves off a member whose window for its model is spent while a sibling has allowance left. */
   migrateWhenSpent: boolean;
   /** Under `by_warm_prefix`, the smallest estimated static prefix, in tokens, that places a fresh session. */
@@ -402,6 +403,8 @@ export interface Pool {
   /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
   selectBelowUtilization: number | null;
   sessionPlacement: SessionPlacement;
+  /** Null disables the shedding round. */
+  shedAheadOfPace: number | null;
   /** The share of a hot member's burn one shedding round moves. */
   shedShare: number;
   /** Seconds a member that shed waits before its next round, and a session shed off it stays away. */
@@ -411,6 +414,8 @@ export interface Pool {
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
   traffic24h: TrafficBucket[];
+  /** The stamp of the row's last write, which an edit sends back as `expected_revision`. */
+  updatedAt: string;
   warmSessions: WarmSessions;
   /** Minutes before an account's subscription end from which it takes a fresh session only as the last resort. */
   windDownMinutes: number;
@@ -445,6 +450,8 @@ export interface ApiKey {
   /** Live sessions whose newest request still presented the previous secret; 0 once the grace ends. */
   sessionsOnRetiredSecret: number;
   status: KeyStatus;
+  /** The stamp of the row's last write, which an edit sends back as `expected_revision`. */
+  updatedAt: string;
   usage7d: { cost: number; requests: number; tokens: number };
 }
 
@@ -950,6 +957,7 @@ export type RecipeReason =
   | 'evicted'
   | 'expired'
   | 'idle_limit'
+  | 'ledger_behind'
   | 'net_negative'
   | 'overage'
   | 'paused'

@@ -84,7 +84,7 @@ struct Pool {
     subagent_placement: SubagentPlacement,
     session_placement: SessionPlacement,
     min_shared_prefix_tokens: u64,
-    migrate: Option<f64>,
+    shed_ahead: Option<f64>,
     select_below: Option<f64>,
     members: Vec<(&'static str, u32)>,
     prefer_subscription: bool,
@@ -103,7 +103,7 @@ impl Default for Pool {
             subagent_placement: SubagentPlacement::ByCohort,
             session_placement: SessionPlacement::ByStrategy,
             min_shared_prefix_tokens: 20_000,
-            migrate: None,
+            shed_ahead: None,
             select_below: None,
             members: vec![("a", 0), ("b", 0), ("c", 0)],
             prefer_subscription: false,
@@ -196,7 +196,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             strategy: pool.strategy,
             affinity_ttl_seconds: pool.affinity,
             overage_policy: pool.policy,
-            migrate_above_utilization: pool.migrate,
+            shed_ahead_of_pace: pool.shed_ahead,
             select_below_utilization: pool.select_below,
             prefer_subscription: pool.prefer_subscription,
             shedding: pool.shedding,
@@ -930,7 +930,7 @@ fn a_pin_on_a_depleted_account_is_renewed_rather_than_moved() {
 #[test]
 fn a_marked_pin_moves_to_a_cooler_sibling_and_stays_when_none_exists() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -1804,6 +1804,35 @@ fn a_fast_rate_limit_answers_its_reset_only_where_it_is_the_candidates_one_block
         }),
         "nor a budget at its limit, whose period's end is the wait"
     );
+
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    st.record_cooldown(cooled("a", "fast", 5_000, "fast", FAST_RATE_LIMIT_REASON));
+    st.record_member_spend(
+        &budgeted,
+        vec![MemberSpend {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            period: BudgetPeriod::Month,
+            period_start: 0,
+            period_end: 3_000,
+            spent_usd: 5.0,
+            observed_at: 1_000,
+        }],
+    );
+    assert_eq!(
+        select(
+            &mut st,
+            &budgeted,
+            &fast(request(&budgeted, None, "claude-opus-5", true, &[], 2_000)),
+            &mut rng()
+        )
+        .0,
+        SelectResult::Exhausted(Exhaustion::Timed {
+            deadline: 5_000,
+            window: "overage".into(),
+        }),
+        "a budget whose period ends inside the fast window waits for the fast reset, which would still refuse it"
+    );
 }
 
 #[test]
@@ -2566,7 +2595,7 @@ fn an_explicitly_chosen_strategy_orders_the_api_key_group_itself() {
 #[test]
 fn a_marked_pin_moves_only_to_a_destination_under_the_band() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -3028,7 +3057,7 @@ fn an_unknown_seven_day_reading_drops_nothing() {
 #[test]
 fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -3054,7 +3083,7 @@ fn a_spent_window_moves_a_pin_back_to_the_account_that_shed_it_inside_the_dwell(
 #[test]
 fn a_spent_pin_moves_to_a_sibling_the_band_would_refuse() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -4536,6 +4565,329 @@ fn two_pools_sharing_an_account_share_its_entries() {
     );
 }
 
+/// The load of `two_pools_sharing_an_account_share_its_entries` with a shedding margin of 0.8 on both pools and
+/// each pool's `source_dwell_seconds` from `dwells`: keys `k1` in `p1` and `k2` in `p2`, `a` in both pools at
+/// priority 1 behind `b` in `p1` and `c` in `p2`, and `d` at priority 2 in the pool `d_in` names, so `a`
+/// outranks it there.
+fn shared_account(dwells: [u64; 2], d_in: Option<&str>) -> RegistrySnapshot {
+    let account = |id: &str| AccountRow {
+        id: id.into(),
+        kind: AccountKind::Oauth,
+        label: id.into(),
+        enabled: true,
+        identity: None,
+        lifecycle_generation: 1,
+        incarnation: 1,
+        revision: 1,
+        state: AccountState::Ready,
+    };
+    let api_key = |id: &str, pool_id: &str| ApiKeyRow {
+        id: id.into(),
+        label: id.into(),
+        notes: None,
+        pool_id: pool_id.into(),
+        enabled: true,
+        revoked_at: None,
+        expires_at: None,
+        model_rules: Vec::new(),
+        model_rules_mode: RulesMode::Extend,
+        long_context_twins: true,
+        keepalive_opt_out: false,
+        body_capture_hours: None,
+        secret_digest: vec![0; 32],
+        prefix: "00000000".into(),
+        created_at: 0,
+        updated_at: 0,
+        rotated_at: None,
+        last_used_at: None,
+        retired_secret_last_used_at: None,
+        auto_mode_server: None,
+    };
+    let pool = |id: &str, source_dwell_seconds: u64| PoolRow {
+        strategy: Strategy::Priority,
+        prefer_subscription: false,
+        shed_ahead_of_pace: Some(0.8),
+        shedding: Shedding {
+            source_dwell_seconds,
+            ..Shedding::default()
+        },
+        ..PoolRow::for_tests(id)
+    };
+    let member = |pool_id: &str, account_id: &str, priority: u32| PoolMember {
+        pool_id: pool_id.into(),
+        account_id: account_id.into(),
+        priority,
+        budget_daily_usd: None,
+        budget_monthly_usd: None,
+    };
+    let mut accounts = vec![account("a"), account("b"), account("c")];
+    let mut members = vec![
+        member("p1", "a", 1),
+        member("p1", "b", 0),
+        member("p2", "a", 1),
+        member("p2", "c", 0),
+    ];
+    if let Some(pool_id) = d_in {
+        accounts.push(account("d"));
+        members.push(member(pool_id, "d", 2));
+    }
+    let load = RegistryLoad {
+        accounts,
+        credential_generations: Vec::new(),
+        keys: vec![api_key("k1", "p1"), api_key("k2", "p2")],
+        members,
+        pools: vec![pool("p1", dwells[0]), pool("p2", dwells[1])],
+        retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
+        terms: Vec::new(),
+    };
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
+/// The main agent's pin of `session` under `key_id`.
+fn key(key_id: &str, session: &str) -> PinKey {
+    PinKey {
+        key_id: key_id.into(),
+        ..pin_key(session)
+    }
+}
+
+/// As `request` for `session`, under `key_id` with its candidates resolved through that key, since `request`
+/// names `k`.
+fn under(s: &RegistrySnapshot, key_id: &str, session: &str, now: i64) -> SelectRequest {
+    let key = s.key(key_id).unwrap();
+    SelectRequest {
+        request_id: "r-1".into(),
+        attempt: 1,
+        seq: 1,
+        key_id: key_id.into(),
+        key_generation: key.created_at,
+        agent_id: "main".into(),
+        session_id: Some(session.into()),
+        canonical_model: "claude-sonnet-5".into(),
+        folded_model: "claude-sonnet-5".into(),
+        candidates: resolve(
+            s,
+            key,
+            "claude-sonnet-5",
+            "claude-sonnet-5",
+        )
+        .unwrap(),
+        portable: true,
+        attempted: Vec::new(),
+        now,
+        fallback_ms: 60_000,
+        revision: s.revision,
+        probe: false,
+        count: false,
+        request_class: None,
+        context_compacted: false,
+        static_hash: None,
+        boundaries: Arc::from([]),
+        client: ClientClass::ClaudeCode,
+        static_boundaries: Arc::from([]),
+        marker: false,
+        parent_agent_id: None,
+        holds: Vec::new(),
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        fast: false,
+    }
+}
+
+#[test]
+fn an_account_in_two_pools_holds_one_prediction_that_both_pools_charges_feed() {
+    let s = shared_account([900, 900], None);
+    let charged = |completions: usize| {
+        let mut st = loaded(vec![
+            PinRow {
+                key_id: "k1".into(),
+                ..seeded_pin("s1", "a", T)
+            },
+            PinRow {
+                key_id: "k2".into(),
+                ..seeded_pin("s2", "a", T)
+            },
+        ]);
+        // A charge counts once it lands after the reading it adds to.
+        st.record_sample("a", sample(0.7, 0.0, T - 500));
+        for _ in 0..completions {
+            st.charge("a", T, &[(FIVE_HOUR, 0.06)]);
+        }
+        st
+    };
+    let five_hour = |st: &RoutingState| st.predicted("a", FIVE_HOUR, T).unwrap().utilization;
+
+    let mut both = charged(2);
+    assert!(
+        (five_hour(&both) - 0.82).abs() < 1e-9,
+        "the sample plus a completion under each pool: {}",
+        five_hour(&both)
+    );
+    assert_eq!(
+        landed(select(&mut both, &s, &under(&s, "k1", "s1", T + 1_000), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert_eq!(
+        both.last_shed("p1", "a"),
+        Some(T + 1_000),
+        "p1 reads a over its margin by the one prediction"
+    );
+    assert_eq!(
+        landed(select(&mut both, &s, &under(&s, "k2", "s2", T + 2_000), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert!(
+        both.last_shed("p2", "a").is_some(),
+        "p2 reads the same figure"
+    );
+
+    let mut one = charged(1);
+    assert!(
+        (five_hour(&one) - 0.76).abs() < 1e-9,
+        "one completion alone: {}",
+        five_hour(&one)
+    );
+    select(&mut one, &s, &under(&s, "k1", "s1", T + 1_000), &mut rng());
+    select(&mut one, &s, &under(&s, "k2", "s2", T + 2_000), &mut rng());
+    assert_eq!(
+        (one.last_shed("p1", "a"), one.last_shed("p2", "a")),
+        (None, None),
+        "either charge alone leaves a under the margin under both pools"
+    );
+}
+
+#[test]
+fn a_shedding_round_on_a_shared_account_marks_the_triggering_pools_pins_alone() {
+    let s = shared_account([900, 900], Some("p1"));
+    let mut st = loaded(vec![
+        PinRow {
+            key_id: "k1".into(),
+            ..burning("s1", "a", 4.0, false, T)
+        },
+        PinRow {
+            key_id: "k1".into(),
+            ..burning("s0", "a", 1.0, false, T)
+        },
+        PinRow {
+            key_id: "k2".into(),
+            ..burning("s3", "a", 4.0, false, T)
+        },
+        PinRow {
+            key_id: "k2".into(),
+            ..burning("s2", "a", 1.0, false, T)
+        },
+        PinRow {
+            key_id: "k1".into(),
+            ..seeded_pin("s5", "b", T)
+        },
+    ]);
+    hot_a_cool_b(&mut st, T);
+    st.record_sample("c", sample(0.1, 0.1, T));
+    // Each round starts through its pool's light pin: a request through the heavy one would mark it and move it in
+    // the same selection, spending the mark read below.
+    assert_eq!(
+        landed(select(&mut st, &s, &under(&s, "k1", "s0", T), &mut rng()).0),
+        ("a".into(), None),
+        "s0 is the last unmarked pin of p1's slice"
+    );
+    assert!(st.shed_marked("p1", &key("k1", "s1"), T, 900_000));
+    assert!(!st.shed_marked("p1", &key("k1", "s0"), T, 900_000));
+    assert!(
+        !st.shed_marked("p1", &key("k2", "s3"), T, 900_000)
+            && !st.shed_marked("p2", &key("k2", "s3"), T, 900_000),
+        "p1's round marks among p1's pins alone"
+    );
+    assert_eq!(st.last_shed("p2", "a"), None);
+    assert_eq!(st.newest_shed("a"), Some(T));
+
+    // A minute decays every burn by the same tenth, so the order stands.
+    let second = T + 60_000;
+    hot_a_cool_b(&mut st, second);
+    assert_eq!(
+        landed(select(&mut st, &s, &under(&s, "k2", "s2", second), &mut rng()).0),
+        ("a".into(), None),
+        "s2 is the last unmarked pin of p2's slice"
+    );
+    assert_eq!(
+        st.last_shed("p2", "a"),
+        Some(second),
+        "p2 runs its own round inside p1's dwell"
+    );
+    assert!(st.shed_marked("p2", &key("k2", "s3"), second, 900_000));
+    assert!(!st.shed_marked("p2", &key("k2", "s2"), second, 900_000));
+    assert!(
+        st.shed_marked("p1", &key("k1", "s1"), second, 900_000),
+        "p2's round leaves p1's mark in place"
+    );
+    assert_eq!(st.newest_shed("a"), Some(second));
+
+    // p1's own round on a is past its 900 s dwell, p2's, 870 s old, is not.
+    let cool_check = T + 930_000;
+    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, cool_check));
+    st.record_sample("a", sample(0.1, 0.1, cool_check));
+    st.record_sample("d", sample(0.1, 0.1, cool_check));
+    assert_eq!(
+        landed(select(&mut st, &s, &under(&s, "k1", "s5", cool_check), &mut rng()).0),
+        ("d".into(), Some(MigrateReason::Spent)),
+        "a outranks d and reads cool, and only p2's round keeps it off the cool set"
+    );
+}
+
+#[test]
+fn an_accounts_cooldown_outlives_the_shedding_pools_purged_marks() {
+    let s = shared_account([600, 1_800], Some("p2"));
+    let mut st = loaded(vec![
+        PinRow {
+            key_id: "k1".into(),
+            ..burning("s1", "a", 4.0, false, T)
+        },
+        PinRow {
+            key_id: "k1".into(),
+            ..burning("s0", "a", 1.0, false, T)
+        },
+        PinRow {
+            key_id: "k2".into(),
+            ..burning("s4", "c", 1.0, false, T)
+        },
+    ]);
+    hot_a_cool_b(&mut st, T);
+    st.record_sample("c", sample(0.1, 0.1, T));
+    assert_eq!(
+        landed(select(&mut st, &s, &under(&s, "k1", "s0", T), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert_eq!(st.last_shed("p1", "a"), Some(T));
+    assert_eq!(st.newest_shed("a"), Some(T));
+
+    // Between p1's 600 s and p2's 1,800 s: the pins outlive the purge, since their accounts stand and their TTL
+    // has not passed.
+    let purged = T + 660_000;
+    st.purge(&s, purged);
+    assert!(st.pin(&key("k1", "s1")).is_some());
+    assert_eq!(
+        st.last_shed("p1", "a"),
+        None,
+        "p1's round leaves with its dwell"
+    );
+    // Read against a dwell the mark is still inside, so only the purge can answer false.
+    assert!(!st.shed_marked("p1", &key("k1", "s1"), purged, 1_800_000));
+    assert_eq!(
+        st.newest_shed("a"),
+        Some(T),
+        "p2 holds a and reads its stamp for its own 1,800 s"
+    );
+
+    let moved = T + 661_000;
+    st.record_sample("c", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, moved));
+    st.record_sample("a", sample(0.1, 0.1, moved));
+    st.record_sample("d", sample(0.1, 0.1, moved));
+    assert_eq!(
+        landed(select(&mut st, &s, &under(&s, "k2", "s4", moved), &mut rng()).0),
+        ("d".into(), Some(MigrateReason::Spent)),
+        "p1 shed from a 661 s ago, inside p2's dwell, so a is no cool destination though it outranks d"
+    );
+}
+
 #[test]
 fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
     let scenario = |pool: Pool, seed: &dyn Fn(&mut RoutingState)| {
@@ -4574,11 +4926,11 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
         );
         assert_eq!(sel.trace.placement, None);
     };
-    // At or above `migrate_above_utilization` minus the band on the 5-hour window.
+    // At or above `shed_ahead_of_pace` minus the band on the 5-hour window.
     scenario(
         Pool {
             members: vec![("a", 1), ("b", 0)],
-            migrate: Some(0.8),
+            shed_ahead: Some(0.8),
             ..Pool::default()
         },
         &|st| {
@@ -4626,6 +4978,92 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
         &|st| {
             st.record_cooldown(cooled("a", "account", 10_000, "five_hour", "rate_limit"));
         },
+    );
+}
+
+#[test]
+fn the_blocker_passes_an_anthropic_key_candidate_while_its_bucket_holds_room() {
+    let scenario = |seed: &dyn Fn(&mut RoutingState), expected: &str, why: &str| {
+        let s = snapshot(Pool {
+            members: vec![("a", 1), ("b", 0)],
+            kinds: vec![("a", AccountKind::ApiKey)],
+            shed_ahead: Some(0.2),
+            ..Pool::default()
+        });
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        seed_affinity(
+            &st,
+            vec![affinity_row(
+                &s,
+                "claude-sonnet-5",
+                "s1",
+                AffinityChain::Static,
+                "a",
+                1_000,
+                3_600_000,
+                20_000,
+                "root",
+            )],
+        );
+        seed(&mut st);
+        let req = subagent(
+            placement_req(
+                request(&s, Some("session"), "claude-sonnet-5", true, &[], 2_000),
+                &[],
+                &["s1"],
+                true,
+            ),
+            "worker",
+        );
+        let SelectResult::Selected(sel) = select(&mut st, &s, &req, &mut rng()).0 else {
+            panic!("the request lands")
+        };
+        assert_eq!(sel.account.id, expected, "{why}");
+        // The warm prefix is a's, so a placement lands there and a refusal leaves the request to the strategy.
+        assert_eq!(sel.trace.placement.is_some(), expected == "a", "{why}");
+    };
+    let bucket = |utilization: f64| {
+        UtilizationSample {
+            observed_at: 1_000,
+            ..Default::default()
+        }
+        .with(
+            "itpm:claude-sonnet-5",
+            WindowReading {
+                utilization,
+                reset: Some(1_000 + MINUTE),
+                observed_at: 1_000,
+                source: WindowSource::Head,
+            },
+        )
+    };
+    scenario(
+        &|st| {
+            st.record_sample("a", bucket(0.95));
+        },
+        "a",
+        "a holds room, so rung 4 places the request on its warm prefix though b outranks it",
+    );
+    scenario(
+        &|st| {
+            st.record_sample("a", bucket(1.0));
+        },
+        "b",
+        "an exhausted bucket blocks a at rung 4",
+    );
+    scenario(
+        &|st| {
+            st.record_sample("a", bucket(0.95));
+            st.record_cooldown(cooled(
+                "a",
+                "account",
+                10_000,
+                "itpm:claude-sonnet-5",
+                "rate_limit",
+            ));
+        },
+        "b",
+        "a cooling account never reaches the rung",
     );
 }
 
@@ -9497,7 +9935,7 @@ fn landed(result: SelectResult) -> (String, Option<MigrateReason>) {
 }
 
 fn marked(st: &RoutingState, session: &str, now: i64) -> bool {
-    st.shed_marked(&pin_key(session), now, 900_000)
+    st.shed_marked("p", &pin_key(session), now, 900_000)
 }
 
 const MINUTE: i64 = 60_000;
@@ -9626,7 +10064,7 @@ fn a_spent_sibling_whose_reading_passed_its_reset_holds_allowance_and_the_shed_t
         ("a".into(), None)
     );
     assert_eq!(
-        st.last_shed("a"),
+        st.last_shed("p", "a"),
         None,
         "the shed trigger reads zero after the reset, so no round ran on a"
     );
@@ -9878,7 +10316,7 @@ fn a_cold_pin_on_a_winding_down_account_drains_and_a_warm_one_stays() {
 /// below would land on `b`.
 fn cool_preference_pool(kinds: Vec<(&'static str, AccountKind)>) -> Pool {
     Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         kinds,
         ..Pool::default()
@@ -9985,7 +10423,7 @@ fn a_drain_move_prefers_a_cool_sibling() {
 #[test]
 fn a_spent_move_lands_on_a_hot_sibling_when_no_cool_one_exists() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         ..Pool::default()
     });
@@ -10024,7 +10462,7 @@ fn a_hot_api_key_sibling_is_not_preferred() {
         &mut rng(),
     );
     st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
-    // b reads no plan window at all; its worst live bucket is what says it is hot.
+    // b reads no plan window at all; its worst live bucket is exhausted, which says it has no room.
     st.record_sample(
         "b",
         UtilizationSample {
@@ -10034,7 +10472,7 @@ fn a_hot_api_key_sibling_is_not_preferred() {
         .with(
             "itpm:claude-sonnet-5",
             WindowReading {
-                utilization: 0.9,
+                utilization: 1.0,
                 reset: Some(T + MINUTE),
                 observed_at: T + 500,
                 source: WindowSource::Head,
@@ -10053,7 +10491,77 @@ fn a_hot_api_key_sibling_is_not_preferred() {
             .0
         ),
         ("c".into(), Some(MigrateReason::Spent)),
-        "the api_key sibling's bucket reads above the band, so the cool one is preferred over it"
+        "the api_key sibling's bucket is exhausted, so the cool one is preferred over it"
+    );
+}
+
+#[test]
+fn an_anthropic_key_sibling_is_cool_while_its_bucket_holds_room() {
+    let run = |bucket: f64, cooling: bool| -> (String, Option<MigrateReason>) {
+        let s = snapshot(Pool {
+            shed_ahead: Some(0.2),
+            ..cool_preference_pool(vec![("b", AccountKind::ApiKey)])
+        });
+        let mut st = RoutingState::from_load(RoutingLoad::default());
+        select(
+            &mut st,
+            &s,
+            &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+            &mut rng(),
+        );
+        st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+        st.record_sample(
+            "b",
+            UtilizationSample {
+                observed_at: T + 500,
+                ..Default::default()
+            }
+            .with(
+                "itpm:claude-sonnet-5",
+                WindowReading {
+                    utilization: bucket,
+                    reset: Some(T + MINUTE),
+                    observed_at: T + 500,
+                    source: WindowSource::Head,
+                },
+            ),
+        );
+        st.record_sample("c", sample(0.1, 0.1, T + 500));
+        if cooling {
+            st.record_cooldown(cooled(
+                "b",
+                "account",
+                T + 10_000,
+                "itpm:claude-sonnet-5",
+                "rate_limit",
+            ));
+        }
+        landed(
+            select(
+                &mut st,
+                &s,
+                &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+                &mut rng(),
+            )
+            .0,
+        )
+    };
+    // The margin's band sits at 0.15, far under a bucket that holds room, so b can read cool only by its bucket's
+    // line, never by the band.
+    assert_eq!(
+        run(0.95, false),
+        ("b".into(), Some(MigrateReason::Spent)),
+        "b holds room, so it is cool and outranks c"
+    );
+    assert_eq!(
+        run(1.0, false),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "an exhausted bucket is no cool destination"
+    );
+    assert_eq!(
+        run(0.95, true),
+        ("c".into(), Some(MigrateReason::Spent)),
+        "a standing cooldown row keeps b out of the set"
     );
 }
 
@@ -10129,7 +10637,7 @@ fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed()
         "the release names the cooldown: {reasons:?}"
     );
     assert!(
-        st.last_shed("a").is_some(),
+        st.last_shed("p", "a").is_some(),
         "the round still ran, since the cooldown is the model's alone"
     );
     assert!(!marked(&st, "s1", T), "the mark left with the released pin");
@@ -10149,7 +10657,7 @@ fn a_marked_pin_on_a_cooled_account_is_released_with_cooldown_rather_than_shed()
 /// A pool whose round runs on `a` at 0.8, with `b` a cool destination.
 fn shedding_pool(shedding: Shedding) -> Pool {
     Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1)],
         shedding,
         ..Pool::default()
@@ -10164,7 +10672,7 @@ fn hot_a_cool_b(st: &mut RoutingState, at: i64) {
 /// A margin of 0.2 over pace on the shedding pool, where the cool line sits at 0.15.
 fn pace_pool() -> Pool {
     Pool {
-        migrate: Some(0.2),
+        shed_ahead: Some(0.2),
         ..shedding_pool(Shedding::default())
     }
 }
@@ -10209,7 +10717,7 @@ fn a_pin_half_through_a_week_ten_percent_elapsed_sheds_at_a_margin_of_a_fifth() 
         ("b".into(), Some(MigrateReason::Shed)),
         "the week's lead of 0.4 starts a round and the marked pin moves to the sibling behind its pace"
     );
-    assert_eq!(st.last_shed("a"), Some(T));
+    assert_eq!(st.last_shed("p", "a"), Some(T));
 }
 
 #[test]
@@ -10224,7 +10732,7 @@ fn the_same_reading_sixty_percent_elapsed_does_not_shed() {
         ("a".into(), None),
         "a week behind its pace runs no round, so the pin renews in place"
     );
-    assert_eq!(st.last_shed("a"), None);
+    assert_eq!(st.last_shed("p", "a"), None);
 }
 
 #[test]
@@ -10250,7 +10758,7 @@ fn a_five_hour_window_at_nine_tenths_eighty_percent_elapsed_does_not_shed() {
         ("a".into(), None),
         "a 5-hour lead of 0.1 sits under the margin of 0.2"
     );
-    assert_eq!(st.last_shed("a"), None);
+    assert_eq!(st.last_shed("p", "a"), None);
 }
 
 #[test]
@@ -10315,7 +10823,7 @@ fn a_subscription_pin_in_overage_orders_the_round_by_the_dollar_average_and_leav
         ("a".into(), None),
         "in overage the round reads dollars, so the Opus pin is the last unmarked one"
     );
-    assert!(marked(&st, "sonnet", T) && !st.shed_marked(&opus_key, T, 900_000));
+    assert!(marked(&st, "sonnet", T) && !st.shed_marked("p", &opus_key, T, 900_000));
 
     let later = T + 900_000;
     hot_a_cool_b(&mut st, later - 500);
@@ -10358,7 +10866,7 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
         ("a".into(), None),
         "the round ran on warm-1's request and did not mark it"
     );
-    assert_eq!(st.last_shed("a"), Some(T));
+    assert_eq!(st.last_shed("p", "a"), Some(T));
     let marks: Vec<&str> = ["warm-4", "cold-3", "warm-2", "warm-1"]
         .into_iter()
         .filter(|session| marked(&st, session, T))
@@ -10383,7 +10891,7 @@ fn the_shedding_round_orders_cold_pins_first_then_warm_by_burn_over_rewrite_and_
         "an unmarked pin renews in place"
     );
     assert_eq!(
-        st.last_shed("a"),
+        st.last_shed("p", "a"),
         Some(T),
         "a second request inside the dwell runs no new round, so warm-2 is still unmarked"
     );
@@ -10452,7 +10960,7 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
         ..BurnRates::default()
     });
     hot_a_cool_b(&mut st, T - 500);
-    let (pins, sum) = st.burn_of("a", BurnUnit::WindowShare, st.rates(), T, HOUR);
+    let (pins, sum) = st.burn_of("a", &|_| true, BurnUnit::WindowShare, st.rates(), T, HOUR);
     let unlisted = pins
         .iter()
         .find(|(p, _)| p.model == "claude-opus-4-8")
@@ -10480,7 +10988,7 @@ fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_mar
 #[test]
 fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
@@ -10508,13 +11016,13 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
         ("a".into(), None),
         "a is still hot and its round still stands, but the move consumed s1's mark"
     );
-    assert_eq!(st.last_shed("a"), Some(T), "no new round ran on a");
+    assert_eq!(st.last_shed("p", "a"), Some(T), "no new round ran on a");
 }
 
 #[test]
 fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
     let s = snapshot(Pool {
-        migrate: Some(0.8),
+        shed_ahead: Some(0.8),
         members: vec![("a", 0), ("b", 1), ("c", 2)],
         ..Pool::default()
     });
@@ -10566,7 +11074,7 @@ fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
         ("a".into(), None),
         "a is still hot and its round still stands, but leaving a spent s1's mark"
     );
-    assert_eq!(st.last_shed("a"), Some(T), "no new round ran on a");
+    assert_eq!(st.last_shed("p", "a"), Some(T), "no new round ran on a");
 }
 
 #[test]
@@ -10718,7 +11226,7 @@ fn warm_sessions_never_marks_no_warm_pin_when_an_unpriced_cold_pin_leaves_the_co
         ..pin_key("cold-guess")
     };
     assert!(
-        !st.shed_marked(&guess, T, 900_000),
+        !st.shed_marked("p", &guess, T, 900_000),
         "the unpriced cold pin is never marked"
     );
 }
@@ -11484,14 +11992,14 @@ fn a_hold_records_its_place_and_bound() {
         &FactValue::Text("strategy_pick".into())
     );
     assert_eq!(fact(hold, "account_id"), &FactValue::Text("b".into()));
-    assert_eq!(fact(hold, "bound_ms"), &FactValue::Int(10_000));
+    assert_eq!(fact(hold, "bound_ms"), &FactValue::Int(60_000));
     assert_eq!(d.record.outcome.kind, "held");
     assert_eq!(
         d.record.outcome.hold,
         Some(HoldOutcome {
             account_id: "b".into(),
             cohort: None,
-            bound_ms: 10_000,
+            bound_ms: 60_000,
         })
     );
     assert_eq!(candidate(&d.record, "b").verdict, "held_on");
@@ -11956,7 +12464,7 @@ fn a_four_member_record_serializes_under_nine_kilobytes() {
         &snapshot_over(
             Pool {
                 strategy: Strategy::Pace,
-                migrate: Some(0.8),
+                shed_ahead: Some(0.8),
                 select_below: Some(0.9),
                 members: vec![("a", 0), ("b", 0), ("c", 1), ("d", 1)],
                 failover: Failover {
@@ -12198,7 +12706,7 @@ fn a_pace_pick_names_its_gap_over_the_runner_up() {
 fn a_move_with_no_cool_destination_reads_pick_none_cool() {
     let s = snapshot_over(
         Pool {
-            migrate: Some(0.8),
+            shed_ahead: Some(0.8),
             members: vec![("a", 0), ("b", 1), ("c", 2), ("d", 3)],
             ..Pool::default()
         },
@@ -12253,7 +12761,7 @@ fn a_four_member_shed_move_serializes_under_sixteen_kilobytes() {
             &snapshot_over(
                 Pool {
                     strategy: Strategy::Pace,
-                    migrate: Some(0.2),
+                    shed_ahead: Some(0.2),
                     session_placement: SessionPlacement::ByWarmPrefix,
                     members: vec![("a", 0), ("b", 0), ("c", 0), ("d", 0)],
                     ..Pool::default()

@@ -134,6 +134,7 @@ reasons! {
     KeepaliveOff => "keepalive_off",
     KeyOptedOut => "key_opted_out",
     LeaseExpired => "lease_expired",
+    LedgerBehind => "ledger_behind",
     MissingAccount => "missing_account",
     NetNegative => "net_negative",
     NoCacheEvidence => "no_cache_evidence",
@@ -393,6 +394,9 @@ pub(crate) struct Agent {
     /// The covering probe's recipe was sent fast: it kept the fast lane's cache, which a standard request never
     /// reads, and the reverse.
     pub covered_fast: bool,
+    /// When the covering probe's entry lapses. The credit needs the credited request to arrive before it: an entry
+    /// that lapsed kept nothing warm, whatever the gap since the last real request says.
+    pub covered_until: Option<i64>,
     pub last_real_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
@@ -439,6 +443,7 @@ impl Agent {
             covered_account: None,
             covered_unit: None,
             covered_fast: false,
+            covered_until: None,
             last_real_at: None,
             last_stop: None,
         }
@@ -483,6 +488,7 @@ pub(crate) struct PriorCoverage {
     pub fast: bool,
     pub real_at: i64,
     pub ttl_ms: i64,
+    pub until: Option<i64>,
 }
 
 /// One real request the engine is following from its observation to its completion.
@@ -1346,6 +1352,7 @@ impl Engine {
                 fast: agent.covered_fast,
                 real_at,
                 ttl_ms: agent.ttl_ms,
+                until: agent.covered_until,
             })
         };
         let poisoned = inner.gap_backlog > 0;
@@ -1357,6 +1364,7 @@ impl Engine {
         agent.covered_account = None;
         agent.covered_unit = None;
         agent.covered_fast = false;
+        agent.covered_until = None;
         if agent.state == AgentState::Unknown {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
@@ -1601,6 +1609,13 @@ impl Engine {
                 .and_then(|prior| {
                     let ttl = prior.ttl_ms.max(crate::config::FIVE_MINUTES_MS);
                     let gap_exceeded = agent.last_real_at.unwrap_or(now) - prior.real_at > ttl;
+                    // The entry the probe kept has to be there when this request arrives, on the boundary the
+                    // settlement and the scheduler read (`arrived < entry_expires`, `now >= expires`): a request
+                    // at or after the lapse read a cache nothing the probe paid for kept, so its batch is a cold
+                    // return, and a credit here would contradict that settlement.
+                    let entry_alive = prior
+                        .until
+                        .is_some_and(|until| agent.last_real_at.unwrap_or(now) < until);
                     let same_model = prior.model == agent.canonical_model;
                     let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
                     // The upstream shares no cached prefix across speeds, so a probe on the other lane kept
@@ -1616,6 +1631,7 @@ impl Engine {
                     let unit = prior.unit;
                     (prior.covered
                         && gap_exceeded
+                        && entry_alive
                         && same_model
                         && same_speed
                         && same_account

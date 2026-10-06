@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # The checker has to fail on what it exists to catch: a dangling link, a route the reference page skipped, an
-# entry the router does not serve, and a handler call it cannot consume. Every case runs against a throwaway
-# tree, never the real site.
+# entry the router does not serve, and a handler call it cannot consume. Every checker case runs against a throwaway
+# tree, never the real site; the favicon case at the end reads the real tree.
 set -euo pipefail
 
 here=$(cd "$(dirname "$0")/../.." && pwd)

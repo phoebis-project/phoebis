@@ -65,7 +65,7 @@ function Handle({ label, min, max, threshold, track }: { label: string; max: num
  * The select-below threshold as a handle over the members' current 5-hour and 7-day readings, 0 to 100 %. The handle
  * drags or takes the arrow keys, a percent a step; it draws while the threshold is on and only with `expert`, since
  * the plain view leaves that threshold to the expert view unless a refusal shows its field there, when the caller
- * passes the flag so the shown field keeps its handle. The migrate margin draws no handle: it is a lead over pace,
+ * passes the flag so the shown field keeps its handle. The shedding margin draws no handle: it is a lead over pace,
  * which no point on an axis of absolute readings can stand for.
  */
 export function UtilizationBar({ expert, readings, selectBelow }: { expert: boolean; readings: MemberReading[]; selectBelow: Threshold | null }) {

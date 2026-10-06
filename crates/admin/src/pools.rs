@@ -18,7 +18,10 @@ use phoebis_store::{
 };
 use serde_json::{json, Value};
 
-use crate::routes::{double_option, failure, reload_or_refuse, store_failure, CreatedId};
+use crate::routes::{
+    double_option, failure, failure_with_code, fence_stamp, present, reload_or_refuse,
+    store_failure, CreatedId,
+};
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
@@ -93,7 +96,7 @@ struct PoolInput {
     #[serde(default)]
     overage_policy: Option<String>,
     #[serde(default, deserialize_with = "double_option")]
-    migrate_above_utilization: Option<Option<f64>>,
+    shed_ahead_of_pace: Option<Option<f64>>,
     #[serde(default, deserialize_with = "double_option")]
     select_below_utilization: Option<Option<f64>>,
     #[serde(default)]
@@ -140,6 +143,11 @@ struct PoolInput {
     session_placement: Option<String>,
     #[serde(default)]
     min_shared_prefix_tokens: Option<u64>,
+    /// The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
+    /// its own sentence rather than read as "not sent" or refused with the body's. A create reads nothing of it,
+    /// since there is no row to fence on.
+    #[serde(default, deserialize_with = "present")]
+    expected_revision: Option<Value>,
 }
 
 /// A PATCH's `keepalive` names only the fields the operator touched, and the struct fills the rest with
@@ -246,14 +254,14 @@ fn apply(state: &AdminState, row: &mut PoolRow, input: &PoolInput) -> Result<(),
             }
         };
     }
-    if let Some(threshold) = input.migrate_above_utilization {
+    if let Some(threshold) = input.shed_ahead_of_pace {
         if threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
             return Err(failure(
                 StatusCode::BAD_REQUEST,
-                "migrate_above_utilization is between 0 and 1",
+                "shed_ahead_of_pace is between 0 and 1",
             ));
         }
-        row.migrate_above_utilization = threshold;
+        row.shed_ahead_of_pace = threshold;
     }
     if let Some(threshold) = input.select_below_utilization {
         if threshold.is_some_and(|t| !(0.0..=1.0).contains(&t)) {
@@ -500,7 +508,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         strategy: Strategy::Pace,
         affinity_ttl_seconds: 3600,
         overage_policy: OveragePolicy::PreferPlan,
-        migrate_above_utilization: None,
+        shed_ahead_of_pace: None,
         select_below_utilization: None,
         model_rules: Vec::new(),
         keepalive_json: "{}".into(),
@@ -568,7 +576,10 @@ pub(crate) async fn patch(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
         Err(e) => return store_failure(e),
     };
-    let read_at = row.updated_at;
+    let read_at = match fence_stamp(input.expected_revision.as_ref(), row.updated_at) {
+        Ok(stamp) => stamp,
+        Err(refusal) => return refusal,
+    };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
@@ -579,14 +590,22 @@ pub(crate) async fn patch(
         },
         None => None,
     };
+    if read_at != row.updated_at {
+        return failure_with_code(
+            StatusCode::CONFLICT,
+            "stale_edit",
+            "the pool changed while it was being edited; reload and try again",
+        );
+    }
     match state
         .store
-        .update_pool_with_members(&row, read_at, writes.as_deref(), ACTOR)
+        .update_pool_with_members(&row, row.updated_at, writes.as_deref(), ACTOR)
     {
         Ok(at) => row.updated_at = at,
         Err(StoreError::Stale) => {
-            return failure(
+            return failure_with_code(
                 StatusCode::CONFLICT,
+                "stale_edit",
                 "the pool changed while it was being edited; reload and try again",
             )
         }
@@ -671,10 +690,7 @@ fn member_json(
     let kind = accounts
         .iter()
         .find(|a| a.id == m.account_id)
-        .map(|a| match a.kind {
-            phoebis_store::AccountKind::ApiKey => "api_key",
-            phoebis_store::AccountKind::Oauth => "oauth",
-        });
+        .map(|a| crate::routes::kind_name(a.kind));
     let rows = crate::routes::spend_rows(spends, &m.pool_id, &m.account_id);
     let reports: Vec<Value> = rows
         .iter()
@@ -845,7 +861,7 @@ pub(crate) async fn pool_json_from(
         "affinity_ttl_seconds": row.affinity_ttl_seconds, "overage_policy": row.overage_policy.as_str(),
         "affinity_mode": row.affinity.mode.as_str(), "subagent_placement": row.affinity.subagent_placement.as_str(),
         "session_placement": row.affinity.session_placement.as_str(), "min_shared_prefix_tokens": row.affinity.min_shared_prefix_tokens,
-        "migrate_above_utilization": row.migrate_above_utilization, "select_below_utilization": row.select_below_utilization,
+        "shed_ahead_of_pace": row.shed_ahead_of_pace, "select_below_utilization": row.select_below_utilization,
         "model_rules": row.model_rules,
         "shed_share": row.shedding.shed_share, "burn_window_seconds": row.shedding.burn_window_seconds,
         "source_dwell_seconds": row.shedding.source_dwell_seconds, "migrate_when_spent": row.shedding.migrate_when_spent,

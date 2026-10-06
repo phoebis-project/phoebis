@@ -23,5 +23,5 @@ pub use session::{
 };
 pub use usage::{
     parse_usage, BackoffEdge, BackoffHook, ExtraUsage, PollOutcome, PollStatus, UsageError,
-    UsageService, UsageSnapshot, UsageWindow, BACKOFF_CAP_MS,
+    UsageService, UsageSnapshot, UsageWindow, BACKOFF_CAP_MS, FABLE_WINDOW_KEY,
 };

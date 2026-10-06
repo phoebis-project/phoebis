@@ -317,7 +317,7 @@ async fn a_pin_renewed_by_an_earlier_200_survives_a_later_400() {
 #[tokio::test]
 async fn a_429_on_a_fresh_pin_takes_the_cooldown_path_as_before() {
     let up = FakeUpstream::start(vec![]).await;
-    up.add_credential_rule(A, "/v1/messages", json_429_retry_after("30"));
+    up.add_credential_rule(A, "/v1/messages", json_429_retry_after("90"));
     up.add_credential_rule(B, "/v1/messages", json_200());
     let h = harness(
         &up,

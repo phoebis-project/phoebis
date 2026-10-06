@@ -20,7 +20,7 @@ use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
     PairingError, PairingSession, PairingStatus, PendingIdentity, PollStatus, ProfileResponse,
-    Started, UsageSnapshot, UsageWindow,
+    Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
@@ -1281,7 +1281,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     });
     json!({
         "id": row.id,
-        "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
+        "kind": kind_name(row.kind),
         "label": row.label,
         "enabled": row.enabled,
         "cancelled": term.cancelled,
@@ -1309,6 +1309,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "quarantined": quarantined,
         })),
         "lifecycle_generation": row.lifecycle_generation,
+        "revision": row.edit_token(),
         "cooldowns": ctx.cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
             "scope": cooldown.scope,
             "until": cooldown.until,
@@ -1332,10 +1333,6 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "usage": usage,
     })
 }
-
-/// The key the usage service gives the Fable week, so an answer built from the router's windows reads like
-/// one the endpoint gave.
-const FABLE_WINDOW_KEY: &str = "fable";
 
 fn has_windows(snapshot: &UsageSnapshot) -> bool {
     !snapshot.windows.is_empty() || snapshot.fable_window.is_some()
@@ -1489,6 +1486,13 @@ fn usage_json(
     })
 }
 
+pub(crate) fn kind_name(kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::ApiKey => "api_key",
+        AccountKind::Oauth => "oauth",
+    }
+}
+
 fn state_name(state: AccountState) -> &'static str {
     match state {
         AccountState::Disconnected => "disconnected",
@@ -1589,6 +1593,51 @@ pub(crate) fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deseriali
     d: D,
 ) -> Result<Option<Option<T>>, D::Error> {
     Option::<T>::deserialize(d).map(Some)
+}
+
+/// A field that is there, whatever it holds: `Option` alone folds a present `null` into an absent field.
+pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(d).map(Some)
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+/// The stamp an edit's body names: the row's own when the body sent none, else the body's integer, refused when it
+/// is not one or lies more than a day past the row's stamp. The route answers 409 when it differs from its own read.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn fence_stamp(sent: Option<&serde_json::Value>, current: i64) -> Result<i64, Response> {
+    let Some(value) = sent else {
+        return Ok(current);
+    };
+    match value.as_i64() {
+        Some(stamp) if stamp <= current.saturating_add(DAY_MS) => Ok(stamp),
+        _ => Err(failure(
+            StatusCode::BAD_REQUEST,
+            "expected_revision is the updated_at the row was read at",
+        )),
+    }
+}
+
+/// The edit token an account edit's body names, `None` when it sent none, refused when it is not a non-negative integer.
+/// The route answers 409 when it names another incarnation or revision than its own read, so the store fences on the
+/// read alone.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn fence_revision(sent: Option<&serde_json::Value>) -> Result<Option<u64>, Response> {
+    let Some(value) = sent else {
+        return Ok(None);
+    };
+    value.as_u64().map(Some).ok_or_else(|| {
+        failure(
+            StatusCode::BAD_REQUEST,
+            "expected_revision is the revision the row was read at",
+        )
+    })
 }
 
 /// A refusal an operator console can branch on without reading the prose, in the same header slot the relay

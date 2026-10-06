@@ -8,11 +8,13 @@ use phoebis_ledger::{
     hour_of, member_spends, read_rollups, AttemptRecord, BudgetedMember, PriceTable, Record,
     RequestRecord, RollupSelect,
 };
+use phoebis_relay::Accounting;
 use phoebis_routing::{
     lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
     SelectResult,
 };
 use phoebis_store::{AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 async fn armed(spec: RigSpec) -> Rig {
@@ -247,6 +249,64 @@ async fn a_retry_re_armed_past_the_expiry_is_held_under_expired_and_sends_no_pro
         r.up.requests().len(),
         2,
         "the arming request and the failed probe, no retry"
+    );
+}
+
+/// A probe the router refused while its ledger was behind holds under `ledger_behind` and goes again after the
+/// answer's wait, with no failure counted. The entry's own expiry still bounds the re-sends: when the ledger catches
+/// up only after it, no probe goes out and the recipe ends under `expired`, as under any other hold.
+#[tokio::test]
+async fn a_ledger_behind_hold_lifted_after_the_expiry_sends_no_probe() {
+    let behind = Arc::new(AtomicBool::new(false));
+    let reading = behind.clone();
+    let mut r = armed(RigSpec {
+        accounting: Some(Arc::new(move |_| Accounting {
+            behind: reading.load(Ordering::SeqCst),
+        })),
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    behind.store(true, Ordering::SeqCst);
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.probes,
+            status.reason,
+            status.failures,
+            status.next_probe_at
+        ),
+        (1, Reason::LedgerBehind, 0, Some(r.now() + 5_000)),
+        "held for the answer's five seconds"
+    );
+    r.advance(5_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.probes,
+            status.reason,
+            status.failures,
+            status.next_probe_at
+        ),
+        (2, Reason::LedgerBehind, 0, Some(r.now() + 5_000)),
+        "sent again after the wait, and refused again"
+    );
+    // The entry written at the start expired at 300 s; the ledger catches up after it.
+    r.advance(30_000);
+    behind.store(false, Ordering::SeqCst);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.reason, status.next_probe_at),
+        (2, Reason::Expired, None)
+    );
+    assert_eq!(
+        r.up.requests().len(),
+        1,
+        "only the arming request went out: both refusals stopped at the router"
     );
 }
 

@@ -36,7 +36,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
+    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'revision', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
@@ -337,6 +337,35 @@ test('a pool decodes its select-below threshold and encodes it back', () => {
   assert.equal(d.encodePool({ ...p, name: p.name, selectBelowUtilization: null, status: 'active' }).select_below_utilization, null, 'null clears it rather than leaving it alone');
 });
 
+test('a pool decodes its shedding margin and encodes it back', () => {
+  const row = fixture('pools').pools[0];
+  assert.equal(d.decodePool(row).shedAheadOfPace, null, 'the captured pool sets none');
+  const p = d.decodePool({ ...row, shed_ahead_of_pace: 0.25 });
+  assert.equal(p.shedAheadOfPace, 0.25);
+  const back = d.encodePool({ ...p, name: p.name, status: 'active' });
+  assert.equal(back.shed_ahead_of_pace, 0.25);
+  assert.equal(d.encodePool({ ...p, name: p.name, shedAheadOfPace: null, status: 'active' }).shed_ahead_of_pace, null, 'null clears it rather than leaving it alone');
+});
+
+test('a pool and a key decode the stamp of their last write, which an edit sends back', () => {
+  const pool = fixture('pools').pools[0];
+  const key = fixture('keys').keys[0];
+  const [p, k] = [d.decodePool(pool), d.decodeKey(key)];
+  assert.ok(isIso(p.updatedAt) && isIso(k.updatedAt));
+  assert.deepEqual([p.updatedAt, k.updatedAt], [new Date(pool.updated_at).toISOString(), new Date(key.updated_at).toISOString()]);
+});
+
+test('an account decodes the revision of its row, which an edit sends back', () => {
+  const body = fixture('account');
+  assert.ok(Number.isInteger(body.revision) && body.revision > 0, 'the capture carries the row\'s counter');
+  assert.equal(d.decodeAccount(body).revision, body.revision);
+  for (const row of fixture('accounts').accounts) {
+    const { revision } = d.decodeAccount(row);
+    assert.ok(Number.isInteger(revision) && revision > 0, row.id);
+  }
+  assert.equal(d.decodeAccount({ ...body, revision: undefined }).revision, 0, 'a row whose answer carried none reads 0, which the route refuses as stale');
+});
+
 test('a pool decodes the three strategies and the flag, and encodes the stored flag back', () => {
   const row = fixture('pools').pools[0];
   assert.equal(d.decodePool({ ...row, strategy: 'pace' }).strategy, 'pace');
@@ -398,7 +427,7 @@ test('a pool decodes the engine fields and encodes them back', () => {
     [0.5, 600, 900, true, 'when_needed'],
     'the captured pool holds the balanced shedding preset',
   );
-  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.paceFloor, p.overageMoveGraceMinutes, p.windDownMinutes], [10, 16, 0.05, 30, 30], 'and the balanced failover preset');
+  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.paceFloor, p.overageMoveGraceMinutes, p.windDownMinutes], [60, 16, 0.05, 30, 30], 'and the balanced failover preset');
   assert.deepEqual(p.movesPerHour, { spent: 1 });
   const wire = {
     ...row,

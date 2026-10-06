@@ -1,6 +1,10 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
 
+// The mock skips its draws by the local hour and every minute below is chosen in UTC, so the file runs there whatever
+// the host's zone; `node --test` gives each file a process of its own.
+process.env.TZ = 'UTC';
+
 // The mock draws its story from the clock it loads at, so each minute loads a copy of the bundle of its own.
 const storyAt = async (at) => {
   const wall = Date.now;
@@ -14,13 +18,17 @@ const storyAt = async (at) => {
 
 // In UTC, the first minute draws a turn whose attempt's trace already held; the second draws no failed turn with one
 // attempt, so a turn that failed over takes the story.
-for (const at of ['2026-09-30T18:07:00Z', '2026-09-29T09:07:00Z']) {
+for (const [at, branch] of [
+  ['2026-09-30T18:07:00Z', 'a traced hold'],
+  ['2026-09-29T09:07:00Z', 'a failover'],
+]) {
   test(`a request held after its attempts carries every hold they named plus the bound it waited out, at ${at}`, async () => {
     const api = new (await storyAt(at)).MockApi();
     const { requests } = await api.listRequests({ held: true, limit: 1_000 });
     const row = requests.find((r) => r.attempts.length > 0 && r.errorCode === 'accounts_at_cap');
     assert.ok(row, 'the story holds a request answered at the cap after an attempt');
     const traced = [...row.attempts].reverse().find((a) => a.selection?.cohortHold)?.selection.cohortHold ?? null;
+    assert.ok(branch === 'a traced hold' ? traced !== null : row.attempts.length > 1, `the minute draws ${branch}`);
     const bound = (await api.listPools()).find((p) => p.id === row.poolId).retryInPlaceSeconds * 1_000;
     const last = row.held.waitedOn.at(-1);
     assert.deepEqual(row.held, { cohort: null, heldMs: (traced?.heldMs ?? 0) + bound, waitedOn: [...(traced?.waitedOn ?? []), last] });
@@ -32,7 +40,7 @@ for (const at of ['2026-09-30T18:07:00Z', '2026-09-29T09:07:00Z']) {
 
 // In UTC this minute's at-cap row, refused before any attempt, is a desktop Opus turn, which asked for fast.
 test('a request refused at the cap before any attempt lists under the fast speed it asked for and not under standard', async () => {
-  const api = new (await storyAt('2026-09-30T20:07:00Z')).MockApi();
+  const api = new (await storyAt('2026-09-30T22:07:00Z')).MockApi();
   const { requests } = await api.listRequests({ held: true, limit: 1_000 });
   const row = requests.find((r) => r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
   assert.equal(row?.shape.requestedSpeed, 'fast', 'the story holds an at-cap row that asked for fast');

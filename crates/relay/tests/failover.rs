@@ -774,7 +774,7 @@ async fn cooldowns_are_partitioned_by_account_kind() {
         "/v1/messages",
         Respond::Json {
             status: 429,
-            headers: vec![("retry-after".into(), "30".into())],
+            headers: vec![("retry-after".into(), "90".into())],
             body: b"{}".to_vec(),
         },
     );
@@ -811,7 +811,7 @@ async fn cooldowns_are_partitioned_by_account_kind() {
     let k1 = c.iter().find(|c| c.account_id == "k1").unwrap();
     assert_eq!(
         (k1.scope.as_str(), k1.until),
-        ("model:claude-sonnet-4-5-20250929", NOW + 30_000 + 1_000),
+        ("model:claude-sonnet-4-5-20250929", NOW + 90_000 + 1_000),
         "an api_key 429 with Retry-After cools the model"
     );
     assert!(
@@ -2354,9 +2354,7 @@ async fn a_credential_acquired_across_an_account_edit_is_not_dispatched_with_the
     })
     .await;
     // The relay is inside `credential` for `a`; the row it selected is revision 1, and this makes it 2.
-    h.store
-        .update_account("a", 1, "a (edited)", "test")
-        .unwrap();
+    rename(&h, "a", 1, "a (edited)", "test").unwrap();
     h.router.reload().await.unwrap();
     up.release();
     let resp = inflight.await.unwrap();

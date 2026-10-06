@@ -164,9 +164,9 @@ A newer client build is not relayed in its own shape automatically: headers trav
 client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the OAuth beta,
 claimed for a subscription credential and stripped for an Anthropic key on every request that carries the line; the
 cache-diagnosis beta under the pool's `cache_diagnostics` switch; and the extended-TTL beta the cache TTL rewrite adds
-or drops. The profile's beta lists record what the measured client sends, as the fixtures
-show, and the fields the router restores for a Claude Code request are the ones on the
-[client page](client.md#the-environment-block), not what a newer client might add.
+or drops. The profile's beta lists record what the measured client sends, as the fixtures show, and the fields the
+router restores for a Claude Code request are the ones on the [client page](client.md#the-environment-block), not what a
+newer client might add.
 
 To re-pin the profile against a new build:
 
@@ -244,15 +244,14 @@ the deploy files, or the console's sources). To release:
    head the changelog's section for it `## X.Y.Z`, and merge to `main`.
 2. Create the release on GitHub with the tag `X.Y.Z` on that commit, no `v` prefix. Publishing it starts the
    workflow.
-3. The workflow refuses the release before anything builds when the tag has another shape, differs from the
-   workspace version, or has no `## X.Y.Z` section in the changelog, naming both values. Otherwise it builds
-   `linux/amd64` and `linux/arm64` on native runners and pushes each by digest, runs the amd64 image through
-   `--version` (which must print the version), `check-config` against `deploy/config.container.yaml`, and a
-   container in the compose example's shape that must reach `healthy` within 30 seconds, serve the built console
-   (the page from the admin listener is not the placeholder and one of its assets is served) and stop within
-   the grace period, and then publishes one manifest list at `ghcr.io/daystrom-labs/phoebis` under
-   `X.Y.Z`, `X.Y` and `X` (from major 1, never for a prerelease), `latest` (never for a prerelease), and
-   `sha-<short commit>`.
+3. The workflow refuses the release before anything builds when the tag has another shape, differs from the workspace
+   version, or has no `## X.Y.Z` section in the changelog, naming both values. Otherwise it builds `linux/amd64` and
+   `linux/arm64` on native runners and pushes each by digest, runs the amd64 image through `--version` (which must print
+   the version), `check-config` against `deploy/config.container.yaml`, and a container in the compose example's shape
+   that must reach `healthy` within 30 seconds, serve the built console (the page from the admin listener is not the
+   placeholder and one of its assets is served) and stop within the grace period, and then publishes one manifest list
+   at `ghcr.io/daystrom-labs/phoebis` under `X.Y.Z`, `X.Y` and `X` (from major 1, never for a prerelease), `latest`
+   (never for a prerelease), and `sha-<short commit>`.
 
 A failed smoke leaves untagged digests in the registry and no tag; a failed guard leaves nothing. A manual dispatch
 (Actions, Release, Run workflow) is the dry run: it builds both platforms and runs the smoke checks without pushing; run

@@ -6,7 +6,7 @@
       "at": -2600000,
       "finished_at": -2599100,
       "key_id": "desktop",
-      "key_generation": 1791217561402,
+      "key_generation": 1791268384992,
       "pool_id": "main",
       "account_id": "business",
       "session_id": "s1",
@@ -123,7 +123,7 @@
             "refusal_recommended_model": null,
             "served_model": null,
             "speed": "standard",
-            "stop_reason": "end_turn",
+            "stop_reason": null,
             "stop_sequence": null
           }
         },

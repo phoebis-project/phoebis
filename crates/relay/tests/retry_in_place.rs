@@ -377,8 +377,8 @@ async fn a_retry_after_over_the_bound_or_a_non_portable_request_fails_over_as_to
     assert_eq!(outcome(&first).account_id, "a");
     drain(first).await;
     let pinned = h.router.pins().await.unwrap()[0].clone();
-    // Past the ten-second bound: the pin leaves a and the sibling takes the request at once.
-    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("30"));
+    // Past the one-minute bound: the pin leaves a and the sibling takes the request at once.
+    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("90"));
     let started = Instant::now();
     let resp = h
         .app

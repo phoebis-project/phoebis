@@ -5829,7 +5829,7 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
     use phoebis_routing::{PinKeyFacts, RouterEvent};
     let store = seeded_oauth(&["a"]);
     let mut pool = store.pool("p").unwrap().unwrap();
-    pool.migrate_above_utilization = Some(0.2);
+    pool.shed_ahead_of_pace = Some(0.2);
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     let now = Arc::new(AtomicI64::new(1_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();

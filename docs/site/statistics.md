@@ -95,7 +95,8 @@ accepts requests and bounded by `routing.startup_fetch_seconds`, so selection ho
 request after a restart; an account whose first answer is a 429 serves from the windows kept in the registry from its
 last run, predicted forward, and its backoff starts at once, and one whose first answer is a transport failure or
 another error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each
-account five minutes after the startup step, on the account's phase, and its profile an hour after.
+account five minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile
+an hour after.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honoured up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
@@ -125,10 +126,10 @@ or `NaN`, which no budget trips on.
 A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
 with the window named; an Anthropic-key account, and a subscription account in overage, read dollars.
 
-A fast answer draws no plan window: it adds nothing to the share, the prediction, the burn a shedding round ranks by, or
-the reconciliation. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`,
-which Spend per minute charts under every grouping; a member's budget counts them at the fast cells, a subscription
-member's as an Anthropic-key member's.
+A fast answer draws no plan window: it adds nothing to the share, the prediction, or the burn a shedding round ranks by.
+It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which Spend per minute
+charts under every grouping; a member's budget counts them at the fast cells, a subscription member's as an
+Anthropic-key member's.
 
 The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
 share of a Max 20x subscription's window that one million tokens consume, a number where the plan meter measured the
@@ -349,7 +350,7 @@ reads the family and version, with the whole id on hover. The client column show
 user agent (`claude-code/<entrypoint>` or `other`), cut at 12 characters, whole on hover, and the agent
 type beneath it on a subagent's turn.
 One row is one client request however many attempts it took, and the attempt trail reads as
-"mail 429, business 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
+"secondary 429, primary 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
 succeed names how it ended beside its status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request
 that waited for a slot while every account was at its cap carries a held marker beside its attempts with the time it
 waited. The search matches the request id, the session, the key, the model, the error code, and an attempt's account,
@@ -430,15 +431,15 @@ mode, tier unknown) for those whose tier the cost table does not size. The accou
 the hourly rollups, which fold a request under the hour it arrived in and weigh it by that hour's band rather than at
 its completion, where the meter charges it. Grouped by account, it adds a Plan per hour chart: the share of each
 subscription account's 5-hour window, solid, and of its 7-day window, dashed, that its traffic used per hour, a bucket
-the table cannot price (a model it has no row for, or a cell it leaves unmeasured) listed under one model unlisted
-legend entry and drawn as a gap, a priced hour with a gap or the range's edge on both sides marked with a dot, an hour
-with no traffic counted as zero on a window the account priced in the range, a window with no priced bucket shown as a
-dash, and an account whose tier the table does not size listed as tier unknown. Latency reports percentiles read from
-the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input
-served from cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range
-and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming reports what probes
-cost against what they saved, where a fast-mode session's probes and credits read as dollars and file under speed
-`fast`; and Accounts reports peak utilization, ineligible time, and pin churn per account.
+the table cannot price (a model it has no row for, a cell it leaves unmeasured, or a tier factor it leaves unmeasured)
+listed under one model unlisted legend entry and drawn as a gap, a priced hour with a gap or the range's edge on both
+sides marked with a dot, an hour with no traffic counted as zero on a window the account priced in the range, a window
+with no priced bucket shown as a dash, and an account whose tier the table does not size listed as tier unknown. Latency
+reports percentiles read from the merged per-hour histograms; Cache reports the hit ratio, tokens that expired between
+turns, the share of input served from cache, and the output split into thinking and plain output; Cost reports the
+estimated spend for the range and a Fast mode spend tile, the dollars fast-mode answers drew from usage credits; Cache
+warming reports what probes cost against what they saved, where a fast-mode session's probes and credits read as dollars
+and file under speed `fast`; and Accounts reports peak utilization, ineligible time, and pin churn per account.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

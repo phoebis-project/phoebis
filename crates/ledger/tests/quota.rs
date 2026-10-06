@@ -718,6 +718,50 @@ async fn a_pairing_re_spreads_the_slots_without_reading_an_account_again_within_
 }
 
 #[tokio::test]
+async fn a_re_spread_during_a_hold_reads_the_held_account_when_its_hold_ends() {
+    let up = FakeUpstream::start(vec![usage_rule(), profile_rule()]).await;
+    up.add_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
+    let h = harness_with_poll(
+        &up,
+        &[
+            oauth("a", A, 0),
+            oauth("c", OAUTH_C, 1),
+            oauth("d", OAUTH_D, 2),
+        ],
+        (0, None),
+        LedgerConfig::default(),
+    )
+    .await;
+    let paused = start_polling(&h, &up).await;
+    // `a` is answered 429 at its 300 s slot and held two minutes, to about 421 s.
+    step_to(&h, &up, &paused, secs(302)).await;
+    assert_eq!(usage_asked(&up, A), 1);
+
+    // Paired during the hold; `c`'s slot at 400 s makes the pass that re-spreads the four, with `a` still held.
+    step_to(&h, &up, &paused, secs(310)).await;
+    pair(&h.store, "b", B);
+    step_to(&h, &up, &paused, secs(418)).await;
+    assert_eq!(
+        (usage_asked(&up, A), usage_asked(&up, B)),
+        (1, 0),
+        "not before the hold ends"
+    );
+    step_to(&h, &up, &paused, secs(425)).await;
+    assert_eq!(
+        usage_asked(&up, A),
+        2,
+        "the re-spread keeps the hold's end, not the interval after the 429"
+    );
+    step_to(&h, &up, &paused, secs(480)).await;
+    assert_eq!(
+        usage_asked(&up, B),
+        1,
+        "b read at its phase, 75 s after the pass"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_registry_read_that_fails_keeps_the_schedule_and_logs() {
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("router.sqlite");

@@ -494,6 +494,7 @@ export function GroupedDialog({
   held = hold !== null,
   initialGroup = null,
   footer,
+  notice,
   width = 1040,
 }: {
   /** The id of the group shown; the page owns it and resets it on open. */
@@ -510,6 +511,8 @@ export function GroupedDialog({
    * reset has chosen it. Null (Edit, Create) leaves focus where the browser's dialog focusing put it.
    */
   initialGroup?: string | null;
+  /** Shown above whichever group is open: a refusal that is about the whole save, not one group's field. */
+  notice?: ReactNode;
   /** The rail, a hint link and Go to call it; the page stores the id. */
   onChoose: (id: string) => void;
   onClose: () => void;
@@ -587,6 +590,12 @@ export function GroupedDialog({
     focusIn(chosen, choice.focus);
     // Only a choice moves focus; the helpers and the body ref change without one.
   }, [open, chosen, chosenShown, initialGroup]);
+  // The notice sits above the groups and is about the whole save, so one raised by a save pressed low in a long group
+  // would land out of view; the body returns to its top when one appears.
+  const noticed = Boolean(notice);
+  useEffect(() => {
+    if (noticed) bodyRef.current?.scrollTo?.({ top: 0 });
+  }, [noticed]);
   const runs: { groups: DialogGroup[]; parent?: string }[] = [];
   for (const g of shown) {
     const last = runs[runs.length - 1];
@@ -671,6 +680,7 @@ export function GroupedDialog({
               <span className="dialog-rail__break" aria-hidden />
             </nav>
             <div className="dialog__body dialog__body--grouped" ref={bodyRef}>
+              {notice && <div style={{ paddingTop: 18 }}>{notice}</div>}
               {shown.map((g) => (
                 <DialogGroupPanel key={g.id} chosen={current} group={g} on={expertView} register={register} turnOn={() => setExpertView(true)} />
               ))}
@@ -726,8 +736,9 @@ const IN_FLOW: MenuPlacement = { kind: 'down' };
 const CLIPPING = new Set(['auto', 'clip', 'hidden', 'scroll']);
 
 /**
- * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's first column
- * opens rightward, since a list aligned to its right edge would run past the table wrap's left edge, which clips it.
+ * A row's actions behind a trigger. `align` names the trigger edge the list lines up with: a menu in a row's
+ * first column opens rightward, since a list aligned to its right edge would run past the table wrap's left edge,
+ * which clips it.
  */
 export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }: { align?: MenuAlign; items: { danger?: boolean; disabled?: boolean; label: string; onClick: () => void; title?: string }[]; label?: string; onOpenChange?: (open: boolean) => void }) {
   const [open, setOpen] = useState(false);
@@ -774,9 +785,9 @@ export function Menu({ align = 'right', items, label = 'Actions', onOpenChange }
     setPlacement(next.kind === 'down' ? IN_FLOW : next);
   }, [open]);
   const floating = open && placement.kind === 'float';
-  // The list in flow can overflow a clipping wrap and give it a scrollbar that pushes the trigger aside; leaving for the
-  // portal takes the scrollbar away. So the layer is placed again from the trigger at rest, measured once it floats,
-  // and that measurement is where the close-on-move checks below start.
+  // The list in flow can overflow a clipping wrap and give it a scrollbar that pushes the trigger aside; leaving for
+  // the portal takes the scrollbar away. So the layer is placed again from the trigger at rest, measured once it
+  // floats, and that measurement is where the close-on-move checks below start.
   useLayoutEffect(() => {
     if (!floating || !ref.current) return;
     const trigger = ref.current.getBoundingClientRect();

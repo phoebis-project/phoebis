@@ -25,6 +25,7 @@ use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
 };
 use phoebis_oauth::Clock;
+use phoebis_relay::AccountingSource;
 // Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
 // of `oauth`, `wait_for`, and `NOW` themselves.
 #[allow(unused_imports)]
@@ -77,6 +78,9 @@ pub struct Rig {
 }
 
 pub struct RigSpec {
+    /// The ledger's standing the relay's admission reads, `None` to admit every probe; a case that drives the
+    /// router's own `ledger_behind` refusal names a reading it can flip.
+    pub accounting: Option<AccountingSource>,
     pub accounts: Vec<TestAccount>,
     /// What the catalog fake answers; nothing by default, so a spelling never resolves to a dated id mid-test.
     pub catalog: Vec<Rule>,
@@ -96,6 +100,7 @@ pub struct RigSpec {
 impl Default for RigSpec {
     fn default() -> Self {
         RigSpec {
+            accounting: None,
             accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
             catalog: Vec::new(),
             lifecycle: None,
@@ -141,6 +146,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         spec.pool,
         bus.clone(),
         catalog_up,
+        spec.accounting,
     )
     .await;
     let mut pool = h.store.pool("main").unwrap().unwrap();

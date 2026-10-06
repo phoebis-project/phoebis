@@ -416,7 +416,7 @@
         "hold": {
           "account_id": "business",
           "cohort": null,
-          "bound_ms": 10000
+          "bound_ms": 60000
         },
         "exhaustion": null,
         "refusal": null,
@@ -1208,7 +1208,7 @@
           "pins_loaded": 3,
           "windows_loaded": 2,
           "affinity_entries_loaded": 5,
-          "down_since": 1791217561398,
+          "down_since": 1791268384988,
           "holds_lost": true
         }
       },

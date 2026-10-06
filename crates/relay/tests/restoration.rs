@@ -279,10 +279,17 @@ async fn a_turn_that_ends_with_a_control_entry_mints_its_own_prompt_id() {
     let second = billing_line(&up.requests()[1].body);
     let first_id = field(&first, "cc_prompt_id");
     let second_id = field(&second, "cc_prompt_id");
-    assert!(first_id.is_some() && second_id.is_some());
+    assert!(first_id.is_some(), "the first wire carries a prompt id");
+    assert!(second_id.is_some(), "the second wire carries a prompt id");
     assert_ne!(
         second_id, first_id,
         "the control entry after the user's message leaves the turn the user's, so it mints its own id"
+    );
+    let sent: serde_json::Value = serde_json::from_slice(&up.requests()[1].body).unwrap();
+    let asked: serde_json::Value = serde_json::from_slice(&next).unwrap();
+    assert_eq!(
+        sent["messages"], asked["messages"],
+        "the restoration fills the line alone: the messages reach the upstream as sent, the control entry included"
     );
     up.shutdown().await;
 }

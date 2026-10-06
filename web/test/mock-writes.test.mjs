@@ -51,32 +51,32 @@ test('a new pool reads each member the way the pool route does', async () => {
   const members = (await api.listAccounts()).map((a) => ({ accountId: a.id, priority: 0 }));
   const verdicts = async (name, overagePolicy) => Object.fromEntries((await api.createPool({ ...(await storyPool(api)), members, name, overagePolicy })).members.map((m) => [m.accountId, m.eligible]));
   assert.deepEqual(await verdicts('first', 'never'), {
-    business: 'eligible',
-    console: 'unavailable',
-    evals: 'eligible',
-    mail: 'cooldown',
-    personal: 'overage',
+    legacy: 'unavailable',
+    nightly: 'overage',
+    overflow: 'unavailable',
+    primary: 'eligible',
+    research: 'eligible',
+    secondary: 'cooldown',
     spare: 'unavailable',
-    team: 'unavailable',
   });
   // Funded again, the flagged account serves; the account the router reads in overage is an obstacle only under a
   // policy that admits none.
-  await api.clearFunding('console');
-  await api.pauseAccount('business');
+  await api.clearFunding('overflow');
+  await api.pauseAccount('primary');
   const second = await verdicts('second', 'never');
-  assert.deepEqual([second.console, second.personal, second.business], ['eligible', 'overage', 'unavailable'], 'a paused account is unavailable like a flagged one');
-  assert.equal((await verdicts('third', 'prefer_plan')).personal, 'eligible');
+  assert.deepEqual([second.overflow, second.nightly, second.primary], ['eligible', 'overage', 'unavailable'], 'a paused account is unavailable like a flagged one');
+  assert.equal((await verdicts('third', 'prefer_plan')).nightly, 'eligible');
 });
 
 test('a pool write round-trips the pin and placement fields and the members\' budgets', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
-  const console_ = all.members.find((m) => m.accountId === 'console');
-  assert.deepEqual([console_.budgetDailyUsd, console_.budgetMonthlyUsd], [5, 50], 'the story budgets its Anthropic-key member by the day and the month');
+  const overflow = all.members.find((m) => m.accountId === 'overflow');
+  assert.deepEqual([overflow.budgetDailyUsd, overflow.budgetMonthlyUsd], [5, 50], 'the story budgets its Anthropic-key member by the day and the month');
   const edit = {
     ...all,
     affinityMode: 'always',
-    members: all.members.map((m) => (m.accountId === 'console' ? { ...m, budgetDailyUsd: 7.5, budgetMonthlyUsd: null } : m)),
+    members: all.members.map((m) => (m.accountId === 'overflow' ? { ...m, budgetDailyUsd: 7.5, budgetMonthlyUsd: null } : m)),
     minSharedPrefixTokens: 30_000,
     sessionPlacement: 'by_strategy',
     subagentPlacement: 'with_main',
@@ -85,17 +85,17 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
   const stored = (await api.listPools()).find((p) => p.id === 'all');
   for (const pool of [saved, stored]) {
     assert.deepEqual([pool.affinityMode, pool.minSharedPrefixTokens, pool.sessionPlacement, pool.subagentPlacement], ['always', 30_000, 'by_strategy', 'with_main']);
-    const member = pool.members.find((m) => m.accountId === 'console');
+    const member = pool.members.find((m) => m.accountId === 'overflow');
     assert.deepEqual([member.budgetDailyUsd, member.budgetMonthlyUsd, member.kind, member.spends, member.budgetUntil], [7.5, null, 'api_key', [], null], 'the mock keeps no ledger, so a write answers no spend');
   }
   assert.deepEqual(poolInputOf(stored).members, edit.members, 'the members read back as they were written');
   const created = await api.createPool({ ...edit, name: 'budgeted' });
   assert.deepEqual(
     created.members.map((m) => [m.accountId, m.kind, m.budgetDailyUsd, m.budgetMonthlyUsd]),
-    edit.members.map((m) => [m.accountId, m.accountId === 'console' ? 'api_key' : 'oauth', m.budgetDailyUsd, m.budgetMonthlyUsd]),
+    edit.members.map((m) => [m.accountId, m.accountId === 'overflow' ? 'api_key' : 'oauth', m.budgetDailyUsd, m.budgetMonthlyUsd]),
     'a create derives each member\'s kind from its account',
   );
-  const bare = await api.createPool({ ...edit, members: [{ accountId: 'console', priority: 0 }], name: 'bare' });
+  const bare = await api.createPool({ ...edit, members: [{ accountId: 'overflow', priority: 0 }], name: 'bare' });
   assert.deepEqual([bare.members[0].budgetDailyUsd, bare.members[0].budgetMonthlyUsd], [null, null], 'a member written without a budget field has no budget over that period');
 });
 
@@ -103,7 +103,7 @@ test('the story reads a member at its budget as the route does, and a member hal
   const api = await signedIn();
   const pools = await api.listPools();
   const member = (poolId, accountId) => pools.find((p) => p.id === poolId).members.find((m) => m.accountId === accountId);
-  const half = member('all', 'console');
+  const half = member('all', 'overflow');
   // The story flags this member's funding, which the route reads before any budget, so the verdict is the flag's and
   // the empty budgetUntil is the half-way reading.
   assert.deepEqual(
@@ -112,16 +112,16 @@ test('the story reads a member at its budget as the route does, and a member hal
   );
   // The mock reads each member's verdict once, from the story's accounts as it is built, so the flag is cleared on the
   // story's account before a second mock reads it, and restored for the cases after this one.
-  const seed = d.ACCOUNTS.find((a) => a.id === 'console');
+  const seed = d.ACCOUNTS.find((a) => a.id === 'overflow');
   const flagged = seed.status;
   seed.status = 'ready';
   try {
-    const cleared = (await (await signedIn()).listPools()).find((p) => p.id === 'all').members.find((m) => m.accountId === 'console');
+    const cleared = (await (await signedIn()).listPools()).find((p) => p.id === 'all').members.find((m) => m.accountId === 'overflow');
     assert.deepEqual([cleared.budgetUntil, cleared.eligible], [null, 'eligible'], 'without the flag, a member under both its budgets is eligible');
   } finally {
     seed.status = flagged;
   }
-  const spent = member('codex', 'evals');
+  const spent = member('codex', 'research');
   const [day] = spent.spends;
   assert.ok(day.spentUsd >= spent.budgetDailyUsd && Date.parse(day.periodEnd) > Date.now(), 'the story spends one member past its daily budget inside the day');
   assert.deepEqual([spent.budgetUntil, spent.eligible], [day.periodEnd, 'budget'], 'the route holds it to the day\'s end, the one budget it reached');
@@ -131,13 +131,48 @@ test('the story reads a member at its budget as the route does, and a member hal
 test('a pool answers its keys from the key registry', async () => {
   const api = await signedIn();
   const keysOf = async (poolId) => (await api.listPools()).find((p) => p.id === poolId).keys.map((k) => [k.id, k.enabled]);
-  assert.deepEqual(await keysOf('studio'), [['notebook', true]]);
-  await api.createKey({ ...keyInput, name: 'scratch', poolId: 'studio' });
+  assert.deepEqual(await keysOf('work'), [['notebook', true]]);
+  await api.createKey({ ...keyInput, name: 'scratch', poolId: 'work' });
   await api.revokeKey('notebook');
-  assert.deepEqual(await keysOf('studio'), [['scratch', true], ['notebook', false]], 'a revocation switches the key off in the pool\'s list too');
+  assert.deepEqual(await keysOf('work'), [['scratch', true], ['notebook', false]], 'a revocation switches the key off in the pool\'s list too');
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
-  await api.updateKey('laptop', { ...keyInput, name: laptop.name, poolId: 'studio', expiresAt: undefined });
-  assert.ok((await keysOf('studio')).some(([id]) => id === 'laptop') && !(await keysOf('all')).some(([id]) => id === 'laptop'), 'a moved key answers under its new pool alone');
+  await api.updateKey('laptop', { ...keyInput, name: laptop.name, poolId: 'work', expiresAt: undefined });
+  assert.ok((await keysOf('work')).some(([id]) => id === 'laptop') && !(await keysOf('all')).some(([id]) => id === 'laptop'), 'a moved key answers under its new pool alone');
+});
+
+const staleAs = (message) => (e) => e instanceof d.ApiError && e.status === 409 && e.message === message && e.code === 'stale_edit';
+const POOL_STALE = 'the pool changed while it was being edited; reload and try again';
+const KEY_STALE = 'the key changed while it was being edited; reload and try again';
+const storyKey = async (api, id) => (await api.listKeys()).find((k) => k.id === id);
+
+test('a pool or key save over a stamp the row no longer carries is refused as stale and stores nothing, and one over its own stamp moves it', async () => {
+  const api = await signedIn();
+  const pool = (await api.listPools()).find((p) => p.id === 'all');
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, '2020-01-01T00:00:00.000Z'), staleAs(POOL_STALE));
+  assert.deepEqual((await api.listPools()).find((p) => p.id === 'all'), pool);
+  const savedPool = await api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.updatedAt);
+  assert.equal(savedPool.name, 'moved');
+  assert.ok(Date.parse(savedPool.updatedAt) > Date.parse(pool.updatedAt), 'the save moves the stamp past the one it was read at');
+  const key = await storyKey(api, 'laptop');
+  const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
+  await assert.rejects(() => api.updateKey('laptop', edit, '2020-01-01T00:00:00.000Z'), staleAs(KEY_STALE));
+  assert.deepEqual(await storyKey(api, 'laptop'), key);
+  const savedKey = await api.updateKey('laptop', edit, key.updatedAt);
+  assert.equal(savedKey.name, 'moved');
+  assert.ok(Date.parse(savedKey.updatedAt) > Date.parse(key.updatedAt), 'the save moves the stamp past the one it was read at');
+});
+
+test('a rotation or a revocation moves the key\'s stamp, so an edit read before it is refused as stale', async () => {
+  const api = await signedIn();
+  for (const [id, write] of [['laptop', (a) => a.rotateKey('laptop')], ['batch', (a) => a.revokeKey('batch')]]) {
+    const before = await storyKey(api, id);
+    await write(api);
+    const after = await storyKey(api, id);
+    assert.ok(Date.parse(after.updatedAt) > Date.parse(before.updatedAt), id);
+    // The key's own switch, since the route refuses re-enabling a revoked key ahead of the fence.
+    await assert.rejects(() => api.updateKey(id, { ...keyInput, enabled: before.enabled, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.updatedAt), staleAs(KEY_STALE), id);
+    assert.equal((await storyKey(api, id)).name, before.name, id);
+  }
 });
 
 test("a key write stores the server-side auto mode override and a pool write stores the switch", async () => {
@@ -171,8 +206,8 @@ test('a pool write with an unknown spelling or a budget the route refuses is ref
     // The route reads the threshold as an unsigned whole number, so any other value fails the body's parse.
     [{ minSharedPrefixTokens: -1 }, 'body must be a JSON object'],
     [{ minSharedPrefixTokens: 1.5 }, 'body must be a JSON object'],
-    [{ members: [{ accountId: 'console', budgetDailyUsd: 0, budgetMonthlyUsd: null, priority: 0 }] }, 'budget_daily_usd is above 0'],
-    [{ members: [{ accountId: 'console', budgetDailyUsd: null, budgetMonthlyUsd: -5, priority: 0 }] }, 'budget_monthly_usd is above 0'],
+    [{ members: [{ accountId: 'overflow', budgetDailyUsd: 0, budgetMonthlyUsd: null, priority: 0 }] }, 'budget_daily_usd is above 0'],
+    [{ members: [{ accountId: 'overflow', budgetDailyUsd: null, budgetMonthlyUsd: -5, priority: 0 }] }, 'budget_monthly_usd is above 0'],
   ];
   for (const [patch, message] of refusals) {
     await assert.rejects(() => api.updatePool('all', { ...all, ...patch }), refusedAs(400, message), message);
@@ -198,7 +233,7 @@ test('a pool save naming an account twice answers the route\'s 409 ahead of ever
   const lists = [
     [[...all.members, { ...all.members[0], priority: 9 }], `members name account ${all.members[0].accountId} twice`],
     [[member('ghost'), member('ghost')], 'members name account ghost twice'],
-    [[member('console', 0), member('console')], 'members name account console twice'],
+    [[member('overflow', 0), member('overflow')], 'members name account overflow twice'],
   ];
   for (const [members, message] of lists) {
     await assert.rejects(() => api.updatePool('all', { ...all, members, name: 'everything' }), refusedAs(409, message), message);
@@ -249,24 +284,87 @@ test('an account patch is refused where the account route refuses it, and a canc
   const api = await signedIn();
   const end = '2026-10-19T09:15:00.000Z';
   const before = await api.listAccounts();
-  await assert.rejects(() => api.updateAccount('console', { cancelled: true, subscriptionEndsAt: end }), refusedAs(400, 'only an oauth account is cancelled'));
-  await assert.rejects(() => api.updateAccount('business', { cancelled: false, subscriptionEndsAt: end }), refusedAs(400, 'subscription_ends_at needs cancelled'));
-  await assert.rejects(() => api.updateAccount('business', { cancelled: true, subscriptionEndsAt: null }), refusedAs(400, 'cancelled needs subscription_ends_at'));
+  await assert.rejects(() => api.updateAccount('overflow', { cancelled: true, subscriptionEndsAt: end }), refusedAs(400, 'only an oauth account is cancelled'));
+  await assert.rejects(() => api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: end }), refusedAs(400, 'subscription_ends_at needs cancelled'));
+  await assert.rejects(() => api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: null }), refusedAs(400, 'cancelled needs subscription_ends_at'));
   await assert.rejects(() => api.updateAccount('nobody', { cancelled: false, subscriptionEndsAt: null }), refusedAs(404, 'account not found'));
   assert.deepEqual(await api.listAccounts(), before, 'a refused patch stores nothing');
-  const cancelled = await api.updateAccount('business', { cancelled: true, subscriptionEndsAt: end });
+  const cancelled = await api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: end });
   assert.deepEqual([cancelled.cancelled, cancelled.subscription.endsAt], [true, end]);
-  const restored = await api.updateAccount('business', { cancelled: false, subscriptionEndsAt: null });
+  const restored = await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
   assert.deepEqual([restored.cancelled, restored.subscription.endsAt], [false, null], 'the end leaves with the flag');
   const unpaired = await api.updateAccount('spare', { cancelled: true, subscriptionEndsAt: end });
   assert.equal(unpaired.subscription?.endsAt, end, 'an OAuth account that never paired still reports the end it was cancelled with');
 });
 
+const ACCOUNT_STALE = 'the account changed while the edit was being saved';
+const storyAccount = async (api, id) => (await api.listAccounts()).find((a) => a.id === id);
+
+test('an account save over a revision the row no longer carries is refused as stale and stores nothing, and one over its own revision moves it', async () => {
+  const api = await signedIn();
+  const patch = { cancelled: true, subscriptionEndsAt: '2026-10-19T09:15:00.000Z' };
+  const listed = await api.listAccounts();
+  const before = listed.find((a) => a.id === 'primary');
+  await assert.rejects(() => api.updateAccount('primary', patch, before.revision + 1), staleAs(ACCOUNT_STALE));
+  assert.deepEqual(await api.listAccounts(), listed, 'a stale save stores nothing');
+  const landed = await api.updateAccount('primary', patch, before.revision);
+  assert.deepEqual([landed.cancelled, landed.revision], [true, before.revision + 1]);
+  await assert.rejects(() => api.updateAccount('primary', patch, before.revision), staleAs(ACCOUNT_STALE), 'the counter moved past the sent revision');
+  await assert.rejects(() => api.renameAccount('primary', 'x', landed.revision + 1), staleAs(ACCOUNT_STALE));
+  assert.equal((await storyAccount(api, 'primary')).label, before.label);
+  const renamed = await api.renameAccount('primary', 'x', landed.revision);
+  assert.deepEqual([renamed.label, renamed.revision], ['x', landed.revision + 1]);
+  const created = await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'fresh', secret: null });
+  assert.equal(created.revision, 2 ** 32 + 1, 'a new row starts at the token the route gives it');
+});
+
+test('an editor opened before its account was deleted and created again is refused as stale and stores nothing', async () => {
+  const api = await signedIn();
+  const first = await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'fresh', secret: null });
+  await api.deleteAccount('fresh');
+  const replacement = await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'again', secret: null });
+  assert.notEqual(replacement.revision, first.revision, 'the replacement never answers a token its predecessor did');
+  await assert.rejects(() => api.renameAccount('fresh', 'stale', first.revision), staleAs(ACCOUNT_STALE));
+  await assert.rejects(() => api.updateAccount('fresh', { cancelled: true, subscriptionEndsAt: '2026-10-19T09:15:00.000Z' }, first.revision), staleAs(ACCOUNT_STALE));
+  const stored = await storyAccount(api, 'fresh');
+  assert.deepEqual([stored.label, stored.cancelled, stored.revision], ['again', replacement.cancelled, replacement.revision], 'the stale saves stored nothing');
+});
+
+test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect moves the account\'s revision, so an edit read before it is refused as stale', async () => {
+  const api = await signedIn();
+  const end = '2026-10-19T09:15:00.000Z';
+  let read = await storyAccount(api, 'primary');
+  await api.renameAccount('primary', 'x');
+  await assert.rejects(() => api.updateAccount('primary', { cancelled: true, subscriptionEndsAt: end }, read.revision), staleAs(ACCOUNT_STALE), 'after a rename');
+  assert.equal((await storyAccount(api, 'primary')).cancelled, read.cancelled);
+  read = await storyAccount(api, 'primary');
+  await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+  await assert.rejects(() => api.renameAccount('primary', 'y', read.revision), staleAs(ACCOUNT_STALE), 'after an end edit');
+  assert.equal((await storyAccount(api, 'primary')).label, read.label);
+  const secondary = await storyAccount(api, 'secondary');
+  await api.pauseAccount('secondary');
+  await assert.rejects(() => api.updateAccount('secondary', { cancelled: false, subscriptionEndsAt: null }, secondary.revision), staleAs(ACCOUNT_STALE), 'an end edit after a pause');
+  await assert.rejects(() => api.renameAccount('secondary', 'y', secondary.revision), staleAs(ACCOUNT_STALE), 'a rename after a pause');
+  const paused = await storyAccount(api, 'secondary');
+  assert.deepEqual([paused.cancelled, paused.label], [secondary.cancelled, secondary.label]);
+  await api.resumeAccount('secondary');
+  await assert.rejects(() => api.renameAccount('secondary', 'y', paused.revision), staleAs(ACCOUNT_STALE), 'a rename after a resume');
+  assert.equal((await storyAccount(api, 'secondary')).label, secondary.label);
+  const funding = await storyAccount(api, 'overflow');
+  await api.clearFunding('overflow');
+  await assert.rejects(() => api.renameAccount('overflow', 'y', funding.revision), staleAs(ACCOUNT_STALE), 'a rename after a funding clear');
+  assert.equal((await storyAccount(api, 'overflow')).label, funding.label);
+  const connected = await storyAccount(api, 'legacy');
+  await api.disconnectAccount('legacy');
+  await assert.rejects(() => api.renameAccount('legacy', 'y', connected.revision), staleAs(ACCOUNT_STALE), 'a rename after a disconnect');
+  assert.equal((await storyAccount(api, 'legacy')).label, connected.label);
+});
+
 test('a model-scoped cooldown reads its window from its reason, not a fixed model_rejection value', async () => {
   const api = await signedIn();
-  const business = api.accounts.find((a) => a.id === 'business');
-  const sample = business.cooldowns[0];
-  business.cooldowns = [...business.cooldowns, { ...sample, reason: 'permission', scope: 'model:claude-test-permission' }];
+  const primary = api.accounts.find((a) => a.id === 'primary');
+  const sample = primary.cooldowns[0];
+  primary.cooldowns = [...primary.cooldowns, { ...sample, reason: 'permission', scope: 'model:claude-test-permission' }];
   const state = await api.getModelsState();
   const permitted = state.cooldowns.find((g) => g.model === 'claude-test-permission');
   assert.equal(permitted.rows[0].window, 'permission', 'a non-model_rejected reason reports its own text as the window');
@@ -277,10 +375,10 @@ test('a model-scoped cooldown reads its window from its reason, not a fixed mode
 test('the catalog union names each model once and a failed fetch contributes nothing', async () => {
   const api = await signedIn();
   const ids = (models) => models.map((m) => m.id);
-  const business = ids((await api.getAccountCatalog('business')).models);
-  assert.ok(business.length > 0, 'the story has a catalog to union');
-  assert.deepEqual(ids(await api.listCatalogOf(['business', 'console', 'personal', 'nobody'])), [...business].sort(), 'the failing account and the unknown one add nothing');
-  assert.deepEqual(await api.listCatalogOf(['personal']), []);
+  const primary = ids((await api.getAccountCatalog('primary')).models);
+  assert.ok(primary.length > 0, 'the story has a catalog to union');
+  assert.deepEqual(ids(await api.listCatalogOf(['primary', 'overflow', 'nightly', 'nobody'])), [...primary].sort(), 'the failing account and the unknown one add nothing');
+  assert.deepEqual(await api.listCatalogOf(['nightly']), []);
   assert.deepEqual(await api.listCatalogOf([]), []);
 });
 

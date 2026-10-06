@@ -10,7 +10,7 @@
       "seq": 1,
       "at": 1000000,
       "key_id": "desktop",
-      "key_generation": 1791217561402,
+      "key_generation": 1791268384992,
       "pool_id": "main",
       "routing_session_id": "s-static",
       "agent_id": "main",
@@ -68,7 +68,7 @@
       "min_shared_prefix_tokens": 20000,
       "subagent_placement": "by_cohort",
       "select_below_utilization": null,
-      "migrate_above_utilization": null,
+      "shed_ahead_of_pace": null,
       "migrate_when_spent": true,
       "overage_move_grace_minutes": 30,
       "wind_down_minutes": 30,
@@ -77,10 +77,10 @@
       "source_dwell_seconds": 900,
       "warm_sessions": "when_needed",
       "in_flight_cap": 16,
-      "retry_in_place_seconds": 10,
+      "retry_in_place_seconds": 60,
       "pace_floor": 0.05,
       "migrate_band": 0.05,
-      "pool_updated_at": 1791217561688
+      "pool_updated_at": 1791268385223
     },
     "candidates": [
       {

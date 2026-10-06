@@ -350,7 +350,8 @@ fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
     pin.tail_hash = request.boundaries.last().cloned();
 }
 
-/// The hysteresis band under the migrate margin: a destination counts only below `margin - MIGRATE_BAND`.
+/// The hysteresis band under the shedding margin (`shed_ahead_of_pace`): a subscription destination counts only below
+/// `margin - MIGRATE_BAND`; an api_key one reads its bucket against 1.0.
 pub const MIGRATE_BAND: f64 = 0.05;
 
 /// Why a selection landed where it did, for the attempt row and the request drawer. `Serialize` here, so the
@@ -881,6 +882,7 @@ fn run(
             };
             let marked = found == "live"
                 && state.shed_marked(
+                    &pool.id,
                     &key,
                     request.now,
                     seconds_ms(pool.shedding.source_dwell_seconds),
@@ -1633,10 +1635,11 @@ fn elapsed_share(reading: &WindowReading, window: &str, now: i64) -> f64 {
     })
 }
 
-/// Whether `account_id` reads under `migrate_above_utilization` minus the hysteresis band: how far each shared plan
-/// window runs ahead of its pace for a subscription account, the worst standing bucket for an api_key one. No
-/// threshold configured, or no reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a
-/// migration destination, so the arithmetic lives once.
+/// Whether `account_id` reads cool: a subscription account under `shed_ahead_of_pace` minus the hysteresis band on
+/// how far each shared plan window runs ahead of its pace, an api_key account with room in its worst standing bucket
+/// (under 1.0, whatever the margin). No threshold configured, or no reading, counts as cool. The reading `move_of`'s
+/// `cool` predicate takes for a migration destination and rung 4's `blocked` takes for a placement, so the arithmetic
+/// lives once.
 fn under_band(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1649,7 +1652,8 @@ fn under_band(
 
 /// `under_band`'s readings as the record's facts beside its answer: the leads over pace of the two shared windows
 /// with their elapsed shares and the larger lead's margin over the band for a subscription account, or the worst
-/// bucket for an api_key one, and the band they are held under. No threshold reads as under with no fact.
+/// bucket for an api_key one, and the line they are held under as `band`: the threshold less `MIGRATE_BAND` on a
+/// subscription account, a full bucket (1.0) on an api_key one. No threshold reads as under with no fact.
 fn band_facts(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1657,27 +1661,29 @@ fn band_facts(
     account_id: &str,
     now: i64,
 ) -> (Vec<Fact>, bool) {
-    let Some(threshold) = pool.migrate_above_utilization else {
+    let Some(threshold) = pool.shed_ahead_of_pace else {
         return (Vec::new(), true);
     };
-    let band = threshold - MIGRATE_BAND;
     let mut facts = Vec::with_capacity(6);
-    let under = match snapshot.account(account_id).map(|a| a.kind) {
+    let (band, under) = match snapshot.account(account_id).map(|a| a.kind) {
+        // A bucket refills within its minute and a reading can be a minute old, so a line under 1.0 says little
+        // about the next minute; a destination that hits its limit costs one short wait in place, not a failover.
         Some(AccountKind::ApiKey) => {
             let worst = state.sample(account_id).and_then(|s| s.worst_bucket(now));
             if let Some(reading) = worst {
                 facts.push(Fact::number("worst_bucket", reading.utilization).unit("percent"));
             }
-            worst.is_none_or(|r| r.utilization < band)
+            (1.0, worst.is_none_or(|r| r.utilization < 1.0))
         }
         _ => {
+            let band = threshold - MIGRATE_BAND;
             let leads = lead_facts(
                 &mut facts,
                 ahead(state, account_id, FIVE_HOUR, now),
                 ahead(state, account_id, SEVEN_DAY, now),
                 band,
             );
-            leads.iter().flatten().all(|lead| *lead < band)
+            (band, leads.iter().flatten().all(|lead| *lead < band))
         }
     };
     facts.push(Fact::number("band", band).unit("percent"));
@@ -1752,14 +1758,14 @@ fn move_of<'a>(
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
     let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
     let cap = pool.failover.in_flight_cap;
-    // A sibling the next round would not shed from again soon: every reading its sample holds under the band
-    // (the shared windows' leads over their pace on a subscription account, the worst live bucket of an api_key
-    // one; an unsampled account reads as under), no round of its own within the dwell, and room under the cap. A
-    // full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one rather
-    // than being dropped at the cap. The readings come back as the cool line's facts beside the answer.
+    // A sibling the next round would not shed from again soon: every reading its sample holds cool (the shared windows'
+    // leads over their pace under the band on a subscription account, room in the worst live bucket of an api_key one;
+    // an unsampled account reads as cool), no pool has run a round on it within the dwell, and room under the cap. A
+    // full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one rather than
+    // being dropped at the cap. The readings come back as the cool line's facts beside the answer.
     let cool_facts = |state: &RoutingState, c: &Candidate| -> (Vec<Fact>, bool) {
         let (mut facts, under) = band_facts(state, snapshot, pool, &c.account_id, now);
-        let last_shed = state.last_shed(&c.account_id);
+        let last_shed = state.newest_shed(&c.account_id);
         let rested = last_shed.is_none_or(|at| now - at >= dwell_ms);
         let in_flight = state.in_flight().account(&c.account_id);
         if let Some(at) = last_shed {
@@ -1789,7 +1795,7 @@ fn move_of<'a>(
         // A hot destination would shed the session again at its next round, so every move prefers a cool
         // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
         // hot sibling still answers, which staying put does not.
-        if pool.migrate_above_utilization.is_none() || set.is_empty() {
+        if pool.shed_ahead_of_pace.is_none() || set.is_empty() {
             return (set, None);
         }
         let mut facts = Vec::new();
@@ -1942,7 +1948,7 @@ fn move_of<'a>(
     // The trigger reads how far the prediction runs ahead of the window's pace, as the ceiling reads the
     // prediction itself: a week at 0.5 ten percent in is a session worth shedding, the same week at 0.5 sixty
     // percent in is not, and a refunded window reads zero at its reset.
-    let Some(threshold) = pool.migrate_above_utilization else {
+    let Some(threshold) = pool.shed_ahead_of_pace else {
         rec.step(RULES[4], "no", vec![Fact::text("threshold", "off")]);
         return None;
     };
@@ -1961,7 +1967,7 @@ fn move_of<'a>(
         return None;
     };
     if state
-        .last_shed(&current.account_id)
+        .last_shed(&pool.id, &current.account_id)
         .is_none_or(|at| now - at >= dwell_ms)
     {
         let hot = HotWindow {
@@ -1994,7 +2000,7 @@ fn move_of<'a>(
             pin: pin_key_facts(&current.key()),
             facts: round,
         });
-        state.record_shed(&current.account_id, now, marks);
+        state.record_shed(&pool.id, &current.account_id, now, marks);
     } else {
         facts.push(Fact::text("round", "within_dwell"));
     }
@@ -2017,7 +2023,7 @@ fn move_of<'a>(
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
     // moves at its next request. A plan-quota round sheds window share, which a fast request does not draw, so
     // its mark moves a standard request alone; a dollar round's mark moves a fast one too.
-    let marked = state.shed_marked(&current.key(), now, dwell_ms);
+    let marked = state.shed_marked(&pool.id, &current.key(), now, dwell_ms);
     facts.push(Fact::bool("marked", marked));
     if !marked {
         rec.step(RULES[4], "no", facts);
@@ -2094,13 +2100,14 @@ struct HotWindow {
     threshold: f64,
 }
 
-/// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
-/// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
-/// in the unit its funding selects. On plan quota each burn is the cost table's 5-hour share rate on its reference
-/// tier: the tier's factor divides every pin of the account alike, so neither the order nor the share of the sum
-/// needs it, and a pin on a fast lane is out of the round, since it draws no window and has nothing to shed there;
-/// in dollars it stays. The current pin's warmth and lane are this request's; every other pin's are the stored ones.
-/// Answers the marks with what the round read, `hot` the window that fired it.
+/// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
+/// keys, cold first by burn, then warm by burn over rewrite cost, bounded by `warm_sessions`, marked in that order
+/// up to `shed_share` of that slice's burn in the unit its funding selects. On plan quota each burn is the cost
+/// table's 5-hour share rate on its reference tier: the tier's factor divides every pin of the account alike, so
+/// neither the order nor the share of the sum needs it, and a pin on a fast lane is out of the round, since it draws
+/// no window and has nothing to shed there; in dollars it stays. The current pin's warmth and lane are this
+/// request's; every other pin's are the stored ones. Answers the marks with what the round read, `hot` the window
+/// that fired it.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -2115,8 +2122,16 @@ fn shed_round(
 ) -> (Vec<PinKey>, ShedRoundFacts) {
     let account_id = &current.account_id;
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
+    // The round is the pool's: a pin under another pool's key on the same account is in that pool's round, with
+    // that pool's share, dwell and bounds, and is neither marked nor counted here.
+    let in_pool = |p: &PinRow| {
+        snapshot
+            .key(&p.key_id)
+            .is_some_and(|k| k.pool_id == pool.id)
+    };
     let (mut pins, mut sum) = state.burn_of(
         account_id,
+        &in_pool,
         unit,
         state.rates(),
         now,
@@ -2292,7 +2307,10 @@ fn obstacle(
         return Some(Obstacle::BudgetUnknown);
     }
     if let Some(until) = budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now) {
-        return Some(Obstacle::Budget { until });
+        // A period that ends inside the fast window would answer a retry the fast lane still refuses.
+        return Some(Obstacle::Budget {
+            until: fast_limited.map_or(until, |row| until.max(row.until)),
+        });
     }
     if let Some(row) = fast_limited {
         return Some(cooldown(row));
@@ -2502,9 +2520,9 @@ fn account_refusal(
 
 /// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
 /// post-partition selection set: under the cap, below `select_below_utilization` on the 5-hour window when the
-/// pool sets one, not winding down, above the Pace floor under Pace, and under the band `move_of`'s `cool` reads
-/// for a migration destination. Answers the first gate that blocks it: `at_cap`, `above_ceiling`,
-/// `winding_down`, `floor` or `band`.
+/// pool sets one, not winding down, above the Pace floor under Pace, and under `under_band`, the reading
+/// `move_of`'s `cool` takes for a migration destination. Answers the first gate that blocks it: `at_cap`,
+/// `above_ceiling`, `winding_down`, `floor` or `band`.
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -3780,7 +3798,7 @@ impl Readings<'_> {
                 return fact;
             }
         }
-        let threshold = self.pool.and_then(|p| p.migrate_above_utilization);
+        let threshold = self.pool.and_then(|p| p.shed_ahead_of_pace);
         let member = self
             .outcome
             .account_id

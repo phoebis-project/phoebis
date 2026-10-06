@@ -1,8 +1,6 @@
 .cache/
 .claude/
 .codegraph/
-.env
-.env.*
 .git/
 .superpowers/
 .worktrees/
@@ -10,6 +8,8 @@
 **/*.sqlite
 **/*.sqlite-shm
 **/*.sqlite-wal
+**/.env
+**/.env.*
 /config.yaml
 data/
 deploy/*.env

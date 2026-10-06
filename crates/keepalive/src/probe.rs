@@ -162,7 +162,8 @@ fn settled_cost(
     )
 }
 
-/// A pool-at-its-cap 429's `Retry-After` seconds, `None` for anything else or a header that does not parse.
+/// The `Retry-After` seconds a pool-at-its-cap 429 or a `ledger_behind` 503 carries, `None` for a missing header or
+/// one that does not parse.
 fn retry_after_secs(headers: &axum::http::HeaderMap) -> Option<u64> {
     headers
         .get(header::RETRY_AFTER)
@@ -648,6 +649,7 @@ impl Inner {
             agent.covered_account = Some(record.account.clone());
             agent.covered_unit = covered_unit;
             agent.covered_fast = job.recipe.fast;
+            agent.covered_until = agent.expires;
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.
@@ -675,6 +677,7 @@ impl Inner {
     /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the
     /// next real request would; a probe the selector refused on the pinned member's spend budget holds under
     /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; a probe
+    /// the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure; a probe
     /// the selector answered on its pinned member's standing holds under that standing: `Paused` for the
     /// operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in the console), a
     /// retry for a member this probe already tried, or for one whose budget the degraded ledger leaves unknown,
@@ -734,6 +737,25 @@ impl Inner {
             // schedule armed, so the gate re-reads the spend on the next poll and releases the probe itself
             // when the period ends or the budget is raised.
             self.set_reason(key, agent_id, Reason::Budget);
+            return;
+        }
+        if status == 503 && error_code == Some(phoebis_relay::LEDGER_BEHIND) {
+            // The router's own standing, not the account's: no failure is counted, so the cold-probe limit never
+            // pauses a recipe for a ledger that is catching up, and the entry's own lapse bounds the re-sends.
+            let agent = self
+                .sessions
+                .get_mut(key)
+                .unwrap()
+                .agents
+                .get_mut(agent_id)
+                .unwrap();
+            let wait_ms = retry_after_secs.map_or(agent.policy.retry_ms(), |secs| {
+                i64::try_from(secs)
+                    .unwrap_or(i64::MAX)
+                    .saturating_mul(1_000)
+            });
+            agent.retry_at = Some(now.saturating_add(wait_ms));
+            self.set_reason(key, agent_id, Reason::LedgerBehind);
             return;
         }
         let reason = match status {
@@ -965,6 +987,90 @@ mod tests {
         let agent = &inner.sessions[&key].agents["main"];
         assert!(!agent.paused);
         assert_eq!(agent.retry_at, Some(1_000 + agent.policy.retry_ms()));
+    }
+
+    #[test]
+    fn a_503_ledger_behind_holds_after_the_header_and_counts_no_failure() {
+        let (mut inner, key) = one_agent_inner();
+        inner.probe_error(
+            &key,
+            "main",
+            503,
+            Some("ledger_behind"),
+            None,
+            Some(5),
+            false,
+            1_000,
+        );
+        let agent = &inner.sessions[&key].agents["main"];
+        assert_eq!(
+            (agent.paused, agent.failures, agent.retry_at, agent.reason),
+            (false, 0, Some(6_000), Reason::LedgerBehind),
+            "the router's own standing: held after the header's wait, no failure counted"
+        );
+    }
+
+    #[test]
+    fn a_ledger_behind_answer_without_a_header_waits_the_pools_retry_seconds() {
+        let (mut inner, key) = one_agent_inner();
+        inner.probe_error(
+            &key,
+            "main",
+            503,
+            Some("ledger_behind"),
+            None,
+            None,
+            false,
+            1_000,
+        );
+        let agent = &inner.sessions[&key].agents["main"];
+        assert_eq!(
+            (agent.paused, agent.failures, agent.retry_at, agent.reason),
+            (
+                false,
+                0,
+                Some(1_000 + agent.policy.retry_ms()),
+                Reason::LedgerBehind
+            ),
+            "the pool's base wait stands in for a missing header, still with no failure counted"
+        );
+    }
+
+    #[test]
+    fn cold_probe_limit_ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
+        let (mut inner, key) = one_agent_inner();
+        let answers = inner.sessions[&key].agents["main"].policy.cold_probe_limit + 1;
+        for answer in 0..answers {
+            let now = 1_000 + i64::from(answer) * 6_000;
+            inner.probe_error(
+                &key,
+                "main",
+                503,
+                Some("ledger_behind"),
+                None,
+                Some(5),
+                false,
+                now,
+            );
+            let agent = &inner.sessions[&key].agents["main"];
+            assert_eq!(
+                (agent.paused, agent.failures, agent.retry_at, agent.reason),
+                (false, 0, Some(now + 5_000), Reason::LedgerBehind),
+                "answer {answer} of {answers}: a ledger catching up never pauses the recipe"
+            );
+        }
+    }
+
+    #[test]
+    fn a_503_without_the_code_still_retries_under_backoff() {
+        let (mut inner, key) = one_agent_inner();
+        inner.probe_error(&key, "main", 503, None, None, None, false, 1_000);
+        let agent = &inner.sessions[&key].agents["main"];
+        assert_eq!(
+            (agent.paused, agent.failures, agent.reason),
+            (false, 1, Reason::RetryableProbeError),
+            "an upstream 503 is a failure the backoff and the retry limit count"
+        );
     }
 
     #[test]

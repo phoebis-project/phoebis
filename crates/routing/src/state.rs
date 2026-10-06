@@ -7,14 +7,15 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, OverageRow,
-    PinBurn, PinKey, PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
+    PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad,
+    WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
 use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date};
-use crate::select::affinity_ttl_ms;
+use crate::select::{affinity_ttl_ms, seconds_ms};
 use crate::task::BurnRates;
 use crate::windows::window_for;
 use crate::RegistrySnapshot;
@@ -734,6 +735,10 @@ pub struct RoutingState {
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
     member_spend: HashMap<(String, String, BudgetPeriod), MemberSpend>,
+    /// When the newest round of any pool ran on each account: what a move's cool check reads, so no pool prefers a
+    /// destination another pool just shed from. A stamp of its own, since a pool's marks expire by that pool's dwell
+    /// while a slower pool still has to read the account as just shed. Memory only, as the rounds are.
+    newest_shed: HashMap<String, i64>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
@@ -749,9 +754,9 @@ pub struct RoutingState {
     resolutions: HashMap<String, String>,
     round_robin: HashMap<(String, Tier, String), usize>,
     samples: HashMap<String, UtilizationSample>,
-    /// Each account's latest shedding round. Memory only, so a restart forgets the marks with the dwell and the
-    /// next hot request may start a fresh round.
-    shed_rounds: HashMap<String, ShedRound>,
+    /// Each pool's latest shedding round on an account, by pool id and account id. Memory only, so a restart forgets
+    /// the marks with the dwell and the next hot request may start a fresh round.
+    shed_rounds: HashMap<(String, String), ShedRound>,
 }
 
 impl RoutingState {
@@ -802,6 +807,7 @@ impl RoutingState {
                 .collect(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
+            newest_shed: HashMap::new(),
             next_epoch,
             overage: load
                 .overage
@@ -935,8 +941,12 @@ impl RoutingState {
     }
 
     fn spend_mark(&mut self, pin: &PinRow) {
-        if let Some((_, marks)) = self.shed_rounds.get_mut(&pin.account_id) {
-            marks.remove(&pin.key());
+        // The account's rounds are walked rather than the pin's pool resolved through a snapshot this state does
+        // not hold; the walk also spends a mark left in the round of a pool the key moved out of inside its dwell.
+        for ((_, account_id), (_, marks)) in self.shed_rounds.iter_mut() {
+            if account_id == &pin.account_id {
+                marks.remove(&pin.key());
+            }
         }
     }
 
@@ -1443,12 +1453,14 @@ impl RoutingState {
         }
     }
 
-    /// The pins of an account, each priced in `unit` through `rates` and decayed to `now`, and the sum over the
-    /// priced pins; under `WindowShare` the cost table's reference share per second, which orders the account's
-    /// pins as the tier's share does; `None` for a pin burning a type its row cannot price.
+    /// The pins of `account_id` that `keep` admits, each priced in `unit` through `rates` and decayed to `now`, and
+    /// the sum over the priced pins; `keep` is the triggering pool's slice, built by the caller from the snapshot
+    /// this state does not hold. Under `WindowShare` a burn is the cost table's reference share per second, which
+    /// orders the pins as the tier's share does; `None` for a pin burning a type its row cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
         unit: BurnUnit,
         rates: &BurnRates,
         now: i64,
@@ -1458,7 +1470,7 @@ impl RoutingState {
         let mut pins: Vec<(PinRow, Option<f64>)> = self
             .pins
             .values()
-            .filter(|p| p.account_id == account_id)
+            .filter(|p| p.account_id == account_id && keep(p))
             .map(|p| {
                 // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
                 let burn = table
@@ -1479,25 +1491,42 @@ impl RoutingState {
         (pins, sum)
     }
 
-    /// Whether the latest round on the pin's current account, run within `dwell_ms`, marked it. A pin marked
-    /// on one account and moved keeps its key, so the round read is the one of the account it now sits on.
-    pub fn shed_marked(&self, key: &PinKey, now: i64, dwell_ms: i64) -> bool {
+    /// Whether `pool_id`'s latest round on the pin's current account, run within `dwell_ms`, marked it. A pin
+    /// marked on one account and moved keeps its key, so the round read is the one of the account it now sits on.
+    pub fn shed_marked(&self, pool_id: &str, key: &PinKey, now: i64, dwell_ms: i64) -> bool {
         let Some(pin) = self.pin(key) else {
             return false;
         };
         self.shed_rounds
-            .get(&pin.account_id)
+            .get(&(pool_id.to_string(), pin.account_id.clone()))
             .is_some_and(|(at, marks)| now - at < dwell_ms && marks.contains(&pin.key()))
     }
 
-    /// When the account's latest shedding round ran.
-    pub fn last_shed(&self, account_id: &str) -> Option<i64> {
-        self.shed_rounds.get(account_id).map(|(at, _)| *at)
+    /// When `pool_id`'s latest round on the account ran.
+    pub fn last_shed(&self, pool_id: &str, account_id: &str) -> Option<i64> {
+        self.shed_rounds
+            .get(&(pool_id.to_string(), account_id.to_string()))
+            .map(|(at, _)| *at)
     }
 
-    pub(crate) fn record_shed(&mut self, account_id: &str, at: i64, marks: Vec<PinKey>) {
-        self.shed_rounds
-            .insert(account_id.to_string(), (at, marks.into_iter().collect()));
+    /// When the newest round of any pool on the account ran, from the account's own stamp.
+    pub fn newest_shed(&self, account_id: &str) -> Option<i64> {
+        self.newest_shed.get(account_id).copied()
+    }
+
+    /// Writes the pool's round and moves the account's stamp to `at`.
+    pub(crate) fn record_shed(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        at: i64,
+        marks: Vec<PinKey>,
+    ) {
+        self.shed_rounds.insert(
+            (pool_id.to_string(), account_id.to_string()),
+            (at, marks.into_iter().collect()),
+        );
+        self.newest_shed.insert(account_id.to_string(), at);
     }
 
     /// A late failure from account A must not remove a newer pin on account B, so both have to match.
@@ -1753,19 +1782,28 @@ impl RoutingState {
         self.round_robin.retain(|(pool_id, _, cohort), _| {
             snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))
         });
-        // A round is read only within its pool's dwell, so one older than every pool's has nothing left to say.
-        let longest_dwell = snapshot
-            .pools()
-            .map(|pool| {
-                i64::try_from(pool.shedding.source_dwell_seconds)
-                    .ok()
-                    .and_then(|s| s.checked_mul(1_000))
-                    .unwrap_or(i64::MAX)
-            })
-            .max()
-            .unwrap_or(0);
-        self.shed_rounds
-            .retain(|_, (at, _)| now - *at < longest_dwell);
+        // A pool's marks are read within its own dwell alone, and a pool that left the registry has no round to
+        // read. The account's newest round is read by every pool holding the account, each against its own dwell,
+        // so its stamp stays until the longest of those has passed.
+        let dwell_ms = |pool: &PoolRow| seconds_ms(pool.shedding.source_dwell_seconds);
+        self.shed_rounds.retain(|(pool_id, _), (at, _)| {
+            snapshot
+                .pool(pool_id)
+                .is_some_and(|pool| now - *at < dwell_ms(pool))
+        });
+        self.newest_shed.retain(|account_id, at| {
+            snapshot
+                .pools()
+                .filter(|pool| {
+                    snapshot
+                        .members(&pool.id)
+                        .iter()
+                        .any(|m| &m.account_id == account_id)
+                })
+                .map(dwell_ms)
+                .max()
+                .is_some_and(|longest| now - *at < longest)
+        });
         let ttl_of = |key_id: &str| -> Option<i64> {
             snapshot
                 .key(key_id)
