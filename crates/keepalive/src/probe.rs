@@ -142,8 +142,8 @@ fn settled_cost(
         if let Some(share) = probe_cost(unit, table, tables, tier, canonical_model, usage, at) {
             return (unit, share);
         }
-        // The model prices every type of a weighted model, so this branch is the defensive read of a `None` the
-        // pricing above answered.
+        // `settlement_unit` reads `priced`, which asks exactly what `share_at` needs (a weight on the window and a
+        // capacity for the tier), so this branch is unreachable; it stays as the defensive read of a `None`.
         tracing::debug!(
             account,
             model = canonical_model,

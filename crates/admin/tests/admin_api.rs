@@ -1921,7 +1921,7 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
 }
 
 #[tokio::test]
-async fn a_pin_on_a_model_with_an_unmeasured_cell_reads_no_burn() {
+async fn a_pin_on_a_model_without_a_weight_reads_no_burn() {
     // The pin burns Sonnet 5, which the shipped cost model has no weight for: the share is unpriced, and the same pin
     // in overage prices in dollars, since the price table lists the model.
     use common::{get, json, login, wait_json};

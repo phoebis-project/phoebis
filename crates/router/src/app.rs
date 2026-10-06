@@ -894,7 +894,7 @@ mod tests {
     }
 
     #[test]
-    fn the_router_config_prices_the_burn_through_the_cost_tables_five_hour_rates_and_the_price_table(
+    fn the_router_config_prices_the_burn_through_the_cost_models_five_hour_rates_and_the_price_table(
     ) {
         let prices = phoebis_ledger::PriceTable::shipped();
         let tables = phoebis_ledger::PlanTables::shipped();

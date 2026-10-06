@@ -1251,7 +1251,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
 /// A request that asked for fast mode and was answered without it files under the fast speed while its funding reads
 /// the served answer: the burn prices it on the plan it drew from, as a standard row of the same usage.
 #[test]
-fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_at_the_plan_cells() {
+fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_as_a_standard_row() {
     let tables = PlanTables::shipped();
     let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
@@ -1300,7 +1300,7 @@ fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_at_the_plan_c
 }
 
 #[test]
-fn fast_traffic_alone_on_a_model_without_plan_cells_reads_a_zero_share_on_a_sized_tier() {
+fn fast_traffic_alone_on_a_model_without_a_weight_reads_a_zero_share_on_a_sized_tier() {
     let tables = PlanTables::shipped();
     let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
     let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
@@ -1819,7 +1819,7 @@ fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_
 }
 
 #[test]
-fn a_row_on_a_model_with_an_unmeasured_cell_prices_no_share_and_its_tokens_still_count() {
+fn a_row_on_a_model_without_a_weight_prices_no_share_and_its_tokens_still_count() {
     let db = LedgerDb::open_in_memory().unwrap();
     // The shipped model has no weight for Opus 5, so a million of its input tokens price on neither window.
     db.insert_request(

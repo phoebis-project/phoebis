@@ -50,11 +50,18 @@ fn priced_body() -> String {
     BODY.replace("claude-sonnet-4-5", PRICED)
 }
 
+/// The cells `model` prices at for an answer served at `speed`, in the table the rig prices through.
+fn rig_cells(model: &str, speed: phoebis_ledger::Speed) -> phoebis_ledger::ModelPrice {
+    phoebis_ledger::PriceTable::shipped()
+        .price_at(model, speed)
+        .expect("the rig's table prices the model")
+        .clone()
+}
+
 /// What 2,000 cached tokens of `PRICED` save, its input less its cache read per million, in the table the rig
 /// prices through.
 fn saving_2000() -> f64 {
-    let table = phoebis_ledger::PriceTable::shipped();
-    let price = table.price(PRICED).expect("the rig's table prices PRICED");
+    let price = rig_cells(PRICED, phoebis_ledger::Speed::Standard);
     2_000.0 * (price.input - price.cache_read) / 1_000_000.0
 }
 
@@ -1320,7 +1327,7 @@ async fn the_daily_cost_cap_pauses_probes_until_midnight() {
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    // Each probe reads 2,000 tokens at 0.2 per million: 0.0004; the second probe crosses the cap.
+    // The cap lies above one probe's cost and below two probes' cost, so the second probe crosses it.
     r.advance(270_000);
     r.step().await;
     r.advance(270_000);
@@ -1402,8 +1409,8 @@ async fn the_share_cap_ignores_a_fast_probe_and_the_dollar_cap_counts_it() {
         1,
         "the fast recipe probes past the share cap"
     );
-    // Opus 5.5's fast cache read is 0.40 per million.
-    let cost = 2_000.0 * 0.4 / 1_000_000.0;
+    // The probe read 2,000 tokens back at Opus 5.5's fast cache read.
+    let cost = 2_000.0 * rig_cells(OPUS, phoebis_ledger::Speed::Fast).cache_read / 1_000_000.0;
     assert!(
         (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - cost).abs() < 1e-12,
         "the day's dollar figure: {:?}",
@@ -1444,8 +1451,9 @@ async fn a_fast_probe_keeps_a_fast_request_warm_at_the_fast_cells_and_a_switch_o
     {
         on_fast.add(row);
     }
-    // Opus 5.5's fast cells: input 8 and cache read 0.40 per million.
-    let saving = 2_000.0 * (8.0 - 0.4) / 1_000_000.0;
+    // Opus 5.5's fast input less its fast cache read.
+    let fast_cells = rig_cells(OPUS, phoebis_ledger::Speed::Fast);
+    let saving = 2_000.0 * (fast_cells.input - fast_cells.cache_read) / 1_000_000.0;
     assert_eq!(
         (on_fast.kept_warm_requests, on_fast.kept_warm_tokens),
         (1, 2_000),
@@ -1501,8 +1509,9 @@ async fn a_request_asked_fast_and_served_standard_credits_the_standard_cells() {
     r.up.push_credential_rule(A, "/v1/messages", warm_answer());
     let kept = r.observe_with("main", &fast).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
-    // Opus 5.5's standard cells: input 4 and cache read 0.20 per million.
-    let saving = 2_000.0 * (4.0 - 0.2) / 1_000_000.0;
+    // Opus 5.5's standard input less its standard cache read.
+    let standard = rig_cells(OPUS, phoebis_ledger::Speed::Standard);
+    let saving = 2_000.0 * (standard.input - standard.cache_read) / 1_000_000.0;
     let credited = inference_rows(&rows).saved_usd_gross;
     assert!((credited - saving).abs() < 1e-12, "{credited}");
     assert!(row(&r, &kept).await.kept_warm);
@@ -1579,7 +1588,7 @@ async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budget
     let body = priced_body();
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    // Each probe reads 2,000 tokens at 0.2 per million, 0.0004 in dollars; the second crosses the cap.
+    // The cap lies above one probe's dollars and below two probes' dollars, so the second crosses it.
     for _ in 0..3 {
         r.advance(270_000);
         r.step().await;
@@ -1799,7 +1808,9 @@ async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
     let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
     let row = rows.iter().find(|row| row.kind == "probe").unwrap();
     assert_eq!(row.canonical_model, "claude-sonnet-5");
-    let expected = 2_000.0 * 0.2 / 1_000_000.0;
+    let expected = 2_000.0
+        * rig_cells("claude-sonnet-5", phoebis_ledger::Speed::Standard).cache_read
+        / 1_000_000.0;
     assert!(
         (row.probe_cost_usd - expected).abs() < 1e-12,
         "priced as the canonical model: {}",
@@ -1947,7 +1958,7 @@ async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_ne
 /// A model the cost model lists with a `null` weight prices no share, so its probe settles in dollars, counts toward
 /// the dollar cap alone and leaves the window-share cap unapplied, as a model the cost model lacks does.
 #[tokio::test]
-async fn a_plan_funded_probe_on_a_model_with_an_unmeasured_cell_settles_in_dollars_and_never_reaches_the_share_cap(
+async fn a_plan_funded_probe_on_a_model_with_a_null_weight_settles_in_dollars_and_never_reaches_the_share_cap(
 ) {
     let mut r = rig(RigSpec {
         policy: KeepalivePolicy {
@@ -2328,8 +2339,9 @@ async fn an_aggregate_only_cache_write_reaches_the_cap() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    // Sonnet 5: 2,000 read at 0.2 and 500 written at 2.5 per million.
-    let expected = (2_000.0 * 0.2 + 500.0 * 2.5) / 1_000_000.0;
+    // Sonnet 5: 2,000 read at its cache read and 500 written at its five-minute write.
+    let cells = rig_cells(PRICED, phoebis_ledger::Speed::Standard);
+    let expected = (2_000.0 * cells.cache_read + 500.0 * cells.cache_write_5m) / 1_000_000.0;
     let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
     let probe = probe_rows(&rows);
     assert!(

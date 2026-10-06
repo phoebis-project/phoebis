@@ -354,15 +354,15 @@ it, and feeds no allowance until a row names it. The windows are read from two s
 answers, and a poll of the usage endpoint every five minutes per account, each account on its own phase, backed off
 alone on a 429 (see the [statistics page](statistics.md#quota-samples)). Between readings the router predicts: a reading
 stands until its window's reset, plus the share of the window the router's own requests consumed since the reading
-(priced through the subscription cost model on the account's tier); a window the table cannot price for the request's
-model adds nothing and holds its reading; at the reset it reads zero and counts the requests since, a weekly window's
-reset advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that names no reset
-stands until the next reading; an Anthropic-key account's rate-limit buckets stand until their reset or, without one,
-for a minute. The share is priced through the account's stored tier: a tier change is read at the next profile refresh,
-within the hour, and applied when the router reloads; a tier changed while the router was down is read at start. The
-newest reading per account and window is kept in the registry and loaded at startup, so a restart, and an account whose
-first poll the endpoint refuses, route from the last known windows. The router never fetches usage at a selection; use
-of an account outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus any
+(priced through the subscription cost model on the account's tier); a window the cost model cannot price for the request
+adds nothing and holds its reading; at the reset it reads zero and counts the requests since, a weekly window's reset
+advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that names no reset stands
+until the next reading; an Anthropic-key account's rate-limit buckets stand until their reset or, without one, for a
+minute. The share is priced through the account's stored tier: a tier change is read at the next profile refresh, within
+the hour, and applied when the router reloads; a tier changed while the router was down is read at start. The newest
+reading per account and window is kept in the registry and loaded at startup, so a restart, and an account whose first
+poll the endpoint refuses, route from the last known windows. The router never fetches usage at a selection; use of an
+account outside the router shows in the next head or poll, so a decision can lag it by up to five minutes plus any
 backoff, and by up to one more interval after a failed poll or a restart. The [Quota view](statistics.md#quota) shows
 when the poll last asked the endpoint for each OAuth account and how it answered, and while an account backs off, since
 when and when its next attempt comes; the `poll_backoff` condition of the
