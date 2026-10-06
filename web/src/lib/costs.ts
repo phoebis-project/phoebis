@@ -48,6 +48,10 @@ export const weightOf = (costs: SubscriptionCosts, model: string, window: string
   return byWindow !== undefined && own(byWindow, window) ? byWindow[window] : costs.modelWeight[key];
 };
 
+/** Whether the model has a weight on either shared window: an override's weight on a window prices that window even
+ *  under a null shared weight. */
+export const isWeighted = (costs: SubscriptionCosts, model: string): boolean => (['five_hour', 'seven_day'] as const).some((w) => weightOf(costs, model, w) !== null);
+
 const multipliersOf = (costs: SubscriptionCosts, model: string): TypeMultiplier => {
   const key = keyOf(costs, model);
   return { ...costs.typeMultiplier, ...(key === null ? {} : costs.overrides[key]?.typeMultiplier ?? {}) };
@@ -220,6 +224,14 @@ export const bandNow = (costs: SubscriptionCosts, at: number): { at: number | nu
   return { at: null, inside };
 };
 
+/** The band state no instant reaches, with the reason a control names for it, from `bandNow`'s answer; null when the
+ *  band flips. A band on at every hour never reads outside; a zone the browser cannot resolve reads as out of band at
+ *  every hour, so it never reads inside. */
+export const unreachableBand = (now: { at: number | null; inside: boolean }): { inside: boolean; title: string } | null => {
+  if (now.at !== null) return null;
+  return now.inside ? { inside: false, title: 'The band is on at every hour.' } : { inside: true, title: 'The band is off at every hour, as this browser cannot resolve its zone.' };
+};
+
 /** The band's in-band intervals between two instants, `{ from, to }` pairs clipped to them, sampled every 15 minutes
  *  through `inBand`. */
 export const bandRuns = (costs: SubscriptionCosts, fromMs: number, toMs: number): { from: number; to: number }[] => {
@@ -239,24 +251,27 @@ export const bandRuns = (costs: SubscriptionCosts, fromMs: number, toMs: number)
   return runs;
 };
 
-/** The next change of the band's local hours within ten weeks; null when none. The change is the stretch of days from
- *  the first that differs from the same weekday this week until a day reads as this week's again, a day without a
- *  band continuing it. `from` and `to` label the stretch's first day and its last day with a band, `text` the first
- *  band run starting in it. The change is `lasting` when the stretch runs to the end of the scan, as one zone's clock
- *  change does until the other zone changes too, and `moved` says the band's own zone changed its clocks rather than
- *  the viewing one. */
+/** The next change of the band's local hours starting within ten weeks; null when none. The change is the stretch of
+ *  days from the first that differs from the same weekday this week until a day reads as this week's again, a day
+ *  without a band continuing it. The stretch reads over a scan three weeks and a weekend longer than the search for its
+ *  start: two zones change their clocks up to three weeks apart and the weekend after a gap continues its stretch, so
+ *  a gap opening on the search's last day needs that much more scan to reach a day that reads as this week's. `from`
+ *  and `to` label the stretch's first day and its last day with a band, `text` the first band run starting in it. The
+ *  change is `lasting` when the stretch runs to the end of the longer scan, as one zone's clock change does until the
+ *  other zone changes too, and `moved` says the band's own zone changed its clocks rather than the viewing one. */
 export const nextLocalChange = (
   costs: SubscriptionCosts,
   at: number,
   zone: string,
   clock: (minutes: number) => string = hhmm,
 ): { from: string; lasting: boolean; moved: boolean; text: string; to: string } | null => {
-  const { days, monday } = weeksAround(costs, at, zone, 10 * 7 + 8);
+  const longer = 3 * 7 + 2;
+  const { days, monday } = weeksAround(costs, at, zone, 10 * 7 + 8 + longer);
   const usual = days.slice(monday, monday + 7).map((d) => JSON.stringify(d.runs));
   const differs = (i: number) => JSON.stringify(days[i].runs) !== usual[(i - monday) % 7];
   // The scan's last day is cut short, so it never counts as a change.
   const end = days.length - 1;
-  for (let i = monday + 7; i < end; i += 1) {
+  for (let i = monday + 7; i < end - longer; i += 1) {
     if (!differs(i)) continue;
     // A weekend inside a shifted stretch has no band on either side, so it does not end the stretch.
     let j = i;

@@ -43,6 +43,15 @@ test("an override replaces the multiplier and the window's weight it names and l
   close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-haiku-4-5', usage({ input: 1 }), OUT), 0.005, "Haiku's input on the 5-hour window, 0.5 x 1 / 100");
 });
 
+test('a model an override weighs on the week alone is weighted, a dash on the 5-hour window and a share on the week', () => {
+  // The test table leaves Opus 5 at null; this copy weighs it 3 on the week through an override.
+  const weekOnly = { ...costs, overrides: { ...costs.overrides, 'claude-opus-5': { weightByWindow: { seven_day: 3 } } } };
+  assert.equal(d.isWeighted(weekOnly, 'claude-opus-5'), true, 'above the divider');
+  assert.equal(d.isWeighted(costs, 'claude-opus-5'), false, 'under the divider without the override');
+  assert.equal(d.shareOf(weekOnly, 'five_hour', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), null, 'the 5-hour window');
+  close(d.shareOf(weekOnly, 'seven_day', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), 0.003, 'the week, 3 x 1 / 1000');
+});
+
 test('a dated id reads its undated weight, and an unweighted model or an unsized tier prices no share', () => {
   close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-5-5-20260101', usage({ input: 1 }), OUT), 0.02, 'the dated id');
   assert.equal(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), null, 'a null weight');
@@ -113,6 +122,12 @@ test('the band says whether an instant is inside it and when that next flips, an
   assert.deepEqual(d.bandNow(always, NOW), { at: null, inside: true });
 });
 
+test('a band on at every hour leaves Outside out of reach and says why, and a band that flips leaves both in reach', () => {
+  const always = { ...costs, peak: { ...costs.peak, fromHour: 0, toHour: 24, weekdays: false } };
+  assert.deepEqual(d.unreachableBand(d.bandNow(always, NOW)), { inside: false, title: 'The band is on at every hour.' });
+  assert.equal(d.unreachableBand(d.bandNow(costs, NOW)), null);
+});
+
 test("the band's runs between two instants are its own hours, clipped to the bounds, never a bucket's", () => {
   // A week of standard time from Monday 7 December 2026: 5 to 11 in Los Angeles at UTC-8 is 13:00 to 19:00 UTC.
   const at = (day, hour) => Date.UTC(2026, 11, day, hour);
@@ -137,13 +152,20 @@ test("the next change of the band's local hours runs from the first later day th
   assert.equal(d.nextLocalChange(costs, NOW, 'America/Los_Angeles'), null);
 });
 
-test("a change of the band's local hours that runs to the end of the ten weeks lasts, and names whose clocks move", () => {
+test('a change that starts late in the ten weeks reads past them to the day that reads as this week again', () => {
+  // Seen from 6 January 2027, the gap between the two spring changes opens on 15 March, inside the ten weeks, and
+  // Monday 29 March, the first day that reads as this week again, falls past them: the stretch seen from 24 February.
+  assert.deepEqual(d.nextLocalChange(costs, Date.parse('2027-01-06T12:00:00Z'), 'Europe/Berlin'), { from: 'Mon 15 Mar', lasting: false, moved: true, text: '13:00 to 19:00', to: 'Fri 26 Mar' });
+});
+
+test("a change of the band's local hours that runs to the end of the scan lasts, and names whose clocks move", () => {
   // UTC keeps its clock, so once Los Angeles leaves summer time the band reads an hour later for good; the stretch
-  // runs to the last whole day the ten weeks scan, Wednesday 2 December.
-  assert.deepEqual(d.nextLocalChange(costs, NOW, 'UTC'), { from: 'Mon 2 Nov', lasting: true, moved: true, text: '13:00 to 19:00', to: 'Wed 2 Dec' });
+  // runs to the last whole day the scan reads, three weeks and a weekend past the ten weeks: Friday 25 December.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'UTC'), { from: 'Mon 2 Nov', lasting: true, moved: true, text: '13:00 to 19:00', to: 'Fri 25 Dec' });
   // Auckland enters summer time on 27 September while Los Angeles keeps its clock: the band starts at 01:00 there,
-  // on the Tuesday a Monday in Los Angeles falls on, and Los Angeles' own change in November moves it once more.
-  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Pacific/Auckland'), { from: 'Tue 29 Sep', lasting: true, moved: false, text: '01:00 to 07:00', to: 'Thu 3 Dec' });
+  // on the Tuesday a Monday in Los Angeles falls on, and Los Angeles' own change in November moves it once more. The
+  // scan's last whole day there is Saturday 26 December.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Pacific/Auckland'), { from: 'Tue 29 Sep', lasting: true, moved: false, text: '01:00 to 07:00', to: 'Sat 26 Dec' });
 });
 
 test("the band's local hours read on the clock a caller passes, and a run past midnight says it ends the next day", () => {

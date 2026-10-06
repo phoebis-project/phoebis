@@ -13,8 +13,10 @@ const WINDOWS: { factor: 'fiveHour' | 'sevenDay'; key: CostWindow; short: string
 /** Three figures at most, trailing zeros dropped: 12, 17.1, 8.57. */
 const figure = (n: number) => String(Number(n.toPrecision(3)));
 
-/** The band control both tabs share: the peak band's state a figure is read in, outside the band until switched. */
-export function BandSwitch({ inside, onChange }: { inside: boolean; onChange: (inside: boolean) => void }) {
+/** The band control both tabs share: the peak band's state a figure is read in, outside the band until switched.
+ *  `unreachable` disables the state no instant reaches, under its title. */
+export function BandSwitch({ inside, onChange, unreachable = null }: { inside: boolean; onChange: (inside: boolean) => void; unreachable?: { inside: boolean; title: string } | null }) {
+  const reach = (state: boolean) => (unreachable !== null && unreachable.inside === state ? { disabled: true, title: unreachable.title } : {});
   return (
     <span className="cost-ref__control">
       <span>Peak band</span>
@@ -23,8 +25,8 @@ export function BandSwitch({ inside, onChange }: { inside: boolean; onChange: (i
         value={inside ? 'in' : 'out'}
         onChange={(v) => onChange(v === 'in')}
         options={[
-          { label: 'Outside', value: 'out' },
-          { label: 'Inside', value: 'in' },
+          { label: 'Outside', value: 'out', ...reach(false) },
+          { label: 'Inside', value: 'in', ...reach(true) },
         ]}
       />
     </span>

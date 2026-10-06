@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { planLabel } from '@/api/decode';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, familyOrder, shareOf, tierCapacity, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { anchorTier, bandNow, familyOrder, isWeighted, shareOf, tierCapacity, unreachableBand, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
@@ -44,16 +44,21 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
   };
   // The band's state now, or the instant it next flips, prices every cell as a request completing then.
   const next = bandNow(costs, now);
-  const at = next.inside === inside ? now : (next.at ?? now);
+  const unreachable = unreachableBand(next);
+  // A band that never flips offers one state alone, so the choice follows it rather than pricing the other at now.
+  const chosen = unreachable === null ? inside : next.inside;
+  const at = next.inside === chosen ? now : (next.at ?? now);
 
-  const weighted = familyOrder(Object.keys(costs.modelWeight).filter((model) => costs.modelWeight[model] !== null));
+  const weighted = familyOrder(Object.keys(costs.modelWeight).filter((model) => isWeighted(costs, model)));
   const unweighted = familyOrder([
-    ...prices.map((p) => p.model).filter((model) => weightOf(costs, model, 'five_hour') === null),
-    ...Object.keys(costs.modelWeight).filter((model) => costs.modelWeight[model] === null && !prices.some((p) => undatedModel(p.model) === model)),
+    ...prices.map((p) => p.model).filter((model) => !isWeighted(costs, model)),
+    ...Object.keys(costs.modelWeight).filter((model) => !isWeighted(costs, model) && !prices.some((p) => undatedModel(p.model) === model)),
   ]);
+  // The weight column reads the 5-hour window, so a model weighed on the week alone sets neither end of its scale.
+  const fiveHourWeighted = weighted.filter((model) => weightOf(costs, model, 'five_hour') !== null);
   const fiveHourWeight = (model: string) => weightOf(costs, model, 'five_hour') ?? 0;
-  const lightest = weighted.reduce<string | null>((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
-  const heaviest = Math.max(0, ...weighted.map(fiveHourWeight));
+  const lightest = fiveHourWeighted.reduce<string | null>((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
+  const heaviest = Math.max(0, ...fiveHourWeighted.map(fiveHourWeight));
   const tierName = planLabel(tier);
   const cols = 2 + WINDOWS.length * TOKEN_TYPES.length;
 
@@ -135,7 +140,7 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
           <span>Tier</span>
           <Segmented ariaLabel="Tier" value={tier} onChange={setTier} options={tiers.map((t) => ({ label: planLabel(t), value: t }))} />
         </span>
-        <BandSwitch inside={inside} onChange={setInside} />
+        <BandSwitch inside={chosen} onChange={setInside} unreachable={unreachable} />
         <span className="cost-ref__tokens">
           <label>
             Tokens{' '}
@@ -166,7 +171,7 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
       </div>
       <div className="cost-ref__caption">
         <b>
-          Share of a {tierName} window per {fmtTokens(tokens)} tokens{inside ? ', a request completing inside the peak band' : ''}
+          Share of a {tierName} window per {fmtTokens(tokens)} tokens{chosen ? ', a request completing inside the peak band' : ''}
         </b>
         <span className="muted">A shaded cell is more than one full window.</span>
       </div>
