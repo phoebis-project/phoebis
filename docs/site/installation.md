@@ -444,7 +444,7 @@ Refused with:
 - `rollup_retention_days`: `stats.rollup_retention_days must be 0 or at least stats.retention_days
   ({retention_days}), not {value}`
 - `subscription_costs_path`: `loading the subscription cost model from {path}` with the rule under it,
-  `plan table: {key}: {rule}`
+  `plan table: {key}: {rule}`, and with the read error under it for a file that is there and cannot be read
 
 A configuration that names `pricing_path` is refused before anything prints with `the configuration is not valid YAML`,
 and the cause serde prints under it: the unknown key under `stats`, the keys it expected, and the line and column
