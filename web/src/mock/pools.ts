@@ -1,8 +1,7 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
-import type { ApiKey, BudgetPeriod, Pool, PoolMember, TrafficBucket } from '@/api/types';
-import { createRng } from './rng';
+import type { ApiKey, BudgetPeriod, Pool, PoolMember } from '@/api/types';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso, startOfHour } from './time';
+import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
 
 /** A member as the story seeds it; the mock reads its kind and its eligibility off the account, as the route does. */
 type MemberSeed = Omit<PoolMember, 'budgetUntil' | 'eligible' | 'kind'>;
@@ -17,22 +16,8 @@ function periodEndAfter(period: BudgetPeriod, now: number): string {
   return iso(period === 'day' ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) : Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
 }
 
-function traffic(seed: number, scale: number): TrafficBucket[] {
-  const rng = createRng(seed);
-  const start = startOfHour(NOW) - 23 * HOUR;
-  return Array.from({ length: 24 }, (_, i) => {
-    const at = start + i * HOUR;
-    const hourOfDay = new Date(at).getHours();
-    // Working hours carry the traffic; overnight is a trickle.
-    const daylight = hourOfDay >= 8 && hourOfDay <= 19 ? 1 : 0.18;
-    const requests = Math.round(scale * daylight * rng.float(0.55, 1.35));
-    const failed = Math.round(requests * rng.float(0, 0.04));
-    return { at: iso(at), costUsd: requests * rng.float(0.01, 0.05), failed, requests, tokens: requests * rng.int(9_000, 24_000) };
-  });
-}
-
-const ALL_TRAFFIC = traffic(41, 62);
-const CODEX_TRAFFIC = traffic(42, 7);
+/** The day's traffic, which `requests.ts` derives from the request rows once they are drawn. */
+const UNTIL_DRAWN: Pick<PoolSeed, 'cost24h' | 'requests24h' | 'traffic24h'> = { cost24h: 0, requests24h: 0, traffic24h: [] };
 
 const POOL_ROWS: PoolSeed[] = [
   {
@@ -69,17 +54,17 @@ const POOL_ROWS: PoolSeed[] = [
     members: [
       // A subscription member capped on its metered spend, so the card and the budgets card draw a metered line.
       {
-        accountId: 'business',
+        accountId: 'primary',
         budgetDailyUsd: null,
         budgetMonthlyUsd: 30,
         priority: 0,
         spends: [{ period: 'month', periodEnd: periodEndAfter('month', NOW), spentUsd: 12.5 }],
       },
-      unbudgeted('mail', 0),
-      unbudgeted('personal', 0),
+      unbudgeted('secondary', 0),
+      unbudgeted('nightly', 0),
       // Under both its budgets, half the month's spent, so the card has two spend lines that hold nothing back.
       {
-        accountId: 'console',
+        accountId: 'overflow',
         budgetDailyUsd: 5,
         budgetMonthlyUsd: 50,
         priority: 1,
@@ -89,9 +74,7 @@ const POOL_ROWS: PoolSeed[] = [
         ],
       },
     ],
-    traffic24h: ALL_TRAFFIC,
-    requests24h: ALL_TRAFFIC.reduce((s, b) => s + b.requests, 0),
-    cost24h: 38.72,
+    ...UNTIL_DRAWN,
     activePins: 10,
     // A pool carries no creation date, so its last write is a stamp of its own.
     updatedAt: daysAgo(2),
@@ -132,17 +115,15 @@ const POOL_ROWS: PoolSeed[] = [
       { not: false, pattern: 'claude-haiku-4-5*' },
       { not: true, pattern: '*' },
     ],
-    members: [{ accountId: 'evals', budgetDailyUsd: 20, budgetMonthlyUsd: null, priority: 0, spends: [{ period: 'day', periodEnd: periodEndAfter('day', NOW), spentUsd: 20.4 }] }],
-    traffic24h: CODEX_TRAFFIC,
-    requests24h: CODEX_TRAFFIC.reduce((s, b) => s + b.requests, 0),
-    cost24h: 2.14,
+    members: [{ accountId: 'research', budgetDailyUsd: 20, budgetMonthlyUsd: null, priority: 0, spends: [{ period: 'day', periodEnd: periodEndAfter('day', NOW), spentUsd: 20.4 }] }],
+    ...UNTIL_DRAWN,
     activePins: 2,
     updatedAt: daysAgo(12),
   },
   {
     ...POOL_SAMPLE,
-    id: 'studio',
-    name: 'studio',
+    id: 'work',
+    name: 'work',
     status: 'active',
     strategy: 'priority',
     preferSubscription: true,
@@ -158,10 +139,8 @@ const POOL_ROWS: PoolSeed[] = [
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
     modelRules: [],
-    members: [unbudgeted('business', 0)],
-    traffic24h: [],
-    requests24h: 0,
-    cost24h: 0,
+    members: [unbudgeted('primary', 0)],
+    ...UNTIL_DRAWN,
     activePins: 0,
     updatedAt: daysAgo(40),
   },
@@ -171,6 +150,9 @@ export const POOLS: PoolSeed[] = POOL_ROWS;
 
 export const poolById = new Map(POOLS.map((p) => [p.id, p]));
 
+// Each key's 7-day usage derives from the rollups in `requests.ts`. A lifetime is the story's own where the key is
+// older than the month the rollups hold, raised there to their sum; a key created inside that month carries none,
+// so its lifetime is theirs.
 export const KEYS: ApiKey[] = [
   {
     ...KEY_SAMPLE,
@@ -184,7 +166,8 @@ export const KEYS: ApiKey[] = [
     longContextTwins: true,
     enabled: true,
     status: 'active',
-    createdAt: daysAgo(91),
+    // Issued under the id an earlier key held, the hour that key's rows end.
+    createdAt: iso(DELETED_HOLDER_END),
     // Its rotation, the key's last write.
     updatedAt: ago(12 * MINUTE),
     expiresAt: null,
@@ -196,8 +179,7 @@ export const KEYS: ApiKey[] = [
     notes: 'Main workstation. Claude Code launches through the shell profile.',
     bodyCaptureHours: null,
     keepaliveOptOut: false,
-    usage7d: { cost: 182.4, requests: 9_812, tokens: 81_400_000 },
-    lifetime: { cost: 2_318.9, requests: 121_407 },
+    lifetime: { cost: 0, requests: 0 },
   },
   {
     ...KEY_SAMPLE,
@@ -224,8 +206,7 @@ export const KEYS: ApiKey[] = [
     notes: 'Travel laptop. Bodies captured while debugging the pre-commit hook.',
     bodyCaptureHours: 6,
     keepaliveOptOut: false,
-    usage7d: { cost: 41.7, requests: 2_960, tokens: 22_100_000 },
-    lifetime: { cost: 204.6, requests: 14_882 },
+    lifetime: { cost: 38.6, requests: 1_012 },
   },
   {
     ...KEY_SAMPLE,
@@ -249,7 +230,6 @@ export const KEYS: ApiKey[] = [
     notes: 'Nightly evaluation runs. Switched off between campaigns rather than revoked.',
     bodyCaptureHours: 0,
     keepaliveOptOut: true,
-    usage7d: { cost: 0, requests: 0, tokens: 0 },
     lifetime: { cost: 31.8, requests: 2_204 },
   },
   {
@@ -278,8 +258,7 @@ export const KEYS: ApiKey[] = [
     notes: 'Rotated out after the runner image moved to its own key.',
     bodyCaptureHours: 0,
     keepaliveOptOut: true,
-    usage7d: { cost: 6.2, requests: 402, tokens: 3_900_000 },
-    lifetime: { cost: 96.3, requests: 8_140 },
+    lifetime: { cost: 21.4, requests: 960 },
   },
   {
     ...KEY_SAMPLE,
@@ -288,7 +267,7 @@ export const KEYS: ApiKey[] = [
     autoModeServer: false,
     name: 'notebook',
     prefix: 'phoebis-a07c',
-    poolId: 'studio',
+    poolId: 'work',
     modelRules: [],
     modelRulesMode: 'extend',
     longContextTwins: true,
@@ -297,14 +276,13 @@ export const KEYS: ApiKey[] = [
     createdAt: daysAgo(3),
     updatedAt: daysAgo(3),
     expiresAt: null,
-    // The request log's one notebook row sets the last use and the usage below, since its time and cost are drawn.
+    // The request log's one notebook row sets the last use, since its time is drawn.
     lastUsedAt: null,
     retiredSecretLastUsedAt: null,
     sessionsOnRetiredSecret: 0,
     notes: 'Handed out for the data notebooks, which call the Messages API through the SDK.',
     bodyCaptureHours: null,
     keepaliveOptOut: false,
-    usage7d: { cost: 0, requests: 0, tokens: 0 },
     lifetime: { cost: 0, requests: 0 },
   },
 ];

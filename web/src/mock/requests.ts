@@ -1,6 +1,6 @@
 import type {
   AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
-  RateLimitWindow, RequestEvent, RequestKind, RequestLog, SelectionTrace, Usage, WastedProbeReason,
+  RateLimitWindow, RequestEvent, RequestKind, RequestLog, SelectionTrace, TrafficBucket, Usage, WastedProbeReason,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
@@ -12,7 +12,7 @@ import { priceFor } from './catalog';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
+import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, daysAgo, iso, startOfHour } from './time';
 
 const rng = createRng(7_331);
 // The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
@@ -50,7 +50,7 @@ export const LANES: Lane[] = [
   {
     keyId: 'desktop',
     poolId: 'all',
-    accountIds: ['business', 'personal', 'mail', 'console'],
+    accountIds: ['primary', 'nightly', 'secondary', 'overflow'],
     models: [
       { value: 'claude-fable-5-1', weight: 8 },
       { value: 'claude-sonnet-5-5', weight: 5 },
@@ -61,7 +61,7 @@ export const LANES: Lane[] = [
   {
     keyId: 'laptop',
     poolId: 'all',
-    accountIds: ['business', 'personal', 'mail'],
+    accountIds: ['primary', 'nightly', 'secondary'],
     models: [
       { value: 'claude-sonnet-5-5', weight: 6 },
       { value: 'claude-haiku-4-5-20251001', weight: 3 },
@@ -70,7 +70,7 @@ export const LANES: Lane[] = [
   {
     keyId: 'ci',
     poolId: 'codex',
-    accountIds: ['evals'],
+    accountIds: ['research'],
     models: [
       { value: 'claude-haiku-4-5-20251001', weight: 6 },
       { value: 'claude-sonnet-5', weight: 1 },
@@ -83,7 +83,7 @@ export const LANES: Lane[] = [
  * leaves `null`, whatever the lane drew, so its buckets read no share while the other subscription accounts'
  * buckets stay priced.
  */
-const UNPRICED_ACCOUNT = 'mail';
+const UNPRICED_ACCOUNT = 'secondary';
 const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-5' : drawn);
 
 /** Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by one. */
@@ -212,7 +212,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
   let cursor = atMs;
   for (let i = 0; i < attemptsWanted; i += 1) {
     const last = i === attemptsWanted - 1;
-    const accountId = pool.length > 1 && i === 0 && lane.poolId === 'all' && rng.chance(0.3) ? 'mail' : rng.pick(pool);
+    const accountId = pool.length > 1 && i === 0 && lane.poolId === 'all' && rng.chance(0.3) ? 'secondary' : rng.pick(pool);
     const idx = pool.indexOf(accountId);
     if (idx >= 0 && pool.length > 1) pool.splice(idx, 1);
     let outcome: AttemptOutcome;
@@ -346,39 +346,29 @@ function buildRequests(): RequestLog[] {
     });
     // A dropped check belongs under notebook, the one key under a pool that turned the check off, and that pool's
     // one member served it; notebook captures no bodies. The row keeps every other value it drew on the laptop
-    // lane, so this loop's later draws stay where they were, and the model the lane drew rather than the one `mail`
-    // serves, which stays on `mail`. The passes after the loop draw per row by its key and pool (a lane in `LANES`,
-    // which has none for notebook, and the pool's cache warming), so they draw less for this row and their later
-    // draws move.
+    // lane, so this loop's later draws stay where they were, and the model the lane drew rather than the one
+    // `secondary` serves, which stays on `secondary`. The passes after the loop draw per row by its key and pool (a
+    // lane in `LANES`, which has none for notebook, and the pool's cache warming), so they draw less for this row and
+    // their later draws move.
     if (autoMode === 'stripped') {
       const moved = rows[rows.length - 1];
       Object.assign(moved, {
-        accountId: 'business',
-        attempts: moved.attempts.map((a) => ({ ...a, accountId: 'business' })),
+        accountId: 'primary',
+        attempts: moved.attempts.map((a) => ({ ...a, accountId: 'primary' })),
         canonicalModel: drawn,
         capturedBodies: false,
         costUsd: Math.round(costOf(drawn, moved.usage) * 10_000) / 10_000,
         keyGeneration: Date.parse(keyById.get('notebook')!.createdAt),
         keyId: 'notebook',
         model: drawn,
-        poolId: 'studio',
+        poolId: 'work',
         responseTruncated: false,
       });
-      // The key's own figures are its one request's.
-      Object.assign(keyById.get('notebook')!, {
-        lastUsedAt: moved.at,
-        lifetime: { cost: moved.costUsd, requests: 1 },
-        usage7d: { cost: moved.costUsd, requests: 1, tokens: tokensTotal(moved.usage) },
-      });
+      // The key's last use is its one request; its counts derive from the rollups with every other key's.
+      keyById.get('notebook')!.lastUsedAt = moved.at;
     }
   }
   rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
-  // The earlier holder of `desktop` spent the first half of the day on the session the live key now holds, so
-  // a session view grouped by key has two lifetimes of one id to keep apart. A probe replays the live key's
-  // recipe alone, so none of those rows is one.
-  for (const r of rows) {
-    if (r.keyId === 'desktop' && r.sessionId === SESSION_IDS[0] && r.kind !== 'probe' && Date.parse(r.at) < NOW - 12 * HOUR) r.keyGeneration = DELETED_HOLDER_GENERATION;
-  }
   // A stream can commit its 200 head and fail after it: the newest such desktop stream keeps the status and
   // carries the error, which is the row Observe and the drawer must not draw as a success.
   const failedAfterHead = rows.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
@@ -797,7 +787,9 @@ function rollups(): HourlyRollup[] {
   const groups = new Map<string, RequestLog[]>();
   for (const r of REQUESTS) {
     const hour = iso(startOfHour(Date.parse(r.at)));
-    const key = [hour, r.keyId, r.poolId, r.accountId, r.model, r.kind, r.sessionId].join('|');
+    // A request answered at the cap before any account served it files under `-`, as the ledger files what it could
+    // not attribute.
+    const key = [hour, r.keyId, r.poolId, r.accountId ?? '-', r.model, r.kind, r.sessionId].join('|');
     const list = groups.get(key) ?? [];
     list.push(r);
     groups.set(key, list);
@@ -900,7 +892,8 @@ function synthesizeMissReasons(hm: Rng, ok: number, asksForDiagnostics: boolean)
   return { cacheMissReasons, expiredBetweenTurns: Math.min(cacheMissReasons.none, hm.chance(0.35) ? hm.int(1, 2) : 0) };
 }
 
-export const DELETED_HOLDER_DAY = new Date(NOW - 9 * DAY).toDateString();
+// The smoke run reads the holder's day through this module.
+export { DELETED_HOLDER_DAY } from './time';
 
 function historicalRollups(): HourlyRollup[] {
   const h = createRng(99);
@@ -923,15 +916,12 @@ function historicalRollups(): HourlyRollup[] {
     const daylight = hourOfDay >= 8 && hourOfDay <= 19 ? 1 : 0.15;
     const volume = daylight * (weekend ? 0.35 : 1);
     for (const lane of LANES) {
-      // The morning of one day in the second week back belongs to an earlier holder of `desktop` alone, at a
-      // fraction of the live key's volume: the month answers the pair of key groups, the shorter ranges do not,
-      // and no hour carries both generations.
-      const earlierHolder = lane.keyId === 'desktop' && hourOfDay < 11 && new Date(t).toDateString() === DELETED_HOLDER_DAY;
+      // Every desktop hour before the live key's creation belongs to the earlier holder of its id: the month answers
+      // the pair of key groups, the week and the day the live key alone, and no hour carries both generations.
+      const earlierHolder = lane.keyId === 'desktop' && t < DELETED_HOLDER_END;
       const generation = earlierHolder ? DELETED_HOLDER_GENERATION : Date.parse(keyById.get(lane.keyId)!.createdAt);
-      const laneWeight = earlierHolder ? 0.3 : lane.keyId === 'desktop' ? 1 : lane.keyId === 'laptop' ? 0.45 : 0.14;
-      // At least one request in each of its daylight hours: when the day falls on a weekend, the weekend factor
-      // would round the morning to nothing and lose the pair of key groups.
-      const n = Math.max(earlierHolder && daylight === 1 ? 1 : 0, Math.round(volume * laneWeight * h.float(3, 9)));
+      const laneWeight = lane.keyId === 'desktop' ? 1 : lane.keyId === 'laptop' ? 0.45 : 0.14;
+      const n = Math.round(volume * laneWeight * h.float(3, 9));
       if (n === 0) continue;
       const drawn = h.weighted(lane.models);
       const accountId = h.pick(lane.accountIds);
@@ -1050,6 +1040,64 @@ function historicalRollups(): HourlyRollup[] {
 }
 
 export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...ROLLUPS];
+
+/**
+ * The first hour of the day every 24-hour figure counts: the dashboard's 24 hourly buckets, the current hour last, so
+ * the dashboard, the pools' traffic and the accounts read one day. The week starts on the hour seven days back, as the
+ * routes total their rollups.
+ */
+export const DAY_FROM = startOfHour(NOW) - 23 * HOUR;
+const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
+
+/** The rows a 24-hour figure counts. A probe is the router's own traffic, which the routes' totals leave out. */
+export const DAY_ROWS: RequestLog[] = REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= DAY_FROM);
+const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
+
+const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
+const requestsIn = (r: HourlyRollup) => r.requests.ok + r.requests.incomplete + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error;
+const tokensIn = (r: HourlyRollup) => r.tokens.uncachedInput + r.tokens.cacheRead + r.tokens.cacheWrite5m + r.tokens.cacheWrite1h + r.tokens.output;
+const inWeek = (r: HourlyRollup) => Date.parse(r.hour) >= WEEK_FROM;
+
+/**
+ * The accounts', keys' and pools' figures, read off the rows and the rollups once both are drawn, since neither
+ * `accounts.ts` nor `pools.ts` can import this module. A lifetime reaches past the month the rollups hold, so it is the
+ * row's literal, raised to the rollups' sum wherever the literal reads under it.
+ */
+function deriveFigures() {
+  for (const a of ACCOUNTS) {
+    const mine = COUNTED_ROLLUPS.filter((r) => r.accountId === a.id);
+    Object.assign(a, {
+      requests: {
+        last24h: DAY_ROWS.filter((r) => r.accountId === a.id).length,
+        last7d: sumOf(mine.filter(inWeek), requestsIn),
+        lifetime: Math.max(a.requests.lifetime, sumOf(mine, requestsIn)),
+      },
+    });
+  }
+  for (const k of keyById.values()) {
+    // A bare id totals its live key alone, so an earlier holder's rows count for neither figure.
+    const mine = COUNTED_ROLLUPS.filter((r) => r.keyId === k.id && r.keyGeneration === Date.parse(k.createdAt));
+    const week = mine.filter(inWeek);
+    Object.assign(k, {
+      lifetime: { cost: Math.max(k.lifetime.cost, sumOf(mine, (r) => r.costUsd)), requests: Math.max(k.lifetime.requests, sumOf(mine, requestsIn)) },
+      usage7d: { cost: sumOf(week, (r) => r.costUsd), requests: sumOf(week, requestsIn), tokens: sumOf(week, tokensIn) },
+    });
+  }
+  for (const p of poolById.values()) {
+    const mine = DAY_ROWS.filter((r) => r.poolId === p.id);
+    const traffic24h: TrafficBucket[] = Array.from({ length: 24 }, (_, i) => ({ at: iso(DAY_FROM + i * HOUR), costUsd: 0, failed: 0, requests: 0, tokens: 0 }));
+    for (const r of mine) {
+      const bucket = traffic24h[Math.floor((Date.parse(r.at) - DAY_FROM) / HOUR)];
+      bucket.costUsd += r.costUsd;
+      bucket.failed += r.outcome === 'succeeded' ? 0 : 1;
+      bucket.requests += 1;
+      bucket.tokens += tokensTotal(r.usage);
+    }
+    Object.assign(p, { cost24h: sumOf(mine, (r) => r.costUsd), requests24h: mine.length, traffic24h });
+  }
+}
+
+deriveFigures();
 
 // Hourly account facts: peak utilization per window, time spent ineligible, and
 // pin churn. The last seven days follow the sampled quota history; older hours

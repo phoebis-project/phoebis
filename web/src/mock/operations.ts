@@ -31,25 +31,25 @@ const sessionSpec: {
   state: Session['keepalive']['state'];
   subagents?: { accountId?: string; model: string };
 }[] = [
-  { keyId: 'desktop', accountId: 'business', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', subagents: { model: 'claude-sonnet-5', accountId: 'personal' } },
-  { keyId: 'desktop', accountId: 'business', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'personal', model: 'claude-sonnet-5', state: 'idle', agents: 2, companion: 'silent' },
-  { keyId: 'desktop', accountId: 'business', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'personal', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' } },
-  { keyId: 'desktop', accountId: 'business', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-5', state: 'idle', agents: 2, companion: 'silent' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' } },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
-  { keyId: 'laptop', accountId: 'personal', model: 'claude-sonnet-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
   // The laptop key allows Haiku 4.5 and Sonnet 5 only, so its subagents stay inside that list.
-  { keyId: 'laptop', accountId: 'business', model: 'claude-sonnet-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
-  { keyId: 'laptop', accountId: 'personal', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'business', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting' },
-  { keyId: 'ci', accountId: 'evals', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
-  { keyId: 'ci', accountId: 'evals', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', idleMinutes: 240 },
-  { keyId: 'laptop', accountId: 'mail', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
-  { keyId: 'desktop', accountId: 'console', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting' },
+  { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
+  { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', idleMinutes: 240 },
+  { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
+  { keyId: 'desktop', accountId: 'overflow', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
   // Seen by the router but with nothing in the ledger, so the per-row jumps to
   // analytics and observe have no traffic to land on.
-  { keyId: 'laptop', accountId: 'personal', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
 ];
 
 const ledgered = new Map<string, { last: string; requests: number }>();

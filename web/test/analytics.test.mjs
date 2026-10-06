@@ -31,10 +31,10 @@ test('a conversation class and an overhead class split as the legend says', () =
 
 test('the burn fold reads every token and dollar figure per minute of its bucket and both window shares per hour', () => {
   const { lines, rows } = d.foldBurn(
-    [point(0, 'business', { cachedTokens: 36_000, fiveHourShare: 0.3, sevenDayShare: 0.06, uncachedTokens: 3_600, unit: 'window_share' }), point(6 * HOUR, 'business', { unit: 'window_share' })],
+    [point(0, 'primary', { cachedTokens: 36_000, fiveHourShare: 0.3, sevenDayShare: 0.06, uncachedTokens: 3_600, unit: 'window_share' }), point(6 * HOUR, 'primary', { unit: 'window_share' })],
     'account',
     6 * 3_600,
-    new Set(['business']),
+    new Set(['primary']),
   );
   assert.deepEqual([rows[0].cached[0], rows[0].uncached[0], rows[0].usd[0]], [100, 10, 0], 'six hours of tokens over 360 minutes');
   assert.ok(Math.abs(rows[0].fiveHour[0] - 0.05) < 1e-12, 'a 30% share of the 5-hour window over six hours is 5% an hour');
@@ -51,33 +51,33 @@ test('a range ending now, twenty minutes into the running hour, rates that bucke
   const end = at13 + HOUR + 20 * 60_000;
   const { lines, rows } = d.foldBurn(
     [
-      point(at13, 'business', { fiveHourShare: 0.3, uncachedTokens: 6_000, unit: 'window_share' }),
-      point(at13, 'console', { unit: 'usd', usd: 6 }),
-      point(at13 + HOUR, 'business', { fiveHourShare: 0.2, uncachedTokens: 4_000, unit: 'window_share' }),
-      point(at13 + HOUR, 'console', { unit: 'usd', usd: 4 }),
+      point(at13, 'primary', { fiveHourShare: 0.3, uncachedTokens: 6_000, unit: 'window_share' }),
+      point(at13, 'overflow', { unit: 'usd', usd: 6 }),
+      point(at13 + HOUR, 'primary', { fiveHourShare: 0.2, uncachedTokens: 4_000, unit: 'window_share' }),
+      point(at13 + HOUR, 'overflow', { unit: 'usd', usd: 4 }),
     ],
     'account',
     3_600,
-    new Set(['business']),
+    new Set(['primary']),
     d.MAX_BURN_LINES,
     end,
     end,
   );
   assert.deepEqual(rows.map((r) => r.seconds), [3_600, 1_200], 'the full first hour, and the twenty minutes the second has run');
-  const [business, consoleLine] = [lines.findIndex((l) => l.key === 'business'), lines.findIndex((l) => l.key === 'console')];
-  assert.deepEqual([rows[0].uncached[business], rows[1].uncached[business]], [100, 200], 'tokens per minute of the time each bucket covers');
-  assert.ok(Math.abs(rows[1].usd[consoleLine] - 0.2) < 1e-12, 'four dollars over twenty minutes');
-  assert.ok(Math.abs(rows[1].fiveHour[business] - 0.6) < 1e-12, 'a 20% share over a third of an hour is 60% an hour');
+  const [primary, overflowLine] = [lines.findIndex((l) => l.key === 'primary'), lines.findIndex((l) => l.key === 'overflow')];
+  assert.deepEqual([rows[0].uncached[primary], rows[1].uncached[primary]], [100, 200], 'tokens per minute of the time each bucket covers');
+  assert.ok(Math.abs(rows[1].usd[overflowLine] - 0.2) < 1e-12, 'four dollars over twenty minutes');
+  assert.ok(Math.abs(rows[1].fiveHour[primary] - 0.6) < 1e-12, 'a 20% share over a third of an hour is 60% an hour');
   // Weighed 3:1 by the seconds each bucket covers: (100 x 3 + 200) / 4 and (0.3 x 3 + 0.6) / 4.
-  assert.ok(Math.abs(lines[business].tokensPerMinute - 125) < 1e-9, 'the legend weighs each bucket by the time it covers');
-  assert.ok(Math.abs(lines[business].fiveHourPerHour - 0.375) < 1e-12, 'and the window shares');
-  assert.ok(Math.abs(lines[consoleLine].usdPerMinute - 0.125) < 1e-12, 'and the dollars');
+  assert.ok(Math.abs(lines[primary].tokensPerMinute - 125) < 1e-9, 'the legend weighs each bucket by the time it covers');
+  assert.ok(Math.abs(lines[primary].fiveHourPerHour - 0.375) < 1e-12, 'and the window shares');
+  assert.ok(Math.abs(lines[overflowLine].usdPerMinute - 0.125) < 1e-12, 'and the dollars');
 });
 
 test('a past range ending twenty minutes into an hour rates that hour in full', () => {
   // The route reads whole hours through the hour ceiling of the range's end, so it answered the whole 14:00 hour.
   const at13 = Date.UTC(2026, 8, 16, 13);
-  const { rows } = d.foldBurn([point(at13, 'console', { uncachedTokens: 600 }), point(at13 + HOUR, 'console', { uncachedTokens: 600 })], 'key', 3_600, NONE, d.MAX_BURN_LINES, at13 + HOUR + 20 * 60_000, at13 + 3 * HOUR);
+  const { rows } = d.foldBurn([point(at13, 'overflow', { uncachedTokens: 600 }), point(at13 + HOUR, 'overflow', { uncachedTokens: 600 })], 'key', 3_600, NONE, d.MAX_BURN_LINES, at13 + HOUR + 20 * 60_000, at13 + 3 * HOUR);
   assert.deepEqual(rows.map((r) => r.seconds), [3_600, 3_600]);
   assert.deepEqual(rows.map((r) => r.uncached[0]), [10, 10]);
 });
@@ -86,15 +86,15 @@ test('a past range ending inside a 6-hour bucket rates it over the hours read', 
   // The bucket at 12:00 holds the hours 12:00 to 15:00, the hour ceiling of an end at 14:20.
   const at12 = Date.UTC(2026, 8, 16, 12);
   const end = at12 + 2 * HOUR + 20 * 60_000;
-  const { rows } = d.foldBurn([point(at12 - 6 * HOUR, 'console', { uncachedTokens: 3_600 }), point(at12, 'console', { uncachedTokens: 1_800 })], 'key', 6 * 3_600, NONE, d.MAX_BURN_LINES, end, end + 24 * HOUR);
+  const { rows } = d.foldBurn([point(at12 - 6 * HOUR, 'overflow', { uncachedTokens: 3_600 }), point(at12, 'overflow', { uncachedTokens: 1_800 })], 'key', 6 * 3_600, NONE, d.MAX_BURN_LINES, end, end + 24 * HOUR);
   assert.deepEqual(rows.map((r) => r.seconds), [21_600, 10_800]);
   assert.deepEqual(rows.map((r) => r.uncached[0]), [10, 10]);
 });
 
 test('a range ending on a bucket boundary rates every bucket over the full width', () => {
   const at12 = Date.UTC(2026, 8, 16, 12);
-  const points = [point(at12, 'console', { cachedTokens: 1_200, fiveHourShare: 0.1, unit: 'window_share' }), point(at12 + HOUR, 'console', { uncachedTokens: 600, fiveHourShare: 0.05, unit: 'window_share' })];
-  const sized = new Set(['console']);
+  const points = [point(at12, 'overflow', { cachedTokens: 1_200, fiveHourShare: 0.1, unit: 'window_share' }), point(at12 + HOUR, 'overflow', { uncachedTokens: 600, fiveHourShare: 0.05, unit: 'window_share' })];
+  const sized = new Set(['overflow']);
   const ended = d.foldBurn(points, 'account', 3_600, sized, d.MAX_BURN_LINES, at12 + 2 * HOUR, at12 + 2 * HOUR);
   assert.deepEqual(ended.rows.map((r) => r.seconds), [3_600, 3_600]);
   assert.deepEqual(ended, d.foldBurn(points, 'account', 3_600, sized), 'the same figures as a fold with no end');
@@ -102,14 +102,14 @@ test('a range ending on a bucket boundary rates every bucket over the full width
 
 test('a range that ended inside the running hour, read ten minutes later, rates that hour up to the read', () => {
   const at14 = Date.UTC(2026, 8, 16, 14);
-  const { rows } = d.foldBurn([point(at14, 'console', { uncachedTokens: 1_800 })], 'key', 3_600, NONE, d.MAX_BURN_LINES, at14 + 20 * 60_000, at14 + 30 * 60_000);
+  const { rows } = d.foldBurn([point(at14, 'overflow', { uncachedTokens: 1_800 })], 'key', 3_600, NONE, d.MAX_BURN_LINES, at14 + 20 * 60_000, at14 + 30 * 60_000);
   assert.deepEqual([rows[0].seconds, rows[0].uncached[0]], [1_800, 60], 'the route answered the hour as it stood at the read, 14:00 to 14:30');
 });
 
 test('a running bucket sets the peak and the axis only once it covers a tenth of its width', () => {
   const at13 = Date.UTC(2026, 8, 16, 13);
-  const points = [point(at13, 'business', { fiveHourShare: 0.06, uncachedTokens: 600, unit: 'window_share' }), point(at13 + HOUR, 'business', { fiveHourShare: 0.02, uncachedTokens: 100, unit: 'window_share' })];
-  const sized = new Set(['business']);
+  const points = [point(at13, 'primary', { fiveHourShare: 0.06, uncachedTokens: 600, unit: 'window_share' }), point(at13 + HOUR, 'primary', { fiveHourShare: 0.02, uncachedTokens: 100, unit: 'window_share' })];
+  const sized = new Set(['primary']);
   const fold = (seconds) => d.foldBurn(points, 'account', 3_600, sized, d.MAX_BURN_LINES, at13 + HOUR + seconds * 1_000, at13 + HOUR + seconds * 1_000);
 
   const early = fold(20);
@@ -131,16 +131,16 @@ test('a capped axis top rises to the last of the five ticks recharts would draw 
 
 test('an account burns in the unit its figures come in, a subscription whose tier the cost table does not size in none, and every other grouping in dollars', () => {
   const answered = [
-    point(0, 'console', { unit: 'usd', usd: 1.2 }),
-    point(0, 'personal', { fiveHourShare: 0.01, sevenDayShare: 0.001, unit: 'window_share' }),
+    point(0, 'overflow', { unit: 'usd', usd: 1.2 }),
+    point(0, 'nightly', { fiveHourShare: 0.01, sevenDayShare: 0.001, unit: 'window_share' }),
     point(0, 'tierless', { uncachedTokens: 40, unit: 'window_share' }),
     point(0, 'idle', { fiveHourShare: 0, sevenDayShare: 0, unit: 'window_share' }),
     point(0, 'departed', { uncachedTokens: 20 }),
   ];
-  const { lines } = d.foldBurn(answered, 'account', 3_600, new Set(['idle', 'personal']));
+  const { lines } = d.foldBurn(answered, 'account', 3_600, new Set(['idle', 'nightly']));
   const byKey = Object.fromEntries(lines.map((l) => [l.key, l]));
   assert.deepEqual(
-    ['console', 'personal', 'tierless', 'idle', 'departed'].map((k) => byKey[k].unit),
+    ['overflow', 'nightly', 'tierless', 'idle', 'departed'].map((k) => byKey[k].unit),
     ['usd', 'window_share', 'unknown', 'window_share', 'usd'],
     'a subscription account whose tier the table sizes charts in window share; one whose tier it does not size is tier unknown',
   );
@@ -182,12 +182,12 @@ test('under the account grouping the rest folds into one other per unit, so no d
 });
 
 test('an idle bucket reads zero only on a window that priced traffic, and a window with none stays null', () => {
-  const plan = (at, over) => point(at * HOUR, 'business', { unit: 'window_share', ...over });
+  const plan = (at, over) => point(at * HOUR, 'primary', { unit: 'window_share', ...over });
   const { lines, rows } = d.foldBurn(
     [plan(0, { fiveHourShare: 0.08, tokens: 100 }), plan(1, { tokens: 100 }), plan(2, { tokens: 0 })],
     'account',
     3_600,
-    new Set(['business']),
+    new Set(['primary']),
   );
   assert.deepEqual(rows.map((r) => r.fiveHour[0]), [0.08, null, 0], 'a priced bucket, one whose traffic went unpriced, and an idle one');
   assert.deepEqual(rows.map((r) => r.sevenDay[0]), [null, null, null], 'the idle bucket stays null on a window no bucket priced');
@@ -198,16 +198,16 @@ test('an idle bucket reads zero only on a window that priced traffic, and a wind
 
 test('a bucket whose rows carried no token is idle whatever share its rows answered', () => {
   // A failed request books a row with no token, which a listed model prices at zero on either window.
-  const plan = (at, over) => point(at * HOUR, 'business', { unit: 'window_share', ...over });
-  const { lines, rows } = d.foldBurn([plan(0, { fiveHourShare: 0.08, tokens: 100 }), plan(1, { fiveHourShare: 0, sevenDayShare: 0, tokens: 0 })], 'account', 3_600, new Set(['business']));
+  const plan = (at, over) => point(at * HOUR, 'primary', { unit: 'window_share', ...over });
+  const { lines, rows } = d.foldBurn([plan(0, { fiveHourShare: 0.08, tokens: 100 }), plan(1, { fiveHourShare: 0, sevenDayShare: 0, tokens: 0 })], 'account', 3_600, new Set(['primary']));
   assert.deepEqual(rows.map((r) => r.fiveHour[0]), [0.08, 0]);
   assert.deepEqual(rows.map((r) => r.sevenDay[0]), [null, null], 'no bucket priced traffic on the 7-day window, so its legend reads a dash rather than 0%');
   assert.equal(lines[0].sevenDayPerHour, null);
 });
 
 test('a bucket with cache writes and output alone is not idle', () => {
-  const plan = (at, over) => point(at * HOUR, 'business', { unit: 'window_share', ...over });
-  const { lines, rows } = d.foldBurn([plan(0, { fiveHourShare: 0.02, uncachedTokens: 10 }), plan(1, { cachedTokens: 0, tokens: 50, uncachedTokens: 0 })], 'account', 3_600, new Set(['business']));
+  const plan = (at, over) => point(at * HOUR, 'primary', { unit: 'window_share', ...over });
+  const { lines, rows } = d.foldBurn([plan(0, { fiveHourShare: 0.02, uncachedTokens: 10 }), plan(1, { cachedTokens: 0, tokens: 50, uncachedTokens: 0 })], 'account', 3_600, new Set(['primary']));
   assert.deepEqual(rows.map((r) => r.fiveHour[0]), [0.02, null], 'its traffic went unpriced rather than absent');
   assert.equal(lines[0].unpriced.fiveHour, true);
 });
@@ -231,8 +231,8 @@ test('a known tier with only a priced 7-day share keeps its 7-day series', () =>
 
 test('a null slot is unpriced only with tokens behind it, so an idle slot on a never-priced window is not', () => {
   // The account prices its 5-hour window and never its 7-day one, so both of its 7-day slots read null.
-  const plan = (at, over) => point(at * HOUR, 'business', { unit: 'window_share', ...over });
-  const { lines, rows } = d.foldBurn([plan(0, { fiveHourShare: 0.02, uncachedTokens: 10 }), plan(1, {})], 'account', 3_600, new Set(['business']));
+  const plan = (at, over) => point(at * HOUR, 'primary', { unit: 'window_share', ...over });
+  const { lines, rows } = d.foldBurn([plan(0, { fiveHourShare: 0.02, uncachedTokens: 10 }), plan(1, {})], 'account', 3_600, new Set(['primary']));
   const [busy, idle] = rows;
   assert.deepEqual([busy.sevenDay[0], idle.sevenDay[0], idle.fiveHour[0]], [null, null, 0]);
   assert.equal(d.slotUnpriced(busy.sevenDay[0], busy.tokens[0]), true, 'traffic the table could not price');
@@ -249,11 +249,11 @@ test("a bucket's share is null when any row is unpriced, in either order", () =>
 });
 
 test("the mock's burn fold prices only rows with tokens and nulls a window on any unpriced row, in either order", () => {
-  // Wednesday 2026-09-16 at 10:00 UTC, before the peak band opens in Los Angeles; business is the story's Max 20x.
+  // Wednesday 2026-09-16 at 10:00 UTC, before the peak band opens in Los Angeles; primary is the story's Max 20x.
   const hour = Date.parse('2026-09-16T10:00:00Z');
-  const row = (model, uncachedInput) => ({ accountId: 'business', costUsd: 0, hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
+  const row = (model, uncachedInput) => ({ accountId: 'primary', costUsd: 0, hour: new Date(hour).toISOString(), keyId: 'desktop', model, requestClass: 'main', sessionId: 's', tokens: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, output: 0, uncachedInput } });
   const range = { from: new Date(hour).toISOString(), to: new Date(hour + HOUR).toISOString() };
-  const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'business' && Date.parse(p.at) === hour).fiveHourShare;
+  const shareOf = (rows) => d.burnOf(rows, range, 'account').points.find((p) => p.group === 'primary' && Date.parse(p.at) === hour).fiveHourShare;
   const priced = row('claude-opus-5-5', 1_000_000);
   // A failed request on Sonnet 4.5, which the table has no row for, carries no token.
   const failed = row('claude-sonnet-4-5', 0);
@@ -291,8 +291,8 @@ test('a burn read outside the account grouping reads no accounts, so a failed ac
 });
 
 test('a priced bucket between unpriced ones, or at an end beside one, is an isolated slot the plan chart marks', () => {
-  const plan = (at, over) => point(at * HOUR, 'business', { tokens: 100, uncachedTokens: 100, unit: 'window_share', ...over });
-  const { rows } = d.foldBurn([plan(0), plan(1, { fiveHourShare: 0.05 }), plan(2)], 'account', 3_600, new Set(['business']));
+  const plan = (at, over) => point(at * HOUR, 'primary', { tokens: 100, uncachedTokens: 100, unit: 'window_share', ...over });
+  const { rows } = d.foldBurn([plan(0), plan(1, { fiveHourShare: 0.05 }), plan(2)], 'account', 3_600, new Set(['primary']));
   const fiveHour = rows.map((r) => r.fiveHour[0]);
   assert.deepEqual(fiveHour, [null, 0.05, null], 'a priced hour between two whose traffic went unpriced');
   assert.deepEqual(d.isolatedSlots(fiveHour), [false, true, false], 'the line draws no segment through it, so it takes a dot');
@@ -308,13 +308,13 @@ test('every burn read reads the accounts again, so a tier a profile refresh supp
     getAnalyticsBurn: async () => ({ bucketSeconds: 3_600, points: [] }),
     listAccounts: async () => {
       const rateLimitTier = reads.shift();
-      return [{ id: 'business', kind: 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } }];
+      return [{ id: 'primary', kind: 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } }];
     },
   };
   const range = { from: new Date(0).toISOString(), to: new Date(HOUR).toISOString() };
   const before = await d.readBurn(source, range, 'account');
   const after = await d.readBurn(source, range, 'account');
-  assert.deepEqual([d.sizedAccounts(before.accounts, tiers).has('business'), d.sizedAccounts(after.accounts, tiers).has('business')], [false, true]);
+  assert.deepEqual([d.sizedAccounts(before.accounts, tiers).has('primary'), d.sizedAccounts(after.accounts, tiers).has('primary')], [false, true]);
   assert.deepEqual(after.answer, { bucketSeconds: 3_600, points: [] });
 });
 

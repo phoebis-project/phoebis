@@ -3,7 +3,7 @@ import { test } from 'node:test';
 import * as d from './dist/api.js';
 
 const event = (kind, agentId) => ({
-  accountId: 'business',
+  accountId: 'primary',
   at: '2026-01-01T00:00:00.000Z',
   detail: { agent_id: agentId, epoch: 1, from_account: 'direct', reason: 'cooldown' },
   keyId: 'desktop',

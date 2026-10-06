@@ -16,7 +16,7 @@ import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE } from './operations';
 import { KEYS, POOLS } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
@@ -432,8 +432,10 @@ export class MockApi implements Api {
     // The router refuses a callback whose state does not belong to the pairing the id names.
     const pairing = this.pairings.get(pairingId);
     if (!pairing || pairing.state !== submitted.state) throw new Error('Pairing expired. Start again.');
+    // Every subscription here is the operator's own, so its organization is the personal one the profile names, and a
+    // login no row has paired yet is the operator's next alias.
     const existing = this.accounts.find((a) => a.id === pairing.accountId);
-    return latency({ email: existing?.email ?? 'new.login@example.com', organization: existing ? `${existing.label} workspace` : 'Personal', state: submitted.state }, 500);
+    return latency({ email: existing?.email ?? 'operator+new@example.com', organization: 'Personal', state: submitted.state }, 500);
   }
 
   async confirmPairing(pairingId: string) {
@@ -561,11 +563,11 @@ export class MockApi implements Api {
   }
 
   /** `refresh` re-stamps `fetchedAt` rather than answering a fresh fixture; every account answers the same
-   * catalog except `personal`, whose live fetch has been failing. */
+   * catalog except `nightly`, whose live fetch has been failing. */
   getAccountCatalog(accountId: string, refresh?: boolean): Promise<AccountCatalog> {
     const a = this.account(accountId);
     const fetchedAt = ago(refresh ? 0 : 40 * 1000);
-    if (a.id === 'personal') return latency({ error: 'the models request answered 503', fetchedAt, models: [] });
+    if (a.id === 'nightly') return latency({ error: 'the models request answered 503', fetchedAt, models: [] });
     return latency({ error: null, fetchedAt, models: CATALOG });
   }
 
@@ -641,7 +643,7 @@ export class MockApi implements Api {
   getOverview() {
     const empty = emptyStore();
     // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
-    const last24h = empty ? [] : REQUESTS.filter((r) => Date.parse(r.at) >= NOW - DAY);
+    const last24h = empty ? [] : DAY_ROWS;
     const hourlyMap = new Map<string, { at: string; cost: number; errors: number; requests: number; tokens: number }>();
     for (let i = 23; i >= 0; i -= 1) {
       const at = iso(Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000);
