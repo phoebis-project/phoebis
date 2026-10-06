@@ -8349,7 +8349,12 @@ m.unmount();
     const content = structuredClone(SETTINGS_WIRE.subscription_costs.content);
     content.type_multiplier.input = 'bad';
     const unreadable = decodeSettings({ ...SETTINGS_WIRE, subscription_costs: { ...SETTINGS_WIRE.subscription_costs, content } }).subscriptionCosts;
-    api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), subscriptionCosts: unreadable });
+    let path = null;
+    api.getSettings = async (...args) => {
+      const settings = await getSettings.apply(api, args);
+      path = settings.storage.subscriptionCostsPath;
+      return { ...settings, subscriptionCosts: unreadable };
+    };
     const SAID = "The cost model's answer could not be read.";
     const settings = await mount('/settings');
     const about = [...settings.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
@@ -8372,10 +8377,11 @@ m.unmount();
     page.unmount();
     api.getSettings = getSettings;
     results.push({
-      name: "/settings and /sessions a cost model answer the console cannot read says so on About's row and on the reference's two cost model tabs, which draw no figure",
+      name: "/settings and /sessions a cost model answer the console cannot read says so on About's row beside the configured path and on the reference's two cost model tabs, which draw no figure",
       ok:
         unreadable.problem === SAID &&
-        rowText === SAID &&
+        path !== null &&
+        rowText === `${path}. ${SAID}` &&
         drawn.planRates.error === SAID &&
         drawn.planRates.tables === 0 &&
         drawn.tiers.error === SAID &&

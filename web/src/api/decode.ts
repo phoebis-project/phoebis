@@ -640,7 +640,8 @@ const override = (v: unknown): SubscriptionCosts['overrides'][string] => {
 };
 /**
  * Every member the model requires is present and of its type: a capacity and a weight may be null, an override's
- * multipliers and window weights absent or null, and nothing else.
+ * multiplier block and each multiplier in it absent or null, its `weight_by_window` block absent or null but never a
+ * null weight inside it, and nothing else.
  */
 const strictCosts = (content: unknown): SubscriptionCosts => {
   const c = map(content);

@@ -142,7 +142,7 @@ export function SettingsPage() {
                 { label: 'Metrics listener', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
                 { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
                 { label: 'API prices path', value: `${s.storage.apiPricesPath ?? 'not configured'}, effective ${effectiveLabel(s.apiPrices.effective)}`, mono: s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
-                { label: 'Subscription costs path', value: s.subscriptionCosts.problem ?? `${s.storage.subscriptionCostsPath ?? 'not configured'}, effective ${effectiveLabel(s.subscriptionCosts.effective)}`, mono: s.subscriptionCosts.problem === null && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
+                { label: 'Subscription costs path', value: `${s.storage.subscriptionCostsPath ?? 'not configured'}${s.subscriptionCosts.problem === null ? `, effective ${effectiveLabel(s.subscriptionCosts.effective)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
                 { label: 'Keepalive sessions', value: String(s.keepalive.maxSessions), mono: true, title: restartNote('keepalive.max_sessions') },
                 { label: 'Keepalive agents', value: String(s.keepalive.maxAgents), mono: true, title: restartNote('keepalive.max_agents') },

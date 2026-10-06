@@ -204,6 +204,25 @@ test('a change opens on the first band day that differs from today, this week in
   assert.deepEqual(d.nextLocalChange(costs, Date.parse('2027-01-04T12:00:00Z'), 'Africa/Cairo'), { from: 'Mon 15 Mar', lasting: false, moved: true, text: '14:00 to 20:00', to: 'Thu 29 Apr' });
 });
 
+test("on a day the band is off, today is the next band day: its week, its hours and the clocks the change is read against", () => {
+  // Saturday 24 October 2026 in Los Angeles, the weekend Berlin leaves summer time: today is Monday 26 October, 12:00
+  // to 18:00 UTC at UTC-7, 13:00 to 19:00 in Berlin at UTC+1, and the week drawn is that Monday's, with no day of it
+  // holding now. Los Angeles leaves summer time on 1 November, so from Monday 2 November the band reads 14:00 to 20:00
+  // there, and 13:00 to 19:00 again on Monday 15 March 2027, once Los Angeles keeps summer time and Berlin not yet.
+  const at = Date.parse('2026-10-24T12:00:00Z');
+  const week = d.bandWeek(costs, at, 'Europe/Berlin');
+  assert.deepEqual(week.map((day) => day.label), ['Mon 26 Oct', 'Tue 27 Oct', 'Wed 28 Oct', 'Thu 29 Oct', 'Fri 30 Oct', 'Sat 31 Oct', 'Sun 1 Nov']);
+  assert.deepEqual(week.map((day) => day.runs), [[run(780, 1140)], [run(780, 1140)], [run(780, 1140)], [run(780, 1140)], [run(780, 1140)], [], []]);
+  assert.deepEqual(week.map((day) => day.today), [false, false, false, false, false, false, false], 'now lies before the week drawn');
+  assert.equal(d.bandCaption(costs, at, 'Europe/Berlin', clock24), 'Mon to Fri, 13:00 to 19:00 here (Europe/Berlin). In Los Angeles: Mon to Fri, 05:00 to 11:00.');
+  assert.deepEqual(d.nextLocalChange(costs, at, 'Europe/Berlin'), { from: 'Mon 2 Nov', lasting: false, moved: true, text: '14:00 to 20:00', to: 'Fri 12 Mar' });
+  // Saturday 13 March 2027 at 12:00 in Los Angeles, still at UTC-8: today is Monday 15 March, at UTC-7 after the change
+  // of 14 March, 12:00 to 18:00 UTC and 13:00 to 19:00 in Berlin. Berlin enters summer time on 28 March, so from Monday
+  // 29 March the band reads 14:00 to 20:00 there, Berlin's own change; it reads 13:00 to 19:00 again on Monday 1
+  // November, once Berlin leaves summer time on 31 October and before Los Angeles does on 7 November, 31 weeks on.
+  assert.deepEqual(d.nextLocalChange(costs, Date.parse('2027-03-13T20:00:00Z'), 'Europe/Berlin'), { from: 'Mon 29 Mar', lasting: true, moved: false, text: '14:00 to 20:00', to: null });
+});
+
 test('a change that starts late in the ten weeks reads past them to the day that reads as today again', () => {
   // Seen from 6 January 2027, the gap between the two spring changes opens on 15 March, inside the ten weeks, and
   // Monday 29 March, the first day that reads as today again, falls past them: the stretch seen from 24 February.

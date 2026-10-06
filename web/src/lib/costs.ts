@@ -248,10 +248,14 @@ const piecesIn = (span: BandSpan, zone: string): { date: string; run: BandRun }[
   return pieces;
 };
 
-/** The week holding `at`, Monday to Sunday in `zone`, each day with the runs of the band days that fall on it. */
+/** Today's week, Monday to Sunday in `zone`: the week holding the start of today's band as the caption and the change
+ *  read it, the next band day's on a day the band is off. Each day carries the runs of the band days that fall on it,
+ *  and `today` marks the day holding `at`, which that week may not hold. */
 export const bandWeek = (costs: SubscriptionCosts, at: number, zone: string): BandDay[] => {
-  const today = partsIn(at, zone);
-  const monday = addDays(today.date, -WEEKDAYS.indexOf(today.weekday));
+  const now = partsIn(at, zone);
+  const band = readable(costs.peak.zone) ? todayOf(costs.peak, at) : null;
+  const shown = band === null ? now : partsIn(band.span.start, zone);
+  const monday = addDays(shown.date, -WEEKDAYS.indexOf(shown.weekday));
   const dates = Array.from({ length: 7 }, (_, n) => addDays(monday, n));
   const runs = new Map(dates.map((date) => [date, [] as BandRun[]]));
   if (readable(costs.peak.zone)) {
@@ -269,7 +273,7 @@ export const bandWeek = (costs: SubscriptionCosts, at: number, zone: string): Ba
       if (last !== undefined && last.to === run.from) last.to = run.to;
       else joined.push({ ...run });
     }
-    return { date, label: dayLabel(date), runs: joined, today: date === today.date };
+    return { date, label: dayLabel(date), runs: joined, today: date === now.date };
   });
 };
 
@@ -360,7 +364,7 @@ const SEARCH_DAYS = 10 * 7;
  *  after today's is read against today's hours. The change runs from the first band day that differs until the first
  *  later band day whose hours are today's again, read up to 26 weeks on; one still open then is `lasting`. `from` and
  *  `to` label its first and last band day as each falls here, `text` the first one's hours, and `moved` says the band's
- *  own zone changed its clocks rather than the viewing one. */
+ *  own zone changed its clocks between today's band and the change rather than the viewing one. */
 export const nextLocalChange = (costs: SubscriptionCosts, at: number, zone: string, clock: (minutes: number) => string = hhmm): LocalChange | null => {
   const { peak } = costs;
   if (!readable(peak.zone) || everyHour(peak)) return null;
@@ -387,7 +391,8 @@ export const nextLocalChange = (costs: SubscriptionCosts, at: number, zone: stri
     return {
       from: dayLabel(first.startDate),
       lasting: !back,
-      moved: offsetIn(span.start, peak.zone) !== offsetIn(at, peak.zone),
+      // Against today's band rather than `at`, which on a day the band is off can lie before a change today's band follows.
+      moved: offsetIn(span.start, peak.zone) !== offsetIn(today.span.start, peak.zone),
       text: hoursText(first, clock),
       to: back ? dayLabel(last.startDate) : null,
     };

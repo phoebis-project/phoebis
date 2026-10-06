@@ -158,25 +158,25 @@ or the file `stats.subscription_costs_path` names (see [Statistics](statistics.m
 profile reports, with the 5-hour and the 7-day window each as a bar labeled as a multiple of the smallest tier's window
 (Pro's in the shipped model), and the week counted in full 5-hour windows. A Peak band switch, outside the band until
 turned, redraws the bars and the count for a request completing inside the band, where each window holds its capacity
-factor of its capacity. Peak band draws this week, Monday to Sunday in the browser's time zone, the band's hours on each
-day it covers and a marker at now, under a caption that names this week's hours here and in the zone the cost model
-defines them in. Beside the grid it says whether the band runs now and until when, names the next change of the local
-hours that opens within ten weeks, from its first day to the last before the hours return, or as lasting when they have
-not returned 26 weeks on, and draws each window's capacity factor. A zone the browser's time zone data lacks leaves the
-band's state unknown: the card gives the band's hours in that zone alone, says the browser cannot read it, and draws no
-grid and no change.
+factor of its capacity. Peak band draws this week, Monday to Sunday in the browser's time zone (on a day the band is
+off, the week of the next day it covers), the band's hours on each day it covers and a marker at now when that week
+holds it, under a caption that names this week's hours here and in the zone the cost model defines them in. Beside the
+grid it says whether the band runs now and until when, names the next change of the local hours that opens within ten
+weeks, from its first day to the last before the hours return, or as lasting when they have not returned 26 weeks on,
+and draws each window's capacity factor. A zone the browser's time zone data lacks leaves the band's state unknown: the
+card gives the band's hours in that zone alone, says the browser cannot read it, and draws no grid and no change.
 
 **Plan rates.** The share of a tier's 5-hour and 7-day window that a token count of each type spends, per model, for a
 request completing outside or inside the band. The tab opens on the cost model's anchor tier, Max 20x, outside the band,
 at one million tokens; with a zone the browser cannot read it opens inside the band and asks the reader to pick the
-state. A tier chooser, the band control, and a token field in millions with quick picks for 100k, 1M and
-10M redraw the table and its caption. A weight column draws each model's weight on the 5-hour window against the
-lightest weighted model's, and reads "by window" for a model whose shared weight is `null` and that an override weighs
-on some windows, its title naming each window's weight. A Fable model with a weight on the Fable week carries a Fable
-week row under its 7-day group, priced on that week, half the 7-day window. On the plan a cache read costs 0.025 of an
-input token in the shipped model, and a 1-hour write spends the same share as a 5-minute one. A cell past a full window
-takes a warning tint. The models the cost model does not weigh on any window follow a divider, each cell a dash and the
-weight "not weighed".
+state. A tier chooser, the band control, and a token field in millions with quick picks for 100k, 1M and 10M redraw the
+table and its caption. A weight column draws each model's weight on the 5-hour window against the lightest weighted
+model's, and reads "by window" for a model whose shared weight is `null` and that an override weighs on some windows,
+its title naming each window's weight. A Fable model with a weight on the Fable week carries a Fable week row under its
+7-day group, priced on that week, half the 7-day window. On the plan a cache read costs 0.025 of an input token in the
+shipped model, and a 1-hour write spends the same share as a 5-minute one. A cell past a full window takes a warning
+tint. The models the cost model does not weigh on any window follow a divider, each cell a dash and the weight "not
+weighed".
 
 **API prices.** The dollar list prices per million tokens: input, cache read, cache write 5m, cache write 1h and output,
 with a fast-mode row under each model that serves fast mode, at its fast cells, what an answer served fast costs.
