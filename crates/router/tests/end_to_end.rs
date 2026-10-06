@@ -3695,8 +3695,8 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .count();
     assert_eq!(
         pngs,
-        22,
-        "eleven views in two themes under {}",
+        24,
+        "twelve views in two themes under {}",
         shots.display()
     );
     println!("screenshots: {}", shots.display());

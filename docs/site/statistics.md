@@ -396,6 +396,43 @@ The drawer shows the captured request and response bodies, each with Copy, which
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
 
+### Routing log
+
+The Routing log sits under the Diagnostics heading at the foot of the navigation, above the Expert view switch. The
+heading shows while the expert view is on or while the log is open, and every link into the log opens it whatever the
+mode, without turning the expert view on.
+
+The log is one stream of routing decisions and the state changes that explain them, newest first, 25 rows a page with
+First, Previous and Next. A row reads the time, with a decision's request beneath it as a link to the request's drawer,
+the kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), the
+session's first eight characters with the agent beneath, the account (a move names the account it left and the one it
+landed on, a pool or key event names its pool or key), the model, By and Fact, and Details, which opens the request's
+drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it (`static
+rung`), the strategy and the tier's priority (`Pace P0`), where a hold waited (`cohort`, `session pin`), what exhausted
+the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for a
+renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so, one labeled value or
+two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a time the row's
+own time already gives. Every account, key, pool, model, session and request a row names is a link, and a column with
+nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
+
+The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
+then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
+page's address, so a filtered view is a link, a reload keeps it and Back returns to the view before it: `from` and `to`
+as ISO instants (`2026-09-16T14:15:00.000Z`), `accounts`, `keys`, `kinds`, `models` and `pools` as comma lists, and
+`session` and `request`. A `kinds` value replaces the default set, so `kinds=probe` lists probe decisions alone. A
+filter change returns to the first page, and Refresh reads up to now.
+
+A request filter opens a line above the table that counts the request's decisions and events and offers three
+widenings: this session (an hour either side of the request's time), this account (a quarter hour either side) and this
+minute (the clock minute that holds it). Any other narrowing draws the same line with what the rows are narrowed to,
+the range and the page's count. Clear returns to the unfiltered view.
+
+Follow, off by default, reads the list every 5 seconds with the range ending now. A new row lands at the top in the
+accent tint until the next read, a filter change keeps Follow on, and paging to an older page turns it off.
+
+Probe decisions and warm prefix expiries are hidden by default. The Kinds filter lists them last in their groups, and
+its button reads "Kinds (2 hidden)" until another set is chosen.
+
 ### Analytics
 
 A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every chart

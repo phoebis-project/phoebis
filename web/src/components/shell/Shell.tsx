@@ -5,10 +5,12 @@ import { useSession } from '@/app/session';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { useAsync } from '@/lib/hooks';
 import { Button, Descriptions, Segmented, Toast, Toggle } from '@/components/ui/primitives';
-import { IconActivity, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
+import { IconActivity, IconChart, IconGauge, IconGrid, IconKey, IconLayers, IconList, IconMonitor, IconMoon, IconRoute, IconSessions, IconShield, IconSliders, IconSun, IconUser } from '@/components/ui/icons';
 import { Mark } from '@/components/ui/Mark';
 
-const NAV: { icon: ReactNode; label: string; to: string }[] = [
+type NavItem = { icon: ReactNode; label: string; to: string };
+
+const NAV: NavItem[] = [
   { to: '/', label: 'Dashboard', icon: <IconGrid size={16} /> },
   { to: '/observe', label: 'Observe', icon: <IconActivity size={16} /> },
   { to: '/quota', label: 'Quota', icon: <IconGauge size={16} /> },
@@ -22,6 +24,9 @@ const NAV: { icon: ReactNode; label: string; to: string }[] = [
   { to: '/settings', label: 'Settings', icon: <IconSliders size={16} /> },
 ];
 
+/** The views an operator opens to see why the router did what it did, kept out of the way of the daily ones. */
+const DIAGNOSTICS: NavItem[] = [{ to: '/routing-log', label: 'Routing log', icon: <IconRoute size={16} /> }];
+
 export const PAGE_TITLES: Record<string, string> = {
   '/': 'Dashboard',
   '/accounts': 'Accounts',
@@ -32,6 +37,7 @@ export const PAGE_TITLES: Record<string, string> = {
   '/pools': 'Pools',
   '/quota': 'Quota',
   '/requests': 'Requests',
+  '/routing-log': 'Routing log',
   '/sessions': 'Sessions',
   '/settings': 'Settings',
 };
@@ -44,6 +50,8 @@ export function Shell() {
   const [navOpen, setNavOpen] = useState(false);
   const base = `/${pathname.split('/')[1] ?? ''}`;
   const title = PAGE_TITLES[base] ?? 'Phoebis Router';
+  // A link into a diagnostics view leaves the mode as the reader set it, so the group shows for the open view too.
+  const diagnostics = expertView || DIAGNOSTICS.some((d) => pathname.startsWith(d.to));
 
   useEffect(() => {
     document.title = `${title} - Phoebis Router`;
@@ -66,6 +74,17 @@ export function Shell() {
               <span>{item.label}</span>
             </NavLink>
           ))}
+          {diagnostics && (
+            <div className="nav__group">
+              <span className="nav__heading">Diagnostics</span>
+              {DIAGNOSTICS.map((item) => (
+                <NavLink key={item.to} to={item.to} className={({ isActive }) => `nav__link ${isActive ? 'is-active' : ''}`}>
+                  {item.icon}
+                  <span>{item.label}</span>
+                </NavLink>
+              ))}
+            </div>
+          )}
         </nav>
         <div className="sidebar__status">
           <label className="sidebar__row sidebar__expert" title="Shows every field of the pool and key dialogs, the advanced ones included.">

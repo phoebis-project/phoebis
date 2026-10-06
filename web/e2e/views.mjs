@@ -101,6 +101,8 @@ const VIEWS = [
   { path: '/analytics#cache-warming', title: 'Analytics', wait: '.analytics-section#cache-warming', slug: 'analytics-cache-warming', mockOnly: true },
   { path: '/sessions', title: 'Sessions', wait: '.sessions-table', slug: 'sessions' },
   { path: '/settings', title: 'Settings', wait: '.envdl', slug: 'settings' },
+  // Last, so every view before it draws the instant it drew without the log in the pass.
+  { path: '/routing-log', title: 'Routing log', wait: '.routing-log__table', slug: 'routing-log' },
 ];
 
 /** How far the page's clock moves per step. */
@@ -588,6 +590,71 @@ async function expertRow(theme) {
   measurements.push(`${theme} /pools sidebar status ${JSON.stringify(read)}`);
   if (JSON.stringify(read.rows) !== '["expert","version"]') failures.push(`${theme} /pools: the sidebar status holds ${read.rows.join(', ') || 'nothing'}, not the Expert view row then the version row`);
   else if (read.expert.bottom > read.version.top) failures.push(`${theme} /pools: the Expert view row ends at ${read.expert.bottom}, past the version row's top at ${read.version.top}`);
+}
+
+/**
+ * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 150 px at both, Account 246 then 256, Model only
+ * at 1440, and the table as wide as its card with nothing to scroll sideways. The pass's viewport is put back for the
+ * shot.
+ */
+async function routingLogColumns(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const table = document.querySelector('.routing-log__table');
+      const wrap = table?.closest('.table-wrap');
+      if (!table || !wrap) return null;
+      const width = (name) => {
+        const th = table.querySelector(`thead th.routing-log__${name}`);
+        return th && getComputedStyle(th).display !== 'none' ? Math.round(th.getBoundingClientRect().width * 10) / 10 : null;
+      };
+      return {
+        account: width('account'),
+        client: wrap.clientWidth,
+        fact: width('fact'),
+        model: width('model'),
+        scroll: wrap.scrollWidth,
+        table: Math.round(table.getBoundingClientRect().width * 10) / 10,
+      };
+    });
+  for (const { account, height, model, width } of [
+    { account: 246, height: 800, model: null, width: 1280 },
+    { account: 256, height: 900, model: 150, width: 1440 },
+  ]) {
+    const where = `at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify(got)}`);
+    if (got === null) {
+      say(`${where} no table to measure`);
+      continue;
+    }
+    if (got.fact !== 150) say(`${where} the Fact column is ${got.fact}px, not 150px`);
+    if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
+    if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
+    if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
+    if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+}
+
+/**
+ * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
+ * Routing log link, and with the log open both are drawn and the link is the active one.
+ */
+async function diagnosticsNav(theme, path) {
+  const read = await page.evaluate(() => {
+    const link = document.querySelector('nav.nav a[href="/routing-log"]');
+    return { active: link?.classList.contains('is-active') ?? null, heading: document.querySelector('nav.nav .nav__heading')?.textContent ?? null, link: link !== null };
+  });
+  measurements.push(`${theme} ${path} diagnostics group ${JSON.stringify(read)}`);
+  if (path === '/routing-log') {
+    if (read.heading !== 'Diagnostics' || !read.link || read.active !== true) failures.push(`${theme} /routing-log: the sidebar reads ${JSON.stringify(read)}, not the Diagnostics heading over the active Routing log link`);
+  } else if (read.heading !== null || read.link) {
+    failures.push(`${theme} ${path}: the sidebar draws ${JSON.stringify(read)} with the expert view off`);
+  }
 }
 
 async function poolChips(theme) {
@@ -3319,6 +3386,7 @@ try {
       if (view.path === '/') {
         await sidebarBrand(theme);
         await attentionLine(theme);
+        await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {
         await remainingCards(theme);
@@ -3375,6 +3443,10 @@ try {
       if (view.path === '/requests') {
         await requestsTableFits(theme);
         await speedFilter(theme);
+      }
+      if (view.path === '/routing-log') {
+        await routingLogColumns(theme);
+        await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/quota') {
         await quotaChips(theme);

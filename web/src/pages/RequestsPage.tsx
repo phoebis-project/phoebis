@@ -1,8 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { Attempt, CapturedBodies, CohortHold, PinReleaseReason, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage, WindowId } from '@/api/types';
-import { PIN_RELEASE_REASON_VALUES, REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import { REQUEST_OUTCOME_VALUES } from '@/api/decode';
+import type { Attempt, CapturedBodies, CohortHold, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage, WindowId } from '@/api/types';
 import { SelectionTrace } from '@/components/SelectionTrace';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
@@ -17,6 +17,7 @@ import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
 import { bytesDropped, fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortAgent, shortId, shortModel, tokensTotal } from '@/lib/format';
 import { useAsync, useCommittedText, useNow } from '@/lib/hooks';
+import { releaseLabel } from '@/lib/routingLog';
 import { requestTrail } from '@/lib/trail';
 import { StatusBadge } from './DashboardPage';
 
@@ -163,34 +164,6 @@ const OUTCOME_LABEL: Record<Attempt['outcome'], string> = {
   transport_error: 'Transport error',
   upstream_error: 'Upstream error',
 };
-
-const PIN_RELEASE_LABEL: Record<PinReleaseReason, string> = {
-  attempted: 'already tried by this request',
-  budget: 'account at its budget',
-  client_error: 'client error',
-  cooldown: 'account cooled',
-  deleted: 'account deleted',
-  disconnected: 'account disconnected',
-  expired: 'pin idle past the affinity window',
-  fast_credits: 'usage credits unavailable for fast mode',
-  fast_rate_limit: 'fast lane rate limited',
-  funding_required: 'funding required',
-  overage: 'in overage',
-  paused: 'account paused',
-  reauth_required: 'needs re-auth',
-  released: 'nothing else stood against the account',
-  spent: 'window spent',
-  subscription_ended: 'subscription ended',
-  unpaired: 'account unpaired',
-  unserved: 'model no longer served here',
-};
-const releaseLabel = (reasons: unknown): string =>
-  (Array.isArray(reasons) ? reasons : [])
-    .map((r) => {
-      const reason = PIN_RELEASE_REASON_VALUES.find((v) => v === r);
-      return reason === undefined ? String(r) : PIN_RELEASE_LABEL[reason];
-    })
-    .join(', ');
 
 /** Where a hold waited: its cohort's account, else the last one it waited on. */
 const heldOn = (h: CohortHold) => h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? 'an account';
@@ -686,7 +659,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
               if (e.kind === 'pin_expired') {
                 return (
                   <p className="attempt__migration" key={`${e.at}-${e.accountId ?? '-'}`} title={fmtAbsolute(e.at)}>
-                    Session released from {e.accountId ? <Link to={`/accounts/${e.accountId}`}>{e.accountId}</Link> : '-'}: {releaseLabel(e.detail?.reasons)}
+                    Session released from {e.accountId ? <Link to={`/accounts/${e.accountId}`}>{e.accountId}</Link> : '-'}: {(Array.isArray(e.detail?.reasons) ? (e.detail?.reasons as unknown[]) : []).map((reason) => releaseLabel(String(reason))).join(', ')}
                   </p>
                 );
               }

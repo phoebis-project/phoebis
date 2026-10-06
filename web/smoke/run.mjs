@@ -6312,6 +6312,237 @@ m.unmount();
   held.unmount();
 }
 
+// The routing log on the pinned clock. Every figure a check names is read from the mock's own answer to the query the
+// page sent, so the story's counts are the route's rules over the story rather than a number kept here.
+{
+  const HOUR = 3_600_000;
+  const MINUTE = 60_000;
+  const iso = (ms) => new Date(ms).toISOString();
+  const clockText = (at) => new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
+  const LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'spent', 'state', 'to', 'turn', 'until', 'was'];
+  const trs = (page) => [...page.container.querySelectorAll('.routing-log__table tbody tr')].filter((tr) => !tr.querySelector('.skeleton, .empty'));
+  const cell = (tr, name) => tr?.querySelector(`td.routing-log__${name}`) ?? null;
+  const scope = (page) => page.container.querySelector('.routing-log__scope');
+  const kindsFilter = (page) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Kinds'));
+  const params = (href) => Object.fromEntries([...new URL(href ?? '/', 'http://phoebis.test').searchParams].sort(([a], [b]) => a.localeCompare(b)));
+
+  const spy = countCalls('listRoutingLog');
+  m = await mount('/routing-log', { now: CLOCK_ORIGIN });
+  spy.restore();
+  const sent = spy.calls[0]?.[0] ?? {};
+  const hour = await api.listRoutingLog({ ...sent, limit: 200 });
+  const hidden = await api.listRoutingLog({ from: sent.from, kinds: ['probe', 'warm_prefix_expired'], limit: 200, to: sent.to });
+  {
+    const drawn = trs(m);
+    const expected = hour.rows.slice(0, 25);
+    const times = drawn.map((tr) => cell(tr, 'time')?.firstChild?.textContent ?? '');
+    const ids = drawn.map((tr) => cell(tr, 'time')?.querySelector('a')?.textContent ?? null);
+    const hiddenIds = hidden.rows.filter((r) => r.type === 'decision').map((r) => r.requestId);
+    const badges = drawn.map((tr) => cell(tr, 'kind')?.querySelector('.badge')?.textContent ?? '');
+    results.push({
+      name: '/routing-log lists the default hour, 25 rows, newest first, with the two hidden kinds absent',
+      ok:
+        sent.from === iso(CLOCK_ORIGIN - HOUR) && sent.to === iso(CLOCK_ORIGIN) && sent.kinds === undefined && sent.limit === 25 && sent.cursor === undefined &&
+        hour.rows.length === 44 && hour.nextCursor === null && drawn.length === 25 &&
+        JSON.stringify(times) === JSON.stringify(expected.map((r) => clockText(r.at))) &&
+        JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
+        hidden.rows.length === 2 && hidden.rows.some((r) => r.type === 'decision' && r.probe) && hidden.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') &&
+        !ids.some((id) => hiddenIds.includes(id)) && !badges.includes('warm prefix expired'),
+      missing: [JSON.stringify(sent), `${hour.rows.length} rows in the hour, ${drawn.length} drawn`, `hidden ${hidden.rows.map((r) => r.kind).join(',')}`, times.join(' ')],
+    });
+  }
+  {
+    const filter = kindsFilter(m);
+    const trigger = filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+    filter?.querySelector('.mselect__trigger')?.click();
+    await m.settle(100);
+    const entries = [...(filter?.querySelectorAll('.mselect__group, .mselect__option') ?? [])].map((e) => (e.classList.contains('mselect__group') ? `# ${e.textContent?.trim()}` : `${e.getAttribute('aria-selected') === 'true' ? '+' : '-'} ${e.textContent?.trim()}`));
+    filter?.querySelector('.mselect__trigger')?.click();
+    await m.settle(100);
+    const events = entries.indexOf('# Events');
+    const probes = await api.listRoutingLog({ from: sent.from, kinds: ['probe'], limit: 25, to: sent.to });
+    const only = await mount(`/routing-log?kinds=probe`, { now: CLOCK_ORIGIN });
+    const listed = trs(only).map((tr) => cell(tr, 'time')?.querySelector('a')?.textContent ?? null);
+    const onlyTrigger = kindsFilter(only)?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+    only.unmount();
+    results.push({
+      name: '/routing-log the Kinds trigger reads 2 hidden and kinds=probe lists the probe alone',
+      ok:
+        trigger === 'Kinds (2 hidden)' && entries[0] === '# Decisions' && events > 0 && entries[events - 1] === '- Probe decisions (hidden by default)' && entries[entries.length - 1] === '- Warm prefix expired (hidden by default)' &&
+        entries.filter((e) => e.startsWith('-')).length === 2 && entries.filter((e) => e.startsWith('+')).length === 34 &&
+        probes.rows.length === 1 && probes.rows[0].probe && JSON.stringify(listed) === JSON.stringify([probes.rows[0].requestId]) && onlyTrigger === 'Kinds (1)',
+      missing: [trigger, ...entries.slice(0, 3), `${probes.rows.length} probes, listed ${listed.join(',')}`, onlyTrigger],
+    });
+  }
+  {
+    // The day's rows too, so the cell is read on every kind the story holds and not on the last hour's alone.
+    const day = await mount(`/routing-log?from=${iso(CLOCK_ORIGIN - 24 * HOUR)}&to=${iso(CLOCK_ORIGIN)}&kinds=${['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed', 'probe', 'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'fast_credits_changed', 'ledger_gap', 'overage_ended', 'overage_started', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset'].join(',')}`, { now: CLOCK_ORIGIN });
+    const wrong = [];
+    let pairs = 0;
+    for (const page of [m, day]) {
+      for (const tr of trs(page)) {
+        const fact = cell(tr, 'fact');
+        const time = (cell(tr, 'time')?.firstChild?.textContent ?? '').slice(0, 5);
+        const drawn = [...(fact?.querySelectorAll('.fact__pair') ?? [])];
+        if (drawn.length === 0) {
+          if (fact?.textContent?.trim() !== '-' || fact.querySelector('.muted') === null) wrong.push(`${time}: ${fact?.textContent}`);
+          continue;
+        }
+        if (drawn.length > 2 || fact.querySelectorAll('.fact').length !== 1) wrong.push(`${time}: ${drawn.length} pairs`);
+        for (const p of drawn) {
+          pairs += 1;
+          const label = p.children[0];
+          const value = p.children[1];
+          const ok = p.children.length === 2 && label.classList.contains('fact__label') && LABELS.includes(label.textContent ?? '') && value.classList.contains('fact__value') && value.classList.contains('mono') && (value.textContent ?? '') !== '' && value.textContent !== time;
+          if (!ok) wrong.push(`${time}: ${p.textContent}`);
+        }
+      }
+    }
+    day.unmount();
+    results.push({ name: '/routing-log every Fact cell is a label from the table in its slot and a mono value, one pair or two and never a third, no value the Time column gives', ok: pairs > 40 && wrong.length === 0, missing: [`${pairs} pairs`, ...wrong.slice(0, 8)] });
+  }
+  {
+    // A link in reads the request a quarter hour either side of its first decision.
+    const id = 'req_1d9c3e55-0b2';
+    const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 2 * HOUR), limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows.filter((r) => r.type === 'decision');
+    const at = Math.min(...own.map((r) => Date.parse(r.at)));
+    const from = at - 15 * MINUTE;
+    const to = Math.min(at + 15 * MINUTE, CLOCK_ORIGIN);
+    const page = await mount(`/routing-log?request=${id}&from=${iso(from)}&to=${iso(to)}`, { now: CLOCK_ORIGIN });
+    const counted = await api.listRoutingLog({ from: iso(from), limit: 25, request: id, to: iso(to) });
+    const line = scope(page);
+    const head = line?.querySelector('span')?.textContent ?? '';
+    const widen = Object.fromEntries([...(line?.querySelectorAll('.routing-log__widen a') ?? [])].map((a) => [a.textContent?.trim(), params(a.getAttribute('href'))]));
+    const newest = own.find((r) => r.accountId !== null);
+    const minute = Math.floor(at / MINUTE) * MINUTE;
+    const expected = {
+      'this session': { from: iso(at - HOUR), session: own[0].sessionId, to: iso(Math.min(at + HOUR, CLOCK_ORIGIN)) },
+      'this account': { accounts: newest.accountId, from: iso(at - 15 * MINUTE), to: iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN)) },
+      'this minute': { from: iso(minute), to: iso(minute + MINUTE - 1) },
+    };
+    const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+    results.push({
+      name: "/routing-log a request filter draws the scope line with the three widenings' URLs",
+      ok:
+        own.length === 2 && counted.counts !== null && head === `Request ${id}: ${plural(counted.counts.decisions, 'decision')}, ${plural(counted.counts.events, 'event')}` &&
+        line?.querySelector('a')?.getAttribute('href') === `/requests/${id}` && JSON.stringify(widen) === JSON.stringify(expected) && (line?.textContent ?? '').includes('Widen to') &&
+        [...(line?.querySelectorAll('button') ?? [])].some((b) => b.textContent?.trim() === 'Clear'),
+      missing: [head, JSON.stringify(widen), JSON.stringify(expected)],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/routing-log?accounts=secondary', { now: CLOCK_ORIGIN });
+    const answer = await api.listRoutingLog({ accountIds: ['secondary'], from: iso(CLOCK_ORIGIN - HOUR), limit: 25, to: iso(CLOCK_ORIGIN) });
+    const line = scope(page);
+    const said = line?.querySelector('span')?.textContent ?? '';
+    const n = trs(page).length;
+    const expected = `Narrowed to account secondary, 13:30 to 14:30: ${n} row${n === 1 ? '' : 's'}${answer.nextCursor ? ', more' : ''}`;
+    results.push({
+      name: '/routing-log a narrowing draws the scope line without widenings',
+      ok: n > 0 && n === answer.rows.length && said === expected && line?.querySelector('.routing-log__widen') === null && line?.querySelector('a')?.getAttribute('href') === '/accounts/secondary',
+      missing: [said, expected],
+    });
+    page.unmount();
+  }
+  {
+    // Mounted two seconds before the hour's newest row, so the first poll's range is the first to reach it.
+    const top = hour.rows[0];
+    const t = Date.parse(top.at);
+    const page = await mount('/routing-log', { now: t - 2_000 });
+    const firstBefore = cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '';
+    const toggle = () => page.container.querySelector('.routing-log__follow button[role="switch"]');
+    const label = () => page.container.querySelector('.routing-log__follow .secondary')?.textContent ?? '';
+    toggle()?.click();
+    await page.settle(100);
+    const polls = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle();
+    const first = trs(page)[0];
+    const call = polls.calls[0]?.[0] ?? {};
+    const landed = { calls: polls.calls.length, cursor: call.cursor, isNew: first?.classList.contains('is-new') ?? false, time: cell(first, 'time')?.firstChild?.textContent ?? '', to: call.to };
+    tick(5_000);
+    await page.settle();
+    const after = { calls: polls.calls.length, isNew: page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length };
+    polls.restore();
+    results.push({
+      name: '/routing-log Follow polls every 5 s with the range\'s end at now and lands a new row in the accent tint',
+      ok:
+        firstBefore !== clockText(top.at) && label() === 'polling every 5 s, the range ends now' &&
+        landed.calls === 1 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === clockText(top.at) &&
+        after.calls === 2 && after.isNew === 0,
+      missing: [firstBefore, label(), JSON.stringify(landed), JSON.stringify(after)],
+    });
+    [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'Next page')?.click();
+    await page.settle();
+    results.push({ name: '/routing-log paging to an older page turns Follow off', ok: toggle()?.getAttribute('aria-checked') === 'false' && label() === 'Follow' && trs(page).length > 0, missing: [String(toggle()?.getAttribute('aria-checked')), label()] });
+    page.unmount();
+  }
+  {
+    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys\?key=[^&]+$/, model: /^\/models\?model=[^&]+$/, pool: /^\/pools\?pool=[^&]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?session=[^&]+$/ };
+    const wrong = [];
+    const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
+    const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
+    for (const tr of trs(m)) {
+      const time = cell(tr, 'time')?.firstChild?.textContent ?? '';
+      const say = (what) => wrong.push(`${time}: ${what}`);
+      if (!all(cell(tr, 'time'), ['request'])) say(`time ${hrefs(cell(tr, 'time'))}`);
+      const session = cell(tr, 'session')?.querySelector('a');
+      if (session && params(session.getAttribute('href')).session !== session.getAttribute('title')) say(`session ${session.getAttribute('href')}`);
+      if (!session && cell(tr, 'session')?.querySelector('.muted')?.textContent !== '-') say('session drawn as text');
+      if (!all(cell(tr, 'account'), ['account', 'pool', 'key', 'model'])) say(`account ${hrefs(cell(tr, 'account'))}`);
+      const named = [...(cell(tr, 'account')?.querySelectorAll('.routing-log__cut:not(.routing-log__model-under) > :not(.muted)') ?? [])].filter((e) => e.tagName !== 'A');
+      if (named.length) say(`account names ${named.map((e) => e.textContent).join(',')} outside a link`);
+      if (!all(cell(tr, 'model'), ['model'])) say(`model ${hrefs(cell(tr, 'model'))}`);
+      if (!all(cell(tr, 'fact'), ['account', 'key', 'pool', 'model'])) say(`fact ${hrefs(cell(tr, 'fact'))}`);
+      if (!all(cell(tr, 'link'), ['request'])) say(`details ${hrefs(cell(tr, 'link'))}`);
+    }
+    const links = [...m.container.querySelectorAll('.routing-log__table tbody a')].map((a) => a.getAttribute('href') ?? '');
+    // The hour's first page names the revoked key in a refusal's Fact.
+    const factLinks = [...m.container.querySelectorAll('.routing-log__fact .fact__value a')].map((a) => a.getAttribute('href'));
+    results.push({
+      name: '/routing-log every entity in a row is a link with the route of its kind',
+      ok: wrong.length === 0 && links.length > 50 && links.every((h) => Object.values(ROUTE).some((r) => r.test(h))) && factLinks.length > 0,
+      missing: [`${links.length} links`, ...wrong.slice(0, 8), ...factLinks.slice(0, 3)],
+    });
+  }
+  {
+    const page = await mount('/routing-log?session=zzzzzzzz', { now: CLOCK_ORIGIN });
+    const t = page.text();
+    results.push({ name: '/routing-log the empty state names the range', ok: trs(page).length === 0 && t.includes('No decisions or events in this range.') && t.includes('Widen the range or clear a filter.'), missing: [t.slice(0, 200)] });
+    page.unmount();
+  }
+  {
+    // Read while the view is open with the expert view off, then on the Dashboard with it off and on.
+    const group = m.container.querySelector('nav.nav > .nav__group');
+    const open = {
+      active: group?.querySelector('a.nav__link.is-active')?.getAttribute('href') ?? null,
+      heading: group?.querySelector('.nav__heading')?.textContent ?? null,
+      links: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim()).slice(-2),
+      title: [document.title, m.container.querySelector('.topbar__title')?.textContent],
+    };
+    const expert = localStorage.getItem('phoebis.expertView');
+    localStorage.removeItem('phoebis.expertView');
+    const off = await mount('/');
+    const dashboard = { heading: off.container.querySelector('.nav__heading') !== null, link: off.container.querySelector('a[href="/routing-log"]') !== null };
+    off.unmount();
+    localStorage.setItem('phoebis.expertView', 'on');
+    const on = await mount('/');
+    const expertOn = { active: on.container.querySelector('a[href="/routing-log"]')?.classList.contains('is-active') ?? null, heading: on.container.querySelector('nav.nav > .nav__group .nav__heading')?.textContent ?? null };
+    on.unmount();
+    if (expert === null) localStorage.removeItem('phoebis.expertView');
+    else localStorage.setItem('phoebis.expertView', expert);
+    results.push({
+      name: '/routing-log sits under the Diagnostics heading, active while open, and the heading is absent on the Dashboard with the expert view off',
+      ok:
+        open.heading === 'Diagnostics' && open.active === '/routing-log' && JSON.stringify(open.links) === JSON.stringify(['Settings', 'Routing log']) && JSON.stringify(open.title) === JSON.stringify(['Routing log - Phoebis Router', 'Routing log']) &&
+        !dashboard.heading && !dashboard.link && expertOn.heading === 'Diagnostics' && expertOn.active === false,
+      missing: [JSON.stringify(open), JSON.stringify(dashboard), JSON.stringify(expertOn)],
+    });
+  }
+  m.unmount();
+}
+
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters
 // before the change read; Try again reads the new filters again.
 {

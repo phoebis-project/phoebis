@@ -346,6 +346,10 @@ A non-portable request, one whose body references a `file_id`, a `container`, or
 its live pin's account or not at all. With affinity off or no live pin, it runs the normal selection instead, and the
 account-scoped reference it carries may then not resolve.
 
+Every decision is recorded in full, with what the engine read in the order it read it, and read in the console's
+[routing log](statistics.md#routing-log). The log's words for the rules, the rungs, the partitions and the strategies
+are the ones this page uses.
+
 ### The windows the router works from
 
 The router judges a subscription account by the 5-hour and the 7-day window every model shares, and a model family's own
