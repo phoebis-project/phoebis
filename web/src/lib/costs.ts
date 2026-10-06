@@ -239,32 +239,38 @@ export const bandRuns = (costs: SubscriptionCosts, fromMs: number, toMs: number)
   return runs;
 };
 
-/** The next week within ten weeks whose local hours differ from this week's, with its dates and hours; null when none.
- *  `from` and `to` label the first and last day that differ, `text` the first band run starting on them. The change
- *  `lasting` holds into the week after, as one zone's clock change does until the other zone changes too, and
- *  `moved` says the band's own zone changed its clocks rather than the viewing one. */
+/** The next change of the band's local hours within ten weeks; null when none. The change is the stretch of days from
+ *  the first that differs from the same weekday this week until a day reads as this week's again, a day without a
+ *  band continuing it. `from` and `to` label the stretch's first day and its last day with a band, `text` the first
+ *  band run starting in it. The change is `lasting` when the stretch runs to the end of the scan, as one zone's clock
+ *  change does until the other zone changes too, and `moved` says the band's own zone changed its clocks rather than
+ *  the viewing one. */
 export const nextLocalChange = (
   costs: SubscriptionCosts,
   at: number,
   zone: string,
   clock: (minutes: number) => string = hhmm,
 ): { from: string; lasting: boolean; moved: boolean; text: string; to: string } | null => {
-  // One week past the tenth, so a change found there can still be told lasting or not.
-  const { days, monday } = weeksAround(costs, at, zone, 11 * 7 + 8);
+  const { days, monday } = weeksAround(costs, at, zone, 10 * 7 + 8);
   const usual = days.slice(monday, monday + 7).map((d) => JSON.stringify(d.runs));
-  const differing = (week: number) => days.slice(monday + week * 7, monday + week * 7 + 7).filter((d, i) => JSON.stringify(d.runs) !== usual[i]);
-  for (let week = 1; week <= 10; week += 1) {
-    const differ = differing(week);
-    if (differ.length === 0) continue;
+  const differs = (i: number) => JSON.stringify(days[i].runs) !== usual[(i - monday) % 7];
+  // The scan's last day is cut short, so it never counts as a change.
+  const end = days.length - 1;
+  for (let i = monday + 7; i < end; i += 1) {
+    if (!differs(i)) continue;
+    // A weekend inside a shifted stretch has no band on either side, so it does not end the stretch.
+    let j = i;
+    while (j + 1 < end && (differs(j + 1) || days[j + 1].runs.length === 0)) j += 1;
+    let last = j;
+    while (last > i && days[last].runs.length === 0) last -= 1;
     // A run carried over midnight from the day before is no start of its own, so the first true start names the hours.
-    const start = differ.flatMap((d) => d.starts).find((t) => !inBand(costs, t - STEP)) ?? null;
-    const changed = start ?? onGrid(at) + week * 7 * DAY;
+    const start = days.slice(i, j + 1).flatMap((d) => d.starts).find((t) => !inBand(costs, t - STEP)) ?? null;
     return {
-      from: differ[0].label,
-      lasting: differing(week + 1).length > 0,
-      moved: offsetIn(changed, costs.peak.zone) !== offsetIn(onGrid(at), costs.peak.zone),
+      from: days[i].label,
+      lasting: j === end - 1,
+      moved: start !== null && offsetIn(start, costs.peak.zone) !== offsetIn(onGrid(at), costs.peak.zone),
       text: start === null ? 'no band' : runFrom(costs, start, zone, clock),
-      to: differ[differ.length - 1].label,
+      to: days[last].label,
     };
   }
   return null;

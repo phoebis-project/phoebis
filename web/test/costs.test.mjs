@@ -127,19 +127,23 @@ test("the band's runs between two instants are its own hours, clipped to the bou
   assert.deepEqual(d.bandRuns(costs, at(7, 15), at(7, 17)), [run(at(7, 15), at(7, 17))]);
 });
 
-test("the next change of the band's local hours is the first later week whose runs differ, and none in its own zone", () => {
+test("the next change of the band's local hours runs from the first later day that differs until a day reads as this week's, and none in its own zone", () => {
   // Berlin leaves summer time on 25 October and Los Angeles on 1 November: for that one week the band reads an hour
-  // earlier in Berlin, and the week after reads as this one.
+  // earlier in Berlin, and the Monday after reads as this week's.
   assert.deepEqual(d.nextLocalChange(costs, NOW, 'Europe/Berlin'), { from: 'Mon 26 Oct', lasting: false, moved: false, text: '13:00 to 19:00', to: 'Fri 30 Oct' });
+  // Los Angeles enters summer time on 14 March 2027 and Berlin on 28 March: the two weeks between read an hour
+  // earlier in Berlin, the weekend inside them continuing the stretch, and 29 March reads as this week again.
+  assert.deepEqual(d.nextLocalChange(costs, Date.parse('2027-02-24T12:00:00Z'), 'Europe/Berlin'), { from: 'Mon 15 Mar', lasting: false, moved: true, text: '13:00 to 19:00', to: 'Fri 26 Mar' });
   assert.equal(d.nextLocalChange(costs, NOW, 'America/Los_Angeles'), null);
 });
 
-test("a change of the band's local hours that holds past its first week lasts, and names whose clocks move", () => {
-  // UTC keeps its clock, so once Los Angeles leaves summer time the band reads an hour later for good.
-  assert.deepEqual(d.nextLocalChange(costs, NOW, 'UTC'), { from: 'Mon 2 Nov', lasting: true, moved: true, text: '13:00 to 19:00', to: 'Fri 6 Nov' });
+test("a change of the band's local hours that runs to the end of the ten weeks lasts, and names whose clocks move", () => {
+  // UTC keeps its clock, so once Los Angeles leaves summer time the band reads an hour later for good; the stretch
+  // runs to the last whole day the ten weeks scan, Wednesday 2 December.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'UTC'), { from: 'Mon 2 Nov', lasting: true, moved: true, text: '13:00 to 19:00', to: 'Wed 2 Dec' });
   // Auckland enters summer time on 27 September while Los Angeles keeps its clock: the band starts at 01:00 there,
-  // on the Tuesday a Monday in Los Angeles falls on.
-  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Pacific/Auckland'), { from: 'Tue 29 Sep', lasting: true, moved: false, text: '01:00 to 07:00', to: 'Sat 3 Oct' });
+  // on the Tuesday a Monday in Los Angeles falls on, and Los Angeles' own change in November moves it once more.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Pacific/Auckland'), { from: 'Tue 29 Sep', lasting: true, moved: false, text: '01:00 to 07:00', to: 'Thu 3 Dec' });
 });
 
 test("the band's local hours read on the clock a caller passes, and a run past midnight says it ends the next day", () => {
