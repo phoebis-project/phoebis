@@ -1,13 +1,14 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode, type RefObject } from 'react';
-import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Dot, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
+import { Area, AreaChart, Bar, BarChart, CartesianGrid, Cell, ComposedChart, Dot, Line, LineChart, ReferenceArea, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
 import { Link, useLocation, useNavigate, useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
 import { foldGroups, foldRequests, loadSessionRequests, sumGroups } from '@/api/fold';
-import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint } from '@/api/types';
+import type { AccountRollup, AnalyticsGroup, AnalyticsGroupBy, AnalyticsPoint, AnalyticsQuery, BurnGroup, BurnPoint, CacheMissReason, CostSplit, LatencyHistograms, MemberBudget, PlacementRow, RequestLog, RewritePoint, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { OUTCOME_SERIES, PERCENTILES, PROBE_SERIES, TOKEN_SERIES, accountColor, type ChartInk } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { ChartTooltip, Legend, type TooltipRow } from '@/components/charts/Tooltip';
+import { CostReferenceLink } from '@/components/ui/CostReference';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
 import { Tile } from '@/components/ui/Tile';
@@ -17,6 +18,7 @@ import { CONVERSATION_CLASSES, MAX_BURN_LINES, foldBurn, isolatedSlots, moveLabe
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
 import { clock } from '@/lib/clock';
+import { bandRuns } from '@/lib/costs';
 import { fmtAbsolute, fmtCompact, fmtDayShort, fmtDuration, fmtHourTick, fmtInt, fmtMs, fmtPct, fmtPeriodEnd, fmtShare, fmtUsd, fmtUsdTick, shortId, toLocalInput, upperFirst, usdTickDigits } from '@/lib/format';
 import { BUCKET_COUNT, BUCKET_EDGES, PERCENTILE_HINT, histogramCount } from '@/lib/histogram';
 import { useAsync, useCommittedText, type Loaded } from '@/lib/hooks';
@@ -576,7 +578,7 @@ export function AnalyticsPage() {
             </Select>
             <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
           </div>
-          <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} rangeEndMs={burn.data?.endMs} readAt={burn.data?.readAt} sized={sized} />
+          <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} costs={burnSettings.data?.subscriptionCosts ?? null} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} rangeEndMs={burn.data?.endMs} readAt={burn.data?.readAt} sized={sized} />
           <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
         </Section>
       )}
@@ -906,7 +908,7 @@ function ChartCard({
   height?: number;
   legend?: { color: string; dashed?: boolean; label: string; shape?: 'line' | 'rect'; title?: string; value?: ReactNode }[];
   loading: boolean;
-  subtitle?: string;
+  subtitle?: ReactNode;
   title: string;
 }) {
   return (
@@ -1382,7 +1384,7 @@ const SPEND_NOTE = "Dollars per minute: Anthropic-key traffic, and a subscriptio
  *  answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode, tier unknown)', window_share: 'Other (fast mode)' };
 const PLAN_NOTE =
-  "The share of each subscription account's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
+  "The share of each subscription account's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band, whose hours are shaded";
 const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size, so no share of its windows is priced';
 const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
@@ -1407,6 +1409,7 @@ const isolatedDot = (values: (number | null)[], color: string) => {
  */
 function BurnCharts({
   answer,
+  costs,
   error,
   groupBy,
   loading,
@@ -1415,6 +1418,7 @@ function BurnCharts({
   sized,
 }: {
   answer: { bucketSeconds: number; points: BurnPoint[] } | null;
+  costs: SubscriptionCosts | null;
   error: string | null;
   groupBy: BurnGroup;
   loading: boolean;
@@ -1446,6 +1450,9 @@ function BurnCharts({
   const unpriced = lines.filter((l) => byAccount && !l.other && l.unit === 'unknown');
   const shareOf = (share: number | null) => (share === null ? '-' : fmtShare(share));
   const partial = rows[rows.length - 1]?.partial === true;
+  // The band's own hours over the instants the plan chart spans: the buckets are UTC multiples whose starts fall off
+  // the band's edges, so shading whole buckets would mark the wrong hours.
+  const band = useMemo(() => (costs === null || !byAccount || rows.length < 2 ? [] : bandRuns(costs, rows[0].at, rows[rows.length - 1].at)), [byAccount, costs, rows]);
   const partialCells = (opacity: number) => rows.map((r) => <Cell key={r.at} {...(r.partial ? { className: 'is-partial', fillOpacity: opacity * PARTIAL_TONE } : {})} />);
   // A bucket too short to set the scale would stretch the axis over a few seconds' rate, so the axis stops at the
   // buckets that set it and the short one runs past the top.
@@ -1513,7 +1520,11 @@ function BurnCharts({
       {byAccount && (
         <ChartCard
           title="Plan per hour"
-          subtitle={partial ? `${PLAN_NOTE}. ${PARTIAL_NOTE}` : PLAN_NOTE}
+          subtitle={
+            <>
+              {PLAN_NOTE}.{partial ? ` ${PARTIAL_NOTE}.` : ''} <CostReferenceLink tab="tiers" />
+            </>
+          }
           error={error}
           loading={loading}
           empty={
@@ -1560,7 +1571,8 @@ function BurnCharts({
         >
           <LineChart data={rows} margin={{ top: 8, right: 8, bottom: 0, left: 0 }}>
             <CartesianGrid vertical={false} stroke={ink.grid} />
-            <XAxis dataKey="at" {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
+            {/* A category axis places a reference area on its categories alone, so this one counts instants and ticks on the buckets. */}
+            <XAxis dataKey="at" type="number" scale="time" domain={['dataMin', 'dataMax']} ticks={rows.map((r) => r.at)} {...axis} tickLine={false} axisLine={{ stroke: ink.axis }} minTickGap={40} />
             <YAxis tickFormatter={(v: number) => fmtShare(v)} tickLine={false} axisLine={false} width={52} {...scaleTo(scaled.flatMap((r) => planned.flatMap(({ i }) => [r.fiveHour[i] ?? 0, r.sevenDay[i] ?? 0])))} />
             {/* Recharts drops null entries by default, and a bucket whose every share is null would lose its date, its dashes and the unpriced hint. */}
             <Tooltip
@@ -1573,6 +1585,9 @@ function BurnCharts({
                 ]),
               ])}
             />
+            {band.map((r) => (
+              <ReferenceArea key={r.from} x1={r.from} x2={r.to} fill={ink.series[6]} fillOpacity={0.34} ifOverflow="hidden" />
+            ))}
             {planned.flatMap(({ i, l }) => [
               // A null slot draws no point, and the gap stays since the lines do not connect across it.
               <Line key={`${i}-5h`} type="monotone" dataKey={(r: BurnRow) => r.fiveHour[i]} stroke={colorOf(l)} strokeWidth={2} dot={isolatedDot(rows.map((r) => r.fiveHour[i]), colorOf(l))} isAnimationActive={false} />,

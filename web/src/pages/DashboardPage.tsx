@@ -7,6 +7,7 @@ import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { AttentionLine } from '@/components/ui/AttentionLine';
+import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
@@ -73,7 +74,19 @@ export function DashboardPage() {
       )}
 
       <div className="grid-2">
-        <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window, weighed by tier" windowId="5h" accounts={accounts.data} costs={costs} now={now} failure={ringFailure} />
+        <RemainingCard
+          title="5h remaining"
+          subtitle={
+            <>
+              Subscription accounts, 5-hour window, weighed by tier. <CostReferenceLink tab="tiers" />
+            </>
+          }
+          windowId="5h"
+          accounts={accounts.data}
+          costs={costs}
+          now={now}
+          failure={ringFailure}
+        />
         <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window, weighed by tier" windowId="7d" accounts={accounts.data} costs={costs} now={now} failure={ringFailure} />
       </div>
 
@@ -124,7 +137,7 @@ function StatTile({ label, value, note, spark, color }: { color: string; label: 
   );
 }
 
-function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failure }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: string; title: string; windowId: '5h' | '7d' }) {
+function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failure }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: ReactNode; title: string; windowId: '5h' | '7d' }) {
   const figures = useMemo(() => (accounts && costs ? ringFigures(accounts, windowId, costs, now) : null), [accounts, costs, windowId, now]);
   return (
     <Card title={title} subtitle={subtitle}>

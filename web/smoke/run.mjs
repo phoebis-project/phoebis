@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtShare, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, planLabel, ratesOf, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, PageLink, planLabel, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -7835,168 +7835,6 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   await m.settle(200);
   results.push({ name: '/sessions Collapse all closes every row', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
 
-  // Cost reference. Every figure it draws is read against the decoded settings the mock answers, the files the
-  // fixtures captured, never against a literal.
-  const wired = decodeSettings(SETTINGS_WIRE);
-  const priceIds = wired.apiPrices.models.map((p) => p.model);
-  const costs = wired.subscriptionCosts;
-  const costLink = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Cost reference');
-  costLink?.click();
-  await m.settle(400);
-  const costDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/sessions cost reference dialog', costDlg?.textContent ?? '', [
-    'Cost reference',
-    'API list prices. A subscription account on plan quota spends the window share columns instead of money.',
-    'Model',
-    'Uncached input',
-    'Cache write 5m',
-    'Cache write 1h',
-    'Cache read',
-    'Output',
-    'Turns to pay off, 5m',
-    'Turns to pay off, 1h',
-    'Hold warm 1h, 5m + probes',
-    'Hold warm 1h, 1h + probe',
-    '1h pays off after',
-    '5-hour window',
-    '7-day window',
-    '5m write',
-    '1h write',
-    'Window share',
-    'from the subscription cost model the ledger ships',
-    'A dash is a model the plan meter has not weighed, or a tier it has not sized on the window',
-    'number of later turns that must read the prefix before writing it into the cache was cheaper than sending it uncached each turn',
-    'A 5-minute entry needs a probe about every 4 minutes to survive an idle hour, 15 in all; a 1-hour entry needs one.',
-    'cost of keeping one prefix token warm across one idle hour (one write plus the probe reads), as a multiple of sending that token once as uncached input; 2.75x means holding it warm costs 2.75 times sending it cold once',
-    'per prefix token',
-    'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client.',
-    'Without warming, the 1-hour entry wins after a 5-minute pause.',
-    ...priceIds,
-  ]);
-  {
-    const terms = [...(costDlg?.querySelectorAll('.cost-ref__notes dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
-    results.push({
-      name: '/sessions cost reference footnote is a definition list of six terms',
-      ok: JSON.stringify(terms) === JSON.stringify(['Per prefix token', 'Turns to pay off', 'Hold warm', 'Payoff', 'Fable 5.1', 'Window share']),
-      missing: terms,
-    });
-  }
-  const priceTable = costDlg?.querySelector('.cost-ref__prices');
-  const shareTable = costDlg?.querySelector('.cost-ref__shares');
-  const rowOf = (table, model) => [...(table?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === model);
-  const priceRow = (model) => [...(rowOf(priceTable, model)?.children ?? [])].map((td) => td.textContent?.trim());
-  const modelsOf = (table) => [...(table?.querySelectorAll('tbody tr:not(.cost-ref__fast)') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
-  const models = modelsOf(priceTable);
-  results.push({
-    name: "/sessions cost reference lists the price file's models in the file's order",
-    ok: models.length === Object.keys(SETTINGS_WIRE.api_prices.content.models).length && JSON.stringify(models) === JSON.stringify(priceIds) && models.every((n) => n.startsWith('claude-')),
-    missing: models,
-  });
-  // Every price row, then every weighted model no price row reads through its undated name, in the files' order.
-  const undatedPrices = new Set(priceIds.map((id) => id.replace(/-\d{8}$/, '')));
-  const shareModels = [...priceIds, ...Object.keys(costs.modelWeight).filter((id) => !undatedPrices.has(id))];
-  results.push({
-    name: "/sessions cost reference keeps the dollar table to its eleven columns and lists every model either file names below it in the window share table, in the files' order",
-    ok: [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(shareModels),
-    missing: modelsOf(shareTable),
-  });
-  // The dollar figures the page derives from a row, read here from the decoded row the same way.
-  const usd = (n) => `$${n.toFixed(2)}`;
-  const priceOf = (model) => wired.apiPrices.models.find((p) => p.model === model);
-  const turns = (p, write) => ((write - p.inputPerM) / (p.inputPerM - p.cacheReadPerM)).toFixed(1);
-  const held = (p, write, probes) => `${Number(((write + probes * p.cacheReadPerM) / p.inputPerM).toFixed(2))}x`;
-  const payoff = (p) => {
-    const minutes = Math.round((4 * (p.cacheWrite1hPerM - p.cacheWrite5mPerM)) / p.cacheReadPerM);
-    return minutes >= 60 ? 'never within 1h' : `${minutes} min`;
-  };
-  {
-    // The fast-mode row sits right under the model it prices, and only a model with fast cells has one.
-    const fastUnder = (model) => {
-      const next = rowOf(priceTable, model)?.nextElementSibling;
-      return next?.classList.contains('cost-ref__fast') ? [...next.children].map((td) => td.textContent?.trim()) : null;
-    };
-    const opus = fastUnder('claude-opus-5-5');
-    const fast = priceOf('claude-opus-5-5')?.fast;
-    results.push({
-      name: '/sessions cost reference lists Opus 5.5 with a fast-mode row at its fast cells',
-      ok: opus !== null && fast !== null && fast !== undefined && opus[0] === 'fast mode' && opus[1] === usd(fast.inputPerM) && opus[5] === usd(fast.outputPerM) && fastUnder('claude-sonnet-5') === null && shareTable?.querySelector('.cost-ref__fast') === null,
-      missing: opus ?? ['no fast-mode row under claude-opus-5-5'],
-    });
-  }
-  const fableRow = priceOf('claude-fable-5-1');
-  const fable = priceRow('claude-fable-5-1');
-  results.push({ name: '/sessions cost reference turns to pay off on cheap-read Fable', ok: fable[6] === turns(fableRow, fableRow.cacheWrite5mPerM) && fable[7] === turns(fableRow, fableRow.cacheWrite1hPerM), missing: fable });
-  const sonnetRow = priceOf('claude-sonnet-5');
-  const sonnet = priceRow('claude-sonnet-5');
-  results.push({ name: '/sessions cost reference turns to pay off on a standard model', ok: sonnet[6] === turns(sonnetRow, sonnetRow.cacheWrite5mPerM) && sonnet[7] === turns(sonnetRow, sonnetRow.cacheWrite1hPerM), missing: sonnet });
-  results.push({
-    name: '/sessions cost reference prices holding a prefix warm for an idle hour',
-    ok: sonnet[8] === held(sonnetRow, sonnetRow.cacheWrite5mPerM, 15) && sonnet[9] === held(sonnetRow, sonnetRow.cacheWrite1hPerM, 1) && sonnet[10] === payoff(sonnetRow),
-    missing: sonnet,
-  });
-  // The dialog's Fable 5.1 note says a 1-hour entry never pays off there, which holds while the file's cells say so.
-  results.push({ name: '/sessions cost reference says a 1h entry never pays off on Fable 5.1', ok: fable[10] === payoff(fableRow) && payoff(fableRow) === 'never within 1h', missing: fable });
-  const haikuRow = priceOf('claude-haiku-4-5');
-  const haiku = priceRow('claude-haiku-4-5');
-  results.push({
-    name: '/sessions cost reference prices Haiku 4.5 from the price file',
-    ok: haiku[1] === usd(haikuRow.inputPerM) && haiku[2] === usd(haikuRow.cacheWrite5mPerM) && haiku[3] === usd(haikuRow.cacheWrite1hPerM) && haiku[4] === usd(haikuRow.cacheReadPerM) && haiku[5] === usd(haikuRow.outputPerM),
-    missing: haiku,
-  });
-  // Input, cache read, 5m write, 1h write and output on the 5-hour window, then the same five on the 7-day one, each
-  // the share of the anchor tier's window one million tokens spend.
-  const plan = (model) => [...(rowOf(shareTable, model)?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
-  const anchor = anchorTier(costs);
-  const SHARE_TYPES = ['input', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h', 'output'];
-  const cellsFor = (model) => ['five_hour', 'seven_day'].flatMap((w) => {
-    const rates = ratesOf(costs, w, anchor, model);
-    return SHARE_TYPES.map((k) => (rates === null ? '-' : fmtShare(rates[k])));
-  });
-  const weighted = shareModels.filter((model) => ratesOf(costs, 'five_hour', anchor, model) !== null);
-  const wrong = shareModels.filter((model) => JSON.stringify(plan(model)) !== JSON.stringify(cellsFor(model)));
-  results.push({
-    name: '/sessions cost reference prices every type of a weighted model on both windows and draws each cell as the share rule gives it',
-    ok: weighted.length > 0 && weighted.every((model) => !plan(model).includes('-') && plan(model).length === 10) && wrong.length === 0,
-    missing: wrong.map((model) => `${model}: ${JSON.stringify(plan(model))} against ${JSON.stringify(cellsFor(model))}`),
-  });
-  {
-    // A Sunday evening in Los Angeles, outside the peak band, so the share is the cell's: one million input tokens.
-    const OUT = Date.UTC(2026, 8, 13, 20, 0);
-    const first = Object.keys(costs.modelWeight).find((model) => costs.modelWeight[model] !== null);
-    const share = first === undefined ? null : shareOf(costs, 'five_hour', anchor, first, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 1_000_000, output: 0 }, OUT);
-    results.push({
-      name: "/sessions cost reference's 5-hour input cell is the share one million input tokens spend",
-      ok: share !== null && bandFactor(costs, 'five_hour', OUT) === 1 && plan(first)[0] === fmtShare(share),
-      missing: [first ?? 'no weighted model', String(plan(first ?? '')[0]), share === null ? 'no share' : fmtShare(share)],
-    });
-  }
-  {
-    // The anchor's capacity over each other tier's, in the file's order.
-    const spends = (tier, w) => {
-      const [anchored, sized] = [costs.capacity[anchor][w], costs.capacity[tier][w]];
-      return anchored !== null && sized !== null && sized > 0 ? `a ${planLabel(tier)} account spends ${Number((anchored / sized).toPrecision(3))} times as much of its own` : `a ${planLabel(tier)} account's capacity is not measured on this window`;
-    };
-    const titleOf = (w) =>
-      `Share of a ${planLabel(anchor)} window per million tokens; ${Object.keys(costs.capacity)
-        .filter((tier) => tier !== anchor)
-        .map((tier) => spends(tier, w))
-        .join(', ')}`;
-    const groups = [...(shareTable?.querySelectorAll('thead tr:first-child th') ?? [])].slice(1).map((th) => [th.textContent?.trim(), th.getAttribute('title')]);
-    results.push({
-      name: "/sessions cost reference titles each window group with the other tiers' multiples from the capacities",
-      ok: JSON.stringify(groups) === JSON.stringify([['5-hour window', titleOf('fiveHour')], ['7-day window', titleOf('sevenDay')]]),
-      missing: groups.map((g) => g.join(': ')),
-    });
-  }
-  results.push({
-    name: '/sessions cost reference dashes Opus 4.8 and Sonnet 5, which the cost model does not weigh, on both windows',
-    ok: ['claude-opus-4-8', 'claude-sonnet-5'].every((model) => plan(model).length === 10 && plan(model).every((c) => c === '-')),
-    missing: ['claude-opus-4-8', 'claude-sonnet-5'].map((model) => `${model}: ${JSON.stringify(plan(model))}`),
-  });
-  const close = [...(costDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close');
-  close?.click();
-  await m.settle(200);
-
   const sessionId = cell(busyRow(), 'Session')?.getAttribute('title') ?? '';
   const jump = async (label) => (await openMenu(busyRow())).find((b) => b.textContent?.trim() === label);
   const chipText = () => [...m.container.querySelectorAll('.chip--removable')].map((c) => c.textContent?.trim() ?? '');
@@ -8108,6 +7946,384 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   }
 }
 m.unmount();
+
+// The cost reference, opened from each of its six entry points on the tab each names. Every figure it draws is read
+// against the decoded settings the mock answers, the files the fixtures captured, through lib/costs.ts and the page's
+// own formatting, never against a literal.
+{
+  const wired = decodeSettings(SETTINGS_WIRE);
+  const costs = wired.subscriptionCosts;
+  const prices = wired.apiPrices.models;
+  const anchor = anchorTier(costs);
+  const tiers = Object.keys(costs.capacity);
+  // A Sunday evening in Los Angeles, outside the peak band, and the pinned clock, inside it.
+  const OUT = Date.UTC(2026, 8, 13, 20, 0);
+  const TYPES = ['input', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h', 'output'];
+  const WINDOWS = ['five_hour', 'seven_day'];
+  const usage = (type, tokens) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0, [type]: tokens });
+  const figure = (n) => String(Number(n.toPrecision(3)));
+  const usd = (n) => `$${n.toFixed(4).replace(/(\.\d\d[1-9]?)0+$/, '$1')}`;
+  const pad = (n) => String(n).padStart(2, '0');
+  const utcClock = (t) => `${pad(new Date(t).getUTCHours())}:${pad(new Date(t).getUTCMinutes())}`;
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const tabsOf = (dlg) => [...(dlg?.querySelectorAll('[role="tab"]') ?? [])];
+  const selectedOf = (dlg) => tabsOf(dlg).find((t) => t.getAttribute('aria-selected') === 'true')?.textContent?.trim() ?? 'none';
+  const shownPanel = (dlg) => dlg?.querySelector('.cost-ref__panel:not([hidden])');
+  const pressedIn = (root, label) => [...(root?.querySelectorAll(`[aria-label="${label}"] button`) ?? [])].filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent?.trim());
+  const linkIn = (root) => [...(root?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cost reference');
+  // The dialog lives under the body, wherever its link sits.
+  const topDialog = () => [...document.querySelectorAll('dialog[open]')].pop();
+  const closeCost = async (page, dlg) => {
+    [...(dlg?.querySelector('.dialog__foot')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close')?.click();
+    await page.settle(200);
+    return dlg?.hasAttribute('open') === false;
+  };
+
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  linkIn(page.container.querySelector('.page-head'))?.click();
+  await page.settle(400);
+  const dlg = topDialog();
+  results.push({
+    name: "/sessions the head's Cost reference opens the dialog on Plan rates, between Tiers and peak band and API prices",
+    ok:
+      dlg?.querySelector('.dialog__title')?.textContent === 'Cost reference' &&
+      dlg?.querySelector('.dialog__subtitle')?.textContent === 'What a million tokens costs: in dollars at list price, and as a share of a subscription window.' &&
+      JSON.stringify(tabsOf(dlg).map((t) => t.textContent?.trim())) === JSON.stringify(['Tiers and peak band', 'Plan rates', 'API prices']) &&
+      selectedOf(dlg) === 'Plan rates' &&
+      dlg?.classList.contains('dialog--costs') === true,
+    missing: [selectedOf(dlg), ...tabsOf(dlg).map((t) => t.textContent?.trim() ?? '')],
+  });
+
+  // Plan rates.
+  const rates = () => shownPanel(dlg);
+  const pressed = (label) => pressedIn(rates(), label);
+  const spinner = () => rates()?.querySelector('input[aria-label="Tokens, in millions"]');
+  const caption = () => rates()?.querySelector('.cost-ref__caption b')?.textContent ?? '';
+  const bodyRows = () => [...(rates()?.querySelectorAll('tbody tr') ?? [])];
+  const mainRows = () => bodyRows().filter((r) => !r.classList.contains('cost-ref__sub') && !r.classList.contains('is-divider'));
+  const rowOf = (model) => mainRows().find((r) => r.children[0]?.textContent?.trim() === model);
+  const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
+  const weighted = Object.keys(SETTINGS_WIRE.subscription_costs.content.model_weight).filter((model) => costs.modelWeight[model] !== null);
+  const unweighted = prices.map((p) => p.model).filter((model) => weightOf(costs, model, 'five_hour') === null);
+  const fiveHourWeight = (model) => weightOf(costs, model, 'five_hour');
+  const lightest = weighted.reduce((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
+  const expected = (model, tier, tokens, at) => WINDOWS.flatMap((w) => TYPES.map((t) => fmtShare(shareOf(costs, w, tier, model, usage(t, tokens), at))));
+  const wrongCells = (tier, tokens, at) => weighted.filter((model) => JSON.stringify(cellsOf(rowOf(model))) !== JSON.stringify(expected(model, tier, tokens, at))).map((model) => `${model}: ${JSON.stringify(cellsOf(rowOf(model)))} against ${JSON.stringify(expected(model, tier, tokens, at))}`);
+  {
+    const divider = bodyRows().findIndex((r) => r.classList.contains('is-divider'));
+    const names = (rows) => rows.filter((r) => !r.classList.contains('cost-ref__sub')).map((r) => r.children[0]?.textContent?.trim());
+    const above = names(bodyRows().slice(0, divider));
+    const below = names(bodyRows().slice(divider + 1));
+    results.push({
+      name: "/sessions plan rates open on the anchor tier outside the band at one million tokens, the weighted models in the cost model's order and the unweighted ones under the divider in the price file's order",
+      ok:
+        JSON.stringify(pressed('Tier')) === JSON.stringify([planLabel(anchor)]) &&
+        JSON.stringify(pressed('Peak band')) === JSON.stringify(['Outside']) &&
+        spinner()?.value === '1' &&
+        spinner()?.getAttribute('min') === '0.1' &&
+        spinner()?.getAttribute('step') === '0.1' &&
+        JSON.stringify(pressed('Token count')) === JSON.stringify(['1M']) &&
+        JSON.stringify(above) === JSON.stringify(weighted) &&
+        JSON.stringify(below) === JSON.stringify(unweighted) &&
+        bodyRows()[divider]?.textContent === 'Not weighed by the subscription cost model: a share on any window reads a dash, and the analytics list the traffic under model unlisted' &&
+        caption() === `Share of a ${planLabel(anchor)} window per 1M tokens` &&
+        (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'A shaded cell is more than one full window.',
+      missing: [JSON.stringify(pressed('Tier')), JSON.stringify(pressed('Peak band')), spinner()?.value ?? 'no spinner', JSON.stringify(pressed('Token count')), JSON.stringify(above), JSON.stringify(below), caption()],
+    });
+  }
+  results.push({ name: '/sessions plan rates price every 5-hour and 7-day cell of a weighted model by the share rule for a million tokens of its type', ok: weighted.length > 0 && wrongCells(anchor, 1_000_000, OUT).length === 0, missing: wrongCells(anchor, 1_000_000, OUT) });
+  {
+    const fable = rowOf('claude-fable-5-1');
+    const week = fable?.nextElementSibling;
+    const weekCells = [...(week?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
+    const want = [...TYPES.map(() => ''), ...TYPES.map((t) => fmtShare(shareOf(costs, 'seven_day_fable', anchor, 'claude-fable-5-1', usage(t, 1_000_000), OUT)))];
+    results.push({
+      name: '/sessions plan rates carry a Fable week row under Fable 5.1, priced on its week alone',
+      ok: week?.classList.contains('cost-ref__sub') === true && week.children[0]?.textContent === 'Fable week' && JSON.stringify(weekCells) === JSON.stringify(want),
+      missing: [week?.children[0]?.textContent ?? 'no sub-row', JSON.stringify(weekCells), JSON.stringify(want)],
+    });
+  }
+  {
+    const opus5 = rowOf('claude-opus-5');
+    const heads = [...(rates()?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    const multiples = weighted.map((model) => rowOf(model)?.children[1]?.textContent?.trim());
+    const want = weighted.map((model) => `${figure(fiveHourWeight(model) / fiveHourWeight(lightest))}x`);
+    results.push({
+      name: "/sessions plan rates dash every cell of a model the cost model does not weigh, and weigh each other model against the lightest on the 5-hour window",
+      ok: cellsOf(opus5).length === 10 && cellsOf(opus5).every((c) => c === '-') && opus5?.children[1]?.textContent === 'not weighed' && heads[1] === 'Weight, 5-hour window' && JSON.stringify(multiples) === JSON.stringify(want),
+      missing: [JSON.stringify(cellsOf(opus5)), heads[1] ?? 'no weight head', JSON.stringify(multiples), JSON.stringify(want)],
+    });
+  }
+  {
+    // A model and its sub-rows share one stripe, and the stripes restart under the divider.
+    const stripes = (rows) => {
+      const wrong = [];
+      let n = -1;
+      for (const r of rows) {
+        if (r.classList.contains('is-divider')) {
+          n = -1;
+          continue;
+        }
+        if (!r.classList.contains('cost-ref__sub')) n += 1;
+        if (r.classList.contains('is-alt') !== (n % 2 === 1)) wrong.push(r.children[0]?.textContent?.trim() ?? '');
+      }
+      return wrong;
+    };
+    const wrong = stripes(bodyRows());
+    results.push({ name: '/sessions plan rates shade every second model with its sub-rows and restart under the divider', ok: wrong.length === 0 && bodyRows().some((r) => r.classList.contains('is-alt')), missing: wrong });
+  }
+  // A missing field fails the checks below rather than the run.
+  const type = (input, text) => {
+    if (!input) return;
+    setter.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  type(spinner(), '2.5');
+  await page.settle(200);
+  results.push({
+    name: '/sessions plan rates rescale every cell to the spinner and say so in the caption',
+    ok: caption() === `Share of a ${planLabel(anchor)} window per 2.5M tokens` && pressed('Token count').length === 0 && wrongCells(anchor, 2_500_000, OUT).length === 0,
+    missing: [caption(), JSON.stringify(pressed('Token count')), ...wrongCells(anchor, 2_500_000, OUT)],
+  });
+  [...(rates()?.querySelectorAll('[aria-label="Token count"] button') ?? [])].find((b) => b.textContent?.trim() === '10M')?.click();
+  await page.settle(200);
+  results.push({
+    name: '/sessions plan rates light the quick pick that matches the spinner',
+    ok: JSON.stringify(pressed('Token count')) === JSON.stringify(['10M']) && spinner()?.value === '10' && wrongCells(anchor, 10_000_000, OUT).length === 0,
+    missing: [JSON.stringify(pressed('Token count')), spinner()?.value ?? 'no spinner'],
+  });
+  [...(rates()?.querySelectorAll('[aria-label="Peak band"] button') ?? [])].find((b) => b.textContent?.trim() === 'Inside')?.click();
+  await page.settle(200);
+  {
+    const factor = bandFactor(costs, 'five_hour', CLOCK_ORIGIN);
+    const scaled = weighted.filter((model) => {
+      const cells = cellsOf(rowOf(model));
+      const five = TYPES.map((t) => fmtShare(shareOf(costs, 'five_hour', anchor, model, usage(t, 10_000_000), OUT) * factor));
+      return JSON.stringify(cells.slice(0, 5)) !== JSON.stringify(five);
+    });
+    const full = rates()?.querySelectorAll('td.is-full').length ?? 0;
+    // The Fable week's cells count too, priced on the model week its sub-row draws.
+    const windowsOf = (model) => [...WINDOWS, ...(rowOf(model)?.nextElementSibling?.classList.contains('cost-ref__sub') ? ['seven_day_fable'] : [])];
+    const over = weighted.flatMap((model) => windowsOf(model).flatMap((w) => TYPES.map((t) => shareOf(costs, w, anchor, model, usage(t, 10_000_000), CLOCK_ORIGIN)))).filter((s) => s >= 1).length;
+    results.push({
+      name: '/sessions plan rates inside the band weigh the 5-hour cells by the band factor, name the band in the caption, and tint every cell past a full window',
+      ok: factor > 1 && scaled.length === 0 && wrongCells(anchor, 10_000_000, CLOCK_ORIGIN).length === 0 && caption() === `Share of a ${planLabel(anchor)} window per 10M tokens, a request completing inside the peak band` && full === over && over > 0,
+      missing: [...scaled, caption(), `${full} tinted against ${over}`],
+    });
+  }
+  const pro = tiers.find((tier) => planLabel(tier) === 'Pro');
+  [...(rates()?.querySelectorAll('[aria-label="Tier"] button') ?? [])].find((b) => b.textContent?.trim() === 'Pro')?.click();
+  await page.settle(200);
+  results.push({
+    name: "/sessions plan rates on another tier price its own window's capacity",
+    ok: pro !== undefined && caption().startsWith('Share of a Pro window') && wrongCells(pro, 10_000_000, CLOCK_ORIGIN).length === 0,
+    missing: [caption(), ...wrongCells(pro ?? 'none', 10_000_000, CLOCK_ORIGIN)],
+  });
+
+  // API prices.
+  tabsOf(dlg).find((t) => t.textContent?.trim() === 'API prices')?.click();
+  await page.settle(200);
+  {
+    const panel = shownPanel(dlg);
+    const rows = [...(panel?.querySelectorAll('tbody tr') ?? [])];
+    const main = rows.filter((r) => !r.classList.contains('cost-ref__sub'));
+    const listed = main.map((r) => r.children[0]?.textContent?.trim());
+    const cells = (row) => [...(row?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
+    const priced = (p) => [p.inputPerM, p.cacheReadPerM, p.cacheWrite5mPerM, p.cacheWrite1hPerM, p.outputPerM].map(usd);
+    const wrong = prices.filter((p) => JSON.stringify(cells(main.find((r) => r.children[0]?.textContent?.trim() === p.model))) !== JSON.stringify(priced(p))).map((p) => p.model);
+    const opus = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5');
+    const fast = opus?.nextElementSibling;
+    const opusFast = prices.find((p) => p.model === 'claude-opus-5-5')?.fast;
+    const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => r.previousElementSibling?.children[0]?.textContent?.trim());
+    const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(r.classList.contains('cost-ref__sub') ? r.previousElementSibling : r) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
+    results.push({
+      name: "/sessions API prices list the price file's models in its order at its cells, a fast-mode row under each model with fast cells",
+      ok:
+        JSON.stringify(listed) === JSON.stringify(Object.keys(SETTINGS_WIRE.api_prices.content.models)) &&
+        wrong.length === 0 &&
+        fast?.classList.contains('cost-ref__sub') === true &&
+        fast.children[0]?.textContent === 'fast mode' &&
+        opusFast !== null &&
+        JSON.stringify(cells(fast)) === JSON.stringify(priced(opusFast)) &&
+        JSON.stringify(subs) === JSON.stringify(prices.filter((p) => p.fast !== null).map((p) => p.model)) &&
+        stripes.length === 0 &&
+        (panel?.querySelector('.cost-ref__caption b')?.textContent ?? '') === 'USD per million tokens at list price' &&
+        (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An Anthropic-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
+      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(subs), ...stripes],
+    });
+  }
+
+  // Tiers and peak band.
+  tabsOf(dlg).find((t) => t.textContent?.trim() === 'Tiers and peak band')?.click();
+  await page.settle(200);
+  {
+    const panel = shownPanel(dlg);
+    const card = (title) => [...(panel?.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent === title);
+    const tierCard = card('Windows by tier');
+    const rows = [...(tierCard?.querySelectorAll('tbody tr') ?? [])];
+    const heads = [...(tierCard?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    // A bar's label is its multiple; the week's figure leads its cell, the share each window takes after it.
+    const vals = (col) => rows.map((r) => (col === 3 ? r.children[col]?.querySelector('.cost-ref__val')?.firstChild?.textContent?.trim() : r.children[col]?.querySelector('.cost-ref__val')?.textContent?.trim()));
+    const segs = () => rows.map((r) => r.children[3]?.querySelectorAll('.cost-ref__segs span').length);
+    const smallest = tiers.find((tier) => windowMultiple(costs, tier, 'five_hour') === 1);
+    const wantMultiples = (w) => tiers.map((tier) => `${figure(windowMultiple(costs, tier, w))}x`);
+    const wantWeeks = (inside) => tiers.map((tier) => figure(fullWindowsAWeek(costs, tier, inside)));
+    const stripes = rows.filter((r, n) => r.classList.contains('is-alt') !== (n % 2 === 1)).length;
+    const before = { five: vals(1), seven: vals(2), weeks: vals(3), segs: segs() };
+    results.push({
+      name: "/sessions Windows by tier names each tier with its key, sizes both windows against the smallest tier's, and counts the full 5-hour windows a week outside the band",
+      ok:
+        JSON.stringify(rows.map((r) => r.querySelector('.cost-ref__tier-name')?.textContent)) === JSON.stringify(tiers.map(planLabel)) &&
+        JSON.stringify(rows.map((r) => r.querySelector('.cost-ref__tier-key')?.textContent)) === JSON.stringify(tiers) &&
+        JSON.stringify(heads) === JSON.stringify(['Tier', '5-hour window', '7-day window', 'Full 5-hour windows a week']) &&
+        tierCard?.querySelector('.card__subtitle')?.textContent === `How much each tier's windows hold, against ${planLabel(smallest)}` &&
+        JSON.stringify(before.five) === JSON.stringify(wantMultiples('five_hour')) &&
+        JSON.stringify(before.seven) === JSON.stringify(wantMultiples('seven_day')) &&
+        JSON.stringify(before.weeks) === JSON.stringify(wantWeeks(false)) &&
+        JSON.stringify(before.segs) === JSON.stringify(tiers.map((tier) => Math.round(fullWindowsAWeek(costs, tier, false)))) &&
+        stripes === 0 &&
+        tierCard?.querySelector('[aria-label="Tier"]') === null &&
+        JSON.stringify([...(tierCard?.children ?? [])].filter((el) => !el.matches('[data-descriptions]')).map((el) => el.tagName)) === JSON.stringify(['HEADER', 'TABLE']) &&
+        JSON.stringify(pressedIn(tierCard, 'Peak band')) === JSON.stringify(['Outside']),
+      missing: [JSON.stringify(before), JSON.stringify(heads), tierCard?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle'],
+    });
+    [...(tierCard?.querySelectorAll('[aria-label="Peak band"] button') ?? [])].find((b) => b.textContent?.trim() === 'Inside')?.click();
+    await page.settle(200);
+    results.push({
+      name: '/sessions the band switch counts the full 5-hour windows a week inside the band and keeps the multiples',
+      ok: JSON.stringify(vals(3)) === JSON.stringify(wantWeeks(true)) && JSON.stringify(segs()) === JSON.stringify(tiers.map((tier) => Math.round(fullWindowsAWeek(costs, tier, true)))) && JSON.stringify(vals(1)) === JSON.stringify(before.five),
+      missing: [JSON.stringify(vals(3)), JSON.stringify(wantWeeks(true))],
+    });
+
+    // The band at the pinned clock in UTC, read through inBand: the week's days, the runs on each, and the next flip.
+    const band = card('Peak band');
+    const tracks = [...(band?.querySelectorAll('.cost-ref__band-track') ?? [])];
+    const days = [...(band?.querySelectorAll('.cost-ref__band-day') ?? [])];
+    const DAY = 86_400_000;
+    const monday = CLOCK_ORIGIN - (CLOCK_ORIGIN % DAY) - ((new Date(CLOCK_ORIGIN).getUTCDay() + 6) % 7) * DAY;
+    const quarters = (from) => Array.from({ length: 96 }, (_, i) => from + i * 900_000);
+    const banded = Array.from({ length: 7 }, (_, d) => quarters(monday + d * DAY).some((t) => inBand(costs, t)));
+    const label = (t) => {
+      const part = (o) => new Date(t).toLocaleDateString('en-US', { ...o, timeZone: 'UTC' });
+      return `${part({ weekday: 'short' })} ${part({ day: 'numeric' })} ${part({ month: 'short' })}`;
+    };
+    const today = days.findIndex((d) => d.classList.contains('is-today'));
+    const start = quarters(monday).find((t) => inBand(costs, t));
+    const end = quarters(monday).find((t) => t > start && !inBand(costs, t));
+    const { fromHour, toHour, zone } = costs.peak;
+    const city = zone.split('/').pop().replace(/_/g, ' ');
+    const wantCaption = `Mon to Fri, ${utcClock(start)} to ${utcClock(end)} here (UTC). In ${city}: Mon to Fri, ${pad(fromHour)}:00 to ${pad(toHour)}:00.`;
+    let flip = CLOCK_ORIGIN + 900_000;
+    while (inBand(costs, flip) === inBand(costs, CLOCK_ORIGIN)) flip += 900_000;
+    const left = Math.round((flip - CLOCK_ORIGIN) / 60_000);
+    const wantNow = `Inside the peak band now, until ${utcClock(flip)} (${Math.floor(left / 60)} h ${pad(left % 60)} min)`;
+    const factor = SETTINGS_WIRE.subscription_costs.content.peak.capacity_factor;
+    const factorText = (f) => (f === 1 ? `no band, holds ${Math.round(f * 100)}%` : `holds ${Math.round(f * 100)}%, a share costs ${figure(1 / f)}x`);
+    const factors = [...(band?.querySelectorAll('.cost-ref__factor .cost-ref__val') ?? [])].map((v) => v.textContent);
+    results.push({
+      name: "/sessions the peak band draws this week's seven days in the browser's zone, a run on each banded day, now on today's track, the caption, the now line and each window's factor",
+      ok:
+        tracks.length === 7 &&
+        JSON.stringify(days.map((d) => d.textContent)) === JSON.stringify(Array.from({ length: 7 }, (_, d) => label(monday + d * DAY))) &&
+        JSON.stringify(tracks.map((t) => t.querySelectorAll('.cost-ref__band-run').length)) === JSON.stringify(banded.map((b) => (b ? 1 : 0))) &&
+        banded.filter(Boolean).length === 5 &&
+        days[today]?.textContent === label(CLOCK_ORIGIN) &&
+        tracks.findIndex((t) => t.querySelector('.cost-ref__band-now') !== null) === today &&
+        band?.querySelector('.cost-ref__band-lead')?.textContent === wantCaption &&
+        inBand(costs, CLOCK_ORIGIN) &&
+        band?.querySelector('.cost-ref__band-text .cost-ref__now')?.textContent === wantNow &&
+        JSON.stringify(factors) === JSON.stringify([factorText(factor.five_hour), factorText(factor.seven_day)]),
+      missing: [JSON.stringify(days.map((d) => d.textContent)), JSON.stringify(tracks.map((t) => t.querySelectorAll('.cost-ref__band-run').length)), band?.querySelector('.cost-ref__band-lead')?.textContent ?? 'no caption', wantCaption, band?.querySelector('.cost-ref__band-text .cost-ref__now')?.textContent ?? 'no now line', wantNow, JSON.stringify(factors)],
+    });
+  }
+  {
+    const chips = [...(dlg?.querySelectorAll('.dialog__foot .chip') ?? [])].map((c) => [c.textContent, c.getAttribute('title')]);
+    const titleOf = (source, key, path) => (source === 'shipped' ? `The table this release ships. A copy at ${key}${path === null ? '' : ` (${path})`} would replace it at the next start.` : `Read from ${path}, set by ${key}.`);
+    const want = [
+      [`API prices, effective ${effectiveLabel(wired.apiPrices.effective)}, ${wired.apiPrices.source}`, titleOf(wired.apiPrices.source, 'stats.api_prices_path', wired.storage.apiPricesPath)],
+      [`Subscription cost model, effective ${effectiveLabel(costs.effective)}, ${costs.source}`, titleOf(costs.source, 'stats.subscription_costs_path', wired.storage.subscriptionCostsPath)],
+    ];
+    results.push({ name: "/sessions the cost reference's footer names each table's date and source, its key and path in the title", ok: JSON.stringify(chips) === JSON.stringify(want), missing: chips.map((c) => c.join(' | ')) });
+    // Every sentence the dialog draws, its titles among them, joins no two clauses with a semicolon.
+    const said = [dlg?.textContent ?? '', ...[...(dlg?.querySelectorAll('[title]') ?? [])].map((el) => el.getAttribute('title') ?? '')].filter((t) => t.includes(';'));
+    results.push({ name: '/sessions no sentence of the cost reference, its titles among them, carries a semicolon', ok: said.length === 0, missing: said.map((t) => t.slice(0, 160)) });
+  }
+  results.push({ name: '/sessions Close closes the cost reference', ok: await closeCost(page, dlg), missing: [] });
+  page.unmount();
+
+  // The other five entry points, each on the tab it names.
+  const opened = async (page, link) => {
+    link?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const tab = dlg?.classList.contains('dialog--costs') ? selectedOf(dlg) : 'no cost reference';
+    await closeCost(page, dlg);
+    return tab;
+  };
+  localStorage.setItem('phoebis.expertView', 'on');
+  const pools = await mount('/pools');
+  [...pools.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await pools.settle(300);
+  const poolDlg = pools.container.querySelector('dialog[open]');
+  // Each field by the hint it carries, the link inside the hint or, for Write cost, under the field's label.
+  const near = (groupLabel, words) => {
+    const hint = [...(group(poolDlg, groupLabel)?.querySelectorAll('.field__hint') ?? [])].find((h) => (h.textContent ?? '').includes(words));
+    return linkIn(hint) ?? linkIn(hint?.closest('.field'));
+  };
+  const fromPools = [
+    ['Warm sessions', await opened(pools, near('Load shedding', 'A warm session rewrites its cache where it lands'))],
+    ['Write cost', await opened(pools, near('Cache TTL', 'Plan writes apply while an account spends plan quota'))],
+    ['Daily probe cost cap', await opened(pools, near('Keepalive', 'Plan-funded probes do not count here.'))],
+  ];
+  pools.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  results.push({
+    name: "/pools the pool dialog's Warm sessions hint opens the cost reference on Plan rates, its Write cost and probe cost cap hints on API prices",
+    ok: JSON.stringify(fromPools.map(([, tab]) => tab)) === JSON.stringify(['Plan rates', 'API prices', 'API prices']),
+    missing: fromPools.map((p) => p.join(': ')),
+  });
+  const dash = await mount('/');
+  const ring = [...dash.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === '5h remaining');
+  const ringSubtitle = ring?.querySelector('.card__subtitle')?.textContent ?? '';
+  const fromDash = await opened(dash, linkIn(ring?.querySelector('.card__subtitle')));
+  dash.unmount();
+  results.push({ name: "/ the 5-hour ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 5-hour window, weighed by tier. Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
+
+  // The plan chart shades the band's own hours over the instants it spans, one area per run of bandRuns, on the 7-day
+  // range's six-hour buckets and on a custom range's daily ones. jsdom lays nothing out, so the chart reads a browser's
+  // size here.
+  const measure = window.HTMLElement.prototype.getBoundingClientRect;
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+  };
+  let answer = null;
+  const read = api.getAnalyticsBurn.bind(api);
+  api.getAnalyticsBurn = async (...args) => (answer = await read(...args));
+  const analytics = await mount('/analytics#burn', { now: CLOCK_ORIGIN });
+  const plan = () => [...analytics.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
+  const fromAnalytics = await opened(analytics, linkIn(plan()?.querySelector('.card__subtitle')));
+  const shaded = () => {
+    const ats = [...new Set((answer?.points ?? []).map((p) => Date.parse(p.at)))].sort((a, b) => a - b);
+    return { areas: plan()?.querySelectorAll('.recharts-reference-area').length ?? 0, bucket: answer?.bucketSeconds, runs: ats.length < 2 ? 0 : bandRuns(costs, ats[0], ats[ats.length - 1]).length };
+  };
+  [...analytics.container.querySelectorAll('.segmented[aria-label="Range"] button')].find((b) => b.textContent?.trim() === '7d')?.click();
+  await analytics.settle(800);
+  const week = shaded();
+  [...analytics.container.querySelectorAll('.segmented[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
+  await analytics.settle(100);
+  type(analytics.container.querySelector('input[aria-label="From"]'), new Date(CLOCK_ORIGIN - 45 * 86_400_000).toISOString().slice(0, 16));
+  await analytics.settle(800);
+  const custom = shaded();
+  analytics.unmount();
+  delete api.getAnalyticsBurn;
+  window.HTMLElement.prototype.getBoundingClientRect = measure;
+  results.push({ name: "/analytics the plan chart's note opens the cost reference on Tiers and peak band", ok: fromAnalytics === 'Tiers and peak band', missing: [fromAnalytics] });
+  results.push({
+    name: "/analytics the plan chart shades one area per run of the peak band over the instants it spans, on six-hour and on daily buckets",
+    ok: week.bucket === 21_600 && week.runs > 0 && week.areas === week.runs && custom.bucket === 86_400 && custom.runs > 0 && custom.areas === custom.runs,
+    missing: [JSON.stringify(week), JSON.stringify(custom)],
+  });
+}
 
 
 // A failed settings read draws About's error state with Try again rather than a skeleton for ever; the client block

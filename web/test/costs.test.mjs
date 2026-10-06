@@ -76,3 +76,85 @@ test('a peak zone the browser cannot resolve prices out of band', () => {
   assert.equal(d.inBand(unzoned, IN), false);
   close(d.shareOf(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), IN), 0.02, 'the out-of-band share inside the hours, 2 / 100');
 });
+
+// The band in a zone. Wednesday 16 September 2026 at 14:30 UTC, 07:30 in Los Angeles: inside the test table's band of
+// weekdays 5 to 11 there, which reads 12:00 to 18:00 UTC while Los Angeles keeps summer time.
+const NOW = Date.parse('2026-09-16T14:30:00Z');
+const HOUR = 3_600_000;
+const run = (from, to) => ({ from, to });
+const clock24 = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
+const WEEK_LABELS = ['Mon 14 Sep', 'Tue 15 Sep', 'Wed 16 Sep', 'Thu 17 Sep', 'Fri 18 Sep', 'Sat 19 Sep', 'Sun 20 Sep'];
+
+test("the week holding an instant runs Monday to Sunday in the viewing zone, the band's runs per day in its minutes", () => {
+  const week = d.bandWeek(costs, NOW, 'America/Los_Angeles');
+  assert.deepEqual(week.map((day) => day.label), WEEK_LABELS);
+  assert.deepEqual(week.map((day) => day.date), ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18', '2026-09-19', '2026-09-20']);
+  assert.deepEqual(week.map((day) => day.today), [false, false, true, false, false, false, false]);
+  // 5 to 11 in the band's own zone, minutes 300 to 660, on the five weekdays alone.
+  assert.deepEqual(week.map((day) => day.runs), [[run(300, 660)], [run(300, 660)], [run(300, 660)], [run(300, 660)], [run(300, 660)], [], []]);
+});
+
+test('the band draws where it falls in another zone: shifted, at a half-hour offset, and across midnight', () => {
+  const runsIn = (zone) => d.bandWeek(costs, NOW, zone).map((day) => day.runs);
+  // Berlin at UTC+2 reads 14:00 to 20:00, Kolkata at UTC+5:30 17:30 to 23:30.
+  assert.deepEqual(runsIn('Europe/Berlin'), [[run(840, 1200)], [run(840, 1200)], [run(840, 1200)], [run(840, 1200)], [run(840, 1200)], [], []]);
+  assert.deepEqual(runsIn('Asia/Kolkata'), [[run(1050, 1410)], [run(1050, 1410)], [run(1050, 1410)], [run(1050, 1410)], [run(1050, 1410)], [], []]);
+  // Tokyo at UTC+9 reads 21:00 to 03:00: each weekday's run ends on the next day, so Saturday carries Friday's tail.
+  const tokyo = d.bandWeek(costs, NOW, 'Asia/Tokyo');
+  assert.deepEqual(tokyo.map((day) => day.label), WEEK_LABELS);
+  const night = [run(0, 180), run(1260, 1440)];
+  assert.deepEqual(tokyo.map((day) => day.runs), [[run(1260, 1440)], night, night, night, night, [run(0, 180)], []]);
+});
+
+test('the band says whether an instant is inside it and when that next flips, and a band that never flips names no instant', () => {
+  assert.deepEqual(d.bandNow(costs, NOW), { at: Date.parse('2026-09-16T18:00:00Z'), inside: true });
+  assert.deepEqual(d.bandNow(costs, Date.parse('2026-09-16T18:00:00Z')), { at: Date.parse('2026-09-17T12:00:00Z'), inside: false });
+  const always = { ...costs, peak: { ...costs.peak, fromHour: 0, toHour: 24, weekdays: false } };
+  assert.deepEqual(d.bandNow(always, NOW), { at: null, inside: true });
+});
+
+test("the band's runs between two instants are its own hours, clipped to the bounds, never a bucket's", () => {
+  // A week of standard time from Monday 7 December 2026: 5 to 11 in Los Angeles at UTC-8 is 13:00 to 19:00 UTC.
+  const at = (day, hour) => Date.UTC(2026, 11, day, hour);
+  const week = d.bandRuns(costs, at(7, 0), at(14, 0));
+  assert.deepEqual(week, [7, 8, 9, 10, 11].map((day) => run(at(day, 13), at(day, 19))));
+  assert.ok(week.every((r) => r.from % (6 * HOUR) !== 0), 'no run starts on a six-hour bucket boundary');
+  // Sixty days hold eight weeks and four weekdays: forty-four runs on the same hours.
+  const sixty = d.bandRuns(costs, at(7, 0), at(7, 0) + 60 * 24 * HOUR);
+  assert.equal(sixty.length, 44);
+  assert.ok(sixty.every((r) => new Date(r.from).getUTCHours() === 13 && r.to - r.from === 6 * HOUR), 'every run 13:00 to 19:00 UTC');
+  assert.ok(sixty.every((r) => r.from % (24 * HOUR) !== 0), 'no run starts on a midnight bucket boundary');
+  assert.deepEqual(d.bandRuns(costs, at(7, 15), at(7, 17)), [run(at(7, 15), at(7, 17))]);
+});
+
+test("the next change of the band's local hours is the first later week whose runs differ, and none in its own zone", () => {
+  // Berlin leaves summer time on 25 October and Los Angeles on 1 November: for that one week the band reads an hour
+  // earlier in Berlin.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Europe/Berlin'), { from: 'Mon 26 Oct', text: '13:00 to 19:00', to: 'Fri 30 Oct' });
+  assert.equal(d.nextLocalChange(costs, NOW, 'America/Los_Angeles'), null);
+});
+
+test("the caption names the band in the viewing zone beside the zone the file defines it in, or once where they are one", () => {
+  assert.equal(d.bandCaption(costs, NOW, 'UTC', clock24), 'Mon to Fri, 12:00 to 18:00 here (UTC). In Los Angeles: Mon to Fri, 05:00 to 11:00.');
+  assert.equal(d.bandCaption(costs, NOW, 'America/Los_Angeles', clock24), 'Mon to Fri, 05:00 to 11:00 in Los Angeles (America/Los_Angeles), the zone the cost model names.');
+});
+
+test("a tier's window reads as a multiple of the smallest sized tier's on that window", () => {
+  assert.equal(d.smallestTier(costs, 'five_hour'), 'default_claude_ai');
+  // Team's week has no capacity, so the week's smallest is Pro's 50.
+  assert.equal(d.smallestTier(costs, 'seven_day'), 'default_claude_ai');
+  const multiples = (window) => ['default_claude_ai', 'default_claude_max_5x', MAX_20X, 'default_claude_team'].map((tier) => d.windowMultiple(costs, tier, window));
+  // 5, 25, 100 and 10 over 5; 50, 250 and 1000 over 50, Team's week unsized.
+  assert.deepEqual(multiples('five_hour'), [1, 5, 20, 2]);
+  assert.deepEqual(multiples('seven_day'), [1, 5, 20, null]);
+});
+
+test('the full 5-hour windows a week are the week over the window, each at its own band factor inside the band', () => {
+  close(d.fullWindowsAWeek(costs, MAX_20X, false), 10, 'Max 20x outside, 1000 / 100');
+  close(d.fullWindowsAWeek(costs, MAX_20X, true), 20, 'Max 20x inside, 1000 / (100 x 0.5)');
+  close(d.fullWindowsAWeek(costs, 'default_claude_ai', false), 10, 'Pro outside, 50 / 5');
+  close(d.fullWindowsAWeek(costs, 'default_claude_ai', true), 20, 'Pro inside, 50 / (5 x 0.5)');
+  assert.equal(d.fullWindowsAWeek(costs, 'default_claude_team', false), null, "Team's unsized week");
+  const bandedWeek = { ...costs, peak: { ...costs.peak, capacityFactor: { fiveHour: 0.5, sevenDay: 0.5 } } };
+  close(d.fullWindowsAWeek(bandedWeek, MAX_20X, true), 10, 'a banded week, (1000 x 0.5) / (100 x 0.5)');
+});

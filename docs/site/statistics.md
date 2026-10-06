@@ -289,8 +289,8 @@ is weighed by its tier's capacity on the window from the subscription cost model
 its own remaining share, and the line under the ring reads the windows left against the pooled capacity, such as 0.39 of
 1.30 Max 20x windows left. A window whose reset has passed with no reading since counts as a full allowance. An account
 whose tier the model does not size, or whose tier has no capacity on the window, is named under the ring instead, with
-the reason. The page ends with the most recent requests and a sessions card that leads with the router's live pins and
-the accounts they sit on.
+the reason. The 5-hour ring's subtitle opens the cost reference on its Tiers and peak band tab. The page ends with the
+most recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
 
 ### Observe
 
@@ -427,12 +427,13 @@ window, dashed, that its traffic used per hour, a bucket the cost model cannot p
 tier it has no capacity for on that window) listed under one model unlisted legend entry and drawn as a gap, a priced
 hour with a gap or the range's edge on both sides marked with a dot, an hour with no traffic counted as zero on a window
 the account priced in the range, a window with no priced bucket shown as a dash, and an account whose tier the cost
-model does not size listed as tier unknown. Latency reports percentiles read from the merged per-hour histograms; Cache
-reports the hit ratio, tokens that expired between turns, the share of input served from cache, and the output split
-into thinking and plain output; Cost reports the estimated spend for the range and a Fast mode spend tile, the dollars
-fast-mode answers drew from usage credits; Cache warming reports what probes cost against what they saved, where a
-fast-mode session's probes and credits read as dollars and file under speed `fast`; and Accounts reports peak
-utilization, ineligible time, and pin churn per account.
+model does not size listed as tier unknown. The chart shades the hours inside the peak band behind the 5-hour lines, and
+its note opens the cost reference on the same Tiers and peak band tab. Latency reports percentiles read from the merged
+per-hour histograms; Cache reports the hit ratio, tokens that expired between turns, the share of input served from
+cache, and the output split into thinking and plain output; Cost reports the estimated spend for the range and a Fast
+mode spend tile, the dollars fast-mode answers drew from usage credits; Cache warming reports what probes cost against
+what they saved, where a fast-mode session's probes and credits read as dollars and file under speed `fast`; and
+Accounts reports peak utilization, ineligible time, and pin churn per account.
 
 The Cache section closes with Placements by rung: the attempts in the range the router placed by a warm prefix or beside
 the main conversation rather than by its strategy, counted by rung (by the conversation's own messages, by its static

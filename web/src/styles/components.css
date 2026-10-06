@@ -953,9 +953,19 @@ textarea.input {
   height: min(800px, calc(100vh - 48px));
 }
 
-/* The child combinator keeps a dialog opened from inside a group, such as the cost reference, on its own capped
-   height, so its body scrolls under a footer that stays in view. */
+/* The child combinator keeps a dialog opened from inside a group on its own capped height, so its body scrolls under a
+   footer that stays in view. */
 .dialog--grouped > .dialog__inner {
+  height: 100%;
+  max-height: none;
+}
+
+/* The cost reference takes the grouped dialogs' fixed height, so the frame stays still between its tabs. */
+.dialog--costs {
+  height: min(800px, calc(100vh - 48px));
+}
+
+.dialog--costs > .dialog__inner {
   height: 100%;
   max-height: none;
 }

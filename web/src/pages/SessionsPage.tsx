@@ -240,7 +240,7 @@ export function SessionsPage() {
             cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
           </p>
         </div>
-        <CostReferenceLink />
+        <CostReferenceLink tab="plan-rates" />
       </div>
 
       <div className="stat-grid stat-grid--fit">

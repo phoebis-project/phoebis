@@ -1659,7 +1659,7 @@ export function PoolDialog({
               plain
               hint={
                 <>
-                  A warm session rewrites its cache where it lands; the <CostReferenceLink /> shows what that write costs.
+                  A warm session rewrites its cache where it lands; the <CostReferenceLink tab="plan-rates" /> shows what that write costs.
                 </>
               }
             >
@@ -1826,7 +1826,7 @@ export function PoolDialog({
           hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an Anthropic-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
         >
           <div className="row">
-            <CostReferenceLink />
+            <CostReferenceLink tab="api-prices" />
           </div>
         </Field>
         <CacheTtlGrid
@@ -1924,7 +1924,7 @@ export function PoolDialog({
               input={{ min: 0, step: 0.5, value: form.capUsd, onChange: (e) => set('capUsd', Number(e.target.value)), 'aria-label': 'Daily probe cost cap in dollars', 'aria-invalid': invalid('Daily probe cost cap in dollars') }}
               hint={
                 <>
-                  Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
+                  Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here. The <CostReferenceLink tab="api-prices" /> prices a probe.
                 </>
               }
             />

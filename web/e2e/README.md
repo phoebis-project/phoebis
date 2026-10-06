@@ -67,12 +67,14 @@ PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
 from a static server on a loopback port, and runs `mock-pass.mjs`, which drives `views.mjs` against it with the mock's
 admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afternoon the smoke run pins. The mock's random
 draws are seeded, so two runs write the same screenshots byte for byte, which `diff -r` over the two directories shows.
-Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`, and its views include the
-Analytics page's Cache warming tab as `<theme>/analytics-cache-warming.png`; the router's pass writes neither: one shot
-per view it runs, which its test counts. The dashboard's remaining cards and its empty state are checked against the
-router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has subscription accounts and
-no empty list on the dashboard. The subscription end editor needs the story's OAuth account, so against the router's
-seed that part stands down.
+Beside the views' shots it writes the open catalog popup's as `<theme>/accounts-catalog.png`, the open cost reference's
+three tabs as `<theme>/cost-reference-tiers.png`, `cost-reference-plan-rates.png` and `cost-reference-api-prices.png`,
+and the Analytics page's Burn tab, its plan chart shading the peak band, as `<theme>/analytics-burn.png`. Its views
+include the Analytics page's Cache warming tab as `<theme>/analytics-cache-warming.png`. The router's pass writes none
+of these: one shot per view it runs, which its test counts. The dashboard's remaining cards and its empty state are
+checked against the router's seeded registry alone (`PHOEBIS_E2E_MOCK=1` skips them), since the mock's story has
+subscription accounts and no empty list on the dashboard. The subscription end editor needs the story's OAuth account,
+so against the router's seed that part stands down.
 
 ## On a host without Chromium
 

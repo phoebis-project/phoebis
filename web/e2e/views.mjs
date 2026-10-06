@@ -1280,15 +1280,16 @@ async function poolDialogWalk(theme, mode) {
 }
 
 /**
- * The cost reference opened from the pool dialog's Cache TTL group keeps its own capped height, so its footer stays
- * inside the viewport with the price table drawn, while the pool dialog's inner still fills its frame. Load shedding,
- * Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table waits on the clock,
- * which every view's shot reads, so this runs after the views.
+ * The cost reference opened from the pool dialog's Cache TTL group keeps its own fixed height, so its footer stays
+ * inside the viewport with the price table drawn, while the pool dialog's inner still fills its frame under it. Load
+ * shedding, Cache TTL and Keepalive open the one cost reference, so Cache TTL stands for them. The table waits on the
+ * clock, which every view's shot reads, so this runs after the views.
  */
 async function poolCostReference(theme) {
   const say = (what) => failures.push(`${theme} /pools dialog Cache TTL: ${what}`);
   const frame = page.locator('dialog.dialog--grouped[open]');
-  const nested = frame.locator('dialog[open]');
+  // The cost reference lives under the body, outside the pool dialog's tree, and opens over it.
+  const nested = page.locator('dialog.dialog--costs[open]');
   try {
     await page.goto(`${base}/pools`);
     await booted();
@@ -1299,14 +1300,14 @@ async function poolCostReference(theme) {
     await frame.locator('section.dialog-group[aria-label="Cache TTL"]').getByRole('button', { name: 'Cost reference', exact: true }).click();
     await nested.waitFor({ state: 'visible', timeout: 15_000 });
     await advance(LOAD_MS);
-    await nested.locator('tbody td.num').first().waitFor({ timeout: 15_000 });
+    await nested.locator('.cost-ref__panel:not([hidden]) tbody td.num').first().waitFor({ timeout: 15_000 });
   } catch (error) {
     say(`the cost reference never drew its table (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
   const read = await frame.evaluate((el) => {
     const inner = el.querySelector(':scope > .dialog__inner');
-    const child = el.querySelector('dialog[open]');
+    const child = document.querySelector('dialog.dialog--costs[open]');
     return {
       footBottom: child?.querySelector('.dialog__foot')?.getBoundingClientRect().bottom ?? null,
       frame: el.clientHeight,
@@ -2109,6 +2110,7 @@ async function burnCards(theme) {
 async function planLegend(theme) {
   try {
     if (!(await tabTo(theme, 'Burn'))) return;
+    if (mock) await burnShot(theme);
     const read = await page.evaluate(() => {
       const card = [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
       if (!card) return null;
@@ -3024,10 +3026,9 @@ async function sessionsLead(theme) {
 }
 
 /**
- * The cost reference dialog from Sessions: the dollar table and the window share table below it each fit the dialog
- * without a sideways scroll, and their Model columns end at one edge; the window groups' heads, their column heads
- * and their cells read in the type of the price columns above them; a row of a model the cost model weighs is the
- * height of one it does not and of a price row.
+ * The cost reference from Sessions, walked tab by tab at 1280 by 800 and at 1440 by 900: no table runs past its wrap,
+ * every second model sits on --surface-2 against --surface with its sub-rows on its shade, and the plan rates'
+ * divider sits on --surface-3. The mock pass writes each tab of the open dialog at 1280 by 800.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -3036,55 +3037,101 @@ async function costReference(theme) {
     await page.getByRole('button', { name: 'Cost reference', exact: true }).first().click();
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     await advance(LOAD_MS);
-    await dialog.locator('tbody tr td.num').first().waitFor({ timeout: 15_000 });
+    await dialog.locator('.cost-ref__panel:not([hidden]) tbody tr td.num').first().waitFor({ timeout: 15_000 });
   } catch (error) {
-    say(`the cost reference never drew its table (${error instanceof Error ? error.message : String(error)})`);
+    say(`the cost reference never drew its tables (${error instanceof Error ? error.message : String(error)})`);
     return;
   }
-  const read = await page.evaluate(() => {
-    const type = (el) => (el ? `${getComputedStyle(el).fontFamily} ${getComputedStyle(el).fontSize} ${getComputedStyle(el).fontWeight} ${getComputedStyle(el).color}` : null);
-    const height = (el) => (el ? Math.round(el.getBoundingClientRect().height) : null);
-    const dlg = [...document.querySelectorAll('dialog[open]')].pop();
-    const prices = dlg.querySelector('.cost-ref__prices');
-    const shares = dlg.querySelector('.cost-ref__shares');
-    const headOf = (table, text) => [...(table?.querySelectorAll('thead th') ?? [])].find((th) => th.textContent?.trim() === text) ?? null;
-    const overflow = (table) => {
-      const wrap = table?.closest('.table-wrap');
-      return wrap ? wrap.scrollWidth - wrap.clientWidth : null;
-    };
-    // A share row is the model and ten cells, one five-cell group per window.
-    const rows = [...(shares?.querySelectorAll('tbody tr') ?? [])];
-    const covered = rows.find((r) => r.children.length === 11 && r.children[1].textContent?.trim() !== '-');
-    const bare = rows.find((r) => r.children.length === 11 && r.children[1].textContent?.trim() === '-');
-    const priceRow = prices?.querySelector('tbody tr') ?? null;
-    return {
-      bareHeight: height(bare),
-      coveredHeight: height(covered),
-      groups: [...(shares?.querySelectorAll('thead th') ?? [])].filter((th) => ['5-hour window', '7-day window'].includes(th.textContent?.trim() ?? '')).map(type),
-      modelEdges: [prices, shares].map((table) => {
-        const th = table?.querySelector('thead th');
-        return th ? Math.round(th.getBoundingClientRect().right) : null;
-      }),
-      overflow: { prices: overflow(prices), shares: overflow(shares) },
-      planCell: type(covered?.children[2]),
-      planHead: type(headOf(shares, 'Cache read')),
-      priceCell: type(priceRow?.children[4]),
-      priceHead: type(headOf(prices, 'Cache read')),
-      priceHeight: height(priceRow),
-    };
-  });
-  measurements.push(`${theme} /sessions cost reference ${JSON.stringify(read)}`);
-  for (const [table, px] of Object.entries(read.overflow)) if (px === null || px > 0) say(`the ${table} table runs ${px}px past the dialog`);
-  const [priceEdge, shareEdge] = read.modelEdges;
-  if (priceEdge === null || shareEdge === null || Math.abs(priceEdge - shareEdge) > 1) say(`the Model columns end at ${priceEdge}px and ${shareEdge}px`);
-  if (read.planHead === null || read.planHead !== read.priceHead) say(`the 5-hour window's Cache read head reads ${read.planHead} against the price column's ${read.priceHead}`);
-  if (read.groups.length !== 2 || read.groups.some((group) => group !== read.priceHead)) say(`the window group heads read ${JSON.stringify(read.groups)} against the price heads' ${read.priceHead}`);
-  if (read.planCell === null || read.planCell !== read.priceCell) say(`a window share cell reads ${read.planCell} against a price cell's ${read.priceCell}`);
-  if (read.coveredHeight === null || read.coveredHeight !== read.priceHeight) say(`a row with window shares is ${read.coveredHeight}px tall against a price row's ${read.priceHeight}px`);
-  if (read.bareHeight !== null && read.coveredHeight !== read.bareHeight) say(`a row with window shares is ${read.coveredHeight}px tall against ${read.bareHeight}px without`);
+  const TABS = [
+    ['Tiers and peak band', 'tiers'],
+    ['Plan rates', 'plan-rates'],
+    ['API prices', 'api-prices'],
+  ];
+  for (const size of [
+    { height: 800, width: 1280 },
+    { height: 900, width: 1440 },
+  ]) {
+    await page.setViewportSize(size);
+    await settle();
+    for (const [label, slug] of TABS) {
+      const where = `the cost reference's ${label} at ${size.width} by ${size.height}`;
+      await dialog.getByRole('tab', { name: label, exact: true }).click();
+      await settle();
+      const read = await page.evaluate(() => {
+        const dlg = [...document.querySelectorAll('dialog[open]')].pop();
+        const panel = dlg.querySelector('.cost-ref__panel:not([hidden])');
+        const tone = (name) => {
+          const probe = document.createElement('div');
+          probe.style.background = `var(${name})`;
+          dlg.append(probe);
+          const color = getComputedStyle(probe).backgroundColor;
+          probe.remove();
+          return color;
+        };
+        const tones = { surface: tone('--surface'), surface2: tone('--surface-2'), surface3: tone('--surface-3') };
+        // The color a cell reads on: its own background, else the first ancestor's that paints one.
+        const shade = (el) => {
+          for (let at = el; at; at = at.parentElement) {
+            const bg = getComputedStyle(at).backgroundColor;
+            if (bg !== 'rgba(0, 0, 0, 0)' && bg !== 'transparent') return bg;
+          }
+          return null;
+        };
+        const tables = [...panel.querySelectorAll('table')].map((table) => {
+          const wrap = table.closest('.table-wrap') ?? table.parentElement;
+          const wrong = [];
+          let n = -1;
+          let alts = 0;
+          for (const row of table.querySelectorAll('tbody tr')) {
+            const name = row.children[0]?.textContent?.trim() ?? '';
+            const bg = shade(row.children[0]);
+            if (row.classList.contains('is-divider')) {
+              n = -1;
+              if (bg !== tones.surface3) wrong.push(`the divider on ${bg}`);
+              continue;
+            }
+            if (!row.classList.contains('cost-ref__sub')) n += 1;
+            const want = n % 2 === 1 ? tones.surface2 : tones.surface;
+            if (n % 2 === 1) alts += 1;
+            if (bg !== want) wrong.push(`${name} on ${bg}, not ${want}`);
+          }
+          return { alts, overflow: Math.max(wrap.scrollWidth - wrap.clientWidth, Math.round(table.getBoundingClientRect().right - wrap.getBoundingClientRect().right)), rows: table.querySelectorAll('tbody tr').length, wrong };
+        });
+        const body = dlg.querySelector('.dialog__body');
+        return { sideways: body.scrollWidth - body.clientWidth, tables, tones };
+      });
+      measurements.push(`${theme} /sessions cost reference ${slug} ${size.width}x${size.height} ${JSON.stringify(read)}`);
+      if (read.tables.length === 0) say(`${where} draws no table`);
+      if (read.sideways > 0) say(`${where} scrolls ${read.sideways}px sideways`);
+      for (const [i, t] of read.tables.entries()) {
+        if (t.overflow > 0) say(`${where}: table ${i + 1} runs ${t.overflow}px past its wrap`);
+        if (t.rows > 1 && t.alts === 0) say(`${where}: table ${i + 1} shades no second row`);
+        for (const w of t.wrong) say(`${where}: table ${i + 1} draws ${w}`);
+      }
+      if (mock && size.width === 1280) {
+        await atRest();
+        await dialog.screenshot({ path: join(shots, theme, `cost-reference-${slug}.png`) });
+      }
+    }
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
   await atRest();
+}
+
+/**
+ * The Analytics page's Burn tab, which the views' shots never reach: the plan chart with the peak band shaded. It
+ * runs on the tab the plan legend's check opened, so the pass takes no step of the clock more than it did before.
+ */
+async function burnShot(theme) {
+  await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
+  const areas = await page.evaluate(() => [...document.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour')?.querySelectorAll('.recharts-reference-area').length ?? 0);
+  measurements.push(`${theme} /analytics burn plan chart shades ${areas} band runs`);
+  if (areas === 0) failures.push(`${theme} /analytics: the Burn view's plan chart shades no hour of the peak band`);
+  await atRest();
+  await page.screenshot({ fullPage: true, path: join(shots, theme, 'analytics-burn.png') });
 }
 
 /**

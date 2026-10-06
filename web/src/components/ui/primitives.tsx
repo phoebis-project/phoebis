@@ -324,13 +324,13 @@ function DialogInner({ children }: { children: ReactNode }) {
   );
 }
 
-export function Dialog({ open, onClose, title, subtitle, children, footer, width = 560 }: { children: ReactNode; footer?: ReactNode; onClose: () => void; open: boolean; subtitle?: ReactNode; title: ReactNode; width?: number }) {
+export function Dialog({ open, onClose, title, subtitle, children, footer, width = 560, className }: { children: ReactNode; className?: string; footer?: ReactNode; onClose: () => void; open: boolean; subtitle?: ReactNode; title: ReactNode; width?: number }) {
   const ref = useModalDialog(open, onClose);
   const titleId = useId();
   return (
     <dialog
       ref={ref}
-      className="dialog"
+      className={className ? `dialog ${className}` : 'dialog'}
       aria-labelledby={titleId}
       style={{ width: `min(${width}px, calc(100vw - 32px))` }}
       onClick={(e) => {
