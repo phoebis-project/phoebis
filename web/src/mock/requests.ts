@@ -79,9 +79,9 @@ export const LANES: Lane[] = [
 ];
 
 /**
- * The account that carries the story's unmeasured traffic alone: it serves Sonnet 5, whose cells the cost table
- * leaves `null`, whatever the lane drew, so its buckets read no share while the other subscription accounts'
- * buckets stay priced.
+ * The account that carries the story's unpriced traffic alone: it serves Sonnet 5, which the cost model has no weight
+ * for, whatever the lane drew, so its buckets read no share while the other subscription accounts' buckets stay
+ * priced.
  */
 const UNPRICED_ACCOUNT = 'mail';
 const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-5' : drawn);
@@ -402,9 +402,9 @@ function buildRequests(): RequestLog[] {
     unsampled.attempts = unsampled.attempts.map((a) => ({ ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, utilization: null } : w)) }));
   }
   // The drawer and the Models view need one request an account refused the model of. The newest desktop turn that
-  // failed over past a 429 to an Anthropic-key account or to the unmeasured one takes it: the client spelled the model
+  // failed over past a 429 to an Anthropic-key account or to the unpriced one takes it: the client spelled the model
   // without the date the router resolved it to, and a pool member the request had not tried answered 404 for that
-  // model first. The cost table has no row for that model, so its tokens never land in a priced subscription's
+  // model first. The cost model has no weight for that model, so its tokens never land in a priced subscription's
   // share. Nothing here draws from a stream, so every row after it keeps its values.
   const storyTurn = (r: RequestLog) =>
     r.keyId === 'desktop' &&

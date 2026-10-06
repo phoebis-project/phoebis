@@ -582,6 +582,14 @@ export const effectiveDateOf = (effective: string): string | null => {
   const parsed = /^\d{4}-\d{2}-\d{2}/.test(effective) ? Date.parse(effective) : Number.NaN;
   return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
 };
+/**
+ * A table's date as the router sent it, free text as sent. A date reads in UTC, the zone it parses in: a date-only
+ * `effective` is midnight UTC, which the browser's own zone would show as the day before west of UTC.
+ */
+export const effectiveLabel = (effective: string): string => {
+  const at = effectiveDateOf(effective);
+  return at === null ? effective : new Date(at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' });
+};
 /** The `api_prices` envelope: its rows keyed by model in the file's order, the date from the file it carries. */
 export const decodePricing = (envelope: unknown): Settings['apiPrices'] => {
   const content = rec(rec(envelope).content);

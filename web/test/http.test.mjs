@@ -164,7 +164,7 @@ test('the burn and rewrite reads send the range and the grouping and answer what
   assert.deepEqual([burnUrl.pathname, burnUrl.searchParams.get('range'), burnUrl.searchParams.get('group_by')], ['/admin/analytics/burn', '0,86400000', 'request_class']);
   assert.deepEqual([rewritesUrl.pathname, [...rewritesUrl.searchParams.keys()], rewritesUrl.searchParams.get('range')], ['/admin/analytics/rewrites', ['range'], '0,86400000']);
   // A subscription point that burned, whose window shares a misnamed field would read as null.
-  const planned = bodies['/admin/analytics/burn'].points.findLastIndex((p) => p.five_hour_share > 0);
+  const planned = bodies['/admin/analytics/burn'].points.findLastIndex((p) => p.five_hour_share > 0 && p.seven_day_share > 0);
   assert.ok(planned >= 0, 'the fixture reports a subscription point that burned');
   assert.deepEqual(
     [burn.bucketSeconds, burn.points.length, burn.points[planned].fiveHourShare, burn.points[planned].sevenDayShare],

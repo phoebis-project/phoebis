@@ -65,3 +65,14 @@ test("the band factor is the reciprocal of the priced window's capacity factor i
   assert.equal(d.bandFactor(costs, 'five_hour', OUT), 1);
   assert.equal(d.bandFactor(costs, 'five_hour', WEEKEND), 1);
 });
+
+test('a week the file does not list prices as the 7-day share once', () => {
+  assert.deepEqual(d.pricedWindow(costs, 'seven_day_other'), { divisor: 1, priced: 'seven_day' });
+  close(d.shareOf(costs, 'seven_day_other', MAX_20X, OPUS, usage({ input: 1 }), OUT), 0.002, 'the 7-day share, 2 / 1000');
+});
+
+test('a peak zone the browser cannot resolve prices out of band', () => {
+  const unzoned = { ...costs, peak: { ...costs.peak, zone: 'Nowhere/Unknown' } };
+  assert.equal(d.inBand(unzoned, IN), false);
+  close(d.shareOf(unzoned, 'five_hour', MAX_20X, OPUS, usage({ input: 1 }), IN), 0.02, 'the out-of-band share inside the hours, 2 / 100');
+});

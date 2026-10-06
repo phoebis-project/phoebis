@@ -2169,7 +2169,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     // At the mock's clock personal's 5-hour window leads its pace by about 0.71 and mail's 7-day window by about 0.61,
     // both over the typed 50 %; business leads by under 0.1 and is the cool destination.
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the table cannot price stay.']);
+    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the cost model cannot price stay.']);
   }
   migrateSwitch?.click();
   await m.settle(120);
@@ -7934,7 +7934,8 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     ok: sonnet[8] === held(sonnetRow, sonnetRow.cacheWrite5mPerM, 15) && sonnet[9] === held(sonnetRow, sonnetRow.cacheWrite1hPerM, 1) && sonnet[10] === payoff(sonnetRow),
     missing: sonnet,
   });
-  results.push({ name: '/sessions cost reference reads when a 1h entry pays off on Fable 5.1', ok: fable[10] === payoff(fableRow), missing: fable });
+  // The dialog's Fable 5.1 note says a 1-hour entry never pays off there, which holds while the file's cells say so.
+  results.push({ name: '/sessions cost reference says a 1h entry never pays off on Fable 5.1', ok: fable[10] === payoff(fableRow) && payoff(fableRow) === 'never within 1h', missing: fable });
   const haikuRow = priceOf('claude-haiku-4-5');
   const haiku = priceRow('claude-haiku-4-5');
   results.push({

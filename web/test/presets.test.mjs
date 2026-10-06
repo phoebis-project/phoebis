@@ -126,11 +126,11 @@ test('the preview orders cold pins first, stops at the share, and never marks th
   assert.deepEqual([decayed.sessions, decayed.burnShare.toFixed(3)], [1, (5 / (10 / Math.E + 5 + 1)).toFixed(3)], 'the order and the share read each burn decayed to now');
 });
 
-test('a pin the table cannot price stays in the order unmarked and counts for the last-pin rule', () => {
+test('a pin the cost model cannot price stays in the order unmarked and counts for the last-pin rule', () => {
   const unlisted = four.map((p) => (p.sessionId === 'warm-1' ? { ...p, burn: null } : p));
   const round = replay([hot, cool], unlisted);
   assert.deepEqual([round.sessions, round.warm, round.unpriced], [2, 1, 1], 'cold 3 then warm 4, as with every pin priced');
-  assert.ok(d.shedPreviewLine(round, true).endsWith(' 1 pin the table cannot price stays.'), d.shedPreviewLine(round, true));
+  assert.ok(d.shedPreviewLine(round, true).endsWith(' 1 pin the cost model cannot price stays.'), d.shedPreviewLine(round, true));
   const pair = replay([hot, cool], [pin('priced', 1, false), pin('unlisted', null, false)]);
   assert.deepEqual([pair.sessions, pair.unpriced], [1, 1], 'without the unpriced pin the priced one would be the last unmarked');
   assert.deepEqual(
@@ -147,7 +147,7 @@ test('a pin the table cannot price stays in the order unmarked and counts for th
   );
 });
 
-test("the pins of an account whose tier the table does not size stay out of the preview, unlike a pin it cannot price", () => {
+test("the pins of an account whose tier the cost model does not size stay out of the preview, unlike a pin it cannot price", () => {
   // The route reads no burn for any pin of such an account, while the round prices them on the reference tier and
   // sheds them; the preview cannot replay that order, so it leaves them out rather than call them unpriced.
   const team = account('team', 0.95);

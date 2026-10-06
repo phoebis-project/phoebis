@@ -660,8 +660,8 @@ test('the burn series decodes each point with its instant, both token sides, and
   const at = body.points.findLastIndex((p) => p.five_hour_share !== null);
   const [last, wire] = [burn.points[at], body.points[at]];
   assert.ok(
-    wire.five_hour_share > 0 && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
-    'the fixture reports a subscription point with a priced 5-hour share, output tokens among its count',
+    wire.five_hour_share > 0 && wire.seven_day_share > 0 && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
+    'the fixture reports a subscription point with both window shares priced, output tokens among its count',
   );
   assert.deepEqual(last, {
     at: new Date(wire.at).toISOString(),
@@ -1221,6 +1221,12 @@ test('a pricing effective date that is not a date decodes as the string sent wit
   assert.deepEqual([dated.effective, dated.effectiveDate], ['2026-10-01', '2026-10-01T00:00:00.000Z'], 'a date keeps its text and parses');
 });
 
+test("a table's effective date reads as the calendar date the file names in every zone, and free text as sent", () => {
+  // A date-only effective parses to midnight UTC; a zone west of UTC would read it as the evening before.
+  assert.equal(d.effectiveLabel('2026-10-01'), 'Oct 01, 2026');
+  assert.equal(d.effectiveLabel('v3'), 'v3');
+});
+
 test('an account patch encodes the cancelled flag and its end', () => {
   const end = '2026-10-19T09:15:00.000Z';
   assert.deepEqual(d.encodeAccountPatch({ cancelled: true, subscriptionEndsAt: end }), { cancelled: true, subscription_ends_at: Date.parse(end) }, 'the route takes milliseconds');
@@ -1345,13 +1351,13 @@ test('the mock feed speaks the router\'s wire and the mock hands the handler wha
   assert.ok(finished.length > 0 && finished.every((r) => r.preview === null), 'a finished row carries no preview');
 });
 
-test('a session decodes its burn unit and both net balances, and a pin the table cannot price reads no burn', () => {
+test('a session decodes its burn unit and both net balances, and a pin the cost model cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');
   assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, which the cost model has no weight for');
   const pinned = d.decodeSession(wire);
-  assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its cells');
-  assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the table cannot price reads null beside its unit');
+  assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its model');
+  assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the cost model cannot price reads null beside its unit');
   assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
   const k = d.decodeSession({ ...rows[0], keepalive: { net_five_hour_share: -0.0004, net_usd: 0.25 } }).keepalive;
   assert.deepEqual([k.netFiveHourShare, k.netUsd], [-0.0004, 0.25]);

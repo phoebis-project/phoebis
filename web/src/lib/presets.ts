@@ -99,7 +99,7 @@ export interface ShedPreview {
   sessions: number;
   /** The unit every replayed member's burn is in; null when none has a pin or two members differ. */
   unit: BurnUnit | null;
-  /** Pins whose burn the table cannot price, left in the order unmarked. */
+  /** Pins whose burn the cost model cannot price, left in the order unmarked. */
   unpriced: number;
   warm: number;
 }
@@ -143,9 +143,9 @@ export function shedPreview(
   const windowMs = pool.burnWindowSeconds * 1_000;
   const rounds = hot.map((account) => {
     const pins = sessions
-      // The route reads no burn for a window-share pin of an account whose tier the table does not size, while the
-      // round prices it on the reference tier and sheds it; the preview cannot replay that order, so it leaves those
-      // pins out rather than count them as pins the table cannot price.
+      // The route reads no burn for a window-share pin of an account whose tier the cost model does not size, while
+      // the round prices it on the anchor tier's rates and sheds it; the preview cannot replay that order, so it
+      // leaves those pins out rather than count them as pins the cost model cannot price.
       .filter((s) => s.pinned && s.accountId === account.id && (s.burnUnit !== 'window_share' || sized.has(account.id)))
       // The router walks an account's pins in key, session and model order, which settles ties in the sorts below.
       .sort((a, b) => cmp(a.keyId, b.keyId) || cmp(a.sessionId, b.sessionId) || cmp(a.model ?? '', b.model ?? ''))
@@ -217,6 +217,6 @@ export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean, table:
   const across = preview.members > 1 ? `, across ${preview.members} accounts` : '';
   const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} ${of}${across}`;
   const n = preview.unpriced;
-  const unpriced = n > 0 ? ` ${n} pin${n === 1 ? '' : 's'} the table cannot price stay${n === 1 ? 's' : ''}.` : '';
+  const unpriced = n > 0 ? ` ${n} pin${n === 1 ? '' : 's'} the cost model cannot price stay${n === 1 ? 's' : ''}.` : '';
   return `${preview.cool ? `Would move ${what}.` : `Would mark ${what}, but no member reads under the band to take them.`}${unpriced}`;
 }

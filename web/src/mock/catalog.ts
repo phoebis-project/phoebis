@@ -12,9 +12,9 @@ export const CATALOG: CatalogModel[] = [
 ];
 
 /**
- * The shipped Anthropic price table, USD per million tokens, grouped by model
- * class with the newest generation of each first. This is what the cost
- * reference shows, so it holds Anthropic models only.
+ * The mock's own Anthropic price list, USD per million tokens, grouped by model
+ * class with the newest generation of each first: the story's requests are
+ * priced in dollars through `priceFor`, so it lists every model they run on.
  */
 export const PRICES: ModelPrice[] = [
   { model: 'claude-fable-5-1', inputPerM: 10, outputPerM: 50, cacheReadPerM: 0.25, cacheWrite5mPerM: 12.5, cacheWrite1hPerM: 20, fast: null },

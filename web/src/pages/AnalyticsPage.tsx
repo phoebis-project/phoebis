@@ -1541,8 +1541,8 @@ function BurnCharts({
                 value: shareOf(l.sevenDayPerHour),
               },
             ]),
-            // One entry for every share the table cannot price, whichever account and window it fell on; muted, since
-            // it draws no line of its own.
+            // One entry for every share the cost model cannot price, whichever account and window it fell on; muted,
+            // since it draws no line of its own.
             ...(planned.some(({ l }) => l.unpriced.fiveHour || l.unpriced.sevenDay)
               ? [
                   {

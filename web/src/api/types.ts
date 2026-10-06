@@ -851,8 +851,8 @@ export interface BurnPoint {
   /** Cache-read tokens. */
   cachedTokens: number;
   /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
-   *  for an Anthropic-key account, one whose tier is unknown, a bucket with no row the table prices (an idle hour among
-   *  them) or one holding a row the table cannot price, and under every other grouping. */
+   *  for an Anthropic-key account, one whose tier is unknown, a bucket with no row the cost model prices (an idle hour
+   *  among them) or one holding a row the cost model cannot price, and under every other grouping. */
   fiveHourShare: number | null;
   group: string;
   /** The same spend as a fraction of the account's 7-day window, unbanded. */

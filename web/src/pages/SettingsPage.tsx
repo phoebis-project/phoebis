@@ -1,9 +1,9 @@
 import { api } from '@/api';
-import { effectiveDateOf } from '@/api/decode';
+import { effectiveLabel } from '@/api/decode';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Skeleton } from '@/components/ui/primitives';
-import { fmtDate, fmtMiB } from '@/lib/format';
+import { fmtMiB } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
@@ -53,11 +53,6 @@ const ENV_TERMS: { body: string; term: string }[] = [
 /** These come from the configuration file and the admin API only reads them, so each says where it is set. */
 const bootstrapNote = (setting: string) => `Set by ${setting} in the configuration file`;
 const restartNote = (key: string) => `${key}\nSet in the configuration file; a change takes a restart.`;
-/** A table's date as the router sent it: a date reads through `fmtDate`, and free text is shown as sent. */
-const effectiveLabel = (effective: string) => {
-  const at = effectiveDateOf(effective);
-  return at === null ? effective : fmtDate(at);
-};
 
 function SecretBadge({ configured }: { configured: boolean }) {
   return <Badge tone={configured ? 'good' : 'warning'}>{configured ? 'configured' : 'not configured'}</Badge>;

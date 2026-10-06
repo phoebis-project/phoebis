@@ -2131,7 +2131,7 @@ async function planLegend(theme) {
       return;
     }
     if (read.unlisted === null) {
-      if (mock) failures.push(`${theme} /analytics: the story's mail account runs on a model the table cannot price, yet no model unlisted entry draws`);
+      if (mock) failures.push(`${theme} /analytics: the story's mail account runs on a model the cost model cannot price, yet no model unlisted entry draws`);
       return;
     }
     failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
