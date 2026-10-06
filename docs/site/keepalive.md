@@ -172,20 +172,24 @@ spent by then.</dd>
 client. Without warming, the 1-hour entry wins after a 5-minute pause.</dd>
 <dt>Window share</dt>
 <dd>Each plan column is the share of a Max 20x subscription's 5-hour or 7-day window that one million tokens of the type
-consume, from the cost table the ledger ships. An account on another tier spends that share over its tier's factor from
-the same table, so a Max 5x account spends four times as much of its own window and a Pro account twenty times, by the
-multiples a group header's tooltip gives. A dash is a cell the plan meter has not measured, through which no share is
-priced. A 1-hour write spends the same share as a 5-minute one, so on plan-funded traffic the long TTL is free and the
-pool's plan rule set keeps `1h` for the main conversation and subagents alike; while a write costs money a 1-hour write
-is 2x against 1.25x, so the metered rule set defaults to `5m` throughout.</dd>
+consume, derived from the subscription cost model the ledger ships: the model's weight times the type's multiplier over
+the window's capacity. An account on another tier spends that share over the ratio of its tier's capacity to Max 20x's,
+so a Max 5x account spends four times as much of its own 5-hour window and a Pro account twenty times, by the multiples
+a group header's tooltip gives for each window. A dash is a model the plan meter has not weighed, or a tier it has not
+sized on the window, through which no share is priced. A 1-hour write spends the same share as a 5-minute one, so on
+plan-funded traffic the long TTL is free and the pool's plan rule set keeps `1h` for the main conversation and subagents
+alike; while a write costs money a 1-hour write is 2x against 1.25x, so the metered rule set defaults to `5m`
+throughout.</dd>
 </dl>
 
-Below the prices, a second table reads the cost table the ledger ships (`crates/ledger/cost_table.yaml`) in two column
-groups: the share of a Max 20x subscription's 5-hour window and of its 7-day window that one million tokens of each type
-consume, one row per model either table lists, sorted by id. An account on another tier spends the share over its
-tier's factor from the same file (Max 5x 0.25 and Pro 0.05 of Max 20x's 5-hour window; their 7-day factors are
-unmeasured). A cell the plan meter has not measured shows a dash; a dated model id reads the cells of its undated name;
-a model the cost table has no row for shows a dash in every cell.
+Below the prices, a second table reads the subscription cost model the ledger ships
+(`crates/ledger/subscription_costs.yaml`) in two column groups: the share of a Max 20x subscription's 5-hour window and
+of its 7-day window that one million tokens of each type consume, one row per model either file lists, in the files'
+order. An account on another tier spends the share over the ratio of its tier's capacity to Max 20x's on the window: in
+the shipped file Max 20x holds 4 times Max 5x's 5-hour capacity and 20 times Pro's, and a group header's tooltip gives
+each tier's multiple. The 7-day group prices every tier the file sizes. A dated model id reads the weight of its
+undated name; a model the cost model has no weight for shows a dash in every cell, and a group's tooltip names a tier
+with no capacity on that window as not measured.
 
 The prices carry one caveat: "API list prices. A subscription account on plan quota spends the window share columns
 instead of money." A recipe's own net follows the same split: the share of the account's 5-hour window, the band inside

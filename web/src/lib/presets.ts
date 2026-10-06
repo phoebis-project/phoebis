@@ -110,7 +110,7 @@ export interface ShedPreview {
  * as the router's `burn_decayed` does: cold pins first by burn, then warm ones by burn over their last input size,
  * bounded by the warm-sessions mode. A member's pins share one unit, so its round needs no conversion; members in
  * different units cannot be summed, so their shares are averaged instead. A member without `eligible` counts as
- * eligible, as a member of a pool not saved yet does. `sized` names the accounts whose tier the cost table sizes.
+ * eligible, as a member of a pool not saved yet does. `sized` names the accounts whose tier the cost model sizes.
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnWindowSeconds' | 'migrateAboveUtilization' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
@@ -199,13 +199,13 @@ export function shedPreview(
 }
 
 /**
- * The shedding card's dry run in one sentence, naming the unit its share was taken in. Until the cost table is read no
+ * The shedding card's dry run in one sentence, naming the unit its share was taken in. Until the cost model is read no
  * window-share pin enters the round, so a count then would read short; `table` says whether it has been read.
  */
 export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
   if (!migrateOn) return 'No round runs while migrate above utilization is off.';
-  if (table === 'loading') return 'The cost table is loading; window-share pins are counted once it is read.';
-  if (table === 'missing') return 'The cost table did not load, so window-share pins cannot be counted.';
+  if (table === 'loading') return 'The cost model is loading; window-share pins are counted once it is read.';
+  if (table === 'missing') return 'The cost model did not load, so window-share pins cannot be counted.';
   if (preview.members === 0) return 'No member is ahead of pace by the margin.';
   const of = preview.averaged
     ? "of each account's burn on average"

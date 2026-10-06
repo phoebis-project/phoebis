@@ -1,8 +1,8 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
+  RuleCooldown, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, TtlRules, TypeMultiplier, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
@@ -186,11 +186,12 @@ export function planName(sub: Subscription | null): string | null {
   return sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
 }
 
-/** `default_claude_max_5x` reads as "Max 5x"; anything else is shown as sent. */
+/** `default_claude_max_5x` reads as "Max 5x" and `default_claude_ai`, the tier the profile reports for Pro, as "Pro";
+ *  anything else is shown as sent. */
 export function planLabel(tier: string): string {
-  const m = /^(?:default_)?claude_(max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
+  const m = /^(?:default_)?claude_(ai|max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
   if (!m) return tier;
-  const name = m[1][0].toUpperCase() + m[1].slice(1);
+  const name = m[1] === 'ai' ? 'Pro' : m[1][0].toUpperCase() + m[1].slice(1);
   return m[2] ? `${name} ${m[2]}x` : name;
 }
 
@@ -570,29 +571,54 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
 
 export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
 
-const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), outputPerM: num(m.output_per_m) });
-const price = (m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model: str(m.model) });
-// The pricing file's effective date is free text: one that is not a date is kept as sent rather than throwing, which
-// would fail the whole settings answer and every page that reads it. Only text opening with an ISO date counts, since
-// `Date.parse` reads some free text as a date ("version 3" as March 2001).
-export const decodePricing = (v: unknown): Settings['pricing'] => {
-  const effective = str(rec(v).effective, '');
+const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read), cacheWrite1hPerM: num(m.cache_write_1h), cacheWrite5mPerM: num(m.cache_write_5m), inputPerM: num(m.input), outputPerM: num(m.output) });
+const price = (model: string, m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model });
+/**
+ * The instant a table's free-text `effective` date parses to, or null. A text that is not a date is kept as sent rather
+ * than throwing, which would fail the whole settings answer and every page that reads it. Only text opening with an
+ * ISO date counts, since `Date.parse` reads some free text as a date ("version 3" as March 2001).
+ */
+export const effectiveDateOf = (effective: string): string | null => {
   const parsed = /^\d{4}-\d{2}-\d{2}/.test(effective) ? Date.parse(effective) : Number.NaN;
-  return { effective, effectiveDate: Number.isNaN(parsed) ? null : new Date(parsed).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) };
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+};
+/** The `api_prices` envelope: its rows keyed by model in the file's order, the date from the file it carries. */
+export const decodePricing = (envelope: unknown): Settings['apiPrices'] => {
+  const content = rec(rec(envelope).content);
+  const effective = str(content.effective, '');
+  return { effective, effectiveDate: effectiveDateOf(effective), models: Object.entries(rec(content.models)).map(([model, row]) => price(model, rec(row))), source: str(rec(envelope).source) };
 };
 
-const planModelCells = (v: unknown): PlanModelCells => {
-  const m = rec(v);
-  return { cacheRead: numOrNull(m.cache_read), cacheWrite1h: numOrNull(m.cache_write_1h), cacheWrite5m: numOrNull(m.cache_write_5m), input: numOrNull(m.input), output: numOrNull(m.output) };
-};
-const planBand = (v: unknown): PlanBand => {
-  const b = rec(v);
-  return { factor: num(b.factor, 1), fromHour: num(b.from_hour), toHour: num(b.to_hour), weekdays: bool(b.weekdays), windows: list(b.windows).map((w) => str(w)), zone: str(b.zone) };
-};
 const byKey = <T>(v: unknown, of: (row: unknown) => T): Record<string, T> => Object.fromEntries(Object.entries(rec(v)).map(([key, row]) => [key, of(row)]));
-const decodePlanTables = (v: unknown): PlanTables => {
-  const cost = rec(rec(v).cost);
-  return { cost: { bands: list(cost.bands).map(planBand), effective: str(cost.effective), tiers: byKey(cost.tiers, (t) => ({ fiveHour: numOrNull(rec(t).five_hour), sevenDay: numOrNull(rec(t).seven_day) })), windows: byKey(cost.windows, (models) => byKey(models, planModelCells)) } };
+const TYPE_KEYS: [keyof TypeMultiplier, string][] = [['cacheRead', 'cache_read'], ['cacheWrite1h', 'cache_write_1h'], ['cacheWrite5m', 'cache_write_5m'], ['input', 'input'], ['output', 'output']];
+// An override names only what it changes, so a member it leaves out stays out rather than reading as zero.
+const override = (v: unknown): SubscriptionCosts['overrides'][string] => {
+  const o = rec(v);
+  const named = rec(o.type_multiplier);
+  const typeMultiplier: Partial<TypeMultiplier> = Object.fromEntries(TYPE_KEYS.filter(([, wire]) => numOrNull(named[wire]) !== null).map(([key, wire]) => [key, num(named[wire])]));
+  return { ...(o.type_multiplier && typeof o.type_multiplier === 'object' ? { typeMultiplier } : {}), ...(o.weight_by_window && typeof o.weight_by_window === 'object' ? { weightByWindow: numberMap(o.weight_by_window) } : {}) };
+};
+/**
+ * The subscription cost model from the envelope's `content`. A missing content reads as the empty model, which sizes no
+ * tier and weighs no model; a capacity factor left out reads 1, which leaves a share alone.
+ */
+export const decodeSubscriptionCosts = (content: unknown): SubscriptionCosts => {
+  const c = rec(content);
+  const unit = rec(c.unit);
+  const definedBy = rec(unit.defined_by);
+  const peak = rec(c.peak);
+  const factor = rec(peak.capacity_factor);
+  const multiplier = rec(c.type_multiplier);
+  return {
+    capacity: byKey(c.capacity, (t) => ({ fiveHour: numOrNull(rec(t).five_hour), sevenDay: numOrNull(rec(t).seven_day) })),
+    effective: str(c.effective),
+    modelWeight: byKey(c.model_weight, numOrNull),
+    modelWindows: byKey(c.model_windows, (w) => ({ capacityFactor: num(rec(w).capacity_factor, 1), of: str(rec(w).of) })),
+    overrides: byKey(c.overrides, override),
+    peak: { capacityFactor: { fiveHour: num(factor.five_hour, 1), sevenDay: num(factor.seven_day, 1) }, fromHour: num(peak.from_hour), toHour: num(peak.to_hour), weekdays: bool(peak.weekdays), zone: str(peak.zone) },
+    typeMultiplier: { cacheRead: num(multiplier.cache_read), cacheWrite1h: num(multiplier.cache_write_1h), cacheWrite5m: num(multiplier.cache_write_5m), input: num(multiplier.input), output: num(multiplier.output) },
+    unit: { definedBy: { band: str(definedBy.band), tier: str(definedBy.tier), window: str(definedBy.window) }, unitsPerWindow: num(unit.units_per_window) },
+  };
 };
 
 export function decodeSettings(v: unknown): Settings {
@@ -600,16 +626,17 @@ export function decodeSettings(v: unknown): Settings {
   const k = rec(s.keepalive);
   const l = rec(s.listeners);
   const store = rec(s.storage);
+  const costs = rec(s.subscription_costs);
   return {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
+    apiPrices: decodePricing(s.api_prices),
     keepalive: { maxAgents: num(k.max_agents), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions) },
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy) },
-    planTables: decodePlanTables(s.plan_tables),
-    pricing: decodePricing(s.pricing),
     retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
-    storage: { ledgerPath: str(store.ledger_path), path: str(store.path), pricingPath: strOrNull(store.pricing_path) },
+    storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },
+    subscriptionCosts: { ...decodeSubscriptionCosts(costs.content), source: str(costs.source) },
     usage: { cacheTtlSeconds: num(rec(s.usage).cache_ttl_seconds) },
   };
 }

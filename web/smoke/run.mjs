@@ -50,8 +50,8 @@ process.on('unhandledRejection', (e) => problems.push(`[unhandledRejection] ${e?
 // while intervals, relative labels, and the scroll guards keep seeing time pass. The zone is pinned to UTC by
 // the smoke script for the same reason. Every date needle a check below compares against derives from
 // CLOCK_ORIGIN through the same formatter the page uses, never from a literal or the wall clock; the formatter
-// is exercised in UTC only. A date the story fixes outright, such as the pricing table's effective date, is a
-// literal on both sides and reads the same at any clock.
+// is exercised in UTC only. A date the fixtures fix outright, such as a cost file's effective date, is read from the
+// fixture through the same formatter and reads the same at any clock.
 const CLOCK_ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const started = performance.now();
 const WallClock = Date;
@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtDate, fmtPct, fmtShare, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, planLabel, ratesOf, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -349,11 +349,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // sessions route answers 17 rows, so a hero counting rows or a note counting every row's account reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '12' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
-  // The expectations come from the figures the page draws, over the accounts route and the decoded cost table's tiers,
-  // which the tier match reads in camelCase.
-  const tiers = decodeSettings(SETTINGS_WIRE).planTables.cost.tiers;
+  // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
+  // the tier match reads in camelCase.
+  const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
   const listed = await api.listAccounts();
-  const figures = { '5h': ringFigures(listed, '5h', tiers, Date.now()), '7d': ringFigures(listed, '7d', tiers, Date.now()) };
+  const figures = { '5h': ringFigures(listed, '5h', costs, Date.now()), '7d': ringFigures(listed, '7d', costs, Date.now()) };
   const ringCard = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
   const rings = { '5h': ringCard('5h remaining'), '7d': ringCard('7d remaining') };
   const labels = [...m.container.querySelectorAll('.donut__label')].map((l) => l.textContent);
@@ -366,23 +366,23 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     missing: [JSON.stringify(labels), `5-hour center ${center || 'absent'} against ${fmtPct(f5.left / f5.capacity)}`],
   });
   const lineOf = (id) => rings[id]?.querySelector('.remaining__line')?.textContent ?? '';
-  const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} Max 20x windows left`;
+  const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} ${f.anchor} windows left`;
   results.push({
     name: '/ the line under each ring reads the weighed figures',
-    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 3 && JSON.stringify(f7.rows.map((r) => r.id)) === JSON.stringify(['business']),
+    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 3 && JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['business', 'mail', 'personal']),
     missing: [`5-hour ${JSON.stringify(lineOf('5h'))} against ${JSON.stringify(lineFrom(f5))}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7))}`, `rows ${f5.rows.map((r) => r.id)} and ${f7.rows.map((r) => r.id)}`],
   });
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
   const onRing = (id) => [...(rings[id]?.querySelectorAll('.remaining__list a, .remaining__left-out li') ?? [])].map((e) => (e.textContent ?? '').split(':')[0]);
   const strays = ['5h', '7d'].flatMap((id) => onRing(id).filter((n) => n === 'team' || n === 'spare').map((n) => `${n} on the ${id} ring`));
   results.push({
-    name: '/ the 7-day ring names the unpriced accounts and the 5-hour ring names none',
-    ok: JSON.stringify(named('7d').sort()) === JSON.stringify(['mail: Pro 7-day capacity not measured', 'personal: Max 5x 7-day capacity not measured']) && lineOf('5h') !== '' && named('5h').length === 0 && strays.length === 0,
+    name: '/ every listed tier is sized on both windows, so neither ring names an account',
+    ok: lineOf('5h') !== '' && lineOf('7d') !== '' && named('7d').length === 0 && named('5h').length === 0 && strays.length === 0,
     missing: [`7-day ${JSON.stringify(named('7d'))}`, `5-hour ${JSON.stringify(named('5h'))}`, ...strays],
   });
   const titled = (id) => {
     const f = figures[id];
-    const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} Max 20x windows, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
+    const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} ${f.anchor} windows, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
     const legend = [...(rings[id]?.querySelectorAll('.remaining__list li') ?? [])];
     // The grey remainder is the spent arc, which carries its own title.
     const slices = [...(rings[id]?.querySelectorAll('svg.donut circle > title') ?? [])].map((t) => t.textContent ?? '').filter((t) => !t.startsWith('Spent: '));
@@ -1875,7 +1875,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Migrate above utilization', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -3249,8 +3249,8 @@ m.unmount();
   const landed = line();
   api.getSettings = getSettings;
   results.push({
-    name: '/pools the preview says the cost table is loading while the settings read is held',
-    ok: loading === 'The cost table is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
+    name: '/pools the preview says the cost model is loading while the settings read is held',
+    ok: loading === 'The cost model is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
     missing: [loading, landed],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -3272,8 +3272,8 @@ m.unmount();
   outage.recover();
   outage.restore();
   results.push({
-    name: '/pools the preview says the cost table did not load after a failed settings read',
-    ok: line === 'The cost table did not load, so window-share pins cannot be counted.' && !line.includes('Would move'),
+    name: '/pools the preview says the cost model did not load after a failed settings read',
+    ok: line === 'The cost model did not load, so window-share pins cannot be counted.' && !line.includes('Would move'),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -6394,15 +6394,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
   {
-    // `mail` serves the story's Sonnet 5 traffic alone, whose cells the cost table leaves null, and every 7-day cell
-    // is null, so its 5-hour window and every account's 7-day window price nothing in the range.
+    // `mail` serves the story's Sonnet 5 traffic alone, which the cost model has no weight for, so its two windows
+    // price nothing in the range while every other account's 5-hour and 7-day windows carry a figure.
     const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
     const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
     const fiveHour = planItems.filter((li) => labelOf(li).endsWith('(5-hour)'));
     const sevenDay = planItems.filter((li) => labelOf(li).endsWith('(7-day)'));
     const unlisted = planItems.filter((li) => labelOf(li) === 'model unlisted');
     results.push({
-      name: "/analytics plan per hour draws each priced account's 5-hour share, a dash for the unmeasured 7-day window, and one model unlisted entry",
+      name: "/analytics plan per hour draws each priced account's 5-hour and 7-day shares, a dash for the unpriced account's windows, and one model unlisted entry",
       ok:
         windows.every((w) => planned.includes(w)) &&
         !planned.some((t) => t.startsWith('console')) &&
@@ -6411,20 +6411,20 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         fiveHour.length === 3 &&
         fiveHour.every((li) => (labelOf(li).startsWith('mail ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
         sevenDay.length === 3 &&
-        sevenDay.every((li) => valueOf(li) === '-') &&
+        sevenDay.every((li) => (labelOf(li).startsWith('mail ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
         unlisted.length === 1 &&
         valueOf(unlisted[0]) === '5-hour, 7-day' &&
-        unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point',
+        unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point',
       missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
     });
     // The legend's per-hour mean still ends in `%` over a single gap, so the buckets themselves are read: the
-    // unmeasured model belongs to `mail` alone, and no story row carries it onto a priced account.
+    // unweighted model belongs to `mail` alone, and no story row carries it onto a priced account.
     const gaps = [];
     for (const days of [1, 7]) {
       const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
-      gaps.push(...burn.points.filter((p) => ['business', 'personal'].includes(p.group) && p.tokens > 0 && p.fiveHourShare === null).map((p) => `${days}d ${p.group} ${p.at}`));
+      gaps.push(...burn.points.filter((p) => ['business', 'personal'].includes(p.group) && p.tokens > 0 && (p.fiveHourShare === null || p.sevenDayShare === null)).map((p) => `${days}d ${p.group} ${p.at}`));
     }
-    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour share', ok: gaps.length === 0, missing: gaps });
+    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour and 7-day shares', ok: gaps.length === 0, missing: gaps });
   }
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
@@ -6477,11 +6477,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
   {
     // jsdom lays nothing out, so the plan chart's container reads a browser's size here and the chart draws its
-    // lines, dots and tooltip. `business` is a Max 20x account the cost table sizes: its middle hour priced, and the
-    // hours either side carried traffic on a cell the table leaves unmeasured, so the 5-hour series reads
-    // [null, 0.05, null] and the 7-day one is null throughout.
+    // lines, dots and tooltip. `business` is a Max 20x account the cost model sizes: its middle hour priced, and the
+    // hours either side carried traffic on a model the cost model has no weight for, so the 5-hour series reads
+    // [null, 0.05, null] and the 7-day one [null, 0.005, null].
     const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: h === 1 ? 0.05 : null, group: 'business', sevenDayShare: null, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 })) });
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: h === 1 ? 0.05 : null, group: 'business', sevenDayShare: h === 1 ? 0.005 : null, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 })) });
     const measure = window.HTMLElement.prototype.getBoundingClientRect;
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
@@ -6492,8 +6492,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const dots = [...(plan?.querySelectorAll('.recharts-line-dots .recharts-line-dot') ?? [])];
     const curves = [...(plan?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d')).filter((d) => d !== null);
     results.push({
-      name: '/analytics plan per hour marks a priced hour between two unpriced ones with a dot and leaves the gaps unconnected',
-      ok: dots.length === 1 && curves.length > 0 && curves.every((d) => !/[CLHV]/i.test(d.slice(1))),
+      name: '/analytics plan per hour marks a priced hour between two unpriced ones with a dot on each window and leaves the gaps unconnected',
+      ok: dots.length === 2 && curves.length > 0 && curves.every((d) => !/[CLHV]/i.test(d.slice(1))),
       missing: [`${dots.length} dots`, ...curves],
     });
     // The first hour's every share is null: the tooltip still names it, with a dash and the unpriced hint per window.
@@ -6511,7 +6511,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok:
         tip?.querySelector('.chart-tip__title')?.textContent === when &&
         JSON.stringify(tipRows.map((r) => [r.label, r.value])) === JSON.stringify([['business (5-hour)', '-'], ['business (7-day)', '-']]) &&
-        tipRows.every((r) => r.hint === 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point'),
+        tipRows.every((r) => r.hint === 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point'),
       missing: [tip?.querySelector('.chart-tip__title')?.textContent ?? 'no tooltip', when, JSON.stringify(tipRows)],
     });
     window.HTMLElement.prototype.getBoundingClientRect = measure;
@@ -7806,12 +7806,17 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool codex keeps no caches warm', 'key ci opts out']);
   {
     const nets = [...m.container.querySelectorAll('.agents__row .agents__net')].map((cell) => [...cell.children].map((part) => part.textContent?.trim()).join(' | '));
+    // The story's probe replays a 20k-token Fable 5.1 prefix out of band, on a Sunday evening in Los Angeles; an
+    // agent that probed once is down one probe's share, and one held for overage up three.
+    const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
+    const probe = shareOf(costs, 'five_hour', anchorTier(costs), 'claude-fable-5-1', { cacheRead: 20_000, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }, Date.UTC(2026, 8, 13, 20, 0));
     results.push({
       name: "/sessions an agent's net reads in the unit it settled in, and one that crossed a funding change carries both",
-      ok: nets.includes('-0.003% of the 5-hour window') && nets.includes('0.009% of the 5-hour window | -$0.01') && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
+      ok: probe !== null && nets.includes(`${fmtShare(-probe)} of the 5-hour window`) && nets.includes(`${fmtShare(3 * probe)} of the 5-hour window | -$0.01`) && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
       missing: [...new Set(nets)],
     });
-    // The story's Opus 5 and Sonnet 5 cells are null, so a probe on either settles in dollars on a subscription too.
+    // The cost model has no weight for the story's Opus 5 and Sonnet 5, so a probe on either settles in dollars on a
+    // subscription too.
     const agentRows = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => ({
       account: row.children[2]?.textContent?.trim(),
       model: row.children[1]?.textContent?.trim(),
@@ -7819,7 +7824,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     }));
     const unlisted = agentRows.filter((r) => ['business', 'personal'].includes(r.account) && ['claude-opus-5', 'claude-sonnet-5'].includes(r.model));
     results.push({
-      name: '/sessions an agent on a subscription account whose model the cost table cannot price settles its probes in dollars',
+      name: '/sessions an agent on a subscription account whose model the cost model cannot price settles its probes in dollars',
       ok: unlisted.length > 0 && unlisted.every((r) => !r.net.includes('of the 5-hour window')) && unlisted.some((r) => r.net.startsWith('-$')),
       missing: unlisted.map((r) => `${r.account} ${r.model}: ${r.net}`),
     });
@@ -7830,7 +7835,11 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   await m.settle(200);
   results.push({ name: '/sessions Collapse all closes every row', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
 
-  // Cost reference.
+  // Cost reference. Every figure it draws is read against the decoded settings the mock answers, the files the
+  // fixtures captured, never against a literal.
+  const wired = decodeSettings(SETTINGS_WIRE);
+  const priceIds = wired.apiPrices.models.map((p) => p.model);
+  const costs = wired.subscriptionCosts;
   const costLink = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Cost reference');
   costLink?.click();
   await m.settle(400);
@@ -7854,20 +7863,15 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     '5m write',
     '1h write',
     'Window share',
+    'from the subscription cost model the ledger ships',
+    'A dash is a model the plan meter has not weighed, or a tier it has not sized on the window',
     'number of later turns that must read the prefix before writing it into the cache was cheaper than sending it uncached each turn',
     'A 5-minute entry needs a probe about every 4 minutes to survive an idle hour, 15 in all; a 1-hour entry needs one.',
     'cost of keeping one prefix token warm across one idle hour (one write plus the probe reads), as a multiple of sending that token once as uncached input; 2.75x means holding it warm costs 2.75 times sending it cold once',
     'per prefix token',
     'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client.',
     'Without warming, the 1-hour entry wins after a 5-minute pause.',
-    'claude-fable-5-1',
-    'claude-fable-5',
-    'claude-opus-5-5',
-    'claude-opus-4-8',
-    'claude-opus-4-7',
-    'claude-sonnet-4-6',
-    'claude-sonnet-4-5',
-    'claude-haiku-4-5-20251001',
+    ...priceIds,
   ]);
   {
     const terms = [...(costDlg?.querySelectorAll('.cost-ref__notes dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
@@ -7883,26 +7887,28 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const priceRow = (model) => [...(rowOf(priceTable, model)?.children ?? [])].map((td) => td.textContent?.trim());
   const modelsOf = (table) => [...(table?.querySelectorAll('tbody tr:not(.cost-ref__fast)') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
   const models = modelsOf(priceTable);
-  results.push({ name: '/sessions cost reference lists Anthropic models only', ok: models.length === 10 && models.every((n) => n.startsWith('claude-')), missing: models });
-  const shareModels = [
-    'claude-fable-5',
-    'claude-fable-5-1',
-    'claude-haiku-4-5-20251001',
-    'claude-opus-4-7',
-    'claude-opus-4-8',
-    'claude-opus-5',
-    'claude-opus-5-5',
-    'claude-sonnet-4-5',
-    'claude-sonnet-4-6',
-    'claude-sonnet-5',
-    'claude-sonnet-5-5',
-  ];
   results.push({
-    name: '/sessions cost reference keeps the dollar table to its eleven columns and lists every model either table names below it in the window share table, sorted by id',
-    ok: models.length === 10 && [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(shareModels),
+    name: "/sessions cost reference lists the price file's models in the file's order",
+    ok: models.length === Object.keys(SETTINGS_WIRE.api_prices.content.models).length && JSON.stringify(models) === JSON.stringify(priceIds) && models.every((n) => n.startsWith('claude-')),
+    missing: models,
+  });
+  // Every price row, then every weighted model no price row reads through its undated name, in the files' order.
+  const undatedPrices = new Set(priceIds.map((id) => id.replace(/-\d{8}$/, '')));
+  const shareModels = [...priceIds, ...Object.keys(costs.modelWeight).filter((id) => !undatedPrices.has(id))];
+  results.push({
+    name: "/sessions cost reference keeps the dollar table to its eleven columns and lists every model either file names below it in the window share table, in the files' order",
+    ok: [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(shareModels),
     missing: modelsOf(shareTable),
   });
-  results.push({ name: '/sessions cost reference groups a class newest first', ok: models.slice(2, 6).join(',') === 'claude-opus-5-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7', missing: models });
+  // The dollar figures the page derives from a row, read here from the decoded row the same way.
+  const usd = (n) => `$${n.toFixed(2)}`;
+  const priceOf = (model) => wired.apiPrices.models.find((p) => p.model === model);
+  const turns = (p, write) => ((write - p.inputPerM) / (p.inputPerM - p.cacheReadPerM)).toFixed(1);
+  const held = (p, write, probes) => `${Number(((write + probes * p.cacheReadPerM) / p.inputPerM).toFixed(2))}x`;
+  const payoff = (p) => {
+    const minutes = Math.round((4 * (p.cacheWrite1hPerM - p.cacheWrite5mPerM)) / p.cacheReadPerM);
+    return minutes >= 60 ? 'never within 1h' : `${minutes} min`;
+  };
   {
     // The fast-mode row sits right under the model it prices, and only a model with fast cells has one.
     const fastUnder = (model) => {
@@ -7910,46 +7916,82 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       return next?.classList.contains('cost-ref__fast') ? [...next.children].map((td) => td.textContent?.trim()) : null;
     };
     const opus = fastUnder('claude-opus-5-5');
+    const fast = priceOf('claude-opus-5-5')?.fast;
     results.push({
       name: '/sessions cost reference lists Opus 5.5 with a fast-mode row at its fast cells',
-      ok: opus !== null && opus[0] === 'fast mode' && opus[1] === '$8.00' && opus[5] === '$40.00' && fastUnder('claude-sonnet-5') === null && shareTable?.querySelector('.cost-ref__fast') === null,
+      ok: opus !== null && fast !== null && fast !== undefined && opus[0] === 'fast mode' && opus[1] === usd(fast.inputPerM) && opus[5] === usd(fast.outputPerM) && fastUnder('claude-sonnet-5') === null && shareTable?.querySelector('.cost-ref__fast') === null,
       missing: opus ?? ['no fast-mode row under claude-opus-5-5'],
     });
   }
+  const fableRow = priceOf('claude-fable-5-1');
   const fable = priceRow('claude-fable-5-1');
-  results.push({ name: '/sessions cost reference turns to pay off on cheap-read Fable', ok: fable[6] === '0.3' && fable[7] === '1.0', missing: fable });
+  results.push({ name: '/sessions cost reference turns to pay off on cheap-read Fable', ok: fable[6] === turns(fableRow, fableRow.cacheWrite5mPerM) && fable[7] === turns(fableRow, fableRow.cacheWrite1hPerM), missing: fable });
+  const sonnetRow = priceOf('claude-sonnet-5');
   const sonnet = priceRow('claude-sonnet-5');
-  results.push({ name: '/sessions cost reference turns to pay off on a standard model', ok: sonnet[6] === '0.3' && sonnet[7] === '1.1', missing: sonnet });
-  results.push({ name: '/sessions cost reference prices holding a prefix warm for an idle hour', ok: sonnet[8] === '2.75x' && sonnet[9] === '2.1x' && sonnet[10] === '30 min', missing: sonnet });
-  results.push({ name: '/sessions cost reference says a 1h entry never pays off on Fable 5.1', ok: fable[10] === 'never within 1h', missing: fable });
-  const haiku = priceRow('claude-haiku-4-5-20251001');
-  results.push({ name: '/sessions cost reference prices Haiku 4.5 from the shipped table', ok: haiku[1] === '$1.00' && haiku[2] === '$1.25' && haiku[3] === '$2.00' && haiku[4] === '$0.10' && haiku[5] === '$5.00', missing: haiku });
-  // Input, cache read, 5m write, 1h write and output on the 5-hour window, then the same five on the 7-day one.
-  const plan = (model) => [...(rowOf(shareTable, model)?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
-  const dashes = Array(10).fill('-');
+  results.push({ name: '/sessions cost reference turns to pay off on a standard model', ok: sonnet[6] === turns(sonnetRow, sonnetRow.cacheWrite5mPerM) && sonnet[7] === turns(sonnetRow, sonnetRow.cacheWrite1hPerM), missing: sonnet });
   results.push({
-    name: '/sessions cost reference prices every measured token type as a share of the 5-hour window and dashes the unmeasured 7-day cells',
-    ok:
-      JSON.stringify(plan('claude-opus-5-5')) === JSON.stringify(['1.46%', '0.0365%', '1.83%', '1.82%', '7.28%', '-', '-', '-', '-', '-']) &&
-      JSON.stringify(plan('claude-fable-5-1')) === JSON.stringify(['6.65%', '0.168%', '8.33%', '8.4%', '32.9%', '-', '-', '-', '-', '-']),
-    missing: [JSON.stringify(plan('claude-opus-5-5')), JSON.stringify(plan('claude-fable-5-1'))],
+    name: '/sessions cost reference prices holding a prefix warm for an idle hour',
+    ok: sonnet[8] === held(sonnetRow, sonnetRow.cacheWrite5mPerM, 15) && sonnet[9] === held(sonnetRow, sonnetRow.cacheWrite1hPerM, 1) && sonnet[10] === payoff(sonnetRow),
+    missing: sonnet,
   });
-  results.push({ name: '/sessions cost reference finds the undated cells for a dated model', ok: JSON.stringify(plan('claude-haiku-4-5-20251001')) === JSON.stringify(['0.659%', '0.0167%', '0.824%', '0.823%', '3.29%', '-', '-', '-', '-', '-']), missing: plan('claude-haiku-4-5-20251001') });
-  results.push({ name: '/sessions cost reference dashes a listed model whose cells are unmeasured', ok: JSON.stringify(plan('claude-opus-5')) === JSON.stringify(dashes), missing: plan('claude-opus-5') });
+  results.push({ name: '/sessions cost reference reads when a 1h entry pays off on Fable 5.1', ok: fable[10] === payoff(fableRow), missing: fable });
+  const haikuRow = priceOf('claude-haiku-4-5');
+  const haiku = priceRow('claude-haiku-4-5');
+  results.push({
+    name: '/sessions cost reference prices Haiku 4.5 from the price file',
+    ok: haiku[1] === usd(haikuRow.inputPerM) && haiku[2] === usd(haikuRow.cacheWrite5mPerM) && haiku[3] === usd(haikuRow.cacheWrite1hPerM) && haiku[4] === usd(haikuRow.cacheReadPerM) && haiku[5] === usd(haikuRow.outputPerM),
+    missing: haiku,
+  });
+  // Input, cache read, 5m write, 1h write and output on the 5-hour window, then the same five on the 7-day one, each
+  // the share of the anchor tier's window one million tokens spend.
+  const plan = (model) => [...(rowOf(shareTable, model)?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
+  const anchor = anchorTier(costs);
+  const SHARE_TYPES = ['input', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h', 'output'];
+  const cellsFor = (model) => ['five_hour', 'seven_day'].flatMap((w) => {
+    const rates = ratesOf(costs, w, anchor, model);
+    return SHARE_TYPES.map((k) => (rates === null ? '-' : fmtShare(rates[k])));
+  });
+  const weighted = shareModels.filter((model) => ratesOf(costs, 'five_hour', anchor, model) !== null);
+  const wrong = shareModels.filter((model) => JSON.stringify(plan(model)) !== JSON.stringify(cellsFor(model)));
+  results.push({
+    name: '/sessions cost reference prices every type of a weighted model on both windows and draws each cell as the share rule gives it',
+    ok: weighted.length > 0 && weighted.every((model) => !plan(model).includes('-') && plan(model).length === 10) && wrong.length === 0,
+    missing: wrong.map((model) => `${model}: ${JSON.stringify(plan(model))} against ${JSON.stringify(cellsFor(model))}`),
+  });
   {
+    // A Sunday evening in Los Angeles, outside the peak band, so the share is the cell's: one million input tokens.
+    const OUT = Date.UTC(2026, 8, 13, 20, 0);
+    const first = Object.keys(costs.modelWeight).find((model) => costs.modelWeight[model] !== null);
+    const share = first === undefined ? null : shareOf(costs, 'five_hour', anchor, first, { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 1_000_000, output: 0 }, OUT);
+    results.push({
+      name: "/sessions cost reference's 5-hour input cell is the share one million input tokens spend",
+      ok: share !== null && bandFactor(costs, 'five_hour', OUT) === 1 && plan(first)[0] === fmtShare(share),
+      missing: [first ?? 'no weighted model', String(plan(first ?? '')[0]), share === null ? 'no share' : fmtShare(share)],
+    });
+  }
+  {
+    // The anchor's capacity over each other tier's, in the file's order.
+    const spends = (tier, w) => {
+      const [anchored, sized] = [costs.capacity[anchor][w], costs.capacity[tier][w]];
+      return anchored !== null && sized !== null && sized > 0 ? `a ${planLabel(tier)} account spends ${Number((anchored / sized).toPrecision(3))} times as much of its own` : `a ${planLabel(tier)} account's capacity is not measured on this window`;
+    };
+    const titleOf = (w) =>
+      `Share of a ${planLabel(anchor)} window per million tokens; ${Object.keys(costs.capacity)
+        .filter((tier) => tier !== anchor)
+        .map((tier) => spends(tier, w))
+        .join(', ')}`;
     const groups = [...(shareTable?.querySelectorAll('thead tr:first-child th') ?? [])].slice(1).map((th) => [th.textContent?.trim(), th.getAttribute('title')]);
     results.push({
-      name: "/sessions cost reference titles each window group with that window's tier factors on Max 20x",
-      ok:
-        JSON.stringify(groups) ===
-        JSON.stringify([
-          ['5-hour window', 'Share of a Max 20x window per million tokens; a Max 5x account spends 4 times as much of its own, a Pro account spends 20 times as much of its own'],
-          ['7-day window', "Share of a Max 20x window per million tokens; a Max 5x account's factor is not measured on this window, a Pro account's factor is not measured on this window"],
-        ]),
+      name: "/sessions cost reference titles each window group with the other tiers' multiples from the capacities",
+      ok: JSON.stringify(groups) === JSON.stringify([['5-hour window', titleOf('fiveHour')], ['7-day window', titleOf('sevenDay')]]),
       missing: groups.map((g) => g.join(': ')),
     });
   }
-  results.push({ name: '/sessions cost reference leaves a model with no cells blank on both windows', ok: plan('claude-opus-4-8').every((c) => c === '-') && plan('claude-opus-4-8').length === 10, missing: plan('claude-opus-4-8') });
+  results.push({
+    name: '/sessions cost reference dashes Opus 4.8 and Sonnet 5, which the cost model does not weigh, on both windows',
+    ok: ['claude-opus-4-8', 'claude-sonnet-5'].every((model) => plan(model).length === 10 && plan(model).every((c) => c === '-')),
+    missing: ['claude-opus-4-8', 'claude-sonnet-5'].map((model) => `${model}: ${JSON.stringify(plan(model))}`),
+  });
   const close = [...(costDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close');
   close?.click();
   await m.settle(200);
@@ -8086,29 +8128,8 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
     missing: rows,
-  });
-  failed.unmount();
-}
-{
-  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
-  const failed = await mount('/settings');
-  const pricing = () => [...failed.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
-  const error = pricing()?.querySelector('.empty--error');
-  const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
-  results.push({
-    name: "/settings a failed read draws Pricing's error state with Try again",
-    ok: error?.querySelector('.empty__title')?.textContent === 'Could not load the price table' && (error?.textContent ?? '').includes('the configuration store is unavailable') && retry !== undefined,
-    missing: [pricing()?.textContent?.slice(0, 160) ?? 'no Pricing card'],
-  });
-  retry?.click();
-  await failed.settle(400);
-  const models = [...(pricing()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim());
-  results.push({
-    name: "/settings Pricing's Try again reads the price table",
-    ok: models.includes('claude-fable-5-1') && pricing()?.querySelector('.empty--error') === null,
-    missing: models,
   });
   failed.unmount();
 }
@@ -8134,7 +8155,7 @@ m.unmount();
     ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],
     ['/analytics', (c, t) => t.includes('No traffic in this range.'), 'No traffic in this range.'],
     ['/sessions', (c, t) => t.includes('No live sessions'), 'No live sessions'],
-    ['/settings', (c, t) => t.includes('Pricing'), 'Pricing'],
+    ['/settings', (c, t) => t.includes('API prices path'), 'API prices path'],
   ];
   for (const [path, drawn, needle] of views) {
     const before = problems.length;
@@ -8183,34 +8204,38 @@ m.unmount();
   // The settings answer feeds the shell's version line as well as the page, so a decoder that threw on the date would
   // blank both.
   const { getSettings } = api;
-  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, pricing: { ...SETTINGS_WIRE.pricing, effective: 'v3' } }));
+  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, api_prices: { ...SETTINGS_WIRE.api_prices, content: { ...SETTINGS_WIRE.api_prices.content, effective: 'v3' } } }));
   const page = await mount('/settings');
   const sidebar = page.container.querySelector('.sidebar')?.textContent ?? '';
-  const pricing = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
-  const subtitle = pricing?.querySelector('.card__subtitle')?.textContent ?? '';
-  results.push({ name: '/settings a free-text pricing date still draws the sidebar version', ok: sidebar.includes(MOCK_VERSION) && subtitle.startsWith('Effective v3,'), missing: [sidebar.slice(0, 120), subtitle || 'no Pricing subtitle'] });
+  const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'API prices path')?.querySelector('dd')?.textContent?.trim() ?? '';
+  results.push({ name: "/settings a free-text price file date shows as sent on its About row and still draws the sidebar version", ok: sidebar.includes(MOCK_VERSION) && row === `${SETTINGS_WIRE.storage.api_prices_path}, effective v3`, missing: [sidebar.slice(0, 120), row || 'no API prices path row'] });
   api.getSettings = getSettings;
   page.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
   const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
-  results.push({ name: '/settings the cards run client block, Pricing, Appearance, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Pricing', 'Appearance', 'About']), missing: titles });
+  results.push({ name: '/settings the cards run client block, Appearance, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Appearance', 'About']) && m.container.querySelector('.price-table') === null, missing: titles });
   const subtitle = m.container.querySelector('.settings > .card')?.querySelector('.card__subtitle')?.textContent;
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  // The mock stores 268435456 retained bytes, which is 256 MiB.
-  results.push({ name: '/settings About lists the version, the profile, the metrics listener, the three paths, the three keepalive limits and the admin secret, then the installation sentence', ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', 'Pricing path=./pricing.yaml', 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  // The mock stores 268435456 retained bytes, which is 256 MiB. Each cost file's row carries its table's date, read
+  // from the captured envelope.
+  const wired = decodeSettings(SETTINGS_WIRE);
+  const priceRow = `API prices path=./api_prices.yaml, effective ${fmtDate(wired.apiPrices.effective)}`;
+  const costRow = `Subscription costs path=./subscription_costs.yaml, effective ${fmtDate(wired.subscriptionCosts.effective)}`;
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates, the three keepalive limits and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   const restart = 'Set in the configuration file; a change takes a restart.';
   results.push({
     name: '/settings each path and keepalive line names its key in the configuration file, each keepalive line the restart, and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'Pricing path=Set by stats.pricing_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', `Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', `Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
@@ -8225,42 +8250,6 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   });
 }
 {
-  expect('/settings pricing meta', m.text(), ['Effective Sep 30, 2026', 'source: shipped']);
-  const priceRow = (model) => {
-    const row = [...m.container.querySelectorAll('tbody tr')].find((tr) => tr.children[0]?.textContent?.trim() === model);
-    return row ? [...row.children].slice(1).map((td) => td.textContent?.trim()) : null;
-  };
-  const shipped = {
-    'claude-fable-5-1': ['$10.00', '$0.25', '$12.50', '$20.00', '$50.00'],
-    'claude-opus-5': ['$5.00', '$0.50', '$6.25', '$10.00', '$25.00'],
-    'claude-sonnet-5': ['$2.00', '$0.20', '$2.50', '$4.00', '$10.00'],
-    'claude-haiku-4-5-20251001': ['$1.00', '$0.10', '$1.25', '$2.00', '$5.00'],
-  };
-  const heads = [...m.container.querySelectorAll('thead th')].map((th) => th.textContent?.trim());
-  for (const [model, want] of Object.entries(shipped)) {
-    const got = priceRow(model);
-    results.push({ name: `/settings price row ${model}`, ok: got !== null && want.every((v) => got.includes(v)), missing: got ?? ['row missing', ...heads] });
-  }
-  const shippedModels = [...m.container.querySelectorAll('tbody tr')].map((row) => row.children[0]?.textContent?.trim() ?? '').filter((n) => n.includes('-'));
-  results.push({ name: '/settings price table is the shipped Anthropic table', ok: shippedModels.length === 10 && shippedModels.every((n) => n.startsWith('claude-')), missing: shippedModels });
-  {
-    const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
-    const rows = card?.querySelectorAll('.price-table tbody tr:not(.price-table__fast)').length ?? 0;
-    const edits = card?.querySelectorAll('.price-cell__btn, input, .save-bar').length ?? 0;
-    const buttons = [...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() || b.getAttribute('aria-label'));
-    results.push({
-      name: '/settings the Pricing card is read-only: the rows, no editable cell, no Add model and no button',
-      ok: card !== undefined && rows === 10 && edits === 0 && buttons.length === 0,
-      missing: [`rows ${rows}`, `editable parts ${edits}`, ...buttons],
-    });
-    const opus = [...(card?.querySelectorAll('.price-table tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'claude-opus-5-5');
-    const fast = opus?.nextElementSibling?.classList.contains('price-table__fast') ? [...opus.nextElementSibling.children].map((td) => td.textContent?.trim()) : null;
-    results.push({
-      name: '/settings the fast-mode row sits under Opus 5.5',
-      ok: fast !== null && fast[0] === 'fast mode' && fast[1] === '$8.00' && fast[5] === '$40.00',
-      missing: fast ?? ['no fast-mode row under claude-opus-5-5'],
-    });
-  }
   results.push({
     name: '/settings no longer carries the other upstream prices section',
     ok: !m.text().includes('Other upstream prices') && !/gpt-\d/.test(m.text()) && m.container.querySelectorAll('.price-extra').length === 0,
@@ -8934,13 +8923,13 @@ m.unmount();
 }
 
 {
-  // Without the Max 20x row in the cost table no account of the story is sized for the 7-day window, so that ring
-  // weighs nobody; the 5-hour ring still weighs Pro and Max 5x and names business alone.
+  // With no tier's 7-day capacity in the cost model no account of the story is sized for that window, so that ring
+  // weighs nobody and names all three; the 5-hour ring still weighs all three and names none.
   const { getSettings } = api;
   api.getSettings = async () => {
     const settings = await getSettings.call(api);
-    const { default_claude_max_20x: _dropped, ...tiers } = settings.planTables.cost.tiers;
-    return { ...settings, planTables: { ...settings.planTables, cost: { ...settings.planTables.cost, tiers } } };
+    const capacity = Object.fromEntries(Object.entries(settings.subscriptionCosts.capacity).map(([tier, row]) => [tier, { ...row, sevenDay: null }]));
+    return { ...settings, subscriptionCosts: { ...settings.subscriptionCosts, capacity } };
   };
   const page = await mount('/', { now: CLOCK_ORIGIN });
   api.getSettings = getSettings;
@@ -8960,9 +8949,9 @@ m.unmount();
       !drawn.week.ring &&
       drawn.week.sentence === "No listed account's tier is sized for the 7-day window." &&
       drawn.week.listAfter &&
-      JSON.stringify(drawn.week.names) === JSON.stringify(['business: tier default_claude_max_20x is not in the cost table', 'mail: Pro 7-day capacity not measured', 'personal: Max 5x 7-day capacity not measured']) &&
+      JSON.stringify(drawn.week.names) === JSON.stringify(['business: Max 20x 7-day capacity not measured', 'mail: Pro 7-day capacity not measured', 'personal: Max 5x 7-day capacity not measured']) &&
       drawn.fiveHour.ring &&
-      JSON.stringify(drawn.fiveHour.names) === JSON.stringify(['business: tier default_claude_max_20x is not in the cost table']),
+      drawn.fiveHour.names.length === 0,
     missing: [JSON.stringify(drawn)],
   });
 }

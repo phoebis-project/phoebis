@@ -532,9 +532,9 @@ which makes it as sensitive as the registry even though it holds no credential, 
 
 No script in this repository backs these files up; [Operations](operations.md) says how.
 
-![The Settings view: the downstream client block, the price table, Appearance and About
+![The Settings view: the downstream client block, Appearance and About
 ](assets/settings-light.png#only-light)
-![The Settings view: the downstream client block, the price table, Appearance and About
+![The Settings view: the downstream client block, Appearance and About
 ](assets/settings-dark.png#only-dark)
 
 ## Compiled-in limits

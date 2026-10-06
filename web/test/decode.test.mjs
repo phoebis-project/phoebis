@@ -194,6 +194,8 @@ test('an unknown weekly window decodes under its key after the known ones, in th
 test('plan labels read the tier', () => {
   assert.equal(d.planLabel('default_claude_max_20x'), 'Max 20x');
   assert.equal(d.planLabel('claude_pro'), 'Pro');
+  assert.equal(d.planLabel('default_claude_ai'), 'Pro', 'the tier the profile reports for Pro');
+  assert.equal(d.planLabel('default_claude_max_5x'), 'Max 5x');
   assert.equal(d.planLabel('something_else'), 'something_else');
 });
 
@@ -658,15 +660,15 @@ test('the burn series decodes each point with its instant, both token sides, and
   const at = body.points.findLastIndex((p) => p.five_hour_share !== null);
   const [last, wire] = [burn.points[at], body.points[at]];
   assert.ok(
-    wire.five_hour_share > 0 && wire.seven_day_share === null && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
-    'the fixture reports a subscription point with a priced 5-hour share and no 7-day one, every 7-day cell being unmeasured, output tokens among its count',
+    wire.five_hour_share > 0 && wire.cached_tokens > 0 && wire.uncached_tokens > 0 && wire.tokens > wire.cached_tokens + wire.uncached_tokens,
+    'the fixture reports a subscription point with a priced 5-hour share, output tokens among its count',
   );
   assert.deepEqual(last, {
     at: new Date(wire.at).toISOString(),
     cachedTokens: wire.cached_tokens,
     fiveHourShare: wire.five_hour_share,
     group: 'business',
-    sevenDayShare: null,
+    sevenDayShare: wire.seven_day_share,
     tokens: wire.tokens,
     uncachedTokens: wire.uncached_tokens,
     unit: 'window_share',
@@ -1106,7 +1108,7 @@ test('settings decode the members the route answers and nothing more', () => {
   const s = d.decodeSettings(wire);
   assert.deepEqual(
     Object.keys(s).sort(),
-    ['about', 'access', 'keepalive', 'listeners', 'planTables', 'pricing', 'retention', 'sessions', 'storage', 'usage'],
+    ['about', 'access', 'apiPrices', 'keepalive', 'listeners', 'retention', 'sessions', 'storage', 'subscriptionCosts', 'usage'],
   );
   const members = Object.fromEntries(Object.entries(s).map(([name, body]) => [name, Object.keys(body).sort()]));
   assert.deepEqual(
@@ -1114,13 +1116,13 @@ test('settings decode the members the route answers and nothing more', () => {
     {
       about: ['profile', 'version'],
       access: ['adminConfigured'],
+      apiPrices: ['effective', 'effectiveDate', 'models', 'source'],
       keepalive: ['maxAgents', 'maxRetainedBytes', 'maxSessions'],
       listeners: ['metrics', 'proxy'],
-      planTables: ['cost'],
-      pricing: ['effective', 'effectiveDate', 'models', 'source'],
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
-      storage: ['ledgerPath', 'path', 'pricingPath'],
+      storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
+      subscriptionCosts: ['capacity', 'effective', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'source', 'typeMultiplier', 'unit'],
       usage: ['cacheTtlSeconds'],
     },
     'each member carries what the pages read and no other key',
@@ -1128,9 +1130,10 @@ test('settings decode the members the route answers and nothing more', () => {
   assert.deepEqual(s.keepalive, { maxAgents: wire.keepalive.max_agents, maxRetainedBytes: wire.keepalive.max_retained_bytes, maxSessions: wire.keepalive.max_sessions });
   assert.deepEqual(s.listeners, { metrics: wire.listeners.metrics, proxy: wire.listeners.proxy });
   assert.deepEqual(s.retention, { bodyCaptureMaxHours: wire.retention.body_capture_max_hours });
-  assert.deepEqual(s.storage, { ledgerPath: wire.storage.ledger_path, path: wire.storage.path, pricingPath: null }, 'no override file is a null path, never an empty one');
+  assert.deepEqual(s.storage, { apiPricesPath: null, ledgerPath: wire.storage.ledger_path, path: wire.storage.path, subscriptionCostsPath: null }, 'no override file is a null path, never an empty one');
   assert.deepEqual(s.usage, { cacheTtlSeconds: wire.usage.cache_ttl_seconds });
-  assert.equal(d.decodeSettings({ ...wire, storage: { ...wire.storage, pricing_path: './pricing.yaml' } }).storage.pricingPath, './pricing.yaml');
+  const configured = d.decodeSettings({ ...wire, storage: { ...wire.storage, api_prices_path: './api_prices.yaml', subscription_costs_path: './subscription_costs.yaml' } }).storage;
+  assert.deepEqual([configured.apiPricesPath, configured.subscriptionCostsPath], ['./api_prices.yaml', './subscription_costs.yaml']);
 });
 
 test('a settings member the answer leaves out decodes to its default', () => {
@@ -1146,37 +1149,73 @@ test('a settings member the answer leaves out decodes to its default', () => {
   assert.deepEqual(without('listeners'), { metrics: '', proxy: '' });
   assert.deepEqual(without('retention'), { bodyCaptureMaxHours: 0 });
   assert.deepEqual(without('sessions'), { expireAfterSeconds: 0 });
-  assert.deepEqual(without('storage'), { ledgerPath: '', path: '', pricingPath: null });
+  assert.deepEqual(without('storage'), { apiPricesPath: null, ledgerPath: '', path: '', subscriptionCostsPath: null });
   assert.deepEqual(without('usage'), { cacheTtlSeconds: 0 });
+  const bare = { ...wire };
+  delete bare.subscription_costs;
+  assert.deepEqual(
+    d.decodeSettings(bare).subscriptionCosts,
+    {
+      capacity: {},
+      effective: '',
+      modelWeight: {},
+      modelWindows: {},
+      overrides: {},
+      peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+      source: '',
+      typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
+      unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
+    },
+    'an answer without the cost model reads as an empty one, with no capacity and no weight',
+  );
 });
 
-test('settings decode the cost table with its tiers and null for unmeasured', () => {
+test('settings decode the subscription cost model from its envelope', () => {
   const wire = fixture('settings');
-  const { cost } = d.decodeSettings(wire).planTables;
-  assert.equal(cost.effective, wire.plan_tables.cost.effective);
-  assert.deepEqual(Object.keys(cost).sort(), ['bands', 'effective', 'tiers', 'windows']);
-  assert.deepEqual(Object.keys(cost.windows).sort(), ['five_hour', 'seven_day']);
-  assert.deepEqual(Object.keys(cost.windows.five_hour).sort(), Object.keys(wire.plan_tables.cost.windows.five_hour).sort());
-  assert.equal(cost.windows.five_hour['claude-opus-5-5'].input, 0.01461, 'a measured cell is its share');
-  assert.equal(cost.windows.five_hour['claude-opus-5'].input, null, 'an unmeasured cell reads null');
-  assert.equal(cost.windows.seven_day['claude-opus-5-5'].output, null, 'every 7-day cell is unmeasured');
-  assert.deepEqual(Object.keys(cost.windows.five_hour['claude-opus-5-5']).sort(), ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output']);
-  assert.deepEqual(cost.bands, [{ factor: 1.435, fromHour: 5, toHour: 11, weekdays: true, windows: ['five_hour'], zone: 'America/Los_Angeles' }]);
-  assert.deepEqual(cost.tiers.default_claude_pro, { fiveHour: 0.05, sevenDay: null });
-  assert.deepEqual(cost.tiers.default_claude_max_20x, { fiveHour: 1, sevenDay: 1 });
+  const s = d.decodeSettings(wire);
+  const costs = s.subscriptionCosts;
+  const content = wire.subscription_costs.content;
+  assert.equal(costs.source, wire.subscription_costs.source);
+  assert.equal(costs.effective, content.effective);
+  assert.deepEqual(costs.unit, { definedBy: { band: content.unit.defined_by.band, tier: content.unit.defined_by.tier, window: content.unit.defined_by.window }, unitsPerWindow: content.unit.units_per_window });
+  assert.equal(costs.capacity.default_claude_ai.fiveHour, content.capacity.default_claude_ai.five_hour, "Pro's 5-hour capacity under the key the profile reports");
+  assert.deepEqual(Object.keys(costs.capacity), Object.keys(content.capacity), "the tiers in the file's order");
+  for (const [tier, row] of Object.entries(content.capacity)) assert.deepEqual(costs.capacity[tier], { fiveHour: row.five_hour, sevenDay: row.seven_day }, tier);
+  assert.deepEqual(Object.keys(costs.modelWeight), Object.keys(content.model_weight), "the weights in the file's order");
+  assert.equal(costs.modelWeight['claude-opus-5-5'], content.model_weight['claude-opus-5-5']);
+  const peak = content.peak;
+  assert.deepEqual(costs.peak, { capacityFactor: { fiveHour: peak.capacity_factor.five_hour, sevenDay: peak.capacity_factor.seven_day }, fromHour: peak.from_hour, toHour: peak.to_hour, weekdays: peak.weekdays, zone: peak.zone });
+  const m = content.type_multiplier;
+  assert.deepEqual(costs.typeMultiplier, { cacheRead: m.cache_read, cacheWrite1h: m.cache_write_1h, cacheWrite5m: m.cache_write_5m, input: m.input, output: m.output });
+  const fable = content.model_windows.seven_day_fable;
+  assert.deepEqual(costs.modelWindows.seven_day_fable, { capacityFactor: fable.capacity_factor, of: fable.of });
+  assert.deepEqual(Object.keys(costs.overrides), Object.keys(content.overrides));
+  assert.deepEqual(s.apiPrices.models.map((p) => p.model), Object.keys(wire.api_prices.content.models), "the price rows in the file's order");
+  assert.deepEqual([s.apiPrices.effective, s.apiPrices.source], [wire.api_prices.content.effective, wire.api_prices.source]);
   const bare = { ...wire };
-  delete bare.plan_tables;
-  assert.deepEqual(d.decodeSettings(bare).planTables, { cost: { bands: [], effective: '', tiers: {}, windows: {} } }, 'an answer without the tables reads as empty ones');
+  delete bare.subscription_costs;
+  assert.deepEqual(Object.keys(d.decodeSettings(bare).subscriptionCosts.capacity), [], 'an answer without the cost model sizes no tier');
+});
+
+test('the cost model decodes an override with the members it names alone, and a null weight and capacity as null', () => {
+  const content = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body.subscription_costs.content;
+  const costs = d.decodeSubscriptionCosts(content);
+  const haiku = content.overrides['claude-haiku-4-5'];
+  assert.deepEqual(costs.overrides['claude-haiku-4-5'], { typeMultiplier: { cacheRead: haiku.type_multiplier.cache_read }, weightByWindow: haiku.weight_by_window });
+  assert.deepEqual(d.decodeSubscriptionCosts({ ...content, overrides: { 'claude-haiku-4-5': { weight_by_window: haiku.weight_by_window } } }).overrides['claude-haiku-4-5'], { weightByWindow: haiku.weight_by_window }, 'an override without multipliers carries none');
+  assert.equal(costs.modelWeight['claude-opus-5'], content.model_weight['claude-opus-5']);
+  assert.equal(costs.modelWeight['claude-opus-5'], null);
+  assert.equal(costs.capacity.default_claude_team.sevenDay, null);
 });
 
 test('a pricing effective date that is not a date decodes as the string sent with no parsed date', () => {
   const wire = fixture('settings');
-  const pricingOf = (effective) => d.decodeSettings({ ...wire, pricing: { ...wire.pricing, effective } }).pricing;
+  const pricingOf = (effective) => d.decodeSettings({ ...wire, api_prices: { ...wire.api_prices, content: { ...wire.api_prices.content, effective } } }).apiPrices;
   // V8 reads some free text as a date ("version 3" as March 2001), so only text that opens with an ISO date counts.
   for (const effective of ['v3', '', 'Q3 2026', 'version 3', 'rev 2']) {
     const pricing = pricingOf(effective);
     assert.deepEqual([pricing.effective, pricing.effectiveDate], [effective, null], `${JSON.stringify(effective)} is kept as sent`);
-    assert.equal(pricing.models.length, wire.pricing.models.length, 'the table beside it still decodes');
+    assert.equal(pricing.models.length, Object.keys(wire.api_prices.content.models).length, 'the table beside it still decodes');
   }
   const dated = pricingOf('2026-10-01');
   assert.deepEqual([dated.effective, dated.effectiveDate], ['2026-10-01', '2026-10-01T00:00:00.000Z'], 'a date keeps its text and parses');
@@ -1189,11 +1228,15 @@ test('an account patch encodes the cancelled flag and its end', () => {
 });
 
 test('settings, pricing, pairing, quota, and usage decode', () => {
-  const s = d.decodeSettings(fixture('settings'));
+  const wire = fixture('settings');
+  const s = d.decodeSettings(wire);
   assert.equal(s.sessions.expireAfterSeconds, 86400);
   assert.deepEqual(s.keepalive, { maxAgents: 1024, maxRetainedBytes: 268_435_456, maxSessions: 128 });
   assert.equal(s.listeners.metrics, '127.0.0.1:9464');
-  assert.equal(s.pricing.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, 2);
+  const rows = wire.api_prices.content.models;
+  assert.equal(s.apiPrices.models.find((m) => m.model === 'claude-sonnet-5').inputPerM, rows['claude-sonnet-5'].input);
+  const opus = s.apiPrices.models.find((m) => m.model === 'claude-opus-5-5');
+  assert.deepEqual([opus.cacheWrite1hPerM, opus.fast.outputPerM], [rows['claude-opus-5-5'].cache_write_1h, rows['claude-opus-5-5'].fast.output], "a cell and a fast cell read under the file's names");
   const pairing = d.decodePairingSession(fixture('pairing_started'));
   assert.ok(pairing.id && pairing.state && pairing.authorizeUrl.includes('state=') && isIso(pairing.expiresAt));
   const history = d.decodeQuotaHistory(fixture('account_quota'));
@@ -1305,7 +1348,7 @@ test('the mock feed speaks the router\'s wire and the mock hands the handler wha
 test('a session decodes its burn unit and both net balances, and a pin the table cannot price reads no burn', () => {
   const rows = fixture('sessions').sessions;
   const wire = rows.find((s) => s.session_id === 's-fixture');
-  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, whose every cell the cost table leaves unmeasured');
+  assert.equal(wire.model, 'claude-sonnet-5', 'the fixture pins Sonnet 5, which the cost model has no weight for');
   const pinned = d.decodeSession(wire);
   assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its cells');
   assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the table cannot price reads null beside its unit');

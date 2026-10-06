@@ -1,5 +1,5 @@
 import { api } from '@/api';
-import type { FastPrice, Settings } from '@/api/types';
+import { effectiveDateOf } from '@/api/decode';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Skeleton } from '@/components/ui/primitives';
@@ -53,27 +53,11 @@ const ENV_TERMS: { body: string; term: string }[] = [
 /** These come from the configuration file and the admin API only reads them, so each says where it is set. */
 const bootstrapNote = (setting: string) => `Set by ${setting} in the configuration file`;
 const restartNote = (key: string) => `${key}\nSet in the configuration file; a change takes a restart.`;
-
-type PriceField = 'cacheReadPerM' | 'cacheWrite1hPerM' | 'cacheWrite5mPerM' | 'inputPerM' | 'outputPerM';
-
-/** Table order, which is the order a turn spends tokens in, not alphabetical. */
-const PRICE_FIELDS: { key: PriceField; label: string }[] = [
-  { key: 'inputPerM', label: 'Input' },
-  { key: 'cacheReadPerM', label: 'Cache read' },
-  { key: 'cacheWrite5mPerM', label: 'Cache write 5m' },
-  { key: 'cacheWrite1hPerM', label: 'Cache write 1h' },
-  { key: 'outputPerM', label: 'Output' },
-];
-
-type Pricing = Settings['pricing'];
-
-/** Two decimals, extended to at most four when a price needs them. */
-const fmtPrice = (n: number) => `$${n.toFixed(4).replace(/(\.\d\d[1-9]?)0+$/, '$1')}`;
-
-/** `pricing.source` is `shipped`, or `file` for the operator's `stats.pricing_path` table; shown as it reads. */
-function sourceLabel(source: string): string {
-  return source;
-}
+/** A table's date as the router sent it: a date reads through `fmtDate`, and free text is shown as sent. */
+const effectiveLabel = (effective: string) => {
+  const at = effectiveDateOf(effective);
+  return at === null ? effective : fmtDate(at);
+};
 
 function SecretBadge({ configured }: { configured: boolean }) {
   return <Badge tone={configured ? 'good' : 'warning'}>{configured ? 'configured' : 'not configured'}</Badge>;
@@ -119,8 +103,6 @@ export function SettingsPage() {
         </dl>
       </Card>
 
-      <PricingCard error={settings.error} pricing={s ? s.pricing : null} onRetry={settings.reload} />
-
       <Card title="Appearance" subtitle="Stored in this browser only.">
         <div className="setting-row">
           <div>
@@ -164,7 +146,8 @@ export function SettingsPage() {
                 { label: 'Profile', value: s.about.profile, mono: true },
                 { label: 'Metrics listener', value: s.listeners.metrics, mono: true, title: 'The Prometheus scrape endpoint.' },
                 { label: 'Ledger path', value: s.storage.ledgerPath, mono: true, title: bootstrapNote('stats.ledger_path') },
-                { label: 'Pricing path', value: s.storage.pricingPath ?? 'not configured', mono: s.storage.pricingPath !== null, title: bootstrapNote('stats.pricing_path') },
+                { label: 'API prices path', value: `${s.storage.apiPricesPath ?? 'not configured'}, effective ${effectiveLabel(s.apiPrices.effective)}`, mono: s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
+                { label: 'Subscription costs path', value: `${s.storage.subscriptionCostsPath ?? 'not configured'}, effective ${effectiveLabel(s.subscriptionCosts.effective)}`, mono: s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
                 { label: 'Keepalive sessions', value: String(s.keepalive.maxSessions), mono: true, title: restartNote('keepalive.max_sessions') },
                 { label: 'Keepalive agents', value: String(s.keepalive.maxAgents), mono: true, title: restartNote('keepalive.max_agents') },
@@ -184,73 +167,4 @@ export function SettingsPage() {
       </Card>
     </div>
   );
-}
-
-function PricingCard({ error: failed, onRetry, pricing }: { error: string | null; onRetry: () => void; pricing: Pricing | null }) {
-  return (
-    <Card
-      title="Pricing"
-      subtitle={pricing ? `Effective ${pricing.effectiveDate ? fmtDate(pricing.effectiveDate) : pricing.effective}, source: ${sourceLabel(pricing.source)}` : undefined}
-      padded={false}
-      className="card--table"
-    >
-      <div className="table-wrap">
-        <table className="table price-table">
-          <thead>
-            <tr>
-              <th>Model</th>
-              {PRICE_FIELDS.map((f) => (
-                <th className="right" key={f.key}>
-                  {f.label}
-                </th>
-              ))}
-            </tr>
-          </thead>
-          <tbody>
-            {pricing ? (
-              pricing.models.flatMap((m) => [
-                <tr key={m.model}>
-                  <td className="mono">{m.model}</td>
-                  {PRICE_FIELDS.map((f) => (
-                    <PriceCell key={f.key} value={m[f.key]} />
-                  ))}
-                </tr>,
-                ...fastRow(m.model, m.fast),
-              ])
-            ) : (
-              <tr>
-                <td colSpan={6}>
-                  {failed ? <ErrorState title="Could not load the price table" body={failed} action={<Button size="sm" onClick={onRetry}>Try again</Button>} /> : <Skeleton />}
-                </td>
-              </tr>
-            )}
-          </tbody>
-        </table>
-      </div>
-      <p className="muted" style={{ padding: '10px 14px' }}>
-        USD per million tokens. Costs in the ledger are estimates computed at request time.
-      </p>
-    </Card>
-  );
-}
-
-/** The read-only fast-mode sub-row under a model that has the cells, in the table's column order. */
-function fastRow(id: string, fast: FastPrice | null) {
-  if (!fast) return [];
-  return [
-    <tr key={`${id} fast`} className="price-table__fast">
-      <td className="muted" style={{ paddingLeft: 28 }}>
-        fast mode
-      </td>
-      {PRICE_FIELDS.map((f) => (
-        <td className="right num" key={f.key}>
-          {fmtPrice(fast[f.key])}
-        </td>
-      ))}
-    </tr>,
-  ];
-}
-
-function PriceCell({ value }: { value: number }) {
-  return <td className="right num">{!Number.isFinite(value) || value === 0 ? <span className="muted">-</span> : fmtPrice(value)}</td>;
 }

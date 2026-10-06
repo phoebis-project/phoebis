@@ -1,12 +1,11 @@
-import type { BurnUnit, CompanionState, FastPrice, KeepaliveOverview, KeepaliveRecipe, ModelPrice, PlanModelCells, RecipeReason, Session } from '@/api/types';
-import { own } from '@/lib/analytics';
+import type { BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, RecipeReason, Session } from '@/api/types';
+import { anchorTier, ratesOf, shareOf } from '@/lib/costs';
 import { accountById } from './accounts';
-import { PRICES } from './catalog';
 import { FIXTURES } from './generated/fixtures';
 import { keyById } from './pools';
 import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
-import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE } from './samples';
+import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
 import { MINUTE, ago, ahead } from './time';
 
 const rng = createRng(2_024);
@@ -60,20 +59,15 @@ for (const r of REQUESTS) {
   else ledgered.set(r.sessionId, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
 }
 
-/** A 20k-token prefix read back at Fable 5.1's cache-read cell, 0.001675 of the Max 20x window per million, rounded. */
-const PROBE_SHARE = 0.00003;
+// Sunday 13 September 2026 at 20:00 UTC, 13:00 in Los Angeles: a weekend day at an hour outside 5 to 11, so the
+// instant is outside the peak band whatever the band's weekday rule.
+const OUT_OF_BAND = Date.UTC(2026, 8, 13, 20, 0);
+/** A 20k-token prefix read back on Fable 5.1, the share of the anchor tier's 5-hour window it spends out of band. */
+const PROBE_SHARE = shareOf(TABLES, 'five_hour', anchorTier(TABLES), 'claude-fable-5-1', { cacheRead: 20_000, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }, OUT_OF_BAND) ?? 0;
 
-/**
- * Whether the cost table's 5-hour row for `model` (a dated id reads its undated name) prices every type in `types`:
- * a model with no row, or with a `null` cell among them, has no share for that usage.
- */
-function sharePrices(model: string, types: (keyof PlanModelCells)[]): boolean {
-  const rows = SETTINGS_SAMPLE.planTables.cost.windows.five_hour ?? {};
-  const undated = model.replace(/-\d{8}$/, '');
-  const row = own(rows, model) ? rows[model] : own(rows, undated) ? rows[undated] : undefined;
-  return row !== undefined && types.every((t) => row[t] !== null);
-}
-const PIN_TYPES: (keyof PlanModelCells)[] = ['cacheRead', 'cacheWrite1h', 'cacheWrite5m', 'input', 'output'];
+/** Whether the cost model weighs `model` on the 5-hour window (a dated id reads its undated name): a weighted model
+ *  prices every type, and one without a weight has no share for any usage. */
+const sharePrices = (model: string): boolean => ratesOf(TABLES, 'five_hour', anchorTier(TABLES), model) !== null;
 
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // The last entry deliberately falls outside the ledgered ids.
@@ -100,8 +94,8 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   const burnAtRoll = ago(rng.int(2, 40) * MINUTE);
   const lastInputRoll = rng.int(500, 20_000);
   const lastRefreshRoll = ago(rng.int(2, 40) * MINUTE);
-  // A pin on a model whose row prices none of its types has no burn to rank by, as the route answers it.
-  const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : PIN_TYPES.some((t) => sharePrices(spec.model, [t])) ? burnRoll : null;
+  // A pin on a model the cost model does not weigh has no burn to rank by, as the route answers it.
+  const burn = !pinned ? null : unit === 'usd' ? burnUsdRoll : sharePrices(spec.model) ? burnRoll : null;
   // The ledger names a session's fork from its requests, so a session it never saw records none.
   const fork = REQUESTS.find((r) => r.sessionId === sessionId && r.forkedFrom !== null);
   return {
@@ -211,13 +205,13 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
-    // The unit a probe settles in follows the serving account's own funding and the probe's typed usage: a share of
-    // the 5-hour window on a subscription account whose row for the model prices every type the probe spends,
-    // dollars on an api_key one or on a model the table cannot price, the same decision the engine makes. A probe
-    // replays a prefix of about 20k tokens at the cache-read rate: about 0.016% of the window, or $0.004.
+    // The unit a probe settles in follows the serving account's own funding: a share of the 5-hour window on a
+    // subscription account whose model the cost model weighs, since a weighted model prices every type a probe
+    // spends, dollars on an api_key one or on a model the cost model cannot price, the same decision the engine
+    // makes. A probe replays a prefix of about 20k tokens at the cache-read rate: `PROBE_SHARE` of the window, or
+    // $0.004.
     const probes = state === 'armed' && reason === null ? j + 1 : 0;
-    const probeTypes: (keyof PlanModelCells)[] = ['cacheRead', 'cacheWrite5m', 'input', 'output', ...(ttlSeconds === 3_600 ? (['cacheWrite1h'] as const) : [])];
-    const inShare = accountById.get(accountId ?? '')?.kind === 'oauth' && sharePrices(model, probeTypes);
+    const inShare = accountById.get(accountId ?? '')?.kind === 'oauth' && sharePrices(model);
     // Held for overage after probing, so an agent on plan quota settled in both units and carries a balance in each;
     // one whose probes the share could not price carries its dollar balance alone.
     const crossed = reason === 'overage';
@@ -305,13 +299,12 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   netSaved7dUsd: 41.8,
 };
 
-const priceCellsWire = (p: FastPrice) => ({ cache_read_per_m: p.cacheReadPerM, cache_write_1h_per_m: p.cacheWrite1hPerM, cache_write_5m_per_m: p.cacheWrite5mPerM, input_per_m: p.inputPerM, output_per_m: p.outputPerM });
-const priceWire = (p: ModelPrice) => ({ ...priceCellsWire(p), fast: p.fast ? priceCellsWire(p.fast) : null, model: p.model });
 const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, unknown>>;
 
 /**
  * The settings answer in the route's own shape, so the mock's settings reach the pages through the decoder the router's
- * answer goes through. The route answers the cost table the ledger ships, so the captured table stands as it is.
+ * answer goes through. The route answers the price table and the cost model the ledger ships, so the captured
+ * `api_prices` and `subscription_costs` envelopes stand as they are.
  */
 export const SETTINGS_WIRE = {
   ...settingsFixture,
@@ -319,9 +312,8 @@ export const SETTINGS_WIRE = {
   access: { admin_configured: true },
   keepalive: { max_agents: 1024, max_retained_bytes: 268_435_456, max_sessions: 128 },
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
-  pricing: { ...settingsFixture.pricing, effective: '2026-09-30', models: PRICES.map(priceWire), source: 'shipped' },
   retention: { body_capture_max_hours: 72 },
   sessions: { expire_after_seconds: 86_400 },
-  storage: { ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', pricing_path: './pricing.yaml' },
+  storage: { api_prices_path: './api_prices.yaml', ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', subscription_costs_path: './subscription_costs.yaml' },
   usage: { cache_ttl_seconds: 60 },
 };

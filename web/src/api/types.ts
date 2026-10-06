@@ -889,7 +889,7 @@ export interface Session {
   agents: number;
   /** The pin's typed burn per hour in `burnUnit`, priced when read; 0 for a pin never renewed with usage, null with
    *  no pin at all, with one whose account left the registry, on a subscription account whose tier is unknown, or
-   *  on a model with a cell the table leaves unmeasured. */
+   *  on a model it has no weight for, or a tier it has no capacity for on that window. */
   burn: number | null;
   /** When `burn` was last folded, the instant the shedding preview decays it forward from; null with no pin, or for a
    *  pin never folded. */
@@ -1011,32 +1011,36 @@ export interface ModelPrice {
   outputPerM: number;
 }
 
-/** The fraction of a Max 20x window one million tokens of each type consume; null for a cell the plan meter has not
- *  measured, through which no share is priced. */
-export interface PlanModelCells { cacheRead: number | null; cacheWrite1h: number | null; cacheWrite5m: number | null; input: number | null; output: number | null }
-/** The peak band on the 5-hour cells: a charge landing inside its hours in `zone` is weighed by `factor`. */
-export interface PlanBand { factor: number; fromHour: number; toHour: number; weekdays: boolean; windows: string[]; zone: string }
-/** The share of the Max 20x window per million tokens, per window (`five_hour`, `seven_day`) and model, and each
- *  tier's capacity of each window over Max 20x's, null where unmeasured. */
-export interface CostTable { bands: PlanBand[]; effective: string; tiers: Record<string, { fiveHour: number | null; sevenDay: number | null }>; windows: Record<string, Record<string, PlanModelCells>> }
-export interface PlanTables { cost: CostTable }
+export interface TypeMultiplier { cacheRead: number; cacheWrite1h: number; cacheWrite5m: number; input: number; output: number }
+/** The subscription cost model as the ledger loaded it, the file's keys in camel case and its maps in the file's order. */
+export interface SubscriptionCosts {
+  capacity: Record<string, { fiveHour: number | null; sevenDay: number | null }>;
+  effective: string;
+  modelWeight: Record<string, number | null>;
+  modelWindows: Record<string, { capacityFactor: number; of: string }>;
+  overrides: Record<string, { typeMultiplier?: Partial<TypeMultiplier>; weightByWindow?: Record<string, number> }>;
+  peak: { capacityFactor: { fiveHour: number; sevenDay: number }; fromHour: number; toHour: number; weekdays: boolean; zone: string };
+  typeMultiplier: TypeMultiplier;
+  unit: { definedBy: { band: string; tier: string; window: string }; unitsPerWindow: number };
+}
 
 export interface Settings {
   about: { profile: string; version: string };
   access: { adminConfigured: boolean };
+  /**
+   * The price table used to cost the ledger, its rows in the file's order. `effective` is the date as the router sent
+   * it, `effectiveDate` the instant it parses to, or null when it is not a date.
+   */
+  apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; source: string };
   keepalive: { maxAgents: number; maxRetainedBytes: number; maxSessions: number };
   listeners: { metrics: string; proxy: string };
-  planTables: PlanTables;
-  /**
-   * The price table shown to the user and used to cost the ledger. `effective` is the date as the router sent it,
-   * `effectiveDate` the instant it parses to, or null when it is not a date.
-   */
-  pricing: { effective: string; effectiveDate: string | null; models: ModelPrice[]; source: string };
   retention: { bodyCaptureMaxHours: number };
   /** How long a session stays listed after its last activity. */
   sessions: { expireAfterSeconds: number };
-  /** `pricingPath` is null when no override file is configured. */
-  storage: { ledgerPath: string; path: string; pricingPath: string | null };
+  /** Each path is null when no override file is configured. */
+  storage: { apiPricesPath: string | null; ledgerPath: string; path: string; subscriptionCostsPath: string | null };
+  /** The envelope's `content` with its `source` beside it; an answer without the envelope reads as an empty model. */
+  subscriptionCosts: SubscriptionCosts & { source: string };
   usage: { cacheTtlSeconds: number };
 }
 

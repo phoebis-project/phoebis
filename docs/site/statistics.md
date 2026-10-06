@@ -102,9 +102,9 @@ keeps the cadence. The other accounts keep theirs throughout.
 Every attempt is stamped with a cost estimate at list prices per million tokens: an estimate rather than a bill,
 since tier and batch modifiers are not known here and subscription quota is the rate-limit windows, never this
 number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the binary;
-`stats.api_prices_path` overrides it with a file of the operator's own, and Settings shows the table in force with
-its version and its source. An attempt on a model the table does not price carries no cost estimate and is counted
-in `phoebis_pricing_unknown_model_total`.
+`stats.api_prices_path` overrides it with a file of the operator's own, and Settings names each table's path and date
+on its About card, and the cost reference shows the table. An attempt on a model the table does not price carries no
+cost estimate and is counted in `phoebis_pricing_unknown_model_total`.
 
 A model that serves fast mode carries a second set of five cells at the fast rates under the same date; an attempt
 whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model
@@ -285,11 +285,12 @@ record without a pool, a pool deleted since, one of the router's own writers); i
 [`phoebis_attention` gauge](#conditions-and-gauges) exports. Four tiles report requests, tokens, estimated cost, and the
 error rate over the last 24 hours, and a line under them says when the figures were read, or that the last refresh
 failed and why. Two cards below show how much of the pooled 5-hour and 7-day capacity is left: each subscription account
-is weighed by its tier's capacity in Max 20x windows from the cost table and listed with its own remaining share, and
-the line under the ring reads the windows left against the pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A
-window whose reset has passed with no reading since counts as a full allowance. An account whose tier the table does not
-size, or whose window the table has not measured, is named under the ring instead, with the reason. The page ends with
-the most recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
+is weighed by its tier's capacity on the window from the subscription cost model, in Max 20x windows, and listed with
+its own remaining share, and the line under the ring reads the windows left against the pooled capacity, such as 0.39 of
+1.30 Max 20x windows left. A window whose reset has passed with no reading since counts as a full allowance. An account
+whose tier the model does not size, or whose tier has no capacity on the window, is named under the ring instead, with
+the reason. The page ends with the most recent requests and a sessions card that leads with the router's live pins and
+the accounts they sit on.
 
 ### Observe
 
@@ -458,10 +459,11 @@ its subtitle says so.
 
 Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
 router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and
-the address the listener binds shows beside the block. Then come the price table, the appearance and time-format
-choices, and an About card with the version, the profile, the metrics listener, the three storage paths, the three
-keepalive limits the file sets and the admin secret's standing. About closes on a pointer: the values the configuration
-file sets are on the [installation page](installation.md), and `phoebis check-config` prints them.
+the address the listener binds shows beside the block. Then come the appearance and time-format choices, and an About
+card with the version, the profile, the metrics listener, the four storage paths, the two price files' with their
+tables' dates, the three keepalive limits the file sets and the admin secret's standing. About closes on a pointer: the
+values the configuration file sets are on the [installation page](installation.md), and `phoebis check-config` prints
+them.
 
 ## Conditions and gauges
 

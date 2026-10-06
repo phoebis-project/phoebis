@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, CostTable, RequestLog, Session } from '@/api/types';
+import type { Account, RequestLog, Session, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
@@ -36,7 +36,7 @@ export function DashboardPage() {
 
   const o = overview.data;
   const hourly = o?.hourly ?? [];
-  const tiers = settings.data?.planTables.cost.tiers ?? null;
+  const costs = settings.data?.subscriptionCosts ?? null;
   const ringFailure = failedFirst(accounts) ? (
     <ReadFailed title="Could not load the accounts" error={accounts.error} retry={accounts.reload} />
   ) : failedFirst(settings) ? (
@@ -73,8 +73,8 @@ export function DashboardPage() {
       )}
 
       <div className="grid-2">
-        <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window, weighed by tier" windowId="5h" accounts={accounts.data} tiers={tiers} now={now} failure={ringFailure} />
-        <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window, weighed by tier" windowId="7d" accounts={accounts.data} tiers={tiers} now={now} failure={ringFailure} />
+        <RemainingCard title="5h remaining" subtitle="Subscription accounts, 5-hour window, weighed by tier" windowId="5h" accounts={accounts.data} costs={costs} now={now} failure={ringFailure} />
+        <RemainingCard title="7d remaining" subtitle="Subscription accounts, 7-day window, weighed by tier" windowId="7d" accounts={accounts.data} costs={costs} now={now} failure={ringFailure} />
       </div>
 
       <section>
@@ -124,8 +124,8 @@ function StatTile({ label, value, note, spark, color }: { color: string; label: 
   );
 }
 
-function RemainingCard({ title, subtitle, windowId, accounts, tiers, now, failure }: { accounts: Account[] | null; failure: ReactNode; now: number; subtitle: string; tiers: CostTable['tiers'] | null; title: string; windowId: '5h' | '7d' }) {
-  const figures = useMemo(() => (accounts && tiers ? ringFigures(accounts, windowId, tiers, now) : null), [accounts, tiers, windowId, now]);
+function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failure }: { accounts: Account[] | null; costs: SubscriptionCosts | null; failure: ReactNode; now: number; subtitle: string; title: string; windowId: '5h' | '7d' }) {
+  const figures = useMemo(() => (accounts && costs ? ringFigures(accounts, windowId, costs, now) : null), [accounts, costs, windowId, now]);
   return (
     <Card title={title} subtitle={subtitle}>
       {failure ? (
@@ -150,9 +150,9 @@ function RemainingCard({ title, subtitle, windowId, accounts, tiers, now, failur
 function WeighedRing({ figures }: { figures: RingFigures }) {
   const ink = useChartInk();
   const [hover, setHover] = useState<string | null>(null);
-  const { capacity, left, leftOut, rows } = figures;
+  const { anchor, capacity, left, leftOut, rows } = figures;
   const share = (r: RingRow) => r.weight * r.remaining;
-  const titleOf = (r: RingRow) => `${r.label}: ${fmtWindows(share(r))} of ${fmtWindows(capacity)} Max 20x windows, ${fmtPct(share(r) / capacity)} of the pooled capacity`;
+  const titleOf = (r: RingRow) => `${r.label}: ${fmtWindows(share(r))} of ${fmtWindows(capacity)} ${anchor} windows, ${fmtPct(share(r) / capacity)} of the pooled capacity`;
   return (
     <div className="remaining">
       <Donut
@@ -172,7 +172,7 @@ function WeighedRing({ figures }: { figures: RingFigures }) {
         ))}
       </ul>
       <p className="remaining__line">
-        {fmtWindows(left)} of {fmtWindows(capacity)} Max 20x windows left
+        {fmtWindows(left)} of {fmtWindows(capacity)} {anchor} windows left
       </p>
       {leftOut.length > 0 && <LeftOut accounts={leftOut} />}
     </div>

@@ -2,7 +2,7 @@ import type { ReactNode } from 'react';
 import { createRoot, type Root } from 'react-dom/client';
 import { createMemoryRouter, MemoryRouter, RouterProvider } from 'react-router-dom';
 import { api } from '@/api';
-import { decodeSettings } from '@/api/decode';
+import { decodeSettings, planLabel } from '@/api/decode';
 import { ApiError, call, reportFailure, SessionNotKept } from '@/api/http';
 import type { LiveEvent } from '@/api/types';
 import { routes } from '@/app/App';
@@ -14,7 +14,7 @@ import { ALL_ROLLUPS, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, REQUEST_EVE
 import { SETTINGS_SAMPLE } from '@/mock/samples';
 import { fakeClock } from './clock';
 
-export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, SessionNotKept, SETTINGS_WIRE };
+export { api, decodeSettings, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, planLabel, SessionNotKept, SETTINGS_WIRE };
 // The transport itself, for the check that needs its 401 path, which no mock call takes.
 export { call };
 export { AttentionRows } from '@/components/AttentionRows';
@@ -23,8 +23,9 @@ export { default as React } from 'react';
 export { AttemptTrail } from '@/components/ui/AttemptTrail';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
-// derivation.
-export { fmtPct, shortModel } from '@/lib/format';
+// derivation; the cost reference's and the About card's checks read theirs the same way.
+export { anchorTier, bandFactor, ratesOf, shareOf } from '@/lib/costs';
+export { fmtDate, fmtPct, fmtShare, shortModel } from '@/lib/format';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;
 export const requestEvents = REQUEST_EVENTS;

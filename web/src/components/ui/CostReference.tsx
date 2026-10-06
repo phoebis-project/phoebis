@@ -1,9 +1,9 @@
 import { useState, type ReactNode } from 'react';
 import { api } from '@/api';
 import { planLabel } from '@/api/decode';
-import type { CostTable, FastPrice, ModelPrice, PlanModelCells } from '@/api/types';
-import { own } from '@/lib/analytics';
-import { fmtShare } from '@/lib/format';
+import type { FastPrice, ModelPrice, SubscriptionCosts } from '@/api/types';
+import { anchorTier, ratesOf, type CostWindow, type TokenType } from '@/lib/costs';
+import { fmtShare, undatedModel } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { Button, Dialog, Skeleton } from './primitives';
 
@@ -31,9 +31,10 @@ const NOTES: { body: ReactNode; term: string }[] = [
     term: 'Window share',
     body: (
       <>
-        Each plan column is the share of a Max 20x subscription's 5-hour or 7-day window that one million tokens of the type consume, from the cost table the ledger ships. An account on
-        another tier spends that share over its tier's factor from the same table, so a Max 5x account spends four times as much of its own window and a Pro account twenty times, by the
-        multiples a group header's tooltip gives. A dash is a cell the plan meter has not measured, through which no share is priced. A 1-hour write spends the same share as a 5-minute
+        Each plan column is the share of a Max 20x subscription's 5-hour or 7-day window that one million tokens of the type consume, derived from the subscription cost model the
+        ledger ships: the model's weight times the type's multiplier over the window's capacity. An account on another tier spends that share over the ratio of its tier's capacity to
+        Max 20x's, so a Max 5x account spends four times as much of its own 5-hour window and a Pro account twenty times, by the multiples a group header's tooltip gives for each window.
+        A dash is a model the plan meter has not weighed, or a tier it has not sized on the window, through which no share is priced. A 1-hour write spends the same share as a 5-minute
         one, so on plan-funded traffic the long TTL is free and the pool's plan rule set keeps <code>1h</code> for the main conversation and subagents alike; while a write costs money a
         1-hour write is 2x against 1.25x, so the metered rule set defaults to <code>5m</code> throughout.
       </>
@@ -92,48 +93,39 @@ function PriceRow({ cells, className, label }: { cells: FastPrice; className?: s
   );
 }
 
-/** A dated model id's undated name; the price table lists dated ids and the cost table ships undated ones. */
-const undatedOf = (model: string) => model.replace(/-\d{8}$/, '');
-/** The model's cells on a window, exact first and then undated. */
-const cellsOf = (table: CostTable, window: string, model: string): PlanModelCells | null => {
-  const models = own(table.windows, window) ? table.windows[window] : {};
-  const undated = undatedOf(model);
-  return own(models, model) ? models[model] : own(models, undated) ? models[undated] : null;
-};
-const PLAN_COLUMNS: { key: keyof PlanModelCells; label: string }[] = [
+const PLAN_COLUMNS: { key: TokenType; label: string }[] = [
   { key: 'input', label: 'Input' },
   { key: 'cacheRead', label: 'Cache read' },
   { key: 'cacheWrite5m', label: '5m write' },
   { key: 'cacheWrite1h', label: '1h write' },
   { key: 'output', label: 'Output' },
 ];
-const WINDOWS = [
-  { factor: 'fiveHour', key: 'five_hour', label: '5-hour window' },
-  { factor: 'sevenDay', key: 'seven_day', label: '7-day window' },
-] as const;
+const WINDOWS: { capacity: 'fiveHour' | 'sevenDay'; key: CostWindow; label: string }[] = [
+  { capacity: 'fiveHour', key: 'five_hour', label: '5-hour window' },
+  { capacity: 'sevenDay', key: 'seven_day', label: '7-day window' },
+];
 
-/** The tier every cell is measured on, whose factors the table carries as 1. */
-const REFERENCE_TIER = 'default_claude_max_20x';
-/** What each other tier spends of its own window against the reference share the group shows. */
-const groupTitle = (tiers: CostTable['tiers'], window: (typeof WINDOWS)[number]['factor']) => {
-  const spends = Object.keys(tiers)
-    .filter((tier) => tier !== REFERENCE_TIER)
-    .sort()
+/** What each other tier spends of its own window against the anchor tier's share the group shows: the anchor's
+ *  capacity over the tier's, in the file's order. */
+const groupTitle = (costs: SubscriptionCosts, window: (typeof WINDOWS)[number]['capacity']) => {
+  const anchor = anchorTier(costs);
+  const anchored = costs.capacity[anchor]?.[window] ?? null;
+  const spends = Object.keys(costs.capacity)
+    .filter((tier) => tier !== anchor)
     .map((tier) => {
-      const factor = tiers[tier][window];
-      return factor !== null && factor > 0
-        ? `a ${planLabel(tier)} account spends ${Number((1 / factor).toPrecision(3))} times as much of its own`
-        : `a ${planLabel(tier)} account's factor is not measured on this window`;
+      const capacity = costs.capacity[tier][window];
+      return anchored !== null && capacity !== null && capacity > 0
+        ? `a ${planLabel(tier)} account spends ${Number((anchored / capacity).toPrecision(3))} times as much of its own`
+        : `a ${planLabel(tier)} account's capacity is not measured on this window`;
     });
-  return `Share of a ${planLabel(REFERENCE_TIER)} window per million tokens; ${spends.join(', ')}`;
+  return `Share of a ${planLabel(anchor)} window per million tokens; ${spends.join(', ')}`;
 };
-/** The share table's rows: every price table model, plus every cost table model no price id reads (a dated price
- *  id reads the cost row of its undated name, as `cellsOf` reads it), sorted by id. */
-const shareModels = (prices: ModelPrice[], table: CostTable): string[] => {
+/** The share table's rows: every price table model, then every weighted model no price id reads (a dated price id
+ *  reads the weight of its undated name), in the files' order. */
+const shareModels = (prices: ModelPrice[], costs: SubscriptionCosts): string[] => {
   const priced = prices.map((p) => p.model);
-  const undated = new Set(priced.map(undatedOf));
-  const costed = Object.values(table.windows).flatMap((models) => Object.keys(models));
-  return [...new Set([...priced, ...costed.filter((m) => !undated.has(m))])].sort();
+  const undated = new Set(priced.map(undatedModel));
+  return [...priced, ...Object.keys(costs.modelWeight).filter((m) => !undated.has(m))];
 };
 
 /** Opens the shipped price table next to anything that spends tokens on the user's behalf. */
@@ -164,8 +156,8 @@ export function CostReferenceLink() {
 
 function PriceTable() {
   const settings = useAsync(() => api.getSettings(), []);
-  const prices = settings.data?.pricing.models ?? null;
-  const tables = settings.data?.planTables ?? null;
+  const prices = settings.data?.apiPrices.models ?? null;
+  const costs = settings.data?.subscriptionCosts ?? null;
   return (
     <div className="cost-ref">
       <p className="secondary">{CAVEAT}</p>
@@ -221,7 +213,7 @@ function PriceTable() {
             <tr>
               <th rowSpan={2}>Model</th>
               {WINDOWS.map((w) => (
-                <th key={w.key} colSpan={PLAN_COLUMNS.length} className="cost-ref__sep" title={tables ? groupTitle(tables.cost.tiers, w.factor) : undefined}>
+                <th key={w.key} colSpan={PLAN_COLUMNS.length} className="cost-ref__sep" title={costs ? groupTitle(costs, w.capacity) : undefined}>
                   {w.label}
                 </th>
               ))}
@@ -237,20 +229,18 @@ function PriceTable() {
             </tr>
           </thead>
           <tbody>
-            {prices && tables ? (
-              shareModels(prices, tables.cost).map((model) => (
+            {prices && costs ? (
+              shareModels(prices, costs).map((model) => (
                 <tr key={model}>
                   <td className="mono">{model}</td>
                   {WINDOWS.map((w) => {
-                    const cells = cellsOf(tables.cost, w.key, model);
-                    return PLAN_COLUMNS.map((c, i) => {
-                      const cell = cells === null ? null : cells[c.key];
-                      return (
-                        <td key={`${w.key}-${c.key}`} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
-                          {cell === null ? dash : fmtShare(cell)}
-                        </td>
-                      );
-                    });
+                    // A rate is per million tokens, the unit the subtitle names, so a cell draws it as it is.
+                    const rates = ratesOf(costs, w.key, anchorTier(costs), model);
+                    return PLAN_COLUMNS.map((c, i) => (
+                      <td key={`${w.key}-${c.key}`} className={`right num ${i === 0 ? 'cost-ref__sep' : ''}`}>
+                        {rates === null ? dash : fmtShare(rates[c.key])}
+                      </td>
+                    ));
                   })}
                 </tr>
               ))

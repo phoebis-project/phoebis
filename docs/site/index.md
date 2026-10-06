@@ -66,7 +66,7 @@ The sidebar shows the views in this order:
 | Requests | Individual relayed requests (see [Statistics](statistics.md)). |
 | Analytics | Hourly rollups and cost (see [Statistics](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
-| Settings | Client setup, the price table, and the router's version and paths (see [Installation](installation.md)). |
+| Settings | Client setup, and the router's version and paths (see [Installation](installation.md)). |
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
 issues a key. The console and this site call the account kind whose credential is an Anthropic API key an Anthropic key;

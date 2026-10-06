@@ -163,13 +163,13 @@ test('the burn and rewrite reads send the range and the grouping and answer what
   const [burnUrl, rewritesUrl] = calls.map((c) => new URL(c.url, 'http://x'));
   assert.deepEqual([burnUrl.pathname, burnUrl.searchParams.get('range'), burnUrl.searchParams.get('group_by')], ['/admin/analytics/burn', '0,86400000', 'request_class']);
   assert.deepEqual([rewritesUrl.pathname, [...rewritesUrl.searchParams.keys()], rewritesUrl.searchParams.get('range')], ['/admin/analytics/rewrites', ['range'], '0,86400000']);
-  // A subscription point that burned, whose 5-hour share a misnamed field would read as null.
+  // A subscription point that burned, whose window shares a misnamed field would read as null.
   const planned = bodies['/admin/analytics/burn'].points.findLastIndex((p) => p.five_hour_share > 0);
   assert.ok(planned >= 0, 'the fixture reports a subscription point that burned');
   assert.deepEqual(
     [burn.bucketSeconds, burn.points.length, burn.points[planned].fiveHourShare, burn.points[planned].sevenDayShare],
-    [3_600, bodies['/admin/analytics/burn'].points.length, bodies['/admin/analytics/burn'].points[planned].five_hour_share, null],
-    'every 7-day cell is unmeasured',
+    [3_600, bodies['/admin/analytics/burn'].points.length, bodies['/admin/analytics/burn'].points[planned].five_hour_share, bodies['/admin/analytics/burn'].points[planned].seven_day_share],
+    'both window shares read as the route answers them',
   );
   assert.deepEqual([rewrites.moves, rewrites.points.length], [{ spent: 1 }, bodies['/admin/analytics/rewrites'].points.length]);
 });

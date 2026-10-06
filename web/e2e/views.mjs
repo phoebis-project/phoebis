@@ -1549,7 +1549,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings cards ${JSON.stringify(read)}`);
-  const want = ['Downstream client configuration', 'Pricing', 'Appearance', 'About'];
+  const want = ['Downstream client configuration', 'Appearance', 'About'];
   if (JSON.stringify(read.titles) !== JSON.stringify(want)) say(`the cards run ${JSON.stringify(read.titles)}, not ${JSON.stringify(want)}`);
   const about = await page.evaluate(() => {
     const card = [...document.querySelectorAll('.settings > .card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
@@ -1567,7 +1567,7 @@ async function settingsOrder(theme) {
     };
   });
   measurements.push(`${theme} /settings about ${JSON.stringify(about)}`);
-  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret'];
+  const lines = ['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret'];
   if (JSON.stringify(about.labels) !== JSON.stringify(lines)) say(`About runs ${JSON.stringify(about.labels)}, not ${JSON.stringify(lines)}`);
   const storage = about.types[about.labels.indexOf('Storage path')];
   const offType = about.labels.filter((label, i) => about.types[i] !== storage);
@@ -2101,10 +2101,10 @@ async function burnCards(theme) {
 
 /**
  * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned account's
- * 7-day entry, on type and swatch size, and, where an account whose tier the cost table does not size draws a tier
+ * 7-day entry, on type and swatch size, and, where an account whose tier the cost model does not size draws a tier
  * unknown entry beside it, that muted entry on type, swatch size and colour too. In the mock's story the entry draws
- * for `mail`, whose Sonnet 5 traffic the table cannot price; the router's seed bills no subscription traffic, so
- * there the pass records that the entry is not drawn.
+ * for `mail`, whose Sonnet 5 traffic the cost model has no weight for; the router's seed bills no subscription
+ * traffic, so there the pass records that the entry is not drawn.
  */
 async function planLegend(theme) {
   try {
@@ -3026,8 +3026,8 @@ async function sessionsLead(theme) {
 /**
  * The cost reference dialog from Sessions: the dollar table and the window share table below it each fit the dialog
  * without a sideways scroll, and their Model columns end at one edge; the window groups' heads, their column heads
- * and their cells read in the type of the price columns above them; a row the cost table covers is the height of
- * one it does not and of a price row.
+ * and their cells read in the type of the price columns above them; a row of a model the cost model weighs is the
+ * height of one it does not and of a price row.
  */
 async function costReference(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);

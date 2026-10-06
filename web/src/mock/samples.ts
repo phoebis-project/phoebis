@@ -22,3 +22,5 @@ export const REQUEST_EVENT_SAMPLE = decodeRequestEvent(first('request', 'events'
 export const REQUEST_SAMPLE = decodeRequest(body('request').request);
 export const SESSION_SAMPLE = decodeSession(first('sessions', 'sessions'));
 export const SETTINGS_SAMPLE = decodeSettings(body('settings'));
+/** The subscription cost model the harness captured, the shipped one, which every mock share is priced through. */
+export const TABLES = SETTINGS_SAMPLE.subscriptionCosts;
