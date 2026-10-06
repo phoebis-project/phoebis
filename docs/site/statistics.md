@@ -124,46 +124,57 @@ the reconciliation. It reads as a zero share in Plan per hour, and its dollars c
 which Spend per minute charts under every grouping; a member's budget counts them at the fast cells, a subscription
 member's as an Anthropic-key member's.
 
-The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
-share of a Max 20x subscription's window that one million tokens consume, a number where the plan meter measured the
-cell and `null` where it did not. No reader prices a share through an unmeasured cell: the prediction adds no charge
-for it, the shedding round ranks the pin after every priced one, a plan-funded probe settles in dollars, the analytics
-list the share under model unlisted and the cost reference shows a dash. The table carries one date, `effective`; a
-dated model id reads the cells of its undated name. The 5-hour input and output cells, as a percent of the window per
-million tokens:
+The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants
+rather than cells: a token costs its model's weight times its type's multiplier in units on every window, a window holds
+a capacity in units per tier, and a request's share of a window is the units it spent over that capacity, over the peak
+band's capacity factor when the request completes inside the band. A unit is 1/150,000,000 of the Max 20x 5-hour window
+outside the band, so one percent of that window, the step the usage header moves in, is 1,500,000 units. Nothing the
+console shows is a unit count.
 
-| Model | Input | Output |
-| --- | --- | --- |
-| `claude-fable-5` | - | - |
-| `claude-fable-5-1` | 6.65% | 32.9% |
-| `claude-haiku-4-5` | 0.659% | 3.29% |
-| `claude-opus-5` | - | - |
-| `claude-opus-5-5` | 1.46% | 7.28% |
-| `claude-sonnet-5` | - | - |
-| `claude-sonnet-5-5` | 0.999% | 4.98% |
-
-Every 7-day cell is unmeasured until the 7-day window is read per model. The peak band is one measured factor on the
-5-hour cells, applied at a request's completion; the 7-day cells are unbanded.
-
-The same file holds each subscription tier's capacity of each window over Max 20x's under `tiers`, so a share of a
-Max 20x window over the tier's factor is that share of the account's own window:
+The capacities the shipped file carries, in units per window, keyed by the tier the profile reports (a Pro subscription
+reports `default_claude_ai`):
 
 | Tier | 5-hour | 7-day |
 | --- | --- | --- |
-| `default_claude_max_20x` | 1, the reference | 1 |
-| `default_claude_max_5x` | 0.25 | - |
-| `default_claude_pro` | 0.05 | - |
+| `default_claude_ai` (Pro) | 7,500,000 | 90,000,000 |
+| `default_claude_max_5x` | 37,500,000 | 450,000,000 |
+| `default_claude_max_20x` | 150,000,000 | 900,000,000 |
 
-The Fable-scoped week is half the 7-day window on every tier, so a Fable request's share of it is twice its 7-day share.
-An account whose tier the table does not list, or whose factor on a window is unmeasured, is priced at no share on that
-window.
+The weights, in units per plain input token, with the share of a Max 20x window one million input tokens spend outside
+the band, derived from the weight over the capacity:
+
+| Model | Weight | 5-hour input per million on Max 20x | 7-day input per million on Max 20x |
+| --- | --- | --- | --- |
+| `claude-fable-5-1` | 10 | 6.67% | 1.11% |
+| `claude-opus-5-5` | 2.2 | 1.47% | 0.244% |
+| `claude-sonnet-5-5` | 1.5 | 1.00% | 0.167% |
+| `claude-haiku-4-5` | 1 | 0.667% | 0.111% |
+
+The models the plan meter has not measured (`claude-fable-5`, `claude-opus-5`, `claude-opus-4-8`, `claude-sonnet-5`)
+have no row and price no share.
+
+Every model shares one multiplier per token type: input 1, output 5, a cache write 1.25 whatever its TTL, and a cache
+read 0.025. Thinking tokens count as output. A model that breaks a shared constant takes an `overrides` row, which may
+name its own multiplier for a type or its own weight on a window. The shipped file has none.
 
 **Peak band** On weekdays from 5 to 11 AM Pacific time, 12:00 to 18:00 UTC while daylight time holds and 13:00 to 19:00
-UTC from 2026-11-01, the 5-hour meter charges a request 1.435 times as much, measured on Max 20x on 2026-09-30 and the
-same for every token type; whether the 7-day meter has a band is unmeasured, so the row weighs the 5-hour window alone.
-The edges are steps, and the band is weekdays only. The meter charges a request when it completes, so the prediction
-weighs a request's 5-hour share by the band in force at its completion, and a session's burn keeps a copy weighed by the
-band at each renewal, which the shedding round prices on plan quota so the order reads what the meter charges.
+UTC from 2026-11-01, a 5-hour window holds 0.7 of its capacity, so a request completing inside the band spends 1/0.7 of
+the share it would outside. The 7-day window's factor is 1, so the week has no band. The edges are steps, and the band
+is weekdays only. The meter charges a request when it completes, so the prediction weighs a request's 5-hour share by
+the band in force at its completion, and a session's burn keeps a copy weighed by the band at each renewal, which the
+shedding round prices on plan quota so the order reads what the meter charges.
+
+The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, half the 7-day window on every tier, so a
+Fable request's share of it is twice its 7-day share.
+
+A model without a weight, or a tier without a capacity on a window, prices no share there: the prediction adds no
+charge, the shedding round ranks the pin after every priced one, a plan-funded probe settles in dollars, the analytics
+list the share under model unlisted and the cost reference shows a dash. The file carries one date, `effective`. A dated
+model id reads the weight of its undated name.
+
+A new model is one weight line: its plain input rate in percent of the Max 20x 5-hour window per million tokens,
+measured outside the band, times 1.5. An operator who cannot wait for a release copies the shipped file, adds the line
+and points `stats.subscription_costs_path` at the copy.
 
 ## Body capture
 
@@ -461,10 +472,10 @@ its subtitle says so.
 Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
 router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and
 the address the listener binds shows beside the block. Then come the appearance and time-format choices, and an About
-card with the version, the profile, the metrics listener, the four storage paths, the two price files' with their
-tables' dates, the three keepalive limits the file sets and the admin secret's standing. About closes on a pointer: the
-values the configuration file sets are on the [installation page](installation.md), and `phoebis check-config` prints
-them.
+card with the version, the profile, the metrics listener, the four storage paths (the price table's and the cost model's
+each with its effective date), the three keepalive limits the file sets and the admin secret's standing. About closes on
+a pointer: the values the configuration file sets are on the [installation page](installation.md), and
+`phoebis check-config` prints them.
 
 ## Conditions and gauges
 
