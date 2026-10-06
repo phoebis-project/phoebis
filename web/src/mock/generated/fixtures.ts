@@ -6840,7 +6840,7 @@ export const FIXTURES: Record<string, Fixture> = {
               "refusal_recommended_model": null,
               "served_model": null,
               "speed": "standard",
-              "stop_reason": "end_turn",
+              "stop_reason": null,
               "stop_sequence": null
             }
           },
@@ -7673,7 +7673,7 @@ export const FIXTURES: Record<string, Fixture> = {
                 "refusal_recommended_model": null,
                 "served_model": null,
                 "speed": "standard",
-                "stop_reason": "end_turn",
+                "stop_reason": null,
                 "stop_sequence": null
               }
             },
