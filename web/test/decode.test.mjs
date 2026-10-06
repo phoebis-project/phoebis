@@ -1122,7 +1122,7 @@ test('settings decode the members the route answers and nothing more', () => {
       retention: ['bodyCaptureMaxHours'],
       sessions: ['expireAfterSeconds'],
       storage: ['apiPricesPath', 'ledgerPath', 'path', 'subscriptionCostsPath'],
-      subscriptionCosts: ['capacity', 'effective', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'source', 'typeMultiplier', 'unit'],
+      subscriptionCosts: ['capacity', 'effective', 'modelWeight', 'modelWindows', 'overrides', 'peak', 'problem', 'source', 'typeMultiplier', 'unit'],
       usage: ['cacheTtlSeconds'],
     },
     'each member carries what the pages read and no other key',
@@ -1162,11 +1162,12 @@ test('a settings member the answer leaves out decodes to its default', () => {
       modelWindows: {},
       overrides: {},
       peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+      problem: null,
       source: '',
       typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
       unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
     },
-    'an answer without the cost model reads as an empty one, with no capacity and no weight',
+    'an answer without the cost model reads as an empty one, with no capacity, no weight and no problem',
   );
 });
 
@@ -1206,6 +1207,49 @@ test('the cost model decodes an override with the members it names alone, and a 
   assert.equal(costs.modelWeight['claude-opus-5'], content.model_weight['claude-opus-5']);
   assert.equal(costs.modelWeight['claude-opus-5'], null);
   assert.equal(costs.capacity.default_claude_team.sevenDay, null);
+});
+
+test('a cost model answer with a member missing or of the wrong type reads as the empty model and says so', () => {
+  const wire = fixture('settings');
+  const envelope = JSON.parse(readFileSync(new URL('./fixtures/test_tables.json', import.meta.url), 'utf8')).body.subscription_costs;
+  const decoded = (edit) => {
+    const content = structuredClone(envelope.content);
+    return d.decodeSettings({ ...wire, subscription_costs: { ...envelope, content: edit(content) ?? content } }).subscriptionCosts;
+  };
+  const unreadable = {
+    capacity: {},
+    effective: '',
+    modelWeight: {},
+    modelWindows: {},
+    overrides: {},
+    peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+    problem: "The cost model's answer could not be read.",
+    source: envelope.source,
+    typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
+    unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
+  };
+  // The input multiplier would price at 0, and the band's factor at 1, a share half the one the router charges.
+  assert.deepEqual(decoded((c) => { c.type_multiplier.input = 'bad'; }), unreadable, 'a multiplier that is not a number prices nothing');
+  assert.deepEqual(decoded((c) => { c.peak.capacity_factor.five_hour = '0.5'; }), unreadable, 'a factor sent as a string prices nothing');
+  const malformed = {
+    'a capacity left out': (c) => { delete c.capacity.default_claude_ai.five_hour; },
+    'a model window factor left out': (c) => { delete c.model_windows.seven_day_fable.capacity_factor; },
+    'a weekday flag sent as a string': (c) => { c.peak.weekdays = 'true'; },
+    'a weight map sent as a list': (c) => { c.model_weight = []; },
+    'a weight that is neither a number nor null': (c) => { c.model_weight['claude-opus-5-5'] = '2'; },
+    'a window weight that is null': (c) => { c.overrides['claude-haiku-4-5'].weight_by_window.seven_day = null; },
+    'a zone that is not a string': (c) => { c.peak.zone = 5; },
+    'an override multiplier sent as a string': (c) => { c.overrides['claude-haiku-4-5'].type_multiplier.cache_read = '0.2'; },
+  };
+  for (const [what, edit] of Object.entries(malformed)) assert.deepEqual(decoded(edit), unreadable, what);
+  assert.deepEqual(d.decodeSettings({ ...wire, subscription_costs: { ...envelope, content: undefined } }).subscriptionCosts, unreadable, 'an envelope without its content');
+  assert.deepEqual(d.decodeSettings({ ...wire, subscription_costs: null }).subscriptionCosts, { ...unreadable, source: '' }, 'an envelope that is not an object');
+  const read = decoded(() => undefined);
+  assert.equal(read.problem, null, 'the test tables read with no problem');
+  assert.equal(read.modelWeight['claude-opus-5'], null, 'a null weight still decodes');
+  const weightByWindow = envelope.content.overrides['claude-haiku-4-5'].weight_by_window;
+  assert.deepEqual(decoded((c) => { c.overrides['claude-haiku-4-5'].type_multiplier.cache_read = null; }).overrides['claude-haiku-4-5'], { typeMultiplier: {}, weightByWindow }, 'a null override multiplier keeps the shared one');
+  assert.deepEqual(decoded((c) => { c.overrides['claude-haiku-4-5'].type_multiplier = null; }).overrides['claude-haiku-4-5'], { weightByWindow }, 'a null override block names nothing');
 });
 
 test('a pricing effective date that is not a date decodes as the string sent with no parsed date', () => {

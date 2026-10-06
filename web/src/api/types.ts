@@ -1039,8 +1039,12 @@ export interface Settings {
   sessions: { expireAfterSeconds: number };
   /** Each path is null when no override file is configured. */
   storage: { apiPricesPath: string | null; ledgerPath: string; path: string; subscriptionCostsPath: string | null };
-  /** The envelope's `content` with its `source` beside it; an answer without the envelope reads as an empty model. */
-  subscriptionCosts: SubscriptionCosts & { source: string };
+  /**
+   * The envelope's `content` with its `source` beside it; an answer without the envelope reads as an empty model.
+   * `problem` is the sentence the cost views show in place of a model the answer carries and the console cannot read,
+   * which then reads as the empty model too; null otherwise.
+   */
+  subscriptionCosts: SubscriptionCosts & { problem: string | null; source: string };
   usage: { cacheTtlSeconds: number };
 }
 

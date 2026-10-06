@@ -600,36 +600,85 @@ export const decodePricing = (envelope: unknown): Settings['apiPrices'] => {
   return { effective, effectiveDate: effectiveDateOf(effective), models: Object.entries(rec(content.models)).map(([model, row]) => price(model, rec(row))), source: str(rec(envelope).source) };
 };
 
-const byKey = <T>(v: unknown, of: (row: unknown) => T): Record<string, T> => Object.fromEntries(Object.entries(rec(v)).map(([key, row]) => [key, of(row)]));
 const TYPE_KEYS: [keyof TypeMultiplier, string][] = [['cacheRead', 'cache_read'], ['cacheWrite1h', 'cache_write_1h'], ['cacheWrite5m', 'cache_write_5m'], ['input', 'input'], ['output', 'output']];
+/** What the console says in place of a cost model it cannot read, which then prices nothing. */
+const COSTS_UNREADABLE = "The cost model's answer could not be read.";
+/** The empty model: it sizes no tier and weighs no model. */
+const emptyCosts = (): SubscriptionCosts => ({
+  capacity: {},
+  effective: '',
+  modelWeight: {},
+  modelWindows: {},
+  overrides: {},
+  peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+  typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
+  unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
+});
+// A fallback on a mistyped member would price a share the router never charges, so the cost model is read strictly.
+// The throw never leaves `readCosts`: a throw out of the settings answer would fail every page that reads it, so the
+// answer carries the empty model and a problem instead.
+class Malformed extends Error {}
+const must = <T>(ok: boolean, v: T): T => {
+  if (!ok) throw new Malformed();
+  return v;
+};
+const isMap = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v);
+const map = (v: unknown): Rec => must(isMap(v), v as Rec);
+const finite = (v: unknown): number => must(typeof v === 'number' && Number.isFinite(v), v as number);
+const finiteOrNull = (v: unknown): number | null => (v === null ? null : finite(v));
+const text = (v: unknown): string => must(typeof v === 'string', v as string);
+const flag = (v: unknown): boolean => must(typeof v === 'boolean', v as boolean);
+const byKey = <T>(v: unknown, of: (row: unknown) => T): Record<string, T> => Object.fromEntries(Object.entries(map(v)).map(([key, row]) => [key, of(row)]));
+// Absent and null both leave an override's member out, as the file's optional members read.
+const absent = (v: unknown): boolean => v === undefined || v === null;
 // An override names only what it changes, so a member it leaves out stays out rather than reading as zero.
 const override = (v: unknown): SubscriptionCosts['overrides'][string] => {
-  const o = rec(v);
-  const named = rec(o.type_multiplier);
-  const typeMultiplier: Partial<TypeMultiplier> = Object.fromEntries(TYPE_KEYS.filter(([, wire]) => numOrNull(named[wire]) !== null).map(([key, wire]) => [key, num(named[wire])]));
-  return { ...(o.type_multiplier && typeof o.type_multiplier === 'object' ? { typeMultiplier } : {}), ...(o.weight_by_window && typeof o.weight_by_window === 'object' ? { weightByWindow: numberMap(o.weight_by_window) } : {}) };
+  const o = map(v);
+  const named = absent(o.type_multiplier) ? null : map(o.type_multiplier);
+  const typeMultiplier: Partial<TypeMultiplier> | null = named === null ? null : Object.fromEntries(TYPE_KEYS.filter(([, wire]) => !absent(named[wire])).map(([key, wire]) => [key, finite(named[wire])]));
+  return { ...(typeMultiplier === null ? {} : { typeMultiplier }), ...(absent(o.weight_by_window) ? {} : { weightByWindow: byKey(o.weight_by_window, finite) }) };
 };
 /**
- * The subscription cost model from the envelope's `content`. A missing content reads as the empty model, which sizes no
- * tier and weighs no model; a capacity factor left out reads 1, which leaves a share alone.
+ * Every member the model requires is present and of its type: a capacity and a weight may be null, an override's
+ * multipliers and window weights absent or null, and nothing else.
  */
-export const decodeSubscriptionCosts = (content: unknown): SubscriptionCosts => {
-  const c = rec(content);
-  const unit = rec(c.unit);
-  const definedBy = rec(unit.defined_by);
-  const peak = rec(c.peak);
-  const factor = rec(peak.capacity_factor);
-  const multiplier = rec(c.type_multiplier);
+const strictCosts = (content: unknown): SubscriptionCosts => {
+  const c = map(content);
+  const unit = map(c.unit);
+  const definedBy = map(unit.defined_by);
+  const peak = map(c.peak);
+  const factor = map(peak.capacity_factor);
+  const multiplier = map(c.type_multiplier);
   return {
-    capacity: byKey(c.capacity, (t) => ({ fiveHour: numOrNull(rec(t).five_hour), sevenDay: numOrNull(rec(t).seven_day) })),
-    effective: str(c.effective),
-    modelWeight: byKey(c.model_weight, numOrNull),
-    modelWindows: byKey(c.model_windows, (w) => ({ capacityFactor: num(rec(w).capacity_factor, 1), of: str(rec(w).of) })),
+    capacity: byKey(c.capacity, (t) => ({ fiveHour: finiteOrNull(map(t).five_hour), sevenDay: finiteOrNull(map(t).seven_day) })),
+    effective: text(c.effective),
+    modelWeight: byKey(c.model_weight, finiteOrNull),
+    modelWindows: byKey(c.model_windows, (w) => ({ capacityFactor: finite(map(w).capacity_factor), of: text(map(w).of) })),
     overrides: byKey(c.overrides, override),
-    peak: { capacityFactor: { fiveHour: num(factor.five_hour, 1), sevenDay: num(factor.seven_day, 1) }, fromHour: num(peak.from_hour), toHour: num(peak.to_hour), weekdays: bool(peak.weekdays), zone: str(peak.zone) },
-    typeMultiplier: { cacheRead: num(multiplier.cache_read), cacheWrite1h: num(multiplier.cache_write_1h), cacheWrite5m: num(multiplier.cache_write_5m), input: num(multiplier.input), output: num(multiplier.output) },
-    unit: { definedBy: { band: str(definedBy.band), tier: str(definedBy.tier), window: str(definedBy.window) }, unitsPerWindow: num(unit.units_per_window) },
+    peak: { capacityFactor: { fiveHour: finite(factor.five_hour), sevenDay: finite(factor.seven_day) }, fromHour: finite(peak.from_hour), toHour: finite(peak.to_hour), weekdays: flag(peak.weekdays), zone: text(peak.zone) },
+    typeMultiplier: { cacheRead: finite(multiplier.cache_read), cacheWrite1h: finite(multiplier.cache_write_1h), cacheWrite5m: finite(multiplier.cache_write_5m), input: finite(multiplier.input), output: finite(multiplier.output) },
+    unit: { definedBy: { band: text(definedBy.band), tier: text(definedBy.tier), window: text(definedBy.window) }, unitsPerWindow: finite(unit.units_per_window) },
   };
+};
+/** The model, or null when a member is missing or of the wrong type. */
+const readCosts = (content: unknown): SubscriptionCosts | null => {
+  try {
+    return strictCosts(content);
+  } catch (e) {
+    if (e instanceof Malformed) return null;
+    throw e;
+  }
+};
+/** The subscription cost model from the envelope's `content`; a content that is absent or cannot be read is the empty model. */
+export const decodeSubscriptionCosts = (content: unknown): SubscriptionCosts => (content === undefined ? emptyCosts() : (readCosts(content) ?? emptyCosts()));
+/**
+ * The settings answer's `subscription_costs` envelope. An answer without it reads as the empty model with no problem;
+ * one whose envelope cannot be read reads as the empty model with the problem the cost views show.
+ */
+const decodeCostsEnvelope = (envelope: unknown): Settings['subscriptionCosts'] => {
+  if (envelope === undefined) return { ...emptyCosts(), problem: null, source: '' };
+  const costs = isMap(envelope) && typeof envelope.source === 'string' ? readCosts(envelope.content) : null;
+  return costs === null ? { ...emptyCosts(), problem: COSTS_UNREADABLE, source: str(rec(envelope).source) } : { ...costs, problem: null, source: str(rec(envelope).source) };
 };
 
 export function decodeSettings(v: unknown): Settings {
@@ -637,7 +686,6 @@ export function decodeSettings(v: unknown): Settings {
   const k = rec(s.keepalive);
   const l = rec(s.listeners);
   const store = rec(s.storage);
-  const costs = rec(s.subscription_costs);
   return {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
@@ -647,7 +695,7 @@ export function decodeSettings(v: unknown): Settings {
     retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
     storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },
-    subscriptionCosts: { ...decodeSubscriptionCosts(costs.content), source: str(costs.source) },
+    subscriptionCosts: decodeCostsEnvelope(s.subscription_costs),
     usage: { cacheTtlSeconds: num(rec(s.usage).cache_ttl_seconds) },
   };
 }

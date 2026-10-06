@@ -71,6 +71,7 @@ function CostPanels({ error, onTab, settings, tab }: { error: string | null; onT
     if (error !== null) return <ErrorState title="Could not load the cost tables" body={error} />;
     if (settings === null) return <Skeleton height={240} />;
     const costs = settings.subscriptionCosts;
+    if (value !== 'api-prices' && costs.problem !== null) return <ErrorState title={costs.problem} />;
     if (value === 'tiers') {
       return (
         <>
@@ -106,7 +107,7 @@ function Provenance({ settings }: { settings: Settings | null }) {
   return (
     <div className="cost-ref__prov">
       {chip('API prices', settings.apiPrices.effective, settings.apiPrices.source, 'stats.api_prices_path', settings.storage.apiPricesPath)}
-      {chip('Subscription cost model', settings.subscriptionCosts.effective, settings.subscriptionCosts.source, 'stats.subscription_costs_path', settings.storage.subscriptionCostsPath)}
+      {settings.subscriptionCosts.problem === null && chip('Subscription cost model', settings.subscriptionCosts.effective, settings.subscriptionCosts.source, 'stats.subscription_costs_path', settings.storage.subscriptionCostsPath)}
     </div>
   );
 }

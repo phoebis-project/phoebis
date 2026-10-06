@@ -8338,6 +8338,53 @@ m.unmount();
     ok: week.bucket === 21_600 && week.runs > 0 && week.areas === week.runs && custom.bucket === 86_400 && custom.runs > 0 && custom.areas === custom.runs,
     missing: [JSON.stringify(week), JSON.stringify(custom)],
   });
+
+  // A cost model answer with a member of the wrong type prices nothing: About's row and the reference's two cost model
+  // tabs say so in place of their figures, and the API prices stay.
+  {
+    const { getSettings } = api;
+    const content = structuredClone(SETTINGS_WIRE.subscription_costs.content);
+    content.type_multiplier.input = 'bad';
+    const unreadable = decodeSettings({ ...SETTINGS_WIRE, subscription_costs: { ...SETTINGS_WIRE.subscription_costs, content } }).subscriptionCosts;
+    api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), subscriptionCosts: unreadable });
+    const SAID = "The cost model's answer could not be read.";
+    const settings = await mount('/settings');
+    const about = [...settings.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Subscription costs path');
+    const rowText = row?.querySelector('dd')?.textContent?.trim() ?? 'no row';
+    settings.unmount();
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const panelOf = async (tab) => {
+      tabsOf(dlg).find((t) => t.textContent?.trim() === tab)?.click();
+      await page.settle(200);
+      const panel = shownPanel(dlg);
+      return { error: panel?.querySelector('.empty--error .empty__title')?.textContent ?? 'none', tables: panel?.querySelectorAll('table').length ?? 0, tracks: panel?.querySelectorAll('.cost-ref__band-track').length ?? 0 };
+    };
+    const drawn = { apiPrices: await panelOf('API prices'), planRates: await panelOf('Plan rates'), tiers: await panelOf('Tiers and peak band') };
+    const chips = [...(dlg?.querySelectorAll('.dialog__foot .chip') ?? [])].map((c) => c.textContent ?? '');
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: "/settings and /sessions a cost model answer the console cannot read says so on About's row and on the reference's two cost model tabs, which draw no figure",
+      ok:
+        unreadable.problem === SAID &&
+        rowText === SAID &&
+        drawn.planRates.error === SAID &&
+        drawn.planRates.tables === 0 &&
+        drawn.tiers.error === SAID &&
+        drawn.tiers.tables === 0 &&
+        drawn.tiers.tracks === 0 &&
+        drawn.apiPrices.error === 'none' &&
+        drawn.apiPrices.tables === 1 &&
+        chips.length === 1 &&
+        chips[0].startsWith('API prices, effective '),
+      missing: [rowText, JSON.stringify(drawn), JSON.stringify(chips)],
+    });
+  }
 }
 
 
