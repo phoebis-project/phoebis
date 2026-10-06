@@ -1222,9 +1222,18 @@ test('a pricing effective date that is not a date decodes as the string sent wit
 });
 
 test("a table's effective date reads as the calendar date the file names in every zone, and free text as sent", () => {
-  // A date-only effective parses to midnight UTC; a zone west of UTC would read it as the evening before.
-  assert.equal(d.effectiveLabel('2026-10-01'), 'Oct 01, 2026');
-  assert.equal(d.effectiveLabel('v3'), 'v3');
+  // A date-only effective parses to midnight UTC, which a zone west of UTC reads as the evening before; the case sets
+  // such a zone itself, so it holds on a host in any zone.
+  const zone = process.env.TZ;
+  process.env.TZ = 'America/Los_Angeles';
+  try {
+    assert.equal(d.effectiveLabel('2026-10-01'), 'Oct 01, 2026');
+    assert.equal(d.effectiveLabel('2026-10-01T23:00'), 'Oct 01, 2026', "a date with a time reads in the browser's zone");
+    assert.equal(d.effectiveLabel('v3'), 'v3');
+  } finally {
+    if (zone === undefined) delete process.env.TZ;
+    else process.env.TZ = zone;
+  }
 });
 
 test('an account patch encodes the cancelled flag and its end', () => {

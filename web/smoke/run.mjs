@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtDate, fmtPct, fmtShare, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, planLabel, ratesOf, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtShare, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, planLabel, ratesOf, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -8227,10 +8227,10 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   // The mock stores 268435456 retained bytes, which is 256 MiB. Each cost file's row carries its table's date, read
-  // from the captured envelope.
+  // from the captured envelope through the page's own label.
   const wired = decodeSettings(SETTINGS_WIRE);
-  const priceRow = `API prices path=./api_prices.yaml, effective ${fmtDate(wired.apiPrices.effective)}`;
-  const costRow = `Subscription costs path=./subscription_costs.yaml, effective ${fmtDate(wired.subscriptionCosts.effective)}`;
+  const priceRow = `API prices path=./api_prices.yaml, effective ${effectiveLabel(wired.apiPrices.effective)}`;
+  const costRow = `Subscription costs path=./subscription_costs.yaml, effective ${effectiveLabel(wired.subscriptionCosts.effective)}`;
   results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates, the three keepalive limits and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   const restart = 'Set in the configuration file; a change takes a restart.';

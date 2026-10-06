@@ -148,8 +148,8 @@ test('a pin the cost model cannot price stays in the order unmarked and counts f
 });
 
 test("the pins of an account whose tier the cost model does not size stay out of the preview, unlike a pin it cannot price", () => {
-  // The route reads no burn for any pin of such an account, while the round prices them on the reference tier and
-  // sheds them; the preview cannot replay that order, so it leaves them out rather than call them unpriced.
+  // The route reads no burn for any pin of such an account, while the round prices them on the anchor tier's rates
+  // and sheds them; the preview cannot replay that order, so it leaves them out rather than call them unpriced.
   const team = account('team', 0.95);
   const pins = [pin('team-a', null, false, { accountId: 'team' }), pin('team-b', null, false, { accountId: 'team' })];
   const round = d.shedPreview(pool({ members: [member('team'), member('cool')] }), [team, cool], pins, NOW, new Set(['cool']));
