@@ -36,12 +36,19 @@ def rewrite(text: str, tls_port: int, ca_pem: str) -> str:
         replacement = [] if value is None else [f"  {key}: {value}"]
         if keyed:
             # A mapping value (a `tls` pair) leaves with its key: the lines indented deeper than the key are its
-            # children, and left under a new scalar, or under no key at all, they would not parse.
+            # children, and left under a new scalar, or under no key at all, they would not parse. Blank and comment
+            # lines do not end the mapping, which a valid file may space out; the next entry at the key's depth or
+            # shallower does, and the blank and comment lines just before that entry stay with it.
             at_key = keyed[0]
             depth = len(lines[at_key]) - len(lines[at_key].lstrip())
             past = at_key + 1
-            while past < len(lines) and lines[past].strip() and len(lines[past]) - len(lines[past].lstrip()) > depth:
-                past += 1
+            for i in range(at_key + 1, len(lines)):
+                stripped = lines[i].strip()
+                if not stripped or stripped.startswith("#"):
+                    continue
+                if len(lines[i]) - len(lines[i].lstrip()) <= depth:
+                    break
+                past = i + 1
             lines[at_key:past] = replacement
         else:
             lines[start:start] = replacement
@@ -64,6 +71,11 @@ def self_test() -> None:
     assert sorted(block) == ["  listen: 127.0.0.1:48317"], f"the proxy block: {block!r}"
     assert "tls" not in paired, f"both listeners serve plain HTTP: {paired!r}"
     yaml.safe_load(paired)
+    gapped = rewrite("proxy:\n  listen: 0.0.0.0:8317\n  tls:\n    cert_file: /a\n\n    # the key beside it\n"
+                     "    key_file: /b\n\n# the stats block\nstats:\n  retention_days: 90\n", 49443, "/tmp/ca.pem")
+    assert "cert_file" not in gapped and "key_file" not in gapped, f"a gapped pair's children survived: {gapped!r}"
+    assert "# the stats block" in gapped, f"the comment past the pair left with it: {gapped!r}"
+    assert yaml.safe_load(gapped)["proxy"] == {"listen": "127.0.0.1:48317"}, f"the proxy block: {gapped!r}"
     try:
         rewrite("proxy:\n  listen: a\n  listen: b\n", 1, "x")
     except SystemExit:
