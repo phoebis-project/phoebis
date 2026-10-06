@@ -802,6 +802,187 @@ fn an_interruption_at_the_switch_leaves_the_previous_pair_live_and_loadable() {
     assert_eq!(after, tree);
 }
 
+/// Each path's mode, owner and bytes, so a refused run can be shown to have left them as they were.
+fn kept(paths: &[PathBuf]) -> Vec<(u32, u32, Vec<u8>)> {
+    paths
+        .iter()
+        .map(|path| {
+            let metadata = std::fs::metadata(path).unwrap();
+            (
+                metadata.mode() & 0o777,
+                metadata.uid(),
+                std::fs::read(path).unwrap(),
+            )
+        })
+        .collect()
+}
+
+#[test]
+fn a_fresh_init_refuses_an_existing_leaf_and_keeps_its_bytes_owner_and_mode() {
+    let dir = tempfile::tempdir().unwrap();
+    let tls = dir.path().join("tls");
+    // A first installation in the directory, with storage paths of its own.
+    let first = dir.path().join("first.yaml");
+    let out = init(
+        dir.path(),
+        &[
+            "--tls",
+            "self-signed",
+            "--proxy-listen",
+            "0.0.0.0:0",
+            "--key-file",
+            path_arg(&dir.path().join("first.key")),
+            "--data-dir",
+            path_arg(&dir.path().join("first-data")),
+            "--non-interactive",
+            "--config",
+            path_arg(&first),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(0), "{}", printed(&out));
+    let (cert, key) = configured_pair(&first);
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o640)).unwrap();
+    let pair = [cert.clone(), key.clone()];
+    let (pair_before, tls_before, tree_before) = (kept(&pair), entries(&tls), entries(dir.path()));
+
+    let second = dir.path().join("second.yaml");
+    let out = init(
+        dir.path(),
+        &[
+            "--tls",
+            "self-signed",
+            "--proxy-listen",
+            "0.0.0.0:0",
+            "--key-file",
+            path_arg(&dir.path().join("second.key")),
+            "--data-dir",
+            path_arg(&dir.path().join("second-data")),
+            "--non-interactive",
+            "--config",
+            path_arg(&second),
+        ],
+    );
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(
+        stderr.contains(&format!(
+            "Error: {} already exists; init never overwrites a certificate pair",
+            tls.join("proxy").display()
+        )),
+        "{stderr}"
+    );
+    assert!(out.stdout.is_empty(), "{}", printed(&out));
+    assert_eq!(kept(&pair), pair_before);
+    assert_eq!(entries(&tls), tls_before);
+    assert_eq!(entries(dir.path()), tree_before);
+}
+
+#[test]
+fn a_failure_after_the_leaves_land_removes_only_this_runs_files() {
+    // Root writes through the read-only directory that makes the run fail here.
+    if unsafe { libc::geteuid() } == 0 {
+        return;
+    }
+    let dir = tempfile::tempdir().unwrap();
+    let conf = dir.path().join("conf");
+    let tls = conf.join("tls");
+    let state = dir.path().join("state");
+    std::fs::create_dir(&state).unwrap();
+    // A CA the run reuses, and an operator's pair named under tls/ through the pair flags, beside the names a
+    // generated leaf takes.
+    phoebis_router::selfsigned::write_ca(
+        &tls,
+        &phoebis_router::selfsigned::hostname(),
+        &phoebis_router::selfsigned::leaf_names("0.0.0.0:0".parse().unwrap()),
+        phoebis_router::selfsigned::Validity::days_from_now(
+            phoebis_router::selfsigned::CA_LIFETIME_DAYS,
+        ),
+    )
+    .unwrap();
+    fake_upstream::generate_pair(&["localhost"]).write_to(&tls, "proxy");
+    let theirs: Vec<PathBuf> = entries(&tls).iter().map(|name| tls.join(name)).collect();
+    let before = kept(&theirs);
+    // The bootstrap file cannot be created, so the run stops after its leaf is live.
+    std::fs::set_permissions(&conf, std::fs::Permissions::from_mode(0o555)).unwrap();
+    let out = init(
+        dir.path(),
+        &[
+            "--tls",
+            "self-signed",
+            "--proxy-listen",
+            "0.0.0.0:0",
+            "--key-file",
+            path_arg(&state.join("storage.key")),
+            "--data-dir",
+            path_arg(&state.join("data")),
+            "--non-interactive",
+            "--config",
+            path_arg(&conf.join("config.yaml")),
+        ],
+    );
+    std::fs::set_permissions(&conf, std::fs::Permissions::from_mode(0o755)).unwrap();
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert!(stderr.contains("removed what this run wrote: "), "{stderr}");
+    assert!(!stderr.contains("could not remove"), "{stderr}");
+    assert_eq!(
+        entries(&tls)
+            .iter()
+            .map(|name| tls.join(name))
+            .collect::<Vec<_>>(),
+        theirs
+    );
+    assert_eq!(kept(&theirs), before);
+    assert!(entries(&state).is_empty(), "{:?}", entries(&state));
+}
+
+#[test]
+fn a_storage_key_or_environment_file_on_a_path_the_tls_material_takes_refuses_before_writing() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = dir.path().join("config.yaml");
+    let tls = dir.path().join("tls");
+    for (flag, path, what, overlapped) in [
+        (
+            "--key-file",
+            tls.join("ca.pem"),
+            "storage key",
+            tls.join("ca.pem"),
+        ),
+        (
+            "--env-file",
+            tls.join("proxy").join("phoebis.env"),
+            "environment file",
+            tls.join("proxy"),
+        ),
+    ] {
+        let out = init(
+            dir.path(),
+            &[
+                "--tls",
+                "self-signed",
+                "--proxy-listen",
+                "0.0.0.0:0",
+                flag,
+                path_arg(&path),
+                "--non-interactive",
+                "--config",
+                path_arg(&config),
+            ],
+        );
+        assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(&format!(
+                "Error: the {what} {} overlaps {}, which --tls self-signed writes; name the {what} elsewhere",
+                path.display(),
+                overlapped.display()
+            )),
+            "{}",
+            printed(&out)
+        );
+        assert!(entries(dir.path()).is_empty(), "{:?}", entries(dir.path()));
+    }
+}
+
 #[test]
 fn a_failure_after_the_first_write_removes_what_the_run_wrote() {
     let dir = tempfile::tempdir().unwrap();

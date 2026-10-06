@@ -250,8 +250,7 @@ pub fn read_ca(dir: &Path) -> Result<Option<Ca>, MaterialError> {
     let key = PKey::private_key_from_pem(&key_pem).map_err(|_| MaterialError::NoKey {
         path: key_file.clone(),
     })?;
-    // The CA signs itself, so its own key verifying the signature is the key matching the certificate; a mismatch is
-    // what a stop between the two renames of `write_ca` leaves.
+    // The CA signs itself, so its own key verifying the signature is the key matching the certificate.
     if !signed_by(&cert, &key) {
         return Err(MaterialError::KeyMismatch {
             key: key_file,
@@ -269,8 +268,9 @@ pub fn read_ca(dir: &Path) -> Result<Option<Ca>, MaterialError> {
 
 /// Writes `ca.pem` (0644) and `ca.key` (0600) under `dir`, staged: both land under `.tmp` names at their modes through
 /// the store's private-file helper, are read back and checked (the certificate parses and is signed by the key), then
-/// each moves into place by one `rename`. The CA is name-constrained to the DNS names in `permitted`, every name the
-/// leaves will carry, so a client that trusts it trusts it for this host's names and no other host's.
+/// each takes its live name through `place_new`, which refuses a name that exists. The CA is name-constrained to the
+/// DNS names in `permitted`, every name the leaves will carry, so a client that trusts it trusts it for this host's
+/// names and no other host's.
 pub fn write_ca(
     dir: &Path,
     hostname: &str,
@@ -294,7 +294,7 @@ pub fn write_ca(
         }
     });
     let ca = checked.inspect_err(|_| discard(&[&cert_tmp, &key_tmp]))?;
-    place(&[(&cert_tmp, &cert_file), (&key_tmp, &key_file)])?;
+    place_new(&[(&cert_tmp, &cert_file), (&key_tmp, &key_file)])?;
     Ok(ca)
 }
 
@@ -739,7 +739,7 @@ fn build_leaf(
 }
 
 /// Writes `contents` to `<live>.tmp` at `mode` through `write_new`, after removing a temporary an interrupted run left;
-/// the live name is untouched until `place`.
+/// the live name is untouched until `place_new`.
 fn stage(live: &Path, mode: u32, contents: &[u8]) -> Result<PathBuf, MaterialError> {
     let mut name = live.as_os_str().to_owned();
     name.push(".tmp");
@@ -773,16 +773,21 @@ fn write_new(
     Ok(())
 }
 
-/// `rename` replaces each live name in one step, so it is never half written and never meets the store helper's
-/// refusal of an existing file. A rename that fails removes the temporaries not yet placed.
-fn place(staged: &[(&Path, &Path)]) -> Result<(), MaterialError> {
+/// Gives each staged file its live name with a hard link, which appears whole and refuses a name that exists, so a
+/// file that landed after the caller looked is never replaced; the staged names go once every link is made. A link
+/// that fails removes the live names this call made and every temporary, so what it published is never left half.
+fn place_new(staged: &[(&Path, &Path)]) -> Result<(), MaterialError> {
+    let temporaries: Vec<&Path> = staged.iter().map(|(tmp, _)| *tmp).collect();
     for (at, (tmp, live)) in staged.iter().enumerate() {
-        if let Err(error) = std::fs::rename(tmp, live) {
-            let left: Vec<&Path> = staged[at..].iter().map(|(tmp, _)| *tmp).collect();
-            discard(&left);
+        if let Err(error) = std::fs::hard_link(tmp, live) {
+            for (_, made) in &staged[..at] {
+                let _ = remove_if_present(made);
+            }
+            discard(&temporaries);
             return Err(io(live)(error));
         }
     }
+    discard(&temporaries);
     Ok(())
 }
 
@@ -1257,6 +1262,33 @@ mod tests {
             )
             .unwrap();
         assert!(verified, "{result:?}");
+    }
+
+    #[test]
+    fn a_ca_write_refuses_a_name_that_appeared_and_keeps_its_bytes() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path();
+        // A key another run placed after `read_ca` found the directory empty.
+        std::fs::write(dir.join(CA_KEY), b"another run's key\n").unwrap();
+        let error = write_ca(
+            dir,
+            "host.example",
+            &leaf_names("192.0.2.7:8317".parse().unwrap()),
+            Validity::days_from_now(CA_LIFETIME_DAYS),
+        )
+        .err()
+        .unwrap();
+        assert!(
+            matches!(&error, MaterialError::Io { path, error }
+                if *path == dir.join(CA_KEY) && error.kind() == std::io::ErrorKind::AlreadyExists),
+            "{error:?}"
+        );
+        assert_eq!(
+            std::fs::read(dir.join(CA_KEY)).unwrap(),
+            b"another run's key\n"
+        );
+        assert!(!dir.join(CA_CERT).exists());
+        assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
     }
 
     #[test]

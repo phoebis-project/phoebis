@@ -304,7 +304,9 @@ the default shown in brackets, and an address that does not parse is asked again
 written with its mode and owner, where the secret went, and the next command, `phoebis check-config --config <path>`.
 
 `init` exits 1 with one `Error:` line and nothing written when the bootstrap file, the key file or the environment file
-already exists, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory
+already exists, when `--tls self-signed` would write a leaf whose link under `tls/` already exists
+(`{path} already exists; init never overwrites a certificate pair`) or the key file or the environment file sits on or
+under a path it writes there, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory
 (`{path} exists and a new key cannot open it; keep the key that sealed it, or name an empty --data-dir`), when input
 ends before a question is answered, when `--owner` runs off root or names no user, when `--tls files` names no pair for
 a listener off loopback (`--tls files needs --proxy-cert and --proxy-key for proxy on {addr}`), when a renewal meets a

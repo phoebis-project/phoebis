@@ -17,7 +17,7 @@ use rand::Rng;
 
 use crate::config::{ConfigError, ListenerTls};
 use crate::selfsigned::{
-    self, LeafModes, MaterialError, Placed, SanName, Unfinished, Validity, CA_CERT,
+    self, LeafModes, MaterialError, Placed, SanName, Unfinished, Validity, CA_CERT, CA_KEY,
     CA_LIFETIME_DAYS, LEAF_CERT, LEAF_KEY, LEAF_LIFETIME_DAYS,
 };
 
@@ -196,8 +196,18 @@ pub enum InitError {
         "{path} names no pair under {dir}; init --tls self-signed renews only the pairs it wrote"
     )]
     NothingToRenew { path: PathBuf, dir: PathBuf },
+    #[error(
+        "the {what} {path} overlaps {tls}, which --tls self-signed writes; name the {what} elsewhere"
+    )]
+    OverlapsTls {
+        what: &'static str,
+        path: PathBuf,
+        tls: PathBuf,
+    },
     #[error("--owner needs root")]
     OwnerNeedsRoot,
+    #[error("{path} already exists; init never overwrites a certificate pair")]
+    PairExists { path: PathBuf },
     #[error(
         "init --tls self-signed against an existing bootstrap file renews its leaves and takes no other flag"
     )]
@@ -764,6 +774,51 @@ fn refuse_existing(plan: &Plan) -> Result<(), InitError> {
             }
         }
     }
+    if generates(plan) {
+        refuse_tls(plan)?;
+    }
+    Ok(())
+}
+
+/// The refusals of a run that generates certificate material: a storage key or environment file on a path the
+/// material takes, a leaf's link that exists, and a CA under `tls_dir` that is there but is not one the run reuses.
+/// Each leaf's link and the CA's two files are published under names that must not exist, which covers whatever
+/// lands between this check and the write.
+fn refuse_tls(plan: &Plan) -> Result<(), InitError> {
+    let links: Vec<PathBuf> = generated(plan)
+        .map(|(name, _)| plan.tls_dir.join(name))
+        .collect();
+    let mut taken = vec![plan.tls_dir.join(CA_CERT), plan.tls_dir.join(CA_KEY)];
+    taken.extend(links.iter().cloned());
+    for (what, path) in [
+        ("storage key", Some(&plan.key_file)),
+        ("environment file", plan.env_file.as_ref()),
+    ] {
+        let Some(path) = path else {
+            continue;
+        };
+        // Another file may sit in `tls_dir`, but not on it, on a path the material takes, or under one.
+        let overlap = std::iter::once(&plan.tls_dir)
+            .chain(&taken)
+            .find(|tls| path == *tls || tls.starts_with(path))
+            .or_else(|| taken.iter().find(|tls| path.starts_with(tls)));
+        if let Some(tls) = overlap {
+            return Err(InitError::OverlapsTls {
+                what,
+                path: path.clone(),
+                tls: tls.clone(),
+            });
+        }
+    }
+    for link in links {
+        if exists(&link)? {
+            return Err(InitError::PairExists { path: link });
+        }
+    }
+    selfsigned::read_ca(&plan.tls_dir).map_err(|error| InitError::Material {
+        what: format!("reading the CA under {}", plan.tls_dir.display()),
+        error,
+    })?;
     Ok(())
 }
 
