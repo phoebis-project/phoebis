@@ -730,7 +730,7 @@ async function poolSelectBelow(theme) {
     await expertView(false).catch(() => {});
     return;
   }
-  for (const label of ['Migrate above utilization', 'Select below utilization']) {
+  for (const label of ['Shed ahead of pace', 'Select below utilization']) {
     const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
@@ -751,14 +751,14 @@ async function poolSelectBelow(theme) {
         switch: `${box.width} ${box.height}`,
       };
     };
-    const migrate = read('Migrate above utilization');
+    const migrate = read('Shed ahead of pace');
     const select = read('Select below utilization');
     return migrate && select ? { migrate, select } : null;
   });
   if (!pair) {
     say('the migration and select-below switches are not both drawn to compare');
   } else {
-    measurements.push(`${theme} /pools migrate above ${JSON.stringify(pair.migrate)}`);
+    measurements.push(`${theme} /pools shed ahead of pace ${JSON.stringify(pair.migrate)}`);
     measurements.push(`${theme} /pools select below ${JSON.stringify(pair.select)}`);
     const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.migrate[key]);
     if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the migration control's`);
@@ -789,7 +789,7 @@ async function poolRoutingCards(theme) {
     await expertView(false).catch(() => {});
     return;
   }
-  for (const label of ['Migrate above utilization', 'Select below utilization']) {
+  for (const label of ['Shed ahead of pace', 'Select below utilization']) {
     const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
@@ -822,7 +822,7 @@ async function poolRoutingCards(theme) {
         affinityPill: box(idlePill('Session affinity')),
         failoverPill: box(idlePill('Failover preset')),
         handle: handle && knob && track ? { inside: knob.left + knob.width / 2 >= track.left - 1 && knob.right - knob.width / 2 <= track.right + 1, value: handle.getAttribute('aria-valuenow'), width: knob.width } : null,
-        migrateField: box(el.querySelector('input[aria-label="Migrate above utilization (%)"]')),
+        migrateField: box(el.querySelector('input[aria-label="Shed ahead of pace (%)"]')),
         overageChoice: box(idleChoice('Overage policy')),
         overageField: box(el.querySelector('input[aria-label="Overage grace (min)"]') ?? [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Overage grace (min)')?.querySelector('input')),
         preview: preview ? (preview.textContent ?? '').trim() : null,
@@ -959,7 +959,7 @@ const POOL_DEPENDENTS = {
   // The switch sits in another group, which is chosen to turn it off and back.
   'Probe tuning': [{ switch: 'Keep prompt caches warm', in: 'Keepalive', controls: ['input[type="number"]'] }],
   'Utilization thresholds': [
-    { switch: 'Migrate above utilization', controls: ['input[aria-label="Migrate above utilization (%)"]'] },
+    { switch: 'Shed ahead of pace', controls: ['input[aria-label="Shed ahead of pace (%)"]'] },
     { switch: 'Select below utilization', controls: ['input[aria-label="Select below utilization (%)"]'], expert: true },
   ],
 };
@@ -1744,7 +1744,7 @@ async function quotaChips(theme) {
   for (const card of read.grids) {
     if (card.grid > card.card) say(`${card.name}'s windows run past its card`);
   }
-  if (mock && !read.resets.some((r) => /^expired .+, no reading since$/.test(r.text))) say("the story's team holds an expired window, yet no reset cell reads it");
+  if (mock && !read.resets.some((r) => /^expired .+, no reading since$/.test(r.text))) say("the story's legacy holds an expired window, yet no reset cell reads it");
 }
 
 /**
@@ -2103,7 +2103,7 @@ async function burnCards(theme) {
  * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned account's
  * 7-day entry, on type and swatch size, and, where an account whose tier the cost table does not size draws a tier
  * unknown entry beside it, that muted entry on type, swatch size and colour too. In the mock's story the entry draws
- * for `mail`, whose Sonnet 5 traffic the table cannot price; the router's seed bills no subscription traffic, so
+ * for `secondary`, whose Sonnet 5 traffic the table cannot price; the router's seed bills no subscription traffic, so
  * there the pass records that the entry is not drawn.
  */
 async function planLegend(theme) {
@@ -2131,7 +2131,7 @@ async function planLegend(theme) {
       return;
     }
     if (read.unlisted === null) {
-      if (mock) failures.push(`${theme} /analytics: the story's mail account runs on a model the table cannot price, yet no model unlisted entry draws`);
+      if (mock) failures.push(`${theme} /analytics: the story's secondary account runs on a model the table cannot price, yet no model unlisted entry draws`);
       return;
     }
     failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
@@ -2210,8 +2210,8 @@ async function analyticsTables(theme) {
     if (mock) {
       if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
       if (read.bars.length !== 4) say(`the story budgets four periods across three members, yet the card lists ${read.bars.length}`);
-      if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on evals alone`);
-      if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['business', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on business alone`);
+      if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['research'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on research alone`);
+      if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['primary', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on primary alone`);
       for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.account} reads ${r.word}, not the figure's ${r.figure}`);
     }
   } finally {
@@ -2468,15 +2468,15 @@ async function fastLane(theme, path) {
   }
   if (path === '/quota') {
     if (read.plan === null) {
-      if (mock) failures.push(`${theme} /quota: the story's business holds a fast lane beside its Plan chip, yet no drawn lane sits on a card with one`);
+      if (mock) failures.push(`${theme} /quota: the story's primary holds a fast lane beside its Plan chip, yet no drawn lane sits on a card with one`);
       return;
     }
     if (read.line) failures.push(...compare(read.line, read.planText, ['font', 'label'], `${theme} /quota: the Fast mode line against the Plan chip`));
     if (read.cooldown) failures.push(...compare(read.cooldown, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the fast cooldown chip against the Plan chip`));
-    if (mock && !read.cooldown) failures.push(`${theme} /quota: the story's business cools on its fast lane, yet no cooldown chip is drawn`);
+    if (mock && !read.cooldown) failures.push(`${theme} /quota: the story's primary cools on its fast lane, yet no cooldown chip is drawn`);
   } else {
     if (read.extra === null) {
-      if (mock) failures.push(`${theme} ${path}: the story's business draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
+      if (mock) failures.push(`${theme} ${path}: the story's primary draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
       return;
     }
     failures.push(...compare(read.lane, read.extra, ['border', 'margin', 'padding'], `${theme} ${path}: the fast lane section against the extra-usage section`));

@@ -18,7 +18,6 @@ const input = {
   inFlightCap: pool.inFlightCap,
   keepalive: pool.keepalive,
   members: pool.members.map((m) => ({ accountId: m.accountId, budgetDailyUsd: m.budgetDailyUsd, budgetMonthlyUsd: m.budgetMonthlyUsd, priority: m.priority })),
-  migrateAboveUtilization: pool.migrateAboveUtilization,
   migrateWhenSpent: pool.migrateWhenSpent,
   minSharedPrefixTokens: pool.minSharedPrefixTokens,
   modelRules: pool.modelRules,
@@ -30,6 +29,7 @@ const input = {
   retryInPlaceSeconds: pool.retryInPlaceSeconds,
   selectBelowUtilization: pool.selectBelowUtilization,
   sessionPlacement: pool.sessionPlacement,
+  shedAheadOfPace: pool.shedAheadOfPace,
   shedShare: pool.shedShare,
   sourceDwellSeconds: pool.sourceDwellSeconds,
   status: 'active',
@@ -118,12 +118,12 @@ test('a pool input refuses thresholds outside their range and an empty name', ()
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: -0.1 }, accounts), false);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 0 }, accounts), true);
   assert.equal(d.validatePoolInput({ ...input, selectBelowUtilization: 1 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0 }, accounts), true, 'a margin over pace runs from 0 %');
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.2 }, accounts), true);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: -0.1 }, accounts), false);
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: Number.NaN }, accounts), false, 'a switched-on field left empty holds the save');
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 1.2 }, accounts), false, 'the route bounds every value to 0 to 1');
-  assert.equal(d.validatePoolInput({ ...input, migrateAboveUtilization: 0.9 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0 }, accounts), true, 'a margin over pace runs from 0 %');
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0.2 }, accounts), true);
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: -0.1 }, accounts), false);
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: Number.NaN }, accounts), false, 'a switched-on field left empty holds the save');
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 1.2 }, accounts), false, 'the route bounds every value to 0 to 1');
+  assert.equal(d.validatePoolInput({ ...input, shedAheadOfPace: 0.9 }, accounts), true);
 });
 
 test('a pool input holds every engine bound', () => {
@@ -224,13 +224,13 @@ test('ticking cancelled prefills the derived end, unticking clears it, and the f
   const derived = '2026-10-19T09:15:00.000Z';
   const account = d.decodeAccount({ ...body, subscription: { ...body.subscription, derived_ends_at: Date.parse(derived) } });
   const form = d.subscriptionEndFormOf(account);
-  assert.deepEqual(form, { cancelled: false, endsAt: '' }, 'an account never cancelled opens unticked with no end');
+  assert.deepEqual(form, { cancelled: false, endsAt: '', revision: account.revision }, 'an account never cancelled opens unticked with no end');
   const ticked = d.tickCancelled(form, true, account.subscription.derivedEndsAt);
   assert.equal(ticked.cancelled, true);
   assert.equal(new Date(ticked.endsAt).toISOString(), derived, 'the field holds the derived end in local time');
   const corrected = { ...ticked, endsAt: '2026-10-05T12:00' };
   assert.equal(d.tickCancelled({ ...corrected, cancelled: false }, true, derived).endsAt, '2026-10-05T12:00', 'a date already in the field is kept');
-  assert.deepEqual(d.tickCancelled(corrected, false, derived), { cancelled: false, endsAt: '' }, 'unticking clears the end with the flag');
+  assert.deepEqual(d.tickCancelled(corrected, false, derived), { cancelled: false, endsAt: '', revision: account.revision }, 'unticking clears the end with the flag');
   assert.equal(d.subscriptionEndRefusal(ticked), null);
   assert.equal(d.subscriptionEndRefusal({ cancelled: false, endsAt: '' }), null);
   assert.equal(d.subscriptionEndRefusal({ cancelled: true, endsAt: '' }), 'A cancelled plan needs the date it ends.', 'a ticked box whose date was cleared');
@@ -241,6 +241,7 @@ test('ticking cancelled prefills the derived end, unticking clears it, and the f
   const reopened = d.subscriptionEndFormOf(saved);
   assert.equal(reopened.cancelled, true);
   assert.equal(new Date(reopened.endsAt).toISOString(), '2026-10-05T12:00:00.000Z', 'a cancelled account opens with the end it was saved with');
+  assert.equal(reopened.revision, saved.revision, 'the reopened editor fences on the revision of the row it opened with');
 });
 
 const rules = (...patterns) => patterns.map((p) => (p.startsWith('NOT ') ? { not: true, pattern: p.slice(4) } : { not: false, pattern: p }));
@@ -330,8 +331,8 @@ test('a pool refusal names the group its control sits in', () => {
       ],
     ],
     [{ affinityMode: 'sometimes' }, refused('Pin sessions', 'pinning', 'Pin sessions is one of its listed choices.')],
-    [{ migrateAboveUtilization: 1.2 }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization is from 0 to 100.')],
-    [{ migrateAboveUtilization: Number.NaN }, refused('Migrate above utilization (%)', 'utilization', 'Migrate above utilization needs a value from 0 to 100.')],
+    [{ shedAheadOfPace: 1.2 }, refused('Shed ahead of pace (%)', 'utilization', 'Shed ahead of pace is from 0 to 100.')],
+    [{ shedAheadOfPace: Number.NaN }, refused('Shed ahead of pace (%)', 'utilization', 'Shed ahead of pace needs a value from 0 to 100.')],
     [{ selectBelowUtilization: 1.2 }, refused('Select below utilization (%)', 'utilization', 'Select below utilization is from 0 to 100.')],
     [{ shedShare: 1.2 }, refused('Share (%)', 'shedding', 'Share (%) is from 0 to 100.')],
     [{ burnWindowSeconds: 59 }, refused('Burn window (s)', 'shedding', 'Burn window (s) is a whole number of at least 60.')],

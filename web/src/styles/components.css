@@ -547,10 +547,10 @@
 }
 
 /* `.mono` sets 0.92em and the body's unitless line height scales with it, drawing a mono input 1.6px shorter than a
-   plain one beside it. A length holds a plain input's line, the body's 14px at 1.45, at either font size: the pattern
-   filters restore the full size inline. */
+   plain one beside it. A length holds a plain input's line, the body's size at its leading, at either font size: the
+   pattern filters restore the full size inline. */
 .input.mono {
-  line-height: calc(14px * 1.45);
+  line-height: calc(var(--body-size) * var(--body-leading));
 }
 
 .input::placeholder {

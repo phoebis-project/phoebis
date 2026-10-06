@@ -110,14 +110,14 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
         h.db.events(0, i64::MAX, 100).await.unwrap().is_empty()
     })
     .await;
-    h.store
-        .update_account(
-            "a",
-            h.store.account_revision("a").unwrap().unwrap(),
-            "renamed",
-            "admin:abc",
-        )
-        .unwrap();
+    rename(
+        &h,
+        "a",
+        h.store.account_revision("a").unwrap().unwrap(),
+        "renamed",
+        "admin:abc",
+    )
+    .unwrap();
     let event = wait_for_async(Duration::from_secs(5), || async {
         h.db.events(0, i64::MAX, 100)
             .await

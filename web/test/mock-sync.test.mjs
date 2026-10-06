@@ -23,15 +23,15 @@ const admin = async () => {
 /**
  * One row per fixture: how the decoder reads it, and how the mock answers the same route. A list route
  * compares every mock row against the fixture's first; a singleton fixture whose `Api` method lists (the one
- * account, the one quota snapshot) picks the story's `business` row so one shape meets one; a route whose
+ * account, the one quota snapshot) picks the story's `primary` row so one shape meets one; a route whose
  * answer depends on which story row it asks for walks the story to one that has rows, since an empty mock
  * list where the fixture has rows is a finding; `expect` stands in for a route with no decoder.
  */
 const SYNC = {
-  account: { decode: (b) => d.decodeAccount(b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'business') },
-  account_catalog: { decode: (b) => d.decodeAccountCatalog(b), mock: (api) => api.getAccountCatalog('business') },
-  account_quota: { decode: (b) => d.decodeQuotaHistory(b), mock: (api) => api.getQuotaHistory('business') },
-  account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'business').usage },
+  account: { decode: (b) => d.decodeAccount(b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'primary') },
+  account_catalog: { decode: (b) => d.decodeAccountCatalog(b), mock: (api) => api.getAccountCatalog('primary') },
+  account_quota: { decode: (b) => d.decodeQuotaHistory(b), mock: (api) => api.getQuotaHistory('primary') },
+  account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'primary').usage },
   accounts: { decode: (b) => b.accounts.map(d.decodeAccount), mock: (api) => api.listAccounts() },
   analytics_accounts: { decode: (b) => d.decodeAccountRollups(b), mock: (api) => api.listAccountRollups(day, now) },
   analytics_breakdown: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown(query) },
@@ -50,7 +50,7 @@ const SYNC = {
   keys: { decode: (b) => b.keys.map(d.decodeKey), mock: (api) => api.listKeys() },
   live_messages: { decode: (b) => ({ ...d.decodeLiveSnapshot(b.snapshot.snapshot), recent: [d.decodeLiveRequest(b.deltas[0].delta.request)] }), mock: (api) => { let snapshot; const stop = api.subscribeLive((e) => { if (e.kind === 'snapshot') snapshot = e.snapshot; }); stop(); return snapshot; } },
   models_state: { decode: (b) => d.decodeModelsState(b), mock: (api) => api.getModelsState() },
-  pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing('team') },
+  pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing('legacy') },
   pools: { decode: (b) => b.pools.map(d.decodePool), mock: (api) => api.listPools() },
   request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const detail = await api.getRequest(r.id); if (detail.events.length) return detail; } throw new Error('no mock request carries an event'); } },
   // `.request`/`.response` are CapturedBodies' own declared-`unknown` fields (decode.ts's decodeBodies passes
@@ -187,12 +187,12 @@ test('the mock stores a key edit\'s enabled flag and expiry and folds them into 
 
 test('the mock deletes an account with its pool memberships, and a disconnect keeps the identity', async () => {
   const api = await admin();
-  assert.ok((await api.listPools()).some((p) => p.members.some((m) => m.accountId === 'mail')), 'the story puts mail in a pool');
-  await api.deleteAccount('mail');
-  assert.equal((await api.listAccounts()).some((a) => a.id === 'mail'), false);
-  assert.deepEqual((await api.listPools()).filter((p) => p.members.some((m) => m.accountId === 'mail')).map((p) => p.id), [], 'the route removes every membership with the account');
-  await assert.rejects(api.deleteAccount('mail'), (e) => e.status === 404);
-  await api.disconnectAccount('business');
-  const business = (await api.listAccounts()).find((a) => a.id === 'business');
-  assert.deepEqual([business.email, business.status, business.credential.refreshTokenExpiresAt, business.pools.length > 0], ['business@example.com', 'unpaired', null, true], 'a disconnect drops the credential and leaves the identity and the memberships');
+  assert.ok((await api.listPools()).some((p) => p.members.some((m) => m.accountId === 'secondary')), 'the story puts secondary in a pool');
+  await api.deleteAccount('secondary');
+  assert.equal((await api.listAccounts()).some((a) => a.id === 'secondary'), false);
+  assert.deepEqual((await api.listPools()).filter((p) => p.members.some((m) => m.accountId === 'secondary')).map((p) => p.id), [], 'the route removes every membership with the account');
+  await assert.rejects(api.deleteAccount('secondary'), (e) => e.status === 404);
+  await api.disconnectAccount('primary');
+  const primary = (await api.listAccounts()).find((a) => a.id === 'primary');
+  assert.deepEqual([primary.email, primary.status, primary.credential.refreshTokenExpiresAt, primary.pools.length > 0], ['operator@example.com', 'unpaired', null, true], 'a disconnect drops the credential and leaves the identity and the memberships');
 });

@@ -100,12 +100,12 @@ setting; they fail there and the client tolerates that.
 ### CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK
 
 Optional; needed to use fast mode behind the router. The client checks whether fast mode is available for the
-organization by asking `api.anthropic.com` directly with the session's credential, ignoring `ANTHROPIC_BASE_URL`;
-with a router key that check fails as a connectivity error and fast mode stays off. With this variable set the
-client skips the check and sends `speed: "fast"` when you switch fast mode on. The router reads the speed from
-the request and the answer: a fast request is served on an account whose fast lane is open, priced in dollars
-from usage credits, and moved to a sibling when an account's fast lane cools (see
-[Cooldowns and failover](routing.md#cooldowns-and-failover)); it draws no plan window.
+organization by asking `api.anthropic.com` directly with the session's credential, ignoring `ANTHROPIC_BASE_URL`; with a
+router key that check fails as a connectivity error and fast mode stays off. With this variable set the client skips the
+check and sends `speed: "fast"` when you switch fast mode on. The router reads the speed from the request and the
+answer: a fast request is served on an account whose fast lane is open, priced in dollars from usage credits, and moved
+to a sibling when an account's fast lane cools (see [Cooldowns and failover](routing.md#cooldowns-and-failover)); it
+draws no plan window.
 
 ### For the keepalive companion
 
@@ -243,18 +243,18 @@ A request body whose top-level object carries `metadata`, `model`, `stream` or `
 `system` block carries `text` more than once, raw or escaped, whose `safeguards` member cannot be cut while its key's
 server-side auto mode is off (carried twice, or spelled with an escape), whose `cache_control` marker the pool's cache
 TTL policy cannot reach (a key on the marker's path spelled with an escape), or whose billing stamp the router can
-neither check nor restamp (a key on its path, the billing line's header name or its `cch=` spelled with an escape),
-whether or not the request needs an edit, is refused before anything reaches the upstream: `400` with the error code
-`body_shape` and a message naming the member. A `metadata` object that names `user_id` twice, raw or escaped, is refused
-the same way, since the router splices the account into one spelling and a last-wins parser upstream would read the
-other. A body whose top-level object nests deeper than the relay reads is refused `400` with the error code
-`invalid_body`.
+neither check nor restamp (a key on its path, the billing line's header name or its `cch=` spelled with an escape, or a
+second stamped `text` in the first `system` block), whether or not the request needs an edit, is refused before anything
+reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A `metadata` object that
+names `user_id` twice, raw or escaped, is refused the same way, since the router splices the account into one spelling
+and a last-wins parser upstream would read the other. A body whose top-level object nests deeper than the relay reads is
+refused `400` with the error code `invalid_body`.
 
 A request body that does not finish arriving within `proxy.body_read_seconds` (60 by default) after authentication is
 refused `408` with the error code `request_timeout` and the message `the request body did not arrive in time`.
 
-A caller that stops sending before its body is complete is refused `400` with the error code
-`request_incomplete` and the message `the request body ended before it was complete`.
+A caller that stops sending before its body is complete is refused `400` with the error code `request_incomplete` and
+the message `the request body ended before it was complete`.
 
 A `count_tokens` request takes no slot of the pool's per-account [in-flight cap](routing.md#in-flight-caps) and is
 never held or refused for want of one, though it takes one of its key's body-read slots, bounded by

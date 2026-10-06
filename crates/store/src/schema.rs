@@ -74,11 +74,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (42, V42),
     (43, V43),
     (44, V44),
+    (45, V45),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 44;
+pub const SCHEMA_VERSION: u32 = 45;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -649,4 +650,10 @@ CREATE INDEX refresh_attempts_account ON refresh_attempts (account_id, incarnati
 ALTER TABLE api_keys ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
 UPDATE api_keys SET updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
 DELETE FROM affinity WHERE chain IN ('request', 'response');
+"#;
+
+// The field names the rule it sets, a window running ahead of its pace by this much; the creating statement keeps
+// its frozen text, so the rename runs on a fresh file as on an old one.
+const V45: &str = r#"
+ALTER TABLE pools RENAME COLUMN migrate_above_utilization TO shed_ahead_of_pace;
 "#;

@@ -1646,17 +1646,13 @@
   white-space: nowrap;
 }
 
-/* The held marker follows the trail at the trail's own step size, so the row reads as one run of badges. */
+/* The held marker follows the trail at the step size the `.trail__step` rule gives both, so the row reads as one run of
+   badges. */
 .requests__attempts {
   display: inline-flex;
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
-}
-
-.requests__attempts > .badge {
-  padding: 1px 7px;
-  font-size: 11.5px;
 }
 
 /* The outcome word follows the status badge at the attempts' step and drops under it where the column is narrow, so
@@ -2497,7 +2493,8 @@
   max-width: 260px;
 }
 
-.trail__step {
+.trail__step,
+.requests__attempts > .badge {
   gap: 4px;
   padding: 1px 7px;
   font-size: 11.5px;

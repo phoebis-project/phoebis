@@ -19,6 +19,7 @@ pub enum ViewReason {
     Evicted,
     Expired,
     IdleLimit,
+    LedgerBehind,
     NetNegative,
     Overage,
     Paused,
@@ -47,6 +48,7 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
         Evicted => ViewReason::Evicted,
         Expired => ViewReason::Expired,
         IdleLimit => ViewReason::IdleLimit,
+        LedgerBehind => ViewReason::LedgerBehind,
         NetNegative => ViewReason::NetNegative,
         Overage => ViewReason::Overage,
         Paused | PoolDisabled | KeepaliveOff | OptedOut | KeyOptedOut | IneligibleCredential

@@ -253,7 +253,8 @@ jobs:
           VERSION: ${{ needs.guard.outputs.version }}
         run: |
           printed=$(docker run --rm "$REF" --version)
-          [ "$printed" = "phoebis $VERSION" ] || { echo "--version printed '$printed', not 'phoebis $VERSION'"; exit 1; }
+          [ "$printed" = "phoebis $VERSION" ] \
+            || { echo "--version printed '$printed', not 'phoebis $VERSION'"; exit 1; }
           tmp=$(mktemp -d)
           head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > "$tmp/storage.key"
           chmod 0444 "$tmp/storage.key"
@@ -274,7 +275,8 @@ jobs:
             [ "$status" = healthy ] && break
             sleep 1
           done
-          [ "$status" = healthy ] || { docker logs phoebis-smoke; echo "the container is '$status' after 30 s"; exit 1; }
+          [ "$status" = healthy ] \
+            || { docker logs phoebis-smoke; echo "the container is '$status' after 30 s"; exit 1; }
           # The console's shell is served without a session: the page must be the built bundle, not the
           # placeholder the crate's build script embeds when npm fails, and one of its assets must be served.
           shell=$(curl -fsS http://127.0.0.1:18081/)

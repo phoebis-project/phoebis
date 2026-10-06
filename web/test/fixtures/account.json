@@ -21,6 +21,7 @@
       "quarantined": false
     },
     "lifecycle_generation": 1,
+    "revision": 4294967299,
     "cooldowns": [
       {
         "scope": "model:claude-haiku-4-5-20251001",

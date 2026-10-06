@@ -267,7 +267,8 @@ fn stamp_hashes(pin: &mut PinRow, request: &SelectRequest) {
     pin.tail_hash = request.boundaries.last().cloned();
 }
 
-/// The hysteresis band under the migrate margin: a destination counts only below `margin - MIGRATE_BAND`.
+/// The hysteresis band under the shedding margin (`shed_ahead_of_pace`): a subscription destination counts only below
+/// `margin - MIGRATE_BAND`; an api_key one reads its bucket against 1.0.
 pub const MIGRATE_BAND: f64 = 0.05;
 
 /// Why a selection landed where it did, for the attempt row and the request drawer. `Serialize` here, so the
@@ -1242,10 +1243,11 @@ fn ahead_under(state: &RoutingState, account_id: &str, window: &str, t: f64, now
     ahead(state, account_id, window, now).is_none_or(|lead| lead < t)
 }
 
-/// Whether `account_id` reads under `migrate_above_utilization` minus the hysteresis band: how far each shared plan
-/// window runs ahead of its pace for a subscription account, the worst standing bucket for an api_key one. No
-/// threshold configured, or no reading, counts as under. The same reading `move_of`'s `cool` predicate takes for a
-/// migration destination, so the arithmetic lives once.
+/// Whether `account_id` reads cool: a subscription account under `shed_ahead_of_pace` minus the hysteresis band on
+/// how far each shared plan window runs ahead of its pace, an api_key account with room in its worst standing bucket
+/// (under 1.0, whatever the margin). No threshold configured, or no reading, counts as cool. The reading `move_of`'s
+/// `cool` predicate takes for a migration destination and rung 4's `blocked` takes for a placement, so the arithmetic
+/// lives once.
 fn under_band(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -1253,16 +1255,18 @@ fn under_band(
     account_id: &str,
     now: i64,
 ) -> bool {
-    let Some(threshold) = pool.migrate_above_utilization else {
+    let Some(threshold) = pool.shed_ahead_of_pace else {
         return true;
     };
-    let band = threshold - MIGRATE_BAND;
     match snapshot.account(account_id).map(|a| a.kind) {
+        // A bucket refills within its minute and a reading can be a minute old, so a line under 1.0 says little
+        // about the next minute; a destination that hits its limit costs one short wait in place, not a failover.
         Some(AccountKind::ApiKey) => state
             .sample(account_id)
             .and_then(|s| s.worst_bucket(now))
-            .is_none_or(|r| r.utilization < band),
+            .is_none_or(|r| r.utilization < 1.0),
         _ => {
+            let band = threshold - MIGRATE_BAND;
             ahead_under(state, account_id, FIVE_HOUR, band, now)
                 && ahead_under(state, account_id, SEVEN_DAY, band, now)
         }
@@ -1306,15 +1310,15 @@ fn move_of<'a>(
     let prefer_plan = pool.overage_policy == OveragePolicy::PreferPlan;
     let kind = |id: &str| snapshot.account(id).map(|a| a.kind);
     let dwell_ms = seconds_ms(pool.shedding.source_dwell_seconds);
-    // A sibling the next round would not shed from again soon: every reading its sample holds under the band
-    // (the shared windows' leads over their pace on a subscription account, the worst live bucket of an api_key
-    // one; an unsampled account reads as under), no round of its own within the dwell, and room under the cap. A
-    // full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one rather
-    // than being dropped at the cap.
+    // A sibling the next round would not shed from again soon: every reading its sample holds cool (the shared windows'
+    // leads over their pace under the band on a subscription account, room in the worst live bucket of an api_key one;
+    // an unsampled account reads as cool), no pool has run a round on it within the dwell, and room under the cap. A
+    // full sibling counts as hot, so a move whose cool siblings are all full falls through to a free one rather than
+    // being dropped at the cap.
     let cool = |state: &RoutingState, c: &Candidate| -> bool {
         under_band(state, snapshot, pool, &c.account_id, now)
             && state
-                .last_shed(&c.account_id)
+                .newest_shed(&c.account_id)
                 .is_none_or(|at| now - at >= dwell_ms)
             && state.in_flight().account(&c.account_id) < pool.failover.in_flight_cap
     };
@@ -1332,7 +1336,7 @@ fn move_of<'a>(
         // A hot destination would shed the session again at its next round, so every move prefers a cool
         // one. The preference falls through to the rule's own set: each rule moves the pin for a reason a
         // hot sibling still answers, which staying put does not.
-        if pool.migrate_above_utilization.is_none() {
+        if pool.shed_ahead_of_pace.is_none() {
             return set;
         }
         let preferred: Vec<&'a Candidate> =
@@ -1423,18 +1427,18 @@ fn move_of<'a>(
     // The trigger reads how far the prediction runs ahead of the window's pace, as the ceiling reads the
     // prediction itself: a week at 0.5 ten percent in is a session worth shedding, the same week at 0.5 sixty
     // percent in is not, and a refunded window reads zero at its reset.
-    let threshold = pool.migrate_above_utilization?;
+    let threshold = pool.shed_ahead_of_pace?;
     let hot = ahead_at_least(state, &current.account_id, FIVE_HOUR, threshold, now)
         || ahead_at_least(state, &current.account_id, SEVEN_DAY, threshold, now);
     if !hot {
         return None;
     }
     if state
-        .last_shed(&current.account_id)
+        .last_shed(&pool.id, &current.account_id)
         .is_none_or(|at| now - at >= dwell_ms)
     {
         let marks = shed_round(state, snapshot, pool, current, cold, fast, now, fallback_ms);
-        state.record_shed(&current.account_id, now, marks);
+        state.record_shed(&pool.id, &current.account_id, now, marks);
     }
     // A pin on an account cooled for this model is not renewed at step 5, so the fresh placement replaces it:
     // the release names the cooldown and the mark leaves with the pin, where a shed would name a move the
@@ -1453,7 +1457,7 @@ fn move_of<'a>(
     // A pin moves only when its session asks, so an unmarked pin never moves for utilization and a marked one
     // moves at its next request. A plan-quota round sheds window share, which a fast request does not draw, so
     // its mark moves a standard request alone; a dollar round's mark moves a fast one too.
-    if !state.shed_marked(&current.key(), now, dwell_ms)
+    if !state.shed_marked(&pool.id, &current.key(), now, dwell_ms)
         || (request.fast
             && burn_unit(state, snapshot, &current.account_id, now, fallback_ms)
                 == BurnUnit::WindowShare)
@@ -1483,12 +1487,13 @@ fn burn_unit(
     BurnUnit::of(kind, state.in_overage(account_id, now, fallback_ms))
 }
 
-/// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
-/// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
-/// in the unit its funding selects. On plan quota each burn is the cost table's 5-hour share rate on its reference
-/// tier: the tier's factor divides every pin of the account alike, so neither the order nor the share of the sum
-/// needs it, and a pin on a fast lane is out of the round, since it draws no window and has nothing to shed there;
-/// in dollars it stays. The current pin's warmth and lane are this request's; every other pin's are the stored ones.
+/// A shedding round over the pool's pins on the account `current` sits on: every pin of it under one of the pool's
+/// keys, cold first by burn, then warm by burn over rewrite cost, bounded by `warm_sessions`, marked in that order
+/// up to `shed_share` of that slice's burn in the unit its funding selects. On plan quota each burn is the cost
+/// table's 5-hour share rate on its reference tier: the tier's factor divides every pin of the account alike, so
+/// neither the order nor the share of the sum needs it, and a pin on a fast lane is out of the round, since it draws
+/// no window and has nothing to shed there; in dollars it stays. The current pin's warmth and lane are this
+/// request's; every other pin's are the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,
@@ -1502,8 +1507,16 @@ fn shed_round(
 ) -> Vec<PinKey> {
     let account_id = &current.account_id;
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
+    // The round is the pool's: a pin under another pool's key on the same account is in that pool's round, with
+    // that pool's share, dwell and bounds, and is neither marked nor counted here.
+    let in_pool = |p: &PinRow| {
+        snapshot
+            .key(&p.key_id)
+            .is_some_and(|k| k.pool_id == pool.id)
+    };
     let (mut pins, mut sum) = state.burn_of(
         account_id,
+        &in_pool,
         unit,
         state.rates(),
         now,
@@ -1620,7 +1633,10 @@ fn obstacle(
         return Some(Obstacle::BudgetUnknown);
     }
     if let Some(until) = budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now) {
-        return Some(Obstacle::Budget { until });
+        // A period that ends inside the fast window would answer a retry the fast lane still refuses.
+        return Some(Obstacle::Budget {
+            until: fast_limited.map_or(until, |row| until.max(row.until)),
+        });
     }
     if let Some(row) = fast_limited {
         return Some(cooldown(row));
@@ -1771,8 +1787,8 @@ fn account_ok(
 
 /// Rung 4's own gate on a candidate account, evaluated per candidate rather than inferred from the
 /// post-partition selection set: under the cap, below `select_below_utilization` on the 5-hour window when the
-/// pool sets one, not winding down, above the Pace floor under Pace, and under the band `move_of`'s `cool` reads
-/// for a migration destination.
+/// pool sets one, not winding down, above the Pace floor under Pace, and under `under_band`, the reading
+/// `move_of`'s `cool` takes for a migration destination.
 fn blocked(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,

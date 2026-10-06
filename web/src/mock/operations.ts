@@ -7,7 +7,7 @@ import { keyById } from './pools';
 import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE } from './samples';
-import { MINUTE, ago, ahead } from './time';
+import { MINUTE, NOW, ago, ahead } from './time';
 
 const rng = createRng(2_024);
 
@@ -31,33 +31,40 @@ const sessionSpec: {
   state: Session['keepalive']['state'];
   subagents?: { accountId?: string; model: string };
 }[] = [
-  { keyId: 'desktop', accountId: 'business', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', subagents: { model: 'claude-sonnet-5', accountId: 'personal' } },
-  { keyId: 'desktop', accountId: 'business', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'personal', model: 'claude-sonnet-5', state: 'idle', agents: 2, companion: 'silent' },
-  { keyId: 'desktop', accountId: 'business', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'personal', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' } },
-  { keyId: 'desktop', accountId: 'business', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'busy', agents: 3, companion: 'reporting', subagents: { model: 'claude-sonnet-5', accountId: 'nightly' } },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'nightly', model: 'claude-sonnet-5', state: 'idle', agents: 2, companion: 'silent' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-opus-5', state: 'parked', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'nightly', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting', subagents: { model: 'claude-sonnet-5' } },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 1, companion: 'reporting' },
   // Idle for longer than the pool's one-hour max idle, so its recipe is held and its retained prompt is gone.
-  { keyId: 'laptop', accountId: 'personal', model: 'claude-sonnet-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-sonnet-5', state: 'idle', agents: 1, companion: 'silent', idleMinutes: 95 },
   // The laptop key allows Haiku 4.5 and Sonnet 5 only, so its subagents stay inside that list.
-  { keyId: 'laptop', accountId: 'business', model: 'claude-sonnet-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
-  { keyId: 'laptop', accountId: 'personal', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
-  { keyId: 'desktop', accountId: 'business', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting' },
-  { keyId: 'ci', accountId: 'evals', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
-  { keyId: 'ci', accountId: 'evals', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', idleMinutes: 240 },
-  { keyId: 'laptop', accountId: 'mail', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
-  { keyId: 'desktop', accountId: 'console', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
+  { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
+  { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting' },
+  { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
+  { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', idleMinutes: 240 },
+  { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
+  { keyId: 'desktop', accountId: 'overflow', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
   // Seen by the router but with nothing in the ledger, so the per-row jumps to
   // analytics and observe have no traffic to land on.
-  { keyId: 'laptop', accountId: 'personal', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
+  { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
 ];
 
+/** How long the router lists a session after its last request, which the settings answer as well. */
+const SESSION_EXPIRE_SECONDS = 86_400;
+
+// Grouped as the route's activity query groups a session's rows, by key, generation and session with probes left out,
+// so the earlier holder's rows count for its own row below, never for the live session that shares their id.
+const activityOf = (keyId: string | null, keyGeneration: number, sessionId: string) => `${keyId}|${keyGeneration}|${sessionId}`;
 const ledgered = new Map<string, { last: string; requests: number }>();
 for (const r of REQUESTS) {
-  if (r.sessionId === null) continue;
-  const seen = ledgered.get(r.sessionId);
-  if (!seen) ledgered.set(r.sessionId, { last: r.at, requests: 1 });
-  else ledgered.set(r.sessionId, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
+  if (r.sessionId === null || r.kind === 'probe') continue;
+  const id = activityOf(r.keyId, r.keyGeneration, r.sessionId);
+  const seen = ledgered.get(id);
+  if (!seen) ledgered.set(id, { last: r.at, requests: 1 });
+  else ledgered.set(id, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
 }
 
 /** A 20k-token prefix read back at Fable 5.1's cache-read cell, 0.001675 of the Max 20x window per million, rounded. */
@@ -78,7 +85,8 @@ const PIN_TYPES: (keyof PlanModelCells)[] = ['cacheRead', 'cacheWrite1h', 'cache
 export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // The last entry deliberately falls outside the ledgered ids.
   const sessionId = i < SESSION_IDS.length ? SESSION_IDS[i] : rng.uuid();
-  const seen = ledgered.get(sessionId) ?? null;
+  const keyGeneration = Date.parse(keyById.get(spec.keyId)!.createdAt);
+  const seen = ledgered.get(activityOf(spec.keyId, keyGeneration, sessionId)) ?? null;
   // Both rolls are drawn whatever the spec says, so pinning one session's idle
   // does not shift the seeded stream the rest of these fixtures read from.
   const createdRoll = rng.int(8, 9 * 60) * MINUTE;
@@ -114,7 +122,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     model: spec.model,
     epoch: i < 3 ? 2 : 1,
     historical: false,
-    keyGeneration: Date.parse(keyById.get(spec.keyId)!.createdAt),
+    keyGeneration,
     createdAt: ago(createdAgo),
     lastUsedAt: ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
@@ -260,23 +268,44 @@ for (const pin of SESSIONS) {
   pin.keepalive.netUsd = main?.netUsd ?? null;
 }
 
-// The earlier holder of the `desktop` key id, which the analytics story already draws as
-// `desktop (deleted, created ... UTC)`: the ledger keeps its sessions until they expire, with no recipe of their
-// own. It joins the list after the probe times are filled in because it carries the live session's id, which would
-// otherwise hand it that session's next probe.
-const firstDesktop = SESSIONS[0];
-SESSIONS.push({
-  ...firstDesktop,
-  agents: 0,
-  companion: 'none',
-  companionSince: null,
-  createdAt: null,
-  historical: true,
-  keepalive: { lastGuard: null, netFiveHourShare: null, netUsd: null, nextProbeAt: null, state: null },
-  keyGeneration: DELETED_HOLDER_GENERATION,
-  lastUsedAt: null,
-  pinned: false,
-});
+// The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...
+// UTC)`: the router lists a holder's session while its last request is inside the session expiry, with that holder's
+// own requests and no pin or recipe. The holder's last request ran on the session the live key holds now, so the row
+// carries that id, and it joins the list after the probe times are filled in, which would otherwise hand it that
+// session's next probe.
+const holderRows = REQUESTS.filter((r) => r.kind !== 'probe' && r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
+const holderLast = holderRows[0];
+if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NOW) {
+  SESSIONS.push({
+    ...SESSION_SAMPLE,
+    accountId: holderLast.accountId,
+    agentId: null,
+    agents: 0,
+    burn: null,
+    burnAt: null,
+    burnUnit: null,
+    cacheTtlMs: null,
+    companion: 'none',
+    companionSince: null,
+    createdAt: null,
+    epoch: null,
+    forkDepth: null,
+    forkedFrom: null,
+    historical: true,
+    keepalive: { lastGuard: null, netFiveHourShare: null, netUsd: null, nextProbeAt: null, state: null },
+    keyGeneration: DELETED_HOLDER_GENERATION,
+    keyId: 'desktop',
+    lastInputTokens: null,
+    lastRefreshAt: null,
+    lastRequestAt: holderLast.at,
+    lastUsedAt: null,
+    model: holderLast.canonicalModel,
+    pinned: false,
+    requests: holderRows.length,
+    sessionId: SESSION_IDS[0],
+    shedFrom: null,
+  });
+}
 
 // Counted off the recipes so the tiles cannot drift from the table below them.
 const WARMED = SESSIONS.filter((pin) => pin.keepalive.state !== null);
@@ -321,7 +350,7 @@ export const SETTINGS_WIRE = {
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   pricing: { ...settingsFixture.pricing, effective: '2026-09-30', models: PRICES.map(priceWire), source: 'shipped' },
   retention: { body_capture_max_hours: 72 },
-  sessions: { expire_after_seconds: 86_400 },
+  sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
   storage: { ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', pricing_path: './pricing.yaml' },
   usage: { cache_ttl_seconds: 60 },
 };

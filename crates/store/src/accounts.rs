@@ -103,6 +103,32 @@ pub struct AccountRow {
     pub state: AccountState,
 }
 
+/// The low bits of an edit token, which carry the revision; the incarnation takes the bits above them.
+const EDIT_TOKEN_REVISION_BITS: u32 = 32;
+const EDIT_TOKEN_REVISION_MAX: u64 = (1 << EDIT_TOKEN_REVISION_BITS) - 1;
+/// The token stays below 2^53, the largest integer a JavaScript number holds exactly, so the console sends back the
+/// very value it was given.
+const EDIT_TOKEN_INCARNATION_MAX: u64 = (1 << (53 - EDIT_TOKEN_REVISION_BITS)) - 1;
+
+impl AccountRow {
+    /// What an operator's edit sends back to be fenced on: the incarnation and the revision in one integer. An
+    /// account deleted and created again under the same id restarts its revision at 1, so the revision alone would
+    /// let an editor opened before the deletion land on the replacement. A part past its share saturates: the token
+    /// then names a row this one is not, so a save sending it back is refused rather than fenced onto another holder.
+    pub fn edit_token(&self) -> u64 {
+        (self.incarnation.min(EDIT_TOKEN_INCARNATION_MAX) << EDIT_TOKEN_REVISION_BITS)
+            | self.revision.min(EDIT_TOKEN_REVISION_MAX)
+    }
+
+    /// Whether `token` names this row's incarnation and revision both.
+    pub fn answers_edit_token(&self, token: u64) -> bool {
+        (
+            token >> EDIT_TOKEN_REVISION_BITS,
+            token & EDIT_TOKEN_REVISION_MAX,
+        ) == (self.incarnation, self.revision)
+    }
+}
+
 /// The one host the relay dials.
 pub const INFERENCE_HOST: &str = "api.anthropic.com";
 
@@ -374,41 +400,6 @@ impl Store {
             params![id, incarnation],
         )?;
         crate::registry::record_change(&tx, now, actor, "account_deleted", id, "{}")?;
-        tx.commit()?;
-        Ok(())
-    }
-
-    /// `expected_revision` is the revision the caller built the update from: an edit assembled out of a row
-    /// read a moment ago must not land on a row another edit has moved since.
-    pub fn update_account(
-        &self,
-        id: &str,
-        expected_revision: u64,
-        label: &str,
-        actor: &str,
-    ) -> Result<(), StoreError> {
-        let mut conn = self.conn.lock().expect(LOCK_POISONED);
-        let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        let now = jiff::Timestamp::now().as_millisecond();
-        if tx.execute(
-            "UPDATE accounts SET label = ?2, revision = revision + 1, updated_at = ?3 \
-             WHERE id = ?1 AND revision = ?4",
-            params![id, label, now, expected_revision as i64],
-        )? == 0
-        {
-            let exists: i64 = tx.query_row(
-                "SELECT COUNT(*) FROM accounts WHERE id = ?1",
-                params![id],
-                |r| r.get(0),
-            )?;
-            return Err(if exists > 0 {
-                StoreError::Stale
-            } else {
-                StoreError::AccountNotFound(id.to_string())
-            });
-        }
-        let diff = serde_json::json!({ "label": label }).to_string();
-        crate::registry::record_change(&tx, now, actor, "account_updated", id, &diff)?;
         tx.commit()?;
         Ok(())
     }

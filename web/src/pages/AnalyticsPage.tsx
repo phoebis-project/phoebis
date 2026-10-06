@@ -576,7 +576,16 @@ export function AnalyticsPage() {
             </Select>
             <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
           </div>
-          <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} rangeEndMs={burn.data?.endMs} readAt={burn.data?.readAt} sized={sized} />
+          {/* Only the account grouping sizes its lines by tier, so another one neither waits on nor fails with the settings read. */}
+          <BurnCharts
+            answer={burn.stale ? null : (burn.data?.answer ?? null)}
+            error={burn.error ?? (burnGroup === 'account' ? burnSettings.error : null)}
+            groupBy={burnGroup}
+            loading={burn.data === null || burn.stale || (burnGroup === 'account' && sized === null)}
+            rangeEndMs={burn.data?.endMs}
+            readAt={burn.data?.readAt}
+            sized={sized}
+          />
           <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
         </Section>
       )}
@@ -1384,7 +1393,7 @@ const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown
 const PLAN_NOTE =
   "The share of each subscription account's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band";
 const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost table does not size, so no share of its windows is priced';
-const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost table has no row for, or on a cell it leaves unmeasured, prices no share on that window and draws no point';
+const MODEL_UNLISTED_HINT = 'A bucket whose traffic ran on a model the cost table has no row for, on a cell it leaves unmeasured, or under a tier factor it leaves unmeasured, prices no share on that window and draws no point';
 const NO_ACCOUNT: ReadonlySet<string> = new Set();
 const PARTIAL_NOTE = 'The last bucket is partial, rated over the part of its width it covers';
 /** A partial bucket's bars draw at this share of their series' opacity. */

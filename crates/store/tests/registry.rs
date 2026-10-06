@@ -138,6 +138,10 @@ const UNDO_V40: &str =
 // a seeded version-40 store is faithful. One line with the marker last; the trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
 const UNDO_V42: &str = "DROP INDEX IF EXISTS alert_deliveries_event; CREATE INDEX alert_deliveries_event ON alert_deliveries (event_id, id);";
+// The reverse of `V45`. One line with the marker last, since it restores a dropped name; the trailing `\n` ends the
+// marker's comment.
+const UNDO_V45: &str =
+    "ALTER TABLE pools RENAME COLUMN shed_ahead_of_pace TO migrate_above_utilization; -- rollback\n";
 // The reverse of `V44`, one statement per line. The request and response links it deleted are not restored, since
 // no older version needs them; the index goes before `UNDO_V20` drops the column it names.
 const UNDO_V44: &str = r#"
@@ -218,6 +222,33 @@ fn member(account_id: &str, priority: u32) -> MemberWrite {
     }
 }
 
+/// A label edit through the one account write, fenced on the revision the caller read. The incarnation and the
+/// generation are the row's own at call time, so only the revision half of the admin route's fence can refuse here.
+fn rename(
+    store: &Store,
+    id: &str,
+    revision: u64,
+    label: &str,
+    actor: &str,
+) -> Result<(), StoreError> {
+    let (incarnation, generation) = store
+        .account(id)?
+        .map_or((0, 0), |row| (row.incarnation, row.lifecycle_generation));
+    store.commit_account_update(&AccountUpdate {
+        id,
+        expected_revision: revision,
+        incarnation,
+        lifecycle_generation: generation,
+        label,
+        secret: None,
+        state: None,
+        at: jiff::Timestamp::now().as_millisecond(),
+        actor,
+        enabled: None,
+        cancellation: None,
+    })
+}
+
 #[test]
 fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let dir = tempfile::tempdir().unwrap();
@@ -258,12 +289,12 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
         "ALTER TABLE accounts DROP COLUMN incarnation; DROP TABLE account_tombstones;";
     const UNDO_V4: &str = "ALTER TABLE accounts DROP COLUMN revision;";
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 44);
+    assert_eq!(store.schema_version().unwrap(), 45);
     drop(store);
     let again = Store::open(&path, &key).unwrap();
     assert_eq!(
         again.schema_version().unwrap(),
-        44,
+        45,
         "a second open runs no migration and keeps the version"
     );
     assert!(again.pools().unwrap().is_empty());
@@ -277,7 +308,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before a cooldown recorded when it was set looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} INSERT INTO cooldowns (account_id, scope, until, reason, window, source_request_id) \
          VALUES ('a', 'account', 9000, 'rate_limit', 'five_hour', NULL); \
          UPDATE meta SET value = '8' WHERE key = 'schema_version';"
     ))
@@ -286,7 +317,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        44,
+        45,
         "a store left at version 8 is carried up"
     );
     assert_eq!(
@@ -315,14 +346,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before the depletion threshold existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} UPDATE meta SET value = '7' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        44,
+        45,
         "a store left at version 7 is carried up"
     );
     drop(migrated);
@@ -341,14 +372,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // What a database written before account incarnations existed looks like on disk.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} UPDATE meta SET value = '4' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        44,
+        45,
         "a store left at version 4 is carried up"
     );
     assert_eq!(
@@ -360,14 +391,14 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the account revision existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} UPDATE meta SET value = '3' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        44,
+        45,
         "a store left at version 3 is carried up"
     );
     assert_eq!(
@@ -379,7 +410,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     // And what one written before the change-log index existed looks like.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} DROP INDEX registry_changes_target; {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} DROP INDEX registry_changes_target; {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} {UNDO_V23} {UNDO_V22} {UNDO_V21} {UNDO_V20} {UNDO_V17} {UNDO_V13} {UNDO_V12} {UNDO_V11} {UNDO_V9} {UNDO_V8} {UNDO_V5} {UNDO_V4} \
          UPDATE meta SET value = '2' WHERE key = 'schema_version';"
     ))
     .unwrap();
@@ -387,7 +418,7 @@ fn the_schema_is_migrated_once_and_the_version_is_recorded() {
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        44,
+        45,
         "a store left at version 2 is carried up"
     );
     drop(migrated);
@@ -436,12 +467,12 @@ fn a_pool_and_a_pin_from_before_the_engine_columns_read_the_mapped_strategy_and_
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} UPDATE meta SET value = '24' WHERE key = 'schema_version'; {SEED_PRE_V25}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} UPDATE meta SET value = '24' WHERE key = 'schema_version'; {SEED_PRE_V25}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     let pools = migrated.pools().unwrap();
     let legacy = pools.iter().find(|p| p.id == "legacy").unwrap();
     let random = pools.iter().find(|p| p.id == "random").unwrap();
@@ -460,7 +491,14 @@ fn a_pool_and_a_pin_from_before_the_engine_columns_read_the_mapped_strategy_and_
         "the migration turns the free toggle on for every existing pool"
     );
     assert_eq!(legacy.shedding, Shedding::default());
-    assert_eq!(legacy.failover, Failover::default());
+    assert_eq!(
+        legacy.failover,
+        Failover {
+            retry_in_place_seconds: 10,
+            ..Failover::default()
+        },
+        "a pool from before the column keeps the column's own default, as an existing pool keeps its stored bound"
+    );
     let pin = migrated
         .load_routing()
         .unwrap()
@@ -506,12 +544,12 @@ fn a_pin_a_pool_a_member_and_a_key_from_before_the_affinity_columns_read_the_def
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} UPDATE meta SET value = '28' WHERE key = 'schema_version'; {SEED_PRE_V29}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} UPDATE meta SET value = '28' WHERE key = 'schema_version'; {SEED_PRE_V29}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
 
     let pin = migrated
         .load_routing()
@@ -640,12 +678,12 @@ fn a_stored_policy_with_the_retired_keepalive_key_reads_as_set_after_the_migrati
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} UPDATE meta SET value = '38' WHERE key = 'schema_version'; {SEED_PRE_V39}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} UPDATE meta SET value = '38' WHERE key = 'schema_version'; {SEED_PRE_V39}"
     ))
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &key).unwrap();
-    assert_eq!(store.schema_version().unwrap(), 44);
+    assert_eq!(store.schema_version().unwrap(), 45);
     let policy = phoebis_relay::CacheTtlPolicy::from_json(
         &store.pool("warm").unwrap().unwrap().cache_ttl_json,
     );
@@ -693,12 +731,12 @@ fn a_member_budget_with_its_period_lands_in_the_column_the_period_names() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} UPDATE meta SET value = '40' WHERE key = 'schema_version'; {SEED_PRE_V41}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} UPDATE meta SET value = '40' WHERE key = 'schema_version'; {SEED_PRE_V41}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     let members = migrated.pool_members("main").unwrap();
     let budgets_of = |id: &str| {
         let m = members.iter().find(|m| m.account_id == id).unwrap();
@@ -746,12 +784,12 @@ fn a_store_left_at_42_is_carried_to_43_without_the_pools_header_switch() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     assert_eq!(
         migrated
             .pools()
@@ -785,12 +823,12 @@ fn a_store_left_at_42_is_carried_to_43_without_the_keys_cap_or_fixed_source() {
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_KEY}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_KEY}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     let read = migrated.api_key("k").unwrap().expect("the key reads back");
     assert_eq!((read.label.as_str(), read.pool_id.as_str()), ("k", "main"));
     drop(migrated);
@@ -823,12 +861,12 @@ fn a_store_left_at_42_is_carried_to_43_with_every_unset_diagnostics_switch_off()
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_DIAGNOSTICS}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_DIAGNOSTICS}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     let pools = migrated.pools().expect("an unset switch reads as a bool");
     assert_eq!(
         pools
@@ -859,12 +897,12 @@ fn a_store_left_at_42_is_carried_to_43_without_the_rule_event_and_delivery_table
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_TABLES}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} UPDATE meta SET value = '42' WHERE key = 'schema_version'; {SEED_PRE_V43_TABLES}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     drop(migrated);
     let conn = rusqlite::Connection::open(&path).unwrap();
     let objects: Vec<String> = conn
@@ -913,7 +951,7 @@ fn a_store_left_at_43_is_carried_to_44_with_the_key_column_the_index_and_no_pare
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} UPDATE meta SET value = '43' WHERE key = 'schema_version'; {SEED_PRE_V44}"
+        "{UNDO_V45} {UNDO_V44} UPDATE meta SET value = '43' WHERE key = 'schema_version'; {SEED_PRE_V44}"
     ))
     .unwrap();
     drop(conn);
@@ -926,7 +964,7 @@ fn a_store_left_at_43_is_carried_to_44_with_the_key_column_the_index_and_no_pare
     let before = wall_ms();
     let migrated = Store::open(&path, &storage_key).unwrap();
     let after = wall_ms();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     assert_eq!(
         migrated
             .load_routing()
@@ -966,6 +1004,30 @@ fn a_store_left_at_43_is_carried_to_44_with_the_key_column_the_index_and_no_pare
         columns,
         ["account_id", "incarnation", "id"],
         "the index a holder's newest attempt is read through"
+    );
+}
+
+#[test]
+fn a_pool_margin_written_under_the_old_column_reads_through_the_new_one() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let key = StorageKey::generate();
+    let store = Store::open(&path, &key).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(&format!(
+        "{UNDO_V45} UPDATE pools SET migrate_above_utilization = 0.25 WHERE id = 'main'; \
+         UPDATE meta SET value = '44' WHERE key = 'schema_version';"
+    ))
+    .unwrap();
+    drop(conn);
+    let migrated = Store::open(&path, &key).unwrap();
+    assert_eq!(migrated.schema_version().unwrap(), 45);
+    assert_eq!(
+        migrated.pool("main").unwrap().unwrap().shed_ahead_of_pace,
+        Some(0.25),
+        "the value written under the old column is read through the new one"
     );
 }
 
@@ -1038,14 +1100,14 @@ fn the_subscription_is_stored_with_the_profile_and_reads_back_with_nulls_before_
     // the version this migration reads from rather than rolled back through every later one.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} UPDATE meta SET value = '23' WHERE key = 'schema_version';"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} UPDATE meta SET value = '23' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
     assert_eq!(
         migrated.schema_version().unwrap(),
-        44,
+        45,
         "the direct 23 to 28 open runs every migration between"
     );
     assert_eq!(
@@ -1133,7 +1195,7 @@ fn a_store_left_at_31_is_carried_to_32_with_the_windows_table() {
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} UPDATE meta SET value = '31' WHERE key = 'schema_version';"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} UPDATE meta SET value = '31' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
@@ -1142,7 +1204,7 @@ fn a_store_left_at_31_is_carried_to_32_with_the_windows_table() {
         "the roll-back left the store at 31"
     );
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     drop(migrated);
     assert!(has_windows_table(&path), "V32 created the table");
 }
@@ -1175,12 +1237,12 @@ fn a_store_left_at_32_is_carried_to_33_with_the_typed_burn_restarted_and_the_sha
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} UPDATE meta SET value = '32' WHERE key = 'schema_version'; {HELD_AT_32}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} UPDATE meta SET value = '32' WHERE key = 'schema_version'; {HELD_AT_32}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     let pin = migrated.load_routing().unwrap().pins.pop().unwrap();
     assert_eq!(
         (pin.burn, pin.burn_at, pin.burn_banded),
@@ -1230,13 +1292,13 @@ fn a_store_left_at_33_is_carried_to_34_without_the_fit_table() {
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} UPDATE meta SET value = '33' WHERE key = 'schema_version';"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} UPDATE meta SET value = '33' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     assert!(has_fit_table(&path), "the roll-back left the store at 33");
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     drop(migrated);
     assert!(!has_fit_table(&path), "V34 dropped the table");
 }
@@ -1276,6 +1338,34 @@ fn a_pool_reopens_on_and_a_key_reopens_inheriting_until_set_off() {
 }
 
 #[test]
+fn a_key_created_with_its_own_auto_mode_setting_reopens_with_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let key_store = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key_store).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    for (id, secret, setting) in [
+        ("desktop", "phoebis-desktop-secret", true),
+        ("laptop", "phoebis-laptop-secret", false),
+    ] {
+        let mut row = key(&store, id, "main", secret);
+        row.auto_mode_server = Some(setting);
+        store.insert_api_key(&row, "test").unwrap();
+    }
+    drop(store);
+    let store = Store::open(&path, &key_store).unwrap();
+    assert_eq!(
+        store.api_key("desktop").unwrap().unwrap().auto_mode_server,
+        Some(true)
+    );
+    assert_eq!(
+        store.api_key("laptop").unwrap().unwrap().auto_mode_server,
+        Some(false),
+        "an override set at the create is stored as set, on or off"
+    );
+}
+
+#[test]
 fn a_registry_from_before_the_auto_mode_columns_reopens_every_pool_on_and_every_key_inheriting() {
     let dir = tempfile::tempdir().unwrap();
     let key_store = StorageKey::generate();
@@ -1287,12 +1377,12 @@ fn a_registry_from_before_the_auto_mode_columns_reopens_every_pool_on_and_every_
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} UPDATE meta SET value = '34' WHERE key = 'schema_version';"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} UPDATE meta SET value = '34' WHERE key = 'schema_version';"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key_store).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     assert!(migrated.pool("main").unwrap().unwrap().auto_mode_server);
     assert_eq!(
         migrated
@@ -1316,12 +1406,12 @@ fn a_store_left_at_37_is_carried_to_38_without_the_budget_flag() {
     drop(Store::open(&path, &key).unwrap());
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} UPDATE meta SET value = '37' WHERE key = 'schema_version'; {HELD_AT_37}"
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} UPDATE meta SET value = '37' WHERE key = 'schema_version'; {HELD_AT_37}"
     ))
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     let budgets = migrated.keepalive_budgets("2026-09-30").unwrap();
     assert_eq!(
         budgets
@@ -1489,7 +1579,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     drop(store);
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} \
+        "{UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V42} {UNDO_V41} {UNDO_V40} {UNDO_V39} {UNDO_V38} {UNDO_V37} {UNDO_V36} {UNDO_V35} {UNDO_V34} {UNDO_V33} {UNDO_V32} {UNDO_V31} {UNDO_V30} {UNDO_V29} {UNDO_V28} {UNDO_V27} {UNDO_V26} {UNDO_V25} {UNDO_V24} \
          DROP TABLE model_resolutions; \
          ALTER TABLE pools ADD COLUMN default_allowed_models_json TEXT; \
          ALTER TABLE pools DROP COLUMN model_rules_json; \
@@ -1518,7 +1608,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
     .unwrap();
     drop(conn);
     let migrated = Store::open(&path, &storage_key).unwrap();
-    assert_eq!(migrated.schema_version().unwrap(), 44);
+    assert_eq!(migrated.schema_version().unwrap(), 45);
     migrated
         .insert_api_key(
             &key(&migrated, "old", "main", "phoebis-old-reissued"),
@@ -1763,6 +1853,17 @@ fn pools_members_and_keys_round_trip_and_a_pool_with_keys_cannot_be_deleted() {
 }
 
 #[test]
+fn a_new_pool_waits_out_a_throttle_of_up_to_a_minute_by_default() {
+    assert_eq!(Failover::default().retry_in_place_seconds, 60);
+    let dir = tempfile::tempdir().unwrap();
+    let store = Store::open(&dir.path().join("router.sqlite"), &StorageKey::generate()).unwrap();
+    store.insert_pool(&pool("main"), "test").unwrap();
+    let pools = store.pools().unwrap();
+    let main = pools.iter().find(|p| p.id == "main").unwrap();
+    assert_eq!(main.failover.retry_in_place_seconds, 60);
+}
+
+#[test]
 fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
@@ -1921,12 +2022,11 @@ fn a_stale_account_update_carrying_enabled_and_a_cancellation_writes_nothing() {
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
     let read = store.account("a").unwrap().unwrap();
-    store
-        .update_account("a", read.revision, "Moved", "admin")
-        .unwrap();
+    rename(&store, "a", read.revision, "Moved", "admin").unwrap();
     let stale = AccountUpdate {
         id: "a",
         expected_revision: read.revision,
+        incarnation: read.incarnation,
         lifecycle_generation: read.lifecycle_generation,
         label: "Stale",
         secret: None,
@@ -2038,6 +2138,7 @@ fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
     let update = AccountUpdate {
         id: "a",
         expected_revision: 1,
+        incarnation: 1,
         lifecycle_generation: 1,
         label: "Renamed",
         secret: Some(&Secret::new("k2")),
@@ -2089,6 +2190,121 @@ fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
 }
 
 #[test]
+fn a_recreated_account_never_answers_an_edit_token_its_predecessor_answered() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .create_account(&account("a", AccountKind::Oauth), None, 1, "admin")
+        .unwrap();
+    let mut answered = Vec::new();
+    for label in ["One", "Two"] {
+        let row = store.account("a").unwrap().unwrap();
+        answered.push(row.edit_token());
+        rename(&store, "a", row.revision, label, "admin").unwrap();
+    }
+    answered.push(store.account("a").unwrap().unwrap().edit_token());
+    store.delete_account("a", "admin").unwrap();
+    store
+        .create_account(&account("a", AccountKind::Oauth), None, 2, "admin")
+        .unwrap();
+    for label in ["One", "Two", "Three"] {
+        let row = store.account("a").unwrap().unwrap();
+        assert!(
+            !answered.contains(&row.edit_token()),
+            "revision {} of the replacement answers a token its predecessor answered",
+            row.revision
+        );
+        rename(&store, "a", row.revision, label, "admin").unwrap();
+    }
+}
+
+#[test]
+fn an_edit_token_too_wide_for_a_console_number_is_refused_by_its_own_row() {
+    let row = AccountRow {
+        incarnation: 1 << 21,
+        ..account("a", AccountKind::Oauth)
+    };
+    assert!(
+        row.edit_token() < 1 << 53,
+        "the token stays an integer a console number holds exactly"
+    );
+    assert!(
+        !row.answers_edit_token(row.edit_token()),
+        "a token that cannot name the row's incarnation fences nothing onto it"
+    );
+}
+
+#[test]
+fn an_account_update_read_from_a_deleted_account_is_stale_on_the_one_that_took_its_id() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .create_account(
+            &account("a", AccountKind::ApiKey),
+            Some(&Secret::new("k1")),
+            1,
+            "admin",
+        )
+        .unwrap();
+    let read = store.account("a").unwrap().unwrap();
+    store.delete_account("a", "admin").unwrap();
+    store
+        .create_account(
+            &account("a", AccountKind::ApiKey),
+            Some(&Secret::new("k2")),
+            2,
+            "admin",
+        )
+        .unwrap();
+    let replacement = store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (replacement.revision, replacement.lifecycle_generation),
+        (read.revision, read.lifecycle_generation),
+        "the replacement restarts both counters the read carried"
+    );
+    let stale = AccountUpdate {
+        id: "a",
+        expected_revision: read.revision,
+        incarnation: read.incarnation,
+        lifecycle_generation: read.lifecycle_generation,
+        label: "Stale",
+        secret: Some(&Secret::new("k3")),
+        state: Some(AccountState::Ready),
+        at: 5,
+        actor: "admin",
+        enabled: Some(false),
+        cancellation: None,
+    };
+    assert!(matches!(
+        store.commit_account_update(&stale),
+        Err(StoreError::Stale)
+    ));
+    assert_eq!(
+        (
+            store.account("a").unwrap().unwrap(),
+            store
+                .api_key_credential("a")
+                .unwrap()
+                .unwrap()
+                .0
+                .expose()
+                .to_string()
+        ),
+        (replacement.clone(), "k2".to_string()),
+        "no staged field of the edit read from the deleted account landed"
+    );
+    store
+        .commit_account_update(&AccountUpdate {
+            incarnation: replacement.incarnation,
+            ..stale
+        })
+        .unwrap();
+    assert_eq!(
+        store.account("a").unwrap().unwrap().label,
+        "Stale",
+        "the same edit built from the replacement lands"
+    );
+}
+
+#[test]
 fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
     let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
     store
@@ -2099,7 +2315,7 @@ fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
         (revision(), store.account_revision("a").unwrap()),
         (1, Some(1))
     );
-    store.update_account("a", 1, "Renamed", "admin").unwrap();
+    rename(&store, "a", 1, "Renamed", "admin").unwrap();
     assert_eq!(revision(), 2, "a label update");
     store.set_enabled("a", false).unwrap();
     assert_eq!(revision(), 3, "an enable flip");
@@ -2141,8 +2357,8 @@ fn the_newest_change_id_is_the_mirrors_starting_watermark() {
     store
         .insert_account(&account("a", AccountKind::Oauth))
         .unwrap();
-    store.update_account("a", 1, "first", "admin").unwrap();
-    store.update_account("a", 2, "second", "admin").unwrap();
+    rename(&store, "a", 1, "first", "admin").unwrap();
+    rename(&store, "a", 2, "second", "admin").unwrap();
     let newest = store.newest_registry_change_id().unwrap().unwrap();
     let changes = store.registry_changes_after(0, 100).unwrap();
     assert_eq!(changes.len(), 2);
@@ -2456,23 +2672,21 @@ fn an_account_update_is_fenced_on_the_revision_it_was_built_from() {
         .create_account(&row, Some(&Secret::new("k1")), 1, "admin")
         .unwrap();
     let built_from = store.account_revision("vendor").unwrap().unwrap();
-    store
-        .update_account("vendor", built_from, "Renamed", "admin")
-        .unwrap();
+    rename(&store, "vendor", built_from, "Renamed", "admin").unwrap();
     assert_eq!(
         store.account("vendor").unwrap().unwrap().label.as_str(),
         "Renamed"
     );
     assert!(
         matches!(
-            store.update_account("vendor", built_from, "Renamed Again", "admin"),
+            rename(&store, "vendor", built_from, "Renamed Again", "admin"),
             Err(StoreError::Stale)
         ),
         "the revision the caller read is gone, so the edit it assembled is about a row that moved"
     );
     assert_eq!(store.account("vendor").unwrap().unwrap().label, "Renamed");
     assert!(matches!(
-        store.update_account("nobody", 1, "x", "admin"),
+        rename(&store, "nobody", 1, "x", "admin"),
         Err(StoreError::AccountNotFound(_))
     ));
 }

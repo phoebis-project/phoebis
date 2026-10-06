@@ -91,6 +91,27 @@ test('updateAccount is one PATCH that carries the cancelled flag and the end in 
   assert.equal(account.cancelled, true, 'the answer decodes as the account');
 });
 
+test('an account edit sends the revision it read as expected_revision, and none for a save that read no row', async () => {
+  const body = JSON.parse(readFileSync(new URL('./fixtures/account.json', import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body));
+  const api = new HttpApi();
+  const end = '2026-10-19T09:15:00.000Z';
+  const patch = { cancelled: true, subscriptionEndsAt: end };
+  await api.updateAccount('business', patch, 3);
+  await api.renameAccount('business', 'x', 3);
+  await api.updateAccount('business', patch);
+  await api.renameAccount('business', 'x');
+  assert.deepEqual(
+    calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body)]),
+    [
+      ['PATCH', '/admin/accounts/business', { cancelled: true, subscription_ends_at: Date.parse(end), expected_revision: 3 }],
+      ['PATCH', '/admin/accounts/business', { label: 'x', expected_revision: 3 }],
+      ['PATCH', '/admin/accounts/business', { cancelled: true, subscription_ends_at: Date.parse(end) }],
+      ['PATCH', '/admin/accounts/business', { label: 'x' }],
+    ],
+  );
+});
+
 test('listRequests passes the user agent pattern as user_agent', async () => {
   const calls = stub(() => answer(200, { next_cursor: null, requests: [] }));
   await new HttpApi().listRequests({ userAgent: 'claude-cli/2.1.*' });
@@ -326,41 +347,44 @@ test('the request detail reads the row and its events from one GET, and a purged
   assert.equal(await api.getRequest('gone'), null);
 });
 
+const keyEdit = { autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
+
 test('a key create and a key edit send the auto mode override in snake_case', async () => {
   const row = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
-  const input = { autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
   const calls = stub((url, init) => answer(200, { ...row, ...JSON.parse(init.body), ...(init.method === 'POST' ? { secret: 'phoebis-fixture' } : {}) }));
   const api = new HttpApi();
-  const created = await api.createKey({ ...input, expiresInDays: null });
-  const edited = await api.updateKey('desktop', { ...input, autoModeServer: false });
+  const created = await api.createKey({ ...keyEdit, expiresInDays: null });
+  const edited = await api.updateKey('desktop', { ...keyEdit, autoModeServer: false });
   const sent = calls.map((c) => [c.init.method, c.url, JSON.parse(c.init.body).auto_mode_server]);
   assert.deepEqual(sent, [['POST', '/admin/keys', null], ['PATCH', '/admin/keys/desktop', false]]);
   assert.deepEqual([created.key.autoModeServer, edited.autoModeServer], [null, false]);
 });
 
+const poolSave = (name) => ({
+  affinityTtlSeconds: 600,
+  bodyCaptureHours: 0,
+  cacheDiagnostics: false,
+  cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { main: '5m', models: [], subagent: '5m' }, plan: { main: '1h', models: [], subagent: '5m' } },
+  keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
+  affinityMode: 'when_cached',
+  members: [{ accountId: 'business', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }, { accountId: 'direct', budgetDailyUsd: 12.5, budgetMonthlyUsd: 50, priority: 1 }],
+  minSharedPrefixTokens: 30_000,
+  modelRules: [],
+  name,
+  overagePolicy: 'prefer_plan',
+  preferSubscription: false,
+  selectBelowUtilization: 0.4,
+  sessionPlacement: 'by_warm_prefix',
+  shedAheadOfPace: 0.25,
+  status: 'active',
+  strategy: 'pace',
+  subagentPlacement: 'with_main',
+});
+
 test('a pool save is one PATCH that carries the members with the settings', async () => {
   const row = JSON.parse(readFileSync(new URL('./fixtures/pools.json', import.meta.url), 'utf8')).body.pools[0];
   const calls = stub(() => answer(200, row));
-  await new HttpApi().updatePool('main', {
-    affinityTtlSeconds: 600,
-    bodyCaptureHours: 0,
-    cacheDiagnostics: false,
-    cacheTtl: { enabled: false, injectWhenAbsent: false, metered: { main: '5m', models: [], subagent: '5m' }, plan: { main: '1h', models: [], subagent: '5m' } },
-    keepalive: { coldProbeLimit: 2, costCapUsdPerDay: null, enabled: false, jitterSeconds1h: 30, jitterSeconds5m: 5, leadSeconds1h: 360, leadSeconds5m: 60, maxIdleSeconds: 3_600, maxIdleTicks: 0, netNegativeGraceProbes: 2, retryMaxSeconds: 300, retrySeconds: 30, stopWhenNetNegative: true, warmSubagents: true },
-    affinityMode: 'when_cached',
-    members: [{ accountId: 'business', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }, { accountId: 'direct', budgetDailyUsd: 12.5, budgetMonthlyUsd: 50, priority: 1 }],
-    migrateAboveUtilization: null,
-    minSharedPrefixTokens: 30_000,
-    modelRules: [],
-    name: row.label,
-    overagePolicy: 'prefer_plan',
-    preferSubscription: false,
-    selectBelowUtilization: 0.4,
-    sessionPlacement: 'by_warm_prefix',
-    status: 'active',
-    strategy: 'pace',
-    subagentPlacement: 'with_main',
-  });
+  await new HttpApi().updatePool('main', poolSave(row.label));
   assert.deepEqual(calls.map((c) => [c.init.method, c.url]), [['PATCH', '/admin/pools/main']], 'a second write could fail after the first landed');
   const body = JSON.parse(calls[0].init.body);
   assert.deepEqual(body.members, [
@@ -368,11 +392,29 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
     { account_id: 'direct', budget_daily_usd: 12.5, budget_monthly_usd: 50, priority: 1 },
   ], 'a member without a budget sends null, which clears a stored one');
   assert.equal(body.select_below_utilization, 0.4);
+  assert.equal(body.shed_ahead_of_pace, 0.25);
   assert.equal(body.cache_diagnostics, false, 'the switch is sent off as it is sent on');
   assert.deepEqual(
     [body.affinity_mode, body.subagent_placement, body.session_placement, body.min_shared_prefix_tokens],
     ['when_cached', 'with_main', 'by_warm_prefix', 30_000],
   );
+});
+
+test('a pool or key edit sends the stamp it read as expected_revision, and one it cannot read is refused as stale unsent', async () => {
+  const pools = JSON.parse(readFileSync(new URL('./fixtures/pools.json', import.meta.url), 'utf8')).body.pools[0];
+  const keys = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
+  const calls = stub((url) => answer(200, url.startsWith('/admin/pools') ? pools : keys));
+  const api = new HttpApi();
+  const read = '2026-09-16T14:30:00.000Z';
+  await api.updatePool('main', poolSave(pools.label), read);
+  await api.updateKey('desktop', keyEdit, read);
+  await api.updatePool('main', poolSave(pools.label));
+  const sent = calls.map((c) => JSON.parse(c.init.body).expected_revision);
+  assert.deepEqual(sent, [Date.parse(read), Date.parse(read), undefined], 'the millisecond stamp, and none for a save that read no row');
+  const unread = (e) => e instanceof ApiError && e.status === 409 && e.code === 'stale_edit';
+  await assert.rejects(api.updatePool('main', poolSave(pools.label), 'not a stamp'), unread);
+  await assert.rejects(api.updateKey('desktop', keyEdit, 'not a stamp'), unread);
+  assert.equal(calls.length, 3, 'a stamp the dialog cannot read sends nothing, so the route never sees a null');
 });
 
 test('deleting an account calls the account route, and a disconnect keeps to the credentials route', async () => {

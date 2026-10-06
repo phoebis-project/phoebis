@@ -70,7 +70,7 @@ selects `claude_ai` (the default) or `console`:
 ```sh
 curl -sS -b jar.txt -X POST https://phoebis.example/admin/oauth/sessions \
   -H 'content-type: application/json' -H 'origin: https://phoebis.example' \
-  -d '{"account_id":"business","login":"claude_ai"}'
+  -d '{"account_id":"primary","login":"claude_ai"}'
 ```
 
 Open the `authorization_url` in a browser and sign in. The provider sends the browser to the loopback redirect

@@ -304,9 +304,9 @@ A newer client build is not relayed in its own shape automatically: headers trav
 client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the OAuth beta,
 claimed for a subscription credential and stripped for an Anthropic key on every request that carries the line; the
 cache-diagnosis beta under the pool's `cache_diagnostics` switch; and the extended-TTL beta the cache TTL rewrite adds
-or drops. The profile's beta lists record what the measured client sends, as the fixtures
-show, and the fields the router restores for a Claude Code request are the ones on the
-[client page](client.md#the-environment-block), not what a newer client might add.
+or drops. The profile's beta lists record what the measured client sends, as the fixtures show, and the fields the
+router restores for a Claude Code request are the ones on the [client page](client.md#the-environment-block), not what a
+newer client might add.
 
 To re-pin the profile against a new build:
 
@@ -385,20 +385,19 @@ release:
    head the changelog's section for it `## X.Y.Z`, and merge to `main`.
 2. Create the release on GitHub with the tag `X.Y.Z` on that commit, no `v` prefix. Publishing it starts the
    workflow.
-3. The workflow refuses the release before anything builds when the tag has another shape, differs from the
-   workspace version, or has no `## X.Y.Z` section in the changelog, naming both values. Otherwise it builds
-   `linux/amd64` and `linux/arm64` on native runners and pushes each by digest, and runs the amd64 image through
-   `--version` (which must print the version), `check-config` against `deploy/config.container.yaml`, a container in
-   the compose example's shape that must reach `healthy` within 30 seconds, serve the built console (the page from the
-   admin listener is not the placeholder and one of its assets is served), answer `phoebis status` inside the
-   container with a first line ending in `ready`, take a `phoebis backup` onto the volume and stop within the grace
-   period, and a second container under a certificate pair the smoke generates, whose certificate verifies the
-   console over TLS. Beside the images it builds a static binary for `x86_64-unknown-linux-musl` and
-   `aarch64-unknown-linux-musl` inside the `cross` tool's images, runs each on its own platform (`--version`, a static
-   link check, `init` and `check-config` in a temporary directory) and packs it with the license. Once every smoke
-   passes it publishes one manifest list at `ghcr.io/daystrom-labs/phoebis` under `X.Y.Z`, `X.Y` and `X` (from major
-   1, never for a prerelease), `latest` (never for a prerelease), and `sha-<short commit>`, and uploads the two
-   archives with `SHA256SUMS` to the release.
+3. The workflow refuses the release before anything builds when the tag has another shape, differs from the workspace
+   version, or has no `## X.Y.Z` section in the changelog, naming both values. Otherwise it builds `linux/amd64` and
+   `linux/arm64` on native runners and pushes each by digest, and runs the amd64 image through `--version` (which must
+   print the version), `check-config` against `deploy/config.container.yaml`, a container in the compose example's shape
+   that must reach `healthy` within 30 seconds, serve the built console (the page from the admin listener is not the
+   placeholder and one of its assets is served), answer `phoebis status` inside the container with a first line ending
+   in `ready`, take a `phoebis backup` onto the volume and stop within the grace period, and a second container under a
+   certificate pair the smoke generates, whose certificate verifies the console over TLS. Beside the images it builds a
+   static binary for `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl` inside the `cross` tool's images, runs
+   each on its own platform (`--version`, a static link check, `init` and `check-config` in a temporary directory) and
+   packs it with the license. Once every smoke passes it publishes one manifest list at `ghcr.io/daystrom-labs/phoebis`
+   under `X.Y.Z`, `X.Y` and `X` (from major 1, never for a prerelease), `latest` (never for a prerelease), and
+   `sha-<short commit>`, and uploads the two archives with `SHA256SUMS` to the release.
 
 A failed smoke, of the image or of a binary, leaves untagged digests in the registry, no tag and no archive on the
 release; a failed guard leaves nothing. A manual dispatch (Actions, Release, Run workflow) is the dry run: it builds
