@@ -102,7 +102,7 @@ export const ACCOUNTS: Account[] = ([
       {
         reason: 'rate_limited (5h window exhausted)',
         scope: 'account',
-        setAt: ago(27 * MINUTE + 49_000),
+        setAt: ago(8 * MINUTE + 43_000),
         until: ahead(1 * HOUR + 12 * MINUTE),
         windowId: '5h',
       },
@@ -128,7 +128,7 @@ export const ACCOUNTS: Account[] = ([
     pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
-    extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
+    extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
     overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(3 * HOUR) },
     credential: {

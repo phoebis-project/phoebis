@@ -707,8 +707,17 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   // endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
   results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
+  // The story's nightly raised its spend cap at 11:30:12, so its extra usage carries no reason; a provider's reason is
+  // drawn when the account answers one.
   const nightly = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
-  results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: nightly?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [nightly?.textContent?.slice(0, 160) ?? 'no nightly card'] });
+  results.push({ name: '/quota draws no extra usage reason for an account whose provider gave none', ok: nightly !== undefined && nightly.querySelector('.callout') === null, missing: [nightly?.querySelector('.callout')?.textContent ?? 'no nightly card'] });
+  const { listAccounts } = api;
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'nightly' ? { ...a, extraUsage: { ...a.extraUsage, disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider' } } : a));
+  const declined = await mount('/quota');
+  const card = [...declined.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
+  results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: card?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [card?.textContent?.slice(0, 160) ?? 'no nightly card'] });
+  declined.unmount();
+  api.listAccounts = listAccounts;
 }
 {
   const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
@@ -1265,7 +1274,7 @@ expect('/accounts/secondary', m.text(), [
   });
 }
 await m.navigate('/accounts/nightly');
-expect('/accounts/nightly', m.text(), ['in use', 'Payment method declined', 'Overage since 3h']);
+expect('/accounts/nightly', m.text(), ['in use', 'Overage since 3h']);
 {
   // The funding flag is an Anthropic key's state, so this OAuth account in overage reads ready and offers no clear.
   const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
@@ -4234,6 +4243,15 @@ localStorage.removeItem('phoebis.expertView');
   await k.settle(200);
   k.unmount();
   localStorage.removeItem('phoebis.expertView');
+}
+
+{
+  // The dialog checks drove the shedding controls from a pool that sheds nothing; the story's margin comes back, so
+  // every later view reads pool `all` as the routing log's records do.
+  const all = (await api.listPools()).find((p) => p.id === 'all');
+  await api.updatePool('all', { ...all, members: all.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), shedAheadOfPace: 0.9 });
+  const restored = (await api.listPools()).find((p) => p.id === 'all');
+  results.push({ name: "fixture: pool all sheds at 90 % again once the pool dialog checks are done", ok: restored?.shedAheadOfPace === 0.9, missing: [String(restored?.shedAheadOfPace)] });
 }
 
 // As on the pools, the key dialog checks below read the expert fields too.
