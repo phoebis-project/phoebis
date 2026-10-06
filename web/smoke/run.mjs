@@ -1274,7 +1274,8 @@ expect('/accounts/secondary', m.text(), [
   });
 }
 await m.navigate('/accounts/nightly');
-expect('/accounts/nightly', m.text(), ['in use', 'Overage since 3h']);
+// Overage started at 11:32, so the label reads 2h 58m or 2h 59m while the clock runs from the anchor.
+expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
 {
   // The funding flag is an Anthropic key's state, so this OAuth account in overage reads ready and offers no clear.
   const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
@@ -6772,15 +6773,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
   {
-    // `secondary` serves the story's Sonnet 5 traffic alone, whose cells the cost table leaves null, and every 7-day
-    // cell is null, so its 5-hour window and every account's 7-day window price nothing in the range.
+    // `secondary` serves the story's Sonnet 5 traffic, whose cells the cost table leaves null, and every 7-day cell is
+    // null, so its 5-hour window prices nothing in the range and a 7-day window prices only a fast answer's zero.
     const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
     const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
     const fiveHour = planItems.filter((li) => labelOf(li).endsWith('(5-hour)'));
     const sevenDay = planItems.filter((li) => labelOf(li).endsWith('(7-day)'));
     const unlisted = planItems.filter((li) => labelOf(li) === 'model unlisted');
+    const day = await api.getAnalyticsBurn({ from: new Date(Date.now() - 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
+    const measured = (li, share) => day.points.some((p) => p.group === labelOf(li).split(' ')[0] && p[share] !== null);
     results.push({
-      name: "/analytics plan per hour draws each priced account's 5-hour share, a dash for the unmeasured 7-day window, and one model unlisted entry",
+      name: "/analytics plan per hour draws each priced account's 5-hour share, a dash for a window the range priced nothing on, and one model unlisted entry",
       ok:
         windows.every((w) => planned.includes(w)) &&
         !planned.some((t) => t.startsWith('overflow')) &&
@@ -6789,20 +6792,27 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         fiveHour.length === 3 &&
         fiveHour.every((li) => (labelOf(li).startsWith('secondary ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
         sevenDay.length === 3 &&
-        sevenDay.every((li) => valueOf(li) === '-') &&
+        sevenDay.every((li) => (measured(li, 'sevenDayShare') ? valueOf(li).endsWith('%') : valueOf(li) === '-')) &&
+        sevenDay.some((li) => valueOf(li) === '-') &&
         unlisted.length === 1 &&
         valueOf(unlisted[0]) === '5-hour, 7-day' &&
         unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost table has no row for, on a cell it leaves unmeasured, or under a tier factor it leaves unmeasured, prices no share on that window and draws no point',
       missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
     });
     // The legend's per-hour mean still ends in `%` over a single gap, so the buckets themselves are read: the
-    // unmeasured model belongs to `secondary` alone, and no story row carries it onto a priced account.
+    // unmeasured model runs on `secondary`, and only the story's sessions that moved off it carry it to a priced
+    // account.
     const gaps = [];
+    const sonnet5 = requests.filter((r) => r.model === 'claude-sonnet-5' && r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output > 0);
+    let carried = 0;
     for (const days of [1, 7]) {
       const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
-      gaps.push(...burn.points.filter((p) => ['primary', 'nightly'].includes(p.group) && p.tokens > 0 && p.fiveHourShare === null).map((p) => `${days}d ${p.group} ${p.at}`));
+      const ranSonnet5 = (p) => sonnet5.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + burn.bucketSeconds * 1_000);
+      const unpriced = burn.points.filter((p) => ['primary', 'nightly'].includes(p.group) && p.tokens > 0 && p.fiveHourShare === null);
+      carried += unpriced.filter(ranSonnet5).length;
+      gaps.push(...unpriced.filter((p) => !ranSonnet5(p)).map((p) => `${days}d ${p.group} ${p.at}`));
     }
-    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour share', ok: gaps.length === 0, missing: gaps });
+    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour share unless Sonnet 5 ran on it', ok: gaps.length === 0 && carried > 0, missing: gaps });
   }
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);

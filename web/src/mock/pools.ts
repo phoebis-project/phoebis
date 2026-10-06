@@ -16,6 +16,9 @@ function periodEndAfter(period: BudgetPeriod, now: number): string {
   return iso(period === 'day' ? Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate() + 1) : Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 1));
 }
 
+/** The instant the ci key was revoked, on the story's pinned day at 14:17:30. */
+export const KEY_REVOKED_AT = NOW - (12 * MINUTE + 30_000);
+
 /** The day's traffic, which `requests.ts` derives from the request rows once they are drawn. */
 const UNTIL_DRAWN: Pick<PoolSeed, 'cost24h' | 'requests24h' | 'traffic24h'> = { cost24h: 0, requests24h: 0, traffic24h: [] };
 
@@ -250,10 +253,10 @@ export const KEYS: ApiKey[] = [
     enabled: false,
     status: 'revoked',
     createdAt: daysAgo(120),
-    // Its revocation.
-    updatedAt: daysAgo(2),
+    // Its revocation, after the last request it reached selection with at 14:16:40.
+    updatedAt: iso(KEY_REVOKED_AT),
     expiresAt: null,
-    lastUsedAt: daysAgo(2),
+    lastUsedAt: iso(NOW - (13 * MINUTE + 20_000)),
     retiredSecretLastUsedAt: null,
     sessionsOnRetiredSecret: 0,
     notes: 'Rotated out after the runner image moved to its own key.',

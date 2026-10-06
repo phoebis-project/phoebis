@@ -20,7 +20,7 @@ const storyAt = async (at) => {
 // attempt, so a turn that failed over takes the story.
 const CLOCKS = [
   ['2026-09-28T10:53:00Z', 'a traced hold'],
-  ['2026-09-29T09:07:00Z', 'a failover'],
+  ['2026-09-29T04:39:00Z', 'a failover'],
 ];
 
 for (const [at, branch] of CLOCKS) {
@@ -42,7 +42,7 @@ for (const [at, branch] of CLOCKS) {
 
 // In UTC this minute's at-cap row, refused before any attempt, is a desktop Opus turn, which asked for fast.
 test('a request refused at the cap before any attempt lists under the fast speed it asked for and not under standard', async () => {
-  const api = new (await storyAt('2026-09-30T22:07:00Z')).MockApi();
+  const api = new (await storyAt('2026-09-30T10:02:00Z')).MockApi();
   const { requests } = await api.listRequests({ held: true, limit: 1_000 });
   const row = requests.find((r) => r.attempts.length === 0 && r.errorCode === 'accounts_at_cap');
   assert.equal(row?.shape.requestedSpeed, 'fast', 'the story holds an at-cap row that asked for fast');

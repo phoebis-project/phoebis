@@ -85,6 +85,8 @@ export const LANES: Lane[] = [
  */
 const UNPRICED_ACCOUNT = 'secondary';
 const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-5' : drawn);
+/** The model a request asked for: Sonnet 5 wherever one of its attempts reached secondary, else the lane's draw. */
+const modelOf = (attempts: Attempt[], drawn: string) => (attempts.some((a) => a.accountId === UNPRICED_ACCOUNT) ? 'claude-sonnet-5' : drawn);
 
 /** Probes exist only where the pool keeps caches warm and the key has not opted out, and so does anything kept warm by one. */
 export function warmsCaches(keyId: string, poolId: string): boolean {
@@ -97,10 +99,15 @@ const TRAFFIC_KINDS: { value: RequestKind; weight: number }[] = [
 ];
 const WARMED_KINDS: { value: RequestKind; weight: number }[] = [...TRAFFIC_KINDS, { value: 'probe', weight: 3 }];
 
+/** How far an earlier window's reading runs ahead of its pace at most: the story's one shedding round is at 11:00. */
+const EARLIER_LEAD = 0.8;
+
 /**
  * Walks a window back so a request seen hours ago reports the window that was
  * live at that moment. `olderFactor` is a thunk because it may draw from the
- * seeded stream, and only a window older than the current one needs it.
+ * seeded stream, and only a window older than the current one needs it. An
+ * earlier window's reading stays within its lead of the share elapsed, so no
+ * account but the story's leads its pace by the pool's shedding margin.
  */
 const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): AttemptWindow => {
   const period = w.periodHours * HOUR;
@@ -108,7 +115,8 @@ const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): 
   const shift = Math.ceil(Math.max(0, resetsAt - period - atMs) / period);
   const resetThen = resetsAt - shift * period;
   const phase = 1 - (resetThen - atMs) / period;
-  const utilization = Math.min(1, Math.max(0.02, w.utilization * (shift === 0 ? phase / Math.max(0.05, 1 - (resetsAt - NOW) / period) : olderFactor())));
+  const ceiling = shift === 0 ? 1 : Math.min(1, phase + EARLIER_LEAD);
+  const utilization = Math.min(ceiling, Math.max(0.02, w.utilization * (shift === 0 ? phase / Math.max(0.05, 1 - (resetsAt - NOW) / period) : olderFactor())));
   return { id: w.id, resetsAt: iso(resetThen), utilization: Math.round(utilization * 100) / 100 };
 };
 
@@ -244,10 +252,10 @@ export const HAIKU = 'claude-haiku-4-5-20251001';
 
 /**
  * Whether an account could take a request at `atMs` by the story's own account facts, so no attempt lands where the
- * decision card would show the account out: secondary, which serves Sonnet 5 alone, cools on its 5-hour window from
- * 14:02:11 to 15:42; primary's fast lane cools from 14:27:00 to 14:42 and it rejects Haiku from 14:24:10 to 15:24;
- * nightly's usage credits take a fast request once its payment clears at 11:30:12; the Overflow workspace needs
- * funding from 11:30:12; research spends its day's budget at 12:41:07.
+ * decision card would show the account out: secondary, which serves Sonnet 5 alone, reads its 5-hour window spent
+ * from 14:02:11 and cools on it from 14:09:31 to 15:42; primary's fast lane cools from 14:27:00 to 14:42 and it
+ * rejects Haiku from 14:24:10 to 15:24; nightly's usage credits take a fast request once its spend cap is raised at
+ * 11:30:12; the Overflow workspace needs funding from 11:30:12; research spends its day's budget at 12:41:07.
  */
 export function servable(accountId: string, atMs: number, model: string, fast: boolean): boolean {
   const within = (from: number, to: number) => atMs >= from && atMs < to;
@@ -262,15 +270,44 @@ export function servable(accountId: string, atMs: number, model: string, fast: b
 /** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
 const SERVED_FACTOR = 0.8;
 
+/** The head after the spend cap's raise that first read nightly in plan overage. */
+export const OVERAGE_FROM = clock(11, 32);
+
+/** The story's one shedding round: secondary's 5-hour window leads its pace by the pool's margin at 11:00. */
+export const SHED_ROUND = { accountId: UNPRICED_ACCOUNT, at: clock(11, 0) };
+
+/** The plan windows a head reads spent, the later reset first, as the relay cools the account until it. */
+const spentWindows = (windows: AttemptWindow[]) =>
+  windows.filter((w) => (w.id === '5h' || w.id === '7d') && (w.utilization ?? 0) >= 1).sort((x, y) => Date.parse(y.resetsAt ?? '') - Date.parse(x.resetsAt ?? ''));
+
+/**
+ * The cooldown a 429 sets by the relay's rule: a head that reads a plan window spent cools the account until that
+ * window's reset, and any other 429 until its retry-after.
+ */
+const rateLimitCooldown = (windows: AttemptWindow[], answeredAt: number, retryAfterS: number): Attempt['cooldownSet'] => {
+  const spent = spentWindows(windows)[0];
+  return spent?.resetsAt ? { reason: `429 on ${spent.id} window`, until: spent.resetsAt } : { reason: `429, retry after ${retryAfterS} s`, until: iso(answeredAt + retryAfterS * 1_000) };
+};
+
+/** Where the attempts a 429 added after a request's draws begin, by request id. */
+const CHAIN_FROM = new Map<string, number>();
+
 /**
  * The attempts of one request: none when no account of the lane could serve it at its time (the router answers it
- * exhausted without an upstream call), and fewer than drawn when the lane ran out of accounts it had not tried.
+ * exhausted without an upstream call), and fewer than drawn when the lane ran out of accounts it had not tried or an
+ * answer ended it. `whole` says the request answered as drawn: every drawn attempt made, and none added after a 429.
+ * `drawnHead` is where the draws end when secondary is barred from a fast request's earlier attempts alone and every
+ * drawn attempt runs; the usage draw is sized by it, so every row keeps the draws the stream gives it.
  */
-function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number, model: string, fast: boolean): Attempt[] {
+function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number, model: string, fast: boolean): { attempts: Attempt[]; chainFrom: number; drawnHead: string | undefined; whole: boolean } {
   const attempts: Attempt[] = [];
+  const trail: string[] = [];
+  const drawnTrail: string[] = [];
   const pool = [...lane.accountIds];
   let cursor = atMs;
   let ended = false;
+  let drawnEnded = false;
+  let committed = false;
   for (let i = 0; i < attemptsWanted; i += 1) {
     const last = i === attemptsWanted - 1;
     const drawnId = pool.length > 1 && i === 0 && lane.poolId === 'all' && rng.chance(0.3) ? 'secondary' : rng.pick(pool);
@@ -279,31 +316,28 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     // The stream draws as it always has, so a request handed off an account keeps every later draw where it was: an
     // account it tried already, or one that could not serve then, hands the attempt to the lane's first account that
     // could and was not tried, and with none left the request ends at the attempt before.
-    // Secondary draws no usage credits, so a fast request reaches it only as its last attempt, where it is the Sonnet 5
-    // turn secondary serves rather than a fast one.
-    const untried = (id: string) => !attempts.some((a) => a.accountId === id) && servable(id, cursor, model, fast) && !(fast && !last && id === UNPRICED_ACCOUNT);
+    const upstreamStatus = last ? finalStatus : rng.weighted([{ value: 429, weight: 6 }, { value: 529, weight: 2 }, { value: 502, weight: 1 }]);
+    const outcome: AttemptOutcome = upstreamStatus === 200 ? 'succeeded' : upstreamStatus === 429 ? 'rate_limited' : 'upstream_error';
+    // Secondary serves Sonnet 5 alone, so it takes a request only as its last attempt, where the request is the
+    // Sonnet 5 turn it serves rather than the model the lane drew.
+    const untried = (id: string) => !trail.includes(id) && servable(id, cursor, model, fast) && !(!last && id === UNPRICED_ACCOUNT);
     const handedTo = untried(drawnId) ? drawnId : lane.accountIds.find((id) => id !== drawnId && untried(id));
     if (handedTo === undefined) ended = true;
+    // The trail `drawnHead` reads, on the hand-off the usage draw is sized by.
+    const drawnUntried = (id: string) => !drawnTrail.includes(id) && servable(id, cursor, model, fast) && !(fast && !last && id === UNPRICED_ACCOUNT);
+    const drawnTo = drawnUntried(drawnId) ? drawnId : lane.accountIds.find((id) => id !== drawnId && drawnUntried(id));
+    if (drawnTo === undefined) drawnEnded = true;
+    if (!drawnEnded) drawnTrail.push(drawnTo ?? drawnId);
     const accountId = handedTo ?? drawnId;
-    let outcome: AttemptOutcome;
-    let upstreamStatus: number;
-    if (last) {
-      upstreamStatus = finalStatus;
-      outcome = finalStatus === 200 ? 'succeeded' : finalStatus === 429 ? 'rate_limited' : 'upstream_error';
-    } else {
-      upstreamStatus = rng.weighted([{ value: 429, weight: 6 }, { value: 529, weight: 2 }, { value: 502, weight: 1 }]);
-      outcome = 'rate_limited';
-    }
     const durationMs = last && finalStatus === 200 ? rng.int(900, 22_000) : rng.int(120, 900);
     const drawnWindows = oauthWindows(drawnId, cursor);
+    // A head reads the account's windows as they stand, a 429's as much as any other.
     const windows = accountId === drawnId ? drawnWindows : oauthWindows(accountId, cursor, () => SERVED_FACTOR);
     const rateLimitHit = upstreamStatus === 429;
     const attempt: Attempt = {
       accountId,
       cacheMissReason: null,
-      cooldownSet: rateLimitHit
-        ? { reason: `429 on ${windows.find((w) => (w.utilization ?? 0) >= 0.95)?.id ?? '5h'} window`, until: iso(cursor + rng.int(20, 75) * MINUTE) }
-        : null,
+      cooldownSet: rateLimitHit ? rateLimitCooldown(windows, cursor + durationMs, rng.int(20, 75)) : null,
       durationMs,
       index: i,
       outcome,
@@ -315,12 +349,43 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       upstreamMessageId: upstreamStatus === 200 ? upstreamId('msg_01') : null,
       upstreamRequestId: upstreamId('req_011C'),
       upstreamStatus,
-      windows: rateLimitHit ? windows.map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w)) : windows,
+      windows,
     };
-    if (!ended) attempts.push(attempt);
+    if (!ended) {
+      trail.push(accountId);
+      if (!committed) attempts.push(attempt);
+      // The relay commits a 529 or a 502 to the client, so the request ends on it and fails over only on a 429.
+      if (!last && upstreamStatus !== 200 && upstreamStatus !== 429) committed = true;
+    }
     cursor += durationMs + rng.int(40, 400);
   }
-  return attempts;
+  // A 429 fails over until no member of the pool is left that could serve, so a request that answered one tried each
+  // member the draw left: they answer 429 too, on no draw, secondary last since it serves Sonnet 5 alone and its plan
+  // draws no usage credits for a fast request.
+  const tail = attempts[attempts.length - 1];
+  let added = 0;
+  if (tail?.upstreamStatus === 429) {
+    // A request secondary took is the Sonnet 5 turn it serves, which is no fast one.
+    const stillFast = fast && !attempts.some((a) => a.accountId === UNPRICED_ACCOUNT);
+    const members = (poolById.get(lane.poolId)?.members ?? []).map((m) => m.accountId).sort((x, y) => Number(x === UNPRICED_ACCOUNT) - Number(y === UNPRICED_ACCOUNT));
+    for (const accountId of members) {
+      if (attempts.some((a) => a.accountId === accountId) || !servable(accountId, cursor, model, stillFast) || (stillFast && accountId === UNPRICED_ACCOUNT)) continue;
+      const windows = oauthWindows(accountId, cursor, () => SERVED_FACTOR);
+      attempts.push({
+        ...tail,
+        accountId,
+        cooldownSet: rateLimitCooldown(windows, cursor + 300, 30),
+        durationMs: 300,
+        index: attempts.length,
+        startedAt: iso(cursor),
+        upstreamRequestId: upstreamId('req_011C'),
+        windows,
+      });
+      added += 1;
+      cursor += 400;
+    }
+  }
+  return { attempts, chainFrom: attempts.length - added, drawnHead: drawnTrail[drawnTrail.length - 1], whole: !ended && !committed && added === 0 };
 }
 
 function buildRequests(): RequestLog[] {
@@ -345,14 +410,17 @@ function buildRequests(): RequestLog[] {
     const drawn = rng.weighted(lane.models);
     const finalStatus = kind === 'probe' ? (rng.chance(0.97) ? 200 : 502) : rng.weighted([{ value: 200, weight: 88 }, { value: 429, weight: 5 }, { value: 529, weight: 3 }, { value: 502, weight: 2 }]);
     const attemptsWanted = finalStatus === 200 ? (lane.poolId === 'all' && rng.chance(0.14) ? rng.int(2, 3) : 1) : rng.int(1, 3);
-    const tried = buildAttempts(lane, atMs, finalStatus, attemptsWanted, drawn, fastTurn(lane.keyId, drawn, kind));
+    const { attempts: tried, chainFrom, drawnHead, whole } = buildAttempts(lane, atMs, finalStatus, attemptsWanted, drawn, fastTurn(lane.keyId, drawn, kind));
     // A request no account could serve still draws its answer below, so every later row keeps its draws.
     const head = tried[tried.length - 1] as Attempt | undefined;
-    const model = modelOn(head?.accountId ?? '', drawn);
-    const usage = finalStatus === 200 ? usageFor(model, kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
+    const model = modelOf(tried, drawn);
+    // The usage draws take the size of the model the draws end on, so every later row keeps its draws; a model that
+    // is not asked to think reads none.
+    const drawnUsage = finalStatus === 200 ? usageFor(modelOn(drawnHead ?? '', drawn), kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
+    const usage = model.includes('fable') || model.includes('opus') ? drawnUsage : { ...drawnUsage, thinking: 0 };
     const diagnosis = diagnosed(tried, kind);
     // The story hour's rows leave below, so the rows the drawer reads land before it.
-    const owable = lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200 && tried.length === attemptsWanted && atMs < STORY_HOUR_FROM;
+    const owable = lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200 && whole && atMs < STORY_HOUR_FROM;
     const refused = refusalOwed && owable;
     if (refused) refusalOwed = false;
     const autoMode = !refused && owable ? (autoModeOwed.shift() ?? null) : null;
@@ -361,7 +429,8 @@ function buildRequests(): RequestLog[] {
       : diagnosis;
     const transport = kind === 'inference' ? (rng.chance(0.86) ? 'sse' : 'json') : 'json';
     const durationMs = attempts.reduce((s, a) => s + (a.durationMs ?? 0), 0);
-    const errorCode = finalStatus === 200 ? null : finalStatus === 429 ? 'rate_limit_error' : finalStatus === 529 ? 'overloaded_error' : 'api_error';
+    // A 429 fails the attempt over, so a request that answers one has run its lane out and the router answers it.
+    const errorCode = finalStatus === 200 ? null : finalStatus === 429 ? 'accounts_exhausted' : finalStatus === 529 ? 'overloaded_error' : 'api_error';
     const ttfbMs = finalStatus === 200 && kind !== 'count_tokens' ? rng.int(kind === 'probe' ? 180 : 420, kind === 'probe' ? 900 : 4_200) : null;
     // Streams open with a message_start frame, so the first content token lands a
     // little after the first byte; JSON responses arrive whole.
@@ -419,8 +488,9 @@ function buildRequests(): RequestLog[] {
       requestTruncated: false,
       responseTruncated: lane.keyId === 'laptop' && i % 7 === 0,
     });
+    if (chainFrom < tried.length) CHAIN_FROM.set(id, chainFrom);
     if (head === undefined) Object.assign(rows[rows.length - 1], unservedAnswer());
-    else if (tried.length < attemptsWanted) Object.assign(rows[rows.length - 1], endedAnswer(tried));
+    else if (!whole) Object.assign(rows[rows.length - 1], endedAnswer(tried));
     // A dropped check belongs under notebook, the one key under a pool that turned the check off, and that pool's
     // one member served it; notebook captures no bodies. The row keeps every other value it drew on the laptop
     // lane, so this loop's later draws stay where they were, and the model the lane drew rather than the one
@@ -433,7 +503,15 @@ function buildRequests(): RequestLog[] {
       const answered = moved.attempts[moved.attempts.length - 1];
       Object.assign(moved, {
         accountId: 'primary',
-        attempts: [{ ...answered, accountId: 'primary', cacheMissReason: answered.cacheMissReason === 'previous_message_not_found' ? 'none' : answered.cacheMissReason, index: 0 }],
+        attempts: [
+          {
+            ...answered,
+            accountId: 'primary',
+            cacheMissReason: answered.cacheMissReason === 'previous_message_not_found' ? 'none' : answered.cacheMissReason,
+            index: 0,
+            windows: oauthWindows('primary', Date.parse(answered.startedAt), () => SERVED_FACTOR),
+          },
+        ],
         durationMs: answered.durationMs,
         canonicalModel: drawn,
         capturedBodies: false,
@@ -449,8 +527,10 @@ function buildRequests(): RequestLog[] {
     }
   }
   // The routing log's story writes its hour by hand, so the draws inside it give way to the story's own rows, and a
-  // drawn row that carries a story id gives the story its slot.
-  const drawnRows = rows.filter((r) => Date.parse(r.at) < STORY_HOUR_FROM && !STORY_IDS.has(r.id) && r.id !== REJECTION_STORY_ID && r.id !== BUDGET_CROSSING_ID);
+  // drawn row that carries a story id gives the story its slot. The 11:00 round's move needs its source warm, so no
+  // drawn 429 on secondary falls between the round and that move.
+  const coolsSource = (r: RequestLog) => Date.parse(r.at) >= clock(11, 0) && Date.parse(r.at) <= clock(11, 8, 30) && r.attempts.some((a) => a.accountId === UNPRICED_ACCOUNT && a.upstreamStatus === 429);
+  const drawnRows = rows.filter((r) => Date.parse(r.at) < STORY_HOUR_FROM && !STORY_IDS.has(r.id) && r.id !== REJECTION_STORY_ID && r.id !== BUDGET_CROSSING_ID && !coolsSource(r));
   rows.length = 0;
   rows.push(...drawnRows);
   rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
@@ -503,18 +583,15 @@ function buildRequests(): RequestLog[] {
 }
 
 /**
- * A cooldown an answer set has lifted by the time another request uses its account in a way it would hold, so no
- * attempt and no hold lands where the routing state still held the account cooling: the drawn deadline is cut to that
- * use. A hold waits on an account at its cap, one that is serving, so a request's hold counts as a use from the
- * request's start. A plan window's cooldown holds a standard request alone, a fast lane's a fast one, a model's that
- * model.
+ * A cooldown an answer set has lifted by the time another request's attempt uses its account in a way it would hold,
+ * so no attempt lands where the routing state still held the account cooling: the drawn deadline is cut to that use.
+ * A hold starts only where no cooldown holds its account, so it needs no lift.
  */
 function liftCooldowns(rows: RequestLog[]) {
   const uses = rows
     .flatMap((r) => {
       const fast = fastTurn(r.keyId, r.model, r.kind);
-      const at = Date.parse(r.at);
-      return [...r.attempts.map((a) => ({ accountId: a.accountId, at: Date.parse(a.startedAt) })), ...(r.held?.waitedOn ?? []).map((accountId) => ({ accountId, at }))].map((u) => ({ ...u, fast, model: r.canonicalModel, r }));
+      return r.attempts.map((a) => ({ accountId: a.accountId, at: Date.parse(a.startedAt), fast, model: r.canonicalModel, r }));
     })
     .sort((x, y) => x.at - y.at);
   for (const r of rows) {
@@ -523,7 +600,7 @@ function liftCooldowns(rows: RequestLog[]) {
       if (!set) continue;
       const setAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
       const until = Date.parse(set.until);
-      const holds = (u: (typeof uses)[number]) => u.r !== r && u.accountId === a.accountId && (set.reason === 'model_rejected' ? u.model === r.canonicalModel : set.reason === 'fast_rate_limit' ? u.fast : !u.fast);
+      const holds = (u: (typeof uses)[number]) => u.r !== r && u.accountId === a.accountId && coolingHolds(set.reason, r.canonicalModel, u.model, u.fast);
       const next = uses.find((u) => holds(u) && u.at >= setAt && u.at < until);
       if (next) a.cooldownSet = { ...set, until: iso(next.at) };
     }
@@ -532,6 +609,47 @@ function liftCooldowns(rows: RequestLog[]) {
 
 /** A turn the story runs in fast mode: the desktop key's Opus inference. */
 const fastTurn = (keyId: string | null, model: string, kind: RequestKind) => keyId === 'desktop' && model.includes('opus') && kind === 'inference';
+
+/**
+ * Whether a cooldown an answer set holds a request: a model's refusal holds that model, a fast lane's a fast request,
+ * a spent plan window a standard one, and a retry-after every request.
+ */
+const coolingHolds = (reason: string, setFor: string, model: string, fast: boolean) =>
+  reason === 'model_rejected' ? model === setFor : reason === 'fast_rate_limit' ? fast : reason.includes('window') ? !fast : true;
+
+/** Whether an answer's cooldown keeps the account from a request at `at`, before any later use lifted it. */
+function coolingAt(accountId: string, at: number, model: string, fast: boolean): boolean {
+  return REQUESTS.some((r) =>
+    r.attempts.some((a) => {
+      const set = a.cooldownSet;
+      if (!set || a.accountId !== accountId) return false;
+      const from = Date.parse(a.startedAt) + (a.durationMs ?? 0);
+      return at >= from && at < Date.parse(set.until) && coolingHolds(set.reason, r.canonicalModel, model, fast);
+    }),
+  );
+}
+
+/** Whether a request could wait on the account at `at`: one it could be served by then, which no cooldown holds. */
+const holdableAt = (r: RequestLog, accountId: string, at: number) => {
+  const fast = fastTurn(r.keyId, r.model, r.kind);
+  return servable(accountId, at, r.canonicalModel, fast) && !coolingAt(accountId, at, r.canonicalModel, fast);
+};
+
+/**
+ * Seats a hold before the request's first attempt: the hold starts at the request's arrival and the attempt once it
+ * ends, so the arrival moves back by the wait, and a pin the hold's selection found expired is released then.
+ * Answers false, changing nothing, where the account could not have been waited on at that start.
+ */
+function holdFirst(r: RequestLog, hold: CohortHold): boolean {
+  const first = r.attempts[0];
+  const start = Date.parse(first.startedAt) - hold.heldMs;
+  if (!holdableAt(r, first.accountId, start)) return false;
+  const arrived = r.at;
+  r.at = iso(start);
+  const events = REQUEST_EVENTS.get(r.id);
+  if (events) REQUEST_EVENTS.set(r.id, events.map((e) => (e.kind === 'pin_expired' && e.at === arrived ? { ...e, at: r.at } : e)));
+  return true;
+}
 
 /** The rejection story's refused attempt: an account refuses a model it does not serve before any inference runs. */
 const REJECTION_MS = 180;
@@ -550,14 +668,17 @@ const unservedAnswer = (): Partial<RequestLog> => ({
   usage: { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS },
 });
 
-/** What a request answers when its lane ran out of untried accounts after a failed attempt: that attempt's failure. */
+/**
+ * What a request answers when it did not end as drawn: the upstream's own error after a 529 or a 502, which the relay
+ * commits, and the router's exhaustion after a 429 once no member of its pool is left to try.
+ */
 const endedAnswer = (attempts: Attempt[]): Partial<RequestLog> => {
   const last = attempts[attempts.length - 1];
   const status = last.upstreamStatus ?? 502;
   return {
     costUsd: 0,
     durationMs: attempts.reduce((n, a) => n + (a.durationMs ?? 0), 0),
-    errorCode: status === 429 ? 'rate_limit_error' : status === 529 ? 'overloaded_error' : 'api_error',
+    errorCode: status === 429 ? 'accounts_exhausted' : status === 529 ? 'overloaded_error' : 'api_error',
     outcome: status === 429 ? 'exhausted' : 'failed',
     status,
     ttfbMs: null,
@@ -601,10 +722,10 @@ interface StorySeed {
 
 /** The routing log's hand-written requests: the story hour, the morning's shedding round and its move. */
 export const STORY_IDS = new Set([
-  'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2e7c90a1-6d4', 'req_31f0b7c2-6e1', 'req_4b0e9d17-c31',
-  'req_51d0e2b8-7a0', 'req_69e30548-32e', 'req_6c3a9e27-5b1', 'req_868264bc-611', 'req_9a07c4e1-d55',
-  'req_b2bed817-a58', 'req_c41d0311-200', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_ef099b34-453',
-  'req_f8085653-422',
+  'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2e7c90a1-6d4', 'req_31f0b7c2-6e1', 'req_3b8e51f4-0a9',
+  'req_4b0e9d17-c31', 'req_51d0e2b8-7a0', 'req_69e30548-32e', 'req_6c3a9e27-5b1', 'req_868264bc-611',
+  'req_9a07c4e1-d55', 'req_b2bed817-a58', 'req_c41d0311-200', 'req_da52d141-a5a', 'req_e0a4c6f2-118',
+  'req_ef099b34-453', 'req_f8085653-422',
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
@@ -631,7 +752,7 @@ function storyRow(seed: StorySeed): RequestLog {
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
-      outcome: a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 404 ? 'upstream_error' : 'rate_limited',
+      outcome: a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
       response: { clearedInputTokens: null, inferenceGeo: a.status === 200 ? 'us' : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: a.status === 200 ? (fast ? 'fast' : 'standard') : null, stopReason: a.status === 200 ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
@@ -639,8 +760,8 @@ function storyRow(seed: StorySeed): RequestLog {
       upstreamMessageId: a.status === 200 ? upstreamId('msg_01') : null,
       upstreamRequestId: upstreamId('req_011C'),
       upstreamStatus: a.status,
-      // A 429 on a plan window reports it spent; the fast lane's limit leaves the plan windows as they read.
-      windows: windows.map((w) => (w.id !== '5h' ? w : a.head5h !== undefined ? { ...w, utilization: a.head5h } : a.status === 429 && a.cooldown?.reason !== 'fast_rate_limit' ? { ...w, utilization: 1 } : w)),
+      // A head reads the windows as they stand, or the 5-hour reading the seed gives where the answer moved past it.
+      windows: windows.map((w) => (w.id === '5h' && a.head5h !== undefined ? { ...w, utilization: a.head5h } : w)),
     };
   });
   const durationMs = seed.attempts.length ? last.at + last.ms - seed.attempts[0].at + (seed.held?.heldMs ?? 0) : null;
@@ -696,6 +817,8 @@ function storyRow(seed: StorySeed): RequestLog {
 function storyRequests(): RequestLog[] {
   const t = clock;
   const rateLimited = (until: number) => ({ reason: '429 on 5h window', until });
+  // A 429 whose head rejects no plan window cools its account for the retry-after alone.
+  const retryAfter = (answeredAt: number) => ({ reason: '429, retry after 20 s', until: answeredAt + 20_000 });
   const seeds: StorySeed[] = [
     { agentId: 'main', at: t(14, 27, 28), attempts: [{ accountId: 'primary', at: t(14, 27, 28), ms: 6_400, status: 200 }], id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: '7bea4514', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } },
     {
@@ -739,53 +862,60 @@ function storyRequests(): RequestLog[] {
       session: '89cd1c92',
       usage: { input: 19_600, output: 820 },
     },
-    // A probe keeping a pin on secondary warm meets its spent window: the 429 starts the cooldown secondary carries.
-    {
-      agentId: 'main',
-      at: t(14, 21, 16),
-      attempts: [{ accountId: 'secondary', at: t(14, 21, 16), cooldown: rateLimited(t(15, 42)), ms: 1_000, status: 429 }],
-      id: 'req_c41d0311-200',
-      keyId: 'desktop',
-      kind: 'probe',
-      model: 'claude-sonnet-5',
-      outcome: 'exhausted',
-      requestClass: 'main',
-      session: '229bf72c',
-    },
     { agentId: 'main', at: t(14, 19, 2), attempts: [{ accountId: 'primary', at: t(14, 19, 2), ms: 7_100, status: 200 }], errorCode: 'overloaded_error', id: 'req_9a07c4e1-d55', outcome: 'failed', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: '7bea4514', usage: { cacheRead: 44_900, cacheWrite1h: 1_800, input: 2_600, output: 960 } },
+    // The runner sends again on its key after its revocation at 14:17:30, which the selection refuses.
+    { agentId: 'main', at: t(14, 18, 5), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: HAIKU, outcome: 'rejected', requestClass: 'main', session: 'cd9a5904', status: 401 },
     { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 22_300, cacheWrite5m: 600, input: 1_100, output: 410 } },
     { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
-    // The runner still sends on the key revoked two days back; the selection refuses it as the registry reads it.
-    { agentId: 'main', at: t(14, 13, 20), attempts: [], errorCode: 'auth_unknown', id: 'req_6c3a9e27-5b1', keyId: 'ci', model: HAIKU, outcome: 'rejected', requestClass: 'main', session: 'cd9a5904', status: 401 },
     { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-5', outcome: 'rejected', requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
     { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
     { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], contextCompacted: 'auto', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
-    { agentId: 'main', at: t(14, 5, 12), attempts: [{ accountId: 'primary', at: t(14, 5, 12), ms: 7_900, status: 200 }], id: 'req_da52d141-a5a', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: '0d588de5', usage: { cacheRead: 30_100, cacheWrite1h: 14_800, input: 2_200, output: 1_120 } },
+    // A token count follows its pin to the spent secondary, whose head rejects the 5-hour window: the 429 starts the
+    // cooldown secondary carries, and the count fails over to primary.
+    {
+      agentId: 'e90b',
+      at: t(14, 9, 30),
+      attempts: [
+        { accountId: 'secondary', at: t(14, 9, 30), cooldown: rateLimited(t(15, 42)), head5h: 1, ms: 1_000, status: 429 },
+        { accountId: 'primary', at: t(14, 9, 31), ms: 300, status: 200 },
+      ],
+      id: 'req_3b8e51f4-0a9',
+      keyId: 'desktop',
+      kind: 'count_tokens',
+      model: 'claude-sonnet-5',
+      requestClass: 'subagent',
+      session: '407dd39b',
+      usage: { input: 41_000 },
+    },
+    // The keepalive's probe of a pin on secondary finds its window spent and moves the pin to primary.
+    { agentId: 'main', at: t(14, 6, 30), attempts: [{ accountId: 'primary', at: t(14, 6, 30), ms: 1_400, status: 200 }], id: 'req_c41d0311-200', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-5', requestClass: 'main', session: '229bf72c', usage: { cacheWrite1h: 46_000, output: 1 } },
+    { agentId: 'main', at: t(14, 5, 12), attempts: [{ accountId: 'primary', at: t(14, 5, 12), ms: 7_900, status: 200 }], id: 'req_da52d141-a5a', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'main', session: '0d588de5', usage: { cacheRead: 30_100, cacheWrite1h: 14_800, input: 2_200, output: 1_120 } },
+    // Secondary answers a 429 that rejects no plan window while its head reads the 5-hour window spent: the account
+    // cools for the retry-after alone and the turn fails over.
     {
       agentId: 'main',
       at: t(14, 2, 10),
       attempts: [
-        { accountId: 'secondary', at: t(14, 2, 10), head5h: 1, ms: 1_000, status: 529 },
-        { accountId: 'primary', at: t(14, 2, 11), ms: 700, status: 529 },
-        { accountId: 'nightly', at: t(14, 2, 12), ms: 6_600, status: 200 },
+        { accountId: 'secondary', at: t(14, 2, 10), cooldown: retryAfter(t(14, 2, 11)), head5h: 1, ms: 1_000, status: 429 },
+        { accountId: 'primary', at: t(14, 2, 11), ms: 6_600, status: 200 },
       ],
       id: 'req_1d9c3e55-0b2',
       keyId: 'desktop',
-      model: 'claude-sonnet-5-5',
+      model: 'claude-sonnet-5',
       requestClass: 'main',
       session: 'bcc805b6',
       usage: { cacheWrite1h: 38_900, input: 4_100, output: 1_310 },
     },
     { agentId: 'e90b', at: t(11, 0), attempts: [{ accountId: 'secondary', at: t(11, 0), ms: 6_200, status: 200 }], id: 'req_1eaa9bc1-a18', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, cacheWrite5m: 1_200, input: 1_700, output: 900 } },
-    { agentId: 'e90b', at: t(11, 8, 30), attempts: [{ accountId: 'primary', at: t(11, 8, 30), ms: 9_400, status: 200 }], id: 'req_868264bc-611', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 3_000, output: 1_600 } },
+    { agentId: 'e90b', at: t(11, 8, 30), attempts: [{ accountId: 'primary', at: t(11, 8, 30), ms: 9_400, status: 200 }], id: 'req_868264bc-611', keyId: 'desktop', model: 'claude-sonnet-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 3_000, output: 1_600 } },
     { agentId: 'main', at: t(12, 40, 58), attempts: [{ accountId: 'research', at: t(12, 40, 58), ms: 9_000, status: 200 }], id: BUDGET_CROSSING_ID, keyId: 'ci', model: HAIKU, requestClass: 'main', session: 'cd9a5904', usage: { input: 6_200, output: 2_900 } },
     {
       agentId: 'main',
       at: t(10, 58, 40),
       attempts: [
         { accountId: 'secondary', at: t(10, 58, 40), cooldown: { reason: 'model_rejected', until: t(10, 58, 40) + REJECTION_MS + HOUR }, ms: REJECTION_MS, status: 404 },
-        { accountId: 'primary', at: t(10, 58, 40) + REJECTION_MS, ms: 700, status: 529 },
-        { accountId: 'nightly', at: t(10, 58, 41), cooldown: rateLimited(t(11, 41)), ms: 800, status: 429 },
+        { accountId: 'primary', at: t(10, 58, 40) + REJECTION_MS, cooldown: retryAfter(t(10, 58, 40) + REJECTION_MS + 700), ms: 700, status: 429 },
+        { accountId: 'nightly', at: t(10, 58, 41), cooldown: retryAfter(t(10, 58, 41) + 800), ms: 800, status: 429 },
         { accountId: 'overflow', at: t(10, 58, 42), ms: 5_200, status: 200 },
       ],
       canonical: 'claude-sonnet-4-5-20250929',
@@ -803,7 +933,43 @@ function storyRequests(): RequestLog[] {
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 
-/** A move reason the fixture draws for a single-attempt row, weighted toward the shedding round and a spent window. */
+/** Whether an account serves the model: secondary serves Sonnet 5 alone. */
+const serves = (accountId: string, model: string) => accountId !== UNPRICED_ACCOUNT || model === 'claude-sonnet-5';
+
+/**
+ * The move rule that takes a pin on `from` to the row's account in the engine's order, or null where none would. A
+ * spent window moves a standard request to an account holding allowance outside plan overage, nightly's overage hands
+ * a standard request back to a plan-funded subscription, and an Anthropic key's pin returns to one past its dwell,
+ * which a pin the day did not see placed has sat. The first rule whose reason holds decides, so a move to an account
+ * that rule would not take is no move; a drain needs a cold pin and a shed a mark, which no drawn pin carries, and a
+ * token count follows its pin without walking the rules.
+ */
+function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
+  const pool = poolById.get(r.poolId ?? '');
+  const head = r.attempts[0];
+  if (!pool || !head || r.kind === 'count_tokens' || !serves(from, r.canonicalModel)) return null;
+  const at = Date.parse(head.startedAt);
+  const fast = fastTurn(r.keyId, r.model, r.kind);
+  const kindOf = (id: string) => ACCOUNTS.find((a) => a.id === id)?.kind;
+  const inOverage = (id: string) => id === 'nightly' && at >= OVERAGE_FROM;
+  const spent = (windows: AttemptWindow[]) => spentWindows(windows).length > 0;
+  const known = head.windows.some((w) => w.id === '5h' && w.utilization !== null) && head.windows.some((w) => w.id === '7d' && w.utilization !== null);
+  const holds = kindOf(head.accountId) === 'api_key' || (known && !spent(head.windows));
+  // A move prefers a cool destination: one whose leads over pace sit under the band and that no round shed from
+  // within the dwell. One that is not cool is taken only where no sibling is, which this rule leaves undecided.
+  const elapsed = (w: AttemptWindow) => Math.min(1, Math.max(0, 1 - (Date.parse(w.resetsAt ?? '') - at) / (w.id === '5h' ? 5 * HOUR : 7 * DAY)));
+  const band = pool.shedAheadOfPace === null ? null : pool.shedAheadOfPace - 0.05;
+  const under = band === null || head.windows.every((w) => (w.id !== '5h' && w.id !== '7d') || w.utilization === null || w.utilization - elapsed(w) < band);
+  const rested = !(head.accountId === SHED_ROUND.accountId && at >= SHED_ROUND.at && at - SHED_ROUND.at < pool.sourceDwellSeconds * 1_000);
+  if (!under || !rested) return null;
+  const toPlan = kindOf(head.accountId) === 'oauth' && !inOverage(head.accountId) && holds;
+  if (!fast && pool.migrateWhenSpent && spent(oauthWindows(from, at, () => SERVED_FACTOR))) return holds && !(pool.overagePolicy === 'prefer_plan' && inOverage(head.accountId)) ? 'spent' : null;
+  if (!fast && pool.overagePolicy === 'prefer_plan' && kindOf(from) === 'oauth' && inOverage(from)) return toPlan ? 'overage' : null;
+  if (kindOf(from) === 'api_key') return toPlan ? 'return_to_plan' : null;
+  return null;
+}
+
+/** The move reasons the stream draws for a single-attempt row; the draw is kept so every later row keeps its own. */
 const MIGRATION_REASONS: { value: PinMigrationReason; weight: number }[] = [
   { value: 'drain', weight: 1 },
   { value: 'fast_lane', weight: 1 },
@@ -816,7 +982,8 @@ const MIGRATION_REASONS: { value: PinMigrationReason; weight: number }[] = [
 function buildRequestEvents(): Map<string, RequestEvent[]> {
   const h = createRng(8_080);
   const out = new Map<string, RequestEvent[]>();
-  // The smoke checks and the drawer need a row that moved for a spent window, so the first eligible row carries one rather than leaving it to the draw below.
+  // The first eligible row skips the draws below, as it did when it carried the drawer's spent move, so every later
+  // row keeps its draws.
   let spentOwed = true;
   let releaseOwed = true;
   for (const r of REQUESTS) {
@@ -830,12 +997,15 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
       if (from.outcome !== 'rate_limited') continue;
       events.push({ ...pin, accountId: r.attempts[i].accountId, at: r.attempts[i].startedAt, detail: { agent_id: r.agentId, epoch: i + 1, from_account: from.accountId, reason: 'cooldown' }, kind: 'pin_migrated' });
     }
-    // A few single-attempt rows moved on selection instead: the migrate rule read a sample, not a 429.
+    // A few single-attempt rows moved on selection instead: the migrate rule read a sample, not a 429. The reason is
+    // drawn and set aside so the stream stays where it was; the move stands where a rule takes the pin there.
     const lane = LANES.find((l) => l.keyId === r.keyId);
     // One draw either way for this seed only: the chance the forced row skips comes up false here, and a seed where it came up true would spend a weighted draw as well and shift every later row.
     if (events.length === 0 && r.status === 200 && lane && lane.accountIds.length > 1 && (spentOwed || h.chance(0.07))) {
       const from = h.pick(lane.accountIds.filter((id) => id !== r.accountId));
-      events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason: spentOwed ? 'spent' : h.weighted(MIGRATION_REASONS) }, kind: 'pin_migrated' });
+      if (!spentOwed) h.weighted(MIGRATION_REASONS);
+      const reason = supportedRule(r, from);
+      if (reason) events.push({ ...pin, accountId: r.accountId, at: r.at, detail: { agent_id: r.agentId, epoch: 2, from_account: from, reason }, kind: 'pin_migrated' });
       spentOwed = false;
     }
     // One release for the drawer and the smoke checks: a pin that expired on a cooled account whose window was
@@ -882,8 +1052,8 @@ function storyEvents(): Map<string, RequestEvent[]> {
   moved('req_4b0e9d17-c31', clock(14, 27, 1), 'primary', 'nightly', 'fast_lane');
   moved('req_2e7c90a1-6d4', clock(14, 24, 10), 'primary', 'nightly', 'cooldown');
   moved('req_da52d141-a5a', clock(14, 5, 12), 'secondary', 'primary', 'spent');
+  moved('req_c41d0311-200', clock(14, 6, 30), 'secondary', 'primary', 'spent');
   moved('req_1d9c3e55-0b2', clock(14, 2, 11), 'secondary', 'primary', 'cooldown');
-  moved('req_1d9c3e55-0b2', clock(14, 2, 12), 'primary', 'nightly', 'cooldown');
   moved('req_868264bc-611', clock(11, 8, 30), 'secondary', 'primary', 'shed');
   const rejected = requestById.get('req_2e7c90a1-6d4');
   if (rejected) {
@@ -987,8 +1157,9 @@ function traceRequests() {
       // The ledger folds the cache read into the trace of the attempt that answered, and only once it did.
       const cacheRead = i === all.length - 1 && r.status === 200 ? r.usage.cacheRead : null;
       const strategy = pool?.strategy ?? 'pace';
-      // A pool that keeps no pins has none to renew; the draw is taken either way, so the stream stays where it was.
-      if (i === 0 && moved === undefined && h.chance(0.55) && (pool?.affinityTtlSeconds ?? 0) > 0) {
+      // A pool that keeps no pins has none to renew, and no pin sits on an account that does not serve its model; the
+      // draw is taken either way, so the stream stays where it was.
+      if (i === 0 && moved === undefined && h.chance(0.55) && (pool?.affinityTtlSeconds ?? 0) > 0 && serves(a.accountId, r.canonicalModel)) {
         return { ...a, selection: { cacheRead, cohortHold: null, moved: null, placement: null, renewed: true, skipped: [], strategy, tier: null } };
       }
       const account = accountOf.get(a.accountId);
@@ -999,7 +1170,10 @@ function traceRequests() {
       const tried = new Set(all.slice(0, i).map((x) => x.accountId));
       const skipped = members.filter((id) => id !== a.accountId).map((accountId) => ({ accountId, obstacle: tried.has(accountId) ? 'attempted' : h.weighted(OBSTACLE_DRAWS) }));
       const placement = moved === undefined ? placementOf(p, r) : null;
-      const cohortHold = cohortHoldOf(p, w, r, placement, a.accountId);
+      // Every placement draws its chance of a hold so the streams stay where they were; a request holds before its
+      // first attempt alone, and only where it could have waited.
+      const drawnHold = cohortHoldOf(p, w, r, placement, a.accountId);
+      const cohortHold = drawnHold !== null && i === 0 && holdFirst(r, drawnHold) ? drawnHold : null;
       if (placement !== null) {
         // A placement runs no ranking, so it names no tier and passes nobody over as ranked.
         const passed = skipped.filter((s) => s.obstacle !== 'ranked');
@@ -1051,9 +1225,10 @@ function seedDrawerBranches() {
     (s, r) => r.agentId !== 'main' && s.moved === null && s.placement === null && s.cohortHold === null && (s.cacheRead ?? 0) > 0 && !REQUEST_EVENTS.has(r.id),
     (s) => ({ ...placed(s, { depth: 0, prefixTokens: 0, rung: 'with_main' }), renewed: false }),
   );
+  const strategyHold = (r: RequestLog): CohortHold => ({ cohort: null, heldMs: 1250, waitedOn: [r.attempts[0].accountId] });
   seed(
-    (s, r) => s.moved === null && s.placement === null && !s.renewed && s.cohortHold === null && s.skipped.length > 0 && !REQUEST_EVENTS.has(r.id),
-    (s, r) => ({ ...s, cohortHold: { cohort: null, heldMs: 1250, waitedOn: [r.attempts[0].accountId] } }),
+    (s, r) => s.moved === null && s.placement === null && !s.renewed && s.cohortHold === null && s.skipped.length > 0 && !REQUEST_EVENTS.has(r.id) && holdFirst(r, strategyHold(r)),
+    (s, r) => ({ ...s, cohortHold: strategyHold(r) }),
   );
 }
 
@@ -1067,34 +1242,54 @@ function seedDrawerBranches() {
 function seedHolds() {
   for (const r of REQUESTS) if (!STORY_IDS.has(r.id)) r.held = [...r.attempts].reverse().find((a) => a.selection?.cohortHold)?.selection?.cohortHold ?? null;
   const boundOf = (r: RequestLog) => (poolById.get(r.poolId ?? '')?.retryInPlaceSeconds ?? 60) * 1_000;
-  const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && !REQUEST_EVENTS.has(r.id) && !STORY_IDS.has(r.id));
+  // The attempts the draws made, before any a 429 added for the members it left untried.
+  const drawnPart = (r: RequestLog) => r.attempts.slice(0, CHAIN_FROM.get(r.id) ?? r.attempts.length);
+  // An attempt that never ran takes the failover that led to it along.
+  const keepAttempts = (r: RequestLog, kept: number) => {
+    const gone = new Set(r.attempts.slice(kept).map((a) => a.startedAt));
+    r.attempts = r.attempts.slice(0, kept);
+    const events = (REQUEST_EVENTS.get(r.id) ?? []).filter((e) => !(e.kind === 'pin_migrated' && gone.has(e.at)));
+    if (events.length) REQUEST_EVENTS.set(r.id, events);
+    else REQUEST_EVENTS.delete(r.id);
+  };
+  const failoversOnly = (r: RequestLog) => (REQUEST_EVENTS.get(r.id) ?? []).every((e) => e.kind === 'pin_migrated' && e.detail?.reason === 'cooldown');
+  const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && failoversOnly(r) && !STORY_IDS.has(r.id));
   // A hold waits on an account that could serve the request then, at its cap.
-  const servableFor = (r: RequestLog, at: number) => (id: string) => servable(id, at, r.canonicalModel, fastTurn(r.keyId, r.model, r.kind));
+  const servableFor = (r: RequestLog, at: number) => (id: string) => holdableAt(r, id, at);
   if (atCap) {
     const first = LANES.find((l) => l.keyId === atCap.keyId)?.accountIds.find(servableFor(atCap, Date.parse(atCap.at)));
     const waitedOn = first === undefined ? [] : [first];
     const heldMs = boundOf(atCap);
-    Object.assign(atCap, { accountId: null, attempts: [], costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
+    keepAttempts(atCap, 0);
+    Object.assign(atCap, { accountId: null, costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
   }
   const heldAt = (r: RequestLog) => {
-    const last = r.attempts[r.attempts.length - 1];
+    const drawnAttempts = drawnPart(r);
+    const last = drawnAttempts[drawnAttempts.length - 1] as Attempt | undefined;
     return last ? Date.parse(last.startedAt) + (last.durationMs ?? 0) : Date.parse(r.at);
   };
-  const untried = (r: RequestLog) => LANES.find((l) => l.keyId === r.keyId && l.poolId === r.poolId)?.accountIds.find((id) => !r.attempts.some((a) => a.accountId === id) && servableFor(r, heldAt(r))(id));
-  const failedTurn = (r: RequestLog) => r !== atCap && !STORY_IDS.has(r.id) && r.kind === 'inference' && r.status !== 200 && r.attempts.length > 0 && untried(r) !== undefined;
-  // The draw skips by the local hour, so at some clocks no turn was exhausted after one attempt; the oldest failed
-  // turn then takes the story, which keeps it at every clock.
+  // The reselect after the draws' last 429 meets the members left untried, the first of which it waits on.
+  const untried = (r: RequestLog) => {
+    const tried = drawnPart(r).map((a) => a.accountId);
+    const members = (poolById.get(r.poolId ?? '')?.members ?? []).map((m) => m.accountId).sort((x, y) => Number(x === UNPRICED_ACCOUNT) - Number(y === UNPRICED_ACCOUNT));
+    return members.find((id) => !tried.includes(id) && serves(id, r.canonicalModel) && servableFor(r, heldAt(r))(id));
+  };
+  // A 429 fails the attempt over to a reselect, which can find every account at its cap; a 529 or a 502 is committed.
+  const failedTurn = (r: RequestLog) => r !== atCap && !STORY_IDS.has(r.id) && r.kind === 'inference' && r.status === 429 && drawnPart(r).slice(-1)[0]?.upstreamStatus === 429 && untried(r) !== undefined;
+  // The draw skips by the local hour, so at some clocks no turn was exhausted after one attempt; the oldest turn
+  // that failed over then takes the story, which keeps it at every clock.
   const oldest = [...REQUESTS].reverse();
-  const afterAttempt = oldest.find((r) => failedTurn(r) && r.status === 429 && r.attempts.length === 1) ?? oldest.find(failedTurn);
+  const afterAttempt = oldest.find((r) => failedTurn(r) && drawnPart(r).length === 1) ?? oldest.find(failedTurn);
   const next = afterAttempt && untried(afterAttempt);
   if (!afterAttempt || !next) return;
+  keepAttempts(afterAttempt, drawnPart(afterAttempt).length);
   // The router's one builder sums every hold into the row, so the row keeps the hold its last attempt's trace
   // already named, whichever turn the clock drew, and adds the bound's wait.
   const before = afterAttempt.held;
   const bound = boundOf(afterAttempt);
   Object.assign(afterAttempt, {
     accountId: null,
-    durationMs: (afterAttempt.durationMs ?? 0) + bound,
+    durationMs: afterAttempt.attempts.reduce((n, a) => n + (a.durationMs ?? 0), 0) + bound,
     errorCode: 'accounts_at_cap',
     held: { cohort: null, heldMs: (before?.heldMs ?? 0) + bound, waitedOn: [...(before?.waitedOn ?? []), next] },
     outcome: 'exhausted',

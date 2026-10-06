@@ -102,7 +102,7 @@ export const ACCOUNTS: Account[] = ([
       {
         reason: 'rate_limited (5h window exhausted)',
         scope: 'account',
-        setAt: ago(8 * MINUTE + 43_000),
+        setAt: ago(20 * MINUTE + 29_000),
         until: ahead(1 * HOUR + 12 * MINUTE),
         windowId: '5h',
       },
@@ -130,7 +130,8 @@ export const ACCOUNTS: Account[] = ([
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
-    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(3 * HOUR) },
+    // In plan overage from the first head after its spend cap was raised at 11:30:12.
+    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(2 * HOUR + 58 * MINUTE) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
       lastError: null,
