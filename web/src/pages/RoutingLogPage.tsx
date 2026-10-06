@@ -1,6 +1,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
+import { ApiError, quietly, reportRecovery } from '@/api/http';
 import type { DecisionKind, DecisionSummary, FactEntity, RoutingEvent, RoutingLogQuery, RoutingLogRow } from '@/api/types';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh } from '@/components/ui/icons';
@@ -8,7 +9,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, T
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
 import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
-import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, aroundRequest, aroundSubject, byOf, compareModels, entityHref, eventTone, factsOf, formatFact, logHref } from '@/lib/routingLog';
+import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, formatFact, logHref } from '@/lib/routingLog';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -160,26 +161,47 @@ export function RoutingLogPage() {
   const fresh = following?.fresh ?? new Set<string>();
   const nextCursor = log.data?.nextCursor ?? null;
 
+  // The rows the poll merges into: those followed under this address, else the list's once it answers this query. While
+  // the list still answers an earlier filter, its rows belong to that filter, so there is nothing to merge into yet.
+  const addressRows = following?.rows ?? (log.stale ? null : (log.data?.rows ?? null));
   // The poll outlives renders, so it reads the current address, query and rows through a ref.
-  const latest = useRef({ address, query, rows });
-  latest.current = { address, query, rows };
+  const latest = useRef({ address, addressRows, query });
+  latest.current = { address, addressRows, query };
+  // A failing streak toasts once: the polls that continue it run quiet, and the one that ends it takes the streak's
+  // notice down, as `useAsync`'s refresh does.
+  const streak = useRef({ failing: false, paths: new Set<string>() });
   useEffect(() => {
     if (!follow || cursor !== undefined) return;
+    // An answer that lands once the poll has stopped would tint rows no later poll clears.
+    const armed = { alive: true };
+    const failures = streak.current;
     const id = clock.setInterval(() => {
       const { address: polled, query: q } = latest.current;
-      api.listRoutingLog({ ...q, cursor: undefined, to: iso(clock.now()) }).then(
+      const read = () => api.listRoutingLog({ ...q, cursor: undefined, to: iso(clock.now()) });
+      (failures.failing ? quietly(read) : read()).then(
         (page) => {
-          // An answer for filters the reader has left since lands nowhere.
-          if (latest.current.address !== polled) return;
-          const shown = latest.current.rows;
+          if (!armed.alive) return;
+          for (const path of failures.paths) reportRecovery(path);
+          failures.paths.clear();
+          failures.failing = false;
+          // An answer for filters the reader has left since, or for an address the list has not answered yet, lands
+          // nowhere.
+          const shown = latest.current.addressRows;
+          if (latest.current.address !== polled || shown === null) return;
           const known = new Set(shown.map(identityOf));
           setFollowed({ for: polled, fresh: new Set(page.rows.map(identityOf).filter((k) => !known.has(k))), rows: merged(shown, page.rows) });
         },
-        // The transport has reported the failure; the next poll reads again.
-        () => {},
+        (err: unknown) => {
+          if (!armed.alive) return;
+          failures.failing = true;
+          if (err instanceof ApiError && err.path !== null) failures.paths.add(err.path);
+        },
       );
     }, FOLLOW_MS);
-    return () => clock.clearInterval(id);
+    return () => {
+      armed.alive = false;
+      clock.clearInterval(id);
+    };
   }, [follow, cursor]);
 
   const preset = !filters.from && !filters.to ? '1h' : RANGES.find((r) => r.value !== '1h' && filters.from && filters.to && Date.parse(filters.to) - Date.parse(filters.from) === r.ms)?.value;
@@ -208,10 +230,15 @@ export function RoutingLogPage() {
     if (span) update({ from: iso(now - span.ms), to: iso(now) });
     log.reload();
   };
+  // The tint marks what the last poll brought, and no poll follows to take it away.
+  const stopFollowing = () => {
+    setFollow(false);
+    setFollowed((f) => f && { ...f, fresh: new Set() });
+  };
   const goNext = () => {
     if (!nextCursor) return;
     // The rows under the reader would move, so an older page stops the poll.
-    setFollow(false);
+    stopFollowing();
     setPaging({ for: address, cursor: nextCursor, stack: [...stack, cursor] });
   };
   const goPrevious = () => {
@@ -220,8 +247,8 @@ export function RoutingLogPage() {
     setPaging({ for: address, cursor: previous, stack: copy });
   };
   const toggleFollow = (on: boolean) => {
-    setFollow(on);
-    if (!on) setFollowed((f) => f && { ...f, fresh: new Set() });
+    if (on) setFollow(true);
+    else stopFollowing();
   };
   const clear = () => {
     setCustomOpen(false);
@@ -384,11 +411,10 @@ function RequestScope({ counts, now, onClear, requestId, rows }: { counts: { dec
   const at = decisions.length ? Date.parse(decisions[decisions.length - 1].at) : null;
   const sessionId = decisions.find((d) => d.sessionId !== null)?.sessionId ?? null;
   const accountId = decisions.find((d) => d.accountId !== null)?.accountId ?? null;
-  const minute = at === null ? null : Math.floor(at / MINUTE) * MINUTE;
   const widenings = [
     { href: at !== null && sessionId !== null ? logHref({ session: sessionId, ...aroundSubject(at, now) }) : null, label: 'this session', title: sessionId },
     { href: at !== null && accountId !== null ? logHref({ accounts: [accountId], ...aroundRequest(at, null, now) }) : null, label: 'this account', title: accountId },
-    { href: minute === null ? null : logHref({ from: minute, to: Math.min(minute + MINUTE - 1, now) }), label: 'this minute', title: null },
+    { href: at === null ? null : logHref(clockMinute(at, now)), label: 'this minute', title: null },
   ].filter((w): w is { href: string; label: string; title: string | null } => w.href !== null);
   return (
     <div className="routing-log__scope">
@@ -520,7 +546,7 @@ const modelOf = (row: RoutingLogRow) => {
 
 function LogRow({ isNew, now, row, rows }: { isNew: boolean; now: number; row: RoutingLogRow; rows: RoutingLogRow[] }) {
   const by = byOf(row, rows);
-  const facts = factsOf(row, now);
+  const facts = factsOf(row, now, rows);
   const model = modelOf(row);
   return (
     <tr className={isNew ? 'is-new' : undefined}>

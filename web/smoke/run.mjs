@@ -6478,6 +6478,121 @@ m.unmount();
     results.push({ name: '/routing-log paging to an older page turns Follow off', ok: toggle()?.getAttribute('aria-checked') === 'false' && label() === 'Follow' && trs(page).length > 0, missing: [String(toggle()?.getAttribute('aria-checked')), label()] });
     page.unmount();
   }
+  const followToggle = (page) => page.container.querySelector('.routing-log__follow button[role="switch"]');
+  const tinted = (page) => page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length;
+  const pagerButton = (page, label) => [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === label);
+  {
+    // The poll lands the hour's newest row in the tint, then the reader pages away before the next poll clears it.
+    const t = Date.parse(hour.rows[0].at);
+    const page = await mount('/routing-log', { now: t - 2_000 });
+    followToggle(page)?.click();
+    await page.settle(100);
+    tick(5_000);
+    await page.settle();
+    const landed = tinted(page);
+    pagerButton(page, 'Next page')?.click();
+    await page.settle();
+    pagerButton(page, 'First page')?.click();
+    await page.settle();
+    const back = { first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', tinted: tinted(page) };
+    results.push({
+      name: '/routing-log paging back from an older page draws no row in the accent tint',
+      ok: landed === 1 && back.first === clockText(hour.rows[0].at) && back.tinted === 0,
+      missing: [`${landed} tinted after the poll`, JSON.stringify(back)],
+    });
+    page.unmount();
+  }
+  {
+    // The poll is in flight when the reader turns Follow off, and its answer lands after.
+    const t = Date.parse(hour.rows[0].at);
+    const page = await mount('/routing-log', { now: t - 2_000 });
+    followToggle(page)?.click();
+    await page.settle(100);
+    const held = deferNextCall('listRoutingLog');
+    tick(5_000);
+    await page.settle(100);
+    followToggle(page)?.click();
+    await page.settle(100);
+    held.release();
+    await page.settle();
+    const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', tinted: tinted(page) };
+    held.restore();
+    results.push({
+      name: '/routing-log a poll that answers after Follow is turned off lands nothing',
+      ok: after.calls === 1 && after.first !== clockText(hour.rows[0].at) && after.tinted === 0,
+      missing: [JSON.stringify(after)],
+    });
+    page.unmount();
+  }
+  {
+    // The new filter's list is held, so the poll that fires under it answers before the list does.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    followToggle(page)?.click();
+    await page.settle(100);
+    const held = deferNextCall('listRoutingLog');
+    await page.navigate('/routing-log?accounts=secondary');
+    tick(5_000);
+    await page.settle();
+    held.release();
+    await page.settle();
+    const [list, poll] = held.calls.map((c) => c[0]);
+    held.restore();
+    const key = (at, requestId) => `${clockText(at)} ${requestId ?? '-'}`;
+    const answered = new Set([...(await api.listRoutingLog(list)).rows, ...(poll ? (await api.listRoutingLog(poll)).rows : [])].map((r) => key(r.at, r.type === 'decision' ? r.requestId : null)));
+    const drawn = trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
+    const strays = drawn.filter((k) => !answered.has(k));
+    results.push({
+      name: "/routing-log a filter change while following never carries the old filter's rows",
+      ok: list?.accountIds?.join() === 'secondary' && poll?.accountIds?.join() === 'secondary' && drawn.length > 0 && strays.length === 0 && followToggle(page)?.getAttribute('aria-checked') === 'true',
+      missing: [`${drawn.length} drawn, ${strays.length} from the old filter`, ...strays.slice(0, 4)],
+    });
+    page.unmount();
+  }
+  {
+    // A failure's notice dwells 6 s and the poll runs every 5 s, so a streak that reported every poll would show its
+    // notice again at the third.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
+    followToggle(page)?.click();
+    await page.settle(100);
+    const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
+    const seen = [];
+    for (let i = 0; i < 3; i += 1) {
+      tick(5_000);
+      await page.settle();
+      seen.push(toasts());
+    }
+    outage.restore();
+    page.unmount();
+    const notice = '/admin/routing-log failed: ledger locked';
+    results.push({
+      name: '/routing-log a failing Follow poll toasts once',
+      ok: JSON.stringify(seen) === JSON.stringify([[notice], [notice], []]),
+      missing: [JSON.stringify(seen)],
+    });
+  }
+  {
+    // The streak's notice is still on screen, inside its 6-second dwell, when the next poll answers.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
+    followToggle(page)?.click();
+    await page.settle(100);
+    const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
+    tick(5_000);
+    await page.settle();
+    const raised = toasts();
+    outage.recover();
+    tick(5_000);
+    await page.settle();
+    const recovered = toasts();
+    outage.restore();
+    page.unmount();
+    results.push({
+      name: "/routing-log the Follow poll that recovers takes its streak's notice down",
+      ok: JSON.stringify(raised) === JSON.stringify(['/admin/routing-log failed: ledger locked']) && recovered.length === 0,
+      missing: [JSON.stringify(raised), JSON.stringify(recovered)],
+    });
+  }
   {
     const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys\?key=[^&]+$/, model: /^\/models\?model=[^&]+$/, pool: /^\/pools\?pool=[^&]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?session=[^&]+$/ };
     const wrong = [];

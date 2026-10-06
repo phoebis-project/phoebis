@@ -1,6 +1,6 @@
 import { useMemo, useState } from 'react';
 import { api } from '@/api';
-import type { Account, PollOutcome, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
+import type { Account, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
 import { accountColor } from '@/components/charts/theme';
 import { FastLane } from '@/components/FastLane';
 import { useChartInk } from '@/components/charts/useChartInk';
@@ -8,7 +8,7 @@ import { IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconUser, I
 import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { STATUS_LABEL, STATUS_TONE, isExpired, isSubscription, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
+import { POLL_OUTCOME_LABEL, STATUS_LABEL, STATUS_TONE, isExpired, isSubscription, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
 
 type Tab = 'all' | 'api_key' | 'oauth';
 type Sort = 'default' | 'soonest';
@@ -122,8 +122,6 @@ function QuotaCardSkeleton() {
   );
 }
 
-const OUTCOME_LABEL: Record<PollOutcome, string> = { clean: 'clean', failed: 'failed', rate_limited: 'rate limited' };
-
 /** A poll that last failed or is backing off wants a look even while the card still draws the windows it had. */
 const needsAttention = (poll: QuotaPoll | null) => poll !== null && (poll.lastOutcome !== 'clean' || poll.backoffSince !== null);
 
@@ -143,7 +141,7 @@ function PollLine({ poll, now }: { now: number; poll: QuotaPoll | null }) {
   }
   return (
     <span className="muted" title={at}>
-      polled {fmtRelative(poll.lastAttemptAt, now)}: {OUTCOME_LABEL[poll.lastOutcome]}
+      polled {fmtRelative(poll.lastAttemptAt, now)}: {POLL_OUTCOME_LABEL[poll.lastOutcome]}
     </span>
   );
 }

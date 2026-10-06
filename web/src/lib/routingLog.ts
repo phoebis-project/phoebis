@@ -2,6 +2,7 @@ import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
 import type { DecisionKind, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, RoutingEvent, RoutingLogRow } from '@/api/types';
 import { moveLabel, own } from './analytics';
 import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtUsd, shortModel } from './format';
+import { POLL_OUTCOME_LABEL } from './quota';
 
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
 // alone and never a route or a fixture.
@@ -327,7 +328,8 @@ const WINDOW_WORD: Record<string, string> = { five_hour: '5h', seven_day: '7d', 
 const STATE_WORD: Record<string, string> = { funding_required: 'funding required', reauth_required: 're-auth required' };
 /** The registry's word for who moved an account's state. */
 const CAUSE_WORD: Record<string, string> = { auth_failed: 'credential refused', funding_refused: 'credit balance', operator: 'by hand', refresh_failed: 'refresh failed' };
-const CLEARED_WORD: Record<string, string> = { admin: 'by hand', deadline: 'deadline passed', operator: 'by hand' };
+// `deadline` is the mock's word for a cooldown that ran out, which the router writes as `expired`.
+const CLEARED_WORD: Record<string, string> = { admin: 'by hand', deadline: 'deadline passed', expired: 'deadline passed', operator: 'by hand' };
 const CREDITS_WORD: Record<string, string> = { org_spend_cap_reached: 'spend cap reached' };
 const PERIOD_WORD: Record<string, string> = { day: 'daily budget', month: 'monthly budget' };
 const REGISTRY_VERB: Record<string, string> = { updated: 'edited' };
@@ -404,8 +406,10 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
       return { value: 'by hand' };
     case 'poll_backoff_ended':
       return { value: 'clean poll' };
+    // The usage service opens a backoff on a rate limit alone, and its `reason` is the hold's English sentence, so the
+    // kind decides the word.
     case 'poll_backoff_started':
-      return { value: str(d.reason) === '429' ? 'rate limited' : 'failed' };
+      return { value: POLL_OUTCOME_LABEL.rate_limited };
     case 'reauth_required':
       return { value: 'credential refused' };
     case 'refresh_failed':
@@ -446,7 +450,33 @@ export function byOf(row: RoutingLogRow, page: readonly RoutingLogRow[] = []): C
   return row.type === 'decision' ? decisionBy(row) : eventBy(row, page);
 }
 
-function eventFacts(e: RoutingEvent, now: number): FactPair[] {
+/** The moves a failed attempt forced, whose Fact is the answer that attempt got. */
+const FAILOVER_MOVES = new Set(['cooldown', 'fast_lane']);
+
+/**
+ * The status a failover's failed attempt answered. The move lands in the second of the decision that placed the next
+ * attempt, under the same session and account. The route joins each decision to the attempt it dispatched, so the
+ * request's decision before that one carries the failed attempt's status.
+ */
+function failoverAnswer(e: RoutingEvent, page: readonly RoutingLogRow[]): number | null {
+  if (e.sessionId === null) return null;
+  const second = Math.floor(atOf(e) / 1_000);
+  const decisions = page.filter((r): r is DecisionSummary => r.type === 'decision');
+  for (const next of decisions) {
+    if (next.sessionId !== e.sessionId || next.accountId !== e.accountId || Math.floor(atOf(next) / 1_000) !== second) continue;
+    const failed = decisions.filter((r) => r.requestId === next.requestId && r.seq < next.seq && r.status !== null).sort((a, b) => b.seq - a.seq)[0];
+    if (failed) return failed.status;
+  }
+  return null;
+}
+
+/** A diff entry the console can read as one field's change: its old value and its new one, nothing else. */
+const isChange = (v: unknown): boolean => {
+  const keys = Object.keys(rec(v));
+  return keys.length === 2 && keys.includes('from') && keys.includes('to');
+};
+
+function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]): FactPair[] {
   const d = e.detail;
   const at = atOf(e);
   const time = (key: FactKey, v: unknown) => {
@@ -488,8 +518,13 @@ function eventFacts(e: RoutingEvent, now: number): FactPair[] {
       return lasted(since === null ? null : at - since);
     }
     case 'pin_created':
-    case 'pin_migrated':
       return count('epoch', d.epoch);
+    case 'pin_migrated': {
+      if (!FAILOVER_MOVES.has(str(d.reason) ?? '')) return count('epoch', d.epoch);
+      // The epoch would stand where the answer belongs, so a failover whose failed attempt is not drawn reads nothing.
+      const status = failoverAnswer(e, page);
+      return status === null ? [] : [pair('answer', status, 'count', now)];
+    }
     case 'poll_backoff_ended':
       return lasted(num(d.duration_ms));
     case 'poll_backoff_started':
@@ -497,8 +532,10 @@ function eventFacts(e: RoutingEvent, now: number): FactPair[] {
     case 'reauth_required':
       return [pair('state', 'routing off', 'text', now)];
     case 'registry_changed': {
+      // Only a diff whose every entry is a change names its fields, and the whole row the store writes on an edit names
+      // none.
       const diff = Object.entries(rec(d.diff));
-      if (diff.length === 0) return [];
+      if (diff.length === 0 || !diff.every(([, change]) => isChange(change))) return [];
       if (diff.length > 1) return [pair('fields', diff.length, 'count', now)];
       const [field, change] = diff[0];
       return [pair('field', words(field), 'text', now), pair('to', fieldValue(field, rec(change).to), 'text', now)];
@@ -531,9 +568,12 @@ function decisionFacts(row: DecisionSummary, now: number): FactPair[] {
   return row.fact.flatMap((f) => (own(LABELS, f.key) && !repeatsAt(row, f.unit, f.value) ? [{ entity: f.entity, label: LABELS[f.key as FactKey], value: formatFact(f.value, f.unit, now) }] : []));
 }
 
-/** One or two pairs; never a time the row's `at` already gives. */
-export function factsOf(row: RoutingLogRow, now: number): FactPair[] {
-  return (row.type === 'decision' ? decisionFacts(row, now) : eventFacts(row, now)).slice(0, 2);
+/**
+ * One or two pairs; never a time the row's `at` already gives. A failover move reads its answer off the decisions
+ * among `page`, the rows drawn beside it.
+ */
+export function factsOf(row: RoutingLogRow, now: number, page: readonly RoutingLogRow[] = []): FactPair[] {
+  return (row.type === 'decision' ? decisionFacts(row, now) : eventFacts(row, now, page)).slice(0, 2);
 }
 
 export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id: string): string {
@@ -591,6 +631,12 @@ export const aroundSubject = (lastActivity: number | null, now: number): LogLink
 
 /** A condition: from its start to now. */
 export const sinceCondition = (since: number, now: number): LogLink => ({ from: since, to: now });
+
+/** The clock minute that holds `at`, its last millisecond the end, `to` at most now. */
+export const clockMinute = (at: number, now: number): LogLink => {
+  const from = Math.floor(at / MINUTE) * MINUTE;
+  return { from, to: Math.min(from + MINUTE - 1, now) };
+};
 
 const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
 

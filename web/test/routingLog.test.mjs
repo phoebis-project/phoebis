@@ -53,7 +53,7 @@ const strategy = (value, tier) => ({ kind: 'strategy', tier, value });
 const by = (kind, value) => ({ kind, tier: null, value });
 
 /** The By chip and the Fact pairs as the row draws them: `label value` per pair. */
-const read = (row, page = []) => ({ by: d.byOf(row, page).value, facts: d.factsOf(row, NOW).map((p) => `${p.label} ${p.value}`) });
+const read = (row, page = []) => ({ by: d.byOf(row, page).value, facts: d.factsOf(row, NOW, page).map((p) => `${p.label} ${p.value}`) });
 
 /** One case per row of the decision table: the summary as the router writes it, and the words the row draws. */
 const DECISIONS = [
@@ -97,14 +97,29 @@ const DECISIONS = [
 const at = ms(14, 0);
 /** The static placement the pin created below follows, in the same second, session and account. */
 const placement = decision({ at: iso(at + 400), by: by('rung', 'static'), fact: [fact('prefix', 31_200, 'tokens'), fact('depth', 2, 'count')], sessionId: 's-created' });
+/**
+ * A failover's two decisions: the first attempt's on secondary, joined to the 429 that attempt answered, and the
+ * second's on primary in the move's own second.
+ */
+const failover = (reason, status) => [
+  decision({ accountId: 'primary', at: iso(at + 300), attempt: 2, attemptCount: 2, by: strategy('pace', [0, 0, 0]), fast: reason === 'fast_lane', fromAccountId: 'secondary', requestId: `req_${reason}`, seq: 2, sessionId: 's-moved', status: 200, tier: [0, 0, 0] }),
+  decision({ accountId: 'secondary', at: iso(at - 1_200), attempt: 1, attemptCount: 2, by: strategy('pace', [0, 0, 0]), fast: reason === 'fast_lane', requestId: `req_${reason}`, seq: 1, sessionId: 's-moved', status, tier: [0, 0, 0] }),
+];
+/** The pool row as the store writes it on every edit: each field's current value, with no record of the old one. */
+const WHOLE_POOL_ROW = {
+  label: 'All', enabled: true, strategy: 'pace', affinity_ttl_seconds: 600, overage_policy: 'prefer_plan', shed_ahead_of_pace: 0.9, select_below_utilization: null, model_rules: [],
+  body_capture_hours: 24, prefer_subscription: true, shed_share: 0.5, burn_window_seconds: 600, source_dwell_seconds: 900, migrate_when_spent: true, warm_sessions: 'when_needed',
+  retry_in_place_seconds: 60, in_flight_cap: 16, pace_floor: 0.05, overage_move_grace_minutes: 30, wind_down_minutes: 30, cache_ttl: {}, cache_diagnostics: false, affinity_mode: 'always',
+  subagent_placement: 'by_cohort', session_placement: 'by_strategy', min_shared_prefix_tokens: 20_000, auto_mode_server: true,
+};
 
 /** One case per row of the event table: the event as its writer stores it, and the words the row draws. */
 const EVENTS = [
   ['pin created by a placement', event('pin_created', { agent_id: 'main', epoch: 52 }, { sessionId: 's-created' }), 'static rung', ['epoch 52'], [placement]],
   ['pin moved by a rule', event('pin_migrated', { agent_id: 'main', epoch: 53, from_account: 'secondary', reason: 'spent' }), 'window spent', ['epoch 53']],
   ['pin moved by the shed rule', event('pin_migrated', { agent_id: 'main', epoch: 23, from_account: 'secondary', reason: 'shed' }), 'shed', ['epoch 23']],
-  ['pin moved, a failover', event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason: 'cooldown' }), d.PIN_MIGRATION_LABEL.cooldown, ['epoch 54']],
-  ['pin moved, the fast lane', event('pin_migrated', { agent_id: 'main', epoch: 55, from_account: 'primary', reason: 'fast_lane' }), 'fast lane cooling', ['epoch 55']],
+  ['pin moved, a failover', event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason: 'cooldown' }, { sessionId: 's-moved' }), d.PIN_MIGRATION_LABEL.cooldown, ['answer 429'], failover('cooldown', 429)],
+  ['pin moved, the fast lane', event('pin_migrated', { agent_id: 'main', epoch: 55, from_account: 'secondary', reason: 'fast_lane' }, { sessionId: 's-moved' }), 'fast lane cooling', ['answer 429'], failover('fast_lane', 429)],
   ['pin expired, found idle by the sweep', event('pin_expired', { agent_id: 'main', reasons: ['expired'] }), 'idle', []],
   ['pin expired, any other reason', event('pin_expired', { agent_id: 'main', reasons: ['cooldown', 'spent'] }), 'account cooled', []],
   ['pin released by hand', event('pin_released', { agent_id: 'main' }, { actor: 'admin' }), 'by hand', []],
@@ -113,7 +128,7 @@ const EVENTS = [
   ['cooldown set, a spend cap', event('cooldown_set', { reason: 'spend_cap', scope: 'account', until: ms(16, 0), window: 'overage' }), 'spend cap', ['until 16:00']],
   ['cooldown set, the fast lane', event('cooldown_set', { reason: 'fast_rate_limit', scope: 'fast', until: ms(14, 42), window: 'fast' }), 'fast lane 429', ['until 14:42']],
   ['cooldown set, a model', event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-haiku-4-5-20251001', until: ms(15, 24), window: 'model' }), '404 on haiku-4-5', ['until 15:24']],
-  ['cooldown cleared, its deadline', event('cooldown_cleared', { cause: 'deadline', scope: 'account' }), 'deadline passed', []],
+  ['cooldown cleared, its deadline', event('cooldown_cleared', { cause: 'expired', scope: 'account' }), 'deadline passed', []],
   ['cooldown cleared by hand', event('cooldown_cleared', { cause: 'admin', scope: 'account' }), 'by hand', []],
   ['cooldown cleared, recovered', event('cooldown_cleared', { cause: 'recovered', scope: 'account' }), 'recovered', []],
   ['overage started', event('overage_started', {}), 'in overage', []],
@@ -122,6 +137,7 @@ const EVENTS = [
   ['model permitted', event('model_permitted', { attempt: 2, rejected_by: ['primary'], request_id: 'req_012', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }), 'after 404', ['attempt 2 of 2']],
   ['registry changed, one field', event('registry_changed', { diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['field shed ahead of pace', 'to 90%']],
   ['registry changed, several fields', event('registry_changed', { diff: { in_flight_cap: { from: 16, to: 8 }, pace_floor: { from: 0, to: 0.1 }, strategy: { from: 'pace', to: 'priority' } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', ['fields 3']],
+  ['registry changed, the whole pool row', event('registry_changed', { diff: WHOLE_POOL_ROW, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', []],
   ['registry changed, a key revoked', event('registry_changed', { diff: {}, kind: 'key_revoked', target: 'ci' }, { accountId: null, actor: 'admin', keyId: 'ci' }), 'key revoked', []],
   ['re-auth required', event('reauth_required', {}), 'credential refused', ['state routing off']],
   ['refresh succeeded', event('refresh_succeeded', {}), 'refreshed', []],
@@ -136,7 +152,7 @@ const EVENTS = [
   ['window reset', event('window_reset', { next_reset: ms(19, 0), observed: 'sample', reset_at: at, utilization_before: 0.92, window: 'five_hour' }), '5h reset', ['was 92%']],
   ['router started', event('router_started', { pins_loaded: 10, version: '0.1.0' }, { accountId: null }), 'restart', ['pins 10']],
   ['warm prefix expired', event('warm_prefix_expired', { cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000 }, entries: 2, root: 's0' }), '5 min tier', ['prefix 18.4K', 'depth 1']],
-  ['poll backoff started', event('poll_backoff_started', { attempts: 1, next_attempt_at: ms(13, 53), reason: '429' }), 'rate limited', ['next 13:53']],
+  ['poll backoff started', event('poll_backoff_started', { attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 40), next_attempt_at: ms(13, 53), reason: 'the usage endpoint rate-limited the account; next attempt at 2026-09-16 13:53:00 UTC' }, { at: iso(ms(13, 52, 30)) }), 'rate limited', ['next 13:53']],
   ['poll backoff ended', event('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: at }), 'clean poll', ['lasted 25 min']],
   ['budget reached', event('budget_reached', { budget_usd: 20, period: 'day', period_end: MIDNIGHT, spent_usd: 20.4 }, { poolId: 'codex' }), 'daily budget', ['spent $20.40 of $20.00']],
   ['budget period ended', event('budget_period_ended', { period: 'month', period_start: at, previous_spent_usd: 18.2 }, { poolId: 'codex' }), 'monthly budget', ['spent $18.20']],
@@ -166,6 +182,15 @@ for (const [name, row, by, facts, page] of EVENTS) {
 
 test('a pin created with no placement beside it reads the placement word', () => {
   assert.equal(d.byOf(event('pin_created', { agent_id: 'main', epoch: 52 }, { sessionId: 's-created' }), []).value, 'placement');
+});
+
+test('a failover or fast-lane move whose failed attempt is not drawn reads no answer and never the epoch', () => {
+  for (const reason of ['cooldown', 'fast_lane']) {
+    const move = event('pin_migrated', { agent_id: 'main', epoch: 54, from_account: 'secondary', reason }, { sessionId: 's-moved' });
+    const [second] = failover(reason, 429);
+    assert.deepEqual(read(move).facts, [], `${reason}, no rows drawn`);
+    assert.deepEqual(read(move, [second]).facts, [], `${reason}, the second attempt drawn alone`);
+  }
 });
 
 test('a value that names an account or a key keeps its entity, so the cell draws it as a link', () => {
@@ -201,7 +226,7 @@ test('every label of the table is used at least once and no fact key lacks a lab
   assert.equal(TABLE_LABELS.length, 33);
   assert.deepEqual([...new Set(Object.values(d.FACT_LABEL))].sort(), [...TABLE_LABELS].sort());
   assert.equal(Object.keys(d.FACT_LABEL).length, 33);
-  const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW).map((p) => p.label));
+  const emitted = [...DECISIONS, ...EVENTS].flatMap(([, row, , , page]) => d.factsOf(row, NOW, page).map((p) => p.label));
   assert.deepEqual([...new Set(emitted)].sort(), [...TABLE_LABELS].sort());
   for (const label of emitted) assert.ok(Object.values(d.FACT_LABEL).includes(label), label);
 });
@@ -298,6 +323,11 @@ test('each link in builds its URL with its range', () => {
   assert.deepEqual(Object.fromEntries(request), { from: '2026-09-16T13:47:10.000Z', request: 'req_1d9c3e55-0b2', to: '2026-09-16T14:17:40.000Z' });
   const session = new URL(d.logHref({ session: '407dd39b', ...d.aroundSubject(ms(11, 0), NOW) }), 'http://phoebis.test').searchParams;
   assert.deepEqual(Object.fromEntries(session), { from: '2026-09-16T10:00:00.000Z', session: '407dd39b', to: '2026-09-16T12:00:00.000Z' });
+});
+
+test('this minute is the clock minute that holds the moment, its last millisecond the end, never past now', () => {
+  assert.deepEqual(d.clockMinute(ms(14, 2, 10), NOW), { from: ms(14, 2), to: ms(14, 3) - 1 });
+  assert.deepEqual(d.clockMinute(ms(14, 29, 10), ms(14, 29, 30)), { from: ms(14, 29), to: ms(14, 29, 30) });
 });
 
 test('model ids order fable, opus, sonnet, haiku, newest version first', () => {
