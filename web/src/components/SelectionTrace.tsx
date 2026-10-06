@@ -13,6 +13,7 @@ const OBSTACLE_HINT: Record<Obstacle, string> = {
   at_cap: 'at its in-flight cap',
   attempted: 'already tried by this request',
   budget: 'at its spend budget for the period',
+  budget_unknown: 'budgeted while the ledger is degraded, so its spend is unknown',
   cooldown: 'in a cooldown',
   credits: 'its usage credits unavailable for fast mode',
   floor: 'at the Pace floor',

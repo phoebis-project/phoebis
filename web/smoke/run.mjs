@@ -1724,7 +1724,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({
     name: '/pools the strip badges the features a pool has on and opens the dialog on their groups',
     ok:
-      JSON.stringify(strip('all')) === JSON.stringify([['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
+      JSON.stringify(strip('all')) === JSON.stringify([['load shedding', '/pools?edit=all&group=shedding', 'Opens the pool dialog on Load shedding'], ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
       JSON.stringify(strip('codex')) === JSON.stringify([['load shedding', '/pools?edit=codex&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
       JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode']]),
     missing: [...strip('all'), ...strip('codex'), ...strip('work')].map((b) => b.join(' | ')),
@@ -1848,7 +1848,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
   results.push({
     name: '/pools six tiles per card, the sixth the count of moves in the last hour split by reason in its title',
-    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '3', 'window spent 2, overage 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
+    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '5', 'rate limited 3, fast lane cooling 1, window spent 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
     missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
   });
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
@@ -1989,6 +1989,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok: m.text().includes('Move or revoke its keys first') && [...m.container.querySelectorAll('.pool .card__title')].some((h) => h.textContent?.trim() === 'all'),
     missing: [m.container.querySelector('.toast')?.textContent ?? 'no toast'],
   });
+}
+{
+  // The story's pool `all` sheds at 90 % ahead of pace; the dialog checks below drive the shedding controls from a
+  // pool that sheds nothing, the store's default, so the margin is cleared through the route and the page read again.
+  const all = (await api.listPools()).find((p) => p.id === 'all');
+  results.push({ name: "fixture: the story's pool all sheds at 90 % ahead of pace", ok: all?.shedAheadOfPace === 0.9, missing: [String(all?.shedAheadOfPace)] });
+  await api.updatePool('all', { ...all, members: all.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), shedAheadOfPace: null });
+  m.unmount();
+  m = await mount('/pools');
 }
 {
   const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all');
@@ -5325,7 +5334,11 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
   results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
   const trails = [...m.container.querySelectorAll('tbody .trail')];
-  results.push({ name: '/requests every row carries an attempt trail', ok: trails.length === rowsBefore, missing: [String(trails.length), String(rowsBefore)] });
+  // A request answered before any account took it, an exhaustion or a refusal, has no attempt to draw: its row is one
+  // of the requests with none.
+  const bare = [...m.container.querySelectorAll('tbody tr')].filter((tr) => !tr.querySelector('.trail')).map((tr) => tr.querySelector('td .sub.mono')?.textContent ?? '');
+  const unattempted = bare.filter((id) => requests.some((r) => r.attempts.length === 0 && `${r.id.slice(0, 12)}…` === id));
+  results.push({ name: '/requests every row that reached an account carries an attempt trail', ok: trails.length + bare.length === rowsBefore && bare.length > 0 && unattempted.length === bare.length, missing: [String(trails.length), String(rowsBefore), ...bare] });
   const singles = trails.filter((t) => t.querySelectorAll('.trail__step').length === 1).length;
   results.push({ name: '/requests a single attempt is one badge', ok: singles >= 1, missing: [String(singles)] });
   const multi = trails.filter((t) => t.querySelectorAll('.trail__step').length > 1);
@@ -6777,7 +6790,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
   // A subscription account spends dollars only on its fast-mode answers, which the story's desktop key sends on Opus.
   const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
-  const fastSpenders = ['primary', 'secondary', 'nightly'].filter((id) => burned.points.some((p) => p.group === id && p.usd > 0));
+  const fastSpenders = ['nightly', 'primary', 'secondary'].filter((id) => burned.points.some((p) => p.group === id && p.usd > 0));
   results.push({
     name: "/analytics spend per minute charts dollars alone, a subscription account's fast-mode dollars among them, and plan per hour a subscription account's two window shares",
     ok:

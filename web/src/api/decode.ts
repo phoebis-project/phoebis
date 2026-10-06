@@ -1,8 +1,8 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
+  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RecordCandidate, RecordOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SummaryFact, TtlRules, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
@@ -409,10 +409,10 @@ export const PIN_RELEASE_REASON_VALUES = [
 ] as const satisfies readonly PinReleaseReason[];
 /**
  * The obstacles the router names for a candidate it passed over: the eligibility checks (`attempted`, `budget`,
- * `cooldown`, `credits`, `operator`, `overage`, `subscription_ended`) and the partitions (`above_ceiling`, `at_cap`,
- * `floor`, `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
+ * `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `subscription_ended`) and the partitions
+ * (`above_ceiling`, `at_cap`, `floor`, `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
  */
-export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'budget', 'cooldown', 'credits', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
+export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'budget', 'budget_unknown', 'cooldown', 'credits', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
 export const PLACEMENT_RUNG_VALUES = ['content', 'static', 'with_main'] as const satisfies readonly Placement['rung'][];
 const tierOf = (v: unknown): SelectionTrace['tier'] => {
   const t = list(v);
@@ -455,6 +455,154 @@ export const decodeRequestPage = (v: unknown): RequestPage => ({ nextCursor: str
 // The four counts are the route's own; nothing here measures the request or the response it passes through.
 export const decodeBodies = (v: unknown): CapturedBodies => { const b = rec(v); return { request: b.request, requestBytesSeen: num(b.request_bytes_seen), requestBytesStored: num(b.request_bytes_stored), requestId: str(b.request_id), requestTruncated: bool(b.request_truncated), response: b.response, responseBytesSeen: num(b.response_bytes_seen), responseBytesStored: num(b.response_bytes_stored), responseTruncated: bool(b.response_truncated) }; };
 export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: rec(v).detail === null || rec(v).detail === undefined ? null : rec(rec(v).detail), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
+
+export const DECISION_KIND_VALUES = ['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed'] as const satisfies readonly DecisionKind[];
+export const PIN_REASON_VALUES = ['not_looked_up', 'pinning_off'] as const satisfies readonly PinReason[];
+const BY_KIND_VALUES = ['exhaustion', 'hold', 'none', 'refusal', 'rule', 'rung', 'strategy'] as const satisfies readonly DecisionBy['kind'][];
+const FACT_UNIT_VALUES = ['count', 'ms', 'percent', 'percent_per_hour', 'text', 'time', 'tokens', 'usd'] as const satisfies readonly FactUnit[];
+const FACT_ENTITY_VALUES = ['account', 'key', 'model', 'pool'] as const satisfies readonly FactEntity['kind'][];
+const decisionKindOf = (v: unknown): DecisionKind | undefined => DECISION_KIND_VALUES.find((k) => k === str(v));
+const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null || typeof v !== 'object' ? null : read(rec(v)));
+const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
+const holdOf = (v: unknown) => orNull(v, (h) => ({ accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort) }));
+const exhaustionOf = (v: unknown) => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
+const refusalOf = (v: unknown) => orNull(v, (x) => ({ kind: str(x.kind), reason: str(x.reason) }));
+/** A value the console cannot draw as a number or a word drops its pair rather than drawing a guess. */
+const factOf = (v: unknown): SummaryFact[] => {
+  const f = rec(v);
+  if (typeof f.value !== 'number' && typeof f.value !== 'string') return [];
+  const entity = orNull(f.entity, (e) => {
+    const kind = FACT_ENTITY_VALUES.find((k) => k === str(e.kind));
+    return kind === undefined ? null : { id: str(e.id), kind };
+  });
+  return [{ entity, key: str(f.key), unit: FACT_UNIT_VALUES.find((u) => u === str(f.unit)) ?? null, value: f.value }];
+};
+
+export function decodeDecisionSummary(v: unknown): DecisionSummary {
+  const r = rec(v);
+  const by = rec(r.by);
+  return {
+    type: 'decision',
+    accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), at: isoOr(r.at, epoch), attempt: num(r.attempt, 1), attemptCount: numOrNull(r.attempt_count),
+    by: { kind: BY_KIND_VALUES.find((k) => k === str(by.kind)) ?? 'none', tier: tierOf(by.tier), value: str(by.value) },
+    cache: orNull(r.cache, (c) => ({ hit: bool(c.hit), inputTokens: num(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), readTokens: num(c.read_tokens) })),
+    exhaustion: exhaustionOf(r.exhaustion), fact: list(r.fact).flatMap(factOf), fast: bool(r.fast), fromAccountId: strOrNull(r.from_account_id), hold: holdOf(r.hold), keyId: strOrNull(r.key_id),
+    kind: decisionKindOf(r.kind) ?? 'placed', model: strOrNull(r.model), poolId: strOrNull(r.pool_id), probe: bool(r.probe), refusal: refusalOf(r.refusal), requestId: str(r.request_id), rule: strOrNull(r.rule), rung: placementOf(r.rung),
+    runnerUp: scoreOf(r.runner_up), score: scoreOf(r.score), seq: num(r.seq, 1), sessionId: strOrNull(r.session_id), skipped: num(r.skipped), status: numOrNull(r.status), strategy: str(r.strategy), tier: tierOf(r.tier),
+    warmth: orNull(r.warmth, (w) => ({ cause: str(w.cause), verdict: str(w.verdict) })),
+  };
+}
+
+export function decodeRoutingEvent(v: unknown): RoutingEvent {
+  const e = rec(v);
+  return {
+    type: 'event',
+    accountId: strOrNull(e.account_id), actor: strOrNull(e.actor), agentId: strOrNull(e.agent_id), at: isoOr(e.at, epoch), detail: rec(e.detail), id: num(e.id), keyId: strOrNull(e.key_id), kind: str(e.kind),
+    model: strOrNull(e.model), poolId: strOrNull(e.pool_id), requestId: strOrNull(e.request_id), sessionId: strOrNull(e.session_id),
+  };
+}
+
+/**
+ * A row's `type` picks its decoder. A row of another type, or one missing the identity its link and its cursor are
+ * built from (a decision's request id, seq and kind, an event's id and kind), is dropped rather than drawn as a row
+ * that leads nowhere.
+ */
+const routingLogRowOf = (v: unknown): RoutingLogRow[] => {
+  const r = rec(v);
+  if (r.type === 'decision') return typeof r.request_id === 'string' && numOrNull(r.seq) !== null && decisionKindOf(r.kind) !== undefined ? [decodeDecisionSummary(r)] : [];
+  if (r.type === 'event') return numOrNull(r.id) !== null && typeof r.kind === 'string' ? [decodeRoutingEvent(r)] : [];
+  return [];
+};
+
+export function decodeRoutingLogPage(v: unknown): RoutingLogPage {
+  const p = rec(v);
+  return { counts: orNull(p.counts, (c) => ({ decisions: num(c.decisions), events: num(c.events) })), nextCursor: strOrNull(p.next_cursor), rows: list(p.rows).flatMap(routingLogRowOf) };
+}
+
+const prefixEntryOf = (v: unknown): PrefixEntry | null =>
+  orNull(v, (e) => ({ depth: num(e.depth), hash: str(e.hash), live: bool(e.live), prefixTokens: num(e.prefix_tokens), refusedBy: strOrNull(e.refused_by), ttlMs: num(e.ttl_ms), writtenAt: isoOr(e.written_at, epoch) }));
+const tierOrZero = (v: unknown): [number, number, number] => tierOf(v) ?? [0, 0, 0];
+
+function decodeRecordCandidate(v: unknown): RecordCandidate {
+  const c = rec(v);
+  const prefix = rec(c.prefix);
+  return {
+    accountId: str(c.account_id), allowanceKnown: bool(c.allowance_known),
+    budget: list(c.budget).map(rec).map((b) => ({ budgetUsd: num(b.budget_usd), observedAt: isoOrNull(b.observed_at), period: str(b.period), periodEnd: isoOrNull(b.period_end), periodStart: isoOrNull(b.period_start), spentUsd: numOrNull(b.spent_usd) })),
+    cooldowns: list(c.cooldowns).map(rec).map((x) => ({ blocking: bool(x.blocking), reason: str(x.reason), scope: str(x.scope), until: isoOr(x.until, epoch), window: str(x.window) })),
+    credits: orNull(c.credits, (x) => ({ blocked: strOrNull(x.blocked), disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.enabled), observedAt: isoOr(x.observed_at, epoch), utilization: numOrNull(x.utilization) })),
+    enabled: bool(c.enabled), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
+    obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), until: isoOrNull(o.until), window: strOrNull(o.window) })),
+    overage: orNull(c.overage, (o) => ({ observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOr(o.since, epoch), source: str(o.source) })),
+    pace: orNull(c.pace, (p) => ({ deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score) })),
+    partition: strOrNull(c.partition), planTier: strOrNull(c.plan_tier),
+    prefix: { content: prefixEntryOf(prefix.content), contentMatch: prefixEntryOf(prefix.content_match), static: prefixEntryOf(prefix.static), staticMatch: prefixEntryOf(prefix.static_match), withMain: bool(prefix.with_main) },
+    priority: num(c.priority), rank: numOrNull(c.rank), score: numOrNull(c.score), state: str(c.state),
+    term: orNull(c.term, (t) => ({ cancelled: bool(t.cancelled), ended: bool(t.ended), endsAt: isoOrNull(t.ends_at), since: isoOrNull(t.since), trialEndsAt: isoOrNull(t.trial_ends_at), windingDown: bool(t.winding_down) })),
+    tier: tierOrZero(c.tier), verdict: str(c.verdict),
+    windows: Object.fromEntries(
+      Object.entries(rec(c.windows)).map(([name, w]) => {
+        const x = rec(w);
+        return [name, { ageMs: num(x.age_ms), ahead: numOrNull(x.ahead), observedAt: isoOr(x.observed_at, epoch), reset: isoOrNull(x.reset), source: str(x.source), utilization: num(x.utilization) }];
+      }),
+    ),
+  };
+}
+
+function decodeRecordOutcome(v: unknown): RecordOutcome {
+  const o = rec(v);
+  return {
+    accountId: strOrNull(o.account_id), cohortHold: cohortHoldOf(o.cohort_hold),
+    completion: orNull(o.completion, (c) => ({
+      cacheMapWritten: Array.isArray(c.cache_map_written) ? c.cache_map_written.map(rec).map((m) => ({ accountId: str(m.account_id), depth: num(m.depth), prefixTokens: num(m.prefix_tokens), tier: str(m.tier), ttlMs: num(m.ttl_ms) })) : null,
+      cacheReadTokens: numOrNull(c.cache_read_tokens), completedAt: isoOrNull(c.completed_at), freed: bool(c.freed), heldMs: numOrNull(c.held_ms), hit: typeof c.hit === 'boolean' ? c.hit : null, inputTokens: numOrNull(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), status: numOrNull(c.status),
+    })),
+    exhaustion: exhaustionOf(o.exhaustion), fromAccountId: strOrNull(o.from_account_id), hold: holdOf(o.hold), inOverage: bool(o.in_overage), kind: decisionKindOf(o.kind) ?? 'placed',
+    pinEvents: list(o.pin_events).map(rec).map((e) => ({ kind: str(e.kind), reason: strOrNull(e.reason) })),
+    pinWritten: orNull(o.pin_written, (p) => ({ action: str(p.action), epoch: num(p.epoch), hashesStamped: bool(p.hashes_stamped), lane: str(p.lane), refreshStamped: bool(p.refresh_stamped) })),
+    refusal: refusalOf(o.refusal), rule: strOrNull(o.rule), rung: placementOf(o.rung),
+    shedMarks: Array.isArray(o.shed_marks) ? o.shed_marks.map(rec).map((m) => ({ agentId: str(m.agent_id), keyId: str(m.key_id), model: str(m.model), sessionId: str(m.session_id) })) : null,
+    strategy: str(o.strategy), tier: tierOf(o.tier), upstreamModel: strOrNull(o.upstream_model),
+  };
+}
+
+export function decodeDecisionRecord(v: unknown): DecisionRecord {
+  const r = rec(v);
+  const q = rec(r.request);
+  const lane = rec(q.lane);
+  const flags = rec(q.flags);
+  const chain = rec(q.chain);
+  const s = r.settings;
+  return {
+    candidates: list(r.candidates).map(decodeRecordCandidate),
+    outcome: decodeRecordOutcome(r.outcome),
+    pin: orNull(r.pin, (p) => ({
+      accountId: strOrNull(p.account_id), createdAt: isoOrNull(p.created_at), epoch: numOrNull(p.epoch), found: str(p.found, 'none'), idleMs: numOrNull(p.idle_ms), incarnation: numOrNull(p.incarnation), lane: strOrNull(p.lane), lastRefreshAt: isoOrNull(p.last_refresh_at), lastUsedAt: isoOrNull(p.last_used_at),
+      marked: bool(p.marked), refreshAgeMs: numOrNull(p.refresh_age_ms), released: strings(p.released), shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
+    })),
+    // A word this build does not know reads as none, as a poll outcome does; the raw answer still carries it.
+    pinReason: PIN_REASON_VALUES.find((x) => x === r.pin_reason) ?? null,
+    raw: v,
+    request: {
+      agentId: str(q.agent_id), at: isoOr(q.at, epoch), attempt: num(q.attempt, 1), attempted: strings(q.attempted), canonicalModel: str(q.canonical_model),
+      chain: { boundaries: num(chain.boundaries), staticBoundaries: num(chain.static_boundaries), staticHash: bool(chain.static_hash) }, clientClass: str(q.client_class),
+      flags: { contextCompacted: bool(flags.context_compacted), count: bool(flags.count), fast: bool(flags.fast), marker: bool(flags.marker), portable: bool(flags.portable), probe: bool(flags.probe) },
+      holds: list(q.holds).map(rec).map((h) => ({ accountId: str(h.account_id), attempt: num(h.attempt, 1), cohort: strOrNull(h.cohort), heldMs: num(h.held_ms) })),
+      keyGeneration: num(q.key_generation), keyId: str(q.key_id), lane: { effort: str(lane.effort), speed: str(lane.speed), thinking: str(lane.thinking) }, parentAgentId: strOrNull(q.parent_agent_id), poolId: str(q.pool_id),
+      registryRevision: num(q.registry_revision), requestClass: strOrNull(q.request_class), requestId: str(q.request_id), seq: num(q.seq, 1),
+    },
+    requestId: str(r.request_id),
+    seq: num(r.seq, 1),
+    settings: orNull(s, (x) => ({
+      affinityMode: str(x.affinity_mode), affinityTtlSeconds: num(x.affinity_ttl_seconds), burnWindowSeconds: num(x.burn_window_seconds), inFlightCap: num(x.in_flight_cap), migrateBand: num(x.migrate_band),
+      migrateWhenSpent: bool(x.migrate_when_spent), minSharedPrefixTokens: num(x.min_shared_prefix_tokens), overageMoveGraceMinutes: num(x.overage_move_grace_minutes), overagePolicy: str(x.overage_policy), paceFloor: num(x.pace_floor),
+      poolUpdatedAt: isoOr(x.pool_updated_at, epoch), preferSubscription: bool(x.prefer_subscription), retryInPlaceSeconds: num(x.retry_in_place_seconds), selectBelowUtilization: numOrNull(x.select_below_utilization), sessionPlacement: str(x.session_placement),
+      shedAheadOfPace: numOrNull(x.shed_ahead_of_pace), shedShare: num(x.shed_share), sourceDwellSeconds: num(x.source_dwell_seconds), strategy: str(x.strategy), subagentPlacement: str(x.subagent_placement), warmSessions: str(x.warm_sessions), windDownMinutes: num(x.wind_down_minutes),
+    })),
+    version: num(r.version),
+    walk: list(r.walk).map(rec).map((w) => ({ facts: list(w.facts).map(rec).map((f) => ({ accountId: strOrNull(f.account_id), key: str(f.key), unit: strOrNull(f.unit), value: f.value ?? null })), step: str(w.step), verdict: str(w.verdict) })),
+  };
+}
 
 const record = <K extends string>(keys: readonly K[], v: unknown, empty: () => Record<K, number>): Record<K, number> => {
   const out = empty();

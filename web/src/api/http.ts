@@ -1,6 +1,6 @@
 import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from './client';
 import * as d from './decode';
-import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, RequestDetail, RequestQuery, SessionInfo } from './types';
+import type { Account, AccountCatalog, AccountInput, AnalyticsGroup, AnalyticsPoint, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, LiveEvent, PairingInput, PairingPreview, RequestDetail, RequestQuery, RoutingLogQuery, SessionInfo } from './types';
 
 export class ApiError extends Error {
   code: string | null;
@@ -186,6 +186,14 @@ export class HttpApi implements Api {
       throw e;
     }
   };
+  getDecision = async (requestId: string, seq: number) => {
+    try {
+      return d.decodeDecisionRecord(await call('GET', `/admin/requests/${enc(requestId)}/decisions/${seq}`));
+    } catch (e) {
+      if (e instanceof ApiError && e.status === 404) return null;
+      throw e;
+    }
+  };
   getKeepaliveOverview = async () => d.decodeKeepaliveOverview(await call('GET', '/admin/keepalive/overview'));
   getKeyModels = async (keyId: string) => d.decodeKeyModels(await call('GET', `/admin/keys/${enc(keyId)}/models`));
   getModelsState = async () => d.decodeModelsState(await call('GET', '/admin/models/state'));
@@ -231,6 +239,9 @@ export class HttpApi implements Api {
     d.decodeRequestPage(
       await call('GET', `/admin/requests${qs({ accounts: q.accountIds, agent_types: q.agentTypes, client: q.client, cursor: q.cursor, from: q.from ? Date.parse(q.from) : undefined, held: q.held, include_probes: q.includeProbes, keys: q.keyIds, kinds: q.kind ? [q.kind] : undefined, limit: q.limit, models: q.models, outcomes: q.outcomes, pools: q.poolIds, speeds: q.speeds, statuses: q.statuses?.map(String), text: q.search, to: q.to ? Date.parse(q.to) : undefined, turn_origins: q.turnOrigins, user_agent: q.userAgent })}`),
     );
+  // The route reads RFC 3339 instants, so the two times pass through as the page wrote them.
+  listRoutingLog = async (q: RoutingLogQuery = {}) =>
+    d.decodeRoutingLogPage(await call('GET', `/admin/routing-log${qs({ accounts: q.accountIds, cursor: q.cursor, from: q.from, keys: q.keyIds, kinds: q.kinds, limit: q.limit, models: q.models, pools: q.poolIds, request: q.request, session: q.session, to: q.to })}`));
   listSessions = async () => (await call<{ sessions: unknown[] }>('GET', '/admin/sessions')).sessions.map(d.decodeSession);
   login = async (secret: string): Promise<SessionInfo> => {
     await call<void>('POST', '/admin/session', { secret });

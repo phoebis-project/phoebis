@@ -1,6 +1,6 @@
 import type {
   AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
-  RateLimitWindow, RequestEvent, RequestKind, RequestLog, SelectionTrace, TrafficBucket, Usage, WastedProbeReason,
+  RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
 import { AGENT_TYPES } from '@/lib/client';
@@ -112,11 +112,11 @@ const walkBack = (w: RateLimitWindow, atMs: number, olderFactor: () => number): 
   return { id: w.id, resetsAt: iso(resetThen), utilization: Math.round(utilization * 100) / 100 };
 };
 
-const oauthWindows = (accountId: string, atMs: number): AttemptWindow[] => {
+export const oauthWindows = (accountId: string, atMs: number, olderFactor: () => number = () => rng.float(0.4, 1.1)): AttemptWindow[] => {
   const account = ACCOUNTS.find((a) => a.id === accountId);
   if (!account || account.kind !== 'oauth') return [];
   // A head reports the two shared windows and the overage week; a week only the poll reads never reaches an attempt.
-  const reported = account.windows.filter((w) => w.id === '5h' || w.id === '7d').map((w) => walkBack(w, atMs, () => rng.float(0.4, 1.1)));
+  const reported = account.windows.filter((w) => w.id === '5h' || w.id === '7d').map((w) => walkBack(w, atMs, olderFactor));
   // Plans that serve Fable send its weekly headers alongside the other two; the
   // rest send nothing and the detail panel reads n/a. A fixed factor rather than
   // a draw keeps the seeded stream the other fixtures read from where it was.
@@ -206,15 +206,56 @@ function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
   });
 }
 
-function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number): Attempt[] {
+/**
+ * The story's wall-clock time on its pinned day, 2026-09-16 at 14:30 UTC, as an offset from the instant the mock loads
+ * at, so every story fact holds at whichever clock the mock is loaded at.
+ */
+export const clock = (h: number, m: number, s = 0, days = 0): number => NOW + days * DAY - ((14 - h) * HOUR + (30 - m) * MINUTE - s * 1_000);
+
+/** The routing log's story hour, written by hand: no drawn request falls inside it. */
+export const STORY_HOUR_FROM = NOW - HOUR;
+
+export const HAIKU = 'claude-haiku-4-5-20251001';
+
+/**
+ * Whether an account could take a request at `atMs` by the story's own account facts, so no attempt lands where the
+ * decision card would show the account out: secondary, which serves Sonnet 5 alone, cools on its 5-hour window from
+ * 14:02:11 to 15:42; primary's fast lane cools from 14:27:00 to 14:42 and it rejects Haiku from 14:24:10 to 15:24;
+ * nightly's usage credits take a fast request once its payment clears at 11:30:12; the Overflow workspace needs
+ * funding from 11:30:12; research spends its day's budget at 12:41:07.
+ */
+export function servable(accountId: string, atMs: number, model: string, fast: boolean): boolean {
+  const within = (from: number, to: number) => atMs >= from && atMs < to;
+  if (accountId === 'secondary') return !within(clock(14, 2, 11), clock(15, 42));
+  if (accountId === 'primary') return !(fast && within(clock(14, 27), clock(14, 42))) && !(model === HAIKU && within(clock(14, 24, 10), clock(15, 24)));
+  if (accountId === 'nightly') return !fast || atMs >= clock(11, 30, 12);
+  if (accountId === 'overflow') return atMs < clock(11, 30, 12);
+  if (accountId === 'research') return atMs < clock(12, 41, 7);
+  return true;
+}
+
+/** An account a request is handed to, or a story attempt's, walks its windows back at a fixed factor, not a draw. */
+const SERVED_FACTOR = 0.8;
+
+/**
+ * The attempts of one request, none when no account of the lane could serve it at its time (the router answers it
+ * exhausted without an upstream call).
+ */
+function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number, model: string, fast: boolean): Attempt[] {
   const attempts: Attempt[] = [];
   const pool = [...lane.accountIds];
   let cursor = atMs;
+  let unserved = false;
   for (let i = 0; i < attemptsWanted; i += 1) {
     const last = i === attemptsWanted - 1;
-    const accountId = pool.length > 1 && i === 0 && lane.poolId === 'all' && rng.chance(0.3) ? 'secondary' : rng.pick(pool);
-    const idx = pool.indexOf(accountId);
+    const drawnId = pool.length > 1 && i === 0 && lane.poolId === 'all' && rng.chance(0.3) ? 'secondary' : rng.pick(pool);
+    const idx = pool.indexOf(drawnId);
     if (idx >= 0 && pool.length > 1) pool.splice(idx, 1);
+    // The stream draws as it always has, so a request handed off an account that could not serve keeps every later
+    // draw where it was; the lane's first account that could serve then and was not tried yet takes the attempt.
+    const handedTo = servable(drawnId, cursor, model, fast) ? drawnId : lane.accountIds.find((id) => id !== drawnId && !attempts.some((a) => a.accountId === id) && servable(id, cursor, model, fast));
+    if (handedTo === undefined) unserved = true;
+    const accountId = handedTo ?? drawnId;
     let outcome: AttemptOutcome;
     let upstreamStatus: number;
     if (last) {
@@ -225,7 +266,8 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       outcome = 'rate_limited';
     }
     const durationMs = last && finalStatus === 200 ? rng.int(900, 22_000) : rng.int(120, 900);
-    const windows = oauthWindows(accountId, cursor);
+    const drawnWindows = oauthWindows(drawnId, cursor);
+    const windows = accountId === drawnId ? drawnWindows : oauthWindows(accountId, cursor, () => SERVED_FACTOR);
     const rateLimitHit = upstreamStatus === 429;
     attempts.push({
       accountId,
@@ -248,7 +290,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     });
     cursor += durationMs + rng.int(40, 400);
   }
-  return attempts;
+  return unserved ? [] : attempts;
 }
 
 function buildRequests(): RequestLog[] {
@@ -273,14 +315,17 @@ function buildRequests(): RequestLog[] {
     const drawn = rng.weighted(lane.models);
     const finalStatus = kind === 'probe' ? (rng.chance(0.97) ? 200 : 502) : rng.weighted([{ value: 200, weight: 88 }, { value: 429, weight: 5 }, { value: 529, weight: 3 }, { value: 502, weight: 2 }]);
     const attemptsWanted = finalStatus === 200 ? (lane.poolId === 'all' && rng.chance(0.14) ? rng.int(2, 3) : 1) : rng.int(1, 3);
-    const tried = buildAttempts(lane, atMs, finalStatus, attemptsWanted);
-    const head = tried[tried.length - 1];
-    const model = modelOn(head.accountId, drawn);
+    const tried = buildAttempts(lane, atMs, finalStatus, attemptsWanted, drawn, fastTurn(lane.keyId, drawn, kind));
+    // A request no account could serve still draws its answer below, so every later row keeps its draws.
+    const head = tried[tried.length - 1] as Attempt | undefined;
+    const model = modelOn(head?.accountId ?? '', drawn);
     const usage = finalStatus === 200 ? usageFor(model, kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
     const diagnosis = diagnosed(tried, kind);
-    const refused = refusalOwed && lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200;
+    // The story hour's rows leave below, so the rows the drawer reads land before it.
+    const owable = lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200 && atMs < STORY_HOUR_FROM;
+    const refused = refusalOwed && owable;
     if (refused) refusalOwed = false;
-    const autoMode = !refused && lane.keyId === 'laptop' && kind === 'inference' && finalStatus === 200 ? (autoModeOwed.shift() ?? null) : null;
+    const autoMode = !refused && owable ? (autoModeOwed.shift() ?? null) : null;
     const attempts = refused
       ? diagnosis.map((a, at) => (at === diagnosis.length - 1 ? { ...a, response: { ...a.response, refusalCategory: 'cyber', refusalRecommendedModel: 'claude-opus-5', stopReason: 'refusal' } } : a))
       : diagnosis;
@@ -302,7 +347,7 @@ function buildRequests(): RequestLog[] {
       keyGeneration: Date.parse(keyById.get(lane.keyId)!.createdAt),
       keyId: lane.keyId,
       poolId: lane.poolId,
-      accountId: head.accountId,
+      accountId: head?.accountId ?? null,
       model,
       canonicalModel: model,
       kind,
@@ -344,6 +389,7 @@ function buildRequests(): RequestLog[] {
       requestTruncated: false,
       responseTruncated: lane.keyId === 'laptop' && i % 7 === 0,
     });
+    if (head === undefined) Object.assign(rows[rows.length - 1], unservedAnswer());
     // A dropped check belongs under notebook, the one key under a pool that turned the check off, and that pool's
     // one member served it; notebook captures no bodies. The row keeps every other value it drew on the laptop
     // lane, so this loop's later draws stay where they were, and the model the lane drew rather than the one
@@ -368,6 +414,11 @@ function buildRequests(): RequestLog[] {
       keyById.get('notebook')!.lastUsedAt = moved.at;
     }
   }
+  // The routing log's story writes its hour by hand, so the draws inside it give way to the story's own rows, and a
+  // drawn row that carries a story id gives the story its slot.
+  const drawnRows = rows.filter((r) => Date.parse(r.at) < STORY_HOUR_FROM && !STORY_IDS.has(r.id) && r.id !== REJECTION_STORY_ID && r.id !== BUDGET_CROSSING_ID);
+  rows.length = 0;
+  rows.push(...drawnRows);
   rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
   // Every desktop row before the live key's creation is its earlier holder's, and the holder's last request ran on
   // the session the live key holds now, so the Sessions view lists that id once under each holder.
@@ -397,44 +448,6 @@ function buildRequests(): RequestLog[] {
   if (unsampled) {
     unsampled.attempts = unsampled.attempts.map((a) => ({ ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, utilization: null } : w)) }));
   }
-  // The drawer and the Models view need one request an account refused the model of. The newest desktop turn that
-  // failed over past a 429 to an Anthropic-key account or to the unmeasured one takes it: the client spelled the model
-  // without the date the router resolved it to, and a pool member the request had not tried answered 404 for that
-  // model first. The cost table has no row for that model, so its tokens never land in a priced subscription's
-  // share. Nothing here draws from a stream, so every row after it keeps its values.
-  const storyTurn = (r: RequestLog) =>
-    r.keyId === 'desktop' &&
-    r.kind === 'inference' &&
-    r.outcome === 'succeeded' &&
-    r.sessionId !== null &&
-    (r.accountId === UNPRICED_ACCOUNT || ACCOUNTS.find((a) => a.id === r.accountId)?.kind === 'api_key');
-  // The draw skips by the local hour, so at some clocks no such turn failed over past a 429; the newest turn those
-  // accounts served then takes the story, which keeps it at every clock.
-  const story = rows.find((r) => storyTurn(r) && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet)) ?? rows.find(storyTurn);
-  const rejecter = story && LANES.find((l) => l.keyId === story.keyId)?.accountIds.find((id) => !story.attempts.some((a) => a.accountId === id));
-  if (story && rejecter) {
-    const at = Date.parse(story.at);
-    const rejection: Attempt = {
-      accountId: rejecter,
-      cacheMissReason: null,
-      cooldownSet: { reason: 'model_rejected', until: iso(at + REJECTION_MS + HOUR) },
-      durationMs: REJECTION_MS,
-      index: 0,
-      outcome: 'upstream_error',
-      response: { clearedInputTokens: null, inferenceGeo: null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: null, stopReason: null, stopSequence: null },
-      selection: null,
-      startedAt: story.at,
-      upstreamMessageId: null,
-      upstreamRequestId: upstreamId('req_011C'),
-      upstreamStatus: 404,
-      windows: [],
-    };
-    story.attempts = [rejection, ...story.attempts.map((a) => ({ ...a, index: a.index + 1, startedAt: iso(Date.parse(a.startedAt) + REJECTION_MS) }))];
-    story.durationMs = (story.durationMs ?? 0) + REJECTION_MS;
-    story.model = 'claude-sonnet-4-5';
-    story.canonicalModel = 'claude-sonnet-4-5-20250929';
-    story.costUsd = Math.round(costOf(story.model, story.usage) * 10_000) / 10_000;
-  }
   // Fast mode is the client's own toggle and serves Opus: the desktop key's Opus turns asked for it and were
   // answered fast by whichever account served them.
   for (const r of rows) {
@@ -446,12 +459,34 @@ function buildRequests(): RequestLog[] {
   // A stream the client closed: its 200 head went out and no error followed, so the request ends canceled with the
   // usage it had reached. One drawn row takes it, so no count another view draws moves: a single-attempt stream off
   // the laptop key whose captures the drawer checks read, past Observe's 30-minute ring, and none of the rows above.
-  const canceled = rows.find((r) => r !== story && r.keyId !== 'laptop' && r.kind === 'inference' && r.transport === 'sse' && r.outcome === 'succeeded' && r.attempts.length === 1 && Date.parse(r.at) < NOW - HOUR);
+  const canceled = rows.find((r) => r.keyId !== 'laptop' && r.kind === 'inference' && r.transport === 'sse' && r.outcome === 'succeeded' && r.attempts.length === 1 && Date.parse(r.at) < NOW - HOUR);
   if (canceled) {
     canceled.outcome = 'canceled';
     canceled.attempts = canceled.attempts.map((a) => ({ ...a, outcome: 'canceled' as const }));
   }
-  return rows;
+  rows.push(...storyRequests());
+  liftCooldowns(rows);
+  return rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+}
+
+/**
+ * A cooldown an answer set has lifted by the time its account serves a request it would hold again, so no attempt
+ * lands where the routing state still held the account cooling: the drawn deadline is cut to that attempt's start.
+ * A plan window's cooldown holds a standard request alone, a fast lane's a fast one, a model's that model.
+ */
+function liftCooldowns(rows: RequestLog[]) {
+  const attempts = rows
+    .flatMap((r) => r.attempts.map((a) => ({ a, fast: fastTurn(r.keyId, r.model, r.kind), model: r.canonicalModel })))
+    .sort((x, y) => Date.parse(x.a.startedAt) - Date.parse(y.a.startedAt));
+  for (const { a, model } of attempts) {
+    const set = a.cooldownSet;
+    if (!set) continue;
+    const setAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
+    const until = Date.parse(set.until);
+    const holds = (x: (typeof attempts)[number]) => x.a.accountId === a.accountId && (set.reason === 'model_rejected' ? x.model === model : set.reason === 'fast_rate_limit' ? x.fast : !x.fast);
+    const next = attempts.find((x) => x.a !== a && holds(x) && Date.parse(x.a.startedAt) >= setAt && Date.parse(x.a.startedAt) < until);
+    if (next) a.cooldownSet = { ...set, until: next.a.startedAt };
+  }
 }
 
 /** A turn the story runs in fast mode: the desktop key's Opus inference. */
@@ -459,6 +494,235 @@ const fastTurn = (keyId: string | null, model: string, kind: RequestKind) => key
 
 /** The rejection story's refused attempt: an account refuses a model it does not serve before any inference runs. */
 const REJECTION_MS = 180;
+
+/** What the router answers a request no account of its pool could serve: a 429 with no upstream call behind it. */
+const unservedAnswer = (): Partial<RequestLog> => ({
+  accountId: null,
+  attempts: [],
+  costUsd: 0,
+  durationMs: null,
+  errorCode: 'accounts_exhausted',
+  outcome: 'exhausted',
+  status: 429,
+  ttfbMs: null,
+  ttftMs: null,
+  usage: { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS },
+});
+
+/** One attempt of a story request: the account, when it started, how long it ran, and the upstream's answer. */
+interface StoryAttempt {
+  accountId: string;
+  at: number;
+  cooldown?: { reason: string; until: number };
+  ms: number;
+  status: number;
+}
+
+interface StorySeed {
+  agentId: string;
+  at: number;
+  attempts: StoryAttempt[];
+  canonical?: string;
+  clientDrift?: string;
+  contextCompacted?: string;
+  errorCode?: string;
+  held?: CohortHold;
+  id: string;
+  keyId: string;
+  kind?: RequestKind;
+  model: string;
+  outcome?: RequestOutcome;
+  requestClass: string;
+  /** The client's session, a prefix of the story's own ids. */
+  session: string;
+  status?: number;
+  usage?: Partial<Usage>;
+  userAgent?: string;
+}
+
+/** The routing log's hand-written requests: the story hour, the morning's shedding round and its move. */
+export const STORY_IDS = new Set([
+  'req_1d9c3e55-0b2', 'req_1eaa9bc1-a18', 'req_2e7c90a1-6d4', 'req_31f0b7c2-6e1', 'req_4b0e9d17-c31', 'req_51d0e2b8-7a0', 'req_69e30548-32e', 'req_868264bc-611',
+  'req_9a07c4e1-d55', 'req_b2bed817-a58', 'req_c41d0311-200', 'req_da52d141-a5a', 'req_e0a4c6f2-118', 'req_ef099b34-453', 'req_f8085653-422',
+]);
+/** The four-attempt failover whose first account refused the model the client spelled without its date. */
+export const REJECTION_STORY_ID = 'req_7015b657-290';
+/** The codex request whose completion crossed research's daily budget. */
+export const BUDGET_CROSSING_ID = 'req_7c19e4a0-2f3';
+
+const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
+
+function storyRow(seed: StorySeed): RequestLog {
+  const lane = LANES.find((l) => l.keyId === seed.keyId)!;
+  const last = seed.attempts[seed.attempts.length - 1];
+  const answered = last?.status === 200;
+  const usage: Usage = { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS, ...(answered ? seed.usage : {}) };
+  const fast = fastTurn(seed.keyId, seed.model, seed.kind ?? 'inference');
+  const sessionId = sessionOf(seed.session);
+  const kind = seed.kind ?? 'inference';
+  const attempts = seed.attempts.map((a, index): Attempt => {
+    const windows = oauthWindows(a.accountId, a.at, () => SERVED_FACTOR);
+    const oauth = ACCOUNTS.find((x) => x.id === a.accountId)?.kind === 'oauth';
+    return {
+      accountId: a.accountId,
+      // A failover lands on an account that never saw the turn before this one.
+      cacheMissReason: a.status !== 200 || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 ? 'previous_message_not_found' : 'none',
+      cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
+      durationMs: a.ms,
+      index,
+      outcome: a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 404 ? 'upstream_error' : 'rate_limited',
+      response: { clearedInputTokens: null, inferenceGeo: a.status === 200 ? 'us' : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: a.status === 200 ? (fast ? 'fast' : 'standard') : null, stopReason: a.status === 200 ? 'end_turn' : null, stopSequence: null },
+      // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
+      selection: null,
+      startedAt: iso(a.at),
+      upstreamMessageId: a.status === 200 ? upstreamId('msg_01') : null,
+      upstreamRequestId: upstreamId('req_011C'),
+      upstreamStatus: a.status,
+      windows: a.status === 429 ? windows.map((w) => (w.id === '5h' ? { ...w, utilization: 1 } : w)) : windows,
+    };
+  });
+  const durationMs = seed.attempts.length ? last.at + last.ms - seed.attempts[0].at + (seed.held?.heldMs ?? 0) : null;
+  const status = seed.status ?? last?.status ?? 429;
+  return {
+    ...REQUEST_SAMPLE,
+    accountId: answered ? last.accountId : null,
+    agentId: seed.agentId,
+    agentType: seed.agentId === 'main' ? null : 'general-purpose',
+    at: iso(seed.at),
+    attempts,
+    autoMode: null,
+    canonicalModel: seed.canonical ?? seed.model,
+    capturedBodies: seed.keyId === 'laptop',
+    client: CLIENTS[seed.keyId] ?? null,
+    clientDrift: seed.clientDrift ?? null,
+    compaction: null,
+    contextCompacted: seed.contextCompacted ?? null,
+    costUsd: answered ? Math.round(costOf(seed.model, usage, fast) * 10_000) / 10_000 : 0,
+    durationMs,
+    errorCode: seed.errorCode ?? (status === 200 ? null : 'rate_limit_error'),
+    forkDepth: null,
+    forkedFrom: null,
+    held: seed.held ?? null,
+    id: seed.id,
+    keyGeneration: Date.parse(keyById.get(seed.keyId)!.createdAt),
+    keyId: seed.keyId,
+    kind,
+    model: seed.model,
+    outcome: seed.outcome ?? (answered ? 'succeeded' : 'failed'),
+    poolId: lane.poolId,
+    prevToolMs: null,
+    requestClass: seed.requestClass,
+    requestTruncated: false,
+    responseTruncated: false,
+    sessionId,
+    shape: { ...REQUEST_SAMPLE.shape, requestedSpeed: fast ? 'fast' : null },
+    status,
+    transport: kind === 'inference' ? 'sse' : 'json',
+    ttfbMs: answered && kind !== 'count_tokens' ? 640 : null,
+    ttftMs: answered && kind === 'inference' ? 910 : answered ? 640 : null,
+    turnOrigin: seed.keyId === 'ci' ? null : 'human',
+    usage,
+    userAgent: seed.userAgent ?? USER_AGENTS[seed.keyId] ?? null,
+  };
+}
+
+/**
+ * The story's requests at their clock times: the hour before the pinned instant written by hand so every card the
+ * routing log draws is on the page, the morning's shedding round and its move, the codex request whose completion
+ * crossed the budget, and the four-attempt failover whose first account refused the model.
+ */
+function storyRequests(): RequestLog[] {
+  const t = clock;
+  const rateLimited = (until: number) => ({ reason: '429 on 5h window', until });
+  const seeds: StorySeed[] = [
+    { agentId: 'main', at: t(14, 27, 28), attempts: [{ accountId: 'primary', at: t(14, 27, 28), ms: 6_400, status: 200 }], id: 'req_f8085653-422', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: '7bea4514', usage: { cacheRead: 48_100, cacheWrite1h: 2_100, input: 3_900, output: 1_250 } },
+    {
+      agentId: 'main',
+      at: t(14, 26, 58),
+      attempts: [
+        { accountId: 'primary', at: t(14, 26, 58), cooldown: { reason: 'fast_rate_limit', until: t(14, 42) }, ms: 2_000, status: 429 },
+        { accountId: 'nightly', at: t(14, 27, 1), ms: 9_800, status: 200 },
+      ],
+      id: 'req_4b0e9d17-c31',
+      keyId: 'desktop',
+      model: 'claude-opus-5-5',
+      requestClass: 'main',
+      session: '1c0f9727',
+      usage: { cacheWrite1h: 61_000, input: 2_400, output: 3_200, thinking: 1_400 },
+    },
+    {
+      agentId: '4d1a',
+      at: t(14, 24, 9),
+      attempts: [
+        { accountId: 'primary', at: t(14, 24, 9), cooldown: { reason: 'model_rejected', until: t(15, 24) }, ms: 1_000, status: 404 },
+        { accountId: 'nightly', at: t(14, 24, 10), ms: 2_000, status: 200 },
+      ],
+      canonical: HAIKU,
+      id: 'req_2e7c90a1-6d4',
+      keyId: 'laptop',
+      model: 'claude-haiku-4-5',
+      requestClass: 'subagent',
+      session: 'c52dbc8e',
+      usage: { cacheWrite5m: 14_200, input: 1_200, output: 380 },
+    },
+    {
+      agentId: 'e90b',
+      at: t(14, 21, 12),
+      attempts: [{ accountId: 'primary', at: t(14, 21, 14), ms: 5_200, status: 200 }],
+      held: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'] },
+      id: 'req_69e30548-32e',
+      keyId: 'desktop',
+      model: 'claude-sonnet-5-5',
+      requestClass: 'subagent',
+      session: '89cd1c92',
+      usage: { cacheRead: 18_400, cacheWrite5m: 9_600, input: 900, output: 820 },
+    },
+    { agentId: 'main', at: t(14, 21, 16), attempts: [{ accountId: 'primary', at: t(14, 21, 16), ms: 600, status: 200 }], id: 'req_c41d0311-200', keyId: 'desktop', kind: 'probe', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 61_200, output: 1 } },
+    { agentId: 'main', at: t(14, 19, 2), attempts: [{ accountId: 'primary', at: t(14, 19, 2), ms: 7_100, status: 200 }], errorCode: 'overloaded_error', id: 'req_9a07c4e1-d55', outcome: 'failed', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: '7bea4514', usage: { cacheRead: 44_900, cacheWrite1h: 1_800, input: 2_600, output: 960 } },
+    { agentId: 'main', at: t(14, 17, 52), attempts: [{ accountId: 'primary', at: t(14, 17, 52), ms: 3_300, status: 200 }], errorCode: 'stream_incomplete', id: 'req_31f0b7c2-6e1', outcome: 'incomplete', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheRead: 22_300, cacheWrite5m: 600, input: 1_100, output: 410 } },
+    { agentId: 'main', at: t(14, 16, 40), attempts: [], errorCode: 'accounts_exhausted', id: 'req_51d0e2b8-7a0', keyId: 'ci', model: HAIKU, outcome: 'exhausted', requestClass: 'main', session: 'cd9a5904', status: 429 },
+    { agentId: 'main', at: t(14, 14, 2), attempts: [], clientDrift: 'hash', errorCode: 'client_drift', id: 'req_e0a4c6f2-118', keyId: 'laptop', model: 'claude-sonnet-5', outcome: 'rejected', requestClass: 'main', session: '5eeed6ce', status: 400, userAgent: 'claude-cli/2.1.271 (external, cli)' },
+    { agentId: 'main', at: t(14, 11, 44), attempts: [{ accountId: 'primary', at: t(14, 11, 44), ms: 8_300, status: 200 }], id: 'req_b2bed817-a58', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: 'd7167642', usage: { cacheRead: 30_900, cacheWrite1h: 21_400, input: 1_900, output: 1_480 } },
+    { agentId: 'main', at: t(14, 9, 41), attempts: [{ accountId: 'primary', at: t(14, 9, 41), ms: 4_800, status: 200 }], contextCompacted: 'auto', id: 'req_ef099b34-453', keyId: 'laptop', model: HAIKU, requestClass: 'main', session: '4ef130f1', usage: { cacheWrite5m: 31_000, input: 9_800, output: 2_100 } },
+    { agentId: 'main', at: t(14, 5, 12), attempts: [{ accountId: 'primary', at: t(14, 5, 12), ms: 7_900, status: 200 }], id: 'req_da52d141-a5a', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'main', session: '0d588de5', usage: { cacheRead: 30_100, cacheWrite1h: 14_800, input: 2_200, output: 1_120 } },
+    {
+      agentId: 'main',
+      at: t(14, 2, 10),
+      attempts: [
+        { accountId: 'secondary', at: t(14, 2, 10), cooldown: rateLimited(t(15, 42)), ms: 1_000, status: 429 },
+        { accountId: 'primary', at: t(14, 2, 11), ms: 700, status: 529 },
+        { accountId: 'nightly', at: t(14, 2, 12), ms: 6_600, status: 200 },
+      ],
+      id: 'req_1d9c3e55-0b2',
+      keyId: 'desktop',
+      model: 'claude-sonnet-5-5',
+      requestClass: 'main',
+      session: 'bcc805b6',
+      usage: { cacheWrite1h: 38_900, input: 4_100, output: 1_310 },
+    },
+    { agentId: 'e90b', at: t(11, 0), attempts: [{ accountId: 'primary', at: t(11, 0), ms: 6_200, status: 200 }], id: 'req_1eaa9bc1-a18', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'subagent', session: '407dd39b', usage: { cacheRead: 40_800, cacheWrite5m: 1_200, input: 1_700, output: 900 } },
+    { agentId: 'e90b', at: t(11, 12, 33), attempts: [{ accountId: 'nightly', at: t(11, 12, 33), ms: 9_400, status: 200 }], id: 'req_868264bc-611', keyId: 'desktop', model: 'claude-sonnet-5-5', requestClass: 'subagent', session: 'c64358b5', usage: { cacheWrite5m: 72_000, input: 3_000, output: 1_600 } },
+    { agentId: 'main', at: t(12, 40, 58), attempts: [{ accountId: 'research', at: t(12, 40, 58), ms: 9_000, status: 200 }], id: BUDGET_CROSSING_ID, keyId: 'ci', model: HAIKU, requestClass: 'main', session: 'cd9a5904', usage: { input: 6_200, output: 2_900 } },
+    {
+      agentId: 'main',
+      at: t(10, 58, 40),
+      attempts: [
+        { accountId: 'secondary', at: t(10, 58, 40), cooldown: { reason: 'model_rejected', until: t(10, 58, 40) + REJECTION_MS + HOUR }, ms: REJECTION_MS, status: 404 },
+        { accountId: 'primary', at: t(10, 58, 40) + REJECTION_MS, ms: 700, status: 529 },
+        { accountId: 'nightly', at: t(10, 58, 41), cooldown: rateLimited(t(11, 41)), ms: 800, status: 429 },
+        { accountId: 'overflow', at: t(10, 58, 42), ms: 5_200, status: 200 },
+      ],
+      canonical: 'claude-sonnet-4-5-20250929',
+      id: REJECTION_STORY_ID,
+      keyId: 'desktop',
+      model: 'claude-sonnet-4-5',
+      requestClass: 'main',
+      session: '0d588de5',
+      usage: { cacheRead: 21_400, cacheWrite5m: 3_100, input: 1_500, output: 880 },
+    },
+  ];
+  return seeds.map(storyRow);
+}
 
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
@@ -480,7 +744,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
   let spentOwed = true;
   let releaseOwed = true;
   for (const r of REQUESTS) {
-    if (r.sessionId === null || r.kind === 'probe') continue;
+    if (r.sessionId === null || r.kind === 'probe' || STORY_IDS.has(r.id)) continue;
     const events: RequestEvent[] = [];
     // The pin the event belongs to: the drawer shows a move only where these match the request's own.
     const pin = { keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId };
@@ -509,7 +773,7 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
   // The rejection story's two events, as the assembler writes them: the refusal when its head lands, the permit
   // when the request completes. Both carry the request's own id, which is how the drawer tells them from another
   // request's in the same window.
-  const story = REQUESTS.find((r) => r.attempts.some((a) => a.cooldownSet?.reason === 'model_rejected'));
+  const story = requestById.get(REJECTION_STORY_ID);
   if (story) {
     const refused = story.attempts[0];
     const served = story.attempts[story.attempts.length - 1];
@@ -521,6 +785,38 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
       { ...pin, accountId: served.accountId, at: iso(Date.parse(story.at) + (story.durationMs ?? 0)), detail: { attempt: story.attempts.length, rejected_by: [refused.accountId], ...detail }, kind: 'model_permitted' },
     ];
     out.set(story.id, events.sort((a, b) => Date.parse(a.at) - Date.parse(b.at)));
+  }
+  for (const [id, events] of storyEvents()) out.set(id, events);
+  return out;
+}
+
+/**
+ * The story requests' pin moves and model answers, as the routing log's records name them: a failover moves the pin
+ * when the next attempt starts, a rule's move lands with the decision, and a refused model's permit when the request
+ * completes.
+ */
+function storyEvents(): Map<string, RequestEvent[]> {
+  const out = new Map<string, RequestEvent[]>();
+  const moved = (id: string, at: number, from: string, to: string, reason: PinMigrationReason) => {
+    const r = requestById.get(id);
+    if (!r) return;
+    const event: RequestEvent = { accountId: to, at: iso(at), detail: { agent_id: r.agentId, epoch: 0, from_account: from, reason }, keyId: r.keyId, kind: 'pin_migrated', model: r.canonicalModel, sessionId: r.sessionId };
+    out.set(id, [...(out.get(id) ?? []), event]);
+  };
+  moved('req_4b0e9d17-c31', clock(14, 27, 1), 'primary', 'nightly', 'fast_lane');
+  moved('req_2e7c90a1-6d4', clock(14, 24, 10), 'primary', 'nightly', 'cooldown');
+  moved('req_da52d141-a5a', clock(14, 5, 12), 'secondary', 'primary', 'spent');
+  moved('req_1d9c3e55-0b2', clock(14, 2, 11), 'secondary', 'primary', 'cooldown');
+  moved('req_1d9c3e55-0b2', clock(14, 2, 12), 'primary', 'nightly', 'cooldown');
+  moved('req_868264bc-611', clock(11, 12, 33), 'primary', 'nightly', 'shed');
+  const rejected = requestById.get('req_2e7c90a1-6d4');
+  if (rejected) {
+    const pin = { keyId: rejected.keyId, model: rejected.canonicalModel, sessionId: rejected.sessionId };
+    const detail = { source_request_id: rejected.id, wire_model: 'claude-haiku-4-5' };
+    out.get(rejected.id)?.push(
+      { ...pin, accountId: 'primary', at: iso(clock(14, 24, 10)), detail: { attempt: 1, request_id: rejected.attempts[0].upstreamRequestId, ...detail }, kind: 'model_rejected' },
+      { ...pin, accountId: 'nightly', at: iso(clock(14, 24, 12)), detail: { attempt: 2, rejected_by: ['primary'], request_id: rejected.attempts[1].upstreamRequestId, ...detail }, kind: 'model_permitted' },
+    );
   }
   return out;
 }
@@ -573,7 +869,7 @@ const cohortHoldOf = (p: Rng, w: Rng, r: RequestLog, placement: Placement | null
  * that look for an unmoved request beside a moved one still find one.
  */
 function addStoryEvents() {
-  const busy = new Set([...REQUEST_EVENTS.keys()].flatMap((id) => { const r = requestById.get(id); return r ? [pinOf(r)] : []; }));
+  const busy = new Set([...REQUEST_EVENTS.keys(), ...STORY_IDS].flatMap((id) => { const r = requestById.get(id); return r ? [pinOf(r)] : []; }));
   const owed: ((r: RequestLog, from: string) => RequestEvent)[] = [];
   const pinned = (r: RequestLog) => ({ keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId });
   const shedMoved = [...REQUEST_EVENTS.values()].some((events) => events.some((e) => e.detail?.reason === 'shed'));
@@ -585,7 +881,7 @@ function addStoryEvents() {
     const next = owed[0];
     if (!next) break;
     const from = lane?.accountIds.find((id) => id !== r.accountId);
-    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r))) continue;
+    if (r.sessionId === null || r.accountId === null || r.kind === 'probe' || r.status !== 200 || r.attempts.length !== 1 || from === undefined || busy.has(pinOf(r)) || STORY_IDS.has(r.id)) continue;
     REQUEST_EVENTS.set(r.id, [next(r, from)]);
     busy.add(pinOf(r));
     owed.shift();
@@ -604,6 +900,8 @@ function traceRequests() {
   const w = createRng(3_119);
   const accountOf = new Map(ACCOUNTS.map((a) => [a.id, a]));
   for (const r of REQUESTS) {
+    // The routing log's records write the story's traces, so no obstacle is drawn against what its cards show.
+    if (STORY_IDS.has(r.id)) continue;
     const pool = poolById.get(r.poolId ?? '');
     const members = LANES.find((l) => l.keyId === r.keyId)?.accountIds ?? [];
     const events = REQUEST_EVENTS.get(r.id) ?? [];
@@ -641,13 +939,14 @@ function traceRequests() {
  */
 function identifyRequests() {
   for (const r of REQUESTS) {
+    if (STORY_IDS.has(r.id)) continue;
     Object.assign(r, { forkDepth: null, forkedFrom: null });
   }
   // A session's oldest row is its first request, and the rows run newest first, so the last one set per session
   // stays. The fork is a turn the log lists, never a probe, and its base another session the story seeds.
   const base = SESSION_IDS[1];
   const oldest = new Map<string, RequestLog>();
-  for (const r of REQUESTS) if (r.sessionId !== null) oldest.set(r.sessionId, r);
+  for (const r of REQUESTS) if (r.sessionId !== null && r.keyId !== 'ci' && !STORY_IDS.has(r.id)) oldest.set(r.sessionId, r);
   const first = [...oldest.values()].find((r) => r.kind === 'inference' && r.sessionId !== SESSION_IDS[0] && r.sessionId !== base);
   if (first) Object.assign(first, { forkDepth: 3, forkedFrom: base });
 }
@@ -689,16 +988,16 @@ function seedDrawerBranches() {
  * out, so no attempt's trace names the whole wait. Nothing is drawn, so every seeded stream keeps its values.
  */
 function seedHolds() {
-  for (const r of REQUESTS) r.held = [...r.attempts].reverse().find((a) => a.selection?.cohortHold)?.selection?.cohortHold ?? null;
+  for (const r of REQUESTS) if (!STORY_IDS.has(r.id)) r.held = [...r.attempts].reverse().find((a) => a.selection?.cohortHold)?.selection?.cohortHold ?? null;
   const boundOf = (r: RequestLog) => (poolById.get(r.poolId ?? '')?.retryInPlaceSeconds ?? 60) * 1_000;
-  const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && !REQUEST_EVENTS.has(r.id));
+  const atCap = REQUESTS.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.status === 429 && !REQUEST_EVENTS.has(r.id) && !STORY_IDS.has(r.id));
   if (atCap) {
     const waitedOn = LANES.find((l) => l.keyId === atCap.keyId)?.accountIds.slice(0, 1) ?? [];
     const heldMs = boundOf(atCap);
     Object.assign(atCap, { accountId: null, attempts: [], costUsd: 0, durationMs: heldMs, errorCode: 'accounts_at_cap', held: { cohort: null, heldMs, waitedOn } });
   }
   const untried = (r: RequestLog) => LANES.find((l) => l.keyId === r.keyId && l.poolId === r.poolId)?.accountIds.find((id) => !r.attempts.some((a) => a.accountId === id));
-  const failedTurn = (r: RequestLog) => r !== atCap && r.kind === 'inference' && r.status !== 200 && r.attempts.length > 0 && untried(r) !== undefined;
+  const failedTurn = (r: RequestLog) => r !== atCap && !STORY_IDS.has(r.id) && r.kind === 'inference' && r.status !== 200 && r.attempts.length > 0 && untried(r) !== undefined;
   // The draw skips by the local hour, so at some clocks no turn was exhausted after one attempt; the oldest failed
   // turn then takes the story, which keeps it at every clock.
   const oldest = [...REQUESTS].reverse();

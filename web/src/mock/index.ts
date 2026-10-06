@@ -2,8 +2,9 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/a
 import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot, decodeSettings } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, KeepaliveOverview, KeyModels, LiveEvent, MemberEligibility, ModelEvent,
-  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RuleCooldown, Session, SessionInfo, Settings, Subscription,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LiveEvent, MemberEligibility, ModelEvent,
+  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  Subscription,
 } from '@/api/types';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -18,6 +19,7 @@ import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE } from './operatio
 import { KEYS, POOLS } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
+import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
@@ -692,6 +694,10 @@ export class MockApi implements Api {
     return latency(emptyStore() ? [] : QUOTA_HISTORY.filter((h) => h.accountId === accountId));
   }
 
+  getDecision(requestId: string, seq: number): Promise<DecisionRecord | null> {
+    return latency(emptyStore() ? null : getDecision(requestId, seq));
+  }
+
   getRequest(id: string): Promise<RequestDetail | null> {
     const request = emptyStore() ? undefined : requestById.get(id);
     return latency(request ? { events: REQUEST_EVENTS.get(id) ?? [], request } : null);
@@ -757,6 +763,15 @@ export class MockApi implements Api {
     const last = page[page.length - 1];
     // A cursor only rides along while rows are left, which is how the route signals the end of the list.
     return latency({ nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
+  }
+
+  listRoutingLog(query: RoutingLogQuery = {}): Promise<RoutingLogPage> {
+    if (emptyStore()) return latency({ counts: query.request ? { decisions: 0, events: 0 } : null, nextCursor: null, rows: [] });
+    // The route's refusals, in its order and words.
+    const unknown = query.kinds?.find((k) => !ROUTING_LOG_KINDS.includes(k));
+    if (unknown !== undefined) return Promise.reject(new ApiError(400, `unknown kind ${unknown}`, null));
+    if (query.limit !== undefined && !(Number.isInteger(query.limit) && query.limit >= 1 && query.limit <= 200)) return Promise.reject(new ApiError(400, 'limit is 1 to 200', null));
+    return latency(listRoutingLog(query, Date.now()));
   }
 
   listSessions() {

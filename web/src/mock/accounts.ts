@@ -67,7 +67,7 @@ export const ACCOUNTS: Account[] = ([
       {
         reason: 'model_rejected',
         scope: 'model:claude-haiku-4-5-20251001',
-        setAt: ago(6 * MINUTE),
+        setAt: ago(5 * MINUTE + 50_000),
         until: ahead(54 * MINUTE),
         windowId: null,
       },
@@ -102,16 +102,17 @@ export const ACCOUNTS: Account[] = ([
       {
         reason: 'rate_limited (5h window exhausted)',
         scope: 'account',
-        setAt: ago(28 * MINUTE),
+        setAt: ago(27 * MINUTE + 49_000),
         until: ahead(1 * HOUR + 12 * MINUTE),
         windowId: '5h',
       },
-      // A second scope, one model, so the account's cooling-down block has an account row and a model row.
+      // A second scope, one model, so the account's cooling-down block has an account row and a model row. Set
+      // before the account cooled, when a request could still reach it.
       {
         reason: 'model_rejected',
         scope: 'model:claude-opus-5',
-        setAt: ago(22 * MINUTE),
-        until: ahead(38 * MINUTE),
+        setAt: ago(34 * MINUTE),
+        until: ahead(26 * MINUTE),
         windowId: null,
       },
     ],

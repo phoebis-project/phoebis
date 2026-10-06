@@ -1,7 +1,7 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
 import type { ApiKey, BudgetPeriod, Pool, PoolMember } from '@/api/types';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
-import { DAY, DELETED_HOLDER_END, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
+import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
 
 /** A member as the story seeds it; the mock reads its kind and its eligibility off the account, as the route does. */
 type MemberSeed = Omit<PoolMember, 'budgetUntil' | 'eligible' | 'kind'>;
@@ -28,7 +28,7 @@ const POOL_ROWS: PoolSeed[] = [
     strategy: 'pace',
     preferSubscription: true,
     overagePolicy: 'prefer_plan',
-    shedAheadOfPace: null,
+    shedAheadOfPace: 0.9,
     selectBelowUtilization: null,
     affinityTtlSeconds: 600,
     // Pins only for a request that caches, and a fresh session placed where its static prefix is warm.
@@ -76,11 +76,11 @@ const POOL_ROWS: PoolSeed[] = [
     ],
     ...UNTIL_DRAWN,
     activePins: 10,
-    // A pool carries no creation date, so its last write is a stamp of its own.
-    updatedAt: daysAgo(2),
-    // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both.
-    // With migration off no round runs, so every move comes from the rules that need no threshold.
-    movesPerHour: { overage: 1, spent: 2 },
+    // The 09:05:12 edit that set its shedding margin, the registry change the routing log records.
+    updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
+    // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both. The
+    // last hour's moves are the routing log's story: three failovers, a fast lane's and the spent rule's.
+    movesPerHour: { cooldown: 3, fast_lane: 1, spent: 1 },
   },
   {
     ...POOL_SAMPLE,
