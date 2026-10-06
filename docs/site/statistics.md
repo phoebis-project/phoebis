@@ -120,10 +120,10 @@ or `NaN`, which no budget trips on.
 A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
 with the window named; an Anthropic-key account, and a subscription account in overage, read dollars.
 
-A fast answer draws no plan window: it adds nothing to the share, the prediction, the burn a shedding round ranks by, or
-the reconciliation. It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`,
-which Spend per minute charts under every grouping; a member's budget counts them at the fast cells, a subscription
-member's as an Anthropic-key member's.
+A fast answer draws no plan window: it adds nothing to the share, the prediction, or the burn a shedding round ranks by.
+It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which Spend per minute
+charts under every grouping; a member's budget counts them at the fast cells, a subscription member's as an
+Anthropic-key member's.
 
 The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
 share of a Max 20x subscription's window that one million tokens consume, a number where the plan meter measured the
@@ -342,7 +342,7 @@ reads the family and version, with the whole id on hover. The client column show
 user agent (`claude-code/<entrypoint>` or `other`), cut at 12 characters, whole on hover, and the agent
 type beneath it on a subagent's turn.
 One row is one client request however many attempts it took, and the attempt trail reads as
-"mail 429, business 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
+"secondary 429, primary 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
 succeed names how it ended beside its status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request
 that waited for a slot while every account was at its cap carries a held marker beside its attempts with the time it
 waited. The search matches the request id, the session, the key, the model, the error code, and an attempt's account,
