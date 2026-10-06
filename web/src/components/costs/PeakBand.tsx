@@ -2,7 +2,7 @@ import { Fragment, useMemo } from 'react';
 import type { SubscriptionCosts } from '@/api/types';
 import { useFormatVersion } from '@/app/settings';
 import { Card } from '@/components/ui/primitives';
-import { bandCaption, bandNow, bandWeek, nextLocalChange } from '@/lib/costs';
+import { bandCaption, bandNow, bandWeek, nextLocalChange, zoneCity } from '@/lib/costs';
 import { fmtShortTime, getTimeFormat } from '@/lib/format';
 
 /** The browser's zone, the one every time the console shows reads in. */
@@ -95,7 +95,9 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
           </p>
           {change && (
             <p className="cost-ref__note">
-              {change.from} to {change.to}: {change.text} here, after a clock change.
+              {change.lasting
+                ? `From ${change.from} the band runs ${change.text} here, once ${change.moved ? `${zoneCity(costs.peak.zone)} changes its clocks` : 'your clocks change'}.`
+                : `${change.from} to ${change.to}: ${change.text} here, while the two zones change their clocks on different dates.`}
             </p>
           )}
           <div className="cost-ref__factor">

@@ -1,4 +1,5 @@
 import type { FastPrice, ModelPrice } from '@/api/types';
+import { familyOrder } from '@/lib/costs';
 import { TOKEN_TYPES } from './PlanRates';
 
 const CELL: Record<(typeof TOKEN_TYPES)[number]['key'], keyof FastPrice> = {
@@ -14,8 +15,9 @@ const fmtPrice = (usd: number) => `$${usd.toFixed(4).replace(/(\.\d\d[1-9]?)0+$/
 
 const FAST_MODE = 'What an answer served in fast mode costs. A subscription account pays it from usage credits, not from its window.';
 
-/** The dollar list prices per million tokens in the price file's order, a fast-mode row under each model with one. */
+/** The dollar list prices per million tokens family by family, a fast-mode row under each model with one. */
 export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
+  const rows = familyOrder(prices.map((p) => p.model)).flatMap((model) => prices.filter((p) => p.model === model));
   const cells = (row: FastPrice) =>
     TOKEN_TYPES.map((t, i) => {
       const usd = row[CELL[t.key]];
@@ -46,7 +48,7 @@ export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
             </tr>
           </thead>
           <tbody>
-            {prices.flatMap((p, n) => {
+            {rows.flatMap((p, n) => {
               // A model and its fast-mode row share one stripe.
               const alt = n % 2 ? 'is-alt' : '';
               return [

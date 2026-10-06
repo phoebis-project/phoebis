@@ -78,7 +78,7 @@ export function DashboardPage() {
           title="5h remaining"
           subtitle={
             <>
-              Subscription accounts, 5-hour window, weighed by tier. <CostReferenceLink tab="tiers" />
+              Subscription accounts, 5-hour window, weighed by tier <CostReferenceLink tab="tiers" />
             </>
           }
           windowId="5h"

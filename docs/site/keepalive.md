@@ -168,17 +168,17 @@ request completing outside or inside the band. The tab opens on the cost model's
 at one million tokens. A tier chooser, the band control, and a token field in millions with quick picks for 100k, 1M and
 10M redraw the table and its caption. A weight column draws each model's weight on the 5-hour window against the
 lightest weighted model's. A Fable model with a weight carries a Fable week row under its 7-day group, priced on the
-Fable week, half the 7-day window. On the plan a cache read costs 0.025 of an input token in the shipped model, and
-either cache write the same. A cell past a full window takes a warning tint. The models the cost model does not weigh
-follow a divider, each cell a dash and the weight "not weighed".
+Fable week, half the 7-day window. On the plan a cache read costs 0.025 of an input token in the shipped model, and a
+1-hour write spends the same share as a 5-minute one. A cell past a full window takes a warning tint. The models the
+cost model does not weigh follow a divider, each cell a dash and the weight "not weighed".
 
 **API prices.** The dollar list prices per million tokens: input, cache read, cache write 5m, cache write 1h and output,
 with a fast-mode row under each model that serves fast mode, at its fast cells, what an answer served fast costs.
 
-Plan rates lists the weighted models in the cost model's order and the others in the price file's order, and API prices
-lists the price file's models in its order. Both files keep the models family by family, Fable, Opus, Sonnet, Haiku, the
-newest version first. The dialog's footer names each table's date and source, `shipped` or `file`, with the key and the
-path that set or would replace it in the title.
+Both tables list the models family by family, Fable, Opus, Sonnet, Haiku, the newest version first, the order both
+shipped files keep, and a file kept in another order lists the same. Plan rates lists the weighted models first and the
+others under the divider. The dialog's footer names each table's date and source, `shipped` or `file`, with the key and
+the path that set or would replace it in the title.
 
 API prices carries the caption "USD per million tokens at list price. An Anthropic-key account pays these. A
 subscription account pays them in overage and for fast-mode answers." A recipe's own net follows the same split: the
@@ -195,17 +195,22 @@ positive while the cache saves more than the probes cost. Whatever the account's
 dollar net, since its probes draw usage credits. Each agent line of the Sessions view shows its net, as "N% of the
 5-hour window", in dollars, or both for an agent whose account changed funding while it was warmed.
 
-The four shipped rows, all prices in USD per million tokens:
+The eight shipped rows, all prices in USD per million tokens, read from `crates/ledger/api_prices.yaml` in its order
+(the three Opus models' fast cells are twice each figure):
 
-| Model | Uncached input | Cache write 5m | Cache write 1h | Cache read | Output |
+| Model | Input | Cache read | Cache write 5m | Cache write 1h | Output |
 | --- | --- | --- | --- | --- | --- |
-| `claude-fable-5-1` | 10.00 | 12.50 | 20.00 | 0.25 | 50.00 |
-| `claude-haiku-4-5-20251001` | 1.00 | 1.25 | 2.00 | 0.10 | 5.00 |
-| `claude-opus-5` | 5.00 | 6.25 | 10.00 | 0.50 | 25.00 |
-| `claude-sonnet-5` | 2.00 | 2.50 | 4.00 | 0.20 | 10.00 |
+| `claude-fable-5-1` | 10.00 | 0.25 | 12.50 | 20.00 | 50.00 |
+| `claude-fable-5` | 10.00 | 0.25 | 12.50 | 20.00 | 50.00 |
+| `claude-opus-5-5` | 4.00 | 0.20 | 5.00 | 8.00 | 20.00 |
+| `claude-opus-5` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 |
+| `claude-opus-4-8` | 5.00 | 0.50 | 6.25 | 10.00 | 25.00 |
+| `claude-sonnet-5-5` | 2.00 | 0.20 | 2.50 | 4.00 | 10.00 |
+| `claude-sonnet-5` | 2.00 | 0.20 | 2.50 | 4.00 | 10.00 |
+| `claude-haiku-4-5` | 1.00 | 0.10 | 1.25 | 2.00 | 5.00 |
 
 `GET /admin/sessions/costs` adds a sixth figure per model, `reads_per_write_5m`, the 5-minute cache write price
-over the cache read price: 50 for `claude-fable-5-1`, 12.5 for the other three.
+over the cache read price: 50 for the two Fable models, 25 for `claude-opus-5-5` and 12.5 for the other five.
 
 ## Recipe states
 

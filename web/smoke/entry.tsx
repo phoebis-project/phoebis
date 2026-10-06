@@ -24,7 +24,7 @@ export { AttemptTrail } from '@/components/ui/AttemptTrail';
 export { Expert, Field, GroupedDialog, GroupLink, Input, PageLink, SwitchedNumber, Toggle } from '@/components/ui/primitives';
 // The figures and the model form a Dashboard check computes its expectation from, so the check and the page read one
 // derivation; the cost reference's and the About card's checks read theirs the same way.
-export { anchorTier, bandFactor, bandRuns, fullWindowsAWeek, inBand, ratesOf, shareOf, weightOf, windowMultiple } from '@/lib/costs';
+export { anchorTier, bandFactor, bandRuns, familyOrder, fullWindowsAWeek, inBand, nextLocalChange, ratesOf, shareOf, weightOf, windowMultiple } from '@/lib/costs';
 export { fmtPct, fmtShare, shortModel } from '@/lib/format';
 export { fmtWindows, ringFigures } from '@/lib/rings';
 export const MOCK_VERSION = SETTINGS_SAMPLE.about.version;

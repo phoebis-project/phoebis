@@ -65,7 +65,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, PageLink, planLabel, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, planLabel, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -8003,8 +8003,9 @@ m.unmount();
   const mainRows = () => bodyRows().filter((r) => !r.classList.contains('cost-ref__sub') && !r.classList.contains('is-divider'));
   const rowOf = (model) => mainRows().find((r) => r.children[0]?.textContent?.trim() === model);
   const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
-  const weighted = Object.keys(SETTINGS_WIRE.subscription_costs.content.model_weight).filter((model) => costs.modelWeight[model] !== null);
-  const unweighted = prices.map((p) => p.model).filter((model) => weightOf(costs, model, 'five_hour') === null);
+  // Family by family whatever order the files keep, which the shipped files keep too.
+  const weighted = familyOrder(Object.keys(SETTINGS_WIRE.subscription_costs.content.model_weight).filter((model) => costs.modelWeight[model] !== null));
+  const unweighted = familyOrder(prices.map((p) => p.model).filter((model) => weightOf(costs, model, 'five_hour') === null));
   const fiveHourWeight = (model) => weightOf(costs, model, 'five_hour');
   const lightest = weighted.reduce((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
   const expected = (model, tier, tokens, at) => WINDOWS.flatMap((w) => TYPES.map((t) => fmtShare(shareOf(costs, w, tier, model, usage(t, tokens), at))));
@@ -8015,7 +8016,7 @@ m.unmount();
     const above = names(bodyRows().slice(0, divider));
     const below = names(bodyRows().slice(divider + 1));
     results.push({
-      name: "/sessions plan rates open on the anchor tier outside the band at one million tokens, the weighted models in the cost model's order and the unweighted ones under the divider in the price file's order",
+      name: "/sessions plan rates open on the anchor tier outside the band at one million tokens, the weighted models family by family and the unweighted ones under the divider in the same order",
       ok:
         JSON.stringify(pressed('Tier')) === JSON.stringify([planLabel(anchor)]) &&
         JSON.stringify(pressed('Peak band')) === JSON.stringify(['Outside']) &&
@@ -8137,15 +8138,15 @@ m.unmount();
     const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => r.previousElementSibling?.children[0]?.textContent?.trim());
     const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(r.classList.contains('cost-ref__sub') ? r.previousElementSibling : r) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
     results.push({
-      name: "/sessions API prices list the price file's models in its order at its cells, a fast-mode row under each model with fast cells",
+      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells",
       ok:
-        JSON.stringify(listed) === JSON.stringify(Object.keys(SETTINGS_WIRE.api_prices.content.models)) &&
+        JSON.stringify(listed) === JSON.stringify(familyOrder(Object.keys(SETTINGS_WIRE.api_prices.content.models))) &&
         wrong.length === 0 &&
         fast?.classList.contains('cost-ref__sub') === true &&
         fast.children[0]?.textContent === 'fast mode' &&
         opusFast !== null &&
         JSON.stringify(cells(fast)) === JSON.stringify(priced(opusFast)) &&
-        JSON.stringify(subs) === JSON.stringify(prices.filter((p) => p.fast !== null).map((p) => p.model)) &&
+        JSON.stringify(subs) === JSON.stringify(familyOrder(prices.filter((p) => p.fast !== null).map((p) => p.model))) &&
         stripes.length === 0 &&
         (panel?.querySelector('.cost-ref__caption b')?.textContent ?? '') === 'USD per million tokens at list price' &&
         (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An Anthropic-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
@@ -8235,6 +8236,20 @@ m.unmount();
         JSON.stringify(factors) === JSON.stringify([factorText(factor.five_hour), factorText(factor.seven_day)]),
       missing: [JSON.stringify(days.map((d) => d.textContent)), JSON.stringify(tracks.map((t) => t.querySelectorAll('.cost-ref__band-run').length)), band?.querySelector('.cost-ref__band-lead')?.textContent ?? 'no caption', wantCaption, band?.querySelector('.cost-ref__band-text .cost-ref__now')?.textContent ?? 'no now line', wantNow, JSON.stringify(factors)],
     });
+    // UTC keeps its clock, so the band's hours here move for good once the cost model's zone changes its clocks.
+    const change = nextLocalChange(costs, CLOCK_ORIGIN, 'UTC');
+    const wantChange =
+      change === null
+        ? null
+        : change.lasting
+          ? `From ${change.from} the band runs ${change.text} here, once ${change.moved ? `${city} changes its clocks` : 'your clocks change'}.`
+          : `${change.from} to ${change.to}: ${change.text} here, while the two zones change their clocks on different dates.`;
+    const changeLine = band?.querySelector('.cost-ref__band-text .cost-ref__note')?.textContent ?? 'no change line';
+    results.push({
+      name: "/sessions the peak band names the next change of its local hours, one that lasts once the cost model's zone changes its clocks",
+      ok: change !== null && change.lasting && change.moved && changeLine === wantChange,
+      missing: [changeLine, String(wantChange)],
+    });
   }
   {
     const chips = [...(dlg?.querySelectorAll('.dialog__foot .chip') ?? [])].map((c) => [c.textContent, c.getAttribute('title')]);
@@ -8287,7 +8302,7 @@ m.unmount();
   const ringSubtitle = ring?.querySelector('.card__subtitle')?.textContent ?? '';
   const fromDash = await opened(dash, linkIn(ring?.querySelector('.card__subtitle')));
   dash.unmount();
-  results.push({ name: "/ the 5-hour ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 5-hour window, weighed by tier. Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
+  results.push({ name: "/ the 5-hour ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 5-hour window, weighed by tier Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
 
   // The plan chart shades the band's own hours over the instants it spans, one area per run of bandRuns, on the 7-day
   // range's six-hour buckets and on a custom range's daily ones. jsdom lays nothing out, so the chart reads a browser's

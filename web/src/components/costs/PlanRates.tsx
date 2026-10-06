@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { planLabel } from '@/api/decode';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, shareOf, tierCapacity, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { anchorTier, bandNow, familyOrder, shareOf, tierCapacity, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
@@ -46,11 +46,11 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
   const next = bandNow(costs, now);
   const at = next.inside === inside ? now : (next.at ?? now);
 
-  const weighted = Object.keys(costs.modelWeight).filter((model) => costs.modelWeight[model] !== null);
-  const unweighted = [
+  const weighted = familyOrder(Object.keys(costs.modelWeight).filter((model) => costs.modelWeight[model] !== null));
+  const unweighted = familyOrder([
     ...prices.map((p) => p.model).filter((model) => weightOf(costs, model, 'five_hour') === null),
     ...Object.keys(costs.modelWeight).filter((model) => costs.modelWeight[model] === null && !prices.some((p) => undatedModel(p.model) === model)),
-  ];
+  ]);
   const fiveHourWeight = (model: string) => weightOf(costs, model, 'five_hour') ?? 0;
   const lightest = weighted.reduce<string | null>((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
   const heaviest = Math.max(0, ...weighted.map(fiveHourWeight));

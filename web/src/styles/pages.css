@@ -2920,7 +2920,7 @@
 }
 
 /* Every second model on --surface-2 over --surface, a model's sub-rows on its shade. The divider is one step
-   heavier, so it never reads as a stripe, and the warning tint sits over whichever stripe a cell is on. */
+   heavier, so it never reads as a stripe. A cell past a full window takes the warning tint in place of its stripe. */
 .cost-ref__tiers tr.is-alt td,
 .cost-ref__table tr.is-alt td {
   background: var(--surface-2);

@@ -1659,7 +1659,7 @@ export function PoolDialog({
               plain
               hint={
                 <>
-                  A warm session rewrites its cache where it lands; the <CostReferenceLink tab="plan-rates" /> shows what that write costs.
+                  A warm session rewrites its cache where it lands. The <CostReferenceLink tab="plan-rates" /> shows what that write costs.
                 </>
               }
             >

@@ -129,9 +129,31 @@ test("the band's runs between two instants are its own hours, clipped to the bou
 
 test("the next change of the band's local hours is the first later week whose runs differ, and none in its own zone", () => {
   // Berlin leaves summer time on 25 October and Los Angeles on 1 November: for that one week the band reads an hour
-  // earlier in Berlin.
-  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Europe/Berlin'), { from: 'Mon 26 Oct', text: '13:00 to 19:00', to: 'Fri 30 Oct' });
+  // earlier in Berlin, and the week after reads as this one.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Europe/Berlin'), { from: 'Mon 26 Oct', lasting: false, moved: false, text: '13:00 to 19:00', to: 'Fri 30 Oct' });
   assert.equal(d.nextLocalChange(costs, NOW, 'America/Los_Angeles'), null);
+});
+
+test("a change of the band's local hours that holds past its first week lasts, and names whose clocks move", () => {
+  // UTC keeps its clock, so once Los Angeles leaves summer time the band reads an hour later for good.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'UTC'), { from: 'Mon 2 Nov', lasting: true, moved: true, text: '13:00 to 19:00', to: 'Fri 6 Nov' });
+  // Auckland enters summer time on 27 September while Los Angeles keeps its clock: the band starts at 01:00 there,
+  // on the Tuesday a Monday in Los Angeles falls on.
+  assert.deepEqual(d.nextLocalChange(costs, NOW, 'Pacific/Auckland'), { from: 'Tue 29 Sep', lasting: true, moved: false, text: '01:00 to 07:00', to: 'Sat 3 Oct' });
+});
+
+test("the band's local hours read on the clock a caller passes, and a run past midnight says it ends the next day", () => {
+  const clock12 = (minutes) => new Date(Date.UTC(2000, 0, 1, 0, minutes)).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h12', minute: '2-digit', timeZone: 'UTC' });
+  assert.equal(d.nextLocalChange(costs, NOW, 'Europe/Berlin', clock12)?.text, '01:00 PM to 07:00 PM');
+  // Tokyo at UTC+9 reads the band's 5 to 11 in Los Angeles as 21:00 to 03:00.
+  assert.equal(d.bandCaption(costs, NOW, 'Asia/Tokyo', clock24), 'Mon to Fri, 21:00 to 03:00 the next day here (Asia/Tokyo). In Los Angeles: Mon to Fri, 05:00 to 11:00.');
+});
+
+test('the models list family by family, Fable, Opus, Sonnet, Haiku, the newest version first, whatever order a file keeps', () => {
+  // The test tables' models in reverse, a dated id, and a family the order does not name, which goes last.
+  const shuffled = [...Object.keys(costs.modelWeight).reverse(), 'claude-mystery-2', 'claude-opus-4-8', 'claude-sonnet-5-20250101'];
+  assert.deepEqual(d.familyOrder(shuffled), ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-opus-4-8', 'claude-sonnet-5-5', 'claude-sonnet-5-20250101', 'claude-haiku-4-5', 'claude-mystery-2']);
+  assert.deepEqual(shuffled.slice(0, 2), ['claude-haiku-4-5', 'claude-sonnet-5-5'], 'the input is left as it was');
 });
 
 test("the caption names the band in the viewing zone beside the zone the file defines it in, or once where they are one", () => {

@@ -190,19 +190,26 @@ const firstStart = (costs: SubscriptionCosts, at: number): number | null => {
   return null;
 };
 
-const cityOf = (zone: string) => (zone.split('/').pop() ?? zone).replace(/_/g, ' ');
+/** "Los Angeles" for `America/Los_Angeles`: a zone's last segment, its underscores as spaces. */
+export const zoneCity = (zone: string): string => (zone.split('/').pop() ?? zone).replace(/_/g, ' ');
+
+/** The zone's offset from UTC at `at`, in milliseconds, for an instant on the minute. */
+const offsetIn = (at: number, zone: string): number => {
+  const p = partsIn(at, zone);
+  return Date.parse(`${p.date}T00:00:00Z`) + p.minute * 60_000 - (at - (at % 60_000));
+};
 
 /** "Mon to Fri, 14:00 to 20:00 here (Europe/Berlin). In Los Angeles: Mon to Fri, 05:00 to 11:00." or the one-zone form. */
 export const bandCaption = (costs: SubscriptionCosts, at: number, zone: string, clock: (minutes: number) => string): string => {
   const { fromHour, toHour, weekdays, zone: own } = costs.peak;
   const defined = `${weekdays ? 'Mon to Fri' : 'Every day'}, ${clock(fromHour * 60)} to ${clock(toHour * 60)}`;
-  if (zone === own) return `${defined} in ${cityOf(own)} (${own}), the zone the cost model names.`;
+  if (zone === own) return `${defined} in ${zoneCity(own)} (${own}), the zone the cost model names.`;
   const start = firstStart(costs, at);
   // The days follow the band's Monday as it falls here: in Auckland it starts on a Tuesday.
   const first = start === null ? null : partsIn(start, zone).weekday;
   const days = first === null || !weekdays ? 'Every day' : `${first} to ${WEEKDAYS[(WEEKDAYS.indexOf(first) + 4) % 7]}`;
   const here = start === null ? (inBand(costs, at) ? 'Every day, at every hour' : 'Never') : `${days}, ${runFrom(costs, start, zone, clock)}`;
-  return `${here} here (${zone}). In ${cityOf(own)}: ${defined}.`;
+  return `${here} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
 };
 
 /** Whether `at` is inside the band and the next instant the state flips, searched eight days ahead; `at` null when
@@ -233,20 +240,56 @@ export const bandRuns = (costs: SubscriptionCosts, fromMs: number, toMs: number)
 };
 
 /** The next week within ten weeks whose local hours differ from this week's, with its dates and hours; null when none.
- *  `from` and `to` label the first and last day that differ, `text` the first band run starting on them. */
-export const nextLocalChange = (costs: SubscriptionCosts, at: number, zone: string, clock: (minutes: number) => string = hhmm): { from: string; text: string; to: string } | null => {
-  const { days, monday } = weeksAround(costs, at, zone, 10 * 7 + 8);
+ *  `from` and `to` label the first and last day that differ, `text` the first band run starting on them. The change
+ *  `lasting` holds into the week after, as one zone's clock change does until the other zone changes too, and
+ *  `moved` says the band's own zone changed its clocks rather than the viewing one. */
+export const nextLocalChange = (
+  costs: SubscriptionCosts,
+  at: number,
+  zone: string,
+  clock: (minutes: number) => string = hhmm,
+): { from: string; lasting: boolean; moved: boolean; text: string; to: string } | null => {
+  // One week past the tenth, so a change found there can still be told lasting or not.
+  const { days, monday } = weeksAround(costs, at, zone, 11 * 7 + 8);
   const usual = days.slice(monday, monday + 7).map((d) => JSON.stringify(d.runs));
+  const differing = (week: number) => days.slice(monday + week * 7, monday + week * 7 + 7).filter((d, i) => JSON.stringify(d.runs) !== usual[i]);
   for (let week = 1; week <= 10; week += 1) {
-    const span = days.slice(monday + week * 7, monday + week * 7 + 7);
-    const differ = span.filter((d, i) => JSON.stringify(d.runs) !== usual[i]);
+    const differ = differing(week);
     if (differ.length === 0) continue;
     // A run carried over midnight from the day before is no start of its own, so the first true start names the hours.
     const start = differ.flatMap((d) => d.starts).find((t) => !inBand(costs, t - STEP)) ?? null;
-    return { from: differ[0].label, text: start === null ? 'no band' : runFrom(costs, start, zone, clock), to: differ[differ.length - 1].label };
+    const changed = start ?? onGrid(at) + week * 7 * DAY;
+    return {
+      from: differ[0].label,
+      lasting: differing(week + 1).length > 0,
+      moved: offsetIn(changed, costs.peak.zone) !== offsetIn(onGrid(at), costs.peak.zone),
+      text: start === null ? 'no band' : runFrom(costs, start, zone, clock),
+      to: differ[differ.length - 1].label,
+    };
   }
   return null;
 };
+
+const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
+const familyKey = (model: string): { rank: number; version: number[] } => {
+  const [, family = '', ...version] = undatedModel(model).split('-');
+  const rank = FAMILIES.indexOf(family);
+  return { rank: rank === -1 ? FAMILIES.length : rank, version: version.map((v) => Number.parseInt(v, 10) || 0) };
+};
+
+/** The models family by family, Fable, Opus, Sonnet, Haiku, then any other, each family's newest version first: the
+ *  order the shipped files keep, so a file kept in another order lists the same. */
+export const familyOrder = (models: string[]): string[] =>
+  [...models].sort((a, b) => {
+    const x = familyKey(a);
+    const y = familyKey(b);
+    if (x.rank !== y.rank) return x.rank - y.rank;
+    for (let i = 0; i < Math.max(x.version.length, y.version.length); i += 1) {
+      const step = (y.version[i] ?? 0) - (x.version[i] ?? 0);
+      if (step !== 0) return step;
+    }
+    return a.localeCompare(b);
+  });
 
 /** The tier whose window is smallest among the sized tiers (Pro on the shipped file), the one the multiples are against. */
 export const smallestTier = (costs: SubscriptionCosts, window: CostWindow): string | null => {
