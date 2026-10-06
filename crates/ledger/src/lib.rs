@@ -7,6 +7,7 @@ mod db;
 mod events;
 mod generations;
 mod histogram;
+mod keys;
 mod metrics;
 mod pattern;
 mod plan;

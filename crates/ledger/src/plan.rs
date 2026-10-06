@@ -251,13 +251,14 @@ impl SubscriptionCosts {
             .expect("the shipped subscription cost model parses")
     }
 
-    /// Refuses with `LedgerError::Plan` naming the key and the rule: serde's refusals (a repeated key, a parse error,
-    /// an unknown or a missing key), a zone the bundled database lacks, then each value rule in the file's order.
+    /// Refuses with `LedgerError::Plan` naming the key and the rule: the untyped pass's refusals (a parse error, a
+    /// repeated key, a key that is not an untagged string), serde's (an unknown or a missing key), a zone the bundled
+    /// database lacks, then each value rule in the file's order.
     pub fn from_yaml(text: &str) -> Result<SubscriptionCosts, LedgerError> {
-        // The typed maps keep the last of two equal keys, so the untyped parse runs first: it refuses the repeat,
-        // naming the map's path and the key. The typed parse stays second so serde's field errors keep their line
-        // and column.
-        serde_norway::from_str::<serde_norway::Value>(text).map_err(|e| refuse(e.to_string()))?;
+        // The typed maps read a key as its text and keep the last of two equal keys, so the untyped pass runs first
+        // and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors keep
+        // their line and column.
+        crate::keys::untagged_string_keys(text).map_err(refuse)?;
         let mut costs: SubscriptionCosts =
             serde_norway::from_str(text).map_err(|e| refuse(e.to_string()))?;
         costs.peak.resolve()?;

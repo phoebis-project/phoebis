@@ -550,6 +550,30 @@ fn a_repeated_model_weight_key_is_refused_by_name() {
     assert_names(&message, "claude-opus-5-5");
 }
 
+/// The typed map reads a tagged key as its plain text, so a tagged repeat would load as the model's last row.
+#[test]
+fn a_tagged_repeat_of_a_model_weight_key_is_refused_as_a_repeat() {
+    let message = refused(
+        "  claude-opus-5-5: 2\n",
+        "  claude-opus-5-5: 2\n  !weight claude-opus-5-5: null\n",
+    );
+    assert_names(&message, "duplicate");
+    assert_names(&message, "model_weight");
+    assert_names(&message, "claude-opus-5-5");
+}
+
+#[test]
+fn a_tagged_model_weight_key_is_refused_as_not_an_untagged_string() {
+    let message = refused(
+        "  claude-opus-5-5: 2\n",
+        "  claude-opus-5-5: 2\n  !weight claude-opus-4: 1\n",
+    );
+    assert_names(
+        &message,
+        "model_weight.!weight claude-opus-4: a key is an untagged string",
+    );
+}
+
 #[test]
 fn a_dated_model_weight_key_is_refused() {
     assert_names(

@@ -83,10 +83,10 @@ impl PriceTable {
     /// Refuses a cell that is not a finite non-negative number: a negative or `NaN` price makes every estimate
     /// negative or `NaN`, which a budget then never trips on.
     pub fn from_yaml(text: &str, source: &str) -> Result<PriceTable, LedgerError> {
-        // The typed map keeps the last of two equal keys, so the untyped parse runs first: it refuses the repeat,
-        // naming the key. The typed parse stays second so serde's field errors keep their line and column.
-        serde_norway::from_str::<serde_norway::Value>(text)
-            .map_err(|e| LedgerError::Yaml(e.to_string()))?;
+        // The typed map reads a key as its text and keeps the last of two equal keys, so the untyped pass runs
+        // first and refuses a repeat, a tagged one included. The typed parse stays second so serde's field errors
+        // keep their line and column.
+        crate::keys::untagged_string_keys(text).map_err(LedgerError::Yaml)?;
         let file: PriceFile =
             serde_norway::from_str(text).map_err(|e| LedgerError::Yaml(e.to_string()))?;
         for (model, row) in &file.models {
@@ -381,6 +381,43 @@ mod tests {
                 );
             }
             Ok(table) => panic!("a repeated model key loads: {:?}", table.models),
+        }
+    }
+
+    /// The test table with one more row, tagged with `!price`, after its last.
+    fn with_tagged_row(model: &str) -> String {
+        format!(
+            "{}  !price {model}: {{input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, \
+             output: 10}}\n",
+            crate::test_tables::API_PRICES
+        )
+    }
+
+    /// The typed map reads a tagged key as its plain text, so a tagged repeat would load as the model's price.
+    #[test]
+    fn a_tagged_repeat_of_a_model_key_is_refused_by_name() {
+        match PriceTable::from_yaml(&with_tagged_row("claude-haiku-4-5"), "file") {
+            Err(error) => {
+                let message = error.to_string();
+                assert!(
+                    message.starts_with("pricing table: ")
+                        && message.contains("duplicate")
+                        && message.contains("claude-haiku-4-5"),
+                    "{message}"
+                );
+            }
+            Ok(table) => panic!("a tagged repeat loads: {:?}", table.models),
+        }
+    }
+
+    #[test]
+    fn a_tagged_model_key_is_refused_by_name() {
+        match PriceTable::from_yaml(&with_tagged_row("claude-sonnet-4"), "file") {
+            Err(error) => assert_eq!(
+                error.to_string(),
+                "pricing table: models.!price claude-sonnet-4: a key is an untagged string"
+            ),
+            Ok(table) => panic!("a tagged key loads: {:?}", table.models),
         }
     }
 
