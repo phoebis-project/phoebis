@@ -945,6 +945,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         .into_iter()
         .map(|(kind, n)| (kind.to_string(), serde_json::Value::from(n)))
         .collect::<serde_json::Map<String, serde_json::Value>>();
+    let prices = state.pricing.current();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "profile": state.profile.name,
@@ -969,6 +970,18 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
         "live": { "clients": state.live.clients(), "in_flight": state.live.in_flight() },
         "pricing_unknown_models": state.pricing.unknown_models(),
+        "pricing": {
+            "api_prices": {
+                "path": state.settings.api_prices_path,
+                "source": prices.source,
+                "effective": prices.effective,
+            },
+            "subscription_costs": {
+                "path": state.settings.subscription_costs_path,
+                "source": state.tables.source,
+                "effective": state.tables.costs.effective,
+            },
+        },
         "gaps": gaps.iter().map(crate::requests::event_json).collect::<Vec<_>>(),
         "keepalive": {
             "agents": keepalive_stats.agents,

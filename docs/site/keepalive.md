@@ -146,11 +146,11 @@ like any other and counts against the daily caps.
 
 ## The cost reference
 
-The Sessions view's Cost reference dialog builds its table from the shipped price table (`crates/ledger/pricing.yaml`,
-effective 2026-09-30), or the file `stats.pricing_path` names (default `./pricing.yaml`) when that file exists (see
-[Statistics](statistics.md)). Per model it lists uncached input, cache write 5m, cache write 1h, cache read, and output,
-each in USD per million tokens (a model that serves fast mode adds a fast-mode row beneath it at its fast cells, what an
-answer served fast costs), plus six derived comparisons explained below the table:
+The Sessions view's Cost reference dialog builds its table from the shipped price table
+(`crates/ledger/api_prices.yaml`), or the file `stats.api_prices_path` names (default `./api_prices.yaml`) when that
+file exists (see [Statistics](statistics.md)). Per model it lists uncached input, cache write 5m, cache write 1h, cache
+read, and output, each in USD per million tokens (a model that serves fast mode adds a fast-mode row beneath it at its
+fast cells, what an answer served fast costs), plus six derived comparisons explained below the table:
 
 <dl markdown="1">
 <dt>Per prefix token</dt>

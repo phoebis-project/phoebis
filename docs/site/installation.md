@@ -48,7 +48,7 @@ sudo install -m 0600 deploy/phoebis.env.example /etc/phoebis/phoebis.env
 sudo install -m 0600 -o phoebis -g phoebis /dev/null /etc/phoebis/storage.key
 head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | sudo tee /etc/phoebis/storage.key >/dev/null
 sudo install -m 0644 deploy/config.example.yaml /etc/phoebis/config.yaml
-sudo install -m 0644 crates/ledger/pricing.yaml /etc/phoebis/pricing.yaml
+sudo install -m 0644 crates/ledger/api_prices.yaml /etc/phoebis/api_prices.yaml
 sudo systemctl daemon-reload
 ```
 
@@ -63,9 +63,12 @@ world-readable between the write and a later `chmod`. The key seals every creden
 
 Edit `/etc/phoebis/config.yaml` next. The installed file's paths are relative and its key file is
 `/run/secrets/router-storage-key`, so point `storage.encryption_key_file` at `/etc/phoebis/storage.key`,
-`storage.path` and `stats.ledger_path` under `/var/lib/phoebis/`, and `stats.pricing_path` at
-`/etc/phoebis/pricing.yaml`. Set `admin.origin`, or `admin.plain_http: true` on a loopback listener behind an SSH
-tunnel. Then validate it before enabling the service:
+`storage.path` and `stats.ledger_path` under `/var/lib/phoebis/`, and `stats.api_prices_path` at
+`/etc/phoebis/api_prices.yaml`. Leave `stats.subscription_costs_path` at its default: the shipped model is the plan
+meter's current measurement and a release updates it, and a copy at `/etc/phoebis/subscription_costs.yaml` would
+shadow every later release's constants until it was copied again. Set `admin.origin`, or `admin.plain_http: true` on
+a loopback listener behind an SSH tunnel. Then validate it before
+enabling the service:
 
 ```sh
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
@@ -130,9 +133,10 @@ false`, set `origin` to the front's `https://` URL, terminate TLS in front of th
 the hostname and port `origin` names: a login from any other origin is refused with `403`.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
-place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
-volume is read at the next start, as `stats.pricing_path` in the container configuration names it. Pulling the image
-needs `docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on the
+place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/api_prices.yaml` on
+the volume is read at the next start, as `stats.api_prices_path` in the container configuration names it, and a
+subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` the same. Pulling the image needs
+`docker login ghcr.io` with a token carrying `read:packages` while the repository is private. Upgrading is on the
 [operations page](operations.md#upgrades).
 
 ## Commands
@@ -249,17 +253,19 @@ sessions:
   memory_idle_seconds: 86400
   memory_retention_days: 30
 stats:
+  # Overrides the shipped price table; a missing file is fine.
+  api_prices_path: ./api_prices.yaml
   # The longest a key or pool may keep captured bodies, 1 to 168.
   body_capture_max_hours: 72
   ledger_path: ./data/ledger.sqlite
   # Prometheus text format at /metrics; bind it where your scraper can reach it.
   metrics_listen: 127.0.0.1:9464
-  # Overrides the shipped price table; a missing file is fine.
-  pricing_path: ./pricing.yaml
   # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this; 0 keeps them forever.
   retention_days: 90
   # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
   rollup_retention_days: 400
+  # Overrides the shipped subscription cost model; a missing file is fine.
+  subscription_costs_path: ./subscription_costs.yaml
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: ./data/router.sqlite
@@ -418,23 +424,30 @@ Defaults whole.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
+| `api_prices_path` | `./api_prices.yaml` | a path; a missing file is fine |
 | `body_capture_max_hours` | `72` | 1 to 168 |
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
-| `pricing_path` | `./pricing.yaml` | a path; a missing file is fine |
 | `retention_days` | `90` | 0 for forever, otherwise any number of days; also covers the quota and extra-usage samples |
 | `rollup_retention_days` | `400` | 0 for forever, otherwise at least `retention_days` |
+| `subscription_costs_path` | `./subscription_costs.yaml` | a path; a missing file is fine |
 
 Refused with:
 
+- `api_prices_path`: nothing
 - `body_capture_max_hours`: `stats.body_capture_max_hours must be between 1 and 168, not {value}`
 - `ledger_path`: `stats.ledger_path {path} must name a database file inside a directory`; and
   `stats.ledger_path and storage.path must name different files, not {path}` when the two paths match
 - `metrics_listen`: a YAML error
-- `pricing_path`: nothing
 - `retention_days`: nothing
 - `rollup_retention_days`: `stats.rollup_retention_days must be 0 or at least stats.retention_days
   ({retention_days}), not {value}`
+- `subscription_costs_path`: `loading the subscription cost model from {path}` with the rule under it,
+  `plan table: {key}: {rule}`
+
+A configuration that names `pricing_path` is refused before anything prints with `the configuration is not valid YAML`,
+and the cause serde prints under it: the unknown key under `stats`, the keys it expected, and the line and column
+where it sits; `api_prices_path` names the price file in its place.
 
 ### storage
 

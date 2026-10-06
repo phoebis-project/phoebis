@@ -144,21 +144,34 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     ));
     // Loaded ahead of the routing task, which prices every burn through it from its first renewal on.
     let pricing = Arc::new(
-        Pricing::load(config.stats.pricing_path.as_deref()).with_context(|| {
+        Pricing::load(config.stats.api_prices_path.as_deref()).with_context(|| {
             format!(
                 "loading the price table from {}",
                 config
                     .stats
-                    .pricing_path
+                    .api_prices_path
                     .as_deref()
                     .map(|p| p.display().to_string())
                     .unwrap_or_else(|| "the built-in table".to_string())
             )
         })?,
     );
-    // One copy of the shipped plan tables for every reader: the router's burn rates, band and share pricer, the
+    // One copy of the subscription cost model for every reader: the router's burn rates, band and share pricer, the
     // keepalive's settlements and the admin's session burn and settings echo.
-    let tables = Arc::new(phoebis_ledger::PlanTables::shipped());
+    let tables = Arc::new(
+        phoebis_ledger::PlanTables::load(config.stats.subscription_costs_path.as_deref())
+            .with_context(|| {
+                format!(
+                    "loading the subscription cost model from {}",
+                    config
+                        .stats
+                        .subscription_costs_path
+                        .as_deref()
+                        .map(|p| p.display().to_string())
+                        .unwrap_or_else(|| "the built-in model".to_string())
+                )
+            })?,
+    );
     let router_task = phoebis_routing::spawn(
         store.clone(),
         clock.clone(),
@@ -355,20 +368,25 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         pricing: pricing.clone(),
         tables,
         settings: Arc::new(SettingsView {
+            api_prices_path: config
+                .stats
+                .api_prices_path
+                .as_ref()
+                .map(|p| p.display().to_string()),
             body_capture_max_hours: config.stats.body_capture_max_hours,
             cooldown_fallback_seconds: config.routing.cooldown_fallback_seconds,
             keepalive: config.keepalive.clone(),
             ledger_path: config.stats.ledger_path.display().to_string(),
             metrics_listen: config.stats.metrics_listen.to_string(),
-            pricing_path: config
-                .stats
-                .pricing_path
-                .as_ref()
-                .map(|p| p.display().to_string()),
             profile: profile.name.to_string(),
             proxy_listen: config.proxy.listen.to_string(),
             session_expire_after_seconds: config.sessions.expire_after_seconds,
             storage_path: config.storage.path.display().to_string(),
+            subscription_costs_path: config
+                .stats
+                .subscription_costs_path
+                .as_ref()
+                .map(|p| p.display().to_string()),
             usage_cache_ttl_seconds: config.usage.cache_ttl_seconds,
         }),
         // Cloned rather than moved: the local binding still serves the companion router and the shutdown

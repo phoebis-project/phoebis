@@ -1653,18 +1653,29 @@ fn stats_and_cooldown_settings_are_validated_with_the_specs_bounds() {
         ),
         (90, "127.0.0.1:9464", "./data/ledger.sqlite")
     );
+    let path =
+        |p: &Option<std::path::PathBuf>| p.as_deref().and_then(|p| p.to_str()).map(str::to_string);
     assert_eq!(
-        config
-            .stats
-            .pricing_path
-            .as_deref()
-            .and_then(|p| p.to_str()),
-        Some("./pricing.yaml")
+        (
+            path(&config.stats.api_prices_path),
+            path(&config.stats.subscription_costs_path)
+        ),
+        (
+            Some("./api_prices.yaml".to_string()),
+            Some("./subscription_costs.yaml".to_string())
+        )
     );
-    let full = load(&with("full", "stats:\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  pricing_path: ./p.yaml\n  retention_days: 7\n  rollup_retention_days: 500\n")).unwrap();
+    let full = load(&with("full", "stats:\n  api_prices_path: ./p.yaml\n  body_capture_max_hours: 24\n  ledger_path: ./data/l.sqlite\n  metrics_listen: 127.0.0.1:9999\n  retention_days: 7\n  rollup_retention_days: 500\n  subscription_costs_path: ./c.yaml\n")).unwrap();
     assert_eq!(
         (full.stats.retention_days, full.stats.rollup_retention_days),
         (7, 500)
+    );
+    assert_eq!(
+        (
+            path(&full.stats.api_prices_path),
+            path(&full.stats.subscription_costs_path)
+        ),
+        (Some("./p.yaml".to_string()), Some("./c.yaml".to_string()))
     );
     let zero_retention = load(&with("retention", "stats:\n  retention_days: 0\n")).unwrap();
     assert_eq!(zero_retention.stats.retention_days, 0);
@@ -1883,11 +1894,17 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
         "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
     )
     .unwrap();
-    std::fs::write(dir.path().join("pricing.yaml"), "effective: 2026-10-01\nmodels:\n  claude-sonnet-4-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}\n").unwrap();
+    std::fs::write(dir.path().join("api_prices.yaml"), "effective: 2026-10-01\nmodels:\n  claude-sonnet-4-5: {input: 3, cache_write_5m: 3.75, cache_write_1h: 6, cache_read: 0.3, output: 15}\n").unwrap();
+    std::fs::write(
+        dir.path().join("subscription_costs.yaml"),
+        phoebis_ledger::test_tables::SUBSCRIPTION_COSTS,
+    )
+    .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  pricing_path: {pricing}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
-        ledger = dir.path().join("ledger.sqlite").display(), pricing = dir.path().join("pricing.yaml").display(),
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  api_prices_path: {prices}\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  subscription_costs_path: {costs}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        ledger = dir.path().join("ledger.sqlite").display(), prices = dir.path().join("api_prices.yaml").display(),
+        costs = dir.path().join("subscription_costs.yaml").display(),
         key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(),
         addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
@@ -2028,8 +2045,16 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
         .await
         .unwrap();
     assert_eq!(
-        settings["pricing"]["version"], "2026-10-01",
-        "the override file's effective date is its version"
+        settings["api_prices"]["effective"], "2026-10-01",
+        "the override file's effective date"
+    );
+    assert_eq!(
+        (
+            &settings["subscription_costs"]["source"],
+            &settings["subscription_costs"]["content"]["effective"]
+        ),
+        (&serde_json::json!("file"), &serde_json::json!("2026-01-01")),
+        "the operator's cost model is the one in force, here the test table"
     );
     let metrics = client
         .get(format!("http://127.0.0.1:{metrics_port}/metrics"))
@@ -2235,8 +2260,9 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     .unwrap();
     std::fs::write(dir.path().join("ca.pem"), up.ca_pem()).unwrap();
     let db_path = dir.path().join("phoebis.sqlite");
-    // No `pricing_path`, and its default `./pricing.yaml` does not exist under the test's working directory, so
-    // `Pricing::load` chooses the shipped table, matched against directly below.
+    // No `api_prices_path`, and its default `./api_prices.yaml` does not exist under the test's working directory, so
+    // `Pricing::load` chooses the shipped table, matched against directly below; the cost model's default path is
+    // just as absent.
     seed_oauth_account(&db_path, &key_path);
     phoebis_store::Store::open(
         &db_path,
@@ -2316,6 +2342,22 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
         "an oauth account funded by its plan reads the share of its window: {row}"
     );
     let burn_at = row["burn_at"].as_i64().unwrap();
+    let settings: serde_json::Value = client
+        .get(admin("/settings"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(
+        (
+            &settings["api_prices"]["source"],
+            &settings["subscription_costs"]["source"]
+        ),
+        (&serde_json::json!("shipped"), &serde_json::json!("shipped")),
+        "both tables in force are the shipped ones the figures below are read from"
+    );
     let tables = phoebis_ledger::PlanTables::shipped();
     let usage = phoebis_routing::PinUsage {
         input: 1_000,

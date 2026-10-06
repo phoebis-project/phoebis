@@ -2232,25 +2232,21 @@ fn ms(y: i16, m: i8, d: i8, h: i8, mi: i8) -> i64 {
 /// same number and a test needs no real-world price to check the read-time estimate landed, not a stale one.
 fn priced_table(model: &str, rate_per_token: f64) -> PriceTable {
     let rate = rate_per_token * 1_000_000.0;
-    let mut models = std::collections::BTreeMap::new();
-    models.insert(
-        model.to_string(),
-        ModelRow {
-            standard: ModelPrice {
-                input: rate,
-                cache_write_5m: rate,
-                cache_write_1h: rate,
-                cache_read: rate,
-                output: rate,
-            },
-            fast: None,
+    let row = ModelRow {
+        standard: ModelPrice {
+            input: rate,
+            cache_write_5m: rate,
+            cache_write_1h: rate,
+            cache_read: rate,
+            output: rate,
         },
-    );
+        fast: None,
+    };
     PriceTable {
         version: "test".into(),
         effective: "test".into(),
         source: "test".into(),
-        models,
+        models: [(model.to_string(), row)].into_iter().collect(),
     }
 }
 
@@ -2259,25 +2255,21 @@ fn priced_table(model: &str, rate_per_token: f64) -> PriceTable {
 /// up as a wrong total rather than the same number in the wrong place.
 fn priced_table_distinct(model: &str) -> PriceTable {
     let per_m = |rate_per_token: f64| rate_per_token * 1_000_000.0;
-    let mut models = std::collections::BTreeMap::new();
-    models.insert(
-        model.to_string(),
-        ModelRow {
-            standard: ModelPrice {
-                input: per_m(1.0),
-                cache_read: per_m(2.0),
-                cache_write_5m: per_m(3.0),
-                cache_write_1h: per_m(4.0),
-                output: per_m(5.0),
-            },
-            fast: None,
+    let row = ModelRow {
+        standard: ModelPrice {
+            input: per_m(1.0),
+            cache_read: per_m(2.0),
+            cache_write_5m: per_m(3.0),
+            cache_write_1h: per_m(4.0),
+            output: per_m(5.0),
         },
-    );
+        fast: None,
+    };
     PriceTable {
         version: "test".into(),
         effective: "test".into(),
         source: "test".into(),
-        models,
+        models: [(model.to_string(), row)].into_iter().collect(),
     }
 }
 

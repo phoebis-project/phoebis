@@ -35,17 +35,19 @@ sessions:
   memory_idle_seconds: 86400
   memory_retention_days: 30
 stats:
+  # Overrides the shipped price table; a missing file is fine, and the volume is where one would be dropped.
+  api_prices_path: /var/lib/phoebis/api_prices.yaml
   # The longest a key or pool may keep captured bodies, 1 to 168.
   body_capture_max_hours: 72
   ledger_path: /var/lib/phoebis/ledger.sqlite
   # Prometheus text format at /metrics; the compose example publishes it on the host's loopback.
   metrics_listen: 0.0.0.0:9464
-  # Overrides the shipped price table; a missing file is fine, and the volume is where one would be dropped.
-  pricing_path: /var/lib/phoebis/pricing.yaml
   # Raw requests, attempts, events, and the quota and extra-usage samples are purged past this; 0 keeps them forever.
   retention_days: 90
   # Hourly rollups are purged past this; 0 keeps them forever, otherwise at least retention_days.
   rollup_retention_days: 400
+  # Overrides the shipped subscription cost model; a missing file is fine, and the volume is where one would be dropped.
+  subscription_costs_path: /var/lib/phoebis/subscription_costs.yaml
 storage:
   encryption_key_file: /run/secrets/router-storage-key
   path: /var/lib/phoebis/router.sqlite

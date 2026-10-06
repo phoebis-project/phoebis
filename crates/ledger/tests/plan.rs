@@ -2,8 +2,6 @@
 //! tier, and the peak band is a capacity factor per window. Every expected figure is worked out by hand from the
 //! round numbers of the test table (`tests/fixtures/subscription_costs.yaml`); the shipped file is held to its shape.
 
-use std::cmp::Reverse;
-
 use phoebis_ledger::test_tables::{self, SUBSCRIPTION_COSTS};
 use phoebis_ledger::{LedgerError, PlanTables, SubscriptionCosts};
 use phoebis_routing::{PinUsage, Rates, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
@@ -708,42 +706,26 @@ fn a_path_that_cannot_be_read_refuses_the_load_rather_than_reading_the_shipped_m
     }
 }
 
-/// Fable, Opus, Sonnet, Haiku, then anything else; within a family the newer version first.
-fn family_order(model: &str) -> (usize, Reverse<Vec<u32>>) {
-    let rest = model.strip_prefix("claude-").unwrap_or(model);
-    let (family, version) = rest.split_once('-').unwrap_or((rest, ""));
-    let rank = ["fable", "opus", "sonnet", "haiku"]
-        .iter()
-        .position(|f| *f == family)
-        .unwrap_or(4);
-    let version = version.split('-').filter_map(|p| p.parse().ok()).collect();
-    (rank, Reverse(version))
-}
-
 #[test]
 fn the_family_order_ranks_fable_opus_sonnet_haiku_and_the_newer_version_first() {
-    let mut models = vec![
-        "claude-haiku-4-5",
+    assert!(test_tables::in_family_order(&[
+        "claude-fable-5-1",
+        "claude-fable-5",
+        "claude-opus-5-5",
+        "claude-opus-5",
         "claude-opus-4-8",
         "claude-sonnet-5-5",
-        "claude-fable-5",
-        "claude-opus-5",
-        "claude-fable-5-1",
-        "claude-opus-5-5",
-    ];
-    models.sort_by_key(|m| family_order(m));
-    assert_eq!(
-        models,
-        [
-            "claude-fable-5-1",
-            "claude-fable-5",
-            "claude-opus-5-5",
-            "claude-opus-5",
-            "claude-opus-4-8",
-            "claude-sonnet-5-5",
-            "claude-haiku-4-5",
-        ]
-    );
+        "claude-haiku-4-5",
+    ]));
+    for misordered in [
+        ["claude-fable-5", "claude-fable-5-1"],
+        ["claude-haiku-4-5", "claude-sonnet-5-5"],
+        ["claude-opus-4-8", "claude-opus-5"],
+        ["claude-opus-5", "claude-opus-5-5"],
+        ["claude-sonnet-5-5", "claude-opus-4-8"],
+    ] {
+        assert!(!test_tables::in_family_order(&misordered), "{misordered:?}");
+    }
 }
 
 #[test]
@@ -772,9 +754,10 @@ fn the_shipped_model_parses_and_holds_the_shape() {
         assert!(costs.model_weight.contains_key(model), "{model}");
     }
     let keys: Vec<&str> = costs.model_weight.keys().map(String::as_str).collect();
-    let mut sorted = keys.clone();
-    sorted.sort_by_key(|m| family_order(m));
-    assert_eq!(keys, sorted, "the weights are in the family order");
+    assert!(
+        test_tables::in_family_order(&keys),
+        "the weights are in the family order: {keys:?}"
+    );
 }
 
 #[test]

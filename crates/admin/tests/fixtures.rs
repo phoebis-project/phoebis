@@ -1023,6 +1023,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // The web's arithmetic tests work their figures out by hand from the test tables' round numbers, so they read
+    // the two envelopes as the settings echo carries them, rendered from the same loader the Rust tests use.
+    hold(
+        &planted,
+        "test_tables",
+        "phoebis_ledger::test_tables",
+        phoebis_admin::table_envelopes(
+            &phoebis_ledger::test_tables::api_prices(),
+            &phoebis_ledger::test_tables::subscription_costs(),
+        ),
+    );
     let probes = bound_probes(app, &cookie).await;
     hold(
         &planted,

@@ -985,7 +985,7 @@ mod tests {
             version: "test".into(),
             effective: "test".into(),
             source: "test".into(),
-            models: BTreeMap::from([(
+            models: [(
                 "unlisted-model".to_string(),
                 phoebis_ledger::ModelRow {
                     standard: phoebis_ledger::ModelPrice {
@@ -997,7 +997,9 @@ mod tests {
                     },
                     fast: None,
                 },
-            )]),
+            )]
+            .into_iter()
+            .collect(),
         }
     }
 

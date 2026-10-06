@@ -68,6 +68,18 @@
       "in_flight": 0
     },
     "pricing_unknown_models": 0,
+    "pricing": {
+      "api_prices": {
+        "path": null,
+        "source": "shipped",
+        "effective": "2026-10-01"
+      },
+      "subscription_costs": {
+        "path": null,
+        "source": "shipped",
+        "effective": "2026-10-05"
+      }
+    },
     "gaps": [],
     "keepalive": {
       "agents": 1,

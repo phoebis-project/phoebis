@@ -101,10 +101,10 @@ keeps the cadence. The other accounts keep theirs throughout.
 
 Every attempt is stamped with a cost estimate at list prices per million tokens: an estimate rather than a bill,
 since tier and batch modifiers are not known here and subscription quota is the rate-limit windows, never this
-number. The shipped price table is embedded in the binary and dated 2026-09-30; `stats.pricing_path` overrides it
-with a file of the operator's own, and Settings shows the table in force with its version and its source. An
-attempt on a model the table does not price carries no cost estimate and is counted in
-`phoebis_pricing_unknown_model_total`.
+number. The shipped price table (`crates/ledger/api_prices.yaml`) is embedded in the binary;
+`stats.api_prices_path` overrides it with a file of the operator's own, and Settings shows the table in force with
+its version and its source. An attempt on a model the table does not price carries no cost estimate and is counted
+in `phoebis_pricing_unknown_model_total`.
 
 A model that serves fast mode carries a second set of five cells at the fast rates under the same date; an attempt
 whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model

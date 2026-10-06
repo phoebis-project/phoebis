@@ -43,6 +43,8 @@ tracing-subscriber = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
+# The test tables, kept off the dependency above so a release build carries none.
+phoebis-ledger = { path = "../ledger", features = ["test-support"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 reqwest = { workspace = true }
 serde_json = { workspace = true }

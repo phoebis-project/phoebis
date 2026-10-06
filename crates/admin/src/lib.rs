@@ -39,6 +39,7 @@ use phoebis_routing::RouterHandle;
 use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
+pub use pricing::table_envelopes;
 pub use readiness::{Readiness, ReadinessSource};
 pub use routes::router;
 pub use session::{AdminSecrets, LoginError, Sessions};
@@ -92,6 +93,7 @@ pub struct AdminState {
 /// at where a credential lives.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SettingsView {
+    pub api_prices_path: Option<String>,
     pub body_capture_max_hours: u32,
     /// Not answered by the settings route: the pool and session routes read it to tell whether a cooldown the
     /// upstream gave no length for still stands.
@@ -99,11 +101,11 @@ pub struct SettingsView {
     pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
     pub metrics_listen: String,
-    pub pricing_path: Option<String>,
     pub profile: String,
     pub proxy_listen: String,
     pub session_expire_after_seconds: u64,
     pub storage_path: String,
+    pub subscription_costs_path: Option<String>,
     pub usage_cache_ttl_seconds: u64,
 }
 

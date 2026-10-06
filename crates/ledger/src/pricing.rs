@@ -2,16 +2,17 @@
 //! tier and batch modifiers are not known here, and subscription quota is the rate-limit windows, never this
 //! number.
 
-use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
+
+use indexmap::IndexMap;
 
 use crate::record::AttemptRecord;
 use crate::rollup::CostSplit;
 use crate::LedgerError;
 
-const SHIPPED: &str = include_str!("../pricing.yaml");
+const SHIPPED_API_PRICES: &str = include_str!("../api_prices.yaml");
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Deserialize, serde::Serialize)]
 pub struct ModelPrice {
@@ -54,13 +55,13 @@ pub struct PriceTable {
     pub version: String,
     pub effective: String,
     pub source: String,
-    pub models: BTreeMap<String, ModelRow>,
+    pub models: IndexMap<String, ModelRow>,
 }
 
 #[derive(serde::Deserialize)]
 struct PriceFile {
     effective: String,
-    models: BTreeMap<String, ModelRow>,
+    models: IndexMap<String, ModelRow>,
 }
 
 fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
@@ -75,12 +76,17 @@ fn per_token(p: &ModelPrice) -> phoebis_routing::Rates {
 
 impl PriceTable {
     pub fn shipped() -> PriceTable {
-        PriceTable::from_yaml(SHIPPED, "shipped").expect("the shipped price table parses")
+        PriceTable::from_yaml(SHIPPED_API_PRICES, "shipped")
+            .expect("the shipped price table parses")
     }
 
     /// Refuses a cell that is not a finite non-negative number: a negative or `NaN` price makes every estimate
     /// negative or `NaN`, which a budget then never trips on.
     pub fn from_yaml(text: &str, source: &str) -> Result<PriceTable, LedgerError> {
+        // The typed map keeps the last of two equal keys, so the untyped parse runs first: it refuses the repeat,
+        // naming the key. The typed parse stays second so serde's field errors keep their line and column.
+        serde_norway::from_str::<serde_norway::Value>(text)
+            .map_err(|e| LedgerError::Yaml(e.to_string()))?;
         let file: PriceFile =
             serde_norway::from_str(text).map_err(|e| LedgerError::Yaml(e.to_string()))?;
         for (model, row) in &file.models {
@@ -224,15 +230,17 @@ impl Pricing {
         }
     }
 
-    /// The operator's file wins over the shipped table.
+    /// The operator's file when one is at the path, the shipped table when nothing is (`NotFound`), and the I/O
+    /// error for any other failure to read it.
     pub fn load(override_path: Option<&Path>) -> Result<Pricing, LedgerError> {
-        if let Some(path) = override_path.filter(|p| p.exists()) {
-            return Ok(Pricing::new(PriceTable::from_yaml(
-                &std::fs::read_to_string(path)?,
-                "file",
-            )?));
-        }
-        Ok(Pricing::new(PriceTable::shipped()))
+        let text = match override_path {
+            Some(path) => read_override(path)?,
+            None => None,
+        };
+        Ok(Pricing::new(match text {
+            Some(text) => PriceTable::from_yaml(&text, "file")?,
+            None => PriceTable::shipped(),
+        }))
     }
 
     pub fn current(&self) -> Arc<PriceTable> {
@@ -354,6 +362,28 @@ mod tests {
         );
     }
 
+    /// A map that kept the last of two rows would price a model at a figure the file does not say.
+    #[test]
+    fn a_repeated_model_key_is_refused_by_name() {
+        let text = crate::test_tables::API_PRICES.replacen(
+            "  claude-sonnet-5-5:",
+            "  claude-haiku-4-5: {input: 2, cache_write_5m: 2.5, cache_write_1h: 4, cache_read: 0.2, output: 10}\n  \
+             claude-sonnet-5-5:",
+            1,
+        );
+        assert_ne!(text, crate::test_tables::API_PRICES);
+        match PriceTable::from_yaml(&text, "file") {
+            Err(error) => {
+                let message = error.to_string();
+                assert!(
+                    message.starts_with("pricing table: ") && message.contains("claude-haiku-4-5"),
+                    "{message}"
+                );
+            }
+            Ok(table) => panic!("a repeated model key loads: {:?}", table.models),
+        }
+    }
+
     #[test]
     fn the_shipped_table_parses_and_every_cell_is_a_finite_price_at_or_above_zero() {
         let table = PriceTable::shipped();
@@ -378,6 +408,11 @@ mod tests {
                 row.fast
             );
         }
+        let models: Vec<&str> = table.models.keys().map(String::as_str).collect();
+        assert!(
+            crate::test_tables::in_family_order(&models),
+            "the rows keep the family order: {models:?}"
+        );
     }
 
     // The test table's Sonnet 5.5 row: input 3, cache read 0.3, 5-minute write 3.75, output 15 per million.
@@ -502,7 +537,7 @@ mod tests {
 
     #[test]
     fn a_dated_id_prices_as_its_undated_base_when_the_table_lacks_the_dated_row() {
-        let mut models = BTreeMap::new();
+        let mut models = IndexMap::new();
         models.insert(
             "claude-sonnet-4-5".to_string(),
             ModelRow {
@@ -567,7 +602,7 @@ mod tests {
             version: "test".into(),
             effective: "test".into(),
             source: "test".into(),
-            models: BTreeMap::from([
+            models: IndexMap::from([
                 ("claude-haiku-4-5-20251001".to_string(), price.clone()),
                 ("claude-sonnet-4-5".to_string(), price),
             ]),
@@ -637,7 +672,7 @@ mod tests {
                 .source,
             "shipped"
         );
-        let path = dir.path().join("pricing.yaml");
+        let path = dir.path().join("api_prices.yaml");
         std::fs::write(&path, "effective: 2026-10-01\nmodels:\n  claude-sonnet-5: {input: 1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, output: 1}\n").unwrap();
         let from_file = Pricing::load(Some(&path)).unwrap().current();
         assert_eq!(
@@ -647,6 +682,30 @@ mod tests {
                 from_file.models.len()
             ),
             ("file", "2026-10-01", 1)
+        );
+    }
+
+    /// Only a path with nothing at it falls back: any other failure to read the operator's file refuses the start,
+    /// since a silent fallback would price every request at a table the operator meant to replace.
+    #[test]
+    fn a_path_that_cannot_be_read_refuses_the_load_rather_than_reading_the_shipped_table() {
+        use std::os::unix::fs::PermissionsExt;
+
+        let dir = tempfile::tempdir().unwrap();
+        assert!(
+            matches!(Pricing::load(Some(dir.path())), Err(LedgerError::Io(_))),
+            "a directory at the path"
+        );
+        let locked = dir.path().join("locked");
+        std::fs::create_dir(&locked).unwrap();
+        std::fs::write(locked.join("api_prices.yaml"), "not read").unwrap();
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o000)).unwrap();
+        let behind_a_locked_parent = Pricing::load(Some(&locked.join("api_prices.yaml")));
+        // Restored before the assertion so the temp directory can still be cleaned up on either outcome.
+        std::fs::set_permissions(&locked, std::fs::Permissions::from_mode(0o700)).unwrap();
+        assert!(
+            matches!(behind_a_locked_parent, Err(LedgerError::Io(_))),
+            "a file whose parent grants no search permission"
         );
     }
 }

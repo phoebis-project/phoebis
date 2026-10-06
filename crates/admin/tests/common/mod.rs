@@ -867,16 +867,17 @@ async fn build_app(
         usage: Some(usage.clone()),
     });
     let settings = Arc::new(SettingsView {
+        api_prices_path: None,
         body_capture_max_hours: BODY_CAPTURE_MAX_HOURS,
         cooldown_fallback_seconds: 60,
         keepalive: KeepaliveLimits::default(),
         ledger_path: "test".into(),
         metrics_listen: "127.0.0.1:9464".into(),
-        pricing_path: None,
         profile: p.name.into(),
         proxy_listen: "test".into(),
         session_expire_after_seconds: 86_400,
         storage_path: "test".into(),
+        subscription_costs_path: None,
         usage_cache_ttl_seconds: 60,
     });
     let vault = Arc::new(PairingVault::new());

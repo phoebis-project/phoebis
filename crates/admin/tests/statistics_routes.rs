@@ -51,6 +51,14 @@ fn record_at(id: &str, at: i64, model: &str, session: &str, key_generation: i64)
     }
 }
 
+/// A JSON object's keys as the body orders them; comparing two `Value`s ignores the order.
+fn keys_in_order(object: &serde_json::Value) -> Vec<&str> {
+    object
+        .as_object()
+        .map(|members| members.keys().map(String::as_str).collect())
+        .unwrap_or_default()
+}
+
 #[tokio::test]
 async fn settings_and_system_show_effective_values_ledger_health_and_gaps_without_secrets() {
     let parts = common::admin_parts_full().await;
@@ -76,16 +84,24 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let expected: Vec<(String, Vec<String>)> = [
         ("about", &["profile", "version"][..]),
         ("access", &["admin_configured"]),
+        ("api_prices", &["content", "effective", "source"]),
         (
             "keepalive",
             &["max_agents", "max_retained_bytes", "max_sessions"],
         ),
         ("listeners", &["metrics", "proxy"]),
-        ("plan_tables", &["cost"]),
-        ("pricing", &["effective", "models", "source", "version"]),
         ("retention", &["body_capture_max_hours"]),
         ("sessions", &["expire_after_seconds"]),
-        ("storage", &["ledger_path", "path", "pricing_path"]),
+        (
+            "storage",
+            &[
+                "api_prices_path",
+                "ledger_path",
+                "path",
+                "subscription_costs_path",
+            ],
+        ),
+        ("subscription_costs", &["content", "effective", "source"]),
         ("usage", &["cache_ttl_seconds"]),
     ]
     .iter()
@@ -120,29 +136,68 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             Some(60)
         )
     );
-    assert_eq!(settings["pricing"]["version"], "2026-10-01");
-    assert_eq!(settings["pricing"]["source"], "shipped");
-    let loaded = phoebis_ledger::PlanTables::shipped().costs;
-    let cost = &settings["plan_tables"]["cost"];
+    let shipped = phoebis_ledger::PriceTable::shipped();
+    let prices = &settings["api_prices"];
     assert_eq!(
-        cost,
-        &serde_json::to_value(&loaded).unwrap(),
+        (&prices["source"], &prices["effective"]),
+        (
+            &serde_json::json!("shipped"),
+            &serde_json::json!(shipped.effective)
+        )
+    );
+    assert_eq!(
+        prices["content"],
+        serde_json::json!({"effective": shipped.effective, "models": shipped.models}),
+        "the echo answers the price table the harness loaded, key for key"
+    );
+    assert_eq!(
+        keys_in_order(&prices["content"]["models"]),
+        shipped
+            .models
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "in the file's order"
+    );
+    let loaded = phoebis_ledger::PlanTables::shipped();
+    let costs = &settings["subscription_costs"];
+    assert_eq!(
+        (&costs["source"], &costs["effective"]),
+        (
+            &serde_json::json!(loaded.source),
+            &serde_json::json!(loaded.costs.effective)
+        )
+    );
+    assert_eq!(
+        costs["content"],
+        serde_json::to_value(&loaded.costs).unwrap(),
         "the echo answers the cost model the harness loaded, key for key"
     );
-    let models: Vec<&str> = cost["model_weight"]
-        .as_object()
-        .unwrap()
-        .keys()
-        .map(String::as_str)
-        .collect();
     assert_eq!(
-        models,
+        keys_in_order(&costs["content"]["model_weight"]),
         loaded
+            .costs
             .model_weight
             .keys()
             .map(String::as_str)
             .collect::<Vec<_>>(),
         "in the file's order"
+    );
+    assert_eq!(
+        (settings.get("pricing"), settings.get("plan_tables")),
+        (None, None),
+        "each table answers under its file's name alone"
+    );
+    let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
+    assert_eq!(
+        pricing,
+        phoebis_admin::table_envelopes(&shipped, &loaded),
+        "the price route answers both envelopes the settings echo carries"
+    );
+    assert!(
+        pricing["api_prices"].get("path").is_none()
+            && pricing["subscription_costs"].get("path").is_none(),
+        "the paths are the settings echo's and the system document's: {pricing}"
     );
     let text = settings.to_string();
     assert!(
@@ -159,6 +214,17 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
         })
         .unwrap();
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            &system["pricing"]["api_prices"],
+            &system["pricing"]["subscription_costs"]
+        ),
+        (
+            &serde_json::json!({"path": null, "source": "shipped", "effective": shipped.effective}),
+            &serde_json::json!({"path": null, "source": "shipped", "effective": loaded.costs.effective})
+        ),
+        "the harness configures neither path, so both tables are the shipped ones: {system}"
+    );
     assert_eq!(
         (
             system["ledger"]["schema_version"].as_u64(),
@@ -366,43 +432,72 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
     let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
     let costs = json(get(&parts.app, "/admin/sessions/costs", Some(&cookie)).await).await;
+    let shipped = phoebis_ledger::PriceTable::shipped();
+    let (opus, sonnet) = (
+        &shipped.models["claude-opus-5-5"],
+        &shipped.models["claude-sonnet-5"],
+    );
+    let fast = opus
+        .fast
+        .as_ref()
+        .expect("the shipped Opus 5.5 row serves fast mode");
+    assert!(
+        sonnet.fast.is_none(),
+        "and the shipped Sonnet 5 row does not"
+    );
     for (route, models) in [
-        ("settings", &settings["pricing"]["models"]),
-        ("pricing", &pricing["models"]),
-        ("sessions/costs", &costs["models"]),
+        ("settings", &settings["api_prices"]["content"]["models"]),
+        ("pricing", &pricing["api_prices"]["content"]["models"]),
     ] {
-        let row = |model: &str| {
-            models
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|m| m["model"] == model)
-                .cloned()
-                .unwrap_or_else(|| panic!("{route} lists {model}: {models}"))
-        };
-        let opus = row("claude-opus-5-5");
         assert_eq!(
-            (&opus["input_per_m"], &opus["output_per_m"]),
-            (&serde_json::json!(4.0), &serde_json::json!(20.0)),
-            "{route}: the standard cells stay where they were"
+            models["claude-opus-5-5"],
+            serde_json::to_value(opus).unwrap(),
+            "{route}: a model that serves fast mode answers its standard and its five fast cells under the file's names"
         );
         assert_eq!(
-            opus["fast"],
-            serde_json::json!({
-                "input_per_m": 8.0,
-                "cache_write_5m_per_m": 10.0,
-                "cache_write_1h_per_m": 16.0,
-                "cache_read_per_m": 0.4,
-                "output_per_m": 40.0,
-            }),
-            "{route}: a model that serves fast mode answers its five fast cells"
+            models["claude-sonnet-5"],
+            serde_json::to_value(sonnet).unwrap(),
+            "{route}: a model without them answers its standard cells alone"
         );
-        assert_eq!(
-            row("claude-sonnet-5").get("fast"),
-            Some(&serde_json::Value::Null),
-            "{route}: a model without them answers null"
+        assert!(
+            models["claude-sonnet-5"].get("fast").is_none(),
+            "{route}: as its file row carries no fast member: {models}"
         );
     }
+    let row = |model: &str| {
+        costs["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["model"] == model)
+            .cloned()
+            .unwrap_or_else(|| panic!("sessions/costs lists {model}: {costs}"))
+    };
+    let opus_row = row("claude-opus-5-5");
+    assert_eq!(
+        (&opus_row["input_per_m"], &opus_row["output_per_m"]),
+        (
+            &serde_json::json!(opus.standard.input),
+            &serde_json::json!(opus.standard.output)
+        ),
+        "sessions/costs: the standard cells keep their per-million names"
+    );
+    assert_eq!(
+        opus_row["fast"],
+        serde_json::json!({
+            "input_per_m": fast.input,
+            "cache_write_5m_per_m": fast.cache_write_5m,
+            "cache_write_1h_per_m": fast.cache_write_1h,
+            "cache_read_per_m": fast.cache_read,
+            "output_per_m": fast.output,
+        }),
+        "sessions/costs: a model that serves fast mode answers its five fast cells"
+    );
+    assert_eq!(
+        row("claude-sonnet-5").get("fast"),
+        Some(&serde_json::Value::Null),
+        "sessions/costs: a model without them answers null"
+    );
 }
 
 #[tokio::test]
@@ -1147,9 +1242,14 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
         .find(|p| p["group"] == "business" && p["uncached_tokens"].as_u64().unwrap_or(0) > 0)
         .cloned()
         .unwrap();
+    // A million tokens at the fast cell's price per million read that price in dollars.
+    let fast_input = phoebis_ledger::PriceTable::shipped()
+        .price_at("claude-opus-5", phoebis_ledger::Speed::Fast)
+        .unwrap()
+        .input;
     assert!(
-        (point["usd"].as_f64().unwrap() - 10.0).abs() < 1e-9,
-        "a million Opus 5 input tokens served fast read the $10 fast cell in dollars: {point}"
+        (point["usd"].as_f64().unwrap() - fast_input).abs() < 1e-9,
+        "a million Opus 5 input tokens served fast read the fast cell in dollars: {point}"
     );
     assert_eq!(
         (
