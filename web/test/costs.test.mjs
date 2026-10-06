@@ -52,6 +52,22 @@ test('a model an override weighs on the week alone is weighted, a dash on the 5-
   close(d.shareOf(weekOnly, 'seven_day', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), 0.003, 'the week, 3 x 1 / 1000');
 });
 
+test('a Fable model an override weighs on the Fable week alone is weighted, a dash on the shared windows and a share on its week', () => {
+  // The test table weighs Fable 5.1 10; this copy leaves its shared weight null and weighs it 10 on the Fable week.
+  const FABLE = 'claude-fable-5-1';
+  const weekOnly = { ...costs, modelWeight: { ...costs.modelWeight, [FABLE]: null }, overrides: { ...costs.overrides, [FABLE]: { weightByWindow: { seven_day_fable: 10 } } } };
+  assert.equal(d.isWeighted(weekOnly, FABLE), true, 'above the divider');
+  assert.equal(d.isWeighted({ ...weekOnly, overrides: costs.overrides }, FABLE), false, 'under the divider without the override');
+  assert.equal(d.shareOf(weekOnly, 'five_hour', MAX_20X, FABLE, usage({ input: 1 }), OUT), null, 'the 5-hour window');
+  assert.equal(d.shareOf(weekOnly, 'seven_day', MAX_20X, FABLE, usage({ input: 1 }), OUT), null, 'the 7-day window');
+  close(d.shareOf(weekOnly, 'seven_day_fable', MAX_20X, FABLE, usage({ input: 1 }), OUT), 0.02, 'the Fable week, 10 x 1 / 1000 / 0.5');
+  assert.deepEqual(d.modelWeeks(weekOnly, FABLE), ['seven_day_fable'], 'a Fable model carries the Fable week');
+  assert.deepEqual(d.modelWeeks(weekOnly, OPUS), [], 'an Opus model carries none');
+  // Opus carries no Fable week, so a weight there prices nothing it sends.
+  const opusWeek = { ...costs, modelWeight: { ...costs.modelWeight, 'claude-opus-5': null }, overrides: { ...costs.overrides, 'claude-opus-5': { weightByWindow: { seven_day_fable: 10 } } } };
+  assert.equal(d.isWeighted(opusWeek, 'claude-opus-5'), false, 'a week the model does not carry weighs nothing');
+});
+
 test('a dated id reads its undated weight, and an unweighted model or an unsized tier prices no share', () => {
   close(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-5-5-20260101', usage({ input: 1 }), OUT), 0.02, 'the dated id');
   assert.equal(d.shareOf(costs, 'five_hour', MAX_20X, 'claude-opus-5', usage({ input: 1 }), OUT), null, 'a null weight');

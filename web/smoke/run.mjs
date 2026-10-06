@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'http://127.0.0.1/', pretendToBeVisual: true });
@@ -8383,6 +8384,59 @@ m.unmount();
         chips.length === 1 &&
         chips[0].startsWith('API prices, effective '),
       missing: [rowText, JSON.stringify(drawn), JSON.stringify(chips)],
+    });
+  }
+
+  // On the test tables, Fable 5.1 with a null shared weight and a weight of 10 on the Fable week alone, and Opus 5 with
+  // a weight of 3 on the 7-day window alone: each lists above the divider and prices the window it is weighed on.
+  {
+    const { getSettings } = api;
+    const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
+    const content = structuredClone(tables.subscription_costs.content);
+    content.model_weight['claude-fable-5-1'] = null;
+    content.overrides['claude-fable-5-1'] = { weight_by_window: { seven_day_fable: 10 } };
+    content.overrides['claude-opus-5'] = { weight_by_window: { seven_day: 3 } };
+    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: { ...tables.subscription_costs, content } });
+    api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), apiPrices: wired.apiPrices, subscriptionCosts: wired.subscriptionCosts });
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
+    const divider = rows.findIndex((r) => r.classList.contains('is-divider'));
+    const above = (row) => row !== undefined && rows.indexOf(row) < (divider === -1 ? rows.length : divider);
+    const rowOf = (model) => rows.find((r) => !r.classList.contains('cost-ref__sub') && r.children[0]?.textContent?.trim() === model);
+    const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
+    const weightIn = (row) => ({ text: row?.children[1]?.textContent?.trim(), title: row?.children[1]?.querySelector('[title]')?.getAttribute('title') });
+    const fable = rowOf('claude-fable-5-1');
+    const week = fable?.nextElementSibling;
+    const opus5 = rowOf('claude-opus-5');
+    const dashes = (n) => Array.from({ length: n }, () => '-');
+    // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10, on
+    // the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the Fable week, Opus 5's 3 x m x 1e6 / 1000.
+    const drawn = {
+      fable: { above: above(fable), cells: cellsOf(fable), weight: weightIn(fable) },
+      opus5: { above: above(opus5), cells: cellsOf(opus5), sub: opus5?.nextElementSibling?.classList.contains('cost-ref__sub') ?? false, weight: weightIn(opus5) },
+      week: { cells: cellsOf(week), label: week?.classList.contains('cost-ref__sub') ? week.children[0]?.textContent : 'no sub-row' },
+    };
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: '/sessions plan rates list a model weighed by window alone above the divider, price the window it is weighed on, and read its weight cell by window',
+      ok:
+        drawn.fable.above &&
+        JSON.stringify(drawn.fable.cells) === JSON.stringify(dashes(10)) &&
+        drawn.fable.weight.text === 'by window' &&
+        drawn.fable.weight.title === 'claude-fable-5-1 carries no shared weight, only a weight per window: 10 on the Fable week' &&
+        drawn.week.label === 'Fable week' &&
+        JSON.stringify(drawn.week.cells) === JSON.stringify([...Array(5).fill(''), fmtShare(20_000), fmtShare(2_000), fmtShare(40_000), fmtShare(40_000), fmtShare(200_000)]) &&
+        drawn.opus5.above &&
+        !drawn.opus5.sub &&
+        JSON.stringify(drawn.opus5.cells) === JSON.stringify([...dashes(5), fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
+        drawn.opus5.weight.text === 'by window' &&
+        drawn.opus5.weight.title === 'claude-opus-5 carries no shared weight, only a weight per window: 3 on the 7-day window',
+      missing: [JSON.stringify(drawn)],
     });
   }
 }

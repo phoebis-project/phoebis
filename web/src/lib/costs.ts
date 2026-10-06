@@ -48,9 +48,16 @@ export const weightOf = (costs: SubscriptionCosts, model: string, window: string
   return byWindow !== undefined && own(byWindow, window) ? byWindow[window] : costs.modelWeight[key];
 };
 
-/** Whether the model has a weight on either shared window: an override's weight on a window prices that window even
- *  under a null shared weight. */
-export const isWeighted = (costs: SubscriptionCosts, model: string): boolean => (['five_hour', 'seven_day'] as const).some((w) => weightOf(costs, model, w) !== null);
+/** The model weeks a model carries: `seven_day_fable` for a Fable model, by the family its undated id names. */
+export const modelWeeks = (costs: SubscriptionCosts, model: string): string[] =>
+  Object.keys(costs.modelWindows).filter((key) => costs.modelWindows[key].of === 'seven_day' && undatedModel(model).startsWith(`claude-${key.slice('seven_day_'.length)}`));
+
+/** The windows the model has a weight on, the two shared windows first and then its model weeks: an override's weight
+ *  on a window prices that window even under a null shared weight. */
+export const weightedWindows = (costs: SubscriptionCosts, model: string): string[] => ['five_hour', 'seven_day', ...modelWeeks(costs, model)].filter((w) => weightOf(costs, model, w) !== null);
+
+/** Whether any window the model can be priced on carries a weight for it. */
+export const isWeighted = (costs: SubscriptionCosts, model: string): boolean => weightedWindows(costs, model).length > 0;
 
 const multipliersOf = (costs: SubscriptionCosts, model: string): TypeMultiplier => {
   const key = keyOf(costs, model);

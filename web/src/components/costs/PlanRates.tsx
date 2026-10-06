@@ -2,7 +2,7 @@ import { useState } from 'react';
 import { planLabel } from '@/api/decode';
 import type { ModelPrice, SubscriptionCosts } from '@/api/types';
 import { Segmented } from '@/components/ui/primitives';
-import { anchorTier, bandNow, familyOrder, isWeighted, shareOf, tierCapacity, unreachableBand, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
+import { anchorTier, bandNow, familyOrder, isWeighted, modelWeeks, shareOf, tierCapacity, unreachableBand, weightedWindows, weightOf, type CostWindow, type TokenType, type Usage } from '@/lib/costs';
 import { fmtShare, undatedModel, upperFirst } from '@/lib/format';
 import { nowLine } from './PeakBand';
 import { BandSwitch } from './WindowsByTier';
@@ -26,10 +26,8 @@ const ZERO: Usage = { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, 
 
 const dash = <span className="muted">-</span>;
 
-/** The model weeks a model carries: `seven_day_fable` for a Fable model, by the family the row's key names. */
-const modelWeeks = (costs: SubscriptionCosts, model: string): string[] =>
-  Object.keys(costs.modelWindows).filter((key) => costs.modelWindows[key].of === 'seven_day' && undatedModel(model).startsWith(`claude-${key.slice('seven_day_'.length)}`));
 const weekLabel = (key: string) => `${upperFirst(key.slice('seven_day_'.length))} week`;
+const windowLabel = (window: string) => WINDOWS.find((w) => w.key === window)?.label ?? weekLabel(window);
 
 /** The share of a tier's windows a token count of each type spends, per model, outside or inside the band. */
 export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; now: number; prices: ModelPrice[] }) {
@@ -85,6 +83,18 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
     );
   };
   const weightCell = (model: string) => {
+    const windows = weightedWindows(costs, model);
+    // A null shared weight under window weights has no one figure to scale, so the cell names each window's own.
+    if (Object.prototype.hasOwnProperty.call(costs.modelWeight, model) && costs.modelWeight[model] === null && windows.length > 0) {
+      const named = windows.map((w) => `${weightOf(costs, model, w)} on the ${windowLabel(w)}`).join(', ');
+      return (
+        <td>
+          <span className="cost-ref__unsized" title={`${model} carries no shared weight, only a weight per window: ${named}`}>
+            by window
+          </span>
+        </td>
+      );
+    }
     const weight = weightOf(costs, model, 'five_hour');
     const base = lightest === null ? null : weightOf(costs, lightest, 'five_hour');
     if (weight === null || base === null || base <= 0 || heaviest <= 0) {
@@ -112,7 +122,7 @@ export function PlanRates({ costs, now, prices }: { costs: SubscriptionCosts; no
   const rows = (models: string[]) =>
     models.flatMap((model, n) => {
       const alt = n % 2 ? 'is-alt' : '';
-      const weeks = weightOf(costs, model, 'seven_day') === null ? [] : modelWeeks(costs, model);
+      const weeks = modelWeeks(costs, model).filter((week) => weightOf(costs, model, week) !== null);
       return [
         <tr key={model} className={`${alt}${weeks.length ? ' has-sub' : ''}`}>
           <td className="mono">{model}</td>

@@ -167,10 +167,12 @@ hours change, and draws each window's capacity factor.
 request completing outside or inside the band. The tab opens on the cost model's anchor tier, Max 20x, outside the band,
 at one million tokens. A tier chooser, the band control, and a token field in millions with quick picks for 100k, 1M and
 10M redraw the table and its caption. A weight column draws each model's weight on the 5-hour window against the
-lightest weighted model's. A Fable model with a weight carries a Fable week row under its 7-day group, priced on the
-Fable week, half the 7-day window. On the plan a cache read costs 0.025 of an input token in the shipped model, and a
-1-hour write spends the same share as a 5-minute one. A cell past a full window takes a warning tint. The models the
-cost model does not weigh follow a divider, each cell a dash and the weight "not weighed".
+lightest weighted model's, and reads "by window" for a model whose shared weight is `null` and that an override weighs
+on some windows, its title naming each window's weight. A Fable model with a weight on the Fable week carries a Fable
+week row under its 7-day group, priced on that week, half the 7-day window. On the plan a cache read costs 0.025 of an
+input token in the shipped model, and a 1-hour write spends the same share as a 5-minute one. A cell past a full window
+takes a warning tint. The models the cost model does not weigh on any window follow a divider, each cell a dash and the
+weight "not weighed".
 
 **API prices.** The dollar list prices per million tokens: input, cache read, cache write 5m, cache write 1h and output,
 with a fast-mode row under each model that serves fast mode, at its fast cells, what an answer served fast costs.
