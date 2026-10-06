@@ -3,7 +3,7 @@
 //! capacity factor per window, read at a request's completion; a model week is sized against the 7-day window. A
 //! model or a tier left out, or set to `null`, prices nothing.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use indexmap::IndexMap;
@@ -551,6 +551,33 @@ impl SubscriptionCosts {
         };
         self.weight(canonical_model, window).is_some()
             && tier_row(&self.capacity, tier).is_some_and(|row| row.on(priced).is_some())
+    }
+
+    /// The models some window prices, each counted once: a `model_weight` row with a weight, or an `overrides` row
+    /// that weighs the model on a window of its own, which prices there even under a null shared weight. The count
+    /// sits on the model, beside `weight`, so what `check-config` prints follows the rule the pricers read.
+    pub fn weighted_model_count(&self) -> usize {
+        self.model_weight
+            .iter()
+            .filter(|(_, weight)| weight.is_some_and(|w| w > 0.0))
+            .map(|(model, _)| model)
+            .chain(
+                self.overrides
+                    .iter()
+                    .filter(|(_, o)| o.weight_by_window.as_ref().is_some_and(|w| !w.is_empty()))
+                    .map(|(model, _)| model),
+            )
+            .collect::<HashSet<_>>()
+            .len()
+    }
+
+    /// The tiers with a capacity on either window; a listed tier null on both prices nothing. The count sits on the
+    /// model, beside `priced`, so what `check-config` prints follows the rule the pricers read.
+    pub fn sized_tier_count(&self) -> usize {
+        self.capacity
+            .values()
+            .filter(|c| c.five_hour.is_some() || c.seven_day.is_some())
+            .count()
     }
 }
 

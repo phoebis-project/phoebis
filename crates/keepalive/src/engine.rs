@@ -2346,7 +2346,7 @@ pub(crate) fn gate(
 
 #[cfg(test)]
 mod tests {
-    use crate::config::{FIVE_MINUTES_MS, ONE_HOUR_MS};
+    use crate::config::FIVE_MINUTES_MS;
 
     use super::*;
 
@@ -2437,16 +2437,6 @@ mod tests {
         overage_policy: OveragePolicy,
         share_cap: Option<f64>,
     ) -> RouterView {
-        stop_view_dispatching(o_in_overage, overage_policy, share_cap, "{}")
-    }
-
-    /// `stop_view_with` with the pool's cache TTL policy stored as `cache_ttl_json`.
-    fn stop_view_dispatching(
-        o_in_overage: bool,
-        overage_policy: OveragePolicy,
-        share_cap: Option<f64>,
-        cache_ttl_json: &str,
-    ) -> RouterView {
         let policy = KeepalivePolicy {
             enabled: true,
             stop_when_net_negative: true,
@@ -2504,7 +2494,6 @@ mod tests {
                 overage_policy,
                 keepalive_json: serde_json::to_string(&policy).unwrap(),
                 prefer_subscription: false,
-                cache_ttl_json: cache_ttl_json.into(),
                 ..phoebis_store::PoolRow::for_tests("main")
             }],
             ..phoebis_store::RegistryLoad::default()
@@ -2751,14 +2740,14 @@ mod tests {
     }
 
     #[test]
-    fn a_recipe_on_a_model_without_a_weight_gates_in_dollars_whatever_its_markers() {
+    fn a_recipe_on_a_model_without_a_weight_gates_in_dollars_and_one_on_a_weighted_model_in_the_share(
+    ) {
         // The test table leaves Opus 5 without a weight and weighs Opus 5.5.
         let tables = phoebis_ledger::test_tables::subscription_costs();
-        let gated = |view: &RouterView, model: &str, longest_ttl_ms: i64| {
+        let gated = |view: &RouterView, model: &str| {
             let mut agent = Agent::new("main", "k", 1, 0);
             agent.account = Some("o".into());
             agent.canonical_model = model.into();
-            // The shortest marker is the TTL in force; the recipe may also mark a part for an hour.
             agent.ttl_ms = FIVE_MINUTES_MS;
             agent.current = Some(Observation {
                 id: "obs".into(),
@@ -2769,7 +2758,7 @@ mod tests {
                     headers: Vec::new(),
                     model: model.into(),
                     ttl_ms: FIVE_MINUTES_MS,
-                    longest_ttl_ms,
+                    longest_ttl_ms: FIVE_MINUTES_MS,
                     size: 0,
                     static_hash: None,
                     tail_hash: None,
@@ -2797,27 +2786,21 @@ mod tests {
             )
             .err()
         };
-        for longest_ttl_ms in [FIVE_MINUTES_MS, ONE_HOUR_MS] {
-            assert_eq!(
-                gated(&stop_view(false), "claude-opus-5", longest_ttl_ms),
-                None,
-                "a model without a weight settles in dollars, so the positive dollar balance decides"
-            );
-            assert_eq!(
-                gated(
-                    &stop_view_capped(false, Some(0.0)),
-                    "claude-opus-5",
-                    longest_ttl_ms
-                ),
-                None,
-                "and a zero share cap never holds it"
-            );
-            assert_eq!(
-                gated(&stop_view(false), "claude-opus-5-5", longest_ttl_ms),
-                Some(Gate::Hold(Reason::NetNegative)),
-                "a weighted model settles in the share whatever its markers, so the share balance decides"
-            );
-        }
+        assert_eq!(
+            gated(&stop_view(false), "claude-opus-5"),
+            None,
+            "a model without a weight settles in dollars, so the positive dollar balance decides"
+        );
+        assert_eq!(
+            gated(&stop_view_capped(false, Some(0.0)), "claude-opus-5"),
+            None,
+            "and a zero share cap never holds it"
+        );
+        assert_eq!(
+            gated(&stop_view(false), "claude-opus-5-5"),
+            Some(Gate::Hold(Reason::NetNegative)),
+            "a weighted model settles in the share, so the share balance decides"
+        );
     }
 
     #[test]

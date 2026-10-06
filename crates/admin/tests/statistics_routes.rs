@@ -473,9 +473,12 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
             .cloned()
             .unwrap_or_else(|| panic!("sessions/costs lists {model}: {costs}"))
     };
-    let fast_cells = row(fast_model);
+    let fast_model_costs = row(fast_model);
     assert_eq!(
-        (&fast_cells["input_per_m"], &fast_cells["output_per_m"]),
+        (
+            &fast_model_costs["input_per_m"],
+            &fast_model_costs["output_per_m"]
+        ),
         (
             &serde_json::json!(fast_row.standard.input),
             &serde_json::json!(fast_row.standard.output)
@@ -483,7 +486,7 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
         "sessions/costs: the standard cells keep their per-million names"
     );
     assert_eq!(
-        fast_cells["fast"],
+        fast_model_costs["fast"],
         serde_json::json!({
             "input_per_m": fast.input,
             "cache_write_5m_per_m": fast.cache_write_5m,

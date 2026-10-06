@@ -104,26 +104,8 @@ fn main() -> anyhow::Result<()> {
                     )
                 })?;
             let costs = &tables.costs;
-            // A model the overrides weigh on a window of their own prices there even without a shared weight.
-            let weighted = costs
-                .model_weight
-                .iter()
-                .filter(|(_, weight)| weight.is_some_and(|w| w > 0.0))
-                .map(|(model, _)| model)
-                .chain(
-                    costs
-                        .overrides
-                        .iter()
-                        .filter(|(_, o)| o.weight_by_window.as_ref().is_some_and(|w| !w.is_empty()))
-                        .map(|(model, _)| model),
-                )
-                .collect::<std::collections::HashSet<_>>()
-                .len();
-            let sized = costs
-                .capacity
-                .values()
-                .filter(|c| c.five_hour.is_some() || c.seven_day.is_some())
-                .count();
+            let weighted = costs.weighted_model_count();
+            let sized = costs.sized_tier_count();
             println!(
                 "subscription costs: {}",
                 table_line(

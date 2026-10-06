@@ -150,41 +150,17 @@ fn the_summary_names_the_routing_keys() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
-    // Neither default path has a file under the test's working directory, so both tables are the shipped ones,
-    // counted here from what they load.
+    // Neither default path has a file under the test's working directory, so both tables are the shipped ones. The
+    // price line compares with the table it loads; the cost model's counts are proven over hand-counted tables
+    // below, so its line here is held to its shape.
     let prices = phoebis_ledger::PriceTable::shipped();
-    let costs = phoebis_ledger::PlanTables::shipped().costs;
-    let weighted = costs
-        .model_weight
-        .iter()
-        .filter(|(_, weight)| weight.is_some_and(|w| w > 0.0))
-        .map(|(model, _)| model)
-        .chain(
-            costs
-                .overrides
-                .iter()
-                .filter(|(_, o)| o.weight_by_window.as_ref().is_some_and(|w| !w.is_empty()))
-                .map(|(model, _)| model),
-        )
-        .collect::<std::collections::BTreeSet<_>>()
-        .len();
-    let sized = costs
-        .capacity
-        .values()
-        .filter(|c| c.five_hour.is_some() || c.seven_day.is_some())
-        .count();
     let api_prices = format!(
         "api prices: built in (effective {}, {} models); ./api_prices.yaml not found",
         prices.effective,
         prices.models.len()
     );
-    let subscription_costs = format!(
-        "subscription costs: built in (effective {}, {weighted} models, {sized} tiers); \
-         ./subscription_costs.yaml not found",
-        costs.effective
-    );
     assert_eq!(
-        lines.get(4..12),
+        lines.get(4..9),
         Some(
             &[
                 "proxy: body budget 536870912 bytes, body read 60s, key body reads 128, max request 33554432 bytes, \
@@ -193,7 +169,25 @@ fn the_summary_names_the_routing_keys() {
                 "routing: cooldown_fallback 60s, model_rejection 3600s, catalog refresh 21600s, startup fetch 30s",
                 "ledger at ./data/ledger.sqlite",
                 api_prices.as_str(),
-                subscription_costs.as_str(),
+            ][..]
+        ),
+        "{stdout}"
+    );
+    let count = |n: &str| n.parse::<usize>().is_ok_and(|n| n > 0);
+    let shaped = lines
+        .get(9)
+        .and_then(|line| line.strip_prefix("subscription costs: built in (effective "))
+        .and_then(|rest| rest.strip_suffix(" tiers); ./subscription_costs.yaml not found"))
+        .and_then(|rest| rest.split_once(", "))
+        .and_then(|(effective, counts)| Some((effective, counts.split_once(" models, ")?)))
+        .is_some_and(|(effective, (models, tiers))| {
+            !effective.is_empty() && count(models) && count(tiers)
+        });
+    assert!(shaped, "the subscription costs line: {stdout}");
+    assert_eq!(
+        lines.get(10..12),
+        Some(
+            &[
                 "retention 90 days, rollups 400 days",
                 "keepalive: 128 sessions, 1024 agents, 256 MiB retained",
             ][..]
@@ -202,20 +196,58 @@ fn the_summary_names_the_routing_keys() {
     );
 }
 
-/// The test tables, both dated 2026-01-01: four price rows; weights for Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 4.5
-/// with Opus 5 at null, and an override that weighs Haiku on the week; four tiers, Team sized on the 5-hour window
-/// alone. So the cost model counts four models, the null weight left out and the overridden model counted once.
+const COUNTED_PRICES: &str = "\
+effective: 2026-02-01
+models:
+  claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
+  claude-haiku-4-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 5}
+";
+
+const COUNTED_COSTS: &str = "\
+effective: 2026-03-01
+unit:
+  defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+  units_per_window: 100
+capacity:
+  default_claude_ai:         {five_hour: 5, seven_day: 50}
+  default_claude_enterprise: {five_hour: null, seven_day: null}
+  default_claude_max_20x:    {five_hour: 100, seven_day: 1000}
+  default_claude_team:       {five_hour: 10, seven_day: null}
+peak:
+  zone: America/Los_Angeles
+  weekdays: true
+  from_hour: 5
+  to_hour: 11
+  capacity_factor: {five_hour: 0.5, seven_day: 1}
+type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+model_weight:
+  claude-opus-5-5: 2
+  claude-opus-5: null
+  claude-sonnet-5-5: 1
+  claude-sonnet-5: null
+  claude-haiku-4-5: 0.5
+model_windows: {}
+overrides:
+  claude-sonnet-5: {weight_by_window: {seven_day: 1}}
+  claude-haiku-4-5: {weight_by_window: {seven_day: 1}}
+";
+
+/// Two tables written for this count: two price rows dated 2026-02-01, and a cost model dated 2026-03-01 that weighs
+/// Opus 5.5, Sonnet 5.5 and Haiku 4.5, leaves Opus 5 and Sonnet 5 at null, and weighs Sonnet 5 and Haiku 4.5 on the
+/// week through overrides; its four tiers are Pro and Max 20x sized on both windows, Team on the 5-hour window alone
+/// and Enterprise on neither. Counted by hand: four models (Opus 5 left out, Sonnet 5 in through its override, Haiku
+/// 4.5 once) and three tiers (Enterprise left out).
 #[test]
-fn files_at_both_paths_print_their_counts_leaving_out_a_null_weight_and_counting_an_overridden_model_once(
+fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_each_tier_sized_on_a_window(
 ) {
     let dir = tempfile::tempdir().unwrap();
     let prices = dir.path().join("api_prices.yaml");
     let costs = dir.path().join("subscription_costs.yaml");
-    std::fs::write(&prices, phoebis_ledger::test_tables::API_PRICES).unwrap();
-    std::fs::write(&costs, phoebis_ledger::test_tables::SUBSCRIPTION_COSTS).unwrap();
+    std::fs::write(&prices, COUNTED_PRICES).unwrap();
+    std::fs::write(&costs, COUNTED_COSTS).unwrap();
     let config = config_file(
         dir.path(),
-        "test-tables",
+        "counted",
         &format!(
             "stats:\n  api_prices_path: {}\n  subscription_costs_path: {}\n",
             prices.display(),
@@ -227,11 +259,11 @@ fn files_at_both_paths_print_their_counts_leaving_out_a_null_weight_and_counting
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
     let api_prices = format!(
-        "api prices: {} (file, effective 2026-01-01, 4 models)",
+        "api prices: {} (file, effective 2026-02-01, 2 models)",
         prices.display()
     );
     let subscription_costs = format!(
-        "subscription costs: {} (file, effective 2026-01-01, 4 models, 4 tiers)",
+        "subscription costs: {} (file, effective 2026-03-01, 4 models, 3 tiers)",
         costs.display()
     );
     assert_eq!(
