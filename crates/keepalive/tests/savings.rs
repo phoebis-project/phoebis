@@ -58,6 +58,12 @@ fn rig_cells(model: &str, speed: phoebis_ledger::Speed) -> phoebis_ledger::Model
         .clone()
 }
 
+/// One probe on `PRICED` answered with the standing 2,000-token read: those tokens at the cache read of the table
+/// the rig prices through.
+fn one_probe_usd() -> f64 {
+    2_000.0 * rig_cells(PRICED, phoebis_ledger::Speed::Standard).cache_read / 1_000_000.0
+}
+
 /// What 2,000 cached tokens of `PRICED` save, its input less its cache read per million, in the table the rig
 /// prices through.
 fn saving_2000() -> f64 {
@@ -1350,7 +1356,7 @@ async fn the_daily_cost_cap_pauses_probes_until_midnight() {
     assert_eq!(r.status("main").probes, 3, "the cap resets at UTC midnight");
     let spent = r.engine.load_spent_today().await;
     assert!(
-        (spent.get("main").copied().unwrap_or(0.0) - 0.0004).abs() < 1e-9,
+        (spent.get("main").copied().unwrap_or(0.0) - one_probe_usd()).abs() < 1e-9,
         "the row after midnight: {spent:?}"
     );
 }
@@ -1755,7 +1761,7 @@ async fn the_day_roll_deletes_yesterdays_budget_rows() {
     let yesterday = budget_day(r.now());
     let rows = r.h.store.keepalive_budgets(&yesterday).unwrap();
     assert!(
-        rows.len() == 1 && rows[0].id == "main" && (rows[0].usd - 0.0004).abs() < 1e-12,
+        rows.len() == 1 && rows[0].id == "main" && (rows[0].usd - one_probe_usd()).abs() < 1e-12,
         "the probe's charge is on its pool's row for the day: {rows:?}"
     );
     let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
@@ -1772,7 +1778,7 @@ async fn the_day_roll_deletes_yesterdays_budget_rows() {
     );
     let today = r.h.store.keepalive_budgets(&budget_day(r.now())).unwrap();
     assert!(
-        today.len() == 1 && (today[0].usd - 0.0004).abs() < 1e-12,
+        today.len() == 1 && (today[0].usd - one_probe_usd()).abs() < 1e-12,
         "the probe due after midnight started the new day's row: {today:?}"
     );
     let restarted = r.restart().await;
@@ -1780,7 +1786,7 @@ async fn the_day_roll_deletes_yesterdays_budget_rows() {
     assert!(
         same_budgets(
             &restarted.spent_today(),
-            &BTreeMap::from([("main".to_string(), 0.0004)])
+            &BTreeMap::from([("main".to_string(), one_probe_usd())])
         ),
         "a restart restores the new day alone: {:?}",
         restarted.spent_today()
@@ -2117,7 +2123,7 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    // Two probes at 0.0004 each under the key's own pool, past the cap the warm pool carries below.
+    // Two probes at one probe's cost each under the key's own pool, past the cap the warm pool carries below.
     for _ in 0..2 {
         r.advance(270_000);
         r.step().await;
