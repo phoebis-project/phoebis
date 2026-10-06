@@ -48,7 +48,8 @@ async function storyAt(at) {
   const weekFrom = startOfHour(now) - 7 * DAY;
   const counted = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= dayFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
-  return { accounts, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, weekFrom };
+  const settings = await api.getSettings();
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, weekFrom };
 }
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -217,21 +218,50 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.equal(sum(points, (pt) => sum(pt.groups, (g) => g.requests)), sum(day, requestsOf));
   });
 
-  test(`the live desktop key starts the hour its earlier holder's rows end, nine days back, at ${at}`, async () => {
+  test(`the live desktop key starts on the hour its earlier holder ended, inside the last day, at ${at}`, async () => {
     const s = await story;
     const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
-    const rows = s.rollups.filter((r) => r.keyId === 'desktop');
+    assert.equal(created % HOUR, 0, 'on the hour');
+    assert.ok(created >= s.now - 22 * HOUR && created <= s.now - 18 * HOUR, `created ${new Date(created).toISOString()}, not 18 to 22 hours back`);
+    const rows = s.allRollups.filter((r) => r.keyId === 'desktop');
     const holder = rows.filter((r) => Date.parse(r.hour) < created);
     const earlier = new Set(holder.map((r) => r.keyGeneration));
-    assert.ok(holder.length > 0, 'the earlier holder has rows');
+    assert.ok(holder.some((r) => r.kind === 'inference') && holder.some((r) => r.kind === 'probe'), 'the earlier holder has rows, probes among them');
     assert.equal(earlier.size, 1, 'one earlier generation');
     const [generation] = earlier;
     assert.ok(generation < created, 'the earlier generation is the older one');
     assert.ok(rows.filter((r) => Date.parse(r.hour) >= created).every((r) => r.keyGeneration === created), 'the live key holds every hour from its creation');
-    assert.equal(Math.max(...holder.map((r) => Date.parse(r.hour))) + HOUR, created, "the key's creation is the hour the holder's rows end");
-    assert.equal(new Date(created).toDateString(), new Date(s.now - 9 * DAY).toDateString(), "the holder's day");
-    assert.deepEqual(s.sessions.filter((x) => x.historical).map((x) => [x.keyId, x.keyGeneration]), [['desktop', generation]], "the Sessions view's earlier holder");
-    assert.ok(s.requests.filter((r) => r.keyId === 'desktop').every((r) => r.keyGeneration === created), 'no request of the day is the holder\'s');
+    assert.ok(s.requests.filter((r) => r.keyId === 'desktop').every((r) => r.keyGeneration === (Date.parse(r.at) < created ? generation : created)), 'each request row carries the holder it ran under');
+  });
+
+  test(`the earlier holder's session row reads its own requests and drops off a day after its last one, at ${at}`, async () => {
+    const s = await story;
+    const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
+    const historical = s.sessions.filter((x) => x.historical);
+    assert.deepEqual(historical.map((x) => x.keyId), ['desktop'], 'one earlier holder is listed');
+    const [held] = historical;
+    // The rows run newest first.
+    const holders = s.requests.filter((r) => r.keyId === 'desktop' && r.keyGeneration === held.keyGeneration);
+    const own = holders.filter((r) => r.sessionId === held.sessionId);
+    assert.ok(held.keyGeneration < created && own.length > 0, 'the row is the earlier generation, with rows of its own');
+    assert.deepEqual([held.requests, held.lastRequestAt], [own.length, own[0].at], "the row's figures are its own rows'");
+    assert.equal(held.lastRequestAt, holders[0].at, "the holder's last request ran on this session");
+    assert.ok(Date.parse(held.lastRequestAt) < created, 'before the live key');
+    assert.deepEqual([held.lastUsedAt, held.pinned, held.agents], [null, false, 0], 'no pin and no activity of its own past the ledger');
+    assert.ok(Date.parse(held.lastRequestAt) + s.settings.sessions.expireAfterSeconds * 1000 > s.now, 'still inside the session expiry');
+    assert.ok(s.sessions.some((x) => !x.historical && x.keyId === 'desktop' && x.sessionId === held.sessionId), 'the live key holds the same session id');
+  });
+
+  test(`a switched-off key was last used before its last write, and a pool's one member holds what its keys sent, at ${at}`, async () => {
+    const s = await story;
+    for (const k of s.keys.filter((x) => x.status === 'disabled' || x.status === 'revoked')) {
+      assert.ok(k.lastUsedAt === null || Date.parse(k.lastUsedAt) <= Date.parse(k.updatedAt), `${k.id} was used at ${k.lastUsedAt}, after it was switched off at ${k.updatedAt}`);
+    }
+    for (const p of s.pools.filter((x) => x.members.length === 1)) {
+      const member = s.accounts.find((a) => a.id === p.members[0].accountId);
+      const sent = sum(s.keys.filter((k) => k.poolId === p.id), (k) => k.lifetime.requests);
+      assert.ok(member.requests.lifetime >= sent, `${member.id}'s lifetime reads ${member.requests.lifetime}, under the ${sent} its pool's keys sent`);
+    }
   });
 
   test(`the key with one request in its life reads one, at ${at}`, async () => {

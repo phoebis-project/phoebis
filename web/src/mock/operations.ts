@@ -7,7 +7,7 @@ import { keyById } from './pools';
 import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE } from './samples';
-import { MINUTE, ago, ahead } from './time';
+import { MINUTE, NOW, ago, ahead } from './time';
 
 const rng = createRng(2_024);
 
@@ -52,9 +52,13 @@ const sessionSpec: {
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
 ];
 
+/** How long the router lists a session after its last request, which the settings answer as well. */
+const SESSION_EXPIRE_SECONDS = 86_400;
+
+// The earlier holder's rows count for its own row below, never for the live session that shares their id.
 const ledgered = new Map<string, { last: string; requests: number }>();
 for (const r of REQUESTS) {
-  if (r.sessionId === null) continue;
+  if (r.sessionId === null || (r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION)) continue;
   const seen = ledgered.get(r.sessionId);
   if (!seen) ledgered.set(r.sessionId, { last: r.at, requests: 1 });
   else ledgered.set(r.sessionId, { last: r.at > seen.last ? r.at : seen.last, requests: seen.requests + 1 });
@@ -260,23 +264,44 @@ for (const pin of SESSIONS) {
   pin.keepalive.netUsd = main?.netUsd ?? null;
 }
 
-// The earlier holder of the `desktop` key id, which the analytics story already draws as
-// `desktop (deleted, created ... UTC)`: the ledger keeps its sessions until they expire, with no recipe of their
-// own. It joins the list after the probe times are filled in because it carries the live session's id, which would
-// otherwise hand it that session's next probe.
-const firstDesktop = SESSIONS[0];
-SESSIONS.push({
-  ...firstDesktop,
-  agents: 0,
-  companion: 'none',
-  companionSince: null,
-  createdAt: null,
-  historical: true,
-  keepalive: { lastGuard: null, netFiveHourShare: null, netUsd: null, nextProbeAt: null, state: null },
-  keyGeneration: DELETED_HOLDER_GENERATION,
-  lastUsedAt: null,
-  pinned: false,
-});
+// The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...
+// UTC)`: the router lists a holder's session while its last request is inside the session expiry, with that holder's
+// own requests and no pin or recipe. The holder's last request ran on the session the live key holds now, so the row
+// carries that id, and it joins the list after the probe times are filled in, which would otherwise hand it that
+// session's next probe.
+const holderRows = REQUESTS.filter((r) => r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === SESSION_IDS[0]);
+const holderLast = holderRows[0];
+if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NOW) {
+  SESSIONS.push({
+    ...SESSION_SAMPLE,
+    accountId: holderLast.accountId,
+    agentId: null,
+    agents: 0,
+    burn: null,
+    burnAt: null,
+    burnUnit: null,
+    cacheTtlMs: null,
+    companion: 'none',
+    companionSince: null,
+    createdAt: null,
+    epoch: null,
+    forkDepth: null,
+    forkedFrom: null,
+    historical: true,
+    keepalive: { lastGuard: null, netFiveHourShare: null, netUsd: null, nextProbeAt: null, state: null },
+    keyGeneration: DELETED_HOLDER_GENERATION,
+    keyId: 'desktop',
+    lastInputTokens: null,
+    lastRefreshAt: null,
+    lastRequestAt: holderLast.at,
+    lastUsedAt: null,
+    model: holderLast.canonicalModel,
+    pinned: false,
+    requests: holderRows.length,
+    sessionId: SESSION_IDS[0],
+    shedFrom: null,
+  });
+}
 
 // Counted off the recipes so the tiles cannot drift from the table below them.
 const WARMED = SESSIONS.filter((pin) => pin.keepalive.state !== null);
@@ -321,7 +346,7 @@ export const SETTINGS_WIRE = {
   listeners: { metrics: '127.0.0.1:9464', proxy: '127.0.0.1:8080' },
   pricing: { ...settingsFixture.pricing, effective: '2026-09-30', models: PRICES.map(priceWire), source: 'shipped' },
   retention: { body_capture_max_hours: 72 },
-  sessions: { expire_after_seconds: 86_400 },
+  sessions: { expire_after_seconds: SESSION_EXPIRE_SECONDS },
   storage: { ledger_path: './data/ledger.sqlite', path: './data/router.sqlite', pricing_path: './pricing.yaml' },
   usage: { cache_ttl_seconds: 60 },
 };

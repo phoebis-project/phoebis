@@ -369,6 +369,11 @@ function buildRequests(): RequestLog[] {
     }
   }
   rows.sort((a, b) => Date.parse(b.at) - Date.parse(a.at));
+  // Every desktop row before the live key's creation is its earlier holder's, and the holder's last request ran on
+  // the session the live key holds now, so the Sessions view lists that id once under each holder.
+  const holderRows = rows.filter((r) => r.keyId === 'desktop' && Date.parse(r.at) < DELETED_HOLDER_END);
+  for (const r of holderRows) r.keyGeneration = DELETED_HOLDER_GENERATION;
+  if (holderRows[0]) Object.assign(holderRows[0], { sessionId: SESSION_IDS[0] });
   // A stream can commit its 200 head and fail after it: the newest such desktop stream keeps the status and
   // carries the error, which is the row Observe and the drawer must not draw as a success.
   const failedAfterHead = rows.find((r) => r.keyId === 'desktop' && r.kind === 'inference' && r.transport === 'sse' && r.status === 200);
@@ -809,7 +814,8 @@ function rollups(): HourlyRollup[] {
       hour,
       client: CLIENTS[keyId] ?? '-',
       keyId,
-      keyGeneration: Date.parse(keyById.get(keyId)!.createdAt),
+      // One hour never holds two holders of a key, since the live key starts on the hour.
+      keyGeneration: list[0].keyGeneration,
       kind,
       poolId,
       accountId,
@@ -916,8 +922,8 @@ function historicalRollups(): HourlyRollup[] {
     const daylight = hourOfDay >= 8 && hourOfDay <= 19 ? 1 : 0.15;
     const volume = daylight * (weekend ? 0.35 : 1);
     for (const lane of LANES) {
-      // Every desktop hour before the live key's creation belongs to the earlier holder of its id: the month answers
-      // the pair of key groups, the week and the day the live key alone, and no hour carries both generations.
+      // Every desktop hour before the live key's creation belongs to the earlier holder of its id, so every range
+      // that reaches past that hour answers the pair of key groups, and no hour carries both generations.
       const earlierHolder = lane.keyId === 'desktop' && t < DELETED_HOLDER_END;
       const generation = earlierHolder ? DELETED_HOLDER_GENERATION : Date.parse(keyById.get(lane.keyId)!.createdAt);
       const laneWeight = lane.keyId === 'desktop' ? 1 : lane.keyId === 'laptop' ? 0.45 : 0.14;

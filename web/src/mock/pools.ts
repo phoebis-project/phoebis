@@ -224,7 +224,8 @@ export const KEYS: ApiKey[] = [
     // When it was switched off.
     updatedAt: daysAgo(20),
     expiresAt: null,
-    lastUsedAt: daysAgo(9),
+    // The last nightly run before the switch-off.
+    lastUsedAt: daysAgo(21),
     retiredSecretLastUsedAt: null,
     sessionsOnRetiredSecret: 0,
     notes: 'Nightly evaluation runs. Switched off between campaigns rather than revoked.',

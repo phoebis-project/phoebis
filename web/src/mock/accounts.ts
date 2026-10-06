@@ -174,7 +174,8 @@ export const ACCOUNTS: Account[] = ([
     fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
-    requests: { last24h: 0, last7d: 0, lifetime: 1_480 },
+    // The codex pool's one member, so its lifetime holds what both of that pool's keys sent.
+    requests: { last24h: 0, last7d: 0, lifetime: 3_400 },
     cooldowns: [],
   },
   {

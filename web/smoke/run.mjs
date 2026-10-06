@@ -7202,8 +7202,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await m.settle(700);
   }
   {
-    // The earlier holder of `desktop` held its id until nine days back, so the month is the range that holds both
-    // groups; the later checks read the day, which it is put back to at the end.
+    // The earlier holder of `desktop` held its id until twenty hours back, so every range holds both groups; the
+    // month is read here, and the later checks read the day, which it is put back to at the end.
     await tab(m, 'Traffic');
     const range = (label) => [...m.container.querySelectorAll('.segmented button')].find((b) => b.textContent?.trim() === label);
     range('30d')?.click();
@@ -7964,7 +7964,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const epochLines = [...m.container.querySelectorAll('.srow__epoch')].map((e) => e.textContent?.trim() ?? '');
     results.push({
       name: '/sessions a re-created pin says so under the session id',
-      ok: epochLines.length === 4 && epochLines.every((t) => t === 'epoch 2') && [...m.container.querySelectorAll('.srow__epoch')].every((e) => (e.getAttribute('title') ?? '').includes('re-created')),
+      ok: epochLines.length === 3 && epochLines.every((t) => t === 'epoch 2') && [...m.container.querySelectorAll('.srow__epoch')].every((e) => (e.getAttribute('title') ?? '').includes('re-created')),
       missing: epochLines,
     });
     const lasts = rows().map((r) => cell(r, 'Last request')?.textContent?.trim() ?? '');
@@ -8091,6 +8091,16 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
         (cell(gone, 'Cache warming')?.querySelector('[title]')?.getAttribute('title') ?? '') === 'Belongs to an earlier holder of this key id; nothing is scheduled for it',
       missing: gone ? [...gone.children].map((c) => c.textContent?.trim() ?? '') : ['absent'],
     });
+    {
+      // The earlier holder's row reads its own generation's requests on that session, never the live holder's.
+      const held = (await api.listSessions()).find((s) => s.historical);
+      const own = requests.filter((r) => r.keyId === 'desktop' && r.keyGeneration === DELETED_HOLDER_GENERATION && r.sessionId === held?.sessionId);
+      results.push({
+        name: "/sessions the earlier holder's row counts its own requests and ends at its last one",
+        ok: own.length > 0 && cell(gone, 'Requests')?.textContent?.trim() === String(own.length) && held?.requests === own.length && held?.lastRequestAt === own[0].at,
+        missing: [cell(gone, 'Requests')?.textContent?.trim() ?? 'absent', `rows ${own.length}`, `last ${held?.lastRequestAt ?? 'no row'} against ${own[0]?.at ?? 'none'}`],
+      });
+    }
     results.push({
       name: '/sessions the live holder keeps the recipes of the id they share',
       ok: live !== undefined && Number(cell(live, 'Agents')?.textContent?.trim()) > 0 && cell(live, 'Cache warming')?.querySelector('.badge') !== null,
