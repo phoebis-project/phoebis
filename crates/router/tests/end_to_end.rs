@@ -2163,7 +2163,7 @@ fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
 }
 
 /// The fixture head with an Opus 5 body in place of the captured fixture's own model; a test that needs a model the
-/// cost table measures names it through `request_on`.
+/// subscription cost model has a weight for names it through `request_on`.
 fn opus_request(
     client: &reqwest::Client,
     proxy_port: u16,
@@ -2325,7 +2325,13 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     // The default `burn_window_seconds` (no pool override above): a single renewal from a cold average is the
     // usage spread over that window, weighed by the band at the renewal, read per hour on Max 20x.
     let share = tables
-        .five_hour_share_at("default_claude_max_20x", "claude-opus-5-5", usage, burn_at)
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_max_20x",
+            "claude-opus-5-5",
+            usage,
+            burn_at,
+        )
         .unwrap();
     let expected_burn = share / 600.0 * 3_600.0;
     assert!(

@@ -251,11 +251,12 @@ impl SubscriptionCosts {
             .expect("the shipped subscription cost model parses")
     }
 
-    /// Refuses with `LedgerError::Plan` naming the key and the rule: serde's refusals (a parse error, an unknown or
-    /// a missing key), a zone the bundled database lacks, then each value rule in the file's order.
+    /// Refuses with `LedgerError::Plan` naming the key and the rule: serde's refusals (a repeated key, a parse error,
+    /// an unknown or a missing key), a zone the bundled database lacks, then each value rule in the file's order.
     pub fn from_yaml(text: &str) -> Result<SubscriptionCosts, LedgerError> {
         // The typed maps keep the last of two equal keys, so the untyped parse runs first: it refuses the repeat,
-        // naming the key with its line and column. The typed parse stays second so serde's field errors keep theirs.
+        // naming the map's path and the key. The typed parse stays second so serde's field errors keep their line
+        // and column.
         serde_norway::from_str::<serde_norway::Value>(text).map_err(|e| refuse(e.to_string()))?;
         let mut costs: SubscriptionCosts =
             serde_norway::from_str(text).map_err(|e| refuse(e.to_string()))?;
@@ -463,24 +464,6 @@ impl SubscriptionCosts {
         usage: PinUsage,
         at: i64,
     ) -> Option<f64> {
-        let (priced, _) = self.priced_window(window)?;
-        self.share_with(
-            window,
-            tier,
-            canonical_model,
-            usage,
-            self.factor_at(priced, at),
-        )
-    }
-
-    fn share_with(
-        &self,
-        window: &str,
-        tier: &str,
-        canonical_model: &str,
-        usage: PinUsage,
-        factor: f64,
-    ) -> Option<f64> {
         let (priced, divisor) = self.priced_window(window)?;
         let weight = self.weight(canonical_model, window)?;
         let capacity = tier_row(&self.capacity, tier)?.on(priced)?;
@@ -490,7 +473,7 @@ impl SubscriptionCosts {
             + usage.write_5m as f64 * weight * write_5m
             + usage.write_1h as f64 * weight * write_1h
             + usage.output as f64 * weight * output;
-        Some(units / capacity / factor / divisor)
+        Some(units / capacity / self.factor_at(priced, at) / divisor)
     }
 
     /// The weight the band puts on a charge landing on `window` at `at`: the reciprocal of the priced window's
@@ -641,28 +624,5 @@ impl PlanTables {
 
     pub fn priced(&self, window: &str, tier: &str, canonical_model: &str) -> bool {
         self.costs.priced(window, tier, canonical_model)
-    }
-
-    /// The share outside the band at any hour, for the readers that call it rather than `share_at`.
-    pub fn share(
-        &self,
-        window: &str,
-        tier: &str,
-        canonical_model: &str,
-        usage: PinUsage,
-    ) -> Option<f64> {
-        self.costs
-            .share_with(window, tier, canonical_model, usage, 1.0)
-    }
-
-    /// `share_at` on the 5-hour window, for the readers that call it rather than `share_at`.
-    pub fn five_hour_share_at(
-        &self,
-        tier: &str,
-        canonical_model: &str,
-        usage: PinUsage,
-        at: i64,
-    ) -> Option<f64> {
-        self.share_at(FIVE_HOUR, tier, canonical_model, usage, at)
     }
 }

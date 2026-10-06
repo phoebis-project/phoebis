@@ -50,8 +50,13 @@ fn priced_body() -> String {
     BODY.replace("claude-sonnet-4-5", PRICED)
 }
 
-/// Sonnet 5: input 2, cache read 0.2 per million; 2,000 cached tokens save (2 - 0.2) * 2000 / 1e6.
-const SAVING_2000: f64 = 2_000.0 * (2.0 - 0.2) / 1_000_000.0;
+/// What 2,000 cached tokens of `PRICED` save, its input less its cache read per million, in the table the rig
+/// prices through.
+fn saving_2000() -> f64 {
+    let table = phoebis_ledger::PriceTable::shipped();
+    let price = table.price(PRICED).expect("the rig's table prices PRICED");
+    2_000.0 * (price.input - price.cache_read) / 1_000_000.0
+}
 
 /// A real request answered with a five-minute write of 2,000 tokens (the cache was cold) or a read of 2,000
 /// (the cache was warm); the standing rule answers reads.
@@ -69,6 +74,7 @@ async fn row(r: &Rig, id: &str) -> phoebis_ledger::RequestRecord {
 
 #[tokio::test]
 async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
+    let saving = saving_2000();
     let mut r = rig(RigSpec::default()).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
@@ -91,14 +97,14 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
         (1, 2_000)
     );
     assert!(
-        (credit.saved_usd_gross - SAVING_2000).abs() < 1e-12,
+        (credit.saved_usd_gross - saving).abs() < 1e-12,
         "{}",
         credit.saved_usd_gross
     );
     let probe = probe_rows(&rows);
     assert!(
         probe.probe_cost_usd > 0.0
-            && (r.status("main").net_usd - (SAVING_2000 - probe.probe_cost_usd)).abs() < 1e-12
+            && (r.status("main").net_usd - (saving - probe.probe_cost_usd)).abs() < 1e-12
     );
     assert!(row(&r, &second).await.kept_warm);
     // The same gap without a probe, or with a cold probe, credits nothing.
@@ -139,7 +145,7 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
         .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
     assert!(
         text.contains(&format!(
-            r#"phoebis_keepalive_saved_usd_total{{pool="main"}} {SAVING_2000}"#
+            r#"phoebis_keepalive_saved_usd_total{{pool="main"}} {saving}"#
         )),
         "{text}"
     );
@@ -1814,7 +1820,7 @@ async fn a_kept_warm_request_on_an_unpriced_model_saves_at_the_dearest_cells_and
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
     let before = r.status("main").net_usd;
-    assert!((before + DEAREST_READ_2000).abs() < 1e-12, "{before}");
+    assert!((before + dearest_read_2000()).abs() < 1e-12, "{before}");
     r.advance(60_000);
     let second = r.observe_with("main", BODY).await;
     let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
@@ -1824,9 +1830,12 @@ async fn a_kept_warm_request_on_an_unpriced_model_saves_at_the_dearest_cells_and
         (1, 2_000),
         "the mark and the tokens count on a model the price table does not know"
     );
-    // The dearest input the shipped price table lists, Fable 5.1's 10 per million, less its dearest cache read,
-    // Opus 5's 0.5: the cells the probe's own cost reads.
-    let saved = 2_000.0 * (10.0 - 0.5) / 1_000_000.0;
+    // The dearest input the rig's price table lists less its dearest cache read: the cells the probe's own cost
+    // reads.
+    let dearest = phoebis_ledger::PriceTable::shipped().rate_table().fallback;
+    let saved = 2_000.0
+        * (dearest.input.expect("the fallback prices every type")
+            - dearest.cache_read.expect("the fallback prices every type"));
     assert!(
         (credit.saved_usd_gross - saved).abs() < 1e-12,
         "{}",
@@ -1851,9 +1860,12 @@ async fn a_kept_warm_request_on_an_unpriced_model_saves_at_the_dearest_cells_and
     );
 }
 
-/// The standing answer's 2,000 cached tokens read back at the dearest cache read the shipped price table lists,
-/// Opus 5's 0.5 per million: what a probe on a model the table does not list costs.
-const DEAREST_READ_2000: f64 = 2_000.0 * 0.5 / 1_000_000.0;
+/// The standing answer's 2,000 cached tokens read back at the dearest cache read of the table the rig prices
+/// through: what a probe on a model the table does not list costs.
+fn dearest_read_2000() -> f64 {
+    let dearest = phoebis_ledger::PriceTable::shipped().rate_table().fallback;
+    2_000.0 * dearest.cache_read.expect("the fallback prices every type")
+}
 
 #[tokio::test]
 async fn an_unpriced_model_costs_the_dearest_cells_and_still_lands_a_probe_row() {
@@ -1862,13 +1874,13 @@ async fn an_unpriced_model_costs_the_dearest_cells_and_still_lands_a_probe_row()
     r.advance(270_000);
     r.step().await;
     assert!(
-        (r.status("main").net_usd + DEAREST_READ_2000).abs() < 1e-12,
+        (r.status("main").net_usd + dearest_read_2000()).abs() < 1e-12,
         "claude-sonnet-4-5 is not in the shipped table, so its probe prices at the dearest cells: {:?}",
         r.status("main")
     );
     let rows = rollups(&r, |rows| probe_rows(rows).requests == 1).await;
     assert!(
-        (probe_rows(&rows).probe_cost_usd - DEAREST_READ_2000).abs() < 1e-12,
+        (probe_rows(&rows).probe_cost_usd - dearest_read_2000()).abs() < 1e-12,
         "the ledger's probe cost reads the same figure: {}",
         probe_rows(&rows).probe_cost_usd
     );
@@ -1895,8 +1907,8 @@ fn plan_pricing_sonnet() -> phoebis_ledger::PlanTables {
     tables
 }
 
-/// A model the dollar table prices but the cost table lacks settles a plan-funded probe in dollars, the same
-/// fall-back the settlement takes; the stop and the dollar cap must read that unit too, or nothing bounds it.
+/// A model the dollar table prices but the cost model has no weight for settles a plan-funded probe in dollars, the
+/// same fall-back the settlement takes; the stop and the dollar cap must read that unit too, or nothing bounds it.
 #[tokio::test]
 async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_net() {
     let mut r = rig(RigSpec {
@@ -1916,7 +1928,7 @@ async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_ne
     let status = r.status("main");
     assert!(
         status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
-        "the cost table lacks this model, so the probe settles in dollars whatever the funding: {status:?}"
+        "the cost model has no weight for this model, so the probe settles in dollars whatever the funding: {status:?}"
     );
     assert!(
         r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0,
@@ -1932,8 +1944,8 @@ async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_ne
     );
 }
 
-/// A model the table lists with every 5-hour cell null prices no share, so its probe settles in dollars, counts
-/// toward the dollar cap alone and leaves the window-share cap unapplied, as a model the table lacks does.
+/// A model the cost model lists with a `null` weight prices no share, so its probe settles in dollars, counts toward
+/// the dollar cap alone and leaves the window-share cap unapplied, as a model the cost model lacks does.
 #[tokio::test]
 async fn a_plan_funded_probe_on_a_model_with_an_unmeasured_cell_settles_in_dollars_and_never_reaches_the_share_cap(
 ) {
@@ -1989,11 +2001,11 @@ async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_c
         "a zero share cap holds nothing on a probe that settles in dollars: {status:?}"
     );
     assert!(
-        (status.net_usd + DEAREST_READ_2000).abs() < 1e-12 && status.net_five_hour_share == 0.0,
+        (status.net_usd + dearest_read_2000()).abs() < 1e-12 && status.net_five_hour_share == 0.0,
         "{status:?}"
     );
     assert!(
-        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - DEAREST_READ_2000).abs()
+        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - dearest_read_2000()).abs()
             < 1e-12
             && !r.engine.share_spent_today().contains_key("o"),
         "{:?}",
@@ -2025,7 +2037,7 @@ async fn a_plan_funded_credit_on_an_unlisted_model_lands_in_dollars() {
     let status = r.status("main");
     assert!(
         status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
-        "the cost table lacks this model, so the probe settles in dollars: {status:?}"
+        "the cost model has no weight for this model, so the probe settles in dollars: {status:?}"
     );
     r.advance(60_000);
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
@@ -2672,7 +2684,7 @@ fn body_on(model: &str) -> String {
 }
 
 /// A probe answer that reads the 2,000-token prefix back and bills a million input tokens beside it, so the
-/// probe stays covered while its cost is the cost table's own input cell.
+/// probe stays covered while its cost is the cost model's price of a million input tokens.
 fn million_input_answer() -> Respond {
     Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":1000000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":0}}"#.to_vec() }
 }

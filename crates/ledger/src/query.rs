@@ -1876,7 +1876,7 @@ struct UsageRow<'a> {
     fast: bool,
 }
 
-/// The shares of an oauth account's two windows (the 5-hour one banded at the row's own instant) when `tier`
+/// The shares of an oauth account's two windows (each banded at the row's own instant) when `tier`
 /// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
 /// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account adds
 /// its `estimated_usd` and a zero share where the tables size its tier: fast mode spends usage credits and draws no
@@ -1898,8 +1898,8 @@ fn price_usage(
     match kind {
         Some(AccountKind::Oauth) if row.fast => {
             point.usd += row.estimated_usd;
-            // Ahead of the model's cells: a fast row prices in dollars whatever standard cells the model carries, so
-            // the zero rests on the tier alone.
+            // Ahead of the model's weights: a fast row prices in dollars whatever the model weighs it at, so the zero
+            // rests on the tier alone.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
                 if tables.tier_factor(tier, FIVE_HOUR).is_some() && !point.five_hour_unpriced {
                     point.five_hour_share.get_or_insert(0.0);
@@ -1917,10 +1917,10 @@ fn price_usage(
                 write_1h: row.cache_write_1h_tokens,
                 output: row.output_tokens,
             };
-            // A failed request books a row with no token, and the table refuses a model it has no row for before it
-            // reads the usage: such a row would null a priced hour for a charge of nothing.
+            // A failed request books a row with no token, and the model refuses a model it has no weight for before
+            // it reads the usage: such a row would null a priced hour for a charge of nothing.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
-                match tables.five_hour_share_at(tier, row.canonical_model, usage, row.at) {
+                match tables.share_at(FIVE_HOUR, tier, row.canonical_model, usage, row.at) {
                     Some(share) if !point.five_hour_unpriced => {
                         *point.five_hour_share.get_or_insert(0.0) += share;
                     }
@@ -1930,7 +1930,7 @@ fn price_usage(
                         point.five_hour_share = None;
                     }
                 }
-                match tables.share(SEVEN_DAY, tier, row.canonical_model, usage) {
+                match tables.share_at(SEVEN_DAY, tier, row.canonical_model, usage, row.at) {
                     Some(share) if !point.seven_day_unpriced => {
                         *point.seven_day_share.get_or_insert(0.0) += share;
                     }

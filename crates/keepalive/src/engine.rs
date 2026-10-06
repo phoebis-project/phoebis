@@ -13,8 +13,8 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
 use phoebis_oauth::Clock;
-use phoebis_relay::{CacheTtlPolicy, Relay};
-use phoebis_routing::{budget_deadline, MemberSpend, PinUsage, RegistrySnapshot, RouterHandle};
+use phoebis_relay::Relay;
+use phoebis_routing::{budget_deadline, MemberSpend, RegistrySnapshot, RouterHandle};
 use phoebis_store::{AccountKind, AccountState, OveragePolicy, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
@@ -23,7 +23,7 @@ use tokio_util::task::TaskTracker;
 use crate::config::{KeepaliveLimits, KeepalivePolicy, FIVE_MINUTES_MS, MAX_WORKERS};
 use crate::probe::{run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
-use crate::savings::{dispatched_types, gross_saving, settlement_unit};
+use crate::savings::{gross_saving, settlement_unit};
 use crate::usage::ProbeUsage;
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
@@ -289,7 +289,7 @@ pub struct EngineParts {
     /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe or
     /// saving is a share of, and the budgets a restart resumes.
     pub store: Arc<Store>,
-    /// The shipped cost table, for a probe or a kept-warm saving on a plan-funded attempt.
+    /// The subscription cost model, for a probe or a kept-warm saving on a plan-funded attempt.
     pub tables: Arc<PlanTables>,
 }
 
@@ -388,7 +388,7 @@ pub(crate) struct Agent {
     /// a prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
     pub covered_account: Option<String>,
     /// The unit the covering probe's own cost settled in, so the credit it earns later settles in the same one;
-    /// a probe the cost table cannot price falls the unit back to dollars along with the cost, so the two never split.
+    /// a probe the cost model cannot price falls the unit back to dollars along with the cost, so the two never split.
     pub covered_unit: Option<SavingsUnit>,
     /// The covering probe's recipe was sent fast: it kept the fast lane's cache, which a standard request never
     /// reads, and the reverse.
@@ -1638,7 +1638,7 @@ impl Engine {
         if let Some((read, key_generation, pool_id, account, model, unit, fast)) = credit {
             // The mark says a probe kept this request warm, which is true whatever the tables know; a model the
             // price table does not list saves dollars at its dearest cells, as its probes cost, and the share is
-            // what the cost table can put a number on, zero where it cannot. The agent's own net settles in the
+            // what the cost model can put a number on, zero where it cannot. The agent's own net settles in the
             // covering probe's unit, a share of the tier the store names now, priced at this settlement; the
             // ledger's kept-warm column stays dollars whatever that unit was.
             let tables = &self.parts.tables;
@@ -1854,7 +1854,7 @@ impl Engine {
             }
             let mut lapsed: Vec<Skipped> = Vec::new();
             inner.follow_resolutions(&view.canonical);
-            let mut due: Vec<(i64, SessionKey, String, PinUsage)> = Vec::new();
+            let mut due: Vec<(i64, SessionKey, String)> = Vec::new();
             let candidates: Vec<(SessionKey, String)> = inner
                 .sessions
                 .iter()
@@ -1934,7 +1934,7 @@ impl Engine {
                         .unwrap();
                     gate(&view, agent, &key.1, spent, share_spent, &self.parts.tables)
                 };
-                let types = match held {
+                match held {
                     Err(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
                         continue;
@@ -1966,8 +1966,8 @@ impl Engine {
                         }
                         continue;
                     }
-                    Ok(types) => types,
-                };
+                    Ok(()) => {}
+                }
                 if !ready || inner.sessions[&key].agents[&agent_id].in_flight {
                     continue;
                 }
@@ -1977,12 +1977,12 @@ impl Engine {
                     continue;
                 };
                 if at <= now {
-                    due.push((at, key, agent_id, types));
+                    due.push((at, key, agent_id));
                 }
             }
             due.sort_by(|a, b| (a.0, &a.1, &a.2).cmp(&(b.0, &b.1, &b.2)));
             let mut jobs = Vec::new();
-            for (_, key, agent_id, types) in due {
+            for (_, key, agent_id) in due {
                 if inner.running >= MAX_WORKERS {
                     break;
                 }
@@ -2011,7 +2011,6 @@ impl Engine {
                     canonical_model: agent.canonical_model.clone(),
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
-                    types,
                 };
                 agent.in_flight = true;
                 agent.hold_counted = false;
@@ -2086,8 +2085,8 @@ pub(crate) struct RouterView {
     /// on, so a sibling's pin never overwrites an agent's own.
     pub pins: BTreeMap<(String, String, String, String), String>,
     pub snapshot: Arc<RegistrySnapshot>,
-    /// A subscription account's own `organization.rate_limit_tier`: an account the cost table cannot size settles
-    /// its probes in dollars, so the stop reads that balance.
+    /// A subscription account's own `organization.rate_limit_tier`: an account on a tier the cost model has no capacity
+    /// for settles its probes in dollars, so the stop reads that balance.
     pub tiers: HashMap<String, String>,
 }
 
@@ -2218,8 +2217,7 @@ impl Engine {
 }
 
 /// The spec's "Scheduling against router state" row, in its order. `Err` names why the due probe waits, or why
-/// the recipe goes; `Ok` carries the typed usage the gate decided the probe's unit on, which the job takes to its
-/// settlement.
+/// the recipe goes; `Ok` lets the probe run.
 pub(crate) fn gate(
     view: &RouterView,
     agent: &mut Agent,
@@ -2227,7 +2225,7 @@ pub(crate) fn gate(
     spent_today: &BTreeMap<String, f64>,
     share_spent_today: &BTreeMap<String, f64>,
     tables: &PlanTables,
-) -> Result<PinUsage, Gate> {
+) -> Result<(), Gate> {
     let key_id = agent.key_id.clone();
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until the flag is cleared.
@@ -2326,25 +2324,10 @@ pub(crate) fn gate(
     } else {
         Funding::of(account.kind, in_overage).unit()
     };
-    // Decided before the share cap and taken again by the settlement: a probe the table cannot price on the
+    // Decided before the share cap and taken again by the settlement: a probe the cost model cannot price on the
     // account's tier settles in dollars, so a zero share cap never holds it and the stop reads its dollar balance.
     let tier = view.tiers.get(&account.id).map(String::as_str);
-    let longest_ttl_ms = agent
-        .current
-        .as_ref()
-        .map_or(0, |o| o.recipe.longest_ttl_ms);
-    // The relay rewrites the probe's markers to the TTL of its agent's branch in the pool's policy, from the set
-    // whoever pays for the write selects as `Relay::dispatch_to` selects it, so the types are the dispatched
-    // body's, not the recipe's own.
-    let types = dispatched_types(
-        &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
-        &agent.canonical_model,
-        in_overage || account.kind == AccountKind::ApiKey,
-        &agent.id,
-        agent.ttl_ms,
-        longest_ttl_ms,
-    );
-    let unit = settlement_unit(default_unit, tables, tier, &agent.canonical_model, types);
+    let unit = settlement_unit(default_unit, tables, tier, &agent.canonical_model);
     // A share-settled probe's day already sums shares of the account's own 5-hour window, the band inside each
     // price, so the sum caps against the configured share directly.
     if let Some(share) = policy.probe_cap_window_share_per_day {
@@ -2358,7 +2341,7 @@ pub(crate) fn gate(
     if policy.stop_when_net_negative && agent.net.in_unit(unit) < 0.0 && agent.grace_left == 0 {
         return Err(Gate::Hold(Reason::NetNegative));
     }
-    Ok(types)
+    Ok(())
 }
 
 #[cfg(test)]
@@ -2617,7 +2600,7 @@ mod tests {
                 usd: -0.50,
             }),
             Some(Gate::Hold(Reason::NetNegative)),
-            "every Opus 5 cell is null, so its probe settles in dollars and the dollar balance decides"
+            "the shipped model has no weight for Opus 5, so its probe settles in dollars and the dollar balance decides"
         );
         assert_eq!(
             unmeasured(Net {

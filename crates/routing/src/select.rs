@@ -1485,10 +1485,11 @@ fn burn_unit(
 
 /// A shedding round over the account `current` sits on: every pin of it, cold first by burn, then warm by burn
 /// over rewrite cost, bounded by `warm_sessions`, marked in that order up to `shed_share` of the account's burn
-/// in the unit its funding selects. On plan quota each burn is the cost table's 5-hour share rate on its reference
-/// tier: the tier's factor divides every pin of the account alike, so neither the order nor the share of the sum
-/// needs it, and a pin on a fast lane is out of the round, since it draws no window and has nothing to shed there;
-/// in dollars it stays. The current pin's warmth and lane are this request's; every other pin's are the stored ones.
+/// in the unit its funding selects. On plan quota each burn is the subscription cost model's 5-hour share rate on
+/// its anchor tier: the tier's capacity ratio divides every pin of the account alike, so neither the order nor the
+/// share of the sum needs it, and a pin on a fast lane is out of the round, since it draws no window and has
+/// nothing to shed there; in dollars it stays. The current pin's warmth and lane are this request's; every other
+/// pin's are the stored ones.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
     state: &RoutingState,

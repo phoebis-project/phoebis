@@ -1694,7 +1694,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     // One hundred input tokens a second plain and 145 banded: the share reads the banded copy, dollars the
-    // plain one. The subscription pin burns Opus 5.5, which the cost table measures; the api_key pin Opus 5.
+    // plain one. The subscription pin burns Opus 5.5, which the cost model weighs; the api_key pin Opus 5.
     let parts = sessions_harness_with(|generation| {
         vec![
             phoebis_store::PinRow {
@@ -1916,14 +1916,14 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     assert_eq!(
         burn_of(&on_team, "s1"),
         (None, Some("window_share".into())),
-        "a tier the cost table lacks sizes no window, so the figure is null rather than a guess"
+        "a tier the cost model does not size sizes no window, so the figure is null rather than a guess"
     );
 }
 
 #[tokio::test]
 async fn a_pin_on_a_model_with_an_unmeasured_cell_reads_no_burn() {
-    // The pin burns Sonnet 5, whose every cell is null: the share is unpriced, and the same pin in overage prices
-    // in dollars, since the price table lists the model.
+    // The pin burns Sonnet 5, which the shipped cost model has no weight for: the share is unpriced, and the same pin
+    // in overage prices in dollars, since the price table lists the model.
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     let parts = sessions_harness_with(|generation| {
@@ -1938,7 +1938,7 @@ async fn a_pin_on_a_model_with_an_unmeasured_cell_reads_no_burn() {
     assert_eq!(
         burn_of(&sessions, "s1"),
         (None, Some("window_share".into())),
-        "a null cell under the burn prices no share"
+        "a model the cost model has no weight for prices no share"
     );
     parts
         .router

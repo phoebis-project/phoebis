@@ -1137,7 +1137,7 @@ fn a_fast_row_never_lifts_a_window_an_unpriced_row_of_its_bucket_nulled() {
         bucket_seconds: 3_600,
         ..SeriesFilter::default()
     };
-    // Every Opus 5 cell is null, so its standard row leaves the bucket unpriced on both windows.
+    // The shipped model has no weight for Opus 5, so its standard row leaves the bucket unpriced on both windows.
     let row = |model: &str, speed: &str, estimated_usd: f64| RollupRow {
         input_tokens: 1_000,
         estimated_usd,
@@ -1249,7 +1249,7 @@ fn a_fast_row_adds_dollars_and_no_share_to_a_subscription_burn_point() {
 }
 
 /// A request that asked for fast mode and was answered without it files under the fast speed while its funding reads
-/// the served answer: the burn prices it at the plan cells it drew from, as a standard row of the same usage.
+/// the served answer: the burn prices it on the plan it drew from, as a standard row of the same usage.
 #[test]
 fn a_row_filed_under_the_asked_fast_speed_with_plan_funding_prices_at_the_plan_cells() {
     let tables = PlanTables::shipped();
@@ -1332,9 +1332,15 @@ fn fast_traffic_alone_on_a_model_without_plan_cells_reads_a_zero_share_on_a_size
     };
     assert!(
         tables
-            .share(FIVE_HOUR, MAX_20X, "claude-opus-4-8", PinUsage::default())
+            .share_at(
+                FIVE_HOUR,
+                MAX_20X,
+                "claude-opus-4-8",
+                PinUsage::default(),
+                3_600_000
+            )
             .is_none(),
-        "the model has no plan cells"
+        "the model has no weight"
     );
     let point = burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
         .unwrap()
@@ -1345,6 +1351,61 @@ fn fast_traffic_alone_on_a_model_without_plan_cells_reads_a_zero_share_on_a_size
         (point.usd, point.five_hour_share, point.seven_day_share),
         (0.25, Some(0.0), Some(0.0)),
         "the tier alone sizes the account, so its fast dollars sit beside a zero share of either window"
+    );
+}
+
+/// The week's band factor is 1 in both the shipped and the test model; a file that bands the week weighs the 7-day
+/// share by the band at the row's hour, as it weighs the 5-hour share, with no change to the analytics.
+#[test]
+fn a_banded_week_weighs_the_seven_day_share_by_the_band_at_the_rows_hour() {
+    let mut tables = phoebis_ledger::test_tables::subscription_costs();
+    tables.costs.peak.capacity_factor.seven_day = 0.5;
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some(MAX_20X.to_string()))]);
+    let filter = SeriesFilter {
+        from: WEEKDAY_PEAK - 3_600_000,
+        to: WEEKDAY_OFF_PEAK + 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let week_at = |at: i64| {
+        let row = RollupRow {
+            input_tokens: 1_000,
+            ..RollupRow::key(
+                hour_of(at),
+                "k",
+                0,
+                "p",
+                "a",
+                "claude-opus-5-5",
+                "inference",
+                UNATTRIBUTED,
+                UNATTRIBUTED,
+                "none",
+                NO_CLASS,
+                "standard",
+                PLAN_FUNDING,
+            )
+        };
+        burn_series_over(&[row], &tables, &kinds, &tiers, &filter)
+            .unwrap()
+            .into_iter()
+            .find(|p| p.at == hour_of(at) * 1_000)
+            .unwrap()
+            .seven_day_share
+            .unwrap()
+    };
+    // The test model: Opus 5.5 weighs 2 and an input token multiplies by 1, so 1,000 input tokens are 2,000 units
+    // of the Max 20x week's 1,000; inside the band the week holds the 0.5 this test sets.
+    assert!(
+        (week_at(WEEKDAY_OFF_PEAK) - 2.0).abs() < 1e-12,
+        "{}",
+        week_at(WEEKDAY_OFF_PEAK)
+    );
+    assert!(
+        (week_at(WEEKDAY_PEAK) - 2.0 / 0.5).abs() < 1e-12,
+        "{}",
+        week_at(WEEKDAY_PEAK)
     );
 }
 
@@ -1728,8 +1789,8 @@ fn a_bucket_mixing_a_priced_and_an_unpriced_row_prices_no_share_on_that_window_a
 #[test]
 fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_no_share() {
     let db = LedgerDb::open_in_memory().unwrap();
-    // A failed request on Sonnet 4.5, a model the table has no row for, books a row with no token beside a priced
-    // hour of Opus 5.5: it has nothing to price, so the hour keeps its share.
+    // A failed request on Sonnet 4.5, a model the cost model has no weight for, books a row with no token beside a
+    // priced hour of Opus 5.5: it has nothing to price, so the hour keeps its share.
     plant_in_the_off_band_hour(&db, "priced", "a", "claude-opus-5-5", Some(1_000_000));
     plant_in_the_off_band_hour(&db, "failed", "a", "claude-sonnet-4-5", None);
     // A failed request alone on a model the table lists, which would price at zero: an idle hour, not a share of zero.
@@ -1760,7 +1821,7 @@ fn a_row_with_no_token_never_unprices_a_bucket_and_a_bucket_of_them_alone_reads_
 #[test]
 fn a_row_on_a_model_with_an_unmeasured_cell_prices_no_share_and_its_tokens_still_count() {
     let db = LedgerDb::open_in_memory().unwrap();
-    // Every Opus 5 cell is null, so a million of its input tokens meet an unmeasured cell on both windows.
+    // The shipped model has no weight for Opus 5, so a million of its input tokens price on neither window.
     db.insert_request(
         &RequestRecord {
             id: "r-opus-5".into(),
@@ -1812,7 +1873,7 @@ fn a_row_on_a_model_with_an_unmeasured_cell_prices_no_share_and_its_tokens_still
             point.usd
         ),
         (None, None, 1_000_000, 0.0),
-        "a known tier prices nothing through a null cell, and the tokens still count"
+        "a known tier prices nothing for a model without a weight, and the tokens still count"
     );
 }
 
@@ -1983,10 +2044,10 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
 fn the_burn_series_over_one_read_matches_a_read_per_scope() {
     let db = LedgerDb::open_in_memory().unwrap();
     for (mut request, mut attempts) in synthetic_day(5) {
-        // The day's Claude models are all unmeasured in the cost table; its Opus rows move to Opus 5.5, whose
-        // 5-hour cells are measured. Account a's other rows move to what the table prices (Sonnet 5.5, and the API
-        // key for its GPT rows), so its scope reads priced shares, while c keeps its unmeasured Sonnet 5 rows beside
-        // Opus 5.5 and its buckets mix priced shares with unpriced rows.
+        // The day's Claude models all lack a weight in the cost model; its Opus rows move to Opus 5.5, which the
+        // model weighs. Account a's other rows move to what the model prices (Sonnet 5.5, and the API key for its
+        // GPT rows), so its scope reads priced shares, while c keeps its unweighed Sonnet 5 rows beside Opus 5.5 and
+        // its buckets mix priced shares with unpriced rows.
         if request.canonical_model == "claude-opus-5" {
             request.canonical_model = "claude-opus-5-5".into();
         }

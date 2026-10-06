@@ -12,7 +12,7 @@ use bytes::{Bytes, BytesMut};
 use http_body_util::BodyExt;
 use phoebis_ledger::{PlanTables, PriceTable};
 use phoebis_relay::{RelayOutcome, ServedUnder};
-use phoebis_routing::{PinUsage, BUDGET_WINDOW};
+use phoebis_routing::BUDGET_WINDOW;
 use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
 use serde_json::Value;
 
@@ -40,9 +40,6 @@ pub(crate) struct ProbeJob {
     pub canonical_model: String,
     pub recipe: Recipe,
     pub expected: u64,
-    /// The typed usage the gate decided the probe's unit on, from the TTL the relay dispatches it with: the
-    /// settlement decides on the same set, so the gate, the caps and the savings read one unit.
-    pub types: PinUsage,
 }
 
 pub(crate) struct ProbeResult {
@@ -127,8 +124,8 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
-/// The unit and the cost a probe settles in: the unit `settlement_unit` decides from the probe's typed usage
-/// `types`, the same decision the gate took, and the probe's own usage priced in it.
+/// The unit and the cost a probe settles in: the unit `settlement_unit` decides, the same decision the gate took, and
+/// the probe's own usage priced in it.
 #[allow(clippy::too_many_arguments)]
 fn settled_cost(
     default_unit: SavingsUnit,
@@ -138,22 +135,20 @@ fn settled_cost(
     account: &str,
     canonical_model: &str,
     usage: ProbeUsage,
-    types: PinUsage,
     at: i64,
 ) -> (SavingsUnit, f64) {
-    let unit = settlement_unit(default_unit, tables, tier, canonical_model, types);
+    let unit = settlement_unit(default_unit, tables, tier, canonical_model);
     if unit == SavingsUnit::WindowShare {
         if let Some(share) = probe_cost(unit, table, tables, tier, canonical_model, usage, at) {
             return (unit, share);
         }
-        // The answer carried a type the typed usage did not foresee, such as an hour write after the pool's TTL
-        // rule changed between the gate and the dispatch; a null cell never books a share, so the probe settles
-        // in dollars and its savings follow.
+        // The model prices every type of a weighted model, so this branch is the defensive read of a `None` the
+        // pricing above answered.
         tracing::debug!(
             account,
             model = canonical_model,
             unpriced = unpriced_reason(tables, canonical_model),
-            "a probe the cost table cannot price on the window share settles in dollars"
+            "a probe the cost model cannot price on the window share settles in dollars"
         );
     }
     (
@@ -301,12 +296,11 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             &record.account,
             &record.canonical_model,
             record.usage,
-            job.types,
             now,
         );
         let mut charge = None;
         // The dollar cap counts what actually settles in dollars: an api_key account, a subscription account in
-        // overage, or a plan-funded probe the cost table cannot price on the account's tier, which `unit` (the
+        // overage, or a plan-funded probe the cost model cannot price on the account's tier, which `unit` (the
         // settlement's decision) already reads as `Usd`. That last case is the only cap bounding such a probe at
         // all, since the plan-side cap below counts `WindowShare` alone.
         if unit == SavingsUnit::Usd {
@@ -834,9 +828,7 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
 mod tests {
     use std::collections::BTreeMap;
 
-    use crate::config::FIVE_MINUTES_MS;
     use crate::engine::{Agent, Session};
-    use crate::savings::probe_types;
 
     use super::*;
 
@@ -986,7 +978,7 @@ mod tests {
         );
     }
 
-    /// A table pricing a model the shipped cost table has no row for, so `settled_cost` must fall all the way
+    /// A table pricing a model the shipped cost model has no weight for, so `settled_cost` must fall all the way
     /// back to dollars rather than mixing a dollar figure into a share-priced settlement.
     fn table_pricing_an_unlisted_model() -> PriceTable {
         PriceTable {
@@ -1039,13 +1031,12 @@ mod tests {
             "o",
             "unlisted-model",
             usage,
-            probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             OFF_BAND,
         );
         assert_eq!(
             unit,
             SavingsUnit::Usd,
-            "the cost table has no row, so the unit falls back too"
+            "the cost model has no weight, so the unit falls back too"
         );
         let expected = probe_cost(
             SavingsUnit::Usd,
@@ -1080,7 +1071,6 @@ mod tests {
                 "o",
                 "claude-opus-5-5",
                 one_input,
-                probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
                 at,
             )
         };
@@ -1109,7 +1099,6 @@ mod tests {
             "o",
             "claude-opus-5",
             million_input(),
-            probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             OFF_BAND,
         );
         let dollars = probe_cost(
@@ -1143,7 +1132,6 @@ mod tests {
             "o",
             "claude-opus-5",
             million_input(),
-            probe_types(FIVE_MINUTES_MS, FIVE_MINUTES_MS),
             OFF_BAND,
         );
         let dollars = probe_cost(

@@ -652,10 +652,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     served
 }
 
-/// The routing task's burn prices and peak band: the cost table's 5-hour share per token on its reference tier
-/// and its band, and for dollars `prices`, the table `Pricing::load` chose at startup; the share of an account's
-/// window a completed request consumed, priced through the cost table and its tier factors. All are fixed for the
-/// life of the process.
+/// The routing task's burn prices and peak band: the model's 5-hour share per token on its anchor tier and its band,
+/// and for dollars `prices`, the table `Pricing::load` chose at startup; the share of an account's window a completed
+/// request consumed, priced through the model on the account's tier. All are fixed for the life of the process.
 fn router_config(
     prices: &phoebis_ledger::PriceTable,
     tables: Arc<phoebis_ledger::PlanTables>,
@@ -671,12 +670,9 @@ fn router_config(
             five_hour: tables.rate_table(phoebis_routing::FIVE_HOUR),
             fast: prices.fast_rate_table(),
         },
-        share: phoebis_routing::SharePricer::new(
-            move |window, tier, model, usage, at| match window {
-                phoebis_routing::FIVE_HOUR => tables.five_hour_share_at(tier, model, usage, at),
-                window => tables.share(window, tier, model, usage),
-            },
-        )
+        share: phoebis_routing::SharePricer::new(move |window, tier, model, usage, at| {
+            tables.share_at(window, tier, model, usage, at)
+        })
         .with_measured(move |window| measured.measured(window)),
         ..phoebis_routing::RouterConfig::default()
     }
@@ -797,7 +793,13 @@ mod tests {
                 usage,
                 at
             ),
-            tables.five_hour_share_at(tier, "claude-opus-5-5", usage, at),
+            tables.share_at(
+                phoebis_routing::FIVE_HOUR,
+                tier,
+                "claude-opus-5-5",
+                usage,
+                at
+            ),
             "the 5-hour share is weighed by the band at the completion"
         );
         for window in [phoebis_routing::SEVEN_DAY, phoebis_routing::SEVEN_DAY_FABLE] {
@@ -805,7 +807,7 @@ mod tests {
                 config
                     .share
                     .price(window, tier, "claude-opus-5-5", usage, at),
-                tables.share(window, tier, "claude-opus-5-5", usage),
+                tables.share_at(window, tier, "claude-opus-5-5", usage, at),
                 "{window}"
             );
             assert!(config.share.measured(window), "{window}");
@@ -833,14 +835,61 @@ mod tests {
                 at
             ),
             None,
-            "a tier the cost table does not size prices at no share"
+            "a tier the model does not size prices at no share"
         );
         assert_eq!(
             config
                 .share
                 .price(phoebis_routing::FIVE_HOUR, tier, "claude-opus-5", usage, at),
             None,
-            "every Opus 5 cell is null"
+            "the shipped model has no weight for Opus 5"
+        );
+    }
+
+    /// The week's band factor is 1 in the shipped model; a file that bands the week reaches the router's 7-day
+    /// share through the completion the router hands the model, with no change to the router.
+    #[test]
+    fn the_router_config_weighs_a_banded_week_by_the_band_at_the_completion() {
+        let mut tables = phoebis_ledger::PlanTables::shipped();
+        tables.costs.peak.capacity_factor.seven_day = 0.5;
+        let config = router_config(
+            &phoebis_ledger::PriceTable::shipped(),
+            Arc::new(tables.clone()),
+        );
+        let usage = phoebis_routing::PinUsage {
+            input: 1_000,
+            ..Default::default()
+        };
+        let tier = "default_claude_max_20x";
+        // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
+        let (in_band, out_of_band) = (1_789_999_200_000, 1_790_020_800_000);
+        let week = |at| {
+            config.share.price(
+                phoebis_routing::SEVEN_DAY,
+                tier,
+                "claude-opus-5-5",
+                usage,
+                at,
+            )
+        };
+        assert_eq!(
+            week(in_band),
+            tables.share_at(
+                phoebis_routing::SEVEN_DAY,
+                tier,
+                "claude-opus-5-5",
+                usage,
+                in_band
+            ),
+            "the router prices the week as the model it loaded does at the completion"
+        );
+        assert!(
+            week(in_band)
+                .zip(week(out_of_band))
+                .is_some_and(|(inside, outside)| inside > outside),
+            "a week charge inside the band weighs more than one outside it: {:?} against {:?}",
+            week(in_band),
+            week(out_of_band)
         );
     }
 
@@ -857,22 +906,25 @@ mod tests {
             write_1h: 200,
             output: 500,
         };
+        // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
+        let (in_band, out_of_band) = (1_789_999_200_000, 1_790_020_800_000);
         let share = config
             .rates
             .five_hour
             .price("claude-opus-5-5", usage)
             .expect("a priced model");
         let expected = tables
-            .share(
+            .share_at(
                 phoebis_routing::FIVE_HOUR,
                 "default_claude_max_20x",
                 "claude-opus-5-5",
                 usage,
+                out_of_band,
             )
             .unwrap();
         assert!(
             (share - expected).abs() < 1e-15,
-            "the 5-hour table is the reference tier's share per token, unweighed by the band: {share} against {expected}"
+            "the 5-hour table is the anchor tier's share per token, unweighed by the band: {share} against {expected}"
         );
         assert_ne!(
             share,
@@ -884,7 +936,7 @@ mod tests {
         assert_eq!(
             config.rates.five_hour.price("claude-opus-4-8", usage),
             None,
-            "the share table prices no model the cost table does not list"
+            "the share table prices no model the cost model has no weight for"
         );
         assert!(
             config
@@ -938,8 +990,6 @@ mod tests {
                 < 1e-12,
             "the fast table prices a usage as the price table estimates a fast answer"
         );
-        // Monday 2026-09-21 at 14:00 and at 20:00 UTC.
-        let (in_band, out_of_band) = (1_789_999_200_000, 1_790_020_800_000);
         let banded = config.band.at(phoebis_routing::FIVE_HOUR, in_band);
         assert_eq!(
             banded,

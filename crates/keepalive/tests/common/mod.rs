@@ -85,8 +85,8 @@ pub struct RigSpec {
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
     pub session_expiry: Duration,
-    /// The shipped tables by default; a test naming a model the cost table lacks (though the price table
-    /// prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
+    /// The shipped tables by default; a test naming a model the cost model has no weight for (though the price
+    /// table prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
     pub tables: PlanTables,
     /// The subscription tier every OAuth account's stored profile names, `None` to store none: a plan-funded
     /// probe settles in the share of the tier's window, and in dollars on an account without one.

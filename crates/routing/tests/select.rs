@@ -10280,8 +10280,9 @@ fn an_unpriced_pin_is_never_marked_and_stays_out_of_the_shed_share_sum() {
     );
 }
 
-/// The share table the router builds from the cost table prices a model it does not list at no rate, so a pin on
-/// such a model reads no burn, adds nothing to the account's sum and is never marked beside a priced pin.
+/// The share table the router builds from the subscription cost model prices a model it has no weight for at no
+/// rate, so a pin on such a model reads no burn, adds nothing to the account's sum and is never marked beside a
+/// priced pin.
 #[test]
 fn a_pin_on_a_model_the_share_table_does_not_list_burns_nothing_and_is_never_marked() {
     let s = snapshot(shedding_pool(Shedding::default()));

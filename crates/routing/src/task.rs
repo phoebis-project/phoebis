@@ -132,9 +132,9 @@ pub struct RouterConfig {
     /// copy does not.
     pub band: BandWeight,
     pub purge_interval: Duration,
-    /// The dollar table and the cost table's 5-hour share table the shedding round prices each pin's burn
-    /// through when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by. The
-    /// task holds them because neither this crate nor the relay can see the ledger's tables.
+    /// The dollar table and the subscription cost model's 5-hour share table the shedding round prices each pin's
+    /// burn through when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by.
+    /// The task holds them because neither this crate nor the relay can see the ledger's tables.
     pub rates: BurnRates,
     /// The share of an account's windows a completed request consumed; the default prices nothing.
     pub share: SharePricer,
@@ -153,8 +153,8 @@ impl Default for RouterConfig {
     }
 }
 
-/// The two tables a reader prices a pin's burn through, dollars per token and the cost table's 5-hour share on
-/// its reference tier per token, and the fast cells a fast renewal is weighed by. All three default to
+/// The two tables a reader prices a pin's burn through, dollars per token and the subscription cost model's 5-hour
+/// share on its anchor tier per token, and the fast cells a fast renewal is weighed by. All three default to
 /// `RateTable::unit`, so a burn read through the default is a token count and a fast renewal folds unweighed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {

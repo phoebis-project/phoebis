@@ -286,8 +286,8 @@ impl SharePricer {
         }
     }
 
-    /// `measured(window)`: whether the tables price `window` from cells of its own rather than as the 7-day share
-    /// once; every window reads measured until this is set.
+    /// `measured(window)`: whether the tables name `window` rather than price it as the 7-day share once; every
+    /// window reads measured until this is set.
     pub fn with_measured(
         self,
         measured: impl Fn(&str) -> bool + Send + Sync + 'static,
@@ -1397,8 +1397,8 @@ impl RoutingState {
     }
 
     /// The pins of an account, each priced in `unit` through `rates` and decayed to `now`, and the sum over the
-    /// priced pins; under `WindowShare` the cost table's reference share per second, which orders the account's
-    /// pins as the tier's share does; `None` for a pin burning a type its row cannot price.
+    /// priced pins; under `WindowShare` the subscription cost model's anchor share per second, which orders the
+    /// account's pins as the tier's share does; `None` for a pin burning a type its row cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,
