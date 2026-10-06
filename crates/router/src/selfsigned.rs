@@ -1,12 +1,17 @@
 //! The certificate material `phoebis init --tls self-signed` writes: a local CA and one leaf per listener that leaves
 //! loopback, under `tls/` beside the bootstrap file. `init` alone calls this; the running router loads the pair as any
 //! operator's through `tls::load_pair` and generates nothing at start.
+//!
+//! A leaf's two files sit in a generation directory, `tls/<listener>.<16 hex digits>`, and the configuration names them
+//! through the link `tls/<listener>`, which points at the live generation. A pair goes live by one switch of that link,
+//! so the certificate and the key change together and a stop before the switch leaves the previous pair live.
 
+use std::ffi::OsString;
 use std::fmt;
-use std::fs::Metadata;
+use std::fs::{DirBuilder, File, Metadata, OpenOptions};
 use std::io::Write;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr, SocketAddr};
-use std::os::unix::fs::{MetadataExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 
 use boring::asn1::Asn1Time;
@@ -27,6 +32,7 @@ use boring::x509::{
     X509,
 };
 use phoebis_store::permissions;
+use rand::Rng;
 
 /// The CA's lifetime: ten years.
 pub const CA_LIFETIME_DAYS: u32 = 3_650;
@@ -35,6 +41,11 @@ pub const LEAF_LIFETIME_DAYS: u32 = 365;
 
 pub const CA_CERT: &str = "ca.pem";
 pub const CA_KEY: &str = "ca.key";
+/// A leaf's certificate and key inside its generation directory.
+pub const LEAF_CERT: &str = "cert.pem";
+pub const LEAF_KEY: &str = "key.pem";
+/// The file a renewal locks under `tls/` for the whole run.
+pub const RENEWAL_LOCK: &str = "renewal.lock";
 
 /// The ending of every refusal that leaves the operator one way out: a new CA, which every client trusts again.
 const NEW_CA: &str =
@@ -92,8 +103,9 @@ pub enum LeafModes {
     /// The container's shape: the certificate at 0644, which the container's uid reads through the bind mount, and the
     /// key at 0600 until the operator hands it over.
     Mounted,
-    /// The renewal: each staged file takes the owner and mode of the live file it replaces, and the live certificate
-    /// must be one the CA signed, so a renewal never replaces an operator's pair named under `tls/`.
+    /// The renewal: the staged generation and each file in it take the owner and mode of the live ones they replace,
+    /// and the live certificate must be one the CA signed, so a renewal never replaces an operator's pair named under
+    /// `tls/`.
     KeepLive,
 }
 
@@ -111,6 +123,8 @@ pub enum MaterialError {
     },
     #[error("{key}: does not match the certificate in {cert}; {}", NEW_CA)]
     KeyMismatch { key: PathBuf, cert: PathBuf },
+    #[error("{path}: another renewal holds the lock; run this one again once it finishes")]
+    Locked { path: PathBuf },
     #[error("{dir} holds no ca.pem and ca.key; a renewal needs the CA the clients trust")]
     NoCa { dir: PathBuf },
     #[error("{path}: holds no PEM certificate; {}", NEW_CA)]
@@ -167,6 +181,39 @@ pub fn hostname() -> String {
     match std::str::from_utf8(&buffer[..end]) {
         Ok(name) if answered && !name.is_empty() && name.is_ascii() => name.to_owned(),
         _ => "localhost".to_owned(),
+    }
+}
+
+/// The two names the configuration carries for `listener`'s generated pair under `dir`, through its link: the
+/// certificate then the key.
+pub fn leaf_files(dir: &Path, listener: &str) -> (PathBuf, PathBuf) {
+    let link = dir.join(listener);
+    (link.join(LEAF_CERT), link.join(LEAF_KEY))
+}
+
+/// The renewal's hold on `<dir>/renewal.lock`, released when dropped.
+pub struct RenewalLock {
+    _file: File,
+}
+
+/// Locks `<dir>/renewal.lock` for one renewal, or refuses while another run holds it, so two renewals never stage
+/// and switch beside each other. The file is never removed: a run that opened it before a removal would lock a name
+/// the next run no longer finds, and both would go ahead.
+pub fn lock_renewal(dir: &Path) -> Result<RenewalLock, MaterialError> {
+    let path = dir.join(RENEWAL_LOCK);
+    let file = OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create(true)
+        .truncate(false)
+        .mode(0o600)
+        .custom_flags(libc::O_NOFOLLOW)
+        .open(&path)
+        .map_err(io(&path))?;
+    match file.try_lock() {
+        Ok(()) => Ok(RenewalLock { _file: file }),
+        Err(std::fs::TryLockError::WouldBlock) => Err(MaterialError::Locked { path }),
+        Err(std::fs::TryLockError::Error(error)) => Err(io(&path)(error)),
     }
 }
 
@@ -233,8 +280,8 @@ pub fn write_ca(
     permissions::create_private_dir(dir).map_err(io(dir))?;
     let (cert, key) = build_ca(hostname, permitted, validity)?;
     let (cert_file, key_file) = (dir.join(CA_CERT), dir.join(CA_KEY));
-    let cert_tmp = stage(&cert_file, 0o644, &cert.to_pem()?, None)?;
-    let key_tmp = stage(&key_file, 0o600, &key.private_key_to_pem_pkcs8()?, None)
+    let cert_tmp = stage(&cert_file, 0o644, &cert.to_pem()?)?;
+    let key_tmp = stage(&key_file, 0o600, &key.private_key_to_pem_pkcs8()?)
         .inspect_err(|_| discard(&[&cert_tmp]))?;
     let checked = read_back(&cert_tmp, &key_tmp).and_then(|(cert, key)| {
         if signed_by(&cert, &key) {
@@ -251,8 +298,8 @@ pub fn write_ca(
     Ok(ca)
 }
 
-/// Writes `<listener>.pem` and `<listener>.key` under `dir`, signed by `ca`, with `names` as the subject alternative
-/// names, at `modes`: `write_leaves` for one leaf. Answers the two live paths, the certificate then the key.
+/// Writes `listener`'s pair under `dir`, signed by `ca`, with `names` as the subject alternative names, at `modes`:
+/// `write_leaves` for one leaf. Answers the two names the configuration carries, the certificate then the key.
 pub fn write_leaf(
     dir: &Path,
     listener: &str,
@@ -271,16 +318,31 @@ pub fn write_leaf(
         modes,
     )
     .map_err(|unfinished| unfinished.error)?;
-    Ok(written.remove(0))
+    Ok(written.remove(0).files())
 }
 
-/// A `write_leaves` that stopped at `error`, with the pairs it had placed by then, which are live: the caller
-/// records them as written as it would on success.
+/// A leaf as it went live: `link`, the name the configuration reaches the pair through, points at `generation`, the
+/// directory holding `cert.pem` and `key.pem`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Placed {
+    pub link: PathBuf,
+    pub generation: PathBuf,
+}
+
+impl Placed {
+    /// The two names the configuration carries, through the link: the certificate then the key.
+    pub fn files(&self) -> (PathBuf, PathBuf) {
+        (self.link.join(LEAF_CERT), self.link.join(LEAF_KEY))
+    }
+}
+
+/// A `write_leaves` that stopped at `error`, with the leaves it had switched live by then: the caller records them as
+/// written as it would on success.
 #[derive(Debug)]
 pub struct Unfinished {
     pub error: MaterialError,
-    /// Each placed leaf's two live paths, the certificate then the key; empty when the stop came before any move.
-    pub placed: Vec<(PathBuf, PathBuf)>,
+    /// Each leaf switched live before the stop; empty when the stop came before any switch.
+    pub placed: Vec<Placed>,
 }
 
 impl From<MaterialError> for Unfinished {
@@ -293,12 +355,14 @@ impl From<MaterialError> for Unfinished {
 }
 
 /// Writes one leaf per entry of `leaves` (the listener's name and the names its leaf carries) under `dir`, signed by
-/// `ca`, at `modes`. Every leaf is staged and checked before any moves into place: its two files land under `.tmp`
-/// names through the store's private-file helper and are read back (both parse, the key matches the certificate, and
-/// the leaf verifies under a store holding `ca` alone, which is where a name outside the CA's constraint is caught), so
-/// a refusal or a failed write on any leaf leaves every live file as it was. Answers each leaf's two live paths, the
-/// certificate then the key, in the order of `leaves`; a rename that fails once a leaf has moved into place answers
-/// the pairs placed before it beside the error.
+/// `ca`, at `modes`. Every leaf is staged and checked before any goes live: its two files land in a new generation
+/// directory through the store's private-file helper, synced, and are read back (both parse, the key matches the
+/// certificate, and the leaf verifies under a store holding `ca` alone, which is where a name outside the CA's
+/// constraint is caught), so a refusal or a failed write on any leaf leaves every live pair as it was. Each leaf then
+/// goes live by one switch of its link: a first write creates the link, which refuses a name that exists, and a
+/// renewal renames a new link over the live one, then removes the generations before the one it replaced. Answers
+/// each leaf as it went live, in the order of `leaves`; a switch that fails once a leaf is live answers the leaves
+/// switched before it beside the error.
 pub fn write_leaves(
     dir: &Path,
     ca: &Ca,
@@ -306,7 +370,7 @@ pub fn write_leaves(
     leaves: &[(&str, Vec<SanName>)],
     validity: Validity,
     modes: LeafModes,
-) -> Result<Vec<(PathBuf, PathBuf)>, Unfinished> {
+) -> Result<Vec<Placed>, Unfinished> {
     permissions::create_private_dir(dir).map_err(io(dir))?;
     let mut staged = Vec::with_capacity(leaves.len());
     for (listener, names) in leaves {
@@ -320,31 +384,113 @@ pub fn write_leaves(
     }
     let mut placed = Vec::with_capacity(staged.len());
     for (at, leaf) in staged.iter().enumerate() {
-        let pair = [
-            (leaf.cert_tmp.as_path(), leaf.cert_file.as_path()),
-            (leaf.key_tmp.as_path(), leaf.key_file.as_path()),
-        ];
-        if let Err(error) = place(&pair) {
-            staged[at + 1..].iter().for_each(StagedLeaf::discard);
+        if let Err(error) = leaf.switch(dir, modes) {
+            staged[at..].iter().for_each(StagedLeaf::discard);
             return Err(Unfinished { error, placed });
         }
-        placed.push((leaf.cert_file.clone(), leaf.key_file.clone()));
+        placed.push(Placed {
+            link: leaf.link.clone(),
+            generation: leaf.generation.clone(),
+        });
+    }
+    if let Err(error) = sync_dir(dir) {
+        return Err(Unfinished { error, placed });
+    }
+    if modes == LeafModes::KeepLive {
+        staged.iter().for_each(|leaf| leaf.sweep(dir));
     }
     Ok(placed)
 }
 
-/// A leaf's two files written and checked under their `.tmp` names, not yet live.
+/// A leaf's generation directory written, synced and checked, not yet live.
 struct StagedLeaf {
-    cert_file: PathBuf,
-    cert_tmp: PathBuf,
-    key_file: PathBuf,
-    key_tmp: PathBuf,
+    listener: String,
+    link: PathBuf,
+    generation: PathBuf,
+    /// The live generation's name as the link held it before this run, which the sweep keeps.
+    previous: Option<OsString>,
 }
 
 impl StagedLeaf {
     fn discard(&self) {
-        discard(&[&self.cert_tmp, &self.key_tmp]);
+        remove_generation(&self.generation);
     }
+
+    /// Points the link at this generation in one step. A first write creates the link, so a name that exists refuses
+    /// rather than being replaced; a renewal creates the new link beside the live one and renames it over, so a stop at
+    /// any point leaves the link naming one whole generation.
+    fn switch(&self, dir: &Path, modes: LeafModes) -> Result<(), MaterialError> {
+        let target = self
+            .generation
+            .file_name()
+            .expect("a generation directory has a name");
+        if modes != LeafModes::KeepLive {
+            return std::os::unix::fs::symlink(target, &self.link).map_err(io(&self.link));
+        }
+        let next = dir.join(format!(".{}.next", self.listener));
+        remove_if_present(&next).map_err(io(&next))?;
+        std::os::unix::fs::symlink(target, &next).map_err(io(&next))?;
+        std::fs::rename(&next, &self.link).map_err(|error| {
+            let _ = remove_if_present(&next);
+            io(&self.link)(error)
+        })
+    }
+
+    /// Removes this listener's generations other than the live one and the one it replaced, which a start that read
+    /// the link just before the switch may still be reading. A removal that fails leaves the directory for the next
+    /// renewal.
+    fn sweep(&self, dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        let live = self.generation.file_name();
+        for entry in entries.flatten() {
+            let name = entry.file_name();
+            if Some(name.as_os_str()) == live || Some(&name) == self.previous.as_ref() {
+                continue;
+            }
+            let is_dir = entry.file_type().is_ok_and(|kind| kind.is_dir());
+            if is_dir && is_generation_of(&self.listener, &name) {
+                remove_generation(&entry.path());
+            }
+        }
+    }
+}
+
+/// Whether `name` is a generation directory's name for `listener`: the listener, a dot, and sixteen hex digits.
+fn is_generation_of(listener: &str, name: &std::ffi::OsStr) -> bool {
+    name.to_str()
+        .and_then(|name| name.strip_prefix(listener))
+        .and_then(|rest| rest.strip_prefix('.'))
+        .is_some_and(|digits| digits.len() == 16 && digits.bytes().all(|b| b.is_ascii_hexdigit()))
+}
+
+/// Removes a generation's two files and the directory; whatever cannot be removed stays.
+fn remove_generation(generation: &Path) {
+    let _ = remove_if_present(&generation.join(LEAF_CERT));
+    let _ = remove_if_present(&generation.join(LEAF_KEY));
+    let _ = std::fs::remove_dir(generation);
+}
+
+/// Creates a new generation directory for `listener` under `dir` at `mode`, set on the directory so the umask cannot
+/// narrow the container's `0755`.
+fn new_generation(dir: &Path, listener: &str, mode: u32) -> Result<PathBuf, MaterialError> {
+    let generation = dir.join(format!("{listener}.{:016x}", rand::rng().next_u64()));
+    DirBuilder::new()
+        .mode(0o700)
+        .create(&generation)
+        .and_then(|()| std::fs::set_permissions(&generation, std::fs::Permissions::from_mode(mode)))
+        .map_err(|error| {
+            let _ = std::fs::remove_dir(&generation);
+            io(&generation)(error)
+        })?;
+    Ok(generation)
+}
+
+fn sync_dir(dir: &Path) -> Result<(), MaterialError> {
+    File::open(dir)
+        .and_then(|file| file.sync_all())
+        .map_err(io(dir))
 }
 
 fn stage_leaf(
@@ -356,42 +502,79 @@ fn stage_leaf(
     validity: Validity,
     modes: LeafModes,
 ) -> Result<StagedLeaf, MaterialError> {
-    let (cert_file, key_file) = (
-        dir.join(format!("{listener}.pem")),
-        dir.join(format!("{listener}.key")),
-    );
-    let (cert_mode, keep) = match modes {
-        LeafModes::Private => (0o600, None),
-        LeafModes::Mounted => (0o644, None),
+    let link = dir.join(listener);
+    let (dir_mode, cert_mode, keep, previous) = match modes {
+        LeafModes::Private => (0o700, 0o600, None, None),
+        LeafModes::Mounted => (0o755, 0o644, None, None),
         LeafModes::KeepLive => {
+            let (cert_file, key_file) = leaf_files(dir, listener);
             signed_leaf(dir, &cert_file, ca)?;
             let metadata = |live: &Path| std::fs::metadata(live).map_err(io(live));
-            (0o600, Some((metadata(&cert_file)?, metadata(&key_file)?)))
+            let keep = (
+                metadata(&link)?,
+                metadata(&cert_file)?,
+                metadata(&key_file)?,
+            );
+            let previous = std::fs::read_link(&link).ok().map(PathBuf::into_os_string);
+            (0o700, 0o600, Some(keep), previous)
         }
     };
     let (cert, key) = build_leaf(ca, hostname, names, validity)?;
-    let cert_tmp = stage(
+    let (cert_pem, key_pem) = (cert.to_pem()?, key.private_key_to_pem_pkcs8()?);
+    let staged = StagedLeaf {
+        listener: listener.to_owned(),
+        link,
+        generation: new_generation(dir, listener, dir_mode)?,
+        previous,
+    };
+    let (cert_file, key_file) = (
+        staged.generation.join(LEAF_CERT),
+        staged.generation.join(LEAF_KEY),
+    );
+    let checked = write_new(
         &cert_file,
         cert_mode,
-        &cert.to_pem()?,
-        keep.as_ref().map(|(cert, _)| cert),
-    )?;
-    let key_tmp = stage(
-        &key_file,
-        0o600,
-        &key.private_key_to_pem_pkcs8()?,
-        keep.as_ref().map(|(_, key)| key),
+        &cert_pem,
+        keep.as_ref().map(|(_, cert, _)| cert),
     )
-    .inspect_err(|_| discard(&[&cert_tmp]))?;
-    let checked = read_back(&cert_tmp, &key_tmp).and_then(|(cert, key)| {
+    .and_then(|()| {
+        write_new(
+            &key_file,
+            0o600,
+            &key_pem,
+            keep.as_ref().map(|(_, _, key)| key),
+        )
+    })
+    .and_then(|()| check_leaf(&cert_file, &key_file, ca, names, validity.not_before))
+    .and_then(|()| match &keep {
+        Some((live, _, _)) => {
+            take_owner_and_mode(&staged.generation, live).map_err(io(&staged.generation))
+        }
+        None => Ok(()),
+    })
+    .and_then(|()| sync_dir(&staged.generation));
+    checked.inspect_err(|_| staged.discard())?;
+    Ok(staged)
+}
+
+/// The staged pair as the disk holds it, checked: both parse, the key matches the certificate, and the leaf chains to
+/// `ca` alone at `not_before`, the start of its window.
+fn check_leaf(
+    cert_file: &Path,
+    key_file: &Path,
+    ca: &Ca,
+    names: &[SanName],
+    not_before: i64,
+) -> Result<(), MaterialError> {
+    read_back(cert_file, key_file).and_then(|(cert, key)| {
         if !matches_key(&cert, &key) {
             return Err(MaterialError::KeyMismatch {
-                key: key_tmp.clone(),
-                cert: cert_tmp.clone(),
+                key: key_file.to_path_buf(),
+                cert: cert_file.to_path_buf(),
             });
         }
         // The leaf was signed by `ca.key` a moment ago, so a chain that fails here fails for its names alone.
-        if !verifies_under(&cert, ca)? {
+        if !verifies_under(&cert, ca, not_before)? {
             return Err(MaterialError::OutsideConstraint {
                 names: names
                     .iter()
@@ -401,14 +584,15 @@ fn stage_leaf(
             });
         }
         Ok(())
-    });
-    checked.inspect_err(|_| discard(&[&cert_tmp, &key_tmp]))?;
-    Ok(StagedLeaf {
-        cert_file,
-        cert_tmp,
-        key_file,
-        key_tmp,
     })
+}
+
+/// Gives `path` the owner and mode in `live`, through a descriptor, so the staged generation keeps the group a service
+/// unit reads the live one through.
+fn take_owner_and_mode(path: &Path, live: &Metadata) -> std::io::Result<()> {
+    let file = File::open(path)?;
+    std::os::unix::fs::fchown(&file, Some(live.uid()), Some(live.gid()))?;
+    file.set_permissions(std::fs::Permissions::from_mode(live.mode() & 0o777))
 }
 
 /// Refuses a live certificate `ca` did not sign, so a renewal never replaces an operator's pair named under `tls/`.
@@ -554,20 +738,27 @@ fn build_leaf(
     Ok((builder.build(), key))
 }
 
-/// Writes `contents` to `<live>.tmp` at `mode` through the store's helper, after removing a temporary an interrupted
-/// run left; the live name is untouched until `place`. Under `keep`, the live file's metadata, the file takes that
-/// owner and mode before any rename, so a renewal under the service unit keeps the group the service reads through.
-fn stage(
-    live: &Path,
-    mode: u32,
-    contents: &[u8],
-    keep: Option<&Metadata>,
-) -> Result<PathBuf, MaterialError> {
+/// Writes `contents` to `<live>.tmp` at `mode` through `write_new`, after removing a temporary an interrupted run left;
+/// the live name is untouched until `place`.
+fn stage(live: &Path, mode: u32, contents: &[u8]) -> Result<PathBuf, MaterialError> {
     let mut name = live.as_os_str().to_owned();
     name.push(".tmp");
     let tmp = PathBuf::from(name);
     remove_if_present(&tmp).map_err(io(&tmp))?;
-    let mut file = permissions::create_private_file(&tmp, mode).map_err(io(&tmp))?;
+    write_new(&tmp, mode, contents, None)?;
+    Ok(tmp)
+}
+
+/// Creates `path` at `mode` through the store's helper, which refuses an existing file, writes `contents` and syncs
+/// it. Under `keep`, the live file's metadata, the file takes that owner and mode first, so a renewal under the
+/// service unit keeps the group the service reads through. A failed write removes the file.
+fn write_new(
+    path: &Path,
+    mode: u32,
+    contents: &[u8],
+    keep: Option<&Metadata>,
+) -> Result<(), MaterialError> {
+    let mut file = permissions::create_private_file(path, mode).map_err(io(path))?;
     let written = file.write_all(contents).and_then(|()| {
         if let Some(live) = keep {
             std::os::unix::fs::fchown(&file, Some(live.uid()), Some(live.gid()))?;
@@ -576,10 +767,10 @@ fn stage(
         file.sync_all()
     });
     if let Err(error) = written {
-        discard(&[&tmp]);
-        return Err(io(&tmp)(error));
+        discard(&[path]);
+        return Err(io(path)(error));
     }
-    Ok(tmp)
+    Ok(())
 }
 
 /// `rename` replaces each live name in one step, so it is never half written and never meets the store helper's
@@ -646,14 +837,18 @@ fn matches_key(cert: &X509Ref, key: &PKeyRef<Private>) -> bool {
     matched
 }
 
-/// Whether `leaf` chains to `ca` under a store holding `ca` alone, the check that applies the CA's name constraint.
-fn verifies_under(leaf: &X509Ref, ca: &Ca) -> Result<bool, ErrorStack> {
+/// Whether `leaf` chains to `ca` under a store holding `ca` alone, the check that applies the CA's name constraint,
+/// verified as of `at`. The verifier's own clock is `time()`, the kernel's coarse clock, which can trail the clock that
+/// stamped a leaf's `not_before` across a second boundary and read a leaf signed a moment ago as not yet valid.
+fn verifies_under(leaf: &X509Ref, ca: &Ca, at: i64) -> Result<bool, ErrorStack> {
     let mut store = X509StoreBuilder::new()?;
     store.add_cert(ca.cert.clone())?;
     let store = store.build();
     let chain = Stack::<X509>::new()?;
-    let verified =
-        X509StoreContext::new()?.init(&store, leaf, &chain, |context| context.verify_cert())?;
+    let verified = X509StoreContext::new()?.init(&store, leaf, &chain, |context| {
+        context.verify_param_mut().set_time(at as libc::time_t);
+        context.verify_cert()
+    })?;
     if !verified {
         let _ = ErrorStack::get();
     }
@@ -709,6 +904,21 @@ mod tests {
             .map(|entry| entry.unwrap().path())
             .filter(|path| path.extension().is_some_and(|extension| extension == "tmp"))
             .collect()
+    }
+
+    /// Every generation directory under `dir`, sorted.
+    fn generations(dir: &Path) -> Vec<PathBuf> {
+        let mut found: Vec<PathBuf> = std::fs::read_dir(dir)
+            .unwrap()
+            .map(|entry| entry.unwrap())
+            .filter(|entry| {
+                let name = entry.file_name();
+                is_generation_of("proxy", &name) || is_generation_of("admin", &name)
+            })
+            .map(|entry| entry.path())
+            .collect();
+        found.sort();
+        found
     }
 
     fn certificate_in(path: &Path) -> X509 {
@@ -777,12 +987,23 @@ mod tests {
         .unwrap();
         assert_eq!(
             (cert.clone(), key.clone()),
-            (dir.join("proxy.pem"), dir.join("proxy.key"))
+            (
+                dir.join("proxy").join(LEAF_CERT),
+                dir.join("proxy").join(LEAF_KEY)
+            )
         );
         assert_eq!(mode(&dir.join(CA_CERT)), 0o644);
         for path in [dir.join(CA_KEY), cert.clone(), key.clone()] {
             assert_eq!(mode(&path), 0o600, "{}", path.display());
         }
+        // The configuration's names reach the pair through the link to its generation directory.
+        let generation = std::fs::read_link(dir.join("proxy")).unwrap();
+        assert!(
+            is_generation_of("proxy", generation.as_os_str()),
+            "{}",
+            generation.display()
+        );
+        assert_eq!(mode(&dir.join(&generation)), 0o700);
         assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
         // The start's loader accepts what `init` writes, as it accepts any operator's pair.
         if let Err(error) = crate::tls::load_pair("proxy.tls", &cert, &key) {
@@ -819,6 +1040,7 @@ mod tests {
         assert_eq!((mode(&cert), mode(&key)), (0o644, 0o640));
         assert!(verifies_under(&ca_cert, &certificate_in(&cert)));
         assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
+        assert_ne!(std::fs::read_link(dir.join("proxy")).unwrap(), generation);
 
         // The container's uid reads the certificate through a bind mount; the key waits for the operator's hand-over.
         let (cert, key) = write_leaf(
@@ -832,6 +1054,7 @@ mod tests {
         )
         .unwrap();
         assert_eq!((mode(&cert), mode(&key)), (0o644, 0o600));
+        assert_eq!(mode(&dir.join("admin")), 0o755);
     }
 
     #[test]
@@ -847,7 +1070,11 @@ mod tests {
         )
         .unwrap();
         // An operator's pair from a CA of their own, named under tls/ through the pair flags.
-        let (cert, key) = fake_upstream::generate_pair(&["localhost"]).write_to(dir, "proxy");
+        let pair = fake_upstream::generate_pair(&["localhost"]);
+        let (cert, key) = leaf_files(dir, "proxy");
+        std::fs::create_dir(dir.join("proxy")).unwrap();
+        std::fs::write(&cert, &pair.cert_pem).unwrap();
+        std::fs::write(&key, &pair.key_pem).unwrap();
         let before = (std::fs::read(&cert).unwrap(), std::fs::read(&key).unwrap());
         let error = write_leaf(
             dir,
@@ -876,7 +1103,7 @@ mod tests {
             (std::fs::read(&cert).unwrap(), std::fs::read(&key).unwrap()),
             before
         );
-        assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
+        assert_eq!(generations(dir), Vec::<PathBuf>::new());
     }
 
     #[test]
@@ -902,20 +1129,17 @@ mod tests {
         )
         .unwrap();
         assert_eq!(
-            written,
-            [
-                (dir.join("proxy.pem"), dir.join("proxy.key")),
-                (dir.join("admin.pem"), dir.join("admin.key")),
-            ]
+            written.iter().map(Placed::files).collect::<Vec<_>>(),
+            [leaf_files(dir, "proxy"), leaf_files(dir, "admin")]
         );
         // The admin key went missing, so its renewal has no owner and mode to keep; the proxy pair, staged first,
         // stays as it was.
-        std::fs::remove_file(dir.join("admin.key")).unwrap();
-        let live = [
-            dir.join("proxy.pem"),
-            dir.join("proxy.key"),
-            dir.join("admin.pem"),
-        ];
+        let (proxy_cert, proxy_key) = leaf_files(dir, "proxy");
+        let (admin_cert, admin_key) = leaf_files(dir, "admin");
+        std::fs::remove_file(&admin_key).unwrap();
+        let live = [proxy_cert, proxy_key, admin_cert];
+        let links = || ["proxy", "admin"].map(|name| std::fs::read_link(dir.join(name)).unwrap());
+        let (generations_before, links_before) = (generations(dir), links());
         let read = || {
             live.iter()
                 .map(|path| std::fs::read(path).unwrap())
@@ -932,16 +1156,17 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(&unfinished.error, MaterialError::Io { path, .. } if *path == dir.join("admin.key")),
+            matches!(&unfinished.error, MaterialError::Io { path, .. } if *path == admin_key),
             "{unfinished:?}"
         );
         assert!(unfinished.placed.is_empty(), "{unfinished:?}");
         assert_eq!(read(), before);
-        assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
+        assert_eq!(links(), links_before);
+        assert_eq!(generations(dir), generations_before);
     }
 
     #[test]
-    fn a_rename_that_fails_on_a_later_leaf_hands_back_the_pairs_already_placed() {
+    fn a_switch_that_fails_on_a_later_leaf_hands_back_the_leaves_already_live() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path();
         let names = leaf_names("192.0.2.7:8317".parse().unwrap());
@@ -952,9 +1177,8 @@ mod tests {
             Validity::days_from_now(CA_LIFETIME_DAYS),
         )
         .unwrap();
-        // A non-empty directory under the admin certificate's live name takes no rename onto it.
-        std::fs::create_dir(dir.join("admin.pem")).unwrap();
-        std::fs::write(dir.join("admin.pem").join("held"), b"x").unwrap();
+        // A directory under the admin link's name refuses the link a first write creates there.
+        std::fs::create_dir(dir.join("admin")).unwrap();
         let unfinished = write_leaves(
             dir,
             &ca,
@@ -965,15 +1189,28 @@ mod tests {
         )
         .unwrap_err();
         assert!(
-            matches!(&unfinished.error, MaterialError::Io { path, .. } if *path == dir.join("admin.pem")),
+            matches!(&unfinished.error, MaterialError::Io { path, .. } if *path == dir.join("admin")),
             "{unfinished:?}"
         );
         assert_eq!(
-            unfinished.placed,
-            [(dir.join("proxy.pem"), dir.join("proxy.key"))]
+            unfinished
+                .placed
+                .iter()
+                .map(Placed::files)
+                .collect::<Vec<_>>(),
+            [leaf_files(dir, "proxy")]
         );
-        assert!(dir.join("proxy.pem").is_file() && dir.join("proxy.key").is_file());
-        assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
+        let (cert, key) = leaf_files(dir, "proxy");
+        assert!(cert.is_file() && key.is_file());
+        // The admin generation that never went live is gone; the proxy's is the one the link names.
+        assert_eq!(
+            generations(dir),
+            [dir.join(std::fs::read_link(dir.join("proxy")).unwrap())]
+        );
+        assert!(std::fs::read_dir(dir.join("admin"))
+            .unwrap()
+            .next()
+            .is_none());
     }
 
     #[test]
@@ -1053,9 +1290,8 @@ mod tests {
             ),
             "{error}"
         );
-        assert!(!dir.join("proxy.pem").exists());
-        assert!(!dir.join("proxy.key").exists());
-        assert!(temporaries(dir).is_empty(), "{:?}", temporaries(dir));
+        assert!(!dir.join("proxy").exists());
+        assert_eq!(generations(dir), Vec::<PathBuf>::new());
     }
 
     #[test]

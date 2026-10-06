@@ -297,8 +297,8 @@ async fn a_pair_init_generated_serves_the_proxy_to_a_client_trusting_ca_pem() {
         dir.path(),
         &up,
         (proxy_port, admin_port),
-        &tls.join("proxy.pem"),
-        &tls.join("proxy.key"),
+        &tls.join("proxy").join("cert.pem"),
+        &tls.join("proxy").join("key.pem"),
     );
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {

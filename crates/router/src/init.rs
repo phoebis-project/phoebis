@@ -1,7 +1,7 @@
 //! `phoebis init`: a first installation's storage key, environment file, certificate material and bootstrap file,
 //! written once. Each file is created with `create_new` at its mode, so no run replaces a key every stored credential
 //! is sealed under, and a run that fails part way removes what it wrote. `--tls self-signed` against an existing
-//! bootstrap file is the one run that replaces files: the leaves it wrote, under the CA the clients already trust.
+//! bootstrap file is the one run that replaces anything: the leaves it wrote, under the CA the clients already trust.
 
 use std::ffi::{CStr, CString};
 use std::fs::{DirBuilder, File, OpenOptions, Permissions};
@@ -17,8 +17,8 @@ use rand::Rng;
 
 use crate::config::{ConfigError, ListenerTls};
 use crate::selfsigned::{
-    self, LeafModes, MaterialError, SanName, Unfinished, Validity, CA_CERT, CA_LIFETIME_DAYS,
-    LEAF_LIFETIME_DAYS,
+    self, LeafModes, MaterialError, Placed, SanName, Unfinished, Validity, CA_CERT,
+    CA_LIFETIME_DAYS, LEAF_CERT, LEAF_KEY, LEAF_LIFETIME_DAYS,
 };
 
 /// The text the bootstrap file is filled from, embedded since the binary runs where no checkout exists.
@@ -160,8 +160,8 @@ pub struct Plan {
 pub struct Renewal {
     pub config_path: PathBuf,
     pub tls_dir: PathBuf,
-    /// Each public listener whose `tls` names `<tls_dir>/<name>.pem` and `.key`, or the container's mount of them under
-    /// `CONTAINER_TLS_DIR`, with its address: the leaves to write.
+    /// Each public listener whose `tls` names the pair `init` writes under `tls_dir`, or the container's mount of it
+    /// under `CONTAINER_TLS_DIR`, with its address: the leaves to write.
     pub listeners: Vec<(&'static str, SocketAddr)>,
 }
 
@@ -496,11 +496,12 @@ fn listener(
     })
 }
 
-/// `<dir>/<listener>.pem` and `.key`, the names `run` writes a generated pair under.
+/// The names a generated pair is read through under `dir`, `<listener>/cert.pem` and `<listener>/key.pem`.
 fn generated_pair(name: &str, dir: &Path) -> ListenerTls {
+    let (cert_file, key_file) = selfsigned::leaf_files(dir, name);
     ListenerTls {
-        cert_file: dir.join(format!("{name}.pem")),
-        key_file: dir.join(format!("{name}.key")),
+        cert_file,
+        key_file,
     }
 }
 
@@ -910,15 +911,32 @@ fn generate(plan: &Plan, written: &mut Vec<Landed>) -> Result<(), InitError> {
         Validity::days_from_now(LEAF_LIFETIME_DAYS),
         modes,
     ) {
-        Ok(pairs) => (pairs, None),
+        Ok(placed) => (placed, None),
         Err(Unfinished { error, placed }) => (placed, Some(error)),
     };
-    for (cert_file, key_file) in pairs {
-        for path in [cert_file, key_file] {
-            written.push(Landed { dir: false, path });
-        }
+    for leaf in pairs {
+        record_leaf(&leaf, written);
     }
     stopped.map_or(Ok(()), |error| Err(material(error)))
+}
+
+/// A live leaf as this run created it: its generation directory, the two files in it, then the link, so `undo`
+/// removes the link first and the directory last.
+fn record_leaf(leaf: &Placed, written: &mut Vec<Landed>) {
+    written.push(Landed {
+        dir: true,
+        path: leaf.generation.clone(),
+    });
+    for name in [LEAF_CERT, LEAF_KEY] {
+        written.push(Landed {
+            dir: false,
+            path: leaf.generation.join(name),
+        });
+    }
+    written.push(Landed {
+        dir: false,
+        path: leaf.link.clone(),
+    });
 }
 
 fn create_missing(dir: &Path, written: &mut Vec<Landed>) -> Result<(), InitError> {
@@ -988,9 +1006,9 @@ fn hand_over(
     Ok(())
 }
 
-/// A generated pair as the unit wants an operator's: the directory `0750` and each leaf's key `0640`, both root's
-/// with the owner's group, each leaf `0644`. The service reads its leaf and key through the group and never signs, so
-/// `ca.pem` and `ca.key` stay root's as written.
+/// A generated pair as the unit wants an operator's: the directory and each leaf's generation directory `0750` and
+/// each leaf's key `0640`, all root's with the owner's group, each leaf `0644`. The service reads its leaf and key
+/// through the group and never signs, so `ca.pem` and `ca.key` stay root's as written.
 fn hand_over_pair(plan: &Plan, gid: u32) -> Result<(), InitError> {
     let set = |path: &Path, group: Option<u32>, mode: u32| {
         set_mode(path, Some(0), group, mode)
@@ -998,9 +1016,14 @@ fn hand_over_pair(plan: &Plan, gid: u32) -> Result<(), InitError> {
     };
     set(&plan.tls_dir, Some(gid), 0o750)?;
     for (name, _) in generated(plan) {
-        let pair = generated_pair(name, &plan.tls_dir);
-        set(&pair.cert_file, None, 0o644)?;
-        set(&pair.key_file, Some(gid), 0o640)?;
+        // The generation by its own name: `set_mode` refuses a link as the last component.
+        let link = plan.tls_dir.join(name);
+        let generation = std::fs::read_link(&link)
+            .map(|target| plan.tls_dir.join(target))
+            .map_err(io_error(format!("reading {}", link.display())))?;
+        set(&generation, Some(gid), 0o750)?;
+        set(&generation.join(LEAF_CERT), None, 0o644)?;
+        set(&generation.join(LEAF_KEY), Some(gid), 0o640)?;
     }
     Ok(())
 }
@@ -1065,6 +1088,15 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
         let Ok(metadata) = std::fs::symlink_metadata(&landed.path) else {
             continue;
         };
+        if metadata.file_type().is_symlink() {
+            let target = std::fs::read_link(&landed.path).unwrap_or_default();
+            text.push_str(&format!(
+                "linked {} to {}\n",
+                landed.path.display(),
+                target.display()
+            ));
+            continue;
+        }
         let (mode, owner) = (metadata.mode() & 0o777, user_name(metadata.uid()));
         let line = match landed.dir {
             true => format!(
@@ -1103,7 +1135,7 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
         if generates(plan) {
             // The leaf keys by name: `ca.key` sits in the mounted directory too, and the container never signs.
             let keys: Vec<String> = generated(plan)
-                .map(|(name, _)| format!("tls/{name}.key"))
+                .map(|(name, _)| format!("tls/{name}/{LEAF_KEY}"))
                 .collect();
             text.push_str(&format!(
                 "; mount ./tls read-only at /etc/phoebis/tls and own {} by uid 65532 at mode 0400",
@@ -1204,9 +1236,11 @@ fn tls_alone(args: &InitArgs) -> bool {
         && secret_env == DEFAULT_SECRET_ENV
 }
 
-/// Writes the renewal's leaves under the existing CA, each replaced file keeping its own owner and mode, and prints one
-/// line per leaf and the stop-and-start line on `report`. Every leaf is staged and checked before any replaces its
-/// pair, and a live certificate the CA did not sign is refused, so a refused renewal leaves every pair as it was.
+/// Writes the renewal's leaves under the existing CA, each new generation keeping the owner and mode of the one it
+/// replaces, and prints one line per leaf and the stop-and-start line on `report`. The run holds the renewal lock under
+/// `tls_dir` throughout, so a second renewal refuses rather than writing beside it. Every leaf is staged and checked
+/// before any goes live, and a live certificate the CA did not sign is refused, so a refused renewal leaves every
+/// pair as it was.
 pub fn renew(renewal: &Renewal, report: &mut dyn Write) -> Result<(), InitError> {
     let material = |error| InitError::Material {
         what: format!("renewing the leaves under {}", renewal.tls_dir.display()),
@@ -1219,6 +1253,7 @@ pub fn renew(renewal: &Renewal, report: &mut dyn Write) -> Result<(), InitError>
             })
         })
         .map_err(material)?;
+    let _lock = selfsigned::lock_renewal(&renewal.tls_dir).map_err(material)?;
     let leaves: Vec<(&str, Vec<SanName>)> = renewal
         .listeners
         .iter()
@@ -1232,11 +1267,11 @@ pub fn renew(renewal: &Renewal, report: &mut dyn Write) -> Result<(), InitError>
         Validity::days_from_now(LEAF_LIFETIME_DAYS),
         LeafModes::KeepLive,
     ) {
-        Ok(pairs) => (pairs, None),
+        Ok(placed) => (placed, None),
         Err(Unfinished { error, placed }) => (placed, Some(error)),
     };
     let ca_file = renewal.tls_dir.join(CA_CERT);
-    for (cert_file, key_file) in pairs {
+    for (cert_file, key_file) in pairs.iter().map(Placed::files) {
         writeln!(
             report,
             "wrote {} and {} under the CA {}",
@@ -1479,8 +1514,8 @@ mod tests {
         );
         let pair = |dir: &Path, name: &str| {
             Some(ListenerTls {
-                cert_file: dir.join(format!("{name}.pem")),
-                key_file: dir.join(format!("{name}.key")),
+                cert_file: dir.join(name).join("cert.pem"),
+                key_file: dir.join(name).join("key.pem"),
             })
         };
         let generated =
@@ -1573,8 +1608,8 @@ mod tests {
         assert_eq!(
             asked.proxy.tls,
             Some(ListenerTls {
-                cert_file: tls.join("proxy.pem"),
-                key_file: tls.join("proxy.key"),
+                cert_file: tls.join("proxy").join("cert.pem"),
+                key_file: tls.join("proxy").join("key.pem"),
             })
         );
         assert!(asked.proxy.generated, "{asked:?}");
@@ -1603,8 +1638,8 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let config = dir.path().join("config.yaml");
         let generated = Some(ListenerTls {
-            cert_file: dir.path().join("tls").join("proxy.pem"),
-            key_file: dir.path().join("tls").join("proxy.key"),
+            cert_file: dir.path().join("tls/proxy/cert.pem"),
+            key_file: dir.path().join("tls/proxy/key.pem"),
         });
         let flags = args(&["--tls", "self-signed", "--proxy-listen", "0.0.0.0:8317"]);
         let defaults = plan(&config, &flags).unwrap();
@@ -1758,9 +1793,9 @@ mod tests {
             "--proxy-listen",
             "0.0.0.0:8317",
             "--proxy-cert",
-            "/etc/phoebis/tls/proxy.pem",
+            "/etc/phoebis/tls/proxy/cert.pem",
             "--proxy-key",
-            "/etc/phoebis/tls/proxy.key",
+            "/etc/phoebis/tls/proxy/key.pem",
         ]);
         std::fs::write(&host, render(&plan(&host, &flags).unwrap())).unwrap();
         let error = renewal(&host, &args(&["--tls", "self-signed"])).unwrap_err();

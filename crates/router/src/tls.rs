@@ -88,8 +88,7 @@ pub enum TlsError {
 /// and the key on a `mozilla_intermediate_v5` acceptor with ALPN fixed to `http/1.1`, and checks the key and the
 /// dates. `key` is `proxy.tls` or `admin.tls`, the prefix of every refusal.
 pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result<Loaded, TlsError> {
-    let cert_pem = read_file(key, "cert_file", cert_file)?;
-    let key_pem = read_file(key, "key_file", key_file)?;
+    let (cert_pem, key_pem) = read_pair(key, cert_file, key_file)?;
     let (leaf, chain) = certificates(key, cert_file, &cert_pem)?;
     let pkey = PKey::private_key_from_pem(&key_pem).map_err(|_| TlsError::NoKey {
         key,
@@ -130,16 +129,58 @@ pub fn load_pair(key: &'static str, cert_file: &Path, key_file: &Path) -> Result
 /// The leaf's facts from `cert_file` alone, refused as `load_pair` refuses the certificate file. `status` reads the
 /// leaf this way: it reports the leaf's dates, and the operator running it may not be able to read the key.
 pub fn read_leaf(key: &'static str, cert_file: &Path) -> Result<LeafFacts, TlsError> {
-    let cert_pem = read_file(key, "cert_file", cert_file)?;
+    let cert_pem = read_file(key, "cert_file", cert_file, cert_file)?;
     let (leaf, _) = certificates(key, cert_file, &cert_pem)?;
     leaf_facts(key, cert_file, &leaf)
 }
 
-fn read_file(key: &'static str, file: &'static str, path: &Path) -> Result<Vec<u8>, TlsError> {
-    std::fs::read(path).map_err(|error| TlsError::Unreadable {
+/// Both files of a pair. When they share a directory, it is resolved once and both are read from what it resolved to,
+/// so a pair that goes live by switching a link to its directory, as `init` publishes a generated one, is read from
+/// one side of the switch.
+fn read_pair(
+    key: &'static str,
+    cert_file: &Path,
+    key_file: &Path,
+) -> Result<(Vec<u8>, Vec<u8>), TlsError> {
+    let shared = cert_file
+        .parent()
+        .filter(|dir| key_file.parent() == Some(*dir));
+    let (Some(dir), Some(cert_name), Some(key_name)) =
+        (shared, cert_file.file_name(), key_file.file_name())
+    else {
+        return Ok((
+            read_file(key, "cert_file", cert_file, cert_file)?,
+            read_file(key, "key_file", key_file, key_file)?,
+        ));
+    };
+    let dir = if dir.as_os_str().is_empty() {
+        Path::new(".")
+    } else {
+        dir
+    };
+    let resolved = std::fs::canonicalize(dir).map_err(|error| TlsError::Unreadable {
+        key,
+        file: "cert_file",
+        path: cert_file.to_path_buf(),
+        error,
+    })?;
+    Ok((
+        read_file(key, "cert_file", cert_file, &resolved.join(cert_name))?,
+        read_file(key, "key_file", key_file, &resolved.join(key_name))?,
+    ))
+}
+
+/// Reads `from`, refusing with `named`, the path the configuration carries.
+fn read_file(
+    key: &'static str,
+    file: &'static str,
+    named: &Path,
+    from: &Path,
+) -> Result<Vec<u8>, TlsError> {
+    std::fs::read(from).map_err(|error| TlsError::Unreadable {
         key,
         file,
-        path: path.to_path_buf(),
+        path: named.to_path_buf(),
         error,
     })
 }
