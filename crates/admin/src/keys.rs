@@ -329,7 +329,14 @@ pub(crate) async fn patch(
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
-    match state.store.update_api_key(&row, read_at, ACTOR) {
+    if read_at != row.updated_at {
+        return failure_with_code(
+            StatusCode::CONFLICT,
+            "stale_edit",
+            "the key changed while it was being edited; reload and try again",
+        );
+    }
+    match state.store.update_api_key(&row, row.updated_at, ACTOR) {
         Ok(updated_at) => row.updated_at = updated_at,
         Err(StoreError::Stale) => {
             return failure_with_code(

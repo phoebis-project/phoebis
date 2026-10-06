@@ -590,9 +590,16 @@ pub(crate) async fn patch(
         },
         None => None,
     };
+    if read_at != row.updated_at {
+        return failure_with_code(
+            StatusCode::CONFLICT,
+            "stale_edit",
+            "the pool changed while it was being edited; reload and try again",
+        );
+    }
     match state
         .store
-        .update_pool_with_members(&row, read_at, writes.as_deref(), ACTOR)
+        .update_pool_with_members(&row, row.updated_at, writes.as_deref(), ACTOR)
     {
         Ok(at) => row.updated_at = at,
         Err(StoreError::Stale) => {

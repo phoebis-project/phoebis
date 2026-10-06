@@ -44,10 +44,9 @@ struct PatchInput {
     cancelled: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     subscription_ends_at: Option<Option<i64>>,
-    // The raw value, kept apart from an absent field as `PoolInput` and `KeyInput` keep theirs, so a present null is
-    // refused with its own sentence rather than read as "not sent".
-    /// The revision the row was read at; the write lands only while the row still carries it. Absent, the route fences
-    /// on its own read.
+    /// The revision the row was read at, kept raw and apart from an absent field as `PoolInput` and `KeyInput` keep
+    /// theirs, so a present null is refused with its own sentence rather than read as "not sent". The write lands only
+    /// while the row still carries it; absent, the route fences on its own read.
     #[serde(default, deserialize_with = "present")]
     expected_revision: Option<Value>,
 }
@@ -265,11 +264,19 @@ pub(crate) async fn patch(
         || input.enabled.is_some()
         || cancellation.is_some();
     if edits {
-        // One commit for every field, fenced on the revision the body sent, else the one the row was read at: an
-        // edit built from a stale read lands nothing, and a combined edit never fences against its own earlier write.
+        // One commit for every field, fenced on the revision the route read, which a sent revision has matched above:
+        // an edit built from a stale read lands nothing, and a combined edit never fences against its own earlier
+        // write.
+        if expected_revision != row.revision {
+            return failure_with_code(
+                StatusCode::CONFLICT,
+                "stale_edit",
+                "the account changed while the edit was being saved",
+            );
+        }
         let update = AccountUpdate {
             id: &id,
-            expected_revision,
+            expected_revision: row.revision,
             lifecycle_generation: row.lifecycle_generation,
             label,
             secret: secret.as_ref(),

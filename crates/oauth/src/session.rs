@@ -395,8 +395,8 @@ fn expire_if_stale(session: &mut PairingSession, now: i64) {
     }
 }
 
-/// The first end keeps its stamp: the sweep counts a session's lifetime from it, so a repeated owner `DELETE` never
-/// extends how long an ended session is kept.
+/// Keeps the first end's stamp, which the sweep counts a session's lifetime from. Every caller ends a session still
+/// in flight, and `cancel` refuses one that has ended.
 fn end(session: &mut PairingSession, status: PairingStatus, now: i64) {
     session.status = status;
     session.ended_at.get_or_insert(now);

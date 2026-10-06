@@ -1597,8 +1597,8 @@ pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
 
 const DAY_MS: i64 = 86_400_000;
 
-/// The stamp an edit fences on: the row's own when the body sent none, else the body's integer, refused when it
-/// is not one or lies more than a day past the row's stamp, which no row the client read can carry.
+/// The stamp an edit's body names: the row's own when the body sent none, else the body's integer, refused when it
+/// is not one or lies more than a day past the row's stamp. The route answers 409 when it differs from its own read.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
@@ -1615,8 +1615,8 @@ pub(crate) fn fence_stamp(sent: Option<&serde_json::Value>, current: i64) -> Res
     }
 }
 
-/// The revision an account edit fences on: the row's own when the body sent none, else the body's integer, refused
-/// when it is not one. No upper bound: the store adds to the row's own counter, never to the sent value.
+/// The revision an account edit's body names: the row's own when the body sent none, else the body's integer, refused
+/// when it is not one. The route answers 409 when it differs from its own read, so the store fences on the read alone.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]

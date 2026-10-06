@@ -897,7 +897,8 @@ pub async fn step_to_backoff(h: &Harness, up: &FakeUpstream, account: &str) {
     h.clock.store(until, Ordering::SeqCst);
 }
 
-/// A label edit through the one account write, fenced on the revision the caller read, as the admin route fences.
+/// A label edit through the one account write, fenced on the revision the caller read. The generation is the row's own
+/// at call time, so only the revision half of the admin route's fence can refuse here.
 pub fn rename(
     h: &Harness,
     id: &str,

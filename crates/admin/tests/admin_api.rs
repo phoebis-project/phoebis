@@ -1487,6 +1487,28 @@ async fn a_repeated_delete_of_an_ended_pairing_keeps_its_first_end() {
     );
 }
 
+#[test]
+fn a_record_discarded_twice_leaves_one_lifetime_after_its_first_discard() {
+    let vault = phoebis_admin::PairingVault::new();
+    vault.open(
+        "pairing",
+        "business",
+        "owner",
+        0,
+        common::NOW + 600_000,
+        common::NOW,
+    );
+    vault.discard("pairing", common::NOW);
+    // A callback whose exchange returns after the owner cancelled discards the record a second time.
+    vault.discard("pairing", common::NOW + 300_000);
+    assert_eq!(vault.sweep(common::NOW + 600_000 - 1), 0);
+    assert_eq!(
+        vault.sweep(common::NOW + 600_000),
+        1,
+        "the record leaves ten minutes after its first discard"
+    );
+}
+
 #[tokio::test]
 async fn a_second_start_by_the_owning_session_replaces_its_standing_pairing() {
     use common::{get, json, login, post};

@@ -1298,6 +1298,71 @@ async fn two_account_editors_from_one_read_meet_one_409() {
     );
 }
 
+#[tokio::test]
+async fn an_account_edit_naming_the_revision_past_its_read_is_refused_when_the_row_moves_onto_it() {
+    let (app, up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.add_credential_rule(
+        "sk-ant-api03-HELD",
+        "/v1/models",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[]}"#.to_vec(),
+        })),
+    );
+    let read = store.account("direct").unwrap().unwrap().revision;
+    // The first edit names the revision the second edit is about to land, then waits at discovery while it does.
+    let first = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        let body = fenced(r#""secret":"sk-ant-api03-HELD""#, read + 1);
+        async move { patch(&app, "/admin/accounts/direct", &body, Some(&cookie)).await }
+    });
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !up.requests().iter().any(|r| {
+        r.headers
+            .iter()
+            .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-HELD")
+    }) {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the first edit never reached discovery"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let second = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"label":"Second"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(second.status(), 200);
+    up.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.status(), 409);
+    assert_eq!(
+        first.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    let row = store.account("direct").unwrap().unwrap();
+    assert_eq!(
+        (
+            row.label,
+            row.revision,
+            store
+                .api_key_credential("direct")
+                .unwrap()
+                .unwrap()
+                .0
+                .expose()
+                .to_string()
+        ),
+        ("Second".to_string(), read + 1, common::API_KEY.to_string()),
+        "a revision the route never read lands nothing, whatever the row moves onto"
+    );
+}
+
 /// The body an account edit sends: its fields, then the revision it read, written into the JSON object.
 fn fenced(fields: &str, revision: impl std::fmt::Display) -> String {
     format!(r#"{{{fields},"expected_revision":{revision}}}"#)

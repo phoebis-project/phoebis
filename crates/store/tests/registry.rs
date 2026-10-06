@@ -222,7 +222,8 @@ fn member(account_id: &str, priority: u32) -> MemberWrite {
     }
 }
 
-/// A label edit through the one account write, fenced on the revision the caller read, as the admin route fences.
+/// A label edit through the one account write, fenced on the revision the caller read. The generation is the row's own
+/// at call time, so only the revision half of the admin route's fence can refuse here.
 fn rename(
     store: &Store,
     id: &str,
