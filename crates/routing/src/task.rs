@@ -772,7 +772,7 @@ pub struct LoadCounts {
     /// Marked rows whose round lies within their pool's dwell at start, each on a pin the load carries under the
     /// row's epoch.
     pub shed_marks: usize,
-    /// Rows whose round lies past their pool's dwell at start, purged on the first tick.
+    /// Rows whose round lies past their pool's dwell at start, which the purge drops once no pool's dwell reads them.
     pub shed_rounds_stale: usize,
 }
 

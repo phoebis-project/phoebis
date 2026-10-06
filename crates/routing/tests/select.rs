@@ -11119,6 +11119,43 @@ fn from_load_restores_the_account_s_newest_round_from_the_loaded_rows() {
 }
 
 #[test]
+fn a_pin_placed_after_a_load_takes_an_epoch_above_every_loaded_round_s() {
+    let s = snapshot(Pool::default());
+    // The pin the round marked under epoch 7 was deleted before the restart; s1, under epoch 6, is the only pin left,
+    // so a seed read off the pins alone would hand out 7 again.
+    let mut st = RoutingState::from_load(RoutingLoad {
+        pins: vec![PinRow {
+            epoch: 6,
+            ..seeded_pin("s1", "a", T)
+        }],
+        shed_rounds: vec![ShedRoundRow {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            incarnation: 1,
+            key_id: "k".into(),
+            session_id: "s2".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            epoch: 7,
+            round_at: T - 60_000,
+            marked: true,
+        }],
+        ..RoutingLoad::default()
+    });
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s2"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    assert!(
+        pinned(&st, "s2").epoch > 7,
+        "a fresh pin under the round's key never takes the epoch its row names: {}",
+        pinned(&st, "s2").epoch
+    );
+}
+
+#[test]
 fn a_pin_that_fails_over_off_its_account_spends_its_mark_there() {
     let s = snapshot(Pool {
         shed_ahead: Some(0.8),

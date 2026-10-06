@@ -828,7 +828,16 @@ pub struct RoutingState {
 
 impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
-        let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
+        // A loaded round names the epochs of pins deleted since, and a mark is read back by its epoch, so none of
+        // them is handed out again.
+        let next_epoch = load
+            .pins
+            .iter()
+            .map(|p| p.epoch)
+            .chain(load.shed_rounds.iter().map(|row| row.epoch))
+            .max()
+            .unwrap_or(0)
+            + 1;
         let (shed_rounds, newest_shed) = rounds_of(&load);
         let mut affinity_map = AffinityMap::from_rows(load.affinity);
         for resolution in &load.resolutions {

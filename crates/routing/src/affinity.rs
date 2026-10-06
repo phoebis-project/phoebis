@@ -971,4 +971,24 @@ mod tests {
              write: the static boundaries keep five minutes and the message boundary records the hour"
         );
     }
+
+    #[test]
+    fn a_restored_entry_keeps_the_depth_its_row_names() {
+        let map = AffinityMap::from_rows(vec![AffinityRow {
+            model: "m".into(),
+            hash: "b3".into(),
+            chain: AffinityChain::Message,
+            account_id: "a".into(),
+            incarnation: 1,
+            written_at: 1_000,
+            ttl_ms: 300_000,
+            prefix_tokens: 500,
+            key_id: "k".into(),
+            key_generation: 0,
+            root: "b1".into(),
+            lane: crate::lane_key("m", "standard", "none", "-"),
+            depth: 3,
+        }]);
+        assert_eq!(map.entry("m", "b3").map(|e| e.depth), Some(3));
+    }
 }
