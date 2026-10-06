@@ -39,6 +39,10 @@ const stamped = (previous: string) => iso(Math.max(Date.now(), Date.parse(previo
  * pass. */
 const revised = (a: Account): Account => ({ ...a, revision: a.revision + 1 });
 
+/** The route's edit token carries the account's incarnation above a 32-bit revision, so an id deleted and created
+ * again starts past every token its predecessor answered. */
+const INCARNATION = 2 ** 32;
+
 /**
  * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
  * drifts from the route is refused here rather than agreed with.
@@ -346,6 +350,8 @@ function isAfterCursor(r: RequestLog, cursor: string): boolean {
 
 export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
+  /** The incarnation each deleted id reached, which its next account starts above. */
+  private buried = new Map<string, number>();
   private keys: ApiKey[] = [...KEYS];
   private pairings = new Map<string, { accountId: string; state: string }>();
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
@@ -459,7 +465,7 @@ export class MockApi implements Api {
       plan: null,
       pools: [],
       requests: { last24h: 0, last7d: 0, lifetime: 0 },
-      revision: 1,
+      revision: ((this.buried.get(input.id) ?? 0) + 1) * INCARNATION + 1,
       routingEnabled: true,
       status,
       subscription: null,
@@ -536,7 +542,7 @@ export class MockApi implements Api {
   }
 
   async deleteAccount(accountId: string) {
-    this.account(accountId);
+    this.buried.set(accountId, Math.floor(this.account(accountId).revision / INCARNATION));
     this.accounts = this.accounts.filter((a) => a.id !== accountId);
     this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
     return latency(undefined, 250);

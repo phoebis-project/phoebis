@@ -222,8 +222,8 @@ fn member(account_id: &str, priority: u32) -> MemberWrite {
     }
 }
 
-/// A label edit through the one account write, fenced on the revision the caller read. The generation is the row's own
-/// at call time, so only the revision half of the admin route's fence can refuse here.
+/// A label edit through the one account write, fenced on the revision the caller read. The incarnation and the
+/// generation are the row's own at call time, so only the revision half of the admin route's fence can refuse here.
 fn rename(
     store: &Store,
     id: &str,
@@ -231,10 +231,13 @@ fn rename(
     label: &str,
     actor: &str,
 ) -> Result<(), StoreError> {
-    let generation = store.account(id)?.map_or(0, |row| row.lifecycle_generation);
+    let (incarnation, generation) = store
+        .account(id)?
+        .map_or((0, 0), |row| (row.incarnation, row.lifecycle_generation));
     store.commit_account_update(&AccountUpdate {
         id,
         expected_revision: revision,
+        incarnation,
         lifecycle_generation: generation,
         label,
         secret: None,
@@ -2023,6 +2026,7 @@ fn a_stale_account_update_carrying_enabled_and_a_cancellation_writes_nothing() {
     let stale = AccountUpdate {
         id: "a",
         expected_revision: read.revision,
+        incarnation: read.incarnation,
         lifecycle_generation: read.lifecycle_generation,
         label: "Stale",
         secret: None,
@@ -2134,6 +2138,7 @@ fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
     let update = AccountUpdate {
         id: "a",
         expected_revision: 1,
+        incarnation: 1,
         lifecycle_generation: 1,
         label: "Renamed",
         secret: Some(&Secret::new("k2")),
@@ -2181,6 +2186,121 @@ fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
         ),
         ("Renamed".to_string(), "k2"),
         "an edit verified against a superseded revision writes nothing"
+    );
+}
+
+#[test]
+fn a_recreated_account_never_answers_an_edit_token_its_predecessor_answered() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .create_account(&account("a", AccountKind::Oauth), None, 1, "admin")
+        .unwrap();
+    let mut answered = Vec::new();
+    for label in ["One", "Two"] {
+        let row = store.account("a").unwrap().unwrap();
+        answered.push(row.edit_token());
+        rename(&store, "a", row.revision, label, "admin").unwrap();
+    }
+    answered.push(store.account("a").unwrap().unwrap().edit_token());
+    store.delete_account("a", "admin").unwrap();
+    store
+        .create_account(&account("a", AccountKind::Oauth), None, 2, "admin")
+        .unwrap();
+    for label in ["One", "Two", "Three"] {
+        let row = store.account("a").unwrap().unwrap();
+        assert!(
+            !answered.contains(&row.edit_token()),
+            "revision {} of the replacement answers a token its predecessor answered",
+            row.revision
+        );
+        rename(&store, "a", row.revision, label, "admin").unwrap();
+    }
+}
+
+#[test]
+fn an_edit_token_too_wide_for_a_console_number_is_refused_by_its_own_row() {
+    let row = AccountRow {
+        incarnation: 1 << 21,
+        ..account("a", AccountKind::Oauth)
+    };
+    assert!(
+        row.edit_token() < 1 << 53,
+        "the token stays an integer a console number holds exactly"
+    );
+    assert!(
+        !row.answers_edit_token(row.edit_token()),
+        "a token that cannot name the row's incarnation fences nothing onto it"
+    );
+}
+
+#[test]
+fn an_account_update_read_from_a_deleted_account_is_stale_on_the_one_that_took_its_id() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .create_account(
+            &account("a", AccountKind::ApiKey),
+            Some(&Secret::new("k1")),
+            1,
+            "admin",
+        )
+        .unwrap();
+    let read = store.account("a").unwrap().unwrap();
+    store.delete_account("a", "admin").unwrap();
+    store
+        .create_account(
+            &account("a", AccountKind::ApiKey),
+            Some(&Secret::new("k2")),
+            2,
+            "admin",
+        )
+        .unwrap();
+    let replacement = store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (replacement.revision, replacement.lifecycle_generation),
+        (read.revision, read.lifecycle_generation),
+        "the replacement restarts both counters the read carried"
+    );
+    let stale = AccountUpdate {
+        id: "a",
+        expected_revision: read.revision,
+        incarnation: read.incarnation,
+        lifecycle_generation: read.lifecycle_generation,
+        label: "Stale",
+        secret: Some(&Secret::new("k3")),
+        state: Some(AccountState::Ready),
+        at: 5,
+        actor: "admin",
+        enabled: Some(false),
+        cancellation: None,
+    };
+    assert!(matches!(
+        store.commit_account_update(&stale),
+        Err(StoreError::Stale)
+    ));
+    assert_eq!(
+        (
+            store.account("a").unwrap().unwrap(),
+            store
+                .api_key_credential("a")
+                .unwrap()
+                .unwrap()
+                .0
+                .expose()
+                .to_string()
+        ),
+        (replacement.clone(), "k2".to_string()),
+        "no staged field of the edit read from the deleted account landed"
+    );
+    store
+        .commit_account_update(&AccountUpdate {
+            incarnation: replacement.incarnation,
+            ..stale
+        })
+        .unwrap();
+    assert_eq!(
+        store.account("a").unwrap().unwrap().label,
+        "Stale",
+        "the same edit built from the replacement lands"
     );
 }
 

@@ -315,7 +315,19 @@ test('an account save over a revision the row no longer carries is refused as st
   const renamed = await api.renameAccount('primary', 'x', landed.revision);
   assert.deepEqual([renamed.label, renamed.revision], ['x', landed.revision + 1]);
   const created = await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'fresh', secret: null });
-  assert.equal(created.revision, 1, 'a new row starts at the revision the route gives it');
+  assert.equal(created.revision, 2 ** 32 + 1, 'a new row starts at the token the route gives it');
+});
+
+test('an editor opened before its account was deleted and created again is refused as stale and stores nothing', async () => {
+  const api = await signedIn();
+  const first = await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'fresh', secret: null });
+  await api.deleteAccount('fresh');
+  const replacement = await api.createAccount({ id: 'fresh', kind: 'oauth', label: 'again', secret: null });
+  assert.notEqual(replacement.revision, first.revision, 'the replacement never answers a token its predecessor did');
+  await assert.rejects(() => api.renameAccount('fresh', 'stale', first.revision), staleAs(ACCOUNT_STALE));
+  await assert.rejects(() => api.updateAccount('fresh', { cancelled: true, subscriptionEndsAt: '2026-10-19T09:15:00.000Z' }, first.revision), staleAs(ACCOUNT_STALE));
+  const stored = await storyAccount(api, 'fresh');
+  assert.deepEqual([stored.label, stored.cancelled, stored.revision], ['again', replacement.cancelled, replacement.revision], 'the stale saves stored nothing');
 });
 
 test('a rename, an end edit, a pause, a resume, a funding clear or a disconnect moves the account\'s revision, so an edit read before it is refused as stale', async () => {

@@ -95,7 +95,8 @@ export interface Account {
   plan: string | null;
   pools: PoolMembership[];
   requests: { last24h: number; last7d: number; lifetime: number };
-  /** The row's edit counter, which an edit sends back as `expected_revision`. */
+  /** The row's edit token, which an edit sends back as `expected_revision`; an account deleted and created again
+   * under its id never answers one its predecessor did. */
   revision: number;
   routingEnabled: boolean;
   status: AccountStatus;

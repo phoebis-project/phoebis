@@ -1302,7 +1302,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "quarantined": quarantined,
         })),
         "lifecycle_generation": row.lifecycle_generation,
-        "revision": row.revision,
+        "revision": row.edit_token(),
         "cooldowns": ctx.cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
             "scope": cooldown.scope,
             "until": cooldown.until,
@@ -1615,19 +1615,17 @@ pub(crate) fn fence_stamp(sent: Option<&serde_json::Value>, current: i64) -> Res
     }
 }
 
-/// The revision an account edit's body names: the row's own when the body sent none, else the body's integer, refused
-/// when it is not one. The route answers 409 when it differs from its own read, so the store fences on the read alone.
+/// The edit token an account edit's body names, `None` when it sent none, refused when it is not a non-negative integer.
+/// The route answers 409 when it names another incarnation or revision than its own read, so the store fences on the
+/// read alone.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-pub(crate) fn fence_revision(
-    sent: Option<&serde_json::Value>,
-    current: u64,
-) -> Result<u64, Response> {
+pub(crate) fn fence_revision(sent: Option<&serde_json::Value>) -> Result<Option<u64>, Response> {
     let Some(value) = sent else {
-        return Ok(current);
+        return Ok(None);
     };
-    value.as_u64().ok_or_else(|| {
+    value.as_u64().map(Some).ok_or_else(|| {
         failure(
             StatusCode::BAD_REQUEST,
             "expected_revision is the revision the row was read at",

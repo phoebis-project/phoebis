@@ -580,6 +580,9 @@ pub struct AccountUpdate<'a> {
     /// The revision the edit was built from. The commit only lands while the row still carries it, so two edits
     /// built from one read cannot both land, and an endpoint and a secret nothing checked together never combine.
     pub expected_revision: u64,
+    /// The incarnation the edit was built from. A slot deleted and created again under the same id restarts its
+    /// revision and lifecycle generation at 1, so only this tells the replacement from the row the edit read.
+    pub incarnation: u64,
     pub lifecycle_generation: u64,
     pub label: &'a str,
     pub secret: Option<&'a Secret>,
@@ -1224,8 +1227,8 @@ impl Store {
     }
 
     /// An edit lands whole, in one revision: every staged field or none. Discovery ran against the staged secret,
-    /// and the row moving underneath (another edit, a disconnect, a deletion) means the edit is about a row that
-    /// no longer exists as it was read.
+    /// and the row moving underneath (another edit, a disconnect, a deletion, a replacement under the same id) means
+    /// the edit is about a row that no longer exists as it was read.
     pub fn commit_account_update(&self, u: &AccountUpdate<'_>) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
@@ -1237,7 +1240,7 @@ impl Store {
              cancelled = COALESCE(?8, cancelled), \
              subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at WHEN ?8 THEN ?9 ELSE NULL END, \
              revision = revision + 1, updated_at = ?4 \
-             WHERE id = ?1 AND lifecycle_generation = ?5 AND revision = ?6",
+             WHERE id = ?1 AND incarnation = ?10 AND lifecycle_generation = ?5 AND revision = ?6",
             params![
                 u.id,
                 u.label,
@@ -1248,6 +1251,7 @@ impl Store {
                 u.enabled,
                 cancelled,
                 ends_at,
+                u.incarnation as i64,
             ],
         )?;
         if updated == 0 {

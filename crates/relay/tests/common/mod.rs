@@ -897,8 +897,8 @@ pub async fn step_to_backoff(h: &Harness, up: &FakeUpstream, account: &str) {
     h.clock.store(until, Ordering::SeqCst);
 }
 
-/// A label edit through the one account write, fenced on the revision the caller read. The generation is the row's own
-/// at call time, so only the revision half of the admin route's fence can refuse here.
+/// A label edit through the one account write, fenced on the revision the caller read. The incarnation and the
+/// generation are the row's own at call time, so only the revision half of the admin route's fence can refuse here.
 pub fn rename(
     h: &Harness,
     id: &str,
@@ -906,13 +906,14 @@ pub fn rename(
     label: &str,
     actor: &str,
 ) -> Result<(), StoreError> {
-    let generation = h
+    let (incarnation, generation) = h
         .store
         .account(id)?
-        .map_or(0, |row| row.lifecycle_generation);
+        .map_or((0, 0), |row| (row.incarnation, row.lifecycle_generation));
     h.store.commit_account_update(&AccountUpdate {
         id,
         expected_revision: revision,
+        incarnation,
         lifecycle_generation: generation,
         label,
         secret: None,

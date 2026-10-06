@@ -1311,8 +1311,8 @@ async fn an_account_edit_naming_the_revision_past_its_read_is_refused_when_the_r
             body: br#"{"data":[]}"#.to_vec(),
         })),
     );
-    let read = store.account("direct").unwrap().unwrap().revision;
-    // The first edit names the revision the second edit is about to land, then waits at discovery while it does.
+    let read = store.account("direct").unwrap().unwrap().edit_token();
+    // The first edit names the token the second edit is about to land, then waits at discovery while it does.
     let first = tokio::spawn({
         let (app, cookie) = (app.clone(), cookie.clone());
         let body = fenced(r#""secret":"sk-ant-api03-HELD""#, read + 1);
@@ -1348,8 +1348,8 @@ async fn an_account_edit_naming_the_revision_past_its_read_is_refused_when_the_r
     let row = store.account("direct").unwrap().unwrap();
     assert_eq!(
         (
-            row.label,
-            row.revision,
+            row.label.clone(),
+            row.edit_token(),
             store
                 .api_key_credential("direct")
                 .unwrap()
@@ -1372,7 +1372,7 @@ fn fenced(fields: &str, revision: impl std::fmt::Display) -> String {
 async fn an_account_edit_with_a_stale_expected_revision_answers_409_and_writes_nothing() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
-    let revision = |id: &str| store.account(id).unwrap().unwrap().revision;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().edit_token();
 
     let read = revision("business");
     let other = patch(
@@ -1401,7 +1401,7 @@ async fn an_account_edit_with_a_stale_expected_revision_answers_409_and_writes_n
     );
     let row = store.account("business").unwrap().unwrap();
     assert_eq!(
-        (row.label.as_str(), row.revision),
+        (row.label.as_str(), row.edit_token()),
         ("Someone else", read + 1),
         "the edit read before the other landed wrote nothing"
     );
@@ -1411,12 +1411,12 @@ async fn an_account_edit_with_a_stale_expected_revision_answers_409_and_writes_n
 async fn an_account_edit_with_the_fresh_revision_lands_and_the_revision_moves() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
-    let revision = |id: &str| store.account(id).unwrap().unwrap().revision;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().edit_token();
 
     let detail = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
     let read = detail["revision"]
         .as_u64()
-        .expect("the account JSON carries the row's revision");
+        .expect("the account JSON carries the row's edit token");
     assert_eq!(read, revision("business"));
     let list = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
     let listed = list["accounts"]
@@ -1526,7 +1526,7 @@ async fn a_body_naming_no_field_writes_nothing_whatever_revision_it_sends() {
 async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
-    let revision = |id: &str| store.account(id).unwrap().unwrap().revision;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().edit_token();
     let end = |revision: u64| {
         fenced(
             r#""cancelled":true,"subscription_ends_at":2000000"#,
@@ -1574,5 +1574,141 @@ async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
     assert_eq!(
         (term.cancelled, term.ends_at, revision("business")),
         (true, Some(2_000_000), read + 2)
+    );
+}
+
+#[tokio::test]
+async fn an_editor_opened_before_its_account_was_deleted_and_created_again_is_refused_and_writes_nothing(
+) {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let create = r#"{"id":"team","kind":"oauth","label":"Team"}"#;
+    let created = post(&app, "/admin/accounts", create, Some(&cookie)).await;
+    assert_eq!(created.status(), 201);
+    let read = json(created).await["revision"]
+        .as_u64()
+        .expect("the account JSON carries the token an edit sends back");
+    assert_eq!(
+        delete(&app, "/admin/accounts/team", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        post(&app, "/admin/accounts", create, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    let replacement = store.account("team").unwrap().unwrap();
+
+    let stale = patch(
+        &app,
+        "/admin/accounts/team",
+        &fenced(r#""label":"Stale","enabled":false"#, read),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
+        store.account("team").unwrap().unwrap(),
+        replacement,
+        "the edit read from the deleted account wrote nothing on its replacement"
+    );
+}
+
+#[tokio::test]
+async fn an_edit_whose_account_is_replaced_while_its_key_is_verified_is_refused_and_writes_nothing()
+{
+    let (app, up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.add_credential_rule(
+        "sk-ant-api03-HELD",
+        "/v1/models",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[]}"#.to_vec(),
+        })),
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts",
+            r#"{"id":"spare","kind":"api_key","label":"Spare","secret":"sk-ant-api03-FIRST"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    // The edit reads the row, then waits at discovery while the account is deleted and created again under its id,
+    // which restarts the revision and the lifecycle generation the edit read.
+    let first = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            patch(
+                &app,
+                "/admin/accounts/spare",
+                r#"{"label":"First","secret":"sk-ant-api03-HELD"}"#,
+                Some(&cookie),
+            )
+            .await
+        }
+    });
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !up.requests().iter().any(|r| {
+        r.headers
+            .iter()
+            .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-HELD")
+    }) {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the edit never reached discovery"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        delete(&app, "/admin/accounts/spare", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts",
+            r#"{"id":"spare","kind":"api_key","label":"Replacement","secret":"sk-ant-api03-NEXT"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let replacement = store.account("spare").unwrap().unwrap();
+    up.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.status(), 409);
+    assert_eq!(
+        first.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
+        (
+            store.account("spare").unwrap().unwrap(),
+            store
+                .api_key_credential("spare")
+                .unwrap()
+                .unwrap()
+                .0
+                .expose()
+                .to_string()
+        ),
+        (replacement, "sk-ant-api03-NEXT".to_string()),
+        "the edit read from the deleted account wrote nothing on its replacement"
     );
 }
