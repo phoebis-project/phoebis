@@ -42,14 +42,17 @@ async function storyAt(at) {
     if (e.kind === 'snapshot') live = e.snapshot;
   })();
   const now = Date.parse(at);
-  // The day the dashboard draws: its 24 hourly buckets, the current hour last. The week starts on the hour seven
-  // days back, as the routes read their rollups.
+  // The day the dashboard and the pools' charts draw: 24 hourly buckets, the current hour last. An account's or a
+  // pool's day total starts an hour earlier, on the hour a full day back, and the week on the hour seven days back,
+  // as the routes total their rollups.
   const dayFrom = startOfHour(now) - 23 * HOUR;
+  const totalsFrom = startOfHour(now) - 24 * HOUR;
   const weekFrom = startOfHour(now) - 7 * DAY;
   const counted = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= dayFrom);
+  const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, weekFrom };
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, totalled, weekFrom };
 }
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -169,12 +172,12 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([preview.email, preview.organization], ['operator+old@example.com', 'Personal']);
   });
 
-  test(`each account's request counts are its rows' over the day and the rollups' over the week, at ${at}`, async () => {
+  test(`each account's request counts are its rows' from the hour a day back and the rollups' over the week, at ${at}`, async () => {
     const s = await story;
     for (const a of s.accounts) {
       const mine = s.rollups.filter((r) => r.accountId === a.id);
       const week = sum(mine.filter((r) => Date.parse(r.hour) >= s.weekFrom), requestsOf);
-      assert.equal(a.requests.last24h, s.counted.filter((r) => r.accountId === a.id).length, `${a.id}'s day`);
+      assert.equal(a.requests.last24h, s.totalled.filter((r) => r.accountId === a.id).length, `${a.id}'s day`);
       assert.equal(a.requests.last7d, week, `${a.id}'s week`);
       assert.ok(a.requests.lifetime >= sum(mine, requestsOf) && a.requests.lifetime >= a.requests.last7d, `${a.id}'s lifetime reads ${a.requests.lifetime}, under what the rollups hold`);
     }
@@ -195,15 +198,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`each pool's day is its rows', drawn in 24 hourly buckets that add up to it, at ${at}`, async () => {
+  test(`each pool's day totals its rows from the hour a day back, and its 24 hourly buckets its rows from the chart's first hour, at ${at}`, async () => {
     const s = await story;
     for (const p of s.pools) {
-      const mine = s.counted.filter((r) => r.poolId === p.id);
+      const mine = s.totalled.filter((r) => r.poolId === p.id);
       assert.equal(p.requests24h, mine.length, `${p.id}'s day`);
       assert.ok(near(p.cost24h, sum(mine, (r) => r.costUsd)), `${p.id}'s cost`);
       assert.equal(p.traffic24h.length, 24, `${p.id}'s buckets`);
       assert.equal(Date.parse(p.traffic24h[0].at), s.dayFrom, `${p.id}'s first bucket`);
-      assert.equal(sum(p.traffic24h, (b) => b.requests), p.requests24h, `${p.id}'s buckets`);
+      assert.equal(sum(p.traffic24h, (b) => b.requests), s.counted.filter((r) => r.poolId === p.id).length, `${p.id}'s buckets`);
     }
   });
 
@@ -211,7 +214,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     assert.equal(s.overview.requests24h, s.counted.length);
     assert.equal(sum(s.overview.hourly, (h) => h.requests), s.overview.requests24h, 'the hourly buckets');
-    assert.equal(s.overview.requests24h, sum(s.pools, (p) => p.requests24h), "the pools' days");
+    assert.equal(s.overview.requests24h, sum(s.pools, (p) => sum(p.traffic24h, (b) => b.requests)), "the pools' charts");
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
     const points = await s.api.getAnalyticsSeries({ ...range, groupBy: 'all' });
     const day = s.rollups.filter((r) => Date.parse(r.hour) >= Date.parse(range.from) && Date.parse(r.hour) <= Date.parse(range.to));
@@ -280,3 +283,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [1, 1]);
   });
 }
+
+// An instant whose hour a full day back carries traffic before the charts' first bucket.
+const firstHour = (loading = loading.then(() => storyAt('2026-09-16T09:30:00Z')));
+
+test("the hour a full day back counts toward the accounts' and pools' day totals and toward no chart", async () => {
+  const s = await firstHour;
+  const early = s.totalled.filter((r) => Date.parse(r.at) < s.dayFrom);
+  assert.ok(early.length > 0, "the story has traffic in the hour before the charts' first bucket");
+  for (const a of s.accounts) {
+    const own = (rows) => rows.filter((r) => r.accountId === a.id).length;
+    assert.equal(a.requests.last24h, own(s.counted) + own(early), `${a.id}'s first hour`);
+  }
+  for (const p of s.pools) {
+    assert.equal(p.requests24h - sum(p.traffic24h, (b) => b.requests), early.filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
+  }
+  assert.equal(s.overview.requests24h, s.counted.length, "the dashboard's day keeps the charts' first hour");
+});

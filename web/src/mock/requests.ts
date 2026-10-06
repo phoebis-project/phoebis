@@ -1049,15 +1049,19 @@ function historicalRollups(): HourlyRollup[] {
 export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...ROLLUPS];
 
 /**
- * The first hour of the day every 24-hour figure counts: the dashboard's 24 hourly buckets, the current hour last, so
- * the dashboard, the pools' traffic and the accounts read one day. The week starts on the hour seven days back, as the
- * routes total their rollups.
+ * The first hour the dashboard and the pools' traffic charts draw: 24 hourly buckets, the current hour last. An
+ * account's or a pool's day total starts an hour earlier, on the hour a full day back, and the week on the hour seven
+ * days back, as the routes total their rollups.
  */
 export const DAY_FROM = startOfHour(NOW) - 23 * HOUR;
+const TOTALS_FROM = startOfHour(NOW) - 24 * HOUR;
 const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
 
-/** The rows a 24-hour figure counts. A probe is the router's own traffic, which the routes' totals leave out. */
-export const DAY_ROWS: RequestLog[] = REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= DAY_FROM);
+const counted = (from: number) => REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= from);
+/** The rows the dashboard and the charts count. A probe is the router's own traffic, which the routes leave out. */
+export const DAY_ROWS: RequestLog[] = counted(DAY_FROM);
+/** The rows an account's or a pool's day total counts. */
+const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
 const sumOf = <T,>(list: T[], read: (x: T) => number) => list.reduce((n, x) => n + read(x), 0);
@@ -1075,7 +1079,7 @@ function deriveFigures() {
     const mine = COUNTED_ROLLUPS.filter((r) => r.accountId === a.id);
     Object.assign(a, {
       requests: {
-        last24h: DAY_ROWS.filter((r) => r.accountId === a.id).length,
+        last24h: TOTAL_ROWS.filter((r) => r.accountId === a.id).length,
         last7d: sumOf(mine.filter(inWeek), requestsIn),
         lifetime: Math.max(a.requests.lifetime, sumOf(mine, requestsIn)),
       },
@@ -1091,9 +1095,9 @@ function deriveFigures() {
     });
   }
   for (const p of poolById.values()) {
-    const mine = DAY_ROWS.filter((r) => r.poolId === p.id);
+    const mine = TOTAL_ROWS.filter((r) => r.poolId === p.id);
     const traffic24h: TrafficBucket[] = Array.from({ length: 24 }, (_, i) => ({ at: iso(DAY_FROM + i * HOUR), costUsd: 0, failed: 0, requests: 0, tokens: 0 }));
-    for (const r of mine) {
+    for (const r of DAY_ROWS.filter((row) => row.poolId === p.id)) {
       const bucket = traffic24h[Math.floor((Date.parse(r.at) - DAY_FROM) / HOUR)];
       bucket.costUsd += r.costUsd;
       bucket.failed += r.outcome === 'succeeded' ? 0 : 1;
