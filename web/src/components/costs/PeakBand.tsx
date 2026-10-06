@@ -44,7 +44,8 @@ const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 const LATE = 20 * 60;
 const atMinute = (minutes: number) => `${(minutes / 1440) * 100}%`;
 
-/** This week's peak band in the browser's zone, with the zone the file defines it in, now, and its weight per window. */
+/** The peak band in the browser's zone over the week `bandWeek` draws, this week or, on a day the band is off before
+ *  its next band day's week, next week, with the zone the file defines it in, now, and its weight per window. */
 export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number }) {
   const version = useFormatVersion();
   const zone = viewingZone();
@@ -61,7 +62,7 @@ export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number
   // A zone this browser cannot read gives no hours here, so the card draws no grid, no swatch and no change.
   const unresolved = 'unresolved' in state;
   return (
-    <Card title="Peak band" subtitle="This week. A request completing inside the band spends more of its 5-hour window.">
+    <Card title="Peak band" subtitle={`${week.some((day) => day.today) ? 'This week.' : 'Next week.'} A request completing inside the band spends more of its 5-hour window.`}>
       <div className="cost-ref__band-side">
         <div>
           <p className="cost-ref__band-lead">{caption}</p>

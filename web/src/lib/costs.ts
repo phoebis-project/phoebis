@@ -248,13 +248,15 @@ const piecesIn = (span: BandSpan, zone: string): { date: string; run: BandRun }[
   return pieces;
 };
 
-/** Today's week, Monday to Sunday in `zone`: the week holding the start of today's band as the caption and the change
- *  read it, the next band day's on a day the band is off. Each day carries the runs of the band days that fall on it,
- *  and `today` marks the day holding `at`, which that week may not hold. */
+/** The week drawn, Monday to Sunday in `zone`: the week holding `at` or the one holding the start of today's band as
+ *  the caption and the change read it, whichever is later, so a day the band is off draws the coming week and a band
+ *  that started on the day before still draws the week of `at`. Each day carries the runs of the band days that fall on
+ *  it, and `today` marks the day holding `at`, which that week may not hold. */
 export const bandWeek = (costs: SubscriptionCosts, at: number, zone: string): BandDay[] => {
   const now = partsIn(at, zone);
   const band = readable(costs.peak.zone) ? todayOf(costs.peak, at) : null;
-  const shown = band === null ? now : partsIn(band.span.start, zone);
+  const start = band === null ? now : partsIn(band.span.start, zone);
+  const shown = start.date > now.date ? start : now;
   const monday = addDays(shown.date, -WEEKDAYS.indexOf(shown.weekday));
   const dates = Array.from({ length: 7 }, (_, n) => addDays(monday, n));
   const runs = new Map(dates.map((date) => [date, [] as BandRun[]]));
@@ -391,7 +393,8 @@ export const nextLocalChange = (costs: SubscriptionCosts, at: number, zone: stri
     return {
       from: dayLabel(first.startDate),
       lasting: !back,
-      // Against today's band rather than `at`, which on a day the band is off can lie before a change today's band follows.
+      // Against today's band rather than `at`, which on a day the band is off can lie before a change today's band
+      // follows.
       moved: offsetIn(span.start, peak.zone) !== offsetIn(today.span.start, peak.zone),
       text: hoursText(first, clock),
       to: back ? dayLabel(last.startDate) : null,

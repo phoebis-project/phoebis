@@ -8460,6 +8460,28 @@ m.unmount();
     lasting.unmount();
     results.push({ name: "/sessions the peak band names a change of its local hours that lasts past 26 weeks once the cost model's zone changes its clocks", ok: note === 'From Mon 15 Mar the band runs 12:00 to 18:00 here, once Los Angeles changes its clocks.', missing: [note] });
 
+    // Saturday 19 September 2026 at 05:00 in Los Angeles, a day the weekday band is off: the card draws the week of
+    // Monday 21 September, which does not hold now; on the pinned Wednesday it draws the week that does.
+    const weekOf = async (at) => {
+      const shown = await mountNode(React.createElement(PeakBand, { costs: tested, now: at }));
+      const read = { first: shown.container.querySelector('.cost-ref__band-day')?.textContent ?? 'no day', marks: shown.container.querySelectorAll('.cost-ref__band-now').length, subtitle: shown.container.querySelector('.card__subtitle')?.textContent ?? 'no subtitle' };
+      shown.unmount();
+      return read;
+    };
+    const weekend = await weekOf(Date.parse('2026-09-19T12:00:00Z'));
+    const weekday = await weekOf(CLOCK_ORIGIN);
+    results.push({
+      name: '/sessions the peak band names the week it draws: next week, unmarked, on a day the band is off, and this week with now marked on a band day',
+      ok:
+        weekend.subtitle === 'Next week. A request completing inside the band spends more of its 5-hour window.' &&
+        weekend.first === 'Mon 21 Sep' &&
+        weekend.marks === 0 &&
+        weekday.subtitle === 'This week. A request completing inside the band spends more of its 5-hour window.' &&
+        weekday.first === 'Mon 14 Sep' &&
+        weekday.marks === 1,
+      missing: [JSON.stringify(weekend), JSON.stringify(weekday)],
+    });
+
     // A zone this browser cannot read: the card gives the band's hours in that zone and says it cannot read it, and Plan
     // rates leaves the state to the viewer, Inside first. One Opus 5.5 input token on the Max 20x 5-hour window is 2 /
     // 100 / 0.5 inside the band and 2 / 100 outside, a million of them 40,000 and 20,000 windows.

@@ -135,7 +135,7 @@ const run = (from, to) => ({ from, to });
 const clock24 = (minutes) => `${String(Math.floor(minutes / 60)).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}`;
 const WEEK_LABELS = ['Mon 14 Sep', 'Tue 15 Sep', 'Wed 16 Sep', 'Thu 17 Sep', 'Fri 18 Sep', 'Sat 19 Sep', 'Sun 20 Sep'];
 
-test("the week holding an instant runs Monday to Sunday in the viewing zone, the band's runs per day in its minutes", () => {
+test("the week drawn runs Monday to Sunday in the viewing zone, from the later of the day holding the instant and the day today's band starts on, the band's runs per day in its minutes", () => {
   const week = d.bandWeek(costs, NOW, 'America/Los_Angeles');
   assert.deepEqual(week.map((day) => day.label), WEEK_LABELS);
   assert.deepEqual(week.map((day) => day.date), ['2026-09-14', '2026-09-15', '2026-09-16', '2026-09-17', '2026-09-18', '2026-09-19', '2026-09-20']);
@@ -221,6 +221,17 @@ test("on a day the band is off, today is the next band day: its week, its hours 
   // 29 March the band reads 14:00 to 20:00 there, Berlin's own change; it reads 13:00 to 19:00 again on Monday 1
   // November, once Berlin leaves summer time on 31 October and before Los Angeles does on 7 November, 31 weeks on.
   assert.deepEqual(d.nextLocalChange(costs, Date.parse('2027-03-13T20:00:00Z'), 'Europe/Berlin'), { from: 'Mon 29 Mar', lasting: true, moved: false, text: '14:00 to 20:00', to: null });
+});
+
+test("on a band day whose band started on the viewer's day before, the week drawn is the one holding the instant", () => {
+  // Every day, Monday 19 October 2026 at 08:00 in Berlin at UTC+2, Sunday 23:00 in Los Angeles at UTC-7: today's band
+  // is Sunday's, 12:00 to 18:00 UTC, which started on Sunday in Berlin, but the instant lies in the week of Monday 19,
+  // which is drawn with Monday marked. Its band days read 14:00 to 20:00 in Berlin, and Sunday 25 October, once Berlin
+  // is at UTC+1, 13:00 to 19:00.
+  const everyDay = d.bandWeek({ ...costs, peak: { ...costs.peak, weekdays: false } }, Date.parse('2026-10-19T06:00:00Z'), 'Europe/Berlin');
+  assert.deepEqual(everyDay.map((day) => day.label), ['Mon 19 Oct', 'Tue 20 Oct', 'Wed 21 Oct', 'Thu 22 Oct', 'Fri 23 Oct', 'Sat 24 Oct', 'Sun 25 Oct']);
+  assert.deepEqual(everyDay.map((day) => day.runs), [...Array(6).fill([run(840, 1200)]), [run(780, 1140)]]);
+  assert.deepEqual(everyDay.map((day) => day.today), [true, false, false, false, false, false, false]);
 });
 
 test('a change that starts late in the ten weeks reads past them to the day that reads as today again', () => {
