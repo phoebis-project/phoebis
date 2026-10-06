@@ -12,8 +12,8 @@ use phoebis_routing::{
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
-    PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, Shedding, Strategy,
-    SubagentPlacement, SubscriptionTerm, WarmSessions,
+    PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, ShedPin, ShedRoundRow,
+    Shedding, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -293,6 +293,7 @@ fn affinity_row(
         key_generation: s.key("k").unwrap().created_at,
         root: root.into(),
         lane: lane_key(model, "standard", "none", "-"),
+        depth: 1,
     }
 }
 
@@ -4491,6 +4492,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         key_generation: s.key("k1").unwrap().created_at,
         root: "root".into(),
         lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        depth: 1,
     };
     seed_affinity(&st, vec![row]);
     let req_for = |key_id: &str, session: &str, now: i64| SelectRequest {
@@ -11017,6 +11019,103 @@ fn a_move_consumes_the_mark_so_a_pin_returning_inside_the_dwell_renews_in_place(
         "a is still hot and its round still stands, but the move consumed s1's mark"
     );
     assert_eq!(st.last_shed("p", "a"), Some(T), "no new round ran on a");
+}
+
+#[test]
+fn a_round_that_ran_pushes_its_write_and_one_inside_the_dwell_pushes_none() {
+    let s = snapshot(shedding_pool(Shedding::default()));
+    let mut st = loaded(vec![
+        PinRow {
+            epoch: 4,
+            ..burning("s1", "a", 4.0, false, T)
+        },
+        PinRow {
+            epoch: 5,
+            ..burning("s0", "a", 1.0, false, T)
+        },
+    ]);
+    hot_a_cool_b(&mut st, T - 500);
+    let decided = decide(&mut st, &s, &auxiliary(&s, "s1", T), &mut rng());
+    assert_eq!(
+        landed(decided.result.clone()),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a's round marks s1 and it moves"
+    );
+    let round = |w: &StateWrite| matches!(w, StateWrite::ShedRound { .. });
+    assert_eq!(
+        decided
+            .writes
+            .iter()
+            .filter(|w| round(w))
+            .collect::<Vec<_>>(),
+        vec![&StateWrite::ShedRound {
+            pool_id: "p".into(),
+            account_id: "a".into(),
+            incarnation: 1,
+            round_at: T,
+            pins: vec![
+                ShedPin {
+                    key: pin_key("s1"),
+                    epoch: 4,
+                    marked: true,
+                },
+                ShedPin {
+                    key: pin_key("s0"),
+                    epoch: 5,
+                    marked: false,
+                },
+            ],
+        }],
+        "one write names every pin of the round in its order, each with its epoch and its mark"
+    );
+    let at = |found: &dyn Fn(&StateWrite) -> bool| decided.writes.iter().position(found);
+    let moved = |w: &StateWrite| matches!(w, StateWrite::DeletePin(key) if *key == pin_key("s1"));
+    assert!(
+        at(&round).expect("the round's write") < at(&moved).expect("the move's delete"),
+        "the round lands ahead of the move that spends its mark"
+    );
+    let next = decide(&mut st, &s, &auxiliary(&s, "s0", T + 1_000), &mut rng());
+    assert_eq!(landed(next.result), ("a".into(), None));
+    assert!(
+        !next.writes.iter().any(round),
+        "a hot request inside the dwell runs no round and writes none"
+    );
+}
+
+#[test]
+fn from_load_restores_the_account_s_newest_round_from_the_loaded_rows() {
+    let row = |pool: &str, session: &str, round_at: i64| ShedRoundRow {
+        pool_id: pool.into(),
+        account_id: "a".into(),
+        incarnation: 1,
+        key_id: "k".into(),
+        session_id: session.into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        epoch: 1,
+        round_at,
+        marked: false,
+    };
+    let st = RoutingState::from_load(RoutingLoad {
+        pins: vec![seeded_pin("s1", "a", T), seeded_pin("s2", "a", T)],
+        shed_rounds: vec![
+            row("p", "s1", T - 60_000),
+            row("p", "s2", T - 60_000),
+            row("q", "s2", T - 30_000),
+        ],
+        ..RoutingLoad::default()
+    });
+    assert_eq!(
+        (st.last_shed("p", "a"), st.last_shed("q", "a")),
+        (Some(T - 60_000), Some(T - 30_000)),
+        "each pool reads its own round"
+    );
+    assert_eq!(
+        st.newest_shed("a"),
+        Some(T - 30_000),
+        "the account's stamp is the newest round any pool ran on it"
+    );
+    assert_eq!(st.newest_shed("b"), None);
 }
 
 #[test]

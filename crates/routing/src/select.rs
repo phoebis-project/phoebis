@@ -6,7 +6,7 @@ use std::sync::Arc;
 
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityMode, CooldownRow, OveragePolicy, PinBurn,
-    PinKey, PinRow, PoolMember, PoolRow, SessionPlacement, Strategy, SubagentPlacement,
+    PinKey, PinRow, PoolMember, PoolRow, SessionPlacement, ShedPin, Strategy, SubagentPlacement,
     WarmSessions,
 };
 use rand::{Rng, RngExt};
@@ -760,6 +760,43 @@ pub fn decide(
     }
 }
 
+/// The round `move_of` just ran, as the registry keeps it: each pin of the round with its mark and its epoch at the
+/// round.
+fn round_write(
+    state: &RoutingState,
+    pool: &PoolRow,
+    current: &PinRow,
+    at: i64,
+    round: &ShedRound,
+) -> StateWrite {
+    let pins = round
+        .facts
+        .pins
+        .iter()
+        .filter_map(|facts| {
+            let key = PinKey {
+                key_id: facts.key_id.clone(),
+                session_id: facts.session_id.clone(),
+                agent_id: facts.agent_id.clone(),
+                model: facts.model.clone(),
+            };
+            let epoch = state.pin(&key)?.epoch;
+            Some(ShedPin {
+                key,
+                epoch,
+                marked: facts.marked,
+            })
+        })
+        .collect();
+    StateWrite::ShedRound {
+        pool_id: pool.id.clone(),
+        account_id: round.account_id.clone(),
+        incarnation: current.incarnation,
+        round_at: at,
+        pins,
+    }
+}
+
 /// `decide` without its record: the tests' entry and nothing else's.
 pub fn select(
     state: &mut RoutingState,
@@ -1105,11 +1142,16 @@ fn run(
             } else {
                 request.fast
             };
+            let moved = move_of(
+                state, snapshot, pool, request, current, &eligible, window, cold, fast, rec,
+            );
+            // Ahead of the move's own writes, so the store holds the mark before the pin write that spends it.
+            if let Some(round) = rec.shed_round.as_ref() {
+                writes.push(round_write(state, pool, current, request.now, round));
+            }
             // A hold is for a fresh placement: with every destination at its cap the move is not made, the pin
             // renews in place at step 5, and the next request judges the move again.
-            if let Some((reason, set)) = move_of(
-                state, snapshot, pool, request, current, &eligible, window, cold, fast, rec,
-            ) {
+            if let Some((reason, set)) = moved {
                 let cap = pool.failover.in_flight_cap;
                 let loads: Vec<u32> = set
                     .iter()

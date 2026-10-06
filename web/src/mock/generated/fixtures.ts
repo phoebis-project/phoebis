@@ -9369,7 +9369,8 @@ export const FIXTURES: Record<string, Fixture> = {
               }
             ],
             "dwell_seconds": 900,
-            "dwell_until": -1580000
+            "dwell_until": -1580000,
+            "persisted": true
           }
         },
         {
@@ -9388,9 +9389,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "version": "0.0.0-fixture",
             "pins_loaded": 3,
+            "shedding_marks_loaded": 2,
+            "shedding_rounds_stale": 1,
             "windows_loaded": 2,
             "affinity_entries_loaded": 5,
-            "down_since": 1791268384988,
+            "down_since": 1791272976317,
             "holds_lost": true
           }
         },

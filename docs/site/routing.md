@@ -439,9 +439,11 @@ A marked session moves at its next request, onto a cool sibling (see above) that
 `source_dwell_seconds`. A mark from a round on plan quota moves a standard request alone: a fast-mode request of the
 marked session stays where it is. A marked pin whose account is cooling for the session's model is released instead,
 with `cooldown` among its reasons, and its mark goes with it; the round on the account still runs, since a cooldown can
-hold one model alone. An unmarked pin never moves for utilization. The marks live in memory for the dwell: a marked
-session that stays idle never moves, no new round of the pool runs on the account until its dwell passes, and a restart
-forgets the marks, so the next request after it may start a fresh round.
+hold one model alone. An unmarked pin never moves for utilization. The marks last for the dwell: a marked session that
+stays idle never moves, and no new round of the pool runs on the account until its dwell passes. The round's marks and
+its dwell are written to the registry and survive a restart, so a restart neither forgets a mark nor starts a fresh
+round inside the dwell; a held request does not survive one (the relay's open connection closes and the client retries),
+and the routing log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and

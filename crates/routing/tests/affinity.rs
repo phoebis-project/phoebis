@@ -223,6 +223,7 @@ fn a_link_only_refresh_of_an_entry_written_before_the_lane_existed_adopts_its_la
         key_generation: 0,
         root: "b1".into(),
         lane: String::new(),
+        depth: 0,
     }]);
     map.record(&AffinityReport {
         lane: fast.clone(),

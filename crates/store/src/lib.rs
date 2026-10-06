@@ -44,7 +44,7 @@ pub use registry::{
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
-    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, WindowRow,
+    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, ShedPin, ShedRoundRow, WindowRow,
 };
 pub use schema::SCHEMA_VERSION;
 

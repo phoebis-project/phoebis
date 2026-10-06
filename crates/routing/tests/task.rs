@@ -15,8 +15,8 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
-    MemberWrite, ModelRule, PinBurn, PoolRow, RoutingLoad, RulesMode, StorageKey, Store, Strategy,
-    SubscriptionRow, WindowRow,
+    MemberWrite, ModelRule, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode, ShedPin,
+    Shedding, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -5949,6 +5949,528 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
         .unwrap();
     assert_eq!(next_decision(&mut events).await.0.kind, "renewed");
     no_further_event(&mut events).await;
+}
+
+/// A clock past the cache TTL, so a pin last refreshed an hour before it reads cold.
+const AT: i64 = 10 * HOUR;
+
+/// `request` under the `quota` class, which leaves the pin's warmth as it was, so a pin last refreshed an hour ago
+/// reads cold on it.
+fn quota_turn(handle: &RouterHandle, session: Option<&str>, now: i64) -> SelectRequest {
+    SelectRequest {
+        request_class: Some("quota".into()),
+        ..request(handle, session, now)
+    }
+}
+
+/// Session `session`'s pin under the store's key `k` on `account`, burning `burn` input tokens a second in both
+/// copies, used a second before `AT` and last refreshed an hour before it, so it is live and cold.
+fn stored_pin(store: &Store, session: &str, account: &str, epoch: u64, burn: f64) -> PinRow {
+    let rates = PinBurn {
+        input: burn,
+        ..PinBurn::default()
+    };
+    PinRow {
+        key_id: "k".into(),
+        session_id: session.into(),
+        agent_id: "main".into(),
+        model: "claude-sonnet-5".into(),
+        account_id: account.into(),
+        epoch,
+        created_at: AT - HOUR,
+        last_used_at: AT - 1_000,
+        // The key's creation time, so the purge reads the pin as its key's rather than a replaced key's.
+        key_generation: store.api_key("k").unwrap().unwrap().created_at,
+        incarnation: 1,
+        burn: rates,
+        burn_at: Some(AT),
+        burn_banded: rates,
+        last_input_tokens: 1_000,
+        last_refresh_at: AT - HOUR,
+        cache_ttl_ms: 300_000,
+        shed_from: None,
+        shed_at: None,
+        static_hash: None,
+        tail_hash: None,
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+    }
+}
+
+fn shed_pin(session: &str, epoch: u64, marked: bool) -> ShedPin {
+    ShedPin {
+        key: PinKey {
+            key_id: "k".into(),
+            session_id: session.into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+        },
+        epoch,
+        marked,
+    }
+}
+
+/// The pool `p` over OAuth accounts `ids` in that priority order, shedding at a lead of 0.2 over pace.
+fn shedding_store(ids: &[&str]) -> Arc<Store> {
+    let store = seeded_oauth(ids);
+    store
+        .set_pool_members(
+            "p",
+            &ids.iter()
+                .enumerate()
+                .map(|(priority, id)| MemberWrite {
+                    account_id: id.to_string(),
+                    priority: priority as u32,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                })
+                .collect::<Vec<_>>(),
+            "test",
+        )
+        .unwrap();
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.shed_ahead_of_pace = Some(0.2);
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    store
+}
+
+/// A second pool `q` holding `a` alone, on its own dwell.
+fn second_pool(store: &Store, dwell_seconds: u64) {
+    store
+        .insert_pool(
+            &PoolRow {
+                shedding: Shedding {
+                    source_dwell_seconds: dwell_seconds,
+                    ..Shedding::default()
+                },
+                ..PoolRow::for_tests("q")
+            },
+            "test",
+        )
+        .unwrap();
+    store
+        .set_pool_members(
+            "q",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+}
+
+/// Both shared windows at `five_hour` and `seven_day` with no reset, so each one's lead over pace is its reading.
+fn windows(account: &str, five_hour: f64, seven_day: f64, at: i64) -> Report {
+    observed(
+        account,
+        sample_with(at, FIVE_HOUR, five_hour, None).with(
+            SEVEN_DAY,
+            WindowReading {
+                utilization: seven_day,
+                reset: None,
+                observed_at: at,
+                source: WindowSource::Poll,
+            },
+        ),
+    )
+}
+
+/// Where the selection landed and the rule that moved it there.
+fn landed_on(
+    answer: phoebis_routing::SelectAnswer,
+) -> (String, Option<phoebis_routing::MigrateReason>) {
+    match answer.result {
+        SelectResult::Selected(sel) => (sel.account.id, sel.migrated),
+        other => panic!("{other:?}"),
+    }
+}
+
+/// The `round` fact of the decision's shed line: `ran`, or `within_dwell` while the pool's last round on the
+/// account gates the next.
+fn shed_round_fact(record: &DecisionRecord) -> Option<phoebis_routing::FactValue> {
+    record
+        .walk
+        .iter()
+        .find(|step| step.step == "move:shed")?
+        .facts
+        .iter()
+        .find(|fact| fact.key == "round")
+        .map(|fact| fact.value.clone())
+}
+
+/// Every event the broadcast holds until it stays quiet for 200 ms.
+async fn drained(
+    events: &mut tokio::sync::broadcast::Receiver<phoebis_routing::RouterEvent>,
+) -> Vec<phoebis_routing::RouterEvent> {
+    let mut seen = Vec::new();
+    while let Ok(Ok(event)) = tokio::time::timeout(Duration::from_millis(200), events.recv()).await
+    {
+        seen.push(event);
+    }
+    seen
+}
+
+fn no_round(events: &[phoebis_routing::RouterEvent]) -> bool {
+    !events
+        .iter()
+        .any(|event| matches!(event, phoebis_routing::RouterEvent::SheddingRound { .. }))
+}
+
+#[tokio::test]
+async fn the_marks_and_the_dwell_gate_survive_a_restart() {
+    use phoebis_routing::MigrateReason;
+    let store = shedding_store(&["a", "b"]);
+    // Neither pin burns, so a round run now would mark nothing: s1 moves on the stored mark alone.
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 0.0),
+        stored_pin(&store, "s2", "a", 2, 0.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    // The previous run's round on a, a minute before the restart, marked s1 and left s2.
+    store
+        .replace_shed_round(
+            "p",
+            "a",
+            1,
+            AT - 60_000,
+            &[shed_pin("s1", 1, true), shed_pin("s2", 2, false)],
+        )
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "the loaded mark moves s1 at its next request"
+    );
+    let (_, record) = next_decision(&mut events).await;
+    assert!(record.pin.as_ref().is_some_and(|pin| pin.marked));
+    assert_eq!(
+        shed_round_fact(&record),
+        Some(phoebis_routing::FactValue::Text("within_dwell".into()))
+    );
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s2"), AT + 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None)
+    );
+    let later = drained(&mut events).await;
+    assert!(
+        no_round(&later),
+        "inside the loaded dwell no round runs on the hot account: {later:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_pin_that_moved_away_and_returned_inside_the_dwell_is_not_shed_again_after_a_restart() {
+    use phoebis_routing::MigrateReason;
+    let store = shedding_store(&["a", "b", "c"]);
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 4.0),
+        stored_pin(&store, "s0", "a", 2, 1.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    // c holds no reading, so it reads as cool and a mark that outlived the move would find it a destination, while
+    // the spent move below, which needs a reading of the window, has only a to go to.
+    handle.report(windows("a", 0.9, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("b".into(), Some(MigrateReason::Shed)),
+        "a's round marks s1 and it moves"
+    );
+    handle.report(windows("b", 1.0, 0.1, AT + 500)).await;
+    handle.samples().await.unwrap();
+    now.store(AT + 1_000, Ordering::SeqCst);
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT + 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), Some(MigrateReason::Spent)),
+        "b spends its window and the spent move takes s1 back to a, inside a's dwell"
+    );
+    handle.shutdown().await.unwrap();
+
+    now.store(AT + 2_000, Ordering::SeqCst);
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT + 2_000)).await;
+    handle.report(windows("b", 1.0, 0.1, AT + 2_000)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT + 2_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None),
+        "the move consumed s1's mark before the restart, so it renews in place rather than going to c"
+    );
+    let (summary, record) = next_decision(&mut events).await;
+    assert_eq!(summary.kind, "renewed");
+    assert!(record.pin.as_ref().is_some_and(|pin| !pin.marked));
+    assert_eq!(
+        shed_round_fact(&record),
+        Some(phoebis_routing::FactValue::Text("within_dwell".into())),
+        "the round before the restart still gates a"
+    );
+    let later = drained(&mut events).await;
+    assert!(no_round(&later), "{later:?}");
+}
+
+#[tokio::test]
+async fn a_released_and_recreated_pin_s_mark_does_not_survive_a_restart() {
+    let store = shedding_store(&["a", "b"]);
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 4.0),
+        stored_pin(&store, "s0", "a", 2, 1.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT)).await;
+    handle.report(windows("b", 0.1, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    // s0's request runs a's round, which marks s1, the heavier, and leaves s0 where it is.
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s0"), AT))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None)
+    );
+    next_decision(&mut events).await;
+    match next_event(&mut events).await {
+        phoebis_routing::RouterEvent::SheddingRound { round, .. } => assert_eq!(
+            round
+                .marks
+                .iter()
+                .map(|key| key.session_id.as_str())
+                .collect::<Vec<_>>(),
+            ["s1"]
+        ),
+        other => panic!("the round follows its decision, not {other:?}"),
+    }
+    assert_eq!(handle.release_session("k", "s1").await.unwrap(), 1);
+    now.store(AT + 1_000, Ordering::SeqCst);
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT + 1_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None),
+        "a fresh pin under the key lands on a under a new epoch"
+    );
+    handle.shutdown().await.unwrap();
+
+    now.store(AT + 2_000, Ordering::SeqCst);
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("a", 0.9, 0.3, AT + 2_000)).await;
+    handle.report(windows("b", 0.1, 0.1, AT + 2_000)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT + 2_000))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), None),
+        "the released pin's mark left with it, so the fresh pin stays rather than moving to b"
+    );
+    let (_, record) = next_decision(&mut events).await;
+    assert!(record.pin.as_ref().is_some_and(|pin| !pin.marked));
+    assert_eq!(
+        shed_round_fact(&record),
+        Some(phoebis_routing::FactValue::Text("within_dwell".into())),
+        "the round's dwell still gates a"
+    );
+    let later = drained(&mut events).await;
+    assert!(no_round(&later), "{later:?}");
+}
+
+#[tokio::test]
+async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
+    let store = seeded(&["a"]);
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.shedding.source_dwell_seconds = 600;
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    second_pool(&store, 1_800);
+    // p's round is past p's own dwell and inside q's, which can still read a's stamp from it after a restart; q's
+    // round is past q's dwell, the longest.
+    store
+        .replace_shed_round("p", "a", 1, AT - 900_000, &[shed_pin("s1", 1, true)])
+        .unwrap();
+    store
+        .replace_shed_round("q", "a", 1, AT - 2_000_000, &[shed_pin("s2", 2, false)])
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let _handle = spawn(
+        store.clone(),
+        clock(&now),
+        RouterConfig {
+            purge_interval: Duration::from_millis(50),
+            ..RouterConfig::default()
+        },
+    )
+    .unwrap();
+    let kept = wait_for_async(WRITTEN, || async {
+        let rounds = store.load_routing().unwrap().shed_rounds;
+        (rounds.len() == 1).then(|| rounds[0].pool_id.clone())
+    })
+    .await;
+    assert_eq!(
+        kept, "p",
+        "the cut is now less the longest dwell of the snapshot's pools"
+    );
+}
+
+#[tokio::test]
+async fn after_a_restart_a_shared_account_reads_as_shed_by_another_pool_s_round() {
+    use phoebis_routing::{FactValue, MigrateReason};
+    let store = seeded(&["x", "a"]);
+    store
+        .set_pool_members(
+            "p",
+            &[("x", 0), ("a", 1)]
+                .into_iter()
+                .map(|(id, priority)| MemberWrite {
+                    account_id: id.into(),
+                    priority,
+                    budget_daily_usd: None,
+                    budget_monthly_usd: None,
+                })
+                .collect::<Vec<_>>(),
+            "test",
+        )
+        .unwrap();
+    let mut pool = store.pool("p").unwrap().unwrap();
+    pool.shed_ahead_of_pace = Some(0.2);
+    store.update_pool(&pool, pool.updated_at, "test").unwrap();
+    second_pool(&store, 900);
+    store
+        .upsert_pin(&stored_pin(&store, "s1", "x", 1, 0.0))
+        .unwrap();
+    // q's round on the shared account a minute before the restart; p never ran one there.
+    store
+        .replace_shed_round("q", "a", 1, AT - 60_000, &[shed_pin("s9", 9, true)])
+        .unwrap();
+    let now = Arc::new(AtomicI64::new(AT));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    handle.report(windows("x", 1.0, 0.1, AT)).await;
+    handle.samples().await.unwrap();
+    let mut events = handle.subscribe_events();
+    assert_eq!(
+        landed_on(
+            handle
+                .select(quota_turn(&handle, Some("s1"), AT))
+                .await
+                .unwrap()
+        ),
+        ("a".into(), Some(MigrateReason::Spent)),
+        "with no cool sibling the spent move falls through to the rule's own destination"
+    );
+    let (_, record) = next_decision(&mut events).await;
+    let cool = record
+        .walk
+        .iter()
+        .find(|step| step.step == "cool")
+        .expect("the spent rule's cool line");
+    let about_a = |key: &str| {
+        cool.facts
+            .iter()
+            .find(|fact| fact.key == key && fact.account_id.as_deref() == Some("a"))
+            .map(|fact| fact.value.clone())
+    };
+    assert_eq!(
+        (cool.verdict, about_a("last_shed_age_ms"), about_a("cool")),
+        (
+            "fell_through",
+            Some(FactValue::Int(60_000)),
+            Some(FactValue::Bool(false))
+        ),
+        "a reads as just shed by q's round, which p never ran"
+    );
+}
+
+#[tokio::test]
+async fn the_load_counts_name_the_marks_within_the_dwell_and_the_stale_rows() {
+    let store = seeded(&["a"]);
+    second_pool(&store, 600);
+    // s2 was created again under another epoch since its round marked it.
+    for pin in [
+        stored_pin(&store, "s1", "a", 1, 0.0),
+        stored_pin(&store, "s2", "a", 9, 0.0),
+        stored_pin(&store, "s3", "a", 3, 0.0),
+    ] {
+        store.upsert_pin(&pin).unwrap();
+    }
+    // p's round a minute ago is inside its 900-second dwell: s1's mark counts, s2's names an epoch its pin left and
+    // s3 is unmarked. q's round is past its 600-second dwell, both rows of it stale.
+    store
+        .replace_shed_round(
+            "p",
+            "a",
+            1,
+            AT - 60_000,
+            &[
+                shed_pin("s1", 1, true),
+                shed_pin("s2", 2, true),
+                shed_pin("s3", 3, false),
+            ],
+        )
+        .unwrap();
+    store
+        .replace_shed_round(
+            "q",
+            "a",
+            1,
+            AT - 700_000,
+            &[shed_pin("s1", 1, true), shed_pin("s3", 3, false)],
+        )
+        .unwrap();
+    let handle = spawn(store, Arc::new(|| AT), RouterConfig::default()).unwrap();
+    let counts = handle.load_counts();
+    assert_eq!(
+        (counts.pins, counts.shed_marks, counts.shed_rounds_stale),
+        (3, 1, 2)
+    );
 }
 
 #[tokio::test]

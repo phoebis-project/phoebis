@@ -1447,6 +1447,8 @@ async fn land_acknowledging(
                                 json!({
                                     "version": version,
                                     "pins_loaded": counts.pins,
+                                    "shedding_marks_loaded": counts.shed_marks,
+                                    "shedding_rounds_stale": counts.shed_rounds_stale,
                                     "windows_loaded": counts.windows,
                                     "affinity_entries_loaded": counts.affinity_entries,
                                     "down_since": newest_row_at(&tx)?,

@@ -7,8 +7,8 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, OverageRow,
-    PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad,
-    WindowRow,
+    PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, ShedPin,
+    ShedRoundRow, WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -239,11 +239,24 @@ pub enum StateWrite {
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
     DeletePin(PinKey),
+    /// `before` is `now` less the longest `source_dwell_seconds` of the snapshot's pools, computed at the purge tick.
+    PurgeShedRounds {
+        before: i64,
+    },
     /// The purge tick's sweep of window and credits rows no current holder of their id wrote.
     PurgeStaleWindows,
     /// One resolution landing, committed as one transaction so the store never holds moved rows without the
     /// spelling row that finds them after a restart.
     Rekey(RekeyWrite),
+    /// A pool's shedding round on an account, every pin of it with its epoch and its mark: it replaces the pool's
+    /// and account's previous round whole, so the marks and the dwell survive a restart.
+    ShedRound {
+        pool_id: String,
+        account_id: String,
+        incarnation: u64,
+        round_at: i64,
+        pins: Vec<ShedPin>,
+    },
     UpsertAffinity(Vec<AffinityRow>),
     UpsertCooldown(CooldownRow),
     UpsertCredits(CreditsRow),
@@ -718,6 +731,61 @@ impl Drop for AccountTicket {
 /// When a shedding round ran, and the pins it marked.
 type ShedRound = (i64, HashSet<PinKey>);
 
+/// Whether a loaded row's mark still stands: the row is marked and the load carries its pin under the row's account
+/// and epoch. A mark whose pin moved, was released or was made again under another epoch before the restart stays
+/// spent.
+pub(crate) fn mark_holds(load: &RoutingLoad) -> impl Fn(&ShedRoundRow) -> bool + '_ {
+    let pins: HashMap<(&str, &str, &str, &str), (&str, u64)> = load
+        .pins
+        .iter()
+        .map(|p| {
+            (
+                (
+                    p.key_id.as_str(),
+                    p.session_id.as_str(),
+                    p.agent_id.as_str(),
+                    p.model.as_str(),
+                ),
+                (p.account_id.as_str(), p.epoch),
+            )
+        })
+        .collect();
+    move |row: &ShedRoundRow| {
+        row.marked
+            && pins.get(&(
+                row.key_id.as_str(),
+                row.session_id.as_str(),
+                row.agent_id.as_str(),
+                row.model.as_str(),
+            )) == Some(&(row.account_id.as_str(), row.epoch))
+    }
+}
+
+/// The loaded rounds by pool and account, each with the marks that still stand, and each account's stamp: the newest
+/// round of any pool on it, so after a restart the cool check still reads a sibling pool's round inside its own dwell,
+/// as it did before.
+fn rounds_of(load: &RoutingLoad) -> (HashMap<(String, String), ShedRound>, HashMap<String, i64>) {
+    let holds = mark_holds(load);
+    let mut rounds: HashMap<(String, String), ShedRound> = HashMap::new();
+    let mut newest: HashMap<String, i64> = HashMap::new();
+    for row in &load.shed_rounds {
+        let round = rounds
+            .entry((row.pool_id.clone(), row.account_id.clone()))
+            .or_insert_with(|| (row.round_at, HashSet::new()));
+        if holds(row) {
+            round.1.insert(PinKey {
+                key_id: row.key_id.clone(),
+                session_id: row.session_id.clone(),
+                agent_id: row.agent_id.clone(),
+                model: row.model.clone(),
+            });
+        }
+        let stamp = newest.entry(row.account_id.clone()).or_insert(row.round_at);
+        *stamp = (*stamp).max(row.round_at);
+    }
+    (rounds, newest)
+}
+
 pub struct RoutingState {
     /// The ledger's standing from its last `Report::Accounting`: while it is degraded a budgeted member's spend rows
     /// may lack a batch the writer still holds. Memory only, so a restart starts clear until the ledger's first
@@ -737,7 +805,7 @@ pub struct RoutingState {
     member_spend: HashMap<(String, String, BudgetPeriod), MemberSpend>,
     /// When the newest round of any pool ran on each account: what a move's cool check reads, so no pool prefers a
     /// destination another pool just shed from. A stamp of its own, since a pool's marks expire by that pool's dwell
-    /// while a slower pool still has to read the account as just shed. Memory only, as the rounds are.
+    /// while a slower pool still has to read the account as just shed.
     newest_shed: HashMap<String, i64>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
@@ -754,14 +822,14 @@ pub struct RoutingState {
     resolutions: HashMap<String, String>,
     round_robin: HashMap<(String, Tier, String), usize>,
     samples: HashMap<String, UtilizationSample>,
-    /// Each pool's latest shedding round on an account, by pool id and account id. Memory only, so a restart forgets
-    /// the marks with the dwell and the next hot request may start a fresh round.
+    /// Each pool's latest shedding round on an account, by pool id and account id.
     shed_rounds: HashMap<(String, String), ShedRound>,
 }
 
 impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
         let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
+        let (shed_rounds, newest_shed) = rounds_of(&load);
         let mut affinity_map = AffinityMap::from_rows(load.affinity);
         for resolution in &load.resolutions {
             affinity_map.learn_resolution(&resolution.spelling, &resolution.dated_id);
@@ -807,7 +875,7 @@ impl RoutingState {
                 .collect(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
-            newest_shed: HashMap::new(),
+            newest_shed,
             next_epoch,
             overage: load
                 .overage
@@ -840,7 +908,7 @@ impl RoutingState {
                 .collect(),
             round_robin: HashMap::new(),
             samples,
-            shed_rounds: HashMap::new(),
+            shed_rounds,
         }
     }
 
@@ -1761,9 +1829,9 @@ impl RoutingState {
         }
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's
         // first reading replaces one left under another incarnation, the window and credits rows cascade too and
-        // the purge tick drops one of another incarnation, and charges, round-robin cursors and shedding rounds
-        // are held in memory only. Samples, charges and cursors are keyed by id alone, so the
-        // reload drops those of a holder the id has moved past.
+        // the purge tick drops one of another incarnation, and charges and round-robin cursors are held in memory
+        // only. Samples, charges and cursors are keyed by id alone, so the reload drops those of a holder the id has
+        // moved past.
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));

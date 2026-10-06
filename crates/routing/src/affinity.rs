@@ -24,7 +24,7 @@ pub struct AffinityEntry {
     /// no warm prefix, while the conversation climb reads across lanes.
     pub lane: String,
     /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it; 0 for an
-    /// entry restored from a registry that does not keep it.
+    /// entry restored from a row stored before the registry kept it.
     pub depth: u32,
 }
 
@@ -147,6 +147,7 @@ fn row_of(model: &str, hash: &str, entry: &AffinityEntry) -> AffinityRow {
         key_generation: entry.key_generation,
         root: entry.root.clone(),
         lane: entry.lane.clone(),
+        depth: entry.depth,
     }
 }
 
@@ -180,7 +181,7 @@ impl AffinityMap {
                     key_generation: row.key_generation,
                     root: row.root,
                     lane: row.lane,
-                    depth: 0,
+                    depth: row.depth,
                 },
             );
         }

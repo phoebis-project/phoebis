@@ -1710,6 +1710,8 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             pins: 3,
             windows: 2,
             affinity_entries: 5,
+            shed_marks: 2,
+            shed_rounds_stale: 1,
         },
         at: at(1),
     });

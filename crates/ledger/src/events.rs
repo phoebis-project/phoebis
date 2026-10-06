@@ -175,8 +175,13 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             key_id: Some(key_id.clone()),
             session_id: Some(session_id.clone()),
             model: Some(model.clone()),
-            // The round's facts serialize as the detail's fields, the pins and the marks as arrays of objects.
-            detail: serde_json::to_string(round).ok(),
+            // The round's facts serialize as the detail's fields, the pins and the marks as arrays of objects. The
+            // routing task writes every round to the registry with the decision's writes, so its marks and dwell
+            // outlive a restart.
+            detail: serde_json::to_value(round).ok().map(|mut detail| {
+                detail["persisted"] = json!(true);
+                detail.to_string()
+            }),
             pool_id: Some(pool_id.clone()),
             agent_id: Some(agent_id.clone()),
             request_id: Some(request_id.clone()),
@@ -901,6 +906,7 @@ mod tests {
             ("warm_sessions", json!("when_needed")),
             ("dwell_seconds", json!(900)),
             ("dwell_until", json!(901_000)),
+            ("persisted", json!(true)),
         ] {
             assert_eq!(detail[field], value, "{field}");
         }

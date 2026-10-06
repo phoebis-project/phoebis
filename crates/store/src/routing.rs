@@ -207,10 +207,13 @@ pub struct AffinityRow {
     pub root: String,
     /// The cache lane of the writing request: a filter beside the `(model, hash)` key, never part of it.
     pub lane: String,
+    /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it; a row
+    /// stored before the registry kept it reads 0.
+    pub depth: u32,
 }
 
 const AFFINITY_COLUMNS: &str =
-    "model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, key_id, key_generation, root, lane";
+    "model, hash, chain, account_id, incarnation, written_at, ttl_ms, prefix_tokens, key_id, key_generation, root, lane, depth";
 
 fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
     Ok(AffinityRow {
@@ -226,7 +229,33 @@ fn affinity_of(r: &rusqlite::Row<'_>) -> rusqlite::Result<AffinityRow> {
         key_generation: r.get(9)?,
         root: r.get(10)?,
         lane: r.get(11)?,
+        depth: r.get(12)?,
     })
+}
+
+/// One pin of a pool's latest shedding round on an account, as the registry keeps it: the pin's epoch at the round
+/// and the account's incarnation fence the mark to the pin and the holder it was made on.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShedRoundRow {
+    pub pool_id: String,
+    pub account_id: String,
+    pub incarnation: u64,
+    pub key_id: String,
+    pub session_id: String,
+    pub agent_id: String,
+    pub model: String,
+    pub epoch: u64,
+    pub round_at: i64,
+    pub marked: bool,
+}
+
+/// One pin of a round as the write names it: its key, its epoch at the round, and whether the round marked it;
+/// the derives `StateWrite` (`Clone, Debug, PartialEq`) needs of what it carries.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ShedPin {
+    pub key: PinKey,
+    pub epoch: u64,
+    pub marked: bool,
 }
 
 #[derive(Clone, Debug, Default)]
@@ -237,6 +266,7 @@ pub struct RoutingLoad {
     pub overage: Vec<OverageRow>,
     pub pins: Vec<PinRow>,
     pub resolutions: Vec<ResolutionRow>,
+    pub shed_rounds: Vec<ShedRoundRow>,
     pub windows: Vec<WindowRow>,
 }
 
@@ -273,6 +303,16 @@ impl Store {
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             affinity: tx.prepare(&format!("SELECT {AFFINITY_COLUMNS} FROM affinity ORDER BY model, hash"))?
                 .query_map([], affinity_of)?
+                .collect::<rusqlite::Result<Vec<_>>>()?,
+            // As with the windows, a previous holder's round is never loaded.
+            shed_rounds: tx.prepare("SELECT r.pool_id, r.account_id, r.incarnation, r.key_id, r.session_id, r.agent_id, r.model, r.epoch, r.round_at, r.marked \
+                 FROM shed_rounds r JOIN accounts ON accounts.id = r.account_id AND accounts.incarnation = r.incarnation \
+                 ORDER BY r.pool_id, r.account_id, r.round_at")?
+                .query_map([], |r| Ok(ShedRoundRow {
+                    pool_id: r.get(0)?, account_id: r.get(1)?, incarnation: r.get::<_, i64>(2)? as u64,
+                    key_id: r.get(3)?, session_id: r.get(4)?, agent_id: r.get(5)?, model: r.get(6)?,
+                    epoch: r.get::<_, i64>(7)? as u64, round_at: r.get(8)?, marked: r.get(9)?,
+                }))?
                 .collect::<rusqlite::Result<Vec<_>>>()?,
             // A row of a previous holder of the id is never loaded: the replacement starts with no windows.
             windows: tx.prepare("SELECT w.account_id, w.incarnation, w.observed_at, w.reset, w.utilization, w.window \
@@ -324,12 +364,14 @@ impl Store {
         Ok(value)
     }
 
+    /// One transaction, since the pin's write clears a shedding mark it consumes beside it.
     pub fn upsert_pin(&self, pin: &PinRow) -> Result<(), StoreError> {
-        self.routing_commit(|conn| upsert_pin_on(conn, pin))
+        self.routing_commit(|conn| in_transaction(conn, |tx| upsert_pin_on(tx, pin)))
     }
 
+    /// One transaction, as `upsert_pin` takes.
     pub fn delete_pin(&self, key: &PinKey) -> Result<bool, StoreError> {
-        self.routing_commit(|conn| delete_pin_on(conn, key))
+        self.routing_commit(|conn| in_transaction(conn, |tx| delete_pin_on(tx, key)))
     }
 
     /// Every row lands or none does; a row under an existing (model, hash) replaces it.
@@ -380,6 +422,29 @@ impl Store {
         self.routing_commit(|conn| in_transaction(conn, |tx| purge_stale_windows_on(tx)))
     }
 
+    /// Deletes the pool's and account's rows and inserts the round's in one transaction, so a crash between two
+    /// rounds leaves the previous round whole; `incarnation` is the account's at the round.
+    pub fn replace_shed_round(
+        &self,
+        pool_id: &str,
+        account_id: &str,
+        incarnation: u64,
+        round_at: i64,
+        pins: &[ShedPin],
+    ) -> Result<(), StoreError> {
+        self.routing_commit(|conn| {
+            in_transaction(conn, |tx| {
+                replace_shed_round_on(tx, pool_id, account_id, incarnation, round_at, pins)
+            })
+        })
+    }
+
+    pub fn purge_shed_rounds_before(&self, before: i64) -> Result<usize, StoreError> {
+        self.routing_commit(|conn| {
+            in_transaction(conn, |tx| purge_shed_rounds_before_on(tx, before))
+        })
+    }
+
     /// All or nothing: a crash or a failed statement part way through would leave rows under the dated id with no
     /// spelling row to find them by after a restart, or a row deleted under the spelling and never re-inserted.
     pub fn rekey_resolution(&self, rekey: &RekeyWrite) -> Result<(), StoreError> {
@@ -423,12 +488,27 @@ impl RoutingTx<'_> {
         delete_pin_on(self.tx, key)
     }
 
+    pub fn purge_shed_rounds_before(&mut self, before: i64) -> Result<usize, StoreError> {
+        purge_shed_rounds_before_on(self.tx, before)
+    }
+
     pub fn purge_stale_windows(&mut self) -> Result<usize, StoreError> {
         purge_stale_windows_on(self.tx)
     }
 
     pub fn rekey_resolution(&mut self, rekey: &RekeyWrite) -> Result<(), StoreError> {
         rekey_resolution_on(self.tx, rekey)
+    }
+
+    pub fn replace_shed_round(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        incarnation: u64,
+        round_at: i64,
+        pins: &[ShedPin],
+    ) -> Result<(), StoreError> {
+        replace_shed_round_on(self.tx, pool_id, account_id, incarnation, round_at, pins)
     }
 
     pub fn set_state_if_generations(
@@ -498,7 +578,22 @@ fn burn_from(r: &rusqlite::Row<'_>, first: usize) -> rusqlite::Result<PinBurn> {
     })
 }
 
+// A mark belongs to the pin it was made on: a pin landing under another account or epoch is a move, a fail-over or a
+// fresh pin under the key, and the mark leaves in the write that moved it, as `take_pin` and `put_pin` spend it in
+// memory. The row and its `round_at` stay, since the round's dwell still gates the account.
 fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
+    conn.execute(
+        "UPDATE shed_rounds SET marked = 0 WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4 \
+         AND (account_id <> ?5 OR epoch <> ?6)",
+        params![
+            pin.key_id,
+            pin.session_id,
+            pin.agent_id,
+            pin.model,
+            pin.account_id,
+            pin.epoch as i64
+        ],
+    )?;
     conn.execute(
         &format!(
             "INSERT INTO pins (key_id, session_id, agent_id, model, account_id, epoch, created_at, last_used_at, key_generation, incarnation, burn_at, last_input_tokens, last_refresh_at, cache_ttl_ms, shed_from, shed_at, static_hash, tail_hash, lane, {BURN_COLUMNS}) \
@@ -552,6 +647,10 @@ fn upsert_pin_on(conn: &Connection, pin: &PinRow) -> Result<(), StoreError> {
 }
 
 fn delete_pin_on(conn: &Connection, key: &PinKey) -> Result<bool, StoreError> {
+    conn.execute(
+        "UPDATE shed_rounds SET marked = 0 WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
+        params![key.key_id, key.session_id, key.agent_id, key.model],
+    )?;
     Ok(conn.execute(
         "DELETE FROM pins WHERE key_id = ?1 AND session_id = ?2 AND agent_id = ?3 AND model = ?4",
         params![key.key_id, key.session_id, key.agent_id, key.model],
@@ -584,12 +683,12 @@ fn delete_cooldown_on(
 
 fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), StoreError> {
     let mut stmt = conn.prepare(&format!(
-        "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12) \
+        "INSERT INTO affinity ({AFFINITY_COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13) \
          ON CONFLICT(model, hash) DO UPDATE SET \
            chain = excluded.chain, account_id = excluded.account_id, incarnation = excluded.incarnation, \
            written_at = excluded.written_at, ttl_ms = excluded.ttl_ms, prefix_tokens = excluded.prefix_tokens, \
            key_id = excluded.key_id, key_generation = excluded.key_generation, root = excluded.root, \
-           lane = excluded.lane"
+           lane = excluded.lane, depth = excluded.depth"
     ))?;
     for row in rows {
         stmt.execute(params![
@@ -604,7 +703,8 @@ fn upsert_affinity_on(conn: &Connection, rows: &[AffinityRow]) -> Result<(), Sto
             row.key_id,
             row.key_generation,
             row.root,
-            row.lane
+            row.lane,
+            row.depth
         ])?;
     }
     Ok(())
@@ -683,6 +783,46 @@ fn purge_stale_windows_on(conn: &Connection) -> Result<usize, StoreError> {
         [],
     )?;
     Ok(windows + credits)
+}
+
+fn replace_shed_round_on(
+    conn: &Connection,
+    pool_id: &str,
+    account_id: &str,
+    incarnation: u64,
+    round_at: i64,
+    pins: &[ShedPin],
+) -> Result<(), StoreError> {
+    conn.execute(
+        "DELETE FROM shed_rounds WHERE pool_id = ?1 AND account_id = ?2",
+        params![pool_id, account_id],
+    )?;
+    let mut stmt = conn.prepare(
+        "INSERT INTO shed_rounds (pool_id, account_id, incarnation, key_id, session_id, agent_id, model, epoch, round_at, marked) \
+         VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10)",
+    )?;
+    for pin in pins {
+        stmt.execute(params![
+            pool_id,
+            account_id,
+            incarnation as i64,
+            pin.key.key_id,
+            pin.key.session_id,
+            pin.key.agent_id,
+            pin.key.model,
+            pin.epoch as i64,
+            round_at,
+            pin.marked
+        ])?;
+    }
+    Ok(())
+}
+
+fn purge_shed_rounds_before_on(conn: &Connection, before: i64) -> Result<usize, StoreError> {
+    Ok(conn.execute(
+        "DELETE FROM shed_rounds WHERE round_at < ?1",
+        params![before],
+    )?)
 }
 
 fn rekey_resolution_on(conn: &Connection, rekey: &RekeyWrite) -> Result<(), StoreError> {

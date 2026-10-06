@@ -10,7 +10,7 @@ use std::time::Duration;
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
     AccountState, CooldownRow, PinBurn, PinKey, PinRow, RegistryLoad, RekeyWrite, RoutingLoad,
-    RoutingTx, Store, StoreError,
+    RoutingTx, ShedRoundRow, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -25,10 +25,11 @@ use crate::record::{
     ShedRoundFacts,
 };
 use crate::select::{
-    decide, release_reasons, Decided, MigrateReason, Refusal, SelectRequest, SelectResult,
+    decide, release_reasons, seconds_ms, Decided, MigrateReason, Refusal, SelectRequest,
+    SelectResult,
 };
 use crate::state::{
-    burn_folded, is_plan_window, AccountTicket, CreditsState, EvidenceSource, InFlight,
+    burn_folded, is_plan_window, mark_holds, AccountTicket, CreditsState, EvidenceSource, InFlight,
     MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
     StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
     SEVEN_DAY_FABLE,
@@ -768,10 +769,22 @@ pub struct LoadCounts {
     /// Accounts with a reading, whatever the number of windows each carries.
     pub windows: usize,
     pub affinity_entries: usize,
+    /// Marked rows whose round lies within their pool's dwell at start, each on a pin the load carries under the
+    /// row's epoch.
+    pub shed_marks: usize,
+    /// Rows whose round lies past their pool's dwell at start, purged on the first tick.
+    pub shed_rounds_stale: usize,
 }
 
 impl LoadCounts {
-    fn of(load: &RoutingLoad) -> LoadCounts {
+    fn of(load: &RoutingLoad, snapshot: &RegistrySnapshot, now: i64) -> LoadCounts {
+        // A row of a pool the registry no longer holds has no dwell left to be read within.
+        let within_dwell = |row: &ShedRoundRow| {
+            snapshot.pool(&row.pool_id).is_some_and(|pool| {
+                now - row.round_at < seconds_ms(pool.shedding.source_dwell_seconds)
+            })
+        };
+        let holds = mark_holds(load);
         LoadCounts {
             pins: load.pins.len(),
             windows: load
@@ -781,6 +794,16 @@ impl LoadCounts {
                 .collect::<HashSet<_>>()
                 .len(),
             affinity_entries: load.affinity.len(),
+            shed_marks: load
+                .shed_rounds
+                .iter()
+                .filter(|row| within_dwell(row) && holds(row))
+                .count(),
+            shed_rounds_stale: load
+                .shed_rounds
+                .iter()
+                .filter(|row| !within_dwell(row))
+                .count(),
         }
     }
 }
@@ -1312,7 +1335,11 @@ pub fn spawn(
         1,
     ))));
     let load = store.load_routing()?;
-    let load_counts = LoadCounts::of(&load);
+    let load_counts = LoadCounts::of(
+        &load,
+        &snapshot.read().expect("snapshot lock poisoned"),
+        now,
+    );
     let mut state = RoutingState::from_load(load);
     // One table, shared by the handle (the relay's synchronous permits and tickets) and the state (the
     // selector's cap partition), so a count is exact wherever it is read.
@@ -1796,10 +1823,20 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
             StateWrite::DeletePin(key) => {
                 tx.delete_pin(key)?;
             }
+            StateWrite::PurgeShedRounds { before } => {
+                tx.purge_shed_rounds_before(*before)?;
+            }
             StateWrite::PurgeStaleWindows => {
                 tx.purge_stale_windows()?;
             }
             StateWrite::Rekey(rekey) => tx.rekey_resolution(rekey)?,
+            StateWrite::ShedRound {
+                pool_id,
+                account_id,
+                incarnation,
+                round_at,
+                pins,
+            } => tx.replace_shed_round(pool_id, account_id, *incarnation, *round_at, pins)?,
             StateWrite::UpsertAffinity(rows) => tx.upsert_affinity(rows)?,
             StateWrite::UpsertCooldown(row) => tx.upsert_cooldown(row)?,
             StateWrite::UpsertCredits(row) => {
@@ -1842,8 +1879,20 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
             store.delete_cooldown(account_id, scope).map(|_| none())
         }
         StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| none()),
+        StateWrite::PurgeShedRounds { before } => {
+            store.purge_shed_rounds_before(*before).map(|_| none())
+        }
         StateWrite::PurgeStaleWindows => store.purge_stale_windows().map(|_| none()),
         StateWrite::Rekey(rekey) => store.rekey_resolution(rekey).map(|()| none()),
+        StateWrite::ShedRound {
+            pool_id,
+            account_id,
+            incarnation,
+            round_at,
+            pins,
+        } => store
+            .replace_shed_round(pool_id, account_id, *incarnation, *round_at, pins)
+            .map(|()| none()),
         StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| none()),
         StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| none()),
         StateWrite::UpsertCredits(row) => store.upsert_credits(row).map(|_| none()),
@@ -3231,6 +3280,17 @@ impl Task {
         if !refreshed.is_empty() {
             writes.push(StateWrite::UpsertAffinity(refreshed));
         }
+        // One cut over every pool, the longest dwell's: a faster pool's round stays on disk while a slower pool that
+        // holds the account can still read the account's stamp from it after a restart. With no pool, nothing reads
+        // a round.
+        let longest_dwell_ms = snapshot
+            .pools()
+            .map(|pool| seconds_ms(pool.shedding.source_dwell_seconds))
+            .max()
+            .unwrap_or(0);
+        writes.push(StateWrite::PurgeShedRounds {
+            before: now - longest_dwell_ms,
+        });
         // The fenced upsert keeps a previous holder's window rows off disk; this sweep is the backstop, so none that
         // got there anyway outlives a tick.
         writes.push(StateWrite::PurgeStaleWindows);
@@ -3516,7 +3576,13 @@ enum DeferredKey {
     Credits(String),
     Overage(String),
     Pin(PinKey),
+    PurgeShedRounds,
     PurgeStaleWindows,
+    /// A pool's round on an account: a later round replaces the held one, as the store's write does.
+    ShedRound {
+        pool_id: String,
+        account_id: String,
+    },
     Window {
         account_id: String,
         window: String,
@@ -3525,9 +3591,10 @@ enum DeferredKey {
 
 /// Writes the channel had no room for, the last write per row: a pin's last upsert or delete, a window's last
 /// upsert, a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an
-/// affinity row's last upsert or delete per key, one stale-window sweep, and every rekey in order. A rekey closes the
-/// rows before it into a segment of their own, so a pin's write dated after a resolution never lands ahead of the
-/// rekey that moved its rows.
+/// affinity row's last upsert or delete per key, a pool's last round per account, one round purge, one stale-window
+/// sweep, and every rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write
+/// dated after a resolution never lands ahead of the rekey that moved its rows. A round may land on either side of
+/// the pin writes held beside it: a mark is read back only for the pin and the epoch its row names.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -3629,11 +3696,34 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         StateWrite::DeletePin(key) => {
             one(DeferredKey::Pin(key.clone()), StateWrite::DeletePin(key))
         }
+        StateWrite::PurgeShedRounds { before } => one(
+            DeferredKey::PurgeShedRounds,
+            StateWrite::PurgeShedRounds { before },
+        ),
         StateWrite::PurgeStaleWindows => one(
             DeferredKey::PurgeStaleWindows,
             StateWrite::PurgeStaleWindows,
         ),
         StateWrite::Rekey(rekey) => Err(Box::new(rekey)),
+        StateWrite::ShedRound {
+            pool_id,
+            account_id,
+            incarnation,
+            round_at,
+            pins,
+        } => one(
+            DeferredKey::ShedRound {
+                pool_id: pool_id.clone(),
+                account_id: account_id.clone(),
+            },
+            StateWrite::ShedRound {
+                pool_id,
+                account_id,
+                incarnation,
+                round_at,
+                pins,
+            },
+        ),
         StateWrite::UpsertAffinity(rows) => Ok(rows
             .into_iter()
             .map(|row| {
@@ -4066,7 +4156,9 @@ mod tests {
             LoadCounts {
                 pins: 0,
                 windows: 1,
-                affinity_entries: 0
+                affinity_entries: 0,
+                shed_marks: 0,
+                shed_rounds_stale: 0,
             }
         );
     }

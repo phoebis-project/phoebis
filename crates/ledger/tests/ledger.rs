@@ -4929,6 +4929,8 @@ async fn the_start_row_dates_the_gap_from_the_newest_row_and_counts_the_load() {
         pins: 3,
         windows: 2,
         affinity_entries: 5,
+        shed_marks: 4,
+        shed_rounds_stale: 1,
     };
     h.ledger.record(Record::RouterStarted {
         version: "0.1.0".into(),
@@ -4946,6 +4948,8 @@ async fn the_start_row_dates_the_gap_from_the_newest_row_and_counts_the_load() {
             serde_json::json!({
                 "version": "0.1.0",
                 "pins_loaded": 3,
+                "shedding_marks_loaded": 4,
+                "shedding_rounds_stale": 1,
                 "windows_loaded": 2,
                 "affinity_entries_loaded": 5,
                 "down_since": null,
