@@ -202,6 +202,52 @@ fn the_summary_names_the_routing_keys() {
     );
 }
 
+/// The test tables, both dated 2026-01-01: four price rows; weights for Fable 5.1, Opus 5.5, Sonnet 5.5 and Haiku 4.5
+/// with Opus 5 at null, and an override that weighs Haiku on the week; four tiers, Team sized on the 5-hour window
+/// alone. So the cost model counts four models, the null weight left out and the overridden model counted once.
+#[test]
+fn files_at_both_paths_print_their_counts_leaving_out_a_null_weight_and_counting_an_overridden_model_once(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let prices = dir.path().join("api_prices.yaml");
+    let costs = dir.path().join("subscription_costs.yaml");
+    std::fs::write(&prices, phoebis_ledger::test_tables::API_PRICES).unwrap();
+    std::fs::write(&costs, phoebis_ledger::test_tables::SUBSCRIPTION_COSTS).unwrap();
+    let config = config_file(
+        dir.path(),
+        "test-tables",
+        &format!(
+            "stats:\n  api_prices_path: {}\n  subscription_costs_path: {}\n",
+            prices.display(),
+            costs.display()
+        ),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let api_prices = format!(
+        "api prices: {} (file, effective 2026-01-01, 4 models)",
+        prices.display()
+    );
+    let subscription_costs = format!(
+        "subscription costs: {} (file, effective 2026-01-01, 4 models, 4 tiers)",
+        costs.display()
+    );
+    assert_eq!(
+        lines.get(7..10),
+        Some(
+            &[
+                "ledger at ./data/ledger.sqlite",
+                api_prices.as_str(),
+                subscription_costs.as_str(),
+            ][..]
+        ),
+        "{}",
+        printed(&out)
+    );
+}
+
 /// The start refuses a price file whose cell an estimate cannot use, so the check refuses it too, naming the file, the
 /// model and the cell.
 #[test]

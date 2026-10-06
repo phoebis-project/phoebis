@@ -432,35 +432,35 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
     let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
     let costs = json(get(&parts.app, "/admin/sessions/costs", Some(&cookie)).await).await;
+    // Picked by what they carry, so the test survives a price update that moves fast mode to another model.
     let shipped = phoebis_ledger::PriceTable::shipped();
-    let (opus, sonnet) = (
-        &shipped.models["claude-opus-5-5"],
-        &shipped.models["claude-sonnet-5"],
-    );
-    let fast = opus
-        .fast
-        .as_ref()
-        .expect("the shipped Opus 5.5 row serves fast mode");
-    assert!(
-        sonnet.fast.is_none(),
-        "and the shipped Sonnet 5 row does not"
-    );
+    let (fast_model, fast_row) = shipped
+        .models
+        .iter()
+        .find(|(_, row)| row.fast.is_some())
+        .expect("a shipped row serves fast mode");
+    let (plain_model, plain_row) = shipped
+        .models
+        .iter()
+        .find(|(_, row)| row.fast.is_none())
+        .expect("a shipped row serves no fast mode");
+    let fast = fast_row.fast.as_ref().unwrap();
     for (route, models) in [
         ("settings", &settings["api_prices"]["content"]["models"]),
         ("pricing", &pricing["api_prices"]["content"]["models"]),
     ] {
         assert_eq!(
-            models["claude-opus-5-5"],
-            serde_json::to_value(opus).unwrap(),
+            models[fast_model],
+            serde_json::to_value(fast_row).unwrap(),
             "{route}: a model that serves fast mode answers its standard and its five fast cells under the file's names"
         );
         assert_eq!(
-            models["claude-sonnet-5"],
-            serde_json::to_value(sonnet).unwrap(),
+            models[plain_model],
+            serde_json::to_value(plain_row).unwrap(),
             "{route}: a model without them answers its standard cells alone"
         );
         assert!(
-            models["claude-sonnet-5"].get("fast").is_none(),
+            models[plain_model].get("fast").is_none(),
             "{route}: as its file row carries no fast member: {models}"
         );
     }
@@ -473,17 +473,17 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
             .cloned()
             .unwrap_or_else(|| panic!("sessions/costs lists {model}: {costs}"))
     };
-    let opus_row = row("claude-opus-5-5");
+    let fast_cells = row(fast_model);
     assert_eq!(
-        (&opus_row["input_per_m"], &opus_row["output_per_m"]),
+        (&fast_cells["input_per_m"], &fast_cells["output_per_m"]),
         (
-            &serde_json::json!(opus.standard.input),
-            &serde_json::json!(opus.standard.output)
+            &serde_json::json!(fast_row.standard.input),
+            &serde_json::json!(fast_row.standard.output)
         ),
         "sessions/costs: the standard cells keep their per-million names"
     );
     assert_eq!(
-        opus_row["fast"],
+        fast_cells["fast"],
         serde_json::json!({
             "input_per_m": fast.input,
             "cache_write_5m_per_m": fast.cache_write_5m,
@@ -494,7 +494,7 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
         "sessions/costs: a model that serves fast mode answers its five fast cells"
     );
     assert_eq!(
-        row("claude-sonnet-5").get("fast"),
+        row(plain_model).get("fast"),
         Some(&serde_json::Value::Null),
         "sessions/costs: a model without them answers null"
     );
