@@ -541,6 +541,17 @@ fn a_multiplier_below_zero_or_not_finite_is_refused() {
     SubscriptionCosts::from_yaml(&text).expect("a multiplier of zero loads");
 }
 
+/// A map that kept the last of two rows would load a model the file does not say.
+#[test]
+fn a_repeated_model_weight_key_is_refused_by_name() {
+    let message = refused(
+        "  claude-opus-5-5: 2\n",
+        "  claude-opus-5-5: 2\n  claude-opus-5-5: 3\n",
+    );
+    assert_names(&message, "duplicate");
+    assert_names(&message, "claude-opus-5-5");
+}
+
 #[test]
 fn a_dated_model_weight_key_is_refused() {
     assert_names(
@@ -586,7 +597,7 @@ fn a_model_window_capacity_factor_outside_zero_to_one_is_refused() {
                 "seven_day_fable: {of: seven_day, capacity_factor: 0.5}",
                 &format!("seven_day_x: {{of: seven_day, capacity_factor: {bad}}}"),
             ),
-            "model_windows.seven_day_x.capacity_factor: above zero and at most 1",
+            "model_windows.seven_day_x.capacity_factor: a factor is a number above zero and at most 1",
         );
     }
 }

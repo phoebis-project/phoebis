@@ -176,7 +176,9 @@ pub struct Override {
     pub weight_by_window: Option<IndexMap<String, f64>>,
 }
 
-/// The file as loaded, key for key and in the file's order; serializes back to the same keys.
+/// The file as loaded, key for key and in the file's order; serializes back to the same keys. `from_yaml` is the one
+/// loader that resolves the peak band's zone and checks the rules: a model deserialized any other way never covers the
+/// band and is unchecked.
 #[derive(Clone, Debug, PartialEq, serde::Deserialize, serde::Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct SubscriptionCosts {
@@ -232,6 +234,17 @@ fn multiplier_rule(path: &str, multiplier: f64) -> Result<(), LedgerError> {
     }
 }
 
+/// A capacity factor holds a fraction of its window: above zero, and 1 at most.
+fn factor_rule(path: &str, factor: f64) -> Result<(), LedgerError> {
+    if factor.is_finite() && factor > 0.0 && factor <= 1.0 {
+        Ok(())
+    } else {
+        Err(refuse(format!(
+            "{path}: a factor is a number above zero and at most 1"
+        )))
+    }
+}
+
 impl SubscriptionCosts {
     pub fn shipped() -> SubscriptionCosts {
         SubscriptionCosts::from_yaml(SHIPPED_SUBSCRIPTION_COSTS)
@@ -241,6 +254,9 @@ impl SubscriptionCosts {
     /// Refuses with `LedgerError::Plan` naming the key and the rule: serde's refusals (a parse error, an unknown or
     /// a missing key), a zone the bundled database lacks, then each value rule in the file's order.
     pub fn from_yaml(text: &str) -> Result<SubscriptionCosts, LedgerError> {
+        // The typed maps keep the last of two equal keys, so the untyped parse runs first: it refuses the repeat,
+        // naming the key with its line and column. The typed parse stays second so serde's field errors keep theirs.
+        serde_norway::from_str::<serde_norway::Value>(text).map_err(|e| refuse(e.to_string()))?;
         let mut costs: SubscriptionCosts =
             serde_norway::from_str(text).map_err(|e| refuse(e.to_string()))?;
         costs.peak.resolve()?;
@@ -314,11 +330,7 @@ impl SubscriptionCosts {
             (FIVE_HOUR, factors.five_hour),
             (SEVEN_DAY, factors.seven_day),
         ] {
-            if !(factor.is_finite() && factor > 0.0 && factor <= 1.0) {
-                return Err(refuse(format!(
-                    "peak.capacity_factor.{window}: a factor is a number above zero and at most 1"
-                )));
-            }
+            factor_rule(&format!("peak.capacity_factor.{window}"), factor)?;
         }
         let m = &self.type_multiplier;
         for (name, multiplier) in [
@@ -347,12 +359,10 @@ impl SubscriptionCosts {
             if row.of != SEVEN_DAY {
                 return Err(refuse(format!("model_windows.{window}.of: {SEVEN_DAY}")));
             }
-            let factor = row.capacity_factor;
-            if !(factor.is_finite() && factor > 0.0 && factor <= 1.0) {
-                return Err(refuse(format!(
-                    "model_windows.{window}.capacity_factor: above zero and at most 1"
-                )));
-            }
+            factor_rule(
+                &format!("model_windows.{window}.capacity_factor"),
+                row.capacity_factor,
+            )?;
         }
         for (model, row) in &self.overrides {
             undated_key("overrides", model)?;
