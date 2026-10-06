@@ -82,8 +82,8 @@ const POOL_ROWS: PoolSeed[] = [
     // The 09:05:12 edit that set its shedding margin, the registry change the routing log records.
     updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
     // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both. The
-    // last hour's moves are the routing log's story: three failovers, a fast lane's and the spent rule's.
-    movesPerHour: { cooldown: 3, fast_lane: 1, spent: 1 },
+    // last hour's moves are the routing log's story: two failovers, a fast lane's and two by the spent rule.
+    movesPerHour: { cooldown: 2, fast_lane: 1, spent: 2 },
   },
   {
     ...POOL_SAMPLE,

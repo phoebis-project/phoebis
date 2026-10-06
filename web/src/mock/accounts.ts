@@ -130,8 +130,9 @@ export const ACCOUNTS: Account[] = ([
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
-    // In plan overage from the first head after its spend cap was raised at 11:30:12.
-    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(2 * HOUR + 58 * MINUTE) },
+    // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
+    // the day's requests are drawn; the raise stands in until then.
+    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(2 * HOUR + 59 * MINUTE + 48_000) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
       lastError: null,

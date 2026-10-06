@@ -1274,7 +1274,7 @@ expect('/accounts/secondary', m.text(), [
   });
 }
 await m.navigate('/accounts/nightly');
-// Overage started at 11:32, so the label reads 2h 58m or 2h 59m while the clock runs from the anchor.
+// Overage started with nightly's head at 11:35:39, so the label reads 2h 54m or 2h 55m while the clock runs.
 expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
 {
   // The funding flag is an Anthropic key's state, so this OAuth account in overage reads ready and offers no clear.
@@ -1858,7 +1858,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
   results.push({
     name: '/pools six tiles per card, the sixth the count of moves in the last hour split by reason in its title',
-    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '5', 'rate limited 3, fast lane cooling 1, window spent 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
+    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '5', 'rate limited 2, window spent 2, fast lane cooling 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
     missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
   });
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });

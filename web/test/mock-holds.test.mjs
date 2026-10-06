@@ -19,7 +19,7 @@ const storyAt = async (at) => {
 // In UTC, the first minute draws a turn whose attempt's trace already held; the second draws no failed turn with one
 // attempt, so a turn that failed over takes the story.
 const CLOCKS = [
-  ['2026-09-28T10:53:00Z', 'a traced hold'],
+  ['2026-09-28T12:52:00Z', 'a traced hold'],
   ['2026-09-29T04:39:00Z', 'a failover'],
 ];
 

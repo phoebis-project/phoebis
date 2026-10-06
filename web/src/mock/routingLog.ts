@@ -4,7 +4,7 @@ import type {
 } from '@/api/types';
 import { ACCOUNTS } from './accounts';
 import { KEY_REVOKED_AT, poolById, type PoolSeed } from './pools';
-import { BUDGET_CROSSING_ID, HAIKU, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, STORY_HOUR_FROM, STORY_IDS, clock, oauthWindows, requestById } from './requests';
+import { BUDGET_CROSSING_ID, HAIKU, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED_ROUND, STORY_HOUR_FROM, STORY_IDS, clock, failsOver, oauthWindows, requestById } from './requests';
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
@@ -529,13 +529,19 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     };
     walk.push(step('pin', 'match', [fact('found', 'live'), fact('account_id', found.accountId, null, found.accountId), fact('epoch', found.epoch, 'count'), fact('idle_ms', idleMs, 'ms'), fact('refresh_age_ms', idleMs, 'ms'), fact('warmth', spec.pin.warmth), fact('cause', spec.pin.cause), fact('marked', pin.marked)]));
   }
-  if (r.kind === 'probe') walk.push(step('probe', 'passed', [fact('tried', spec.accountId ?? '', null, spec.accountId)]));
   if (spec.kind === 'refused') {
     walk.push(step('admission', 'refused', [fact('reason', spec.refusal?.reason ?? '')]), step('selection', 'not_run'));
   } else {
     walk.push(step('eligible', candidates.some((c) => c.obstacle === null) ? 'match' : 'none', candidates.map((c) => fact('standing', c.obstacle?.name ?? 'eligible', null, c.accountId))));
   }
   const member = (id: string | null | undefined) => candidates.find((c) => c.accountId === id);
+  // A probe warms the pin it was sent for: the line names that member's obstacle, if any, and whether this probe
+  // already tried it.
+  if (r.kind === 'probe') {
+    const pinned = pin?.found === 'live' ? member(pin.accountId) : undefined;
+    const facts = pinned ? [...(pinned.obstacle ? [fact('obstacle', pinned.obstacle.name)] : []), fact('tried', spec.attempted.includes(pinned.accountId))] : [];
+    walk.push(step('probe', 'passed', facts));
+  }
   // A live pin a portable request still reaches walks the five rules, and a fired rule names its destinations. A token
   // count follows its pin, since it writes none a move could leave, and a pin past its account's end is released at
   // renewal instead.
@@ -564,8 +570,12 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
       }
     }
   }
+  // A renewal stamps the refresh on a turn that refreshes the pin, and the hashes on any turn that touches it and
+  // carries a chain; a probe and a token count leave both.
+  const warmth = typeof spec.pin === 'object' ? spec.pin.warmth : null;
+  const stamps = { hashes: warmth !== 'untouched' && r.kind === 'inference', refresh: warmth === 'refresh' };
   if (spec.kind === 'renewed') {
-    walk.push(step('renew', 'renewed', [fact('account_id', spec.accountId, null, spec.accountId), fact('lane', laneOf(r)), fact('refresh_stamped', typeof spec.pin === 'object' && spec.pin.warmth === 'refresh'), fact('hashes_stamped', r.kind === 'inference')]));
+    walk.push(step('renew', 'renewed', [fact('account_id', spec.accountId, null, spec.accountId), fact('lane', laneOf(r)), fact('refresh_stamped', stamps.refresh), fact('hashes_stamped', stamps.hashes)]));
   }
   let pick: ReturnType<typeof pickOf> = { runnerUp: null, score: null, tierSize: 0 };
   const placing = spec.kind === 'placed' || spec.kind === 'moved' || spec.kind === 'held';
@@ -622,12 +632,13 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const tier = dispatched && !spec.rung && spec.kind !== 'renewed' ? (chosen?.tier ?? null) : null;
   const pinEvents = pinEventsOf(spec, pinning);
   let pinWritten: RecordOutcome['pinWritten'] = null;
-  if (dispatched && pinning && r.kind !== 'count_tokens') {
+  // Every renewal writes the pin back; a token count creates and moves none, so the session keeps the one it had.
+  if (dispatched && pinning && (r.kind !== 'count_tokens' || spec.kind === 'renewed')) {
     const action = spec.kind === 'renewed' ? 'renewed' : pin?.found === 'live' || spec.failover ? 'moved' : 'created';
     const prior = pins.get(pinKey);
     const epoch = action === 'renewed' && prior ? prior.epoch : (epochs += 1);
     pins.set(pinKey, { accountId: spec.accountId ?? '', createdAt: action === 'renewed' && prior ? prior.createdAt : spec.at, epoch, lastRefreshAt: spec.at, lastUsedAt: spec.at });
-    pinWritten = { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
+    pinWritten = action === 'renewed' ? { action, epoch, hashesStamped: stamps.hashes, lane: laneOf(r), refreshStamped: stamps.refresh } : { action, epoch, hashesStamped: r.kind === 'inference', lane: laneOf(r), refreshStamped: true };
   }
   const usage = r.usage;
   const promised = spec.rung && spec.rung.rung !== 'with_main' ? spec.rung.prefixTokens : null;
@@ -859,7 +870,9 @@ function derivedSpecs(r: RequestLog): Spec[] {
     const kind: DecisionKind = !pinning ? 'placed' : s?.renewed ? 'renewed' : rule ? 'moved' : 'placed';
     const from = failover ? attempted[attempted.length - 1] : rule ? (String(REQUEST_EVENTS.get(r.id)?.find((e) => e.kind === 'pin_migrated')?.detail?.from_account ?? '') || undefined) : undefined;
     const live = kind === 'renewed' || kind === 'moved' || failover !== undefined;
-    const pinSpec: Spec['pin'] = live && pinning ? { cause: r.kind === 'probe' ? 'probe' : r.kind === 'count_tokens' ? 'count' : 'continues_pin', idleMs: 20_000 + inFlightRng.int(0, 280) * 1_000, warmth: r.kind === 'probe' ? 'untouched' : 'refresh' } : noPin;
+    // A probe and a token count leave the pin's warmth untouched.
+    const untouched = r.kind === 'probe' || r.kind === 'count_tokens';
+    const pinSpec: Spec['pin'] = live && pinning ? { cause: r.kind === 'probe' ? 'probe' : r.kind === 'count_tokens' ? 'count' : 'continues_pin', idleMs: 20_000 + inFlightRng.int(0, 280) * 1_000, warmth: untouched ? 'untouched' : 'refresh' } : noPin;
     const prefix: Spec['prefix'] = {};
     const rung = s?.placement ?? null;
     if (rung && rung.rung !== 'with_main') {
@@ -876,8 +889,9 @@ function derivedSpecs(r: RequestLog): Spec[] {
   const after = Date.parse(last.startedAt) + (last.durationMs ?? 0);
   const tried = r.attempts.map((x) => x.accountId);
   if (r.errorCode === 'accounts_at_cap') ranOut(seq + 1, r.attempts.length + 1, after, tried);
-  // A 429 fails over, so a request that answered one found nothing left at its reselect and the router answered it.
-  else if (last.upstreamStatus === 429) specs.push({ ...base, accountId: null, at: after, attempt: r.attempts.length + 1, attempted: tried, holds: [...holds], kind: 'exhausted', pin: noPin, seq: seq + 1 });
+  // A 429 or a refused model fails over, so a request whose last attempt answered one found nothing left at its
+  // reselect and the router answered it.
+  else if (failsOver(last)) specs.push({ ...base, accountId: null, at: after, attempt: r.attempts.length + 1, attempted: tried, holds: [...holds], kind: 'exhausted', pin: noPin, seq: seq + 1 });
   return specs;
 }
 
@@ -910,16 +924,25 @@ function storySpecs(): Spec[] {
   const placedStatic: Placement = { depth: 2, prefixTokens: 31_200, rung: 'static' };
   const round: ShedRound = { marks: ROUND_PINS.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: 'desktop', model: p.model, sessionId: p.sessionId })), pins: ROUND_PINS };
   return [
+    // Two of the round's sessions placed on secondary just before it; every pin a beat renews or moves is a request's.
+    at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
+    at('req_f3b6d218-85a', 1, 1, t(10, 59, 10), 'placed', 'secondary'),
+    at('req_0b7c2d94-e61', 1, 1, t(10, 59, 30), 'renewed', 'secondary', { pin: live('probe', 31_000, 'untouched') }),
     // Secondary's 5-hour window opened at 10:42 and leads its pace past the pool's margin: this renewal runs the round.
-    at('req_1eaa9bc1-a18', 1, 1, t(11, 0), 'renewed', 'secondary', { pin: live('continues_pin', 61_000), round }),
+    at('req_1eaa9bc1-a18', 1, 1, t(11, 0), 'renewed', 'secondary', { pin: live('continues_pin', 30_000), round }),
     // A marked pin moves at its next request inside the dwell, while the window still leads its pace by the margin.
     at('req_868264bc-611', 1, 1, t(11, 8, 30), 'moved', 'primary', {
       from: 'secondary',
-      pin: live('continues_pin', 62_000),
+      pin: live('continues_pin', 560_000),
       prefix: { secondary: { content: message('c64358b5', 10, 72_000, t(11, 8, 30), t(11, 6, 2), FIVE_MINUTES), contentMatch: null } },
       rule: 'shed',
     }),
-    at('req_1d9c3e55-0b2', 1, 1, t(14, 2, 10), 'renewed', 'secondary', { pin: live('continues_pin', 71_000) }),
+    // The hour's sessions placed on secondary before its spent edge.
+    at('req_a1f04c2e-7b3', 1, 1, t(14, 0, 10), 'placed', 'secondary'),
+    at('req_b72e9d05-c14', 1, 1, t(14, 1, 30), 'placed', 'secondary'),
+    at('req_c90d3f61-a28', 1, 1, t(14, 1, 35), 'placed', 'secondary'),
+    at('req_d4e8a7b2-916', 1, 1, t(14, 1, 40), 'placed', 'secondary'),
+    at('req_1d9c3e55-0b2', 1, 1, t(14, 2, 10), 'renewed', 'secondary', { pin: live('continues_pin', 120_000) }),
     at('req_1d9c3e55-0b2', 2, 2, t(14, 2, 11), 'placed', 'primary', {
       attempted: ['secondary'],
       failover: 'cooldown',
@@ -932,7 +955,7 @@ function storySpecs(): Spec[] {
     // request finds it spent and free: the spent rule moves the pin to primary.
     at('req_da52d141-a5a', 1, 1, t(14, 5, 12), 'moved', 'primary', {
       from: 'secondary',
-      pin: live('continues_pin', 200_000),
+      pin: live('continues_pin', 217_000),
       prefix: { primary: { static: mainStatic(t(14, 5, 12), t(13, 58, 2)), staticMatch: mainStatic(t(14, 5, 12), t(13, 58, 2)) }, secondary: { content: message('0d588de5', 5, 44_600, t(14, 5, 12), t(14, 1, 47), ONE_HOUR), contentMatch: null } },
       rule: 'spent',
       rung: placedStatic,
@@ -941,9 +964,9 @@ function storySpecs(): Spec[] {
     at('req_c41d0311-200', 1, 1, t(14, 6, 30), 'moved', 'primary', { from: 'secondary', pin: live('probe', 290_000, 'untouched'), rule: 'spent' }),
     // A token count follows its pin without walking the rules, to the spent secondary, whose 429 cools it until the
     // window resets; the count fails over to primary and writes no pin there.
-    at('req_3b8e51f4-0a9', 1, 1, t(14, 9, 30), 'renewed', 'secondary', { pin: live('count', 480_000) }),
-    at('req_3b8e51f4-0a9', 2, 2, t(14, 9, 31), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live() }),
-    at('req_ef099b34-453', 1, 1, t(14, 9, 41), 'renewed', 'primary', { pin: live('compacted', 412_000, 'cold') }),
+    at('req_3b8e51f4-0a9', 1, 1, t(14, 9, 30), 'renewed', 'secondary', { pin: live('count', 480_000, 'untouched') }),
+    at('req_3b8e51f4-0a9', 2, 2, t(14, 9, 31), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live('count', 1_000, 'untouched') }),
+    at('req_ef099b34-453', 1, 1, t(14, 9, 41), 'placed', 'primary'),
     // The member placed by its static prefix holds a deeper entry the rung refused as expired beside the one it took;
     // a sibling's entry reads the gate that refused it.
     at('req_b2bed817-a58', 1, 1, t(14, 11, 44), 'placed', 'primary', {
@@ -956,8 +979,9 @@ function storySpecs(): Spec[] {
     at('req_6c3a9e27-5b1', 1, 1, t(14, 18, 5), 'refused', null, { pin: 'not_looked_up', refusal: { kind: 'key', reason: 'the key was revoked' } }),
     at('req_e0a4c6f2-118', 1, 1, t(14, 14, 2), 'refused', null, { pin: 'not_looked_up', refusal: { kind: 'client', reason: 'hash; client 2.1.271' } }),
     at('req_51d0e2b8-7a0', 1, 1, t(14, 16, 40), 'exhausted', null, { exhaustion: { deadline: iso(startOfDay(t(14, 16, 40)) + DAY), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, pin: 'pinning_off' }),
-    at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live() }),
-    at('req_9a07c4e1-d55', 1, 1, t(14, 19, 2), 'renewed', 'primary', { pin: live('continues_pin', 140_000) }),
+    // The compacted conversation renews its pin cold.
+    at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live('compacted', 491_000, 'cold') }),
+    at('req_9a07c4e1-d55', 1, 1, t(14, 19, 2), 'renewed', 'primary', { pin: live('continues_pin', 438_000) }),
     // A subagent request that carries no cache marker of its own pins nothing; its cohort's static entry places it.
     at('req_69e30548-32e', 1, 1, t(14, 21, 12), 'held', 'primary', { hold: { cohort: 'primary', place: 'cohort' }, inFlight: { nightly: 16, primary: 16 }, pin: 'pinning_off', prefix: { primary: { static: cohort(t(14, 21, 12), 'at_cap'), staticMatch: null } } }),
     at('req_69e30548-32e', 2, 1, t(14, 21, 14), 'placed', 'primary', {
@@ -968,11 +992,11 @@ function storySpecs(): Spec[] {
       prefix: { primary: { static: cohort(t(14, 21, 14)), staticMatch: cohort(t(14, 21, 14)) } },
       rung: { depth: 1, prefixTokens: 18_400, rung: 'static' },
     }),
-    at('req_2e7c90a1-6d4', 1, 1, t(14, 24, 9), 'renewed', 'primary', { pin: live('continues_pin', 95_000) }),
+    at('req_2e7c90a1-6d4', 1, 1, t(14, 24, 9), 'placed', 'primary'),
     at('req_2e7c90a1-6d4', 2, 2, t(14, 24, 10), 'placed', 'nightly', { attempted: ['primary'], failover: 'cooldown', from: 'primary', pin: live() }),
-    at('req_4b0e9d17-c31', 1, 1, t(14, 26, 58), 'renewed', 'primary', { pin: live('continues_pin', 118_000) }),
+    at('req_4b0e9d17-c31', 1, 1, t(14, 26, 58), 'placed', 'primary'),
     at('req_4b0e9d17-c31', 2, 2, t(14, 27, 1), 'placed', 'nightly', { attempted: ['primary'], failover: 'fast_lane', from: 'primary', pin: live() }),
-    at('req_f8085653-422', 1, 1, t(14, 27, 28), 'renewed', 'primary', { pin: live() }),
+    at('req_f8085653-422', 1, 1, t(14, 27, 28), 'renewed', 'primary', { pin: live('continues_pin', 506_000) }),
   ];
 }
 
@@ -1067,19 +1091,21 @@ function buildEvents(): RoutingEvent[] {
     if (!record?.outcome.pinEvents.some((e) => e.kind === 'pin_created')) continue;
     seeds.push({ accountId: s.accountId, agentId: s.agentId, at: s.at, detail: { agent_id: s.agentId, epoch: record.outcome.pinWritten?.epoch ?? null }, keyId: s.keyId, kind: 'pin_created', model: s.model, sessionId: s.sessionId });
   }
+  // A window's spent edge is the first head of any answer that reads it at its limit, once per account and window.
+  const heads = REQUESTS.flatMap((r) => r.attempts.map((a) => ({ a, at: Date.parse(a.startedAt) + (a.durationMs ?? 0), r }))).sort((x, y) => x.at - y.at);
+  const spent = new Set<string>();
+  for (const { a, at, r } of heads) {
+    for (const w of a.windows) {
+      const window = WINDOW_OF[w.id];
+      const edge = `${a.accountId}|${window}|${w.resetsAt}`;
+      if ((window !== 'five_hour' && window !== 'seven_day') || (w.utilization ?? 0) < 1 || spent.has(edge)) continue;
+      spent.add(edge);
+      seeds.push({ accountId: a.accountId, at: iso(at), detail: { reset: w.resetsAt === null ? null : Date.parse(w.resetsAt), source: 'head', source_request_id: r.id, utilization: 1, window }, kind: 'window_spent', requestId: r.id });
+    }
+  }
   for (const r of REQUESTS) {
     for (const a of r.attempts) {
       const answeredAt = Date.parse(a.startedAt) + (a.durationMs ?? 0);
-      // A drawn 429 whose head reads a plan window at its limit raises the window's spent edge; the story writes its
-      // own.
-      if (a.upstreamStatus === 429 && !STORY_IDS.has(r.id)) {
-        for (const w of a.windows) {
-          const window = WINDOW_OF[w.id];
-          if ((window === 'five_hour' || window === 'seven_day') && (w.utilization ?? 0) >= 1) {
-            seeds.push({ accountId: a.accountId, at: iso(answeredAt), detail: { reset: w.resetsAt === null ? null : Date.parse(w.resetsAt), source: 'head', source_request_id: r.id, utilization: 1, window }, kind: 'window_spent', requestId: r.id });
-          }
-        }
-      }
       if (!a.cooldownSet || a.cooldownSet.reason === 'model_rejected') continue;
       const fast = a.cooldownSet.reason === 'fast_rate_limit';
       const until = Date.parse(a.cooldownSet.until);
@@ -1113,7 +1139,6 @@ function buildEvents(): RoutingEvent[] {
   const burnSum = 0.299;
   seeds.push(
     // The story hour.
-    { accountId: 'secondary', at: iso(t(14, 2, 11)), detail: { reset: t(15, 42), source: 'head', source_request_id: 'req_1d9c3e55-0b2', utilization: 1, window: 'five_hour' }, kind: 'window_spent', requestId: 'req_1d9c3e55-0b2' },
     ...expiries(),
     { accountId: 'secondary', at: iso(t(13, 48, 20)), detail: { attempts: 1, endpoint: 'usage', last_clean_poll_at: t(13, 43), next_attempt_at: t(13, 53), reason: '429' }, kind: 'poll_backoff_started' },
     // Earlier the same day.
