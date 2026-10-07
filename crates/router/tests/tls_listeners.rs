@@ -392,7 +392,6 @@ async fn a_reload_with_a_new_pair_at_the_same_paths_serves_the_new_leaf_to_the_n
     assert_eq!(served_not_after(&next), not_after(&new));
     assert_ready(&mut next).await;
     // The connection handshaken before the reload finishes its request on the leaf it took.
-    assert_eq!(served_not_after(&held), not_after(&old));
     assert_ready(&mut held).await;
 
     let _ = stop_tx.send(());

@@ -247,9 +247,9 @@ fn state(start: &Value) -> &str {
 }
 
 /// Starts the router with `admin_pair`, when given, as `admin.tls` and its CA written to `admin-ca.pem`, the admin
-/// secret read from `secret_env`, and an upstream whose discovery answers 200 and whose token, profile and roles routes answer the control fixtures, so a
-/// pairing's exchange reaches it as the provider; returns once the admin listener accepts, and a start that ends first
-/// fails the test with its own error rather than at the settle deadline.
+/// secret read from `secret_env`, and an upstream whose discovery answers 200 and whose token, profile and roles routes
+/// answer the control fixtures, so a pairing's exchange reaches it as the provider; returns once the admin listener
+/// accepts, and a start that ends first fails the test with its own error rather than at the settle deadline.
 async fn start(admin_pair: Option<&GeneratedPair>, secret_env: &str) -> Running {
     let control = |which: ControlFixture| Respond::Json {
         status: 200,

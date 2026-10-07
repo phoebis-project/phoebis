@@ -309,8 +309,8 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     });
     // Both daily budgets are read back from the store so a restart resets neither cap.
     keepalive.load_spent_today().await;
-    // Empty here because the admin state and the attention reader take it before the pairs load below. The load fills
-    // it before any listener binds, so nothing reads it empty.
+    // Empty here because the admin state takes it before the pairs load below. The load fills it before any listener
+    // binds, so nothing reads it empty.
     let tls_live = tls::LiveSet::new();
     let (attention, mut attention_handles) =
         phoebis_attention::spawn(phoebis_attention::AttentionParts {

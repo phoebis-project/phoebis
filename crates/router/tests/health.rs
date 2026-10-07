@@ -162,22 +162,20 @@ fn a_listener_that_accepts_and_whose_budget_is_spent_before_the_first_read_fails
     listener.set_nonblocking(true).unwrap();
     let addr = listener.local_addr().unwrap();
     // The smallest budget the probe's check before the connect passes: the connect alone outlasts it, so the
-    // handshake's first socket call finds it spent and answers `TimedOut` without touching the socket.
+    // handshake's first socket call finds it spent and answers `TimedOut` without touching the socket. A preemption
+    // between the probe's two clock reads spends it before the connect instead, with the same line, so the probe runs
+    // again until an attempt has connected.
     let budget = Duration::from_micros(1);
-    let reason = phoebis_router::health::probe(addr, true, budget).unwrap_err();
-    assert_eq!(
-        reason,
-        format!("proxy on {addr} sent no status line within {budget:?}")
-    );
-    // The connection waits in the backlog though the probe has closed it, so an accept proves the probe connected
-    // and ran out in the handshake rather than before the connect.
-    let accepted = (0..100).any(|_| {
-        listener.accept().is_ok() || {
-            std::thread::sleep(Duration::from_millis(10));
-            false
-        }
+    let connected = (0..10).any(|_| {
+        let reason = phoebis_router::health::probe(addr, true, budget).unwrap_err();
+        assert_eq!(
+            reason,
+            format!("proxy on {addr} sent no status line within {budget:?}")
+        );
+        // The probe has returned, so a connection it made waits in the backlog though the probe has closed it.
+        listener.accept().is_ok()
     });
-    assert!(accepted, "the probe never connected");
+    assert!(connected, "no probe connected in ten attempts");
 }
 
 #[test]

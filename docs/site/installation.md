@@ -639,10 +639,10 @@ the service user cannot read) keeps the pair the router was serving and the comm
 next reload clears it. A reload that lands between the two writes meets a key mismatch and is retried once both files
 are in place. The service user reads the pair at reload as it did at start, so a new pair keeps the modes above.
 
-`phoebis tls reload` takes the flags `status` takes, `--ca`, `--config`, `--json`, `--secret-env`, `--timeout` and
-`--url` ([the shared flags](#commands)), and posts [the reload route](api.md#post-admintlsreload). It prints one line
-per listener on stdout: `proxy: reloaded, certificate {path} expires {date}`, `proxy: not reloaded, {the loader's
-line}. The router keeps the pair it was serving.`, or `proxy: plain HTTP, nothing to reload`, and the same for `admin`.
+`phoebis tls reload` takes the shared flags, `--ca`, `--config`, `--json`, `--secret-env`, `--timeout` and `--url`
+([the shared flags](#commands)), and posts [the reload route](api.md#post-admintlsreload). It prints one line per
+listener on stdout: `proxy: reloaded, certificate {path} expires {date}`, `proxy: not reloaded, {the loader's line}.
+The router keeps the pair it was serving.`, or `proxy: plain HTTP, nothing to reload`, and the same for `admin`.
 `--json` prints the route's body instead. It exits 0 once every pair reloaded, a plain listener aside, 1 when any pair
 was refused, the secret was refused, the admin listener did not answer or the file does not load, and 2 for a usage
 error.
