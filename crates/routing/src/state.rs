@@ -1737,8 +1737,8 @@ impl RoutingState {
             snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))
         });
         // A pool's marks are read within its own dwell alone, and a pool that left the registry has no round to
-        // read. The account's newest round is read by every pool holding the account, each against its own dwell,
-        // so its stamp stays until the longest of those has passed.
+        // read. The account's newest round is read by the one pool holding the account, so its stamp stays until
+        // that pool's dwell has passed.
         let dwell_ms = |pool: &PoolRow| seconds_ms(pool.shedding.source_dwell_seconds);
         self.shed_rounds.retain(|(pool_id, _), (at, _)| {
             snapshot
@@ -1748,15 +1748,13 @@ impl RoutingState {
         self.newest_shed.retain(|account_id, at| {
             snapshot
                 .pools()
-                .filter(|pool| {
+                .find(|pool| {
                     snapshot
                         .members(&pool.id)
                         .iter()
                         .any(|m| &m.account_id == account_id)
                 })
-                .map(dwell_ms)
-                .max()
-                .is_some_and(|longest| now - *at < longest)
+                .is_some_and(|pool| now - *at < dwell_ms(pool))
         });
         let ttl_of = |key_id: &str| -> Option<i64> {
             snapshot

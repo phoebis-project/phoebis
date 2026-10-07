@@ -353,14 +353,32 @@ fn request(
     attempted: &[&str],
     now: i64,
 ) -> SelectRequest {
+    select_request(s, "k", session, model, "main", portable, attempted, now)
+}
+
+/// The request of a selection test on `key_id` and `agent_id`: `request`'s shape for `s`, `session`, `model`,
+/// `portable`, `attempted` and `now`, with the key, its generation and its resolved candidates swapped for the
+/// named key, so a case reads the difference it is about.
+#[allow(clippy::too_many_arguments)]
+fn select_request(
+    s: &RegistrySnapshot,
+    key_id: &str,
+    session: Option<&str>,
+    model: &str,
+    agent_id: &str,
+    portable: bool,
+    attempted: &[&str],
+    now: i64,
+) -> SelectRequest {
+    let key = s.key(key_id).unwrap();
     SelectRequest {
-        key_id: "k".into(),
-        key_generation: s.key("k").unwrap().created_at,
-        agent_id: "main".into(),
+        key_id: key_id.into(),
+        key_generation: key.created_at,
+        agent_id: agent_id.into(),
         session_id: session.map(String::from),
         canonical_model: model.into(),
         folded_model: model.into(),
-        candidates: resolve(s, s.key("k").unwrap(), model, model).unwrap(),
+        candidates: resolve(s, key, model, model).unwrap(),
         portable,
         attempted: attempted.iter().map(|a| a.to_string()).collect(),
         now,
@@ -4400,7 +4418,8 @@ fn an_entry_another_key_wrote_places_the_request() {
     );
 }
 
-/// Accounts `a`, `b` and `c`, pools `p1` and `p2` at a shedding margin of 0.8 with the default shedding, each key
+/// Accounts `a`, `b` and `c`, pools `p1` and `p2` at a shedding margin of 0.8 with the default shedding and a
+/// dwell of 900 s set on each pool, so the cases that read 900 s do not rest on the default preset, each key
 /// `(id, pool)` and each member `(pool, account, priority)` as given.
 fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> RegistrySnapshot {
     let account = |id: &str| AccountRow {
@@ -4440,6 +4459,10 @@ fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> Regis
         strategy: Strategy::Priority,
         prefer_subscription: false,
         shed_ahead_of_pace: Some(0.8),
+        shedding: Shedding {
+            source_dwell_seconds: 900,
+            ..Shedding::default()
+        },
         ..PoolRow::for_tests(id)
     };
     let load = RegistryLoad {
@@ -4464,50 +4487,35 @@ fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> Regis
     RegistrySnapshot::from_load(load, [0; 32], 0, 1)
 }
 
+/// `s` rebuilt with each named pool's source dwell as given, every other row as `s` holds it.
+fn with_dwells(s: &RegistrySnapshot, dwells: &[(&str, u64)]) -> RegistrySnapshot {
+    let load = RegistryLoad {
+        accounts: s.accounts().cloned().collect(),
+        credential_generations: Vec::new(),
+        keys: s.keys().cloned().collect(),
+        members: s.pools().flat_map(|p| s.members(&p.id).to_vec()).collect(),
+        pools: s
+            .pools()
+            .cloned()
+            .map(|mut pool| {
+                if let Some(&(_, seconds)) = dwells.iter().find(|(id, _)| *id == pool.id) {
+                    pool.shedding.source_dwell_seconds = seconds;
+                }
+                pool
+            })
+            .collect(),
+        retired_secrets: Vec::new(),
+        reused_key_ids: Vec::new(),
+        terms: Vec::new(),
+    };
+    RegistrySnapshot::from_load(load, [0; 32], 0, 1)
+}
+
 /// The main agent's pin of `session` under `key_id`.
 fn key(key_id: &str, session: &str) -> PinKey {
     PinKey {
         key_id: key_id.into(),
         ..pin_key(session)
-    }
-}
-
-/// As `request` for `session`, under `key_id` with its candidates resolved through that key, since `request`
-/// names `k`.
-fn under(s: &RegistrySnapshot, key_id: &str, session: &str, now: i64) -> SelectRequest {
-    let key = s.key(key_id).unwrap();
-    SelectRequest {
-        key_id: key_id.into(),
-        key_generation: key.created_at,
-        agent_id: "main".into(),
-        session_id: Some(session.into()),
-        canonical_model: "claude-sonnet-5".into(),
-        folded_model: "claude-sonnet-5".into(),
-        candidates: resolve(
-            s,
-            key,
-            "claude-sonnet-5",
-            "claude-sonnet-5",
-        )
-        .unwrap(),
-        portable: true,
-        attempted: Vec::new(),
-        now,
-        fallback_ms: 60_000,
-        revision: s.revision,
-        probe: false,
-        count: false,
-        request_class: None,
-        context_compacted: false,
-        static_hash: None,
-        boundaries: Arc::from([]),
-        client: ClientClass::ClaudeCode,
-        static_boundaries: Arc::from([]),
-        marker: false,
-        parent_agent_id: None,
-        holds: Vec::new(),
-        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        fast: false,
     }
 }
 
@@ -4539,7 +4547,24 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
     // Through a pin the round leaves: a request through a marked pin would move it in the same selection, spending
     // the mark read below.
     assert_eq!(
-        landed(select(&mut st, &s, &under(&s, "k1", "s0", T), &mut rng()).0),
+        landed(
+            select(
+                &mut st,
+                &s,
+                &select_request(
+                    &s,
+                    "k1",
+                    Some("s0"),
+                    "claude-sonnet-5",
+                    "main",
+                    true,
+                    &[],
+                    T
+                ),
+                &mut rng()
+            )
+            .0
+        ),
         ("a".into(), None)
     );
     // Half of the 8.5 burning is 4.25, which k1's s1 and k2's s3 carry the marked burn past.
@@ -4559,7 +4584,24 @@ fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_d
     let inside = T + 450_000;
     hot_a_cool_b(&mut st, inside);
     assert_eq!(
-        landed(select(&mut st, &s, &under(&s, "k2", "s2", inside), &mut rng()).0),
+        landed(
+            select(
+                &mut st,
+                &s,
+                &select_request(
+                    &s,
+                    "k2",
+                    Some("s2"),
+                    "claude-sonnet-5",
+                    "main",
+                    true,
+                    &[],
+                    inside
+                ),
+                &mut rng()
+            )
+            .0
+        ),
         ("a".into(), None)
     );
     assert_eq!(
@@ -4595,7 +4637,24 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
     ]);
     hot_a_cool_b(&mut st, T);
     assert_eq!(
-        landed(select(&mut st, &before, &under(&before, "k1", "s0", T), &mut rng()).0),
+        landed(
+            select(
+                &mut st,
+                &before,
+                &select_request(
+                    &before,
+                    "k1",
+                    Some("s0"),
+                    "claude-sonnet-5",
+                    "main",
+                    true,
+                    &[],
+                    T
+                ),
+                &mut rng()
+            )
+            .0
+        ),
         ("a".into(), None)
     );
     assert!(st.shed_marked("p1", &key("k1", "s1"), T, 900_000));
@@ -4618,7 +4677,16 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
             select(
                 &mut st,
                 &after,
-                &under(&after, "k2", "s2", moved),
+                &select_request(
+                    &after,
+                    "k2",
+                    Some("s2"),
+                    "claude-sonnet-5",
+                    "main",
+                    true,
+                    &[],
+                    moved
+                ),
                 &mut rng()
             )
             .0
@@ -4639,6 +4707,67 @@ fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
     assert!(
         !st.shed_marked("p1", &key("k1", "s0"), moved, 900_000),
         "the pin p1's round left unmarked stays unmarked"
+    );
+}
+
+#[test]
+fn an_accounts_round_stamp_is_kept_for_its_own_pools_dwell_and_no_longer() {
+    // p2 carries the longest dwell and holds b alone, so it has no say over how long a's stamp stays.
+    let s = with_dwells(
+        &shedding_pools(
+            &[("k1", "p1"), ("k2", "p2")],
+            &[("p1", "a", 0), ("p2", "b", 0)],
+        ),
+        &[("p1", 600), ("p2", 1_800)],
+    );
+    let mut st = loaded(vec![
+        PinRow {
+            key_id: "k1".into(),
+            ..burning("s1", "a", 4.0, false, T)
+        },
+        PinRow {
+            key_id: "k2".into(),
+            ..burning("s2", "b", 4.0, false, T)
+        },
+    ]);
+    st.record_sample("a", sample(0.9, 0.3, T));
+    st.record_sample("b", sample(0.9, 0.3, T));
+    for (key_id, session) in [("k1", "s1"), ("k2", "s2")] {
+        let req = select_request(
+            &s,
+            key_id,
+            Some(session),
+            "claude-sonnet-5",
+            "main",
+            true,
+            &[],
+            T,
+        );
+        select(&mut st, &s, &req, &mut rng());
+    }
+    assert_eq!(
+        (st.newest_shed("a"), st.newest_shed("b")),
+        (Some(T), Some(T)),
+        "a round ran on each account at T"
+    );
+
+    st.purge(&s, T + 900_000);
+    assert_eq!(
+        st.newest_shed("a"),
+        None,
+        "past p1's 600 s the purge drops a's stamp, so a cool check on a reads cool"
+    );
+    assert_eq!(
+        st.newest_shed("b"),
+        Some(T),
+        "b's stamp stays inside p2's 1 800 s"
+    );
+
+    st.purge(&s, T + 1_800_000);
+    assert_eq!(
+        st.newest_shed("b"),
+        None,
+        "b's stamp leaves with p2's dwell"
     );
 }
 
