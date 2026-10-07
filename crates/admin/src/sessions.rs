@@ -72,8 +72,17 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
     // tier's factor. Each account's tier is read once per request.
     let dollar_rates = state.pricing.current().rate_table();
     let share_rates = state.tables.rate_table(FIVE_HOUR);
-    let mut tiers: std::collections::HashMap<String, Option<String>> =
-        std::collections::HashMap::new();
+    let tiers = accounts
+        .iter()
+        .filter(|a| a.kind == phoebis_store::AccountKind::Oauth)
+        .map(|a| {
+            Ok((
+                a.id.clone(),
+                state.store.subscription(&a.id)?.and_then(|s| s.tier),
+            ))
+        })
+        .collect::<Result<std::collections::HashMap<String, Option<String>>, _>>()
+        .map_err(crate::routes::store_failure)?;
     for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {
         // `delete_api_key` deletes the key's pins, so a pin always names the live generation of its id.
         let Some(&generation) = live.get(&p.key_id) else {
@@ -120,17 +129,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 .price_burn(&p.model, &p.burn)
                 .map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
-                let tier = tiers
-                    .entry(p.account_id.clone())
-                    .or_insert_with(|| {
-                        state
-                            .store
-                            .subscription(&p.account_id)
-                            .ok()
-                            .flatten()
-                            .and_then(|s| s.tier)
-                    })
-                    .as_deref();
+                let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
                 // A tier the table does not size, or a cell it leaves null under this pin's burn, prices nothing,
                 // so the figure reads null rather than a guess.
                 tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR))

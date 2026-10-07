@@ -95,6 +95,28 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
             .status(),
         204
     );
+    for bound in ["0", "1"] {
+        assert_eq!(
+            post(
+                &app,
+                "/admin/pools",
+                &format!(
+                    r#"{{"id":"p5","label":"x","strategy":"pace","shed_ahead_of_pace":{bound}}}"#
+                ),
+                Some(&cookie)
+            )
+            .await
+            .status(),
+            201,
+            "shed_ahead_of_pace takes its bound {bound}"
+        );
+        assert_eq!(
+            delete(&app, "/admin/pools/p5", Some(&cookie))
+                .await
+                .status(),
+            204
+        );
+    }
     assert_eq!(
         post(
             &app,

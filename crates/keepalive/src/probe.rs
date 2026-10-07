@@ -292,13 +292,16 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         };
         // The tier the store names now: a share is of the window the account has at this settlement.
         let tier = (default_unit == SavingsUnit::WindowShare)
-            .then(|| {
-                engine
-                    .parts
-                    .store
-                    .subscription(&record.account)
-                    .ok()
-                    .flatten()
+            .then(|| match engine.parts.store.subscription(&record.account) {
+                Ok(row) => row,
+                Err(error) => {
+                    tracing::warn!(
+                        account = %record.account,
+                        %error,
+                        "the account's tier could not be read, so the settlement falls back to dollars"
+                    );
+                    None
+                }
             })
             .flatten()
             .and_then(|s| s.tier);

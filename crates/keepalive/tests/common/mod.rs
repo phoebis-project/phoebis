@@ -88,6 +88,9 @@ pub struct RigSpec {
     pub limits: KeepaliveLimits,
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
+    /// The registry's file, `None` to keep the registry in memory: a case that breaks a read from a second
+    /// connection needs a file to open.
+    pub registry: Option<std::path::PathBuf>,
     pub session_expiry: Duration,
     /// The shipped tables by default; a test naming a model the cost table lacks (though the price table
     /// prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
@@ -116,6 +119,7 @@ impl Default for RigSpec {
                 ..KeepalivePolicy::default()
             },
             pool: PoolSpec::default(),
+            registry: None,
             session_expiry: Duration::from_secs(86_400),
             tables: PlanTables::shipped(),
             tier: None,
@@ -140,7 +144,13 @@ pub async fn rig(spec: RigSpec) -> Rig {
     // Most of this suite is about a session's pin and account continuity, where a spelling resolving to a dated id
     // mid-test is not what it is testing; the cases that are about a resolution name the rules that answer one.
     let catalog_up = FakeUpstream::start(spec.catalog).await;
-    let h = relay_common::harness_with_bus_and_catalog(
+    let key = phoebis_store::StorageKey::generate();
+    let store = Arc::new(match &spec.registry {
+        Some(path) => phoebis_store::Store::open(path, &key).unwrap(),
+        None => phoebis_store::Store::open_in_memory(&key).unwrap(),
+    });
+    let h = relay_common::harness_on_with_bus_and_catalog(
+        store,
         &up,
         &spec.accounts,
         spec.pool,
@@ -659,5 +669,45 @@ impl Rig {
                 incarnation,
             })
             .await;
+    }
+}
+
+/// The formatter's output, kept in memory so a case reads back exactly what the host's journal would hold.
+#[derive(Clone, Default)]
+pub struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Captured {
+    /// Makes the capture this thread's subscriber until the guard drops. A `#[tokio::test]` polls the engine, the
+    /// relay and the probes on the case's own thread, so every line the case drives lands here.
+    pub fn install(&self) -> tracing::subscriber::DefaultGuard {
+        tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(self.clone())
+                .finish(),
+        )
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
     }
 }

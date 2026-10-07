@@ -1571,3 +1571,81 @@ async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
         "dollars at the standard cells: {status:?}"
     );
 }
+
+/// A tier the store cannot read leaves a plan-funded probe no window to size a share by, so it settles in dollars as
+/// on an account the store names no tier for, and the log says why, naming the account and the error.
+#[tokio::test]
+async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
+    let captured = Captured::default();
+    let _guard = captured.install();
+    let dir = tempfile::tempdir().unwrap();
+    let registry = dir.path().join("router.sqlite");
+    // The rig's model priced on the 5-hour window, so a readable tier would settle the probe in the share.
+    let mut tables = phoebis_ledger::PlanTables::shipped();
+    tables.cost.windows.get_mut("five_hour").unwrap().insert(
+        "claude-sonnet-4-5".to_string(),
+        phoebis_ledger::ModelCells {
+            cache_read: Some(0.001),
+            cache_write_1h: Some(0.02),
+            cache_write_5m: Some(0.01),
+            input: Some(0.01),
+            output: Some(0.05),
+        },
+    );
+    let mut r = rig(RigSpec {
+        registry: Some(registry.clone()),
+        tables,
+        ..plan_funded_spec()
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", real_answer());
+    r.observe("main").await;
+    // The tier reads name the column, and the router serves on from the registry it already loaded.
+    let conn = rusqlite::Connection::open(&registry).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    )
+    .unwrap();
+    drop(conn);
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(status.probes, 1);
+    assert!(
+        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
+        "the probe settled in dollars: {status:?}"
+    );
+    assert_eq!(
+        r.engine
+            .share_spent_today()
+            .get("o")
+            .copied()
+            .unwrap_or(0.0),
+        0.0,
+        "no window share was spent"
+    );
+    let text = captured.text();
+    let settled: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            line.contains(
+                "the account's tier could not be read, so the settlement falls back to dollars",
+            )
+        })
+        .collect();
+    assert_eq!(settled.len(), 1, "one line for the one settlement:\n{text}");
+    assert!(
+        settled[0].contains(" WARN ")
+            && settled[0].contains("account=o")
+            && settled[0].contains("no such column: subscription_tier")
+            && !settled[0].contains(OAUTH_SECRET),
+        "{}",
+        settled[0]
+    );
+    assert!(
+        text.lines().any(|line| line.contains(
+            "the account's tier could not be read, so the tier map leaves the account out"
+        ) && line.contains("account=o")),
+        "the scheduler's read says why the account has no tier:\n{text}"
+    );
+}

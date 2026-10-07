@@ -2165,7 +2165,17 @@ impl Engine {
             .accounts()
             .filter(|a| a.kind == AccountKind::Oauth)
             .filter_map(|a| {
-                let tier = self.parts.store.subscription(&a.id).ok().flatten()?.tier?;
+                let tier = match self.parts.store.subscription(&a.id) {
+                    Ok(row) => row?.tier?,
+                    Err(error) => {
+                        tracing::warn!(
+                            account = %a.id,
+                            %error,
+                            "the account's tier could not be read, so the tier map leaves the account out"
+                        );
+                        return None;
+                    }
+                };
                 Some((a.id.clone(), tier))
             })
             .collect();

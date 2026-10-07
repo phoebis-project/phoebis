@@ -653,6 +653,29 @@ fn a_set_secret_shorter_than_sixteen_characters_fails_check_config() {
 }
 
 #[test]
+fn a_secret_with_a_non_ascii_character_or_a_surrounding_space_fails_check_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "shape", "");
+    for secret in ["sixteen-chars-ok-é", " sixteen-chars-ok "] {
+        let out = check_config(phoebis().env("TEST_CHECK_CONFIG_ADMIN", secret), &config);
+        assert_eq!(out.status.code(), Some(1), "{secret:?}: {}", printed(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(
+                "environment variable TEST_CHECK_CONFIG_ADMIN holds a secret outside the allowed shape \
+                 (printable ASCII, no surrounding spaces)"
+            ),
+            "{secret:?}: {}",
+            printed(&out)
+        );
+    }
+    let out = check_config(
+        phoebis().env("TEST_CHECK_CONFIG_ADMIN", "sixteen-chars-ok"),
+        &config,
+    );
+    assert!(out.status.success(), "{}", printed(&out));
+}
+
+#[test]
 fn a_set_secret_holding_the_example_placeholder_fails_check_config() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path(), "placeholder", "");

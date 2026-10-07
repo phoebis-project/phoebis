@@ -86,8 +86,9 @@ sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-con
 
 `check-config` reads `admin.secret_env` from the process environment when it is set and prints
 `warning: environment variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the env file is
-optional for it; the service and `phoebis health` still refuse an unset secret. Once it is clean,
-`sudo systemctl enable --now phoebis`.
+optional for it; the service and `phoebis health` still refuse an unset secret. The secret is printable ASCII without
+surrounding spaces, at least 16 characters, and not the example file's placeholder. The start, `check-config`, `status`
+and `tls reload` refuse another shape with the same line. Once it is clean, `sudo systemctl enable --now phoebis`.
 
 ## Run the container
 
@@ -203,6 +204,15 @@ its group alone, such as `0640 root:phoebis`, earns no warning from a process th
 A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and `the registry at
 {config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at
 {config.stats.ledger_path}`, since the start refuses either file the same way.
+
+A registry that holds an account in more than one pool fails the check with exit 1 and the start's line for each such
+account, `account {id} is a member of pools {pools}, and an account belongs to one pool`, since the start refuses to
+migrate it.
+
+A secret variable set to a value the start refuses fails the check with exit 1 and the start's line: `environment
+variable {name} holds a secret shorter than 16 characters`, `environment variable {name} still holds the example
+placeholder`, or `environment variable {name} holds a secret outside the allowed shape (printable ASCII, no surrounding
+spaces)`.
 
 An unreadable, mismatched, expired or not-yet-valid certificate pair fails the check with exit 1 and the line the start
 prints, naming the key and the path ([TLS on the listeners](#tls-on-the-listeners)).
@@ -339,8 +349,9 @@ nothing was written to {dir}`. It exits 0 once the manifest is written, and 2 fo
 The bootstrap file names the admin secret's environment variable and never holds a secret. `phoebis` resolves it at
 startup and refuses to start when it is unset or empty, with `environment variable {name} is unset or empty` and nothing
 else. A value shorter than 16 characters refuses with `environment variable {name} holds a secret shorter than 16
-characters`, and the example file's own placeholder refuses with `environment variable {name} still holds the example
-placeholder`.
+characters`, the example file's own placeholder refuses with `environment variable {name} still holds the example
+placeholder`, and a value with a character outside printable ASCII or a leading or trailing space refuses with
+`environment variable {name} holds a secret outside the allowed shape (printable ASCII, no surrounding spaces)`.
 
 | Variable | Named by | Holds |
 | --- | --- | --- |

@@ -933,6 +933,70 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
     assert_eq!(row("silent")["pinned"].as_bool(), Some(true));
 }
 
+/// A pin on plan quota is priced in its account's window, so a tier the store cannot read fails the route rather
+/// than reading as a tier the table does not size.
+#[tokio::test]
+async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = std::sync::Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    // The router loads the pins at spawn, so the pool, the key and the pin are written through one harness and
+    // the store is handed to the one under test.
+    let seed = common::admin_parts_full_on(store.clone()).await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    let now = common::NOW;
+    store
+        .upsert_pin(&phoebis_store::PinRow {
+            key_id: "desktop".into(),
+            session_id: "planned".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            account_id: "business".into(),
+            epoch: 1,
+            created_at: now - 10,
+            last_used_at: now - 5,
+            key_generation: common::generation(&store, "desktop"),
+            incarnation: 1,
+            burn: phoebis_store::PinBurn::default(),
+            burn_at: None,
+            burn_banded: phoebis_store::PinBurn::default(),
+            last_input_tokens: 0,
+            last_refresh_at: 0,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on(store).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The tier read names the column, and no other read the route makes does.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    )
+    .unwrap();
+    drop(conn);
+    let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
+    assert_eq!(listed.status(), 500);
+    assert_eq!(
+        json(listed).await,
+        serde_json::json!({"error": "storage failure"})
+    );
+}
+
 #[tokio::test]
 async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
     let parts = common::admin_parts_full().await;
@@ -954,17 +1018,17 @@ async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
     assert!(connect(None).await.is_err(), "no session, no upgrade");
     // Over a real socket the client sets `Host` to the served address: an authenticated handshake whose origin
     // names another authority is refused by the gate, and one naming the served address is admitted.
-    let pinned = common::admin_parts_full().await;
-    let pinned_addr = common::serve(pinned.app.clone()).await;
-    let pinned_cookie = common::login(&pinned.app, "admin-secret").await;
+    let served = common::admin_parts_full().await;
+    let served_addr = common::serve(served.app.clone()).await;
+    let served_cookie = common::login(&served.app, "admin-secret").await;
     let mut foreign =
         tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
-            "ws://{pinned_addr}/admin/live"
+            "ws://{served_addr}/admin/live"
         ))
         .unwrap();
     foreign.headers_mut().insert(
         "cookie",
-        format!("phoebis_admin={pinned_cookie}").parse().unwrap(),
+        format!("phoebis_admin={served_cookie}").parse().unwrap(),
     );
     foreign
         .headers_mut()
@@ -975,15 +1039,15 @@ async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
         "a foreign origin is refused before the upgrade: {refused:?}"
     );
     let mut same = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-        format!("ws://{pinned_addr}/admin/live"),
+        format!("ws://{served_addr}/admin/live"),
     )
     .unwrap();
     same.headers_mut().insert(
         "cookie",
-        format!("phoebis_admin={pinned_cookie}").parse().unwrap(),
+        format!("phoebis_admin={served_cookie}").parse().unwrap(),
     );
     same.headers_mut()
-        .insert("origin", format!("http://{pinned_addr}").parse().unwrap());
+        .insert("origin", format!("http://{served_addr}").parse().unwrap());
     let (mut same_ws, _) = tokio_tungstenite::connect_async(same).await.unwrap();
     assert_eq!(
         common::next_text(&mut same_ws).await["kind"],
