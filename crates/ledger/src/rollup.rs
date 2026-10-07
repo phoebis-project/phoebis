@@ -201,6 +201,9 @@ pub struct RollupRow {
     pub wasted_probe_usd: f64,
     pub wasted_probe_reasons: BTreeMap<String, u64>,
     pub probes_skipped: u64,
+    /// Probes the router refused with `503 ledger_behind` while its ledger caught up, sent again later; outside
+    /// `failed`, since the account answered nothing.
+    pub probes_held: u64,
     pub ttfb_hist: Histogram,
     pub ttfc_hist: Histogram,
     pub duration_hist: Histogram,
@@ -274,6 +277,7 @@ impl RollupRow {
             wasted_probe_usd: 0.0,
             wasted_probe_reasons: BTreeMap::new(),
             probes_skipped: 0,
+            probes_held: 0,
             ttfb_hist: Histogram::new(),
             ttfc_hist: Histogram::new(),
             duration_hist: Histogram::new(),
@@ -318,6 +322,7 @@ impl RollupRow {
         self.wasted_probe_usd += o.wasted_probe_usd;
         add_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
         self.probes_skipped += o.probes_skipped;
+        self.probes_held += o.probes_held;
         self.ttfb_hist.merge(&o.ttfb_hist);
         self.ttfc_hist.merge(&o.ttfc_hist);
         self.duration_hist.merge(&o.duration_hist);
@@ -371,6 +376,7 @@ impl RollupRow {
         self.wasted_probe_usd -= o.wasted_probe_usd;
         subtract_counts(&mut self.wasted_probe_reasons, &o.wasted_probe_reasons);
         self.probes_skipped = self.probes_skipped.saturating_sub(o.probes_skipped);
+        self.probes_held = self.probes_held.saturating_sub(o.probes_held);
         self.ttfb_hist.subtract(&o.ttfb_hist);
         self.ttfc_hist.subtract(&o.ttfc_hist);
         self.duration_hist.subtract(&o.duration_hist);
@@ -435,14 +441,23 @@ pub fn delta_of(request: &RequestRecord, attempts: &[AttemptRecord]) -> RollupRo
         },
     );
     d.requests = 1;
-    match request.outcome.as_str() {
-        "succeeded" => d.succeeded = 1,
-        "failed" if request.status == Some(429) => d.rate_limited = 1,
-        "failed" | "canceled" => d.failed = 1,
-        "exhausted" => d.exhausted = 1,
-        "incomplete" => d.incomplete = 1,
-        "rejected" => d.rejected = 1,
-        _ => {}
+    // Read off the row's kind, status and code rather than its outcome: the relay files a refusal before any attempt
+    // as `rejected`, the router's own `503 ledger_behind` among them, though no account was asked.
+    if request.kind == "probe"
+        && request.status == Some(503)
+        && request.error_code.as_deref() == Some("ledger_behind")
+    {
+        d.probes_held = 1;
+    } else {
+        match request.outcome.as_str() {
+            "succeeded" => d.succeeded = 1,
+            "failed" if request.status == Some(429) => d.rate_limited = 1,
+            "failed" | "canceled" => d.failed = 1,
+            "exhausted" => d.exhausted = 1,
+            "incomplete" => d.incomplete = 1,
+            "rejected" => d.rejected = 1,
+            _ => {}
+        }
     }
     d.attempts = attempts.len() as u64;
     // A 401 replay and an unsent retry both run again on the account the request was already on, so only a
@@ -584,6 +599,7 @@ pub fn fold_request(
                 && row.probe_cost_usd == 0.0
                 && row.probe_migrated == 0
                 && row.probes_skipped == 0
+                && row.probes_held == 0
                 && row.wasted_probes == 0
                 && row.wasted_probe_usd == 0.0;
             if row.requests == 0 && keepalive_empty {
@@ -1029,7 +1045,7 @@ fn take_segments(
     Ok(segments)
 }
 
-const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete";
+const COLUMNS: &str = "hour, key_id, key_generation, pool_id, account_id, canonical_model, kind, user_agent, client, effort, request_class, speed, funding, requests, succeeded, rate_limited, failed, exhausted, rejected, attempts, failovers, cache_hits, cache_misses, uncached_requests, input_tokens, cache_read_tokens, cache_write_5m_tokens, cache_write_1h_tokens, output_tokens, thinking_tokens, web_search_requests, web_fetch_requests, estimated_usd, input_usd, cache_read_usd, cache_write_usd, output_usd, kept_warm_requests, kept_warm_tokens, saved_usd_gross, probe_cost_usd, probe_migrated, wasted_probes, wasted_probe_usd, wasted_probe_reasons_json, probes_skipped, ttfb_hist, ttfc_hist, duration_hist, output_tps_hist, errors_json, cache_miss_reasons_json, incomplete, probes_held";
 const ACCOUNT_SELECT: &str = "SELECT hour, account_id, utilization_5h_max, utilization_7d_max, utilization_7d_oi_max, overage_seconds, cooldown_seconds, pins_created, pins_migrated_in, pins_migrated_out, rewrite_tokens, migrations_json FROM account_rollups_hourly";
 
 pub(crate) fn read_rollup(
@@ -1057,7 +1073,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
     let counts =
         |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap_or_else(|_| "{}".into());
     conn.execute(
-        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53)"),
+        &format!("INSERT OR REPLACE INTO rollups_hourly ({COLUMNS}) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49, ?50, ?51, ?52, ?53, ?54)"),
         params![
             r.hour, r.key_id, r.key_generation, r.pool_id, r.account_id, r.canonical_model, r.kind, r.user_agent, r.client, r.effort, r.request_class, r.speed, r.funding, r.requests as i64, r.succeeded as i64, r.rate_limited as i64, r.failed as i64,
             r.exhausted as i64, r.rejected as i64, r.attempts as i64, r.failovers as i64, r.cache_hits as i64, r.cache_misses as i64, r.uncached_requests as i64,
@@ -1066,7 +1082,7 @@ pub(crate) fn write_rollup(conn: &Connection, r: &RollupRow) -> Result<(), Ledge
             r.estimated_usd, r.input_usd, r.cache_read_usd, r.cache_write_usd, r.output_usd, r.kept_warm_requests as i64, r.kept_warm_tokens as i64,
             r.saved_usd_gross, r.probe_cost_usd, r.probe_migrated as i64, r.wasted_probes as i64, r.wasted_probe_usd, counts(&r.wasted_probe_reasons),
             r.probes_skipped as i64, r.ttfb_hist.to_le_bytes(), r.ttfc_hist.to_le_bytes(), r.duration_hist.to_le_bytes(), r.output_tps_hist.to_le_bytes(), counts(&r.errors), counts(&r.cache_miss_reasons),
-            r.incomplete as i64,
+            r.incomplete as i64, r.probes_held as i64,
         ],
     )?;
     Ok(())
@@ -1140,6 +1156,7 @@ fn row_to_rollup_at(r: &rusqlite::Row<'_>, offset: usize) -> rusqlite::Result<Ro
         errors: counts(50)?,
         cache_miss_reasons: counts(51)?,
         incomplete: u(52)?,
+        probes_held: u(53)?,
     })
 }
 
@@ -1349,6 +1366,7 @@ mod tests {
             .replace(", probes_skipped", "")
             .replace(", key_generation", "")
             .replace(", incomplete", "")
+            .replace(", probes_held", "")
     }
 
     /// One row per version-2 column, in that order.
@@ -1450,6 +1468,7 @@ mod tests {
         let (tables, attempts, rollups) = db.read_blocking(|c| Ok(shape(c))).unwrap();
         assert_eq!(tables, FINAL_TABLES);
         assert!(rollups.iter().any(|c| c == "probes_skipped"));
+        assert!(rollups.iter().any(|c| c == "probes_held"));
     }
 
     /// A stored ledger has rollup rows under the six-part key, and SQLite cannot add a seventh to a primary
@@ -1479,7 +1498,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -1529,6 +1548,7 @@ mod tests {
                         .replace(", speed", "")
                         .replace(", funding", "")
                         .replace(", incomplete", "")
+                        .replace(", probes_held", "")
                 ),
                 [],
             )
@@ -1536,7 +1556,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1631,7 +1651,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -2352,6 +2372,7 @@ mod tests {
         r.wasted_probe_usd = 39.5;
         r.wasted_probe_reasons = BTreeMap::from([("idle_limit".to_string(), 40)]);
         r.probes_skipped = 41;
+        r.probes_held = 49;
         r.ttfb_hist.record(42.0);
         r.ttfc_hist.record(43.0);
         r.ttfc_hist.record(43.0);
@@ -2457,6 +2478,7 @@ mod tests {
         old.web_search_requests = 0;
         old.web_fetch_requests = 0;
         old.incomplete = 0;
+        old.probes_held = 0;
         {
             let mut conn = Connection::open(&path).unwrap();
             conn.execute_batch(crate::schema::SCHEMA).unwrap();
@@ -2481,7 +2503,8 @@ mod tests {
                     ", thinking_tokens, web_search_requests, web_fetch_requests",
                     "",
                 )
-                .replace(", incomplete", "");
+                .replace(", incomplete", "")
+                .replace(", probes_held", "");
             let counts = |m: &BTreeMap<String, u64>| serde_json::to_string(m).unwrap();
             tx.execute(
                 &format!(
@@ -2542,7 +2565,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -2555,7 +2578,7 @@ mod tests {
         expected.funding = PLAN_FUNDING.into();
         assert_eq!(
             rows[0], expected,
-            "every old value is where it was; effort is none, and the three sums and the incomplete count are zero"
+            "every old value is where it was; effort is none, and the three sums, the incomplete count and the held count are zero"
         );
     }
 }

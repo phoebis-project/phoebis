@@ -2060,6 +2060,11 @@
   background: var(--series-3);
 }
 
+/* Matches the held slice of the analytics probe chart, --series-muted. */
+.probe-bar__seg--held {
+  background: var(--series-muted);
+}
+
 .probe-bar__seg--skipped {
   background: var(--series-muted);
 }

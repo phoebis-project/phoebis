@@ -337,6 +337,17 @@ test("the mock files its hourly rows under the speed each hour's answers reporte
   assert.deepEqual(groups.map((g) => g.requests), [served(fast), served(d.ALL_ROLLUPS.filter((r) => r.speed === 'standard'))]);
 });
 
+test('the probe totals sum each group\'s held probes, and the mock holds a few on its probe rows', () => {
+  const row = fixture('analytics_breakdown').rows[0];
+  const group = (held) => d.decodeAnalyticsGroup({ ...row, probes: { ...row.probes, held } });
+  assert.equal(d.sumGroups([group(2), group(3)]).probes.held, 5, 'the chart and the tiles draw the sum');
+  const probeRows = d.ALL_ROLLUPS.filter((r) => r.kind === 'probe');
+  const held = probeRows.reduce((n, r) => n + r.probes.held, 0);
+  assert.ok(held > 0 && held < probeRows.reduce((n, r) => n + r.probes.ok, 0) / 20, `a small held count: ${held}`);
+  const [all] = d.groupsOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'all', to: d.ALL_ROLLUPS.at(-1).hour });
+  assert.equal(all.probes.held, held, 'the mock route sums the probe rows it groups');
+});
+
 test("the mock prices a fast hour and a fast answer at the model's fast cells", async () => {
   const api = new d.MockApi();
   const cells = new Map((await api.getSettings()).pricing.models.map((p) => [p.model, p.fast]));

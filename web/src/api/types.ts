@@ -812,7 +812,7 @@ export interface AnalyticsGroup {
   key: string;
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
-  probes: { failed: number; migrated: number; ok: number; skipped: number };
+  probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };
   rateLimited: number;
   rejected: number;
   requests: number;
@@ -1010,7 +1010,7 @@ export interface KeepaliveOverview {
   /** Requests whose prefix expired between turns in the last 24 hours. */
   expiredBetweenTurns24h: number;
   netSaved7dUsd: number;
-  probes24h: { failed: number; migrated: number; ok: number; skipped: number };
+  probes24h: { failed: number; held: number; migrated: number; ok: number; skipped: number };
 }
 
 /** A model's fast-mode cells, USD per million tokens, which an answer served fast is priced at. */

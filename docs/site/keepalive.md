@@ -117,7 +117,7 @@ The pool's `keepalive` object carries fifteen fields, each with its own default 
 | `lead_seconds_1h` | `360` | 0 to 3599 | How long before a 1h entry expires its probe is due. |
 | `lead_seconds_5m` | `60` | 0 to 299 | How long before a 5m entry expires its probe is due. |
 | `max_idle_seconds` | `3600` | 0 to 31536000 | Stops probing the main agent while reporting, every agent once silent. |
-| `max_idle_ticks` | `0` | 0 to 1000000 | The same limit counted in probes instead of seconds. |
+| `max_idle_ticks` | `0` | 0 to 1000000 | The same limit counted in probes served or failed, instead of seconds. |
 | `net_negative_grace_probes` | `2` | 0 to 100 | Probes still granted once the net turns negative. |
 | `probe_cap_window_share_per_day` | unset | unset or 0 to 1 | A subscription account's daily cap, a window share. |
 | `probe_cost_cap_usd_per_day` | unset | unset or a positive number | Daily probe spend cap per pool. |
@@ -279,8 +279,9 @@ flight is `retrying` rather than paused under `pool_exhausted`: its next attempt
 
 A probe the router refused with `503 ledger_behind`, its ledger catching up, holds under `ledger_behind` rather than
 `retrying`: its next attempt waits out that answer's `Retry-After`, or the pool's `retry_seconds` without one, and
-counts no failure toward `cold_probe_limit`, so a ledger that stays behind never pauses the recipe. The entry's expiry
-still bounds the re-sends: once it passes, the recipe ends under `expired`, as under any other hold.
+counts no failure toward `cold_probe_limit`, so a ledger that stays behind never pauses the recipe. A held re-send
+counts no tick toward `max_idle_ticks`. The entry's expiry is the one bound on the hold: once it passes, the recipe ends
+under `expired`, as under any other hold.
 
 A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
 lapses or is evicted, or when the next request after the probe reads nothing from the entry it kept:
@@ -307,12 +308,13 @@ what sending the probes cost; both at the dearest listed cells for a model the p
 `probe_migrated`, a probe that landed on a different account than the recipe's; `wasted_probes` and `wasted_probe_usd`,
 probes settled wasted by one of the reasons above, and what they cost; `wasted_probe_reasons`, those wasted probes
 counted by the reason; and `probes_skipped`, a due probe a gate or a lapsed entry withheld rather than sending, for
-example because the cost cap or a cooldown already held the recipe.
+example because the cost cap or a cooldown already held the recipe. `probes_held` counts a probe the router refused with
+`503 ledger_behind` while its ledger caught up and sent again, outside the failed probes since no account answered it.
 
 `GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost),
-`probes_24h` (`ok`, `failed`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap. Its `bus_gaps`
-counts the times the engine found it had missed bus events; each gap discarded every observation still open, so those
-agents wait for their next request while an armed recipe keeps its schedule.
+`probes_24h` (`ok`, `failed`, `held`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap. Its
+`bus_gaps` counts the times the engine found it had missed bus events; each gap discarded every observation still
+open, so those agents wait for their next request while an armed recipe keeps its schedule.
 
 ## In the console
 

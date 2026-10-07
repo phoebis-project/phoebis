@@ -246,7 +246,7 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   costToday: [],
   expiredBetweenTurns24h: 0,
   netSaved7dUsd: 0,
-  probes24h: { failed: 0, migrated: 0, ok: 0, skipped: 0 },
+  probes24h: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
 };
 
 type WireMetric = { quality: string; series: number[]; value: number | null };

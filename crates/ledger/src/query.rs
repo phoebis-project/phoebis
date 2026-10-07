@@ -604,6 +604,7 @@ pub struct KeptWarm {
 #[derive(Clone, Debug, Default, Serialize)]
 pub struct ProbeCounts {
     pub failed: u64,
+    pub held: u64,
     pub migrated: u64,
     pub ok: u64,
     pub skipped: u64,
@@ -937,6 +938,7 @@ fn group_row(key: &str, sum: &RollupRow, probes: &RollupRow, label: String) -> G
                 + probes.exhausted
                 + probes.rejected
                 + probes.incomplete,
+            held: probes.probes_held,
             migrated: probes.probe_migrated,
             ok: probes.succeeded,
             skipped: probes.probes_skipped,

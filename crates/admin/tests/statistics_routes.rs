@@ -171,8 +171,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(28), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that spells every quota window by the endpoint's key"
+        (Some(29), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that counts the held probes"
     );
     assert_eq!(
         (
@@ -2288,5 +2288,197 @@ async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
         row(&filtered, "content").as_ref().unwrap()["placements"].as_u64(),
         Some(2),
         "desktop's own rows still answer under the filter"
+    );
+}
+
+/// One probe the harness's relay refused at admission with its own `503 ledger_behind`, sent by the harness's
+/// keepalive engine: the pool `main` warming `direct`, the key `desktop`, and one client request that arms the recipe
+/// while the reading is clear, the probe going out once the reading is behind. Answers when the ledger holds the
+/// probe's row.
+async fn one_held_probe() -> (common::Full, String) {
+    use http_body_util::BodyExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tower::ServiceExt;
+    let behind = std::sync::Arc::new(AtomicBool::new(false));
+    let reading = behind.clone();
+    let parts = common::admin_parts_full_with_accounting(std::sync::Arc::new(move |_| {
+        phoebis_relay::Accounting {
+            behind: reading.load(Ordering::SeqCst),
+        }
+    }))
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    parts.router.reload().await.unwrap();
+    let created = json(
+        post(
+            &parts.app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let secret = created["secret"].as_str().unwrap().to_string();
+    let generation = common::generation(&parts.store, "desktop");
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            generation,
+            phoebis_keepalive::Event {
+                event: "session_start".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    phoebis_keepalive::spawn_observer(parts.keepalive.clone());
+    parts.up.add_credential_rule(
+        common::API_KEY,
+        "/v1/messages",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":2000,"ephemeral_1h_input_tokens":0},"output_tokens":10}}"#.to_vec(),
+        },
+    );
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header("x-api-key", &secret)
+        .header("content-type", "application/json")
+        .header("x-claude-code-session-id", "s1")
+        .header("x-claude-code-agent-id", "main")
+        .body(axum::body::Body::from(
+            r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let resp = phoebis_relay::router(parts.relay.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await.unwrap();
+    let due = wait_for(Duration::from_secs(5), || {
+        parts
+            .keepalive
+            .agent_status("desktop", "s1", "main")
+            .and_then(|s| s.next_probe_at)
+    })
+    .await;
+    behind.store(true, Ordering::SeqCst);
+    parts.clock_cell.store(due + 1_000, Ordering::SeqCst);
+    parts.keepalive.step().await;
+    parts.keepalive.wait_idle().await;
+    let status = parts
+        .keepalive
+        .agent_status("desktop", "s1", "main")
+        .unwrap();
+    assert_eq!(
+        (status.probes, status.reason),
+        (1, phoebis_keepalive::Reason::LedgerBehind),
+        "the relay's admission refused the one probe"
+    );
+    wait_for(Duration::from_secs(5), || {
+        parts
+            .db
+            .read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    0,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap()
+            .iter()
+            .any(|r| r.kind == "probe")
+            .then_some(())
+    })
+    .await;
+    (parts, cookie)
+}
+
+/// The router's own `503 ledger_behind` is no answer from the account, so the overview's day counts the probe under
+/// `held` and leaves it out of `failed`.
+#[tokio::test]
+async fn the_overview_counts_a_probe_the_router_held_under_held_and_not_as_failed() {
+    let (parts, cookie) = one_held_probe().await;
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    let probes = &overview["probes_24h"];
+    assert_eq!(
+        (
+            probes["held"].as_u64(),
+            probes["failed"].as_u64(),
+            probes["ok"].as_u64(),
+            probes["migrated"].as_u64(),
+            probes["skipped"].as_u64()
+        ),
+        (Some(1), Some(0), Some(0), Some(0), Some(0)),
+        "{overview}"
+    );
+}
+
+/// The analytics groups count the same held probe under `probes.held`, and with probes counted as requests its row
+/// counts under no failure and no rejection, on the breakdown and on the series alike.
+#[tokio::test]
+async fn an_analytics_group_counts_a_probe_the_router_held_under_held_and_not_as_failed_or_rejected(
+) {
+    let (parts, cookie) = one_held_probe().await;
+    let breakdown = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=key&include_probes=true",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let row = breakdown["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "desktop")
+        .unwrap_or_else(|| panic!("no desktop group: {breakdown}"));
+    let counts = |g: &serde_json::Value| {
+        (
+            g["probes"]["held"].as_u64(),
+            g["probes"]["failed"].as_u64(),
+            g["requests"].as_u64(),
+            g["succeeded"].as_u64(),
+            g["failed"].as_u64(),
+            g["rejected"].as_u64(),
+        )
+    };
+    assert_eq!(
+        counts(row),
+        (Some(1), Some(0), Some(2), Some(1), Some(0), Some(0)),
+        "the client request and the held probe: {row}"
+    );
+    let series = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=key&include_probes=true",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let groups: Vec<&serde_json::Value> = series["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["groups"].as_array().unwrap())
+        .filter(|g| g["key"] == "desktop")
+        .collect();
+    assert_eq!(groups.len(), 1, "one bucket holds both rows: {series}");
+    assert_eq!(
+        counts(groups[0]),
+        (Some(1), Some(0), Some(2), Some(1), Some(0), Some(0)),
+        "{series}"
     );
 }

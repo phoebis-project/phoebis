@@ -251,7 +251,9 @@ The `model` label is bounded by the price table: a model reads as the table entr
 dated id priced under its undated base, that base; every other model is reported as `other`, so a downstream caller
 cannot grow the label set by naming models it likes.
 `phoebis_keepalive_probes_total`'s `account` label reads `-` for a probe cancelled before any account was
-attributed, the same reserved id a request row with no account reads under.
+attributed, the same reserved id a request row with no account reads under. Its `outcome` label reads `cancelled`,
+`exhausted`, `failed`, `held`, `migrated`, `ok`, `rate_limited`, `rejected` or `timed_out`, where `held` is a probe
+refused by the router with `503 ledger_behind` while its ledger caught up and sent again.
 `phoebis_account_cooldown_seconds`, `phoebis_account_overage_in_use`, `phoebis_keepalive_agents`, and
 `phoebis_pins_active` are the four routing-state gauges; each is computed fresh from the router's own snapshot on every
 scrape rather than accumulated between them. `phoebis_pins_active` is counted per pool by the routing loop itself, so

@@ -2,10 +2,13 @@
 //! how a late or a failed one is classified; the Go probe suite.
 mod common;
 use std::str::FromStr;
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
 
 use common::*;
 use fake_upstream::{Respond, SseEvent};
 use phoebis_keepalive::{Event, KeepalivePolicy, Reason, MAIN_AGENT, MAX_WORKERS};
+use phoebis_relay::Accounting;
 use phoebis_store::AccountState;
 
 fn json(status: u16, body: &str) -> Respond {
@@ -420,6 +423,76 @@ async fn idle_seconds_include_parked_time_and_exclude_subagents() {
         (r.status("main").probes, r.status("worker").probes),
         (1, 2),
         "the idle budget applies to the idle main agent alone"
+    );
+}
+
+/// A probe the router refused with `503 ledger_behind` gives back the idle tick its dispatch counted, so a ledger
+/// catching up never runs the idle limit down: three refusals in a row and the served probe after them count one
+/// tick, and two served idle probes still reach the limit. The refusal is the relay's own, under the rig's
+/// accounting reading, and the probe counts under its own outcome.
+#[tokio::test]
+async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
+    let behind = Arc::new(AtomicBool::new(false));
+    let reading = behind.clone();
+    let mut r = rig(RigSpec {
+        accounting: Some(Arc::new(move |_| Accounting {
+            behind: reading.load(Ordering::SeqCst),
+        })),
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_ticks: 2,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.state("main", "idle");
+    behind.store(true, Ordering::SeqCst);
+    r.advance_attended(270_000);
+    r.step().await;
+    for _ in 0..2 {
+        r.advance_attended(5_000);
+        r.step().await;
+    }
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.idle_ticks, status.reason),
+        (3, 0, Reason::LedgerBehind),
+        "three refusals in a row spent no tick: {status:?}"
+    );
+    let text = r
+        .metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
+    assert!(
+        text.contains(r#"phoebis_keepalive_probes_total{account="a",outcome="held"} 3"#)
+            && !text.contains(r#"outcome="failed""#),
+        "each refusal counts under its own outcome and none as failed: {text}"
+    );
+    behind.store(false, Ordering::SeqCst);
+    r.advance_attended(5_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.idle_ticks, status.reason),
+        (4, 1, Reason::Scheduled),
+        "the served probe counts the one tick: {status:?}"
+    );
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").idle_ticks, 2, "a second served idle probe");
+    r.advance_attended(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.idle_ticks, status.reason),
+        (5, 2, Reason::IdleLimit),
+        "two served idle probes reach the limit: {status:?}"
+    );
+    assert_eq!(
+        r.up.requests().len(),
+        3,
+        "the arming request and the two served probes went out; the refusals stopped at the router"
     );
 }
 

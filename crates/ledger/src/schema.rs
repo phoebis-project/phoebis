@@ -834,4 +834,5 @@ CREATE TABLE parked_records (
 UPDATE quota_samples SET window = CASE window WHEN '5h' THEN 'five_hour' WHEN '7d' THEN 'seven_day'
   WHEN '7d_oi' THEN 'seven_day_overage_included' WHEN 'fable' THEN 'seven_day_fable' ELSE window END;",
     ),
+    (29, "ALTER TABLE rollups_hourly ADD COLUMN probes_held INTEGER NOT NULL DEFAULT 0;"),
 ];

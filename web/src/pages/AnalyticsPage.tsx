@@ -74,7 +74,7 @@ const inputOf = (g: AnalyticsGroup) => g.tokens.uncachedInput + g.tokens.cacheRe
 const hitRatioOf = (g: AnalyticsGroup) => (g.cacheHits + g.cacheMisses + g.uncached ? g.cacheHits / (g.cacheHits + g.cacheMisses + g.uncached) : null);
 const cachedShareOf = (g: AnalyticsGroup) => (inputOf(g) ? g.tokens.cacheRead / inputOf(g) : null);
 const errorRateOf = (g: AnalyticsGroup) => (g.requests ? (g.requests - g.succeeded) / g.requests : 0);
-const probesOf = (g: AnalyticsGroup) => g.probes.ok + g.probes.skipped + g.probes.failed;
+const probesOf = (g: AnalyticsGroup) => g.probes.ok + g.probes.held + g.probes.skipped + g.probes.failed;
 const usdOrDash = (v: number | null) => (v === null ? '-' : fmtUsd(v));
 /**
  * A dollar axis's tick labels, all at the one precision the largest figure the axis draws sets, and a width that
@@ -1213,7 +1213,7 @@ function KeepaliveByPool({ groups, error, loading }: { error: string | null; gro
       error={error}
       loading={loading}
       groupLabel="Pool"
-      columns={['Probes OK', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Gross saved', 'Probe cost', 'Net saved']}
+      columns={['Probes OK', 'Skipped', 'Held', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Gross saved', 'Probe cost', 'Net saved']}
       rows={rows.map((g) => ({
         key: g.key,
         label: g.label,
@@ -1221,6 +1221,7 @@ function KeepaliveByPool({ groups, error, loading }: { error: string | null; gro
         cells: [
           g.fromRequests ? '-' : fmtInt(g.probes.ok),
           g.fromRequests ? '-' : fmtInt(g.probes.skipped),
+          g.fromRequests ? '-' : fmtInt(g.probes.held),
           g.fromRequests ? '-' : fmtInt(g.probes.failed),
           g.keptWarm === null ? '-' : fmtInt(g.keptWarm.requests),
           g.keptWarm === null ? '-' : fmtCompact(g.keptWarm.tokens),

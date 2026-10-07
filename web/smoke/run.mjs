@@ -7565,6 +7565,18 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net"),
       missing: [migrated?.getAttribute('title') ?? legend.join('|').slice(0, 160)],
     });
+    const probeLegend = [...(migrated?.parentElement?.querySelectorAll('li') ?? [])];
+    const held = probeLegend.find((li) => (li.textContent ?? '').startsWith('Held'));
+    const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
+    const columns = [...(warming?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+    results.push({
+      name: '/analytics probes by outcome carries a held slice after migrated, and the warming table a Held column after Skipped',
+      ok:
+        probeLegend.map((li) => li.textContent?.match(/^[A-Za-z]+/)?.[0]).join(',') === 'OK,Migrated,Held,Skipped,Failed' &&
+        (held?.getAttribute('title') ?? '') === 'The router refused the probe while its ledger caught up. It was sent again and counts for neither the cold streak nor the net.' &&
+        columns.indexOf('Held') === columns.indexOf('Skipped') + 1,
+      missing: [probeLegend.map((li) => li.textContent ?? '').join('|').slice(0, 160), held?.getAttribute('title') ?? 'no held slice', columns.join(',')],
+    });
   }
   results.push({ name: '/analytics filter bar is sticky', ok: m.container.querySelector('.filters.filters--sticky') !== null, missing: [m.container.querySelector('.filters')?.className ?? 'no filter bar'] });
   await tab(m, 'Latency');
@@ -8105,6 +8117,17 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions cost meter against cap', ok: meters === 1, missing: [String(meters)] });
   const tiles = [...m.container.querySelectorAll('.stat--compact')].map((t) => ({ label: t.querySelector('.stat__label')?.textContent?.trim(), value: t.querySelector('.stat__value')?.textContent?.trim(), warn: t.querySelector('.stat__value')?.classList.contains('is-warning') === true }));
   const expired = tiles.find((t) => t.label === 'Expired between turns, 24h');
+  {
+    const probe = [...m.container.querySelectorAll('.stat--compact')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Cache probes, 24h');
+    const segments = [...(probe?.querySelectorAll('.probe-bar .probe-bar__seg') ?? [])].map((s) => [...s.classList].find((c) => c.startsWith('probe-bar__seg--'))?.slice('probe-bar__seg--'.length));
+    const note = probe?.querySelector('.stat__note')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    const label = probe?.querySelector('.probe-bar')?.getAttribute('aria-label') ?? '';
+    results.push({
+      name: '/sessions the probe tile draws five segments, the held one after migrated, and its note names the held probes',
+      ok: segments.join(',') === 'ok,migrated,held,skipped,failed' && note.includes('18 migrated, 4 held, 45 skipped') && label.includes('18 migrated, 4 held, 45 skipped') && probe?.querySelector('.stat__value')?.textContent?.trim() === '295',
+      missing: [segments.join(','), note || 'no note', label || 'no label'],
+    });
+  }
   results.push({ name: '/sessions expired-between-turns tile follows the probe tile', ok: tiles.findIndex((t) => t.label === 'Expired between turns, 24h') === tiles.findIndex((t) => t.label === 'Cache probes, 24h') + 1, missing: tiles.map((t) => t.label ?? '') });
   results.push({ name: '/sessions expired-between-turns tile counts the mock', ok: Boolean(expired) && Number(expired.value.replace(/,/g, '')) > 0, missing: [expired?.value ?? 'absent'] });
   results.push({ name: '/sessions expired-between-turns warns while a pool keeps caches warm', ok: expired?.warn === true, missing: [String(expired?.warn)] });

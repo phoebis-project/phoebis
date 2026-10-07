@@ -579,6 +579,7 @@ fn every_registered_family_renders_and_nothing_else_does() {
     let metrics = Metrics::new();
     metrics.observe_probe("a", "ok");
     metrics.observe_probe("a", "migrated");
+    metrics.observe_probe("a", "held");
     metrics.observe_probe("b", "failed");
     metrics.observe_saving("main", 0.25);
     metrics.observe_saving("main", 0.5);
@@ -612,6 +613,7 @@ fn every_registered_family_renders_and_nothing_else_does() {
         r#"phoebis_keepalive_agents{state="busy"} 2"#,
         r#"phoebis_keepalive_agents{state="idle"} 1"#,
         r#"phoebis_keepalive_agents{state="parked"} 0"#,
+        r#"phoebis_keepalive_probes_total{account="a",outcome="held"} 1"#,
         r#"phoebis_keepalive_probes_total{account="a",outcome="migrated"} 1"#,
         r#"phoebis_keepalive_probes_total{account="a",outcome="ok"} 1"#,
         r#"phoebis_keepalive_probes_total{account="b",outcome="failed"} 1"#,

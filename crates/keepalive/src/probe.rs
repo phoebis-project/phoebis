@@ -77,6 +77,7 @@ pub enum ProbeOutcome {
     Cancelled,
     Exhausted,
     Failed,
+    Held,
     Migrated,
     Ok,
     RateLimited,
@@ -90,6 +91,7 @@ impl ProbeOutcome {
             ProbeOutcome::Cancelled => "cancelled",
             ProbeOutcome::Exhausted => "exhausted",
             ProbeOutcome::Failed => "failed",
+            ProbeOutcome::Held => "held",
             ProbeOutcome::Migrated => "migrated",
             ProbeOutcome::Ok => "ok",
             ProbeOutcome::RateLimited => "rate_limited",
@@ -198,6 +200,7 @@ fn classify_status(status: u16, error_code: Option<&str>) -> ProbeOutcome {
         429 => ProbeOutcome::RateLimited,
         _ if exhausted => ProbeOutcome::Exhausted,
         400..=499 => ProbeOutcome::Rejected,
+        503 if error_code == Some(phoebis_relay::LEDGER_BEHIND) => ProbeOutcome::Held,
         _ => ProbeOutcome::Failed,
     }
 }
@@ -677,15 +680,15 @@ impl Inner {
     /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the
     /// next real request would; a probe the selector refused on the pinned member's spend budget holds under
     /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; a probe
-    /// the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure; a probe
-    /// the selector answered on its pinned member's standing holds under that standing: `Paused` for the
-    /// operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in the console), a
-    /// retry for a member this probe already tried, or for one whose budget the degraded ledger leaves unknown,
-    /// which the ledger's recovery clears without a real request; a pinned member a leg of the probe marked for
-    /// re-authentication pauses under the authentication reason; the untimed exhaustion 503, when every account of
-    /// the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from upstream retries; any
-    /// other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange (status 0) is a
-    /// transport error.
+    /// the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no
+    /// idle tick; a probe the selector answered on its pinned member's standing holds under that standing:
+    /// `Paused` for the operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in
+    /// the console), a retry for a member this probe already tried, or for one whose budget the degraded ledger
+    /// leaves unknown, which the ledger's recovery clears without a real request; a pinned member a leg of the
+    /// probe marked for re-authentication pauses under the authentication reason; the untimed exhaustion 503, when
+    /// every account of the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from
+    /// upstream retries; any other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange
+    /// (status 0) is a transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,
@@ -698,6 +701,11 @@ impl Inner {
         exhausted: bool,
         now: i64,
     ) {
+        let retry_after_ms = retry_after_secs.map(|secs| {
+            i64::try_from(secs)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(1_000)
+        });
         match (exhausted, obstacle) {
             (true, Some("operator")) => {
                 self.set_reason(key, agent_id, Reason::Paused);
@@ -723,12 +731,13 @@ impl Inner {
         if status == 429 && error_code == Some("accounts_at_cap") {
             // Retrying, not pausing: the pool is momentarily full, not out of quota, and a slot frees up in
             // seconds, so `RetryableProbeError` ("retrying") is the honest label rather than the quota one.
-            let delay_ms = retry_after_secs.map(|secs| {
-                i64::try_from(secs)
-                    .unwrap_or(i64::MAX)
-                    .saturating_mul(1_000)
-            });
-            self.retry(key, agent_id, Reason::RetryableProbeError, now, delay_ms);
+            self.retry(
+                key,
+                agent_id,
+                Reason::RetryableProbeError,
+                now,
+                retry_after_ms,
+            );
             return;
         }
         if status == 429 && obstacle == Some(BUDGET_WINDOW) {
@@ -749,12 +758,11 @@ impl Inner {
                 .agents
                 .get_mut(agent_id)
                 .unwrap();
-            let wait_ms = retry_after_secs.map_or(agent.policy.retry_ms(), |secs| {
-                i64::try_from(secs)
-                    .unwrap_or(i64::MAX)
-                    .saturating_mul(1_000)
-            });
+            let wait_ms = retry_after_ms.unwrap_or_else(|| agent.policy.retry_ms());
             agent.retry_at = Some(now.saturating_add(wait_ms));
+            // The dispatch counted this probe before the router refused it, so the hold costs no tick:
+            // `max_idle_ticks` counts served or failed probes, and the entry's lapse bounds the hold.
+            agent.idle_ticks = agent.idle_ticks.saturating_sub(1);
             self.set_reason(key, agent_id, Reason::LedgerBehind);
             return;
         }
@@ -987,6 +995,21 @@ mod tests {
         let agent = &inner.sessions[&key].agents["main"];
         assert!(!agent.paused);
         assert_eq!(agent.retry_at, Some(1_000 + agent.policy.retry_ms()));
+    }
+
+    #[test]
+    fn a_503_ledger_behind_classifies_as_held_and_no_other_outcome() {
+        assert_eq!(
+            classify_status(503, Some("ledger_behind")),
+            ProbeOutcome::Held,
+            "the router's own refusal is its own outcome"
+        );
+        assert_eq!(ProbeOutcome::Held.as_str(), "held");
+        assert_eq!(
+            classify_status(503, None),
+            ProbeOutcome::Failed,
+            "an upstream 503 stays a failure"
+        );
     }
 
     #[test]

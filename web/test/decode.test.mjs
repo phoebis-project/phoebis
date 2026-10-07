@@ -673,6 +673,10 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(desktop.tokens.thinking, 200);
   assert.equal(desktop.savings.wastedProbeReasons.idle_limit, 0);
   assert.equal(desktop.errors.upstream_error, 1);
+  assert.equal(desktop.probes.held, 0, 'the captured group counts no held probe');
+  // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
+  const row = fixture('analytics_breakdown').rows[0];
+  assert.equal(d.decodeAnalyticsGroup({ ...row, probes: { ...row.probes, held: 3 } }).probes.held, 3, 'a group reads its held probes off the route');
   const points = fixture('analytics_series').points.map(d.decodeAnalyticsPoint);
   assert.ok(points.length >= 24 && isIso(points[0].at));
   const rollups = d.decodeAccountRollups(fixture('analytics_accounts'));
@@ -806,6 +810,7 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 6);
   assert.equal(all.cacheMissReasons.none, 6);
   assert.equal(all.probes.ok, 0);
+  assert.equal(all.probes.held, 0, 'a group folded from request rows counts no held probe');
   const captured = page.requests.find((r) => r.id === 'r-captured');
   const busy = d.foldGroups([{ ...captured, usage: { ...captured.usage, webSearch: 3, webFetch: 1 } }, captured], 'all')[0].tokens;
   assert.equal(busy.webSearch, 3 + captured.usage.webSearch);
@@ -1098,6 +1103,9 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
   assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'costToday', 'expiredBetweenTurns24h', 'netSaved7dUsd', 'probes24h'], 'the overview carries the tiles alone; the page counts its sessions over its rows');
   assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
+  assert.deepEqual(Object.keys(ov.probes24h).sort(), ['failed', 'held', 'migrated', 'ok', 'skipped'], 'the five probe outcomes the tile draws');
+  const captured = fixture('keepalive_overview');
+  assert.equal(d.decodeKeepaliveOverview({ ...captured, probes_24h: { ...captured.probes_24h, held: 2 } }).probes24h.held, 2, 'the held count reads off the route');
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
   assert.equal(d.decodeKeepaliveOverview({ ...fixture('keepalive_overview'), bus_gaps: 3 }).busGaps, 3, 'the engine\'s gap count reads off the route');
   assert.equal(ov.costToday[0].capUsd, 4);

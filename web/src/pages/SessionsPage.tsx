@@ -62,6 +62,7 @@ const COMPANION_HINT: Record<CompanionState, string> = {
 };
 const MIGRATED_PROBE_HINT =
   "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the net.";
+const HELD_PROBE_HINT = 'The router refused the probe while its ledger caught up. It was sent again and counts for neither the cold streak nor the net.';
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
 const NET_HINT =
   "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the account's 5-hour window on plan quota, dollars on an Anthropic key or in overage. An agent whose account changed funding carries both. A fast-mode session's probes settle in dollars whatever the account's funding, since they draw usage credits.";
@@ -685,7 +686,7 @@ function OtherPins({ agents }: { agents: KeepaliveRecipe[] }) {
 }
 
 function ProbeTile({ error, overview: o }: { error: string | null; overview: KeepaliveOverview | null }) {
-  const total = o ? o.probes24h.ok + o.probes24h.migrated + o.probes24h.skipped + o.probes24h.failed : 0;
+  const total = o ? o.probes24h.ok + o.probes24h.migrated + o.probes24h.held + o.probes24h.skipped + o.probes24h.failed : 0;
   return (
     <Tile
       label="Cache probes, 24h"
@@ -694,14 +695,16 @@ function ProbeTile({ error, overview: o }: { error: string | null; overview: Kee
       note={
         o ? (
           <>
-            <div className="probe-bar" role="img" aria-label={`Probes in the last 24h: ${o.probes24h.ok} ok, ${o.probes24h.migrated} migrated, ${o.probes24h.skipped} skipped, ${o.probes24h.failed} failed`}>
+            <div className="probe-bar" role="img" aria-label={`Probes in the last 24h: ${o.probes24h.ok} ok, ${o.probes24h.migrated} migrated, ${o.probes24h.held} held, ${o.probes24h.skipped} skipped, ${o.probes24h.failed} failed`}>
               <span className="probe-bar__seg probe-bar__seg--ok" style={{ flex: o.probes24h.ok }} />
               <span className="probe-bar__seg probe-bar__seg--migrated" style={{ flex: o.probes24h.migrated }} title={MIGRATED_PROBE_HINT} />
+              <span className="probe-bar__seg probe-bar__seg--held" style={{ flex: o.probes24h.held }} title={HELD_PROBE_HINT} />
               <span className="probe-bar__seg probe-bar__seg--skipped" style={{ flex: o.probes24h.skipped }} />
               <span className="probe-bar__seg probe-bar__seg--failed" style={{ flex: o.probes24h.failed }} />
             </div>
             <span className="stat__note">
-              {fmtInt(o.probes24h.ok)} ok ({fmtPct(total ? o.probes24h.ok / total : 0)}), <span title={MIGRATED_PROBE_HINT}>{fmtInt(o.probes24h.migrated)} migrated</span>, {fmtInt(o.probes24h.skipped)} skipped,{' '}
+              {fmtInt(o.probes24h.ok)} ok ({fmtPct(total ? o.probes24h.ok / total : 0)}), <span title={MIGRATED_PROBE_HINT}>{fmtInt(o.probes24h.migrated)} migrated</span>, <span title={HELD_PROBE_HINT}>{fmtInt(o.probes24h.held)} held</span>,{' '}
+              {fmtInt(o.probes24h.skipped)} skipped,{' '}
               {fmtInt(o.probes24h.failed)} failed
             </span>
           </>

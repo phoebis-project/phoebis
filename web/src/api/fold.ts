@@ -27,7 +27,7 @@ const empty = (key: string, label = key): AnalyticsGroup => ({
   key,
   label,
   percentiles: { durationMs: quartet(emptyHistogram()), outputTps: quartet(emptyHistogram()), ttfbMs: quartet(emptyHistogram()), ttftMs: quartet(emptyHistogram()) },
-  probes: { failed: 0, migrated: 0, ok: 0, skipped: 0 },
+  probes: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
   rateLimited: 0,
   rejected: 0,
   requests: 0,
@@ -212,7 +212,7 @@ export function sumGroups(groups: AnalyticsGroup[]): AnalyticsGroup {
     for (const [reason, n] of Object.entries(g.cacheMissReasons)) out.cacheMissReasons[reason] = missCount(out.cacheMissReasons, reason) + n;
     if (g.fromRequests) out.fromRequests = true;
     out.keptWarm = out.keptWarm && g.keptWarm ? { requests: out.keptWarm.requests + g.keptWarm.requests, tokens: out.keptWarm.tokens + g.keptWarm.tokens } : null;
-    for (const k of ['failed', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];
+    for (const k of ['failed', 'held', 'migrated', 'ok', 'skipped'] as const) out.probes[k] += g.probes[k];
     const { savings } = g;
     if (out.savings === null || savings === null) out.savings = null;
     else {

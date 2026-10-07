@@ -503,21 +503,25 @@ async fn a_request_that_reads_no_cache_after_a_covering_probe_settles_the_probe_
 fn open_request(r: &Rig, id: &str, read: u64, write: u64) {
     r.engine.observe(r.observed(id, "main", BODY));
     r.engine.observe(r.selected(id, "a"));
-    r.engine.observe(phoebis_bus::Event::ResponseChunk(
-        phoebis_bus::ResponseChunk {
-            request_id: id.into(),
-            attempt: 1,
-            index: 0,
-            body: Default::default(),
-            phase: Some(phoebis_bus::Phase::MessageStart {
-                usage: phoebis_bus::Usage {
-                    cache_read_tokens: Some(read),
-                    cache_write_5m_tokens: Some(write),
-                    ..Default::default()
-                },
-            }),
+    r.engine.observe(message_start(
+        id,
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(read),
+            cache_write_5m_tokens: Some(write),
+            ..Default::default()
         },
     ));
+}
+
+/// The first stream event of `id`'s first attempt, carrying the cache it read and wrote.
+fn message_start(id: &str, usage: phoebis_bus::Usage) -> phoebis_bus::Event {
+    phoebis_bus::Event::ResponseChunk(phoebis_bus::ResponseChunk {
+        request_id: id.into(),
+        attempt: 1,
+        index: 0,
+        body: Default::default(),
+        phase: Some(phoebis_bus::Phase::MessageStart { usage }),
+    })
 }
 
 fn completed(r: &Rig, id: &str, read: u64) -> phoebis_bus::Event {
@@ -660,19 +664,12 @@ async fn a_probe_sent_while_a_request_is_open_outlives_that_request_failing_past
 fn open_request_with(r: &Rig, id: &str, body: &str, read: u64, write: u64) {
     r.engine.observe(r.observed(id, "main", body));
     r.engine.observe(r.selected(id, "a"));
-    r.engine.observe(phoebis_bus::Event::ResponseChunk(
-        phoebis_bus::ResponseChunk {
-            request_id: id.into(),
-            attempt: 1,
-            index: 0,
-            body: Default::default(),
-            phase: Some(phoebis_bus::Phase::MessageStart {
-                usage: phoebis_bus::Usage {
-                    cache_read_tokens: Some(read),
-                    cache_write_5m_tokens: Some(write),
-                    ..Default::default()
-                },
-            }),
+    r.engine.observe(message_start(
+        id,
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(read),
+            cache_write_5m_tokens: Some(write),
+            ..Default::default()
         },
     ));
 }
@@ -1037,19 +1034,12 @@ async fn a_fast_batch_inside_its_entry_earns_no_credit_on_the_standard_lane() {
     let fast = standard.replacen('{', r#"{"speed":"fast","#, 1);
     r.engine.observe(r.observed("first", "main", &fast));
     r.engine.observe(r.selected("first", "a"));
-    r.engine.observe(phoebis_bus::Event::ResponseChunk(
-        phoebis_bus::ResponseChunk {
-            request_id: "first".into(),
-            attempt: 1,
-            index: 0,
-            body: Default::default(),
-            phase: Some(phoebis_bus::Phase::MessageStart {
-                usage: phoebis_bus::Usage {
-                    cache_read_tokens: Some(0),
-                    cache_write_1h_tokens: Some(2_000),
-                    ..Default::default()
-                },
-            }),
+    r.engine.observe(message_start(
+        "first",
+        phoebis_bus::Usage {
+            cache_read_tokens: Some(0),
+            cache_write_1h_tokens: Some(2_000),
+            ..Default::default()
         },
     ));
     r.engine.observe(completed(&r, "first", 0));

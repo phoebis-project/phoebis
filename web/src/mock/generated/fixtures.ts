@@ -851,6 +851,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "probes": {
             "failed": 0,
+            "held": 0,
             "migrated": 0,
             "ok": 0,
             "skipped": 0
@@ -1198,6 +1199,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "probes": {
             "failed": 0,
+            "held": 0,
             "migrated": 0,
             "ok": 0,
             "skipped": 0
@@ -1555,6 +1557,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "probes": {
             "failed": 0,
+            "held": 0,
             "migrated": 0,
             "ok": 0,
             "skipped": 0
@@ -1905,6 +1908,7 @@ export const FIXTURES: Record<string, Fixture> = {
           },
           "probes": {
             "failed": 0,
+            "held": 0,
             "migrated": 0,
             "ok": 0,
             "skipped": 0
@@ -3076,6 +3080,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "probes": {
                 "failed": 0,
+                "held": 0,
                 "migrated": 0,
                 "ok": 0,
                 "skipped": 0
@@ -3423,6 +3428,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "probes": {
                 "failed": 0,
+                "held": 0,
                 "migrated": 0,
                 "ok": 0,
                 "skipped": 0
@@ -3777,6 +3783,7 @@ export const FIXTURES: Record<string, Fixture> = {
               },
               "probes": {
                 "failed": 0,
+                "held": 0,
                 "migrated": 0,
                 "ok": 0,
                 "skipped": 0
@@ -5240,6 +5247,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "net_saved_7d_usd": 0,
       "probes_24h": {
         "failed": 0,
+        "held": 0,
         "migrated": 0,
         "ok": 0,
         "skipped": 0
@@ -8319,7 +8327,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 28,
+        "schema_version": 29,
         "written": 14,
         "dropped": 0,
         "write_failures": 0,
