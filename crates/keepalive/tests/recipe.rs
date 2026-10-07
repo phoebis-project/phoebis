@@ -85,12 +85,7 @@ fn a_replay_changes_only_the_output_controls() {
     );
     assert_eq!(
         recipe.size,
-        recipe.body.len()
-            + "alias".len()
-            + headers()
-                .iter()
-                .map(|(n, v)| n.len() + v.len())
-                .sum::<usize>()
+        recipe.body.len() + "alias".len() + header_bytes(&headers())
     );
 }
 
@@ -102,13 +97,7 @@ fn a_body_without_a_stream_flag_gains_one_and_a_stamped_body_is_resigned() {
     assert_eq!(result["stream"].as_bool(), Some(false));
     // The first-party fixture carries a billing hash over a view that includes `stream`, so the edited body
     // must be re-signed or the relay refuses it as drift.
-    let stamped =
-        phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::FirstParty9b244);
-    let adaptive = String::from_utf8(stamped.to_vec()).unwrap().replacen(
-        r#""thinking":{"budget_tokens":31999,"type":"enabled","display":"omitted"}"#,
-        r#""thinking":{"type":"adaptive"}"#,
-        1,
-    );
+    let adaptive = stamped_adaptive();
     let recipe = make_recipe(
         &headers(),
         adaptive.as_bytes(),
@@ -235,7 +224,7 @@ fn an_escaped_safeguards_spelling_is_not_retained() {
         )
         .unwrap_err(),
         "invalid_request",
-        "a second spelling beside the one the cut finds"
+        "a second spelling beside the one the cut finds, which the decoded duplicate-key walk refuses before the cut runs"
     );
 }
 
@@ -350,10 +339,7 @@ fn unsupported_shapes_are_named() {
         ("user-agent".to_string(), "u".repeat(8_000)),
         ("x-app".to_string(), "a".repeat(346)),
     ];
-    assert_eq!(
-        near.iter().map(|(n, v)| n.len() + v.len()).sum::<usize>(),
-        16_375
-    );
+    assert_eq!(header_bytes(&near), 16_375);
     assert!(make_recipe(&near, BODY.as_bytes(), "m", 1 << 20).is_ok());
     assert_eq!(
         make_recipe(&near, BODY.as_bytes(), "routing-alias-x", 1 << 20).unwrap_err(),

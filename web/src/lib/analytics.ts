@@ -1,11 +1,11 @@
 import type { Api } from '@/api/client';
 import type { Account, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts } from '@/api/types';
-import { tierRow } from '@/lib/costs';
+import { tierCapacity } from '@/lib/costs';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 
-/** Why a session's pin moved, as the request drawer, its selection trace and the rewrites legend word it. */
+/** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
-  cooldown: 'rate limited',
+  cooldown: 'failed over',
   drain: 'winding down',
   fast_lane: 'fast lane cooling',
   mark: 'account marked',
@@ -14,6 +14,13 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
   shed: 'shed',
   spent: 'window spent',
 };
+/**
+ * The pool's own balancing: what the pool card's move tile sums, the rule moves on the pool's member accounts in the
+ * last hour. A keepalive probe's move counts among them, and the routing log lists it only with probe decisions chosen.
+ */
+export const RULE_MOVE_REASONS: readonly PinMigrationReason[] = ['drain', 'overage', 'return_to_plan', 'shed', 'spent'];
+/** The moves an answer forced on a session, which the pool card's move tile names apart from its count. */
+export const FAILOVER_MOVE_REASONS: readonly PinMigrationReason[] = ['cooldown', 'fast_lane', 'mark'];
 /**
  * Whether a label map holds the name as its own key. The names are the router's data, and one could name a member
  * every object inherits.
@@ -134,23 +141,25 @@ export function isolatedSlots(values: (number | null)[]): boolean[] {
 
 /**
  * The burn route's answer with the accounts beside it, read together: a profile refresh can supply a tier the last
- * read lacked, and the plan chart sizes each account from the tiers of the read that answered its buckets.
+ * read lacked, and the plan chart sizes each account from the tiers of the read that answered its buckets. Only the
+ * account grouping sizes its lines, so another grouping reads no account and a failed account read leaves it whole.
  */
 export async function readBurn(
   source: Pick<Api, 'getAnalyticsBurn' | 'listAccounts'>,
   range: Pick<AnalyticsQuery, 'from' | 'to'>,
   groupBy: BurnGroup,
 ): Promise<{ accounts: Account[]; answer: { bucketSeconds: number; points: BurnPoint[] } }> {
-  const [answer, accounts] = await Promise.all([source.getAnalyticsBurn(range, groupBy), source.listAccounts()]);
+  const [answer, accounts] = await Promise.all([source.getAnalyticsBurn(range, groupBy), groupBy === 'account' ? source.listAccounts() : Promise.resolve<Account[]>([])]);
   return { accounts, answer };
 }
 
 /**
  * The accounts whose stored tier the cost model sizes, matched as the ledger matches it: as stored, then with the
- * `default_` prefix taken off or put on, since only one spelling has been seen on the wire.
+ * `default_` prefix taken off or put on, since only one spelling has been seen on the wire. A tier the model lists with
+ * no 5-hour capacity sizes nothing, since the route prices no share of that window on it.
  */
 export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts): Set<string> {
-  return new Set(accounts.filter((a) => a.subscription !== null && tierRow(costs, a.subscription.rateLimitTier) !== undefined).map((a) => a.id));
+  return new Set(accounts.filter((a) => a.subscription !== null && tierCapacity(costs, a.subscription.rateLimitTier, 'five_hour') !== null).map((a) => a.id));
 }
 
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */

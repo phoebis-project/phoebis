@@ -16,10 +16,14 @@ path = "src/main.rs"
 [dependencies]
 anyhow = { workspace = true }
 axum = { workspace = true }
+base64 = { workspace = true }
+boring = { workspace = true }
 clap = { workspace = true }
+http-body-util = { workspace = true }
 hyper = { workspace = true }
 hyper-util = { workspace = true }
 jiff = { workspace = true }
+libc = { workspace = true }
 phoebis-admin = { path = "../admin" }
 phoebis-attention = { path = "../attention" }
 phoebis-bus = { path = "../bus" }
@@ -34,10 +38,13 @@ phoebis-routing = { path = "../routing" }
 phoebis-store = { path = "../store" }
 phoebis-transport = { path = "../transport" }
 phoebis-ui = { path = "../ui" }
+rand = { workspace = true }
 serde = { workspace = true }
+serde_json = { workspace = true }
 serde_norway = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
+tokio-boring = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
 
@@ -47,5 +54,7 @@ fake-upstream = { path = "../../tests/fake_upstream" }
 phoebis-ledger = { path = "../ledger", features = ["test-support"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 reqwest = { workspace = true }
-serde_json = { workspace = true }
+# The lock tests hold a second connection on the registry, and neither database crate re-exports the driver.
+rusqlite = { workspace = true }
 tempfile = { workspace = true }
+tokio = { workspace = true, features = ["test-util"] }

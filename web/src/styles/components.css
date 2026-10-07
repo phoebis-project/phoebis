@@ -90,6 +90,30 @@
   font-weight: 600;
 }
 
+/* The group sits inside the nav, so the nav takes the sidebar's spare height while it is drawn and the group rides its
+   foot, above the status block. */
+.nav:has(> .nav__group) {
+  flex: 1 0 auto;
+}
+
+.nav__group {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  margin-top: auto;
+  padding-top: 12px;
+  border-top: 1px solid var(--hairline);
+}
+
+.nav__heading {
+  padding: 0 10px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
 .sidebar__status {
   margin-top: auto;
   padding: 12px 10px 0;
@@ -547,10 +571,10 @@
 }
 
 /* `.mono` sets 0.92em and the body's unitless line height scales with it, drawing a mono input 1.6px shorter than a
-   plain one beside it. A length holds a plain input's line, the body's 14px at 1.45, at either font size: the pattern
-   filters restore the full size inline. */
+   plain one beside it. A length holds a plain input's line, the body's size at its leading, at either font size: the
+   pattern filters restore the full size inline. */
 .input.mono {
-  line-height: calc(14px * 1.45);
+  line-height: calc(var(--body-size) * var(--body-leading));
 }
 
 .input::placeholder {
@@ -732,6 +756,15 @@ textarea.input {
   padding: 10px;
   color: var(--ink-2);
   text-align: center;
+}
+
+.mselect__group {
+  padding: 8px 8px 4px;
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--ink-2);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
 }
 
 .menu {

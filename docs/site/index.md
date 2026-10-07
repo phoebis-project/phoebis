@@ -2,11 +2,11 @@
 
 A router for Claude Code.
 
-Every request lands on the right account. Phoebis is a genus of sulphur butterflies, migrants of the Americas that
-land on the right flower. A client points at `phoebis` with a key the router issued; the router puts each request
-on the wire to Anthropic, under the credentials of an account it holds itself, and
-picks that account from a pool. Three listeners make up one process: the proxy that relays `/v1/messages`, the admin
-API with the embedded console, and a metrics endpoint in Prometheus text format.
+Every request lands on the right account. Phoebis is a genus of sulphur butterflies, migrants of the Americas that land
+on the right flower. A client points at `phoebis` with a key the router issued; the router puts each request back on the
+wire in the shape Claude Code 2.1.269 sends it, under the credentials of an account it holds itself, and picks that
+account from a pool. Three listeners make up one process: the proxy that relays `/v1/messages`, the admin API with the
+embedded console, and a metrics endpoint in Prometheus text format.
 
 | Page | What it covers |
 | --- | --- |
@@ -16,7 +16,7 @@ API with the embedded console, and a metrics endpoint in Prometheus text format.
 | [Pools, keys, and routing](routing.md) | Pace, load shedding, cooldowns, failover, and overage. |
 | [Keepalive](keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning fields, the cost. |
 | [Statistics](statistics.md) | The ledger, the plan meter, the views, metrics, the live feed, and the gauges. |
-| [Operations](operations.md) | Backup, the storage key, upgrades, re-pinning a client build, publishing. |
+| [Operations](operations.md) | Backup, restore, the storage key, upgrades, re-pinning a client build, publishing. |
 | [Changelog](changelog.md) | What changed for an operator, by date. |
 
 ## How a request travels
@@ -37,6 +37,9 @@ sibling inside the same call. The request, each attempt, and the usage land in t
 | Admin | `admin.listen` | The console and `/admin/*` |
 | Metrics | `stats.metrics_listen` | `/metrics` in Prometheus text format, no credential, plain HTTP |
 
+The proxy and the admin listener terminate TLS natively or run plain HTTP by their `tls` key; the metrics listener is
+plain HTTP ([TLS on the listeners](installation.md#tls-on-the-listeners)).
+
 The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST /v1/messages`, `POST
 /v1/messages/count_tokens`, `GET /v1/usage` for the key's own usage, the two keepalive companion routes, and `GET
 /v1/models` with the caller's own routable models ([models listing](client.md#the-models-listing)).
@@ -44,7 +47,8 @@ The proxy listener answers `HEAD /api/hello`, `HEAD` and `GET /api/ready`, `POST
 ## The console
 
 The admin listener serves a React console over the same routes as the admin API. The top bar carries the theme
-toggle, and the sidebar carries eleven views.
+toggle, and the sidebar carries eleven views. A Diagnostics heading at its foot adds the Routing log while the expert
+view is on or the log is open.
 
 ![The dashboard: the attention line, four tiles, the capacity-left rings, recent requests][dl]
 ![The dashboard: the attention line, four tiles, the capacity-left rings, recent requests][dd]
@@ -67,9 +71,10 @@ The sidebar shows the views in this order:
 | Analytics | Hourly rollups and cost (see [Statistics](statistics.md)). |
 | Sessions | Session pins and keepalive recipes (see [Keepalive](keepalive.md)). |
 | Settings | Client setup and the router's version and paths (see [Installation](installation.md)). |
+| Routing log | Each routing decision and the state changes behind it (see [Statistics](statistics.md#routing-log)). |
 
 The console, the API, the bootstrap file and this site call what the router holds an account and a key the router
-issues a key. The console and this site call the account kind whose credential is an Anthropic API key an Anthropic key;
+issues a key. The console and this site call the account kind whose credential is an Anthropic API key "Anthropic key";
 the API's kind value is `api_key`. "Upstream" names the provider's host and the party that answered a request (the
 bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachable` codes, the `upstream_message_id`,
 `upstream_request_id` and `upstream_status` fields, the `phoebis_upstream_ttfb_seconds` metric).
@@ -77,7 +82,6 @@ bootstrap file's `upstream` block, the `upstream_error` and `upstream_unreachabl
 ## What this build does not do
 
 - Claude Code's Remote Control is unavailable behind the router.
-- The listeners speak HTTP/1.1 and terminate no TLS; a reverse proxy does that in front.
 
 ## Status
 

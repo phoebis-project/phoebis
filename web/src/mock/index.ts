@@ -2,8 +2,9 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/a
 import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot, decodeSettings } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, KeepaliveOverview, KeyModels, LiveEvent, MemberEligibility, ModelEvent,
-  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RuleCooldown, Session, SessionInfo, Settings, Subscription,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LiveEvent, MemberEligibility,
+  ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
+  Subscription,
 } from '@/api/types';
 import { modelRulesRefusal, type NumericKeepaliveKey } from '@/lib/forms';
 import { matchesPattern } from '@/lib/pattern';
@@ -16,8 +17,9 @@ import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE } from './operations';
 import { KEYS, POOLS } from './pools';
-import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
+import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
+import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
 import { ACCOUNT_SAMPLE, KEY_SAMPLE, PAIRING_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, MINUTE, NOW, ago, ahead, iso } from './time';
 
@@ -30,6 +32,18 @@ const latency = <T,>(value: T, ms = 120): Promise<T> => new Promise((resolve) =>
 // The routes' own wording, so a page draws the text the router would have sent.
 const KEY_TAKEN = 'a key with this id exists';
 const POOL_TAKEN = 'a pool with this id exists';
+
+/** Strictly later than the stamp it replaces, as the route's fence stamps, so a save inside one millisecond still
+ * moves it and an edit read before it cannot pass. */
+const stamped = (previous: string) => iso(Math.max(Date.now(), Date.parse(previous) + 1));
+
+/** One past the row's, as every store write of the account row moves the counter, so an edit read before it cannot
+ * pass. */
+const revised = (a: Account): Account => ({ ...a, revision: a.revision + 1 });
+
+/** The route's edit token carries the account's incarnation above a 32-bit revision, so an id deleted and created
+ * again starts past every token its predecessor answered. */
+const INCARNATION = 2 ** 32;
 
 /**
  * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
@@ -143,31 +157,6 @@ const poolRefusal = (input: PoolInput): string | null => {
 const PAIRING_REDIRECT_URI = 'http://localhost:54545/callback';
 
 const MODEL_SCOPE_PREFIX = 'model:';
-
-/**
- * The Models view's newest rejections and permits, lifted off the request log's own events so each names a request
- * the drawer opens; the state route's live cooldowns come from the accounts.
- */
-const modelEvents = (kind: 'model_permitted' | 'model_rejected'): ModelEvent[] =>
-  [...REQUEST_EVENTS.values()]
-    .flat()
-    .filter((e) => e.kind === kind)
-    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
-    .map((e) => ({
-      // Every model_rejected and model_permitted event this mock produces sets both fields: an unnamed
-      // account or model here is the fixture builder's own bug, worth a crash rather than a silent blank.
-      accountId: e.accountId!,
-      at: e.at,
-      keyId: e.keyId,
-      model: e.model!,
-      rejectedBy: Array.isArray(e.detail?.rejected_by) ? e.detail.rejected_by.map(String) : [],
-      requestId: typeof e.detail?.source_request_id === 'string' ? e.detail.source_request_id : null,
-      sessionId: e.sessionId,
-      upstreamRequestId: typeof e.detail?.request_id === 'string' ? e.detail.request_id : null,
-      wireModel: String(e.detail?.wire_model ?? ''),
-    }));
-const MODEL_REJECTIONS = modelEvents('model_rejected');
-const MODEL_PERMITS = modelEvents('model_permitted');
 
 /**
  * The signed-in mark, which outlives a reload the way the router's session cookie does: the smoke runner writes
@@ -338,6 +327,8 @@ function isAfterCursor(r: RequestLog, cursor: string): boolean {
 
 export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
+  /** The incarnation each deleted id reached, which its next account starts above. */
+  private buried = new Map<string, number>();
   private keys: ApiKey[] = [...KEYS];
   private pairings = new Map<string, { accountId: string; state: string }>();
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
@@ -414,7 +405,7 @@ export class MockApi implements Api {
 
   async clearFunding(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status });
+    this.putAccount(revised({ ...a, extraUsage: a.extraUsage ? { ...a.extraUsage, disabledReason: null } : null, status: a.status === 'funding_required' ? 'ready' : a.status }));
     return latency(undefined, 200);
   }
 
@@ -424,8 +415,10 @@ export class MockApi implements Api {
     // The router refuses a callback whose state does not belong to the pairing the id names.
     const pairing = this.pairings.get(pairingId);
     if (!pairing || pairing.state !== submitted.state) throw new Error('Pairing expired. Start again.');
+    // Every subscription here is the operator's own, so its organization is the personal one the profile names, and a
+    // login no row has paired yet is the operator's next alias.
     const existing = this.accounts.find((a) => a.id === pairing.accountId);
-    return latency({ email: existing?.email ?? 'new.login@example.com', organization: existing ? `${existing.label} workspace` : 'Personal', state: submitted.state }, 500);
+    return latency({ email: existing?.email ?? 'operator+new@example.com', organization: 'Personal', state: submitted.state }, 500);
   }
 
   async confirmPairing(pairingId: string) {
@@ -449,6 +442,7 @@ export class MockApi implements Api {
       plan: null,
       pools: [],
       requests: { last24h: 0, last7d: 0, lifetime: 0 },
+      revision: ((this.buried.get(input.id) ?? 0) + 1) * INCARNATION + 1,
       routingEnabled: true,
       status,
       subscription: null,
@@ -480,6 +474,7 @@ export class MockApi implements Api {
       modelRulesMode: input.modelRulesMode ?? 'extend',
       status: 'active',
       createdAt: iso(NOW),
+      updatedAt: iso(NOW),
       expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
       keepaliveOptOut: input.keepaliveOptOut,
       lastUsedAt: null,
@@ -517,13 +512,14 @@ export class MockApi implements Api {
       movesPerHour: {},
       requests24h: 0,
       traffic24h: [],
+      updatedAt: iso(NOW),
     };
     this.pools = [...this.pools, pool];
     return latency(this.poolView(pool), 300);
   }
 
   async deleteAccount(accountId: string) {
-    this.account(accountId);
+    this.buried.set(accountId, Math.floor(this.account(accountId).revision / INCARNATION));
     this.accounts = this.accounts.filter((a) => a.id !== accountId);
     this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
     return latency(undefined, 250);
@@ -545,16 +541,16 @@ export class MockApi implements Api {
     const a = this.account(accountId);
     // The route drops the credential and leaves the identity, so the row still says whose it was; with no credential
     // the poll's standing goes too.
-    this.putAccount({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) });
+    this.putAccount(revised({ ...a, credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null }, status: 'unpaired', usage: usageOf({ ...a, status: 'unpaired' }) }));
     return latency(undefined, 250);
   }
 
   /** `refresh` re-stamps `fetchedAt` rather than answering a fresh fixture; every account answers the same
-   * catalog except `personal`, whose live fetch has been failing. */
+   * catalog except `nightly`, whose live fetch has been failing. */
   getAccountCatalog(accountId: string, refresh?: boolean): Promise<AccountCatalog> {
     const a = this.account(accountId);
     const fetchedAt = ago(refresh ? 0 : 40 * 1000);
-    if (a.id === 'personal') return latency({ error: 'the models request answered 503', fetchedAt, models: [] });
+    if (a.id === 'nightly') return latency({ error: 'the models request answered 503', fetchedAt, models: [] });
     return latency({ error: null, fetchedAt, models: CATALOG });
   }
 
@@ -617,20 +613,20 @@ export class MockApi implements Api {
   }
 
   getModelsState(): Promise<ModelsState> {
-    if (emptyStore()) return latency({ cooldowns: [], permits: [], rejections: [] });
+    if (emptyStore()) return latency({ cooldowns: [] });
     const byModel = new Map<string, RuleCooldown[]>();
     for (const row of this.modelCooldowns()) {
       const model = row.scope.slice(MODEL_SCOPE_PREFIX.length);
       byModel.set(model, [...(byModel.get(model) ?? []), row]);
     }
     const cooldowns = [...byModel.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([model, rows]) => ({ model, rows }));
-    return latency({ cooldowns, permits: MODEL_PERMITS, rejections: MODEL_REJECTIONS });
+    return latency({ cooldowns });
   }
 
   getOverview() {
     const empty = emptyStore();
     // The route answers its 24 hourly buckets over an empty ledger too, at zero, so each spark draws a flat line.
-    const last24h = empty ? [] : REQUESTS.filter((r) => Date.parse(r.at) >= NOW - DAY);
+    const last24h = empty ? [] : DAY_ROWS;
     const hourlyMap = new Map<string, { at: string; cost: number; errors: number; requests: number; tokens: number }>();
     for (let i = 23; i >= 0; i -= 1) {
       const at = iso(Math.floor((NOW - i * 3_600_000) / 3_600_000) * 3_600_000);
@@ -671,6 +667,10 @@ export class MockApi implements Api {
 
   getQuotaHistory(accountId: string) {
     return latency(emptyStore() ? [] : QUOTA_HISTORY.filter((h) => h.accountId === accountId));
+  }
+
+  getDecision(requestId: string, seq: number): Promise<DecisionRecord | null> {
+    return latency(emptyStore() ? null : getDecision(requestId, seq));
   }
 
   getRequest(id: string): Promise<RequestDetail | null> {
@@ -740,6 +740,15 @@ export class MockApi implements Api {
     return latency({ nextCursor: after.length > limit && last ? `${Date.parse(last.at)}:${last.id}` : null, requests: page });
   }
 
+  listRoutingLog(query: RoutingLogQuery = {}): Promise<RoutingLogPage> {
+    if (emptyStore()) return latency({ counts: query.request ? { decisions: 0, events: 0 } : null, nextCursor: null, rows: [] });
+    // The route's refusals, in its order and words.
+    const unknown = query.kinds?.find((k) => !ROUTING_LOG_KINDS.includes(k));
+    if (unknown !== undefined) return Promise.reject(new ApiError(400, `unknown kind ${unknown}`, null));
+    if (query.limit !== undefined && !(Number.isInteger(query.limit) && query.limit >= 1 && query.limit <= 200)) return Promise.reject(new ApiError(400, 'limit is 1 to 200', null));
+    return latency(listRoutingLog(query, Date.now()));
+  }
+
   listSessions() {
     return latency(emptyStore() ? [] : this.sessions);
   }
@@ -759,7 +768,7 @@ export class MockApi implements Api {
 
   async pauseAccount(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, routingEnabled: false, status: statusOf(a, false) });
+    this.putAccount(revised({ ...a, routingEnabled: false, status: statusOf(a, false) }));
     return latency(undefined, 250);
   }
 
@@ -772,19 +781,23 @@ export class MockApi implements Api {
     return latency(undefined, 250);
   }
 
-  async renameAccount(accountId: string, label: string) {
-    return latency(this.putAccount({ ...this.account(accountId), label }), 250);
+  async renameAccount(accountId: string, label: string, revision?: number) {
+    const a = this.account(accountId);
+    if (revision !== undefined && revision !== a.revision) {
+      return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
+    }
+    return latency(this.putAccount(revised({ ...a, label })), 250);
   }
 
   async resumeAccount(accountId: string) {
     const a = this.account(accountId);
-    this.putAccount({ ...a, routingEnabled: true, status: statusOf(a, true) });
+    this.putAccount(revised({ ...a, routingEnabled: true, status: statusOf(a, true) }));
     return latency(undefined, 250);
   }
 
   async revokeKey(id: string) {
     // The route switches a revoked key off in the same write, and an edit sends that flag back.
-    this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const } : k));
+    this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const, updatedAt: stamped(k.updatedAt) } : k));
     return latency(undefined, 250);
   }
 
@@ -792,7 +805,7 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
-    const next: ApiKey = { ...key, prefix: secret.slice(0, 12), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2 };
+    const next: ApiKey = { ...key, prefix: secret.slice(0, 12), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, updatedAt: stamped(key.updatedAt) };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: next, secret }, 300);
   }
@@ -830,34 +843,38 @@ export class MockApi implements Api {
   }
 
   /** The account route's refusals in its order and words; the end is kept only while the flag stands. */
-  async updateAccount(accountId: string, patch: AccountPatch): Promise<Account> {
+  async updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account> {
     const a = this.account(accountId);
     if (patch.cancelled && a.kind === 'api_key') throw new ApiError(400, 'only an oauth account is cancelled', null);
     if (!patch.cancelled && patch.subscriptionEndsAt !== null) throw new ApiError(400, 'subscription_ends_at needs cancelled', null);
     if (patch.cancelled && patch.subscriptionEndsAt === null) throw new ApiError(400, 'cancelled needs subscription_ends_at', null);
+    if (revision !== undefined && revision !== a.revision) {
+      return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
+    }
     // The route answers a subscription block for a cancelled OAuth row even before it pairs, so its end has a place.
     const blank: Subscription = { billingType: '', derivedEndsAt: null, endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
     const base = a.subscription ?? (patch.cancelled ? blank : null);
     const subscription = base ? { ...base, endsAt: patch.cancelled ? patch.subscriptionEndsAt : null } : null;
-    return latency(this.putAccount({ ...a, cancelled: patch.cancelled, subscription }), 250);
+    return latency(this.putAccount(revised({ ...a, cancelled: patch.cancelled, subscription })), 250);
   }
 
-  async updateKey(id: string, input: KeyInput): Promise<ApiKey> {
+  async updateKey(id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey> {
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
     const refusal = keyRulesRefusal(input);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     const { expiresAt: expiry, ...rest } = input;
     const current = this.keys[idx];
+    if (updatedAt !== undefined && updatedAt !== current.updatedAt) return Promise.reject(new ApiError(409, 'the key changed while it was being edited; reload and try again', 'stale_edit'));
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
     const status = current.status === 'revoked' ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= Date.now() ? 'expired' : rest.enabled ? 'active' : 'disabled';
-    const next: ApiKey = { ...current, ...rest, expiresAt, status };
+    const next: ApiKey = { ...current, ...rest, expiresAt, status, updatedAt: stamped(current.updatedAt) };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
     return latency(next, 250);
   }
 
-  async updatePool(id: string, input: PoolInput): Promise<Pool> {
+  async updatePool(id: string, input: PoolInput, updatedAt?: string): Promise<Pool> {
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
     const refusal = poolRefusal(input);
@@ -874,6 +891,7 @@ export class MockApi implements Api {
     const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
     if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
     const current = this.pools[idx];
+    if (updatedAt !== undefined && updatedAt !== current.updatedAt) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited; reload and try again', 'stale_edit'));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
     const next: Omit<Pool, 'keys'> = {
       ...current,
@@ -885,6 +903,7 @@ export class MockApi implements Api {
         const kept = verdict.get(m.accountId) ?? 'eligible';
         return writtenMember(m, account, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept));
       }),
+      updatedAt: stamped(current.updatedAt),
     };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     return latency(this.poolView(next), 250);

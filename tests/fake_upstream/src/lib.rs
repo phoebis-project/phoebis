@@ -9,13 +9,20 @@ pub use capture::capture_tracing;
 use std::collections::{HashMap, VecDeque};
 use std::future::Future;
 use std::net::SocketAddr;
+use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
-use boring::ssl::{SslAcceptor, SslMethod};
+use boring::pkey::PKey;
+use boring::ssl::{
+    select_next_proto, AlpnError, ConnectConfiguration, SslAcceptor, SslConnector, SslMethod,
+};
+use boring::x509::X509;
 use bytes::{Buf, BytesMut};
-use rcgen::{BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair};
+use rcgen::{
+    date_time_ymd, BasicConstraints, CertificateParams, DistinguishedName, DnType, IsCa, KeyPair,
+};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWrite, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{oneshot, watch, Notify};
@@ -1160,6 +1167,92 @@ struct GeneratedTls {
 }
 
 fn generate_tls(hosts: &[&str]) -> GeneratedTls {
+    let pair = generate_pair(hosts);
+    GeneratedTls {
+        acceptor: acceptor_for(&pair),
+        ca_pem: pair.ca_pem,
+    }
+}
+
+/// A CA and a leaf for `hosts`, generated here for a test that serves TLS itself: the PEMs for an operator's pair
+/// written to files, the CA for the test's client, and an acceptor for a loop test. Never installed anywhere.
+pub struct GeneratedPair {
+    pub ca_pem: String,
+    pub cert_pem: String,
+    pub key_pem: String,
+}
+
+impl GeneratedPair {
+    /// Writes the pair where an operator's would sit, `<name>.pem` and `<name>.key` under `dir`, and answers the
+    /// two paths in that order.
+    pub fn write_to(&self, dir: &Path, name: &str) -> (PathBuf, PathBuf) {
+        let cert = dir.join(format!("{name}.pem"));
+        let key = dir.join(format!("{name}.key"));
+        std::fs::write(&cert, &self.cert_pem).expect("write the generated leaf");
+        std::fs::write(&key, &self.key_pem).expect("write the generated key");
+        (cert, key)
+    }
+}
+
+pub fn generate_pair(hosts: &[&str]) -> GeneratedPair {
+    signed_pair(leaf_params(hosts))
+}
+
+/// The same with the leaf's validity window set, for the date refusals' tests.
+pub fn generate_pair_valid_between(
+    hosts: &[&str],
+    not_before: (i32, u8, u8),
+    not_after: (i32, u8, u8),
+) -> GeneratedPair {
+    let mut params = leaf_params(hosts);
+    params.not_before = date_time_ymd(not_before.0, not_before.1, not_before.2);
+    params.not_after = date_time_ymd(not_after.0, not_after.1, not_after.2);
+    signed_pair(params)
+}
+
+/// The acceptor shape the router's listeners build: the Mozilla intermediate profile with ALPN fixed to
+/// `http/1.1`, so a loop test negotiates what a listener negotiates.
+pub fn acceptor_for(pair: &GeneratedPair) -> SslAcceptor {
+    let leaf = X509::from_pem(pair.cert_pem.as_bytes()).expect("parse the generated leaf");
+    let key = PKey::private_key_from_pem(pair.key_pem.as_bytes()).expect("parse the generated key");
+    let mut acceptor =
+        SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).expect("build TLS acceptor");
+    acceptor
+        .set_certificate(&leaf)
+        .expect("set leaf certificate");
+    acceptor.set_private_key(&key).expect("set leaf key");
+    acceptor
+        .check_private_key()
+        .expect("leaf key matches certificate");
+    acceptor.set_alpn_select_callback(|_, offered| {
+        select_next_proto(b"\x08http/1.1", offered).ok_or(AlpnError::NOACK)
+    });
+    acceptor.build()
+}
+
+/// A client of a listener serving `pair`: it trusts the pair's CA and offers HTTP/1.1, as a listener's clients do.
+pub fn connector_trusting(pair: &GeneratedPair) -> ConnectConfiguration {
+    let mut builder = SslConnector::builder(SslMethod::tls()).expect("build TLS connector");
+    let ca = X509::from_pem(pair.ca_pem.as_bytes()).expect("parse the generated CA");
+    builder
+        .cert_store_mut()
+        .add_cert(ca)
+        .expect("trust the generated CA");
+    builder
+        .set_alpn_protos(b"\x08http/1.1")
+        .expect("offer http/1.1");
+    builder
+        .build()
+        .configure()
+        .expect("configure a TLS connection")
+}
+
+fn leaf_params(hosts: &[&str]) -> CertificateParams {
+    CertificateParams::new(hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>())
+        .expect("leaf SAN params")
+}
+
+fn signed_pair(leaf_params: CertificateParams) -> GeneratedPair {
     let mut ca_params = CertificateParams::new(Vec::<String>::new()).expect("empty-SAN CA params");
     ca_params.is_ca = IsCa::Ca(BasicConstraints::Unconstrained);
     let mut ca_name = DistinguishedName::new();
@@ -1170,30 +1263,14 @@ fn generate_tls(hosts: &[&str]) -> GeneratedTls {
     let ca_key = KeyPair::generate().expect("generate CA key");
     let ca_cert = ca_params.self_signed(&ca_key).expect("self-sign CA cert");
 
-    let leaf_params =
-        CertificateParams::new(hosts.iter().map(|h| h.to_string()).collect::<Vec<_>>())
-            .expect("leaf SAN params");
     let leaf_key = KeyPair::generate().expect("generate leaf key");
     let leaf_cert = leaf_params
         .signed_by(&leaf_key, &ca_cert, &ca_key)
         .expect("sign leaf cert");
 
-    let x509 = boring::x509::X509::from_der(leaf_cert.der()).expect("parse leaf certificate DER");
-    let pkey = boring::pkey::PKey::private_key_from_der(&leaf_key.serialize_der())
-        .expect("parse leaf key DER");
-
-    let mut acceptor =
-        SslAcceptor::mozilla_intermediate_v5(SslMethod::tls()).expect("build TLS acceptor");
-    acceptor
-        .set_certificate(&x509)
-        .expect("set leaf certificate");
-    acceptor.set_private_key(&pkey).expect("set leaf key");
-    acceptor
-        .check_private_key()
-        .expect("leaf key matches certificate");
-
-    GeneratedTls {
+    GeneratedPair {
         ca_pem: ca_cert.pem(),
-        acceptor: acceptor.build(),
+        cert_pem: leaf_cert.pem(),
+        key_pem: leaf_key.serialize_pem(),
     }
 }

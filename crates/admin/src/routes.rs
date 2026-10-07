@@ -8,7 +8,7 @@ use std::time::Duration;
 use axum::body::Bytes;
 use axum::extract::{MatchedPath, Path, Request, State};
 use axum::http::header::{
-    CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
+    AUTHORIZATION, CACHE_CONTROL, CONTENT_LENGTH, CONTENT_TYPE, COOKIE, HOST, ORIGIN, SET_COOKIE,
     TRANSFER_ENCODING, UPGRADE, X_CONTENT_TYPE_OPTIONS,
 };
 use axum::http::{HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
@@ -20,7 +20,7 @@ use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
     PairingError, PairingSession, PairingStatus, PendingIdentity, PollStatus, ProfileResponse,
-    Started, UsageSnapshot, UsageWindow,
+    Started, UsageSnapshot, UsageWindow, FABLE_WINDOW_KEY,
 };
 use phoebis_relay::DiscoveryError;
 use phoebis_routing::{
@@ -28,7 +28,8 @@ use phoebis_routing::{
     SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
+    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember,
+    StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -88,6 +89,10 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/keys/{id}/models", get(models::key_models))
         .route("/admin/keys/{id}/revoke", post(keys::revoke))
         .route("/admin/keys/{id}/rotate", post(keys::rotate))
+        .route(
+            "/admin/ledger/parked/replay",
+            post(crate::ledger::replay_parked),
+        )
         .route("/admin/live", get(live::upgrade))
         .route("/admin/live/snapshot", get(live::past))
         .route("/admin/models/state", get(models::state))
@@ -112,6 +117,11 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/requests", get(requests::list))
         .route("/admin/requests/{id}", get(requests::show))
         .route("/admin/requests/{id}/bodies", get(requests::bodies))
+        .route(
+            "/admin/requests/{id}/decisions/{seq}",
+            get(crate::routing_log::record),
+        )
+        .route("/admin/routing-log", get(crate::routing_log::list))
         .route("/admin/session", get(whoami).post(login).delete(logout))
         .route("/admin/sessions", get(sessions::list))
         .route(
@@ -128,11 +138,17 @@ pub fn router(state: Arc<AdminState>) -> Router {
 }
 
 /// Who is calling, as the gate resolved them: the handle that names this admin session in pairing
-/// ownership and in the mutation log. The cookie that produced it never leaves the session store.
+/// ownership and in the mutation log, and the credential that admitted it. The cookie or bearer that produced it
+/// never leaves the gate.
 #[derive(Clone)]
 pub(crate) struct Caller {
     pub session_id: String,
+    /// `"bearer"` or `"session"`.
+    pub credential: &'static str,
 }
+
+/// The session id every bearer caller carries, so a pairing one scripted call starts the next confirms.
+pub(crate) const BEARER_SESSION_ID: &str = "bearer";
 
 /// The id a create handler made, which its path does not carry; read by the mutation log.
 #[derive(Clone)]
@@ -151,13 +167,10 @@ async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: 
     let path = request.uri().path().to_string();
     let mut response = match admit(&state, &mut request) {
         None => {
-            let session = request
-                .extensions()
-                .get::<Caller>()
-                .map(|c| c.session_id.clone());
+            let caller = request.extensions().get::<Caller>().cloned();
             let response = next.run(request).await;
             if mutation {
-                log_mutation(&method, &route, &path, session.as_deref(), &response);
+                log_mutation(&method, &route, &path, caller.as_ref(), &response);
             }
             response
         }
@@ -189,15 +202,16 @@ fn log_mutation(
     method: &Method,
     route: &str,
     path: &str,
-    session: Option<&str>,
+    caller: Option<&Caller>,
     response: &Response,
 ) {
     let (entity, id) = entity_of(route, path, response.extensions().get::<CreatedId>());
     let status = response.status().as_u16();
     let id = id.as_deref().unwrap_or("-");
-    match session {
-        Some(session) => tracing::info!(
-            %method, %route, status, %entity, %id, credential = %"session", %session, "admin mutation"
+    match caller {
+        Some(caller) => tracing::info!(
+            %method, %route, status, %entity, %id, credential = %caller.credential,
+            session = %caller.session_id, "admin mutation"
         ),
         None => tracing::info!(
             %method, %route, status, %entity, %id, credential = %"none", "admin mutation"
@@ -225,6 +239,7 @@ fn entity_of(
     match pattern.get(2).copied() {
         Some("accounts") => ("account", segment("{id}").or(created)),
         Some("keys") => ("key", segment("{id}").or(created)),
+        Some("ledger") => ("ledger", None),
         Some("pools") => ("pool", segment("{id}").or(created)),
         Some("oauth") => ("pairing", segment("{id}").or(created)),
         Some("sessions") => (
@@ -249,32 +264,30 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         .get(UPGRADE)
         .and_then(|v| v.to_str().ok())
         .is_some_and(|v| v.eq_ignore_ascii_case("websocket"));
-    // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake; a value that is
-    // not the configured admin origin is a forged request rather than a mistake. The login is checked too: a
-    // forced login is a real attack, and it is the one mutation an unauthenticated caller can reach.
-    if mutation || websocket {
-        let presented = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok());
-        match &state.origin {
-            Some(expected) => {
-                if presented != Some(expected.as_str()) {
-                    return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
-                }
-            }
-            // No configured origin means plain HTTP on a host the operator trusts. A browser still sends
-            // `Origin` on every cross-site write and every handshake, and a value naming another authority
-            // than the request's own `Host` is another page on this host driving the console; a request
-            // with no `Origin` (curl, the health probe) is admitted.
-            None => {
-                if let Some(origin) = presented {
-                    let host = request
-                        .headers()
-                        .get(HOST)
-                        .and_then(|v| v.to_str().ok())
-                        .unwrap_or("");
-                    if !same_authority(origin, host) {
-                        return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
-                    }
-                }
+    // A bearer is the operator's own hand: a browser cannot attach `Authorization` to a cross-site request without a
+    // preflight the admin API never answers, so the Origin check is the cookie's and not the bearer's. The login
+    // route stays the cookie's door and ignores a bearer on it.
+    let bearer = (!(method == Method::POST && path == LOGIN_PATH))
+        .then(|| presented_bearer(request.headers()))
+        .flatten();
+    // A browser attaches `Origin` to every cross-site write and to every WebSocket handshake. A presented `Origin`
+    // must name the request's own `Host`, since another authority is another page on this host driving the console,
+    // while a request with no `Origin` (curl, a subcommand, the health probe) is the operator's own hand. Where this
+    // listener terminates TLS, or a front says the browser's leg does, the `Origin` must be `https://` too: a page
+    // on this host over plain HTTP could otherwise drive a bodiless write with a cookie some browsers send across
+    // schemes. A front that terminates TLS passes `Host` through beside `X-Forwarded-Proto`, so both headers name
+    // the front; a forged header on a plain listener only costs the forger the `http://` origin it would need. The
+    // login is checked too: a forced login is the one mutation an unauthenticated caller can reach.
+    if bearer.is_none() && (mutation || websocket) {
+        if let Some(origin) = request.headers().get(ORIGIN).and_then(|v| v.to_str().ok()) {
+            let host = request
+                .headers()
+                .get(HOST)
+                .and_then(|v| v.to_str().ok())
+                .unwrap_or("");
+            let https_only = state.tls || forwarded_https(request.headers());
+            if !same_authority(origin, host, https_only) {
+                return Some(failure(StatusCode::FORBIDDEN, "origin is not allowed"));
             }
         }
     }
@@ -307,11 +320,36 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
         return None;
     }
 
+    if let Some(bearer) = bearer {
+        return match state
+            .sessions
+            .bearer(&bearer, &state.secrets, (state.clock)())
+        {
+            Ok(()) => {
+                request.extensions_mut().insert(Caller {
+                    session_id: BEARER_SESSION_ID.to_string(),
+                    credential: "bearer",
+                });
+                None
+            }
+            Err(LoginError::Throttled) => Some(failure(
+                StatusCode::TOO_MANY_REQUESTS,
+                "too many failed logins, try again in a minute",
+            )),
+            Err(LoginError::Invalid) => {
+                Some(failure(StatusCode::UNAUTHORIZED, "secret does not match"))
+            }
+        };
+    }
+
     let session_id = presented_cookie(request.headers())
         .and_then(|cookie| state.sessions.authenticate(&cookie, (state.clock)()));
     match session_id {
         Some(session_id) => {
-            request.extensions_mut().insert(Caller { session_id });
+            request.extensions_mut().insert(Caller {
+                session_id,
+                credential: "session",
+            });
             None
         }
         // A tab holding a dead cookie still needs the browser's copy cleared, so the logout answers it rather
@@ -321,18 +359,22 @@ fn admit(state: &AdminState, request: &mut Request) -> Option<Response> {
     }
 }
 
-/// `origin` names the request's own authority: its scheme stripped, the rest equals `host` ignoring case.
-pub(crate) fn same_authority(origin: &str, host: &str) -> bool {
-    let authority = origin
-        .get(..7)
+/// `origin` names the request's own authority: its scheme stripped, the rest equals `host` ignoring case. Under
+/// `https_only` the scheme must be `https`, the rule when the listener terminates TLS or a front reports that the
+/// browser's leg does, since a page on this host over plain HTTP could otherwise drive a bodiless write with a
+/// cookie some browsers send across schemes; a plain listener behind no front admits either scheme.
+pub(crate) fn same_authority(origin: &str, host: &str, https_only: bool) -> bool {
+    let http = (!https_only)
+        .then(|| origin.get(..7))
+        .flatten()
         .filter(|p| p.eq_ignore_ascii_case("http://"))
-        .map(|_| &origin[7..])
-        .or_else(|| {
-            origin
-                .get(..8)
-                .filter(|p| p.eq_ignore_ascii_case("https://"))
-                .map(|_| &origin[8..])
-        });
+        .map(|_| &origin[7..]);
+    let authority = http.or_else(|| {
+        origin
+            .get(..8)
+            .filter(|p| p.eq_ignore_ascii_case("https://"))
+            .map(|_| &origin[8..])
+    });
     authority.is_some_and(|a| !a.is_empty() && a.eq_ignore_ascii_case(host))
 }
 
@@ -347,6 +389,25 @@ fn carries_body(headers: &HeaderMap) -> bool {
     has_length || headers.contains_key(TRANSFER_ENCODING)
 }
 
+/// Whether a front's word says the browser's leg is TLS: the first comma-separated value of `X-Forwarded-Proto`,
+/// case-insensitively `https`. A plain-HTTP forger earns a cookie its browser never returns over `http://`.
+pub(crate) fn forwarded_https(headers: &HeaderMap) -> bool {
+    headers
+        .get("x-forwarded-proto")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.split(',').next())
+        .is_some_and(|first| first.trim().eq_ignore_ascii_case("https"))
+}
+
+/// The value of `Authorization: Bearer ...` when the header carries that scheme (case-insensitive), trimmed.
+pub(crate) fn presented_bearer(headers: &HeaderMap) -> Option<String> {
+    let header = headers.get(AUTHORIZATION)?.to_str().ok()?;
+    let (scheme, value) = header.trim_start().split_once(' ')?;
+    scheme
+        .eq_ignore_ascii_case("bearer")
+        .then(|| value.trim().to_string())
+}
+
 fn presented_cookie(headers: &HeaderMap) -> Option<String> {
     let header = headers.get(COOKIE)?.to_str().ok()?;
     header.split(';').find_map(|pair| {
@@ -357,7 +418,7 @@ fn presented_cookie(headers: &HeaderMap) -> Option<String> {
     })
 }
 
-async fn login(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
+async fn login(State(state): State<Arc<AdminState>>, headers: HeaderMap, body: Bytes) -> Response {
     #[derive(serde::Deserialize)]
     struct Input {
         secret: String,
@@ -372,7 +433,7 @@ async fn login(State(state): State<Arc<AdminState>>, body: Bytes) -> Response {
         Ok(cookie) => {
             let mut attributes =
                 format!("{COOKIE_NAME}={cookie}; Path=/admin; HttpOnly; SameSite=Strict");
-            if !state.plain_http {
+            if state.tls || forwarded_https(&headers) {
                 attributes.push_str("; Secure");
             }
             set_cookie(StatusCode::NO_CONTENT, &attributes)
@@ -453,7 +514,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    match state.store.bump_lifecycle(&id) {
+    match state.store.bump_lifecycle(&id, StateCause::Operator) {
         Ok(_) => {}
         Err(StoreError::AccountNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "account not found")
@@ -466,7 +527,10 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An Anthropic-key slot
     // has no pairing to run, so it rests where a slot that never had a key rests.
     if row.kind == AccountKind::ApiKey {
-        if let Err(error) = state.store.set_state(&id, AccountState::Unpaired) {
+        if let Err(error) = state
+            .store
+            .set_state(&id, AccountState::Unpaired, StateCause::Operator)
+        {
             return store_failure(error);
         }
     }
@@ -890,7 +954,10 @@ async fn pairing_confirm(
     ) {
         tracing::warn!(account = %row.id, %error, "the profile could not be stored after pairing");
     }
-    if let Err(error) = state.store.set_state(&row.id, AccountState::Ready) {
+    if let Err(error) = state
+        .store
+        .set_state(&row.id, AccountState::Ready, StateCause::Paired)
+    {
         return unstored(&state, error);
     }
     state.usage.invalidate(&row.id);
@@ -957,6 +1024,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         "ledger": {
             "schema_version": state.ledger.db().schema_version().await.ok(),
             "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),
+            "cache_map_orphans": load(&stats.cache_map_orphans), "mirror_lagged": load(&stats.mirror_lagged),
             "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
             "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
             "queued": state.ledger.queued(), "behind": state.ledger.behind(),
@@ -965,6 +1033,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         },
         "router": {
             "command_depth": phoebis_routing::COMMANDS, "queued": state.router.queued(), "dropped_reports": dropped,
+            "dropped_refusals": state.router.dropped_refusals(),
             "writer": { "depth": writer.depth, "deferred": writer.deferred, "degraded": writer.degraded, "failed_batches": writer.failed_batches },
         },
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
@@ -1287,7 +1356,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     });
     json!({
         "id": row.id,
-        "kind": match row.kind { AccountKind::ApiKey => "api_key", AccountKind::Oauth => "oauth" },
+        "kind": kind_name(row.kind),
         "label": row.label,
         "enabled": row.enabled,
         "cancelled": term.cancelled,
@@ -1315,6 +1384,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
             "quarantined": quarantined,
         })),
         "lifecycle_generation": row.lifecycle_generation,
+        "revision": row.edit_token(),
         "cooldowns": ctx.cooldowns.iter().filter(|cooldown| cooldown.account_id == row.id).map(|cooldown| json!({
             "scope": cooldown.scope,
             "until": cooldown.until,
@@ -1338,10 +1408,6 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "usage": usage,
     })
 }
-
-/// The key the usage service gives the Fable week, so an answer built from the router's windows reads like
-/// one the endpoint gave.
-const FABLE_WINDOW_KEY: &str = "fable";
 
 fn has_windows(snapshot: &UsageSnapshot) -> bool {
     !snapshot.windows.is_empty() || snapshot.fable_window.is_some()
@@ -1495,6 +1561,13 @@ fn usage_json(
     })
 }
 
+pub(crate) fn kind_name(kind: AccountKind) -> &'static str {
+    match kind {
+        AccountKind::ApiKey => "api_key",
+        AccountKind::Oauth => "oauth",
+    }
+}
+
 fn state_name(state: AccountState) -> &'static str {
     match state {
         AccountState::Disconnected => "disconnected",
@@ -1597,6 +1670,51 @@ pub(crate) fn double_option<'de, T: serde::Deserialize<'de>, D: serde::Deseriali
     Option::<T>::deserialize(d).map(Some)
 }
 
+/// A field that is there, whatever it holds: `Option` alone folds a present `null` into an absent field.
+pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
+    d: D,
+) -> Result<Option<serde_json::Value>, D::Error> {
+    serde_json::Value::deserialize(d).map(Some)
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+/// The stamp an edit's body names: the row's own when the body sent none, else the body's integer, refused when it
+/// is not one or lies more than a day past the row's stamp. The route answers 409 when it differs from its own read.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn fence_stamp(sent: Option<&serde_json::Value>, current: i64) -> Result<i64, Response> {
+    let Some(value) = sent else {
+        return Ok(current);
+    };
+    match value.as_i64() {
+        Some(stamp) if stamp <= current.saturating_add(DAY_MS) => Ok(stamp),
+        _ => Err(failure(
+            StatusCode::BAD_REQUEST,
+            "expected_revision is the updated_at the row was read at",
+        )),
+    }
+}
+
+/// The edit token an account edit's body names, `None` when it sent none, refused when it is not a non-negative integer.
+/// The route answers 409 when it names another incarnation or revision than its own read, so the store fences on the
+/// read alone.
+// The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+// pointer chase and nothing else.
+#[allow(clippy::result_large_err)]
+pub(crate) fn fence_revision(sent: Option<&serde_json::Value>) -> Result<Option<u64>, Response> {
+    let Some(value) = sent else {
+        return Ok(None);
+    };
+    value.as_u64().map(Some).ok_or_else(|| {
+        failure(
+            StatusCode::BAD_REQUEST,
+            "expected_revision is the revision the row was read at",
+        )
+    })
+}
+
 /// A refusal an operator console can branch on without reading the prose, in the same header slot the relay
 /// puts its own codes.
 pub(crate) fn failure_with_code(status: StatusCode, code: &'static str, message: &str) -> Response {
@@ -1628,13 +1746,53 @@ mod tests {
     use phoebis_store::BudgetPeriod;
 
     #[test]
-    fn same_authority_names_the_requests_own_host_case_insensitively() {
-        assert!(same_authority("http://localhost:8081", "localhost:8081"));
-        assert!(same_authority("HTTP://LocalHost:8081", "localhost:8081"));
-        assert!(!same_authority("http://localhost:5173", "localhost:8081"));
-        assert!(!same_authority("null", "localhost:8081"));
-        assert!(!same_authority("https://localhost:8081", "localhost"));
-        assert!(!same_authority("ftp://localhost:8081", "localhost:8081"));
+    fn same_authority_names_the_requests_own_host_and_requires_https_when_asked() {
+        assert!(same_authority(
+            "http://localhost:8081",
+            "localhost:8081",
+            false
+        ));
+        assert!(same_authority(
+            "HTTP://LocalHost:8081",
+            "localhost:8081",
+            false
+        ));
+        assert!(!same_authority(
+            "http://localhost:5173",
+            "localhost:8081",
+            false
+        ));
+        assert!(!same_authority("null", "localhost:8081", false));
+        assert!(!same_authority(
+            "https://localhost:8081",
+            "localhost",
+            false
+        ));
+        assert!(!same_authority(
+            "ftp://localhost:8081",
+            "localhost:8081",
+            false
+        ));
+        assert!(same_authority(
+            "https://localhost:8081",
+            "localhost:8081",
+            true
+        ));
+        assert!(same_authority(
+            "HTTPS://LocalHost:8081",
+            "localhost:8081",
+            true
+        ));
+        assert!(!same_authority(
+            "http://localhost:8081",
+            "localhost:8081",
+            true
+        ));
+        assert!(!same_authority(
+            "https://localhost:5173",
+            "localhost:8081",
+            true
+        ));
     }
 
     #[test]

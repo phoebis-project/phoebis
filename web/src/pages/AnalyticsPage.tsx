@@ -578,7 +578,17 @@ export function AnalyticsPage() {
             </Select>
             <span className="muted analytics-groupby__reason">Burn groups by account, key, session or request class alone; the plan shares read under Account, since shares of different accounts&apos; windows do not add.</span>
           </div>
-          <BurnCharts answer={burn.stale ? null : (burn.data?.answer ?? null)} costs={burnSettings.data?.subscriptionCosts ?? null} error={burn.error ?? burnSettings.error} groupBy={burnGroup} loading={burn.data === null || burn.stale || sized === null} rangeEndMs={burn.data?.endMs} readAt={burn.data?.readAt} sized={sized} />
+          {/* Only the account grouping sizes its lines by tier, so another one neither waits on nor fails with the settings read. */}
+          <BurnCharts
+            answer={burn.stale ? null : (burn.data?.answer ?? null)}
+            costs={burnSettings.data?.subscriptionCosts ?? null}
+            error={burn.error ?? (burnGroup === 'account' ? burnSettings.error : null)}
+            groupBy={burnGroup}
+            loading={burn.data === null || burn.stale || (burnGroup === 'account' && sized === null)}
+            rangeEndMs={burn.data?.endMs}
+            readAt={burn.data?.readAt}
+            sized={sized}
+          />
           <BudgetTable budgets={budgets.data} error={budgets.error} now={now} />
         </Section>
       )}

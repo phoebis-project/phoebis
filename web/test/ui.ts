@@ -2,8 +2,11 @@
 // the components were bundled with.
 export { act, createElement, useEffect, useState } from 'react';
 export { createRoot } from 'react-dom/client';
+export { MemoryRouter } from 'react-router-dom';
+export { api } from '@/api';
 export { ApiError, setHooks } from '@/api/http';
 export { queueToast } from '@/app/session';
+export { DecisionCard } from '@/components/DecisionCard';
 export { MultiSelect } from '@/components/ui/MultiSelect';
 export { PATTERN_GRAMMAR, PatternInput } from '@/components/ui/PatternInput';
 export { Menu } from '@/components/ui/primitives';

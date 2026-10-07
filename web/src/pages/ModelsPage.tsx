@@ -1,16 +1,18 @@
 import { useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { KeyModels, ModelEvent, ProcessedRule } from '@/api/types';
+import type { KeyModels, ProcessedRule } from '@/api/types';
 import { useSession } from '@/app/session';
 import { CoolingDown, scopeLabel, type CoolingRow } from '@/components/CoolingDown';
 import { IconInfo } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, ErrorState, Select, Skeleton } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtRelative } from '@/lib/format';
+import { fmtAbsolute } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
 import { UNDATED_MODEL_NOTE } from '@/lib/patterns';
+import { logHref } from '@/lib/routingLog';
 
 const RULE_COLUMNS = 4;
+const DAY = 24 * 3_600_000;
 
 /** Account links separated by commas, each titled when a title is given. */
 function accountLinks(ids: string[], titleOf?: (id: string) => string): ReactNode {
@@ -140,7 +142,7 @@ export function ModelsPage() {
 
       {state.data === null && state.error ? (
         <Card>
-          <ErrorState title="Could not load the model cooldowns and events" body={state.error} action={<Button size="sm" onClick={state.reload}>Try again</Button>} />
+          <ErrorState title="Could not load the model cooldowns" body={state.error} action={<Button size="sm" onClick={state.reload}>Try again</Button>} />
         </Card>
       ) : (
         <>
@@ -154,10 +156,14 @@ export function ModelsPage() {
             // One block per model, so each opens on its own rows rather than keeping another model's toggle.
             state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} busy={busy} now={now} rows={g.rows} showAccount onClear={setPending} />)
           )}
-          <RecentEvents title="Recent rejections" subtitle="The newest refusals of a model by an account" events={state.data?.rejections ?? null} empty="No account has refused a model." now={now} />
-          <RecentEvents title="Recent permits" subtitle="The newest requests an account served after another refused the model" events={state.data?.permits ?? null} empty="No request was served after a refusal." now={now} permits />
         </>
       )}
+      {/* The link reads none of the state above, so a failed read keeps it. */}
+      <div className="models__log">
+        <Link className="btn btn--secondary btn--md" to={logHref({ kinds: ['model_rejected', 'model_permitted'], from: now - DAY, to: now })}>
+          View rejections and permits in the routing log
+        </Link>
+      </div>
 
       <ConfirmDialog
         open={pending !== null}
@@ -168,58 +174,5 @@ export function ModelsPage() {
         onConfirm={onConfirmClear}
       />
     </div>
-  );
-}
-
-function RecentEvents({ empty, events, now, permits = false, subtitle, title }: { empty: string; events: ModelEvent[] | null; now: number; permits?: boolean; subtitle: string; title: string }) {
-  const columns = permits ? 5 : 4;
-  return (
-    <Card padded={false} className="card--table" title={title} subtitle={subtitle}>
-      <div className="table-wrap">
-        <table className="table">
-          <thead>
-            <tr>
-              <th>Time</th>
-              <th>Account</th>
-              <th>Model</th>
-              <th>Key</th>
-              {permits && <th>Rejected by</th>}
-            </tr>
-          </thead>
-          <tbody>
-            {events === null ? (
-              <tr>
-                <td colSpan={columns}>
-                  <Skeleton />
-                </td>
-              </tr>
-            ) : events.length === 0 ? (
-              <tr>
-                <td colSpan={columns} className="muted">
-                  {empty}
-                </td>
-              </tr>
-            ) : (
-              events.map((e, i) => (
-                <tr key={`${e.at}-${e.accountId}-${i}`}>
-                  <td title={fmtAbsolute(e.at)}>{e.requestId ? <Link to={`/requests/${e.requestId}`}>{fmtRelative(e.at, now)}</Link> : fmtRelative(e.at, now)}</td>
-                  <td>{accountLinks([e.accountId])}</td>
-                  <td>
-                    <span className="mono">{e.model}</span>
-                    {e.wireModel && e.wireModel !== e.model && (
-                      <span className="sub">
-                        sent as <span className="mono">{e.wireModel}</span>
-                      </span>
-                    )}
-                  </td>
-                  <td className="mono">{e.keyId ?? '-'}</td>
-                  {permits && <td>{accountLinks(e.rejectedBy)}</td>}
-                </tr>
-              ))
-            )}
-          </tbody>
-        </table>
-      </div>
-    </Card>
   );
 }

@@ -13,13 +13,13 @@ const ofAccount = (id: string): Pick<AttentionItem, 'link' | 'pools' | 'subject'
   subject: { id, label: accountById.get(id)?.label ?? id, type: 'account' },
 });
 
-const mailPoll = accountById.get('mail')?.usage?.poll ?? null;
+const secondaryPoll = accountById.get('secondary')?.usage?.poll ?? null;
 
 /**
  * One item per kind on the story's accounts, pools and keys, in the route's order: codex exhausted since the runner's
  * key last asked it, a client build refused on the laptop key, the routing state writer keeping its writes in memory,
- * team's lapsed credential, the Console workspace out of funding as its account reads, team's refreshes failing, a
- * priced record of codex's one member parked in the ledger file, and the backoff mail's poll is in.
+ * legacy's lapsed credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing, a
+ * priced record of codex's one member parked in the ledger file, and the backoff secondary's poll is in.
  */
 export const ATTENTION: AttentionItem[] = [
   {
@@ -51,28 +51,28 @@ export const ATTENTION: AttentionItem[] = [
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
-    ...ofAccount('team'),
-    detail: { account: 'team', label: 'team' },
+    ...ofAccount('legacy'),
+    detail: { account: 'legacy', label: 'legacy' },
     kind: 'reauth_required',
     since: ago(2 * DAY + 2 * HOUR),
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
-    ...ofAccount('console'),
-    detail: { account: 'console', label: 'Console workspace' },
+    ...ofAccount('overflow'),
+    detail: { account: 'overflow', label: 'Overflow workspace' },
     kind: 'funding_required',
     since: ago(3 * HOUR),
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
-    ...ofAccount('team'),
-    detail: { account: 'team', failures: 5, last_error: 'refresh_token rejected: invalid_grant', outcome: 'failed' },
+    ...ofAccount('legacy'),
+    detail: { account: 'legacy', failures: 5, last_error: 'refresh_token rejected: invalid_grant', outcome: 'failed' },
     kind: 'refresh_failed',
     since: ago(2 * DAY + 2 * HOUR + 50 * MINUTE),
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
-    detail: { accounts: ['evals'], count: 1, pool: 'codex' },
+    detail: { accounts: ['research'], count: 1, pool: 'codex' },
     kind: 'ledger_record_parked',
     link: { id: 'codex', page: 'pools' },
     pools: ['codex'],
@@ -81,9 +81,9 @@ export const ATTENTION: AttentionItem[] = [
   },
   {
     ...ATTENTION_ITEM_SAMPLE,
-    ...ofAccount('mail'),
-    detail: { account: 'mail', backoff_since: ms(mailPoll?.backoffSince), next_attempt_at: ms(mailPoll?.nextAttemptAt), rate_limited_in_a_row: mailPoll?.rateLimitedInARow ?? 0 },
+    ...ofAccount('secondary'),
+    detail: { account: 'secondary', backoff_since: ms(secondaryPoll?.backoffSince), next_attempt_at: ms(secondaryPoll?.nextAttemptAt), rate_limited_in_a_row: secondaryPoll?.rateLimitedInARow ?? 0 },
     kind: 'poll_backoff',
-    since: mailPoll?.backoffSince ?? ago(42 * MINUTE),
+    since: secondaryPoll?.backoffSince ?? ago(42 * MINUTE),
   },
 ];

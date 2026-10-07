@@ -74,11 +74,13 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (42, V42),
     (43, V43),
     (44, V44),
+    (45, V45),
+    (46, V46),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 44;
+pub const SCHEMA_VERSION: u32 = 46;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -649,4 +651,38 @@ CREATE INDEX refresh_attempts_account ON refresh_attempts (account_id, incarnati
 ALTER TABLE api_keys ADD COLUMN updated_at INTEGER NOT NULL DEFAULT 0;
 UPDATE api_keys SET updated_at = CAST(strftime('%s', 'now') AS INTEGER) * 1000;
 DELETE FROM affinity WHERE chain IN ('request', 'response');
+"#;
+
+// The field names the rule it sets, a window running ahead of its pace by this much; the creating statement keeps
+// its frozen text, so the rename runs on a fresh file as on an old one.
+const V45: &str = r#"
+ALTER TABLE pools RENAME COLUMN migrate_above_utilization TO shed_ahead_of_pace;
+"#;
+
+// One row per pin of a pool's and account's latest shedding round, marked or not, so the round itself (and the
+// dwell it arms) is on disk even when it marked nothing. `round_at` is the same on every row of one round. `epoch`
+// is the pin's at the round and `incarnation` the account's: a mark is read back only for the pin it was made on,
+// never for a replacement pin under the key or a replaced account. A pin write that removes the pin or replaces it
+// under another epoch clears the mark in its own transaction (`marked` 0, the row and its `round_at` kept for the
+// dwell gate). A deleted account takes its rows with it, as the pins' cascade does. The affinity table gains the
+// ordinal of each entry's boundary in its chain, which the routing map records at the write and the purge reports.
+// The accounts table gains the word for who moved its state, so the routing log's transition row reads the cause off
+// the registry rather than inferring it from the path a change reached the mirror by. A row from before the column
+// reads `unrecorded`.
+const V46: &str = r#"
+CREATE TABLE IF NOT EXISTS shed_rounds (
+  pool_id TEXT NOT NULL,
+  account_id TEXT NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  incarnation INTEGER NOT NULL,
+  key_id TEXT NOT NULL,
+  session_id TEXT NOT NULL,
+  agent_id TEXT NOT NULL,
+  model TEXT NOT NULL,
+  epoch INTEGER NOT NULL,
+  round_at INTEGER NOT NULL,
+  marked INTEGER NOT NULL,
+  PRIMARY KEY (pool_id, account_id, key_id, session_id, agent_id, model)
+);
+ALTER TABLE affinity ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
+ALTER TABLE accounts ADD COLUMN state_cause TEXT NOT NULL DEFAULT 'unrecorded';
 "#;

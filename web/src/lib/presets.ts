@@ -14,14 +14,17 @@ export const SHEDDING_PRESETS: Record<Exclude<SheddingPreset, 'custom'>, { burnW
 
 export type FailoverPreset = 'balanced' | 'conservative' | 'custom' | 'fast';
 
-/** balanced 16, 10 s, 5 % (the default); fast 8, 5 s, 10 %; conservative 16, 20 s, 5 %. */
+/** balanced 16, 60 s, 5 % (the default); fast 8, 20 s, 10 %; conservative 16, 120 s, 5 %. */
 export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFlightCap: number; paceFloor: number; retryInPlaceSeconds: number }> = {
-  balanced: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 10 },
-  conservative: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 20 },
-  fast: { inFlightCap: 8, paceFloor: 0.1, retryInPlaceSeconds: 5 },
+  balanced: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 60 },
+  conservative: { inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 120 },
+  fast: { inFlightCap: 8, paceFloor: 0.1, retryInPlaceSeconds: 20 },
 };
 
-/** The hysteresis band under the migrate margin: a shed session lands only on a member below `margin - MIGRATE_BAND`. */
+/**
+ * The hysteresis band under the shedding margin: a shed session lands only on a subscription member below
+ * `margin - MIGRATE_BAND`; an Anthropic-key member's bucket reads against 1.0.
+ */
 export const MIGRATE_BAND = 0.05;
 
 /** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
@@ -89,12 +92,13 @@ export interface ShedPreview {
   /** The marked burn over the burn of the members that ran a round; 0 when they burn nothing. */
   burnShare: number;
   /**
-   * Whether an eligible member reads under the band, where the router lands a marked session; without one the
-   * marks stand and nothing moves. The router also passes over a member at its in-flight cap or inside its own
-   * dwell, which the pool view does not carry.
+   * Whether an eligible member reads cool (a subscription member under the band, an Anthropic-key member with room in
+   * its bucket), where the router lands a marked session; without one the marks stand and nothing moves. The router
+   * also passes over a member at its in-flight cap or one any pool shed from within the dwell, which the pool view
+   * does not carry.
    */
   cool: boolean;
-  /** Members whose 5-hour or 7-day window runs ahead of its pace by the migrate margin, each of which runs a round. */
+  /** Members whose 5-hour or 7-day window runs ahead of its pace by the shedding margin, each of which runs a round. */
   members: number;
   sessions: number;
   /** The unit every replayed member's burn is in; null when none has a pin or two members differ. */
@@ -106,20 +110,22 @@ export interface ShedPreview {
 
 /**
  * The shedding round's dry run: how many pins would be marked, how many of them warm, and their share of the burn.
- * Each member ahead of its pace by the migrate margin replays its round over its pins with each burn decayed to `now`,
- * as the router's `burn_decayed` does: cold pins first by burn, then warm ones by burn over their last input size,
- * bounded by the warm-sessions mode. A member's pins share one unit, so its round needs no conversion; members in
- * different units cannot be summed, so their shares are averaged instead. A member without `eligible` counts as
- * eligible, as a member of a pool not saved yet does. `sized` names the accounts whose tier the cost model sizes.
+ * Each member ahead of its pace by the shedding margin replays its round over the pool's pins on it: `sessions` is the
+ * pool's slice, the sessions under its keys, which the caller filters, since the router's round marks the triggering
+ * pool's pins alone. The round decays each burn to `now`, as the router's `burn_decayed` does, and orders cold pins
+ * first by burn, then warm ones by burn over their last input size, bounded by the warm-sessions mode. A member's
+ * pins share one unit, so its round needs no conversion; members in different units cannot be summed, so their shares
+ * are averaged instead. A member without `eligible` counts as eligible, as a member of a pool not saved yet does.
+ * `sized` names the accounts whose tier the cost model sizes.
  */
 export function shedPreview(
-  pool: Pick<Pool, 'burnWindowSeconds' | 'migrateAboveUtilization' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
+  pool: Pick<Pool, 'burnWindowSeconds' | 'shedAheadOfPace' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
   accounts: Account[],
   sessions: Session[],
   now: number,
   sized: ReadonlySet<string>,
 ): ShedPreview {
-  const threshold = pool.migrateAboveUtilization;
+  const threshold = pool.shedAheadOfPace;
   if (threshold === null) return { averaged: false, burnShare: 0, cool: false, members: 0, sessions: 0, unit: null, unpriced: 0, warm: 0 };
   const byId = new Map(accounts.map((a) => [a.id, a]));
   const band = threshold - MIGRATE_BAND;
@@ -127,11 +133,12 @@ export function shedPreview(
     const w = windowOf(a, id);
     return w === null ? null : aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now);
   };
-  // The router's destination readings: a subscription account's two shared windows by their lead over pace, an
-  // Anthropic-key account's worst live one; a window the row does not carry reads as under.
+  // The router's destination readings: a subscription account's two shared windows by their lead over pace against the
+  // band, an Anthropic-key account's worst live bucket against 1.0 (a bucket refills within its minute); a window the
+  // row does not carry reads as under.
   const under = (a: Account) =>
     a.kind === 'api_key'
-      ? Math.max(0, ...a.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now).map((w) => w.utilization)) < band
+      ? Math.max(0, ...a.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now).map((w) => w.utilization)) < 1
       : (['5h', '7d'] as const).every((id) => (lead(a, id) ?? Number.NEGATIVE_INFINITY) < band);
   const cool = pool.members.some((m) => {
     const account = byId.get(m.accountId);
@@ -202,8 +209,8 @@ export function shedPreview(
  * The shedding card's dry run in one sentence, naming the unit its share was taken in. Until the cost model is read no
  * window-share pin enters the round, so a count then would read short; `table` says whether it has been read.
  */
-export function shedPreviewLine(preview: ShedPreview, migrateOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
-  if (!migrateOn) return 'No round runs while migrate above utilization is off.';
+export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
+  if (!shedAheadOn) return 'No round runs while shed ahead of pace is off.';
   if (table === 'loading') return 'The cost model is loading; window-share pins are counted once it is read.';
   if (table === 'missing') return 'The cost model did not load, so window-share pins cannot be counted.';
   if (preview.members === 0) return 'No member is ahead of pace by the margin.';

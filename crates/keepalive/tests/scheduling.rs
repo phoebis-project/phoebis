@@ -8,11 +8,15 @@ use phoebis_ledger::{
     hour_of, member_spends, read_rollups, AttemptRecord, BudgetedMember, PriceTable, Record,
     RequestRecord, RollupSelect,
 };
+use phoebis_relay::Accounting;
 use phoebis_routing::{
     lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
     SelectResult,
 };
-use phoebis_store::{AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy};
+use phoebis_store::{
+    AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy, StateCause,
+};
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
 async fn armed(spec: RigSpec) -> Rig {
@@ -250,6 +254,64 @@ async fn a_retry_re_armed_past_the_expiry_is_held_under_expired_and_sends_no_pro
     );
 }
 
+/// A probe the router refused while its ledger was behind holds under `ledger_behind` and goes again after the
+/// answer's wait, with no failure counted. The entry's own expiry still bounds the re-sends: when the ledger catches
+/// up only after it, no probe goes out and the recipe ends under `expired`, as under any other hold.
+#[tokio::test]
+async fn a_ledger_behind_hold_lifted_after_the_expiry_sends_no_probe() {
+    let behind = Arc::new(AtomicBool::new(false));
+    let reading = behind.clone();
+    let mut r = armed(RigSpec {
+        accounting: Some(Arc::new(move |_| Accounting {
+            behind: reading.load(Ordering::SeqCst),
+        })),
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    behind.store(true, Ordering::SeqCst);
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.probes,
+            status.reason,
+            status.failures,
+            status.next_probe_at
+        ),
+        (1, Reason::LedgerBehind, 0, Some(r.now() + 5_000)),
+        "held for the answer's five seconds"
+    );
+    r.advance(5_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.probes,
+            status.reason,
+            status.failures,
+            status.next_probe_at
+        ),
+        (2, Reason::LedgerBehind, 0, Some(r.now() + 5_000)),
+        "sent again after the wait, and refused again"
+    );
+    // The entry written at the start expired at 300 s; the ledger catches up after it.
+    r.advance(30_000);
+    behind.store(false, Ordering::SeqCst);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.reason, status.next_probe_at),
+        (2, Reason::Expired, None)
+    );
+    assert_eq!(
+        r.up.requests().len(),
+        1,
+        "only the arming request went out: both refusals stopped at the router"
+    );
+}
+
 /// A report lands on the router task's own queue; the state it changes is visible once the handle says so.
 ///
 /// The lifetime is named rather than elided: `check` is only ever called with this one borrow of `r`, and an
@@ -371,6 +433,9 @@ async fn select_main(r: &Rig) -> SelectResult {
     let lane = lane_key(&model, "standard", "adaptive", "-");
     r.h.router
         .select(SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "desktop".into(),
             key_generation: key.created_at,
             agent_id: "main".into(),
@@ -695,6 +760,9 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
     .unwrap();
     r.h.router
         .select(SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "desktop".into(),
             key_generation: key.created_at,
             agent_id: "main".into(),
@@ -837,7 +905,7 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
     );
     r.h.store.set_enabled("a", true).unwrap();
     r.h.store
-        .set_state("a", AccountState::ReauthRequired)
+        .set_state("a", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
@@ -845,7 +913,9 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
         (r.status("main").probes, r.status("main").reason),
         (0, Reason::Reauth)
     );
-    r.h.store.set_state("a", AccountState::Ready).unwrap();
+    r.h.store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
@@ -1228,6 +1298,9 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
     let answer =
         r.h.router
             .select(SelectRequest {
+                request_id: "r-1".into(),
+                attempt: 1,
+                seq: 1,
                 key_id: pin.key_id.clone(),
                 key_generation: key.created_at,
                 agent_id: pin.agent_id.clone(),

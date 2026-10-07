@@ -18,7 +18,10 @@ use serde_json::{json, Value};
 
 use crate::accounts::within_text_bound;
 use crate::pools::valid_slug;
-use crate::routes::{double_option, failure, reload_or_refuse, store_failure, CreatedId};
+use crate::routes::{
+    double_option, failure, failure_with_code, fence_stamp, present, reload_or_refuse,
+    store_failure, CreatedId,
+};
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
@@ -50,6 +53,11 @@ struct KeyInput {
     body_capture_hours: Option<Option<u32>>,
     #[serde(default, deserialize_with = "double_option")]
     auto_mode_server: Option<Option<Value>>,
+    /// The raw value, kept apart from an absent field, so a present null, a string or a fraction is refused with
+    /// its own sentence rather than read as "not sent" or refused with the body's. A create reads nothing of it,
+    /// since there is no row to fence on.
+    #[serde(default, deserialize_with = "present")]
+    expected_revision: Option<Value>,
 }
 
 fn new_secret() -> String {
@@ -314,15 +322,26 @@ pub(crate) async fn patch(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "key not found"),
         Err(e) => return store_failure(e),
     };
-    let read_at = row.updated_at;
+    let read_at = match fence_stamp(input.expected_revision.as_ref(), row.updated_at) {
+        Ok(stamp) => stamp,
+        Err(refusal) => return refusal,
+    };
     if let Err(refusal) = apply(&state, &mut row, &input) {
         return refusal;
     }
-    match state.store.update_api_key(&row, read_at, ACTOR) {
+    if read_at != row.updated_at {
+        return failure_with_code(
+            StatusCode::CONFLICT,
+            "stale_edit",
+            "the key changed while it was being edited; reload and try again",
+        );
+    }
+    match state.store.update_api_key(&row, row.updated_at, ACTOR) {
         Ok(updated_at) => row.updated_at = updated_at,
         Err(StoreError::Stale) => {
-            return failure(
+            return failure_with_code(
                 StatusCode::CONFLICT,
+                "stale_edit",
                 "the key changed while it was being edited; reload and try again",
             )
         }

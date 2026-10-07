@@ -20,7 +20,7 @@ import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { moveLabel, sizedAccounts } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, poolRefusals, type PoolGroup } from '@/lib/forms';
@@ -28,6 +28,7 @@ import { useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
+import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, kindOrdered, poolStatusSentence, selectionOrder } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
@@ -43,7 +44,7 @@ const isPoolGroup = (value: string | null): value is PoolGroup => value !== null
 /** The strip: a feature the pool has on, in the rail's order, each opening the dialog on the group that edits it. */
 const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: string }[] = [
   { group: 'autoMode', on: (p) => !p.autoModeServer, word: 'server-side auto mode off' },
-  { group: 'shedding', on: (p) => p.migrateAboveUtilization !== null, word: 'load shedding' },
+  { group: 'shedding', on: (p) => p.shedAheadOfPace !== null, word: 'load shedding' },
   { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: 'cache TTL' },
   { group: 'keepalive', on: (p) => p.keepalive.enabled, word: 'keepalive' },
 ];
@@ -294,7 +295,7 @@ export function PoolsPage() {
         onRetryAccounts={accounts.reload}
         keys={keys.data ?? []}
         pools={pools.data ?? []}
-        sessions={sessions.data ?? []}
+        sessions={dialog?.pool ? (sessionsByPool.get(dialog.pool.id) ?? []) : []}
         models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
         onSaved={(created) => {
           setDialog(null);
@@ -497,12 +498,27 @@ function PoolCard({
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
   const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
-  // The route counts the moves of the last hour by reason, so every figure is a whole number.
+  // The route counts the moves of the last hour by reason on the pool's member accounts, so every figure is a whole
+  // number. The figure sums the rule moves, a keepalive probe's move included, which the log lists as moved only with
+  // probe decisions chosen. The title names the failovers apart, which the log draws as a later attempt's placement,
+  // and any reason this build does not know apart from both.
   const moveCounts = Object.entries(pool.movesPerHour)
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a);
-  const movesTotal = moveCounts.reduce((s, [, count]) => s + count, 0);
-  const movesTitle = moveCounts.length === 0 ? 'No session moved in the last hour.' : moveCounts.map(([reason, count]) => `${moveLabel(reason)} ${fmtInt(count)}`).join(', ');
+  const among = (reasons: readonly string[]) => moveCounts.filter(([reason]) => reasons.includes(reason));
+  const ruleMoves = among(RULE_MOVE_REASONS);
+  const failovers = among(FAILOVER_MOVE_REASONS);
+  const known: readonly string[] = [...RULE_MOVE_REASONS, ...FAILOVER_MOVE_REASONS];
+  const others = moveCounts.filter(([reason]) => !known.includes(reason));
+  const movesTotal = ruleMoves.reduce((s, [, count]) => s + count, 0);
+  const moveLine = ([reason, count]: [string, number]) => `${moveLabel(reason)} ${fmtInt(count)}`;
+  const movesTitle = [
+    ruleMoves.length === 0 ? 'No rule moved a session in the last hour' : 'Rule moves in the last hour',
+    ...ruleMoves.map(moveLine),
+    ...(failovers.length === 0 ? [] : ['Failovers left out of the count', ...failovers.map(moveLine)]),
+    ...(others.length === 0 ? [] : ['Other moves left out of the count', ...others.map(moveLine)]),
+    `Opens the Routing log on pool ${pool.id} and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen`,
+  ].join('\n');
   return (
     <Card id={pool.id} tabIndex={-1} padded={false} className="pool">
       <header className="pool__head">
@@ -692,7 +708,7 @@ function PoolCard({
         <div>
           <dt>Moves in the last hour</dt>
           <dd className="num" title={movesTitle}>
-            {fmtInt(movesTotal)}
+            <Link to={logHref({ pools: [pool.id], kinds: ['moved'], ...aroundSubject(null, now) })}>{fmtInt(movesTotal)}</Link>
           </dd>
         </div>
       </dl>
@@ -771,9 +787,6 @@ interface PoolForm {
   failoverCustom: boolean;
   keepalive: boolean;
   members: Record<string, number>;
-  /** The margin in percent; null while the field is empty, which a switched-on save refuses. */
-  migrate: number | null;
-  migrateOn: boolean;
   modelRules: ModelRule[];
   name: string;
   overage: OveragePolicy;
@@ -783,6 +796,9 @@ interface PoolForm {
   selectBelow: number;
   selectBelowOn: boolean;
   sessionPlacement: SessionPlacement;
+  /** The lead over pace in percent; null while the field is empty, which a switched-on save refuses. */
+  shedAhead: number | null;
+  shedAheadOn: boolean;
   sheddingCustom: boolean;
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
@@ -809,8 +825,6 @@ const blankForm = (): PoolForm => ({
   failoverCustom: false,
   keepalive: true,
   members: {},
-  migrate: null,
-  migrateOn: false,
   modelRules: [],
   name: '',
   overage: 'prefer_plan',
@@ -819,6 +833,8 @@ const blankForm = (): PoolForm => ({
   selectBelow: 80,
   selectBelowOn: false,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
+  shedAhead: null,
+  shedAheadOn: false,
   sheddingCustom: false,
   status: 'active',
   strategy: 'pace',
@@ -858,9 +874,6 @@ const formFrom = (pool: Pool): PoolForm => ({
   failoverCustom: failoverPresetOf(pool) === 'custom',
   keepalive: pool.keepalive.enabled,
   members: Object.fromEntries(pool.members.map((m) => [m.accountId, m.priority])),
-  // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
-  migrate: pool.migrateAboveUtilization === null ? null : Math.round(pool.migrateAboveUtilization * 10_000) / 100,
-  migrateOn: pool.migrateAboveUtilization !== null,
   modelRules: pool.modelRules,
   name: pool.name,
   overage: pool.overagePolicy,
@@ -871,6 +884,9 @@ const formFrom = (pool: Pool): PoolForm => ({
   selectBelow: pool.selectBelowUtilization === null ? 80 : Math.round(pool.selectBelowUtilization * 10_000) / 100,
   selectBelowOn: pool.selectBelowUtilization !== null,
   sessionPlacement: pool.sessionPlacement,
+  // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
+  shedAhead: pool.shedAheadOfPace === null ? null : Math.round(pool.shedAheadOfPace * 10_000) / 100,
+  shedAheadOn: pool.shedAheadOfPace !== null,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.
   status: pool.status === 'disabled' ? 'disabled' : 'active',
@@ -919,7 +935,7 @@ export function PoolDialog({
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];
   models: { label: string; value: string }[];
-  /** `reload` is true after a save the route answered with a refusal: one saying the pool changed while it was edited means the lists are out of date. */
+  /** `reload` is true from the stale save's Reload, and on a close after any refused save or a key move refused as stale, whose cause may be lists that are out of date. */
   onClose: (reload: boolean) => void;
   onKeyCreated: (c: CreatedApiKey) => void;
   onKeysChanged: () => void;
@@ -928,7 +944,7 @@ export function PoolDialog({
   open: boolean;
   pool: Pool | null;
   pools: Pool[];
-  /** Every session the router holds: a shedding round weighs all of a member's pins, whichever pool's key made them. */
+  /** The sessions under the pool's keys: a shedding round weighs the pool's own pins on a member alone. */
   sessions: Session[];
 }) {
   const now = useNow();
@@ -937,6 +953,7 @@ export function PoolDialog({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
+  const [stale, setStale] = useState<string | null>(null);
   const [chosen, setChosen] = useState<PoolGroup>('identity');
   const settings = useAsync(() => api.getSettings(), []);
   const captureMaxHours = settings.data?.retention.bodyCaptureMaxHours ?? 72;
@@ -965,6 +982,7 @@ export function PoolDialog({
     setBusy(false);
     setError(null);
     setAttempted(false);
+    setStale(null);
     setChosen(initialGroup ?? 'identity');
     // `accounts` is read but not tracked: the parent hands down a fresh array on every render, and reacting to
     // that would wipe the form mid-edit.
@@ -981,7 +999,7 @@ export function PoolDialog({
   }, [open, accounts]);
 
   const set = <K extends keyof PoolForm>(key: K, value: PoolForm[K]) => setForm((f) => ({ ...f, [key]: value }));
-  const setMigrate = (value: number | null) => set('migrate', value);
+  const setShedAhead = (value: number | null) => set('shedAhead', value);
   const poolKeys = (pool ? [...localKeys, ...keys.filter((k) => k.poolId === pool.id && !localKeys.some((l) => l.id === k.id))] : localKeys).filter((k) => !moved.has(k.id));
   const otherPools = pools.filter((p) => p.id !== pool?.id);
   // The id the create call derives from the name, which keys created before the pool is saved use too.
@@ -1023,10 +1041,6 @@ export function PoolDialog({
       const usd = (typed: string) => (typed.trim() === '' ? null : Number(typed));
       return { accountId, budgetDailyUsd: usd(budget.daily), budgetMonthlyUsd: usd(budget.monthly), priority };
     }),
-    // Through whole hundredths of a percent, so a stored four-decimal threshold saves back as stored: the two-decimal
-    // percent divided by 100 lands an ulp off for about a quarter of them. An empty field goes on as NaN, which the
-    // refusals below hold the save for.
-    migrateAboveUtilization: form.migrateOn ? (form.migrate === null ? Number.NaN : Math.round(form.migrate * 100) / 10_000) : null,
     // With neither placement reading the threshold it goes back as stored, so an edit left in it holds nothing.
     minSharedPrefixTokens: prefixEnabled
       ? form.prefixTokens.trim() === '' ? Number.NaN : Number(form.prefixTokens)
@@ -1037,6 +1051,10 @@ export function PoolDialog({
     preferSubscription: form.preferSubscription,
     selectBelowUtilization: form.selectBelowOn ? form.selectBelow / 100 : null,
     sessionPlacement: form.sessionPlacement,
+    // Through whole hundredths of a percent, so a stored four-decimal threshold saves back as stored: the two-decimal
+    // percent divided by 100 lands an ulp off for about a quarter of them. An empty field goes on as NaN, which the
+    // refusals below hold the save for.
+    shedAheadOfPace: form.shedAheadOn ? (form.shedAhead === null ? Number.NaN : Math.round(form.shedAhead * 100) / 10_000) : null,
     status: form.status,
     strategy: form.strategy,
     subagentPlacement: form.subagentPlacement,
@@ -1110,12 +1128,14 @@ export function PoolDialog({
         name: moving.name,
         notes: moving.notes,
         poolId: moveTo,
-      });
+      }, moving.updatedAt);
       setMoved((prev) => new Set(prev).add(moving.id));
       setMoving(null);
       onKeysChanged();
     } catch (e) {
       setMoveError(e instanceof Error ? e.message : String(e));
+      // The key moved since the page read it, so the lists are out of date and the dialog's close reads them again.
+      if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') setAttempted(true);
     } finally {
       setMoveBusy(false);
     }
@@ -1134,13 +1154,21 @@ export function PoolDialog({
   const submit = async () => {
     setBusy(true);
     setError(null);
+    setStale(null);
     try {
-      if (pool) await api.updatePool(pool.id, input);
+      if (pool) await api.updatePool(pool.id, input, pool.updatedAt);
       else await api.createPool(input);
     } catch (e) {
       // Stated inside the dialog, which stays open: it sits in the browser's top layer, where a toast raised
       // behind its backdrop would never be seen, and the edit that was refused is still on screen.
       setBusy(false);
+      if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') {
+        // The row moved under the dialog: the edit is about values that are gone, so the operator reloads and
+        // re-applies it rather than saving over what someone else wrote. Cancel reads the lists again as well.
+        setStale(e.message);
+        setAttempted(true);
+        return;
+      }
       setError(e instanceof Error ? e.message : String(e));
       if (e instanceof ApiError && e.status >= 400) setAttempted(true);
       return;
@@ -1560,11 +1588,11 @@ export function PoolDialog({
       <div className="cells">
         <div className="cell--half">
           <SwitchedNumber
-            label="Migrate above utilization"
-            numberLabel="Utilization (%)"
-            checked={form.migrateOn}
-            onChange={(v) => set('migrateOn', v)}
-            input={{ min: 0, max: 100, value: form.migrate ?? '', onChange: (e) => setMigrate(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Migrate above utilization (%)', 'aria-invalid': invalid('Migrate above utilization (%)') }}
+            label="Shed ahead of pace"
+            numberLabel="Lead over pace (%)"
+            checked={form.shedAheadOn}
+            onChange={(v) => set('shedAheadOn', v)}
+            input={{ min: 0, max: 100, value: form.shedAhead ?? '', onChange: (e) => setShedAhead(e.target.value === '' ? null : Number(e.target.value)), 'aria-label': 'Shed ahead of pace (%)', 'aria-invalid': invalid('Shed ahead of pace (%)') }}
             hint={
               <>
                 A member whose 5-hour or 7-day window runs ahead of pace by this much starts a <GroupLink id="shedding">shedding round</GroupLink>; a sibling counts as cool under the line minus 5%.
@@ -1609,7 +1637,7 @@ export function PoolDialog({
     shedding: (
       <>
         <p className="dialog-group__intro">
-          A member ahead of its pace by the <GroupLink id="utilization">migrate margin</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
+          A member ahead of its pace by the <GroupLink id="utilization">shedding margin</GroupLink> runs a round that marks some of its sessions; each moves to a cooler sibling at its next request.
         </p>
         <div className="cells">
           <Expert>
@@ -1678,11 +1706,11 @@ export function PoolDialog({
           <Expert>
             <Field label="Preview" plain>
               <p className="shed-preview num" role="status">
-                {form.migrateOn ? (
+                {form.shedAheadOn ? (
                   shedPreviewLine(preview, true, settings.data ? 'ready' : settings.error ? 'missing' : 'loading')
                 ) : (
                   <>
-                    No round runs while <GroupLink id="utilization">migrate above utilization</GroupLink> is off.
+                    No round runs while <GroupLink id="utilization">shed ahead of pace</GroupLink> is off.
                   </>
                 )}
               </p>
@@ -2024,7 +2052,18 @@ export function PoolDialog({
         // before the edit.
         status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
         hold={first?.group ?? null}
-        held={first !== null || error !== null}
+        held={first !== null || error !== null || stale !== null}
+        notice={
+          stale &&
+          refusalCallout(
+            <>
+              {stale}{' '}
+              <Button variant="ghost" onClick={() => onClose(true)}>
+                Reload
+              </Button>
+            </>,
+          )
+        }
         footer={
           <>
             <Button variant="ghost" onClick={() => onClose(attempted)}>

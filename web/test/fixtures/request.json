@@ -6,7 +6,7 @@
       "at": -2600000,
       "finished_at": -2599100,
       "key_id": "desktop",
-      "key_generation": 1790987341276,
+      "key_generation": 1791268384992,
       "pool_id": "main",
       "account_id": "business",
       "session_id": "s1",
@@ -123,7 +123,7 @@
             "refusal_recommended_model": null,
             "served_model": null,
             "speed": "standard",
-            "stop_reason": "end_turn",
+            "stop_reason": null,
             "stop_sequence": null
           }
         },
@@ -205,7 +205,10 @@
           "from_account": "direct",
           "epoch": 2,
           "reason": "spent"
-        }
+        },
+        "pool_id": null,
+        "agent_id": "main",
+        "request_id": null
       },
       {
         "at": -2599800,
@@ -221,7 +224,10 @@
             "cooldown",
             "spent"
           ]
-        }
+        },
+        "pool_id": null,
+        "agent_id": "main",
+        "request_id": null
       },
       {
         "at": -2599700,
@@ -236,7 +242,10 @@
           "request_id": "req-rejected",
           "source_request_id": "r-failover",
           "wire_model": "claude-haiku-4-5"
-        }
+        },
+        "pool_id": null,
+        "agent_id": null,
+        "request_id": "r-failover"
       },
       {
         "at": -2599650,
@@ -254,7 +263,10 @@
           "request_id": "req-permitted",
           "source_request_id": "r-failover",
           "wire_model": "claude-haiku-4-5"
-        }
+        },
+        "pool_id": null,
+        "agent_id": null,
+        "request_id": "r-failover"
       }
     ]
   }

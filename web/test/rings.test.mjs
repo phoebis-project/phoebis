@@ -24,15 +24,15 @@ const close = (actual, expected, what) => assert.ok(Math.abs(actual - expected) 
 
 test('a Max 20x account at 10% left and a Pro account at 90% left weigh to 1.05 capacity and 0.145 left', () => {
   // Weighed by capacity over the anchor's: 100 / 100 and 5 / 100.
-  const figures = d.ringFigures([account('business', 'default_claude_max_20x', [window('5h', 0.9)]), account('mail', 'default_claude_ai', [window('5h', 0.1)])], '5h', COSTS, NOW);
+  const figures = d.ringFigures([account('primary', 'default_claude_max_20x', [window('5h', 0.9)]), account('secondary', 'default_claude_ai', [window('5h', 0.1)])], '5h', COSTS, NOW);
   assert.equal(figures.anchor, 'Max 20x', 'the capacity reads in windows of the tier the file anchors its unit on');
   close(figures.capacity, 1.05, 'capacity');
   close(figures.left, 0.145, 'left');
   assert.deepEqual(
     figures.rows.map((r) => [r.id, r.weight]),
     [
-      ['business', 1],
-      ['mail', 0.05],
+      ['primary', 1],
+      ['secondary', 0.05],
     ],
   );
   assert.deepEqual(figures.leftOut, []);
@@ -43,18 +43,18 @@ test('a Max 20x account at 10% left and a Pro account at 90% left weigh to 1.05 
 
 test('an unsized tier and a null 7-day capacity are left out with their reasons', () => {
   const accounts = [
-    account('business', 'default_claude_max_20x', [window('7d', 0.41)]),
-    account('personal', 'default_claude_team', [window('7d', 0.35)]),
+    account('primary', 'default_claude_max_20x', [window('7d', 0.41)]),
+    account('nightly', 'default_claude_team', [window('7d', 0.35)]),
     account('team', 'claude_enterprise', [window('7d', 0.52)]),
     account('fresh', null, [window('7d', 0.1)]),
   ];
   const figures = d.ringFigures(accounts, '7d', COSTS, NOW);
   assert.deepEqual(
     figures.rows.map((r) => r.id),
-    ['business'],
+    ['primary'],
   );
   assert.deepEqual(figures.leftOut, [
-    { id: 'personal', label: 'personal', reason: 'Team 7-day capacity not measured' },
+    { id: 'nightly', label: 'nightly', reason: 'Team 7-day capacity not measured' },
     { id: 'team', label: 'team', reason: 'tier claude_enterprise is not in the cost model' },
     { id: 'fresh', label: 'fresh', reason: 'no subscription profile' },
   ]);
@@ -63,7 +63,7 @@ test('an unsized tier and a null 7-day capacity are left out with their reasons'
 });
 
 test('a ring with every account left out has no rows', () => {
-  const accounts = [account('mail', 'default_claude_team', [window('7d', 0.88)]), account('personal', 'claude_enterprise', [window('7d', 0.35)])];
+  const accounts = [account('secondary', 'default_claude_team', [window('7d', 0.88)]), account('nightly', 'claude_enterprise', [window('7d', 0.35)])];
   const figures = d.ringFigures(accounts, '7d', COSTS, NOW);
   assert.deepEqual(figures.rows, []);
   assert.equal(figures.capacity, 0);
@@ -76,7 +76,7 @@ test('a ring with every account left out has no rows', () => {
 
 test("an anchor with no capacity on the window weighs no account and names the anchor's tier as the one not measured", () => {
   const anchorless = { ...COSTS, capacity: { ...COSTS.capacity, default_claude_max_20x: { ...COSTS.capacity.default_claude_max_20x, sevenDay: null } } };
-  const figures = d.ringFigures([account('business', 'default_claude_max_20x', [window('7d', 0.41)]), account('personal', 'default_claude_max_5x', [window('7d', 0.35)])], '7d', anchorless, NOW);
+  const figures = d.ringFigures([account('primary', 'default_claude_max_20x', [window('7d', 0.41)]), account('nightly', 'default_claude_max_5x', [window('7d', 0.35)])], '7d', anchorless, NOW);
   assert.deepEqual(figures.rows, []);
   assert.deepEqual(
     figures.leftOut.map((o) => o.reason),
@@ -85,13 +85,13 @@ test("an anchor with no capacity on the window weighs no account and names the a
 });
 
 test('an expired window counts as a full allowance, keeps its weight and is not named', () => {
-  const accounts = [account('business', 'default_claude_max_20x', [window('5h', 0.8, -2 * HOUR)]), account('personal', 'default_claude_max_5x', [window('5h', 0.6)])];
+  const accounts = [account('primary', 'default_claude_max_20x', [window('5h', 0.8, -2 * HOUR)]), account('nightly', 'default_claude_max_5x', [window('5h', 0.6)])];
   const figures = d.ringFigures(accounts, '5h', COSTS, NOW);
   assert.deepEqual(
     figures.rows.map((r) => [r.id, r.weight, Number(r.remaining.toFixed(9))]),
     [
-      ['business', 1, 1],
-      ['personal', 0.25, 0.4],
+      ['primary', 1, 1],
+      ['nightly', 0.25, 0.4],
     ],
   );
   assert.deepEqual(figures.leftOut, []);
@@ -101,17 +101,17 @@ test('an expired window counts as a full allowance, keeps its weight and is not 
 
 test('an account with routing off or without the window is neither weighed nor named', () => {
   const accounts = [
-    account('business', 'default_claude_max_20x', [window('5h', 0.5)]),
+    account('primary', 'default_claude_max_20x', [window('5h', 0.5)]),
     account('team', 'claude_team', [window('5h', 0.18)], { routingEnabled: false }),
     account('off', 'default_claude_ai', [window('5h', 0.2)], { routingEnabled: false }),
     account('spare', null, []),
     account('weekly', 'default_claude_max_5x', [window('7d', 0.3)]),
-    account('console', null, [], { kind: 'api_key' }),
+    account('overflow', null, [], { kind: 'api_key' }),
   ];
   const figures = d.ringFigures(accounts, '5h', COSTS, NOW);
   assert.deepEqual(
     figures.rows.map((r) => r.id),
-    ['business'],
+    ['primary'],
   );
   assert.deepEqual(figures.leftOut, []);
 });

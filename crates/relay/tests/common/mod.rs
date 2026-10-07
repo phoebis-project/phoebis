@@ -24,9 +24,9 @@ use phoebis_relay::{
 };
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Failover, Identity,
-    MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret, StorageKey,
-    Store, Strategy,
+    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Failover,
+    Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret,
+    StateCause, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use tower::ServiceExt;
@@ -103,6 +103,7 @@ pub fn test_account_row(account: &TestAccount) -> AccountRow {
         incarnation: 1,
         revision: 1,
         state: AccountState::Ready,
+        state_cause: StateCause::Operator,
     }
 }
 
@@ -114,9 +115,9 @@ pub struct PoolSpec {
     pub failover: Failover,
     /// The harness key's own override of `auto_mode_server`; `None` inherits the pool's.
     pub key_auto_mode_server: Option<bool>,
-    pub migrate_above_utilization: Option<f64>,
     pub model_rules: Vec<ModelRule>,
     pub overage_policy: OveragePolicy,
+    pub shed_ahead_of_pace: Option<f64>,
     pub strategy: Strategy,
 }
 
@@ -129,9 +130,9 @@ impl Default for PoolSpec {
             cache_ttl: "{}",
             failover: Failover::default(),
             key_auto_mode_server: None,
-            migrate_above_utilization: None,
             model_rules: Vec::new(),
             overage_policy: OveragePolicy::PreferPlan,
+            shed_ahead_of_pace: None,
             strategy: Strategy::Priority,
         }
     }
@@ -576,13 +577,14 @@ pub async fn harness_with_catalog(
 
 /// `harness_with_bus`, with the caller's own catalog fake in place of `catalog_rules()`'s: for a suite (like
 /// keepalive's) built around a session's pin and account continuity, where a spelling resolving to a dated id
-/// mid-test is not what the suite is about.
+/// mid-test is not what the suite is about. `accounting`, when named, is the ledger's standing admission reads.
 pub async fn harness_with_bus_and_catalog(
     up: &FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
     bus: Bus,
     catalog_up: FakeUpstream,
+    accounting: Option<AccountingSource>,
 ) -> Harness {
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     build(
@@ -596,7 +598,7 @@ pub async fn harness_with_bus_and_catalog(
         None,
         Some(catalog_up),
         RouterConfig::default(),
-        None,
+        accounting,
     )
     .await
 }
@@ -664,6 +666,7 @@ async fn build(
                     incarnation: 1,
                     revision: 1,
                     state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
                 })
                 .unwrap();
             match account.kind {
@@ -703,7 +706,7 @@ async fn build(
                     strategy: pool.strategy,
                     affinity_ttl_seconds: pool.affinity_ttl_seconds,
                     overage_policy: pool.overage_policy,
-                    migrate_above_utilization: pool.migrate_above_utilization,
+                    shed_ahead_of_pace: pool.shed_ahead_of_pace,
                     model_rules: pool.model_rules,
                     prefer_subscription: false,
                     failover: pool.failover,
@@ -894,6 +897,34 @@ pub async fn step_to_backoff(h: &Harness, up: &FakeUpstream, account: &str) {
     })
     .await;
     h.clock.store(until, Ordering::SeqCst);
+}
+
+/// A label edit through the one account write, fenced on the revision the caller read. The incarnation and the
+/// generation are the row's own at call time, so only the revision half of the admin route's fence can refuse here.
+pub fn rename(
+    h: &Harness,
+    id: &str,
+    revision: u64,
+    label: &str,
+    actor: &str,
+) -> Result<(), StoreError> {
+    let (incarnation, generation) = h
+        .store
+        .account(id)?
+        .map_or((0, 0), |row| (row.incarnation, row.lifecycle_generation));
+    h.store.commit_account_update(&AccountUpdate {
+        id,
+        expected_revision: revision,
+        incarnation,
+        lifecycle_generation: generation,
+        label,
+        secret: None,
+        state: None,
+        at: h.clock.load(Ordering::SeqCst),
+        actor,
+        enabled: None,
+        cancellation: None,
+    })
 }
 
 /// A fake serving plain HTTP has no certificate to trust, and `X509::from_pem` refuses the empty string.

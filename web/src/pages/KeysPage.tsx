@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
 import { useLocation, useNavigate } from 'react-router-dom';
-import { api } from '@/api';
+import { api, ApiError } from '@/api';
 import { slug } from '@/api/http';
 import type { ApiKey, CreatedApiKey, KeyModels, KeyStatus, ModelRule, ModelRulesMode, Pool } from '@/api/types';
 import { useSession } from '@/app/session';
@@ -368,6 +368,10 @@ export function KeysPage() {
         existing={dialog?.key ?? null}
         initialGroup={dialog?.initialGroup ?? null}
         onClose={() => setDialog(null)}
+        onReload={() => {
+          setDialog(null);
+          keys.reload();
+        }}
         pools={poolList}
         existingIds={new Set((keys.data ?? []).map((k) => k.id))}
         onCreated={(c) => {
@@ -420,7 +424,7 @@ const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: '
  * inside a pool's own dialog. `existingIds` are the listed keys' ids, which a new
  * key's derived id is checked against before the create.
  */
-export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
+export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [name, setName] = useState('');
   const [poolId, setPoolId] = useState('all');
@@ -436,6 +440,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const [enabled, setEnabled] = useState(true);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [stale, setStale] = useState<string | null>(null);
   const settings = useAsync(() => api.getSettings(), []);
   const pool = pools.find((p) => p.id === poolId) ?? null;
   const poolName = pool?.name ?? poolId;
@@ -473,6 +478,7 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     setEnabled(form.enabled);
     setBusy(false);
     setError(null);
+    setStale(null);
   }, [open, existing, initialPoolId, initialGroup]);
   // A new key opened before the pools landed has no pool yet; the first one fills it once they do.
   useEffect(() => {
@@ -487,11 +493,12 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
   const submit = async () => {
     setBusy(true);
     setError(null);
+    setStale(null);
     const form = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
     const input = keyInputOf(form, clock.now());
     try {
       if (existing) {
-        const updated = await api.updateKey(existing.id, input);
+        const updated = await api.updateKey(existing.id, input, existing.updatedAt);
         setBusy(false);
         onUpdated?.(updated);
         return;
@@ -502,11 +509,17 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
     } catch (e) {
       // Stated in the dialog rather than a toast, so the form the operator filled in is still on screen beside it.
       setBusy(false);
+      if (e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') {
+        // The row moved under the dialog: the edit is about values that are gone, so the operator reloads and
+        // re-applies it rather than saving over what someone else wrote.
+        setStale(e.message);
+        return;
+      }
       setError(e instanceof Error ? e.message : String(e));
     }
   };
 
-  const refusalCallout = (text: string) => (
+  const refusalCallout = (text: ReactNode) => (
     <div className="callout callout--critical" role="alert">
       <IconWarning size={16} />
       <div>{text}</div>
@@ -704,7 +717,18 @@ export function KeyDialog({ open, onClose, onCreated, onUpdated, pools, existing
       // before the edit.
       status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
       hold={first?.group ?? null}
-      held={first !== null || error !== null}
+      held={first !== null || error !== null || stale !== null}
+      notice={
+        stale &&
+        refusalCallout(
+          <>
+            {stale}{' '}
+            <Button variant="ghost" onClick={onReload}>
+              Reload
+            </Button>
+          </>,
+        )
+      }
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>

@@ -952,6 +952,206 @@ async fn a_credit_on_the_standard_lane_settles_a_fast_batch_kept_beside_it_as_a_
     );
 }
 
+/// A kept-warm credit needs the entry the covering probe kept to be there when the credited request arrives, on the
+/// instant the settlement and the scheduler read as the entry gone. On the lineage trace above, the standard probe
+/// refreshes its five-minute entry 560 s in and nothing is admitted until the fourth request, which arrives one
+/// millisecond before that entry lapses, as it lapses, or a minute after: only the first is credited, and past the
+/// lapse the standard batch settles as a cold return beside the fast one.
+#[tokio::test]
+async fn a_kept_warm_credit_needs_the_covering_entry_alive_when_the_request_arrives() {
+    for (offset, credited) in [(299_999, 1), (300_000, 0), (360_000, 0)] {
+        let arrived = 560_000 + offset;
+        let mut r = rig(RigSpec {
+            accounts: vec![api_key("a", A, 0)],
+            ..RigSpec::default()
+        })
+        .await;
+        let standard = opus_body();
+        let fast = standard.replacen('{', r#"{"speed":"fast","#, 1);
+        open_request_with(&r, "first", &fast, 0, 2_000);
+        r.engine.observe(completed(&r, "first", 0));
+        r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+        r.advance_attended(270_000);
+        r.step().await;
+        assert_eq!(
+            (r.status("main").probes, r.status("main").unanswered),
+            (1, 1),
+            "arrived {arrived} ms in: a covering fast probe"
+        );
+        r.advance_attended(10_000);
+        r.engine.observe(r.observed("second", "main", &standard));
+        r.engine.observe(r.selected("second", "a"));
+        r.engine.observe(failed(&r, "second", None));
+        r.advance_attended(10_000);
+        open_request_with(&r, "third", &standard, 0, 2_000);
+        r.advance_attended(270_000);
+        r.step().await;
+        assert_eq!(
+            (r.status("main").probes, r.status("main").unanswered),
+            (2, 2),
+            "arrived {arrived} ms in: a covering standard probe landed while the third request streamed"
+        );
+        r.engine.bus_gap(1, 0);
+        // The standard probe refreshed its five-minute entry 560 s in, so it lapses 860 s in.
+        r.advance_attended(offset);
+        open_request_with(&r, "fourth", &standard, 2_000, 0);
+        r.engine.observe(completed(&r, "fourth", 2_000));
+        assert_eq!(r.status("main").unanswered, 0, "arrived {arrived} ms in");
+        r.ledger.clone().shutdown().await.unwrap();
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let (fast_probes, standard_probes) =
+            (probe_rows_at(&rows, true), probe_rows_at(&rows, false));
+        let cold_return = BTreeMap::from([("cold_return".to_string(), 1)]);
+        let standard_settled = if credited == 1 {
+            (0, BTreeMap::new())
+        } else {
+            (1, cold_return.clone())
+        };
+        assert_eq!(
+            (
+                inference_rows(&rows).kept_warm_requests,
+                fast_probes.wasted_probe_reasons.clone(),
+                (
+                    standard_probes.wasted_probes,
+                    standard_probes.wasted_probe_reasons.clone()
+                ),
+            ),
+            (credited, cold_return, standard_settled),
+            "arrived {arrived} ms in"
+        );
+        assert!(
+            fast_probes.wasted_probe_usd > 0.0
+                && (fast_probes.wasted_probe_usd - fast_probes.probe_cost_usd).abs() < 1e-12,
+            "arrived {arrived} ms in: {fast_probes:?}"
+        );
+        if credited == 0 {
+            assert!(
+                standard_probes.wasted_probe_usd > 0.0
+                    && (standard_probes.wasted_probe_usd - standard_probes.probe_cost_usd).abs()
+                        < 1e-12,
+                "arrived {arrived} ms in: {standard_probes:?}"
+            );
+        }
+    }
+}
+
+/// The lane check refuses a credit on its own. A fast recipe on a one-hour write is covered by a fast probe, and a
+/// standard request on the same model and account arrives past the hour since the last real request, while the
+/// entry the probe refreshed is still there, and reads the cache: the fast probe kept nothing on the standard lane,
+/// so nothing is credited and its batch settles as a cold return.
+#[tokio::test]
+async fn a_fast_batch_inside_its_entry_earns_no_credit_on_the_standard_lane() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let standard = opus_body().replace(
+        r#""cache_control":{"type":"ephemeral"}"#,
+        r#""cache_control":{"type":"ephemeral","ttl":"1h"}"#,
+    );
+    let fast = standard.replacen('{', r#"{"speed":"fast","#, 1);
+    r.engine.observe(r.observed("first", "main", &fast));
+    r.engine.observe(r.selected("first", "a"));
+    r.engine.observe(phoebis_bus::Event::ResponseChunk(
+        phoebis_bus::ResponseChunk {
+            request_id: "first".into(),
+            attempt: 1,
+            index: 0,
+            body: Default::default(),
+            phase: Some(phoebis_bus::Phase::MessageStart {
+                usage: phoebis_bus::Usage {
+                    cache_read_tokens: Some(0),
+                    cache_write_1h_tokens: Some(2_000),
+                    ..Default::default()
+                },
+            }),
+        },
+    ));
+    r.engine.observe(completed(&r, "first", 0));
+    assert_eq!(r.status("main").cache_ttl_ms, 3_600_000, "a one-hour entry");
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    r.advance_attended(3_600_000 - 360_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").unanswered),
+        (1, 1),
+        "a covering fast probe"
+    );
+    // The probe refreshed its one-hour entry 3,240 s in, so it is there until 6,840 s in; the request arrives
+    // 3,640 s in, past the hour since the first.
+    r.advance_attended(400_000);
+    open_request_with(&r, "second", &standard, 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (0, BTreeMap::from([("cold_return".to_string(), 1)])),
+        "the standard request read nothing the fast probe kept"
+    );
+}
+
+/// The account check refuses a credit on its own. A probe warms the recipe's entry on `a`, and the next request on
+/// the same model and speed arrives past the TTL since the last real request, while that entry is still there, and is
+/// served on `b`: what it read there ordinary traffic cached, not the probe, so nothing is credited and the batch
+/// settles as a cold return.
+#[tokio::test]
+async fn a_credit_binds_to_the_account_the_probe_warmed() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0), api_key("b", B, 1)],
+        ..RigSpec::default()
+    })
+    .await;
+    open_request(&r, "first", 0, 2_000);
+    r.engine.observe(completed(&r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.unanswered, status.migrations),
+        (1, 1, 0),
+        "a covering probe on a"
+    );
+    // The probe refreshed its five-minute entry 270 s in, so it is there until 570 s in; the request arrives 400 s
+    // in, past the five minutes since the first.
+    r.advance_attended(130_000);
+    r.engine.observe(r.observed("second", "main", BODY));
+    r.engine.observe(r.selected("second", "b"));
+    let mut served = completed(&r, "second", 2_000);
+    if let phoebis_bus::Event::RequestComplete(complete) = &mut served {
+        complete.account_id = Some("b".into());
+    }
+    r.engine.observe(served);
+    assert_eq!(r.status("main").unanswered, 0);
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (0, BTreeMap::from([("cold_return".to_string(), 1)])),
+        "the read on b answered nothing the probe on a kept"
+    );
+}
+
 /// A batch answers only to a read that arrived while the entry its probes kept was still there. A request that failed
 /// before any head leaves the batch kept; the next request on the same model, speed and account arrives as that entry
 /// expires and reads the cache, which nothing the probe paid for kept, so the batch settles as a cold return.
@@ -972,7 +1172,7 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_a_cold_
     r.engine.observe(r.selected("second", "a"));
     r.engine.observe(failed(&r, "second", None));
     assert_eq!(r.status("main").unanswered, 1, "the batch stays kept");
-    // The probe wrote its five-minute entry 270 s in, so it expires 570 s in.
+    // The probe refreshed its five-minute entry 270 s in, so it expires 570 s in.
     r.advance_attended(290_000);
     open_request(&r, "third", 2_000, 0);
     r.engine.observe(completed(&r, "third", 2_000));

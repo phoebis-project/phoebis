@@ -19,19 +19,28 @@ const admin = async () => {
   await api.login('admin');
   return api;
 };
+/**
+ * A summary fact's value is a number or a word by design and a walk fact's any value the engine read, so both sides
+ * read as one kind there; a member's windows are keyed by window name, data rather than schema, so the comparison
+ * holds each entry to the fixture's first.
+ */
+const factValue = (f) => ({ ...f, value: typeof f.value === 'number' || typeof f.value === 'string' ? 'number or string' : f.value });
+/** The merged page split by row type, so each of the two shapes meets the fixture's own rows of that type. */
+const byType = (page) => ({ decisions: page.rows.filter((r) => r.type === 'decision').map((r) => ({ ...r, fact: r.fact.map(factValue) })), events: page.rows.filter((r) => r.type === 'event') });
+const recordShape = (r) => r && { ...r, candidates: r.candidates.map((c) => ({ ...c, windows: Object.values(c.windows) })), walk: r.walk.map((w) => ({ ...w, facts: w.facts.map((f) => ({ ...f, value: 'any' })) })) };
 
 /**
  * One row per fixture: how the decoder reads it, and how the mock answers the same route. A list route
  * compares every mock row against the fixture's first; a singleton fixture whose `Api` method lists (the one
- * account, the one quota snapshot) picks the story's `business` row so one shape meets one; a route whose
+ * account, the one quota snapshot) picks the story's `primary` row so one shape meets one; a route whose
  * answer depends on which story row it asks for walks the story to one that has rows, since an empty mock
  * list where the fixture has rows is a finding; `expect` stands in for a route with no decoder.
  */
 const SYNC = {
-  account: { decode: (b) => d.decodeAccount(b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'business') },
-  account_catalog: { decode: (b) => d.decodeAccountCatalog(b), mock: (api) => api.getAccountCatalog('business') },
-  account_quota: { decode: (b) => d.decodeQuotaHistory(b), mock: (api) => api.getQuotaHistory('business') },
-  account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'business').usage },
+  account: { decode: (b) => d.decodeAccount(b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'primary') },
+  account_catalog: { decode: (b) => d.decodeAccountCatalog(b), mock: (api) => api.getAccountCatalog('primary') },
+  account_quota: { decode: (b) => d.decodeQuotaHistory(b), mock: (api) => api.getQuotaHistory('primary') },
+  account_usage: { decode: (b) => d.decodeSnapshot('business', b), mock: async (api) => (await api.listAccounts()).find((a) => a.id === 'primary').usage },
   accounts: { decode: (b) => b.accounts.map(d.decodeAccount), mock: (api) => api.listAccounts() },
   analytics_accounts: { decode: (b) => d.decodeAccountRollups(b), mock: (api) => api.listAccountRollups(day, now) },
   analytics_breakdown: { decode: (b) => b.rows.map(d.decodeAnalyticsGroup), mock: (api) => api.getAnalyticsBreakdown(query) },
@@ -43,6 +52,8 @@ const SYNC = {
   analytics_series: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries(query)).filter((p) => p.groups.length) },
   attention: { decode: (b) => b.items.map(d.decodeAttention), mock: (api) => api.getAttention() },
   dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview() },
+  // The story's static placement, whose `raw` is the record the mock answers where the fixture's is the route's body.
+  decision: { decode: (b) => recordShape(d.decodeDecisionRecord(b)), mock: async (api) => recordShape(await api.getDecision('req_b2bed817-a58', 1)), opaque: (path) => path === '.settings' || path === '.raw' },
   keepalive_overview: { decode: (b) => d.decodeKeepaliveOverview(b), mock: (api) => api.getKeepaliveOverview() },
   keepalive_recipes: { decode: (b) => b.recipes.map(d.decodeRecipe), mock: (api) => api.listKeepaliveRecipes() },
   key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'sync', notes: null, poolId: 'all' }) },
@@ -50,13 +61,14 @@ const SYNC = {
   keys: { decode: (b) => b.keys.map(d.decodeKey), mock: (api) => api.listKeys() },
   live_messages: { decode: (b) => ({ ...d.decodeLiveSnapshot(b.snapshot.snapshot), recent: [d.decodeLiveRequest(b.deltas[0].delta.request)] }), mock: (api) => { let snapshot; const stop = api.subscribeLive((e) => { if (e.kind === 'snapshot') snapshot = e.snapshot; }); stop(); return snapshot; } },
   models_state: { decode: (b) => d.decodeModelsState(b), mock: (api) => api.getModelsState() },
-  pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing('team') },
+  pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing('legacy') },
   pools: { decode: (b) => b.pools.map(d.decodePool), mock: (api) => api.listPools() },
   request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const detail = await api.getRequest(r.id); if (detail.events.length) return detail; } throw new Error('no mock request carries an event'); } },
   // `.request`/`.response` are CapturedBodies' own declared-`unknown` fields (decode.ts's decodeBodies passes
   // them through raw), the same class of value OPAQUE covers for `.detail`.
   request_bodies: { decode: (b) => d.decodeBodies(b), mock: async (api) => { const page = await api.listRequests(); return api.getCapturedBodies(page.requests.find((r) => r.capturedBodies).id); }, opaque: (path) => path === '.request' || path === '.response' },
   requests: { decode: (b) => d.decodeRequestPage(b), mock: (api) => api.listRequests() },
+  routing_log: { decode: (b) => byType(d.decodeRoutingLogPage(b)), mock: async (api) => byType(await api.listRoutingLog()) },
   session: { expect: (b) => Object.fromEntries(Object.keys(b).map((k) => [camel(k), 'any'])), mock: async (api) => { await api.login('admin'); return api.getSession(); } },
   sessions: { decode: (b) => b.sessions.map(d.decodeSession), mock: (api) => api.listSessions() },
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
@@ -187,12 +199,12 @@ test('the mock stores a key edit\'s enabled flag and expiry and folds them into 
 
 test('the mock deletes an account with its pool memberships, and a disconnect keeps the identity', async () => {
   const api = await admin();
-  assert.ok((await api.listPools()).some((p) => p.members.some((m) => m.accountId === 'mail')), 'the story puts mail in a pool');
-  await api.deleteAccount('mail');
-  assert.equal((await api.listAccounts()).some((a) => a.id === 'mail'), false);
-  assert.deepEqual((await api.listPools()).filter((p) => p.members.some((m) => m.accountId === 'mail')).map((p) => p.id), [], 'the route removes every membership with the account');
-  await assert.rejects(api.deleteAccount('mail'), (e) => e.status === 404);
-  await api.disconnectAccount('business');
-  const business = (await api.listAccounts()).find((a) => a.id === 'business');
-  assert.deepEqual([business.email, business.status, business.credential.refreshTokenExpiresAt, business.pools.length > 0], ['business@example.com', 'unpaired', null, true], 'a disconnect drops the credential and leaves the identity and the memberships');
+  assert.ok((await api.listPools()).some((p) => p.members.some((m) => m.accountId === 'secondary')), 'the story puts secondary in a pool');
+  await api.deleteAccount('secondary');
+  assert.equal((await api.listAccounts()).some((a) => a.id === 'secondary'), false);
+  assert.deepEqual((await api.listPools()).filter((p) => p.members.some((m) => m.accountId === 'secondary')).map((p) => p.id), [], 'the route removes every membership with the account');
+  await assert.rejects(api.deleteAccount('secondary'), (e) => e.status === 404);
+  await api.disconnectAccount('primary');
+  const primary = (await api.listAccounts()).find((a) => a.id === 'primary');
+  assert.deepEqual([primary.email, primary.status, primary.credential.refreshTokenExpiresAt, primary.pools.length > 0], ['operator@example.com', 'unpaired', null, true], 'a disconnect drops the credential and leaves the identity and the memberships');
 });

@@ -14,7 +14,7 @@ pub use exchange::{
     OauthError, ProfileResponse, TokenAccount, TokenOrg, TokenResponse,
 };
 pub use identity::{identity_matches, IdentityClaims};
-pub use manager::{AccessToken, AcquireError, Backoff, Clock, CredentialManager};
+pub use manager::{refresh_cause, AccessToken, AcquireError, Backoff, Clock, CredentialManager};
 pub use manager::{SERVER_ERROR_BACKOFF_MS, TRANSIENT_BACKOFF_MS};
 pub use pkce::{generate_pkce, generate_state, Pkce};
 pub use session::{
@@ -22,6 +22,6 @@ pub use session::{
     Started, SESSION_TTL_MS,
 };
 pub use usage::{
-    parse_usage, ExtraUsage, PollOutcome, PollStatus, UsageError, UsageService, UsageSnapshot,
-    UsageWindow, BACKOFF_CAP_MS,
+    parse_usage, BackoffEdge, BackoffHook, ExtraUsage, PollOutcome, PollStatus, UsageError,
+    UsageService, UsageSnapshot, UsageWindow, BACKOFF_CAP_MS, FABLE_WINDOW_KEY,
 };

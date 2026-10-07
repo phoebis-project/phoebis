@@ -10,6 +10,7 @@ mod attention;
 mod dashboard;
 mod keepalive;
 mod keys;
+mod ledger;
 mod live;
 mod models;
 mod pools;
@@ -17,6 +18,7 @@ mod pricing;
 mod readiness;
 mod requests;
 mod routes;
+mod routing_log;
 mod rules;
 mod session;
 mod sessions;
@@ -58,10 +60,9 @@ pub struct AdminState {
     pub sessions: Arc<Sessions>,
     pub secrets: AdminSecrets,
     pub clock: Clock,
-    pub plain_http: bool,
-    /// The admin origin every mutation's `Origin` header is compared against. `None` only under `plain_http`,
-    /// which is the one mode that may leave it unset.
-    pub origin: Option<String>,
+    /// Whether the admin listener terminates TLS, which decides the session cookie's `Secure` flag and makes a
+    /// presented `Origin` need `https://`.
+    pub tls: bool,
     pub vault: Arc<PairingVault>,
     /// Unix milliseconds this state was built, which `GET /system` reports as uptime.
     pub started_at: i64,
@@ -297,8 +298,9 @@ impl PairingVault {
 }
 
 impl PairingRecord {
-    /// An ended record keeps the stamp of its first end, which the sweep counts its lifetime from, so a repeated
-    /// owner `DELETE` never extends how long it is kept.
+    /// An ended record keeps the stamp of its first end, which the sweep counts its lifetime from, so a second
+    /// discard (a callback's, when the owner cancelled while its exchange ran) leaves its lifetime where the first end
+    /// put it.
     fn move_to(&mut self, status: VaultStatus, now: i64) {
         if matches!(self.status, VaultStatus::Started | VaultStatus::Exchanged) {
             self.status_at = now;

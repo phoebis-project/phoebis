@@ -12,14 +12,14 @@ test('a preset is derived from the values and custom when none matches', () => {
   assert.equal(d.sheddingPresetOf({ ...d.SHEDDING_PRESETS.conservative, shedShare: 0.1 + 0.2 }), 'conservative', 'a share that reads back a rounding off still names its preset');
   assert.deepEqual(
     [
-      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 10 }),
+      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 60 }),
+      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 120 }),
       d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 20 }),
-      d.failoverPresetOf({ inFlightCap: 16, paceFloor: 0.05, retryInPlaceSeconds: 15 }),
     ],
     ['balanced', 'conservative', 'custom'],
     'balanced and conservative share the cap and the floor, so the retry-in-place bound alone tells them apart',
   );
-  for (const off of [{ inFlightCap: 9 }, { paceFloor: 0.05 }, { retryInPlaceSeconds: 6 }]) assert.equal(d.failoverPresetOf({ ...d.FAILOVER_PRESETS.fast, ...off }), 'custom', JSON.stringify(off));
+  for (const off of [{ inFlightCap: 9 }, { paceFloor: 0.05 }, { retryInPlaceSeconds: 21 }]) assert.equal(d.failoverPresetOf({ ...d.FAILOVER_PRESETS.fast, ...off }), 'custom', JSON.stringify(off));
 });
 
 const NOW = Date.parse('2026-09-16T14:30:00Z');
@@ -54,7 +54,7 @@ const pool = (over = {}) => ({
     { accountId: 'hot', eligible: 'eligible', priority: 0 },
     { accountId: 'cool', eligible: 'eligible', priority: 0 },
   ],
-  migrateAboveUtilization: 0.8,
+  shedAheadOfPace: 0.8,
   shedShare: 0.5,
   warmSessions: 'when_needed',
   ...over,
@@ -80,7 +80,7 @@ test('a window leads its pace by its utilization less the share of it that has e
 
 test('a member at half its week counts as hot at a margin of a fifth ten percent in and not sixty percent in', () => {
   const halfway = (elapsed) => ({ ...account('halfway', 0.1), windows: [reading('5h', 0.1), { ...reading('7d', 0.5), resetsAt: at(NOW + WEEK * (1 - elapsed)) }] });
-  const members = (elapsed) => replay([halfway(elapsed)], [], { migrateAboveUtilization: 0.2 }).members;
+  const members = (elapsed) => replay([halfway(elapsed)], [], { shedAheadOfPace: 0.2 }).members;
   assert.deepEqual([members(0.1), members(0.6)], [1, 0], '0.4 ahead of pace runs a round, 0.1 behind it does not');
 });
 
@@ -120,7 +120,7 @@ test('the preview orders cold pins first, stops at the share, and never marks th
   assert.equal(preview(four, { shedShare: 0 }).sessions, 0, 'a share of 0 marks nothing');
   const never = preview(four, { warmSessions: 'never' });
   assert.deepEqual([never.sessions, never.warm, never.burnShare.toFixed(2)], [1, 0, '0.30'], 'never stops after the cold pins');
-  assert.deepEqual([preview(four, { migrateAboveUtilization: 0.95 }).members, preview(four, { migrateAboveUtilization: null }).members], [0, 0], 'no member at the threshold, or no threshold, replays no round');
+  assert.deepEqual([preview(four, { shedAheadOfPace: 0.95 }).members, preview(four, { shedAheadOfPace: null }).members], [0, 0], 'no member at the threshold, or no threshold, replays no round');
   // Folded one burn window ago, 10 has decayed to 10/e, under the 5 folded now; a burn never folded reads as stored.
   const decayed = preview([pin('old', 10, false, { burnAt: at(NOW - 600_000) }), pin('new', 5, false), pin('unfolded', 1, false, { burnAt: null })]);
   assert.deepEqual([decayed.sessions, decayed.burnShare.toFixed(3)], [1, (5 / (10 / Math.E + 5 + 1)).toFixed(3)], 'the order and the share read each burn decayed to now');
@@ -187,6 +187,29 @@ test('two hot members in one unit share the burn by weight, and members in two u
   assert.equal(d.shedPreviewLine(mixed, true), "Would move 3 sessions, 1 warm, 80% of each account's burn on average, across 2 accounts.");
 });
 
+test('a pool previews its own pins on a shared account, so one pin per pool sheds nothing', () => {
+  // The caller hands in the pool's slice, the sessions under its keys: `theirs` sits under another pool's key.
+  const mine = pin('mine', 4, false);
+  const theirs = pin('theirs', 3, false, { keyId: 'notebook' });
+  assert.equal(preview([mine, theirs]).sessions, 1, 'over every pin on the account the heavier one is marked');
+  const own = preview([mine]);
+  assert.deepEqual([own.sessions, own.cool], [0, true], "the pool's one pin is its slice's last unmarked pin");
+  assert.equal(d.shedPreviewLine(own, true), 'Would move 0 sessions, 0 warm, 0% of the burn in window share.');
+});
+
+test('an api_key member reads cool while its worst live bucket holds room, whatever the margin', () => {
+  const keyed = (utilization) => ({
+    id: 'key',
+    kind: 'api_key',
+    label: 'key',
+    windows: [{ id: 'itpm:claude-sonnet-5', label: 'itpm', observedAt: at(NOW), periodHours: 1 / 60, resetsAt: at(NOW + MINUTE), utilization }],
+  });
+  // `hot` keeps a round in the preview, so `cool` is read for a round with marks; the margin's band sits at 0.15.
+  const read = (key) => d.shedPreview(pool({ members: [member('hot'), member('key')], shedAheadOfPace: 0.2 }), [hot, key], [pin('cold-3', 3, false)], NOW, SIZED).cool;
+  assert.equal(read(keyed(0.95)), true, 'a bucket with room is a destination, far above the band');
+  assert.equal(read(keyed(1)), false, 'an exhausted bucket is no destination');
+});
+
 test('with no member under the band the preview marks sessions it cannot move', () => {
   // Under the threshold of 80 %, so it runs no round of its own, but above the 75 % a shed session has to land under.
   const near = account('near', 0.78);
@@ -197,7 +220,7 @@ test('with no member under the band the preview marks sessions it cannot move', 
   assert.equal(cooling.cool, false, 'a member the router skips is no destination');
   const open = replay([hot, near, cool], four);
   assert.deepEqual([open.cool, d.shedPreviewLine(open, true)], [true, 'Would move 2 sessions, 1 warm, 70% of the burn in window share.']);
-  assert.equal(d.shedPreviewLine(open, false), 'No round runs while migrate above utilization is off.');
+  assert.equal(d.shedPreviewLine(open, false), 'No round runs while shed ahead of pace is off.');
   assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is ahead of pace by the margin.');
 });
 
@@ -206,5 +229,5 @@ test('while the cost model is loading or did not load the preview names the mode
   assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost model is loading; window-share pins are counted once it is read.');
   assert.equal(d.shedPreviewLine(round, true, 'missing'), 'The cost model did not load, so window-share pins cannot be counted.');
   assert.equal(d.shedPreviewLine(round, true, 'ready'), 'Would move 2 sessions, 1 warm, 70% of the burn in window share.', 'a read model counts as before');
-  assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while migrate above utilization is off.', 'with migrate off no round runs, model or not');
+  assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while shed ahead of pace is off.', 'with shed ahead of pace off no round runs, model or not');
 });

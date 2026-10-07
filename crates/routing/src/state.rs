@@ -7,14 +7,15 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, OverageRow,
-    PinBurn, PinKey, PinRow, PoolMember, RekeyWrite, ResolutionRow, RoutingLoad, WindowRow,
+    PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, ShedPin,
+    ShedRoundRow, StateCause, WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
 
-use crate::affinity::AffinityMap;
+use crate::affinity::{AffinityMap, PurgedEntry};
 use crate::listing::{row_for, snapshot_date};
-use crate::select::affinity_ttl_ms;
+use crate::select::{affinity_ttl_ms, seconds_ms};
 use crate::task::BurnRates;
 use crate::windows::window_for;
 use crate::RegistrySnapshot;
@@ -52,6 +53,28 @@ impl EvidenceSource {
         match self {
             EvidenceSource::Head => "head",
             EvidenceSource::Sample => "sample",
+        }
+    }
+}
+
+/// Where a window's reading came from: a response head, the usage poll, the registry at start (which keeps no
+/// origin), or the router's own prediction once a charge or a passed reset moved the stored reading.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum WindowSource {
+    Head,
+    Poll,
+    Predicted,
+    Stored,
+}
+
+impl WindowSource {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            WindowSource::Head => "head",
+            WindowSource::Poll => "poll",
+            WindowSource::Predicted => "predicted",
+            WindowSource::Stored => "stored",
         }
     }
 }
@@ -140,6 +163,7 @@ pub struct WindowReading {
     pub utilization: f64,
     pub reset: Option<i64>,
     pub observed_at: i64,
+    pub source: WindowSource,
 }
 
 /// The fast lane's two buckets, per organization and shared by every fast-capable model, so the names carry no
@@ -202,22 +226,38 @@ impl UtilizationSample {
 pub enum StateWrite {
     /// The relay's verdict on an account, fenced by the incarnation and the generations the attempt that
     /// formed it went out with. It travels with the rest of the routing writes so shutdown drains it like any
-    /// other.
+    /// other. `cause` is stored with the state, and it and `detail` ride to the event the loop emits when the write
+    /// moves the row's state.
     AccountState {
         account_id: String,
         state: AccountState,
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
+        cause: StateCause,
+        detail: Option<String>,
     },
     DeleteAffinity(Vec<(String, String)>),
     DeleteCooldown(String, String),
     DeletePin(PinKey),
+    /// `before` is `now` less the longest `source_dwell_seconds` of the snapshot's pools, computed at the purge tick.
+    PurgeShedRounds {
+        before: i64,
+    },
     /// The purge tick's sweep of window and credits rows no current holder of their id wrote.
     PurgeStaleWindows,
     /// One resolution landing, committed as one transaction so the store never holds moved rows without the
     /// spelling row that finds them after a restart.
     Rekey(RekeyWrite),
+    /// A pool's shedding round on an account, every pin of it with its epoch and its mark: it replaces the pool's
+    /// and account's previous round whole, so the marks and the dwell survive a restart.
+    ShedRound {
+        pool_id: String,
+        account_id: String,
+        incarnation: u64,
+        round_at: i64,
+        pins: Vec<ShedPin>,
+    },
     UpsertAffinity(Vec<AffinityRow>),
     UpsertCooldown(CooldownRow),
     UpsertCredits(CreditsRow),
@@ -228,7 +268,10 @@ pub enum StateWrite {
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Purged {
+    /// The removed entries' keys, for the store's delete.
     pub affinity: Vec<(String, String)>,
+    /// The same entries whole, with why each left, for the expiry events.
+    pub affinity_entries: Vec<PurgedEntry>,
     pub cooldowns: Vec<(String, String)>,
     /// Each dropped pin with the one fact that dropped it: `deleted`, `expired`, or `unserved`.
     pub pins: Vec<(PinKey, &'static str)>,
@@ -426,6 +469,13 @@ pub enum BurnUnit {
 }
 
 impl BurnUnit {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            BurnUnit::Usd => "usd",
+            BurnUnit::WindowShare => "window_share",
+        }
+    }
+
     pub fn of(kind: AccountKind, in_overage: bool) -> BurnUnit {
         match (kind, in_overage) {
             (AccountKind::Oauth, false) => BurnUnit::WindowShare,
@@ -682,6 +732,61 @@ impl Drop for AccountTicket {
 /// When a shedding round ran, and the pins it marked.
 type ShedRound = (i64, HashSet<PinKey>);
 
+/// Whether a loaded row's mark still stands: the row is marked and the load carries its pin under the row's account
+/// and epoch. A mark whose pin moved, was released or was made again under another epoch before the restart stays
+/// spent.
+pub(crate) fn mark_holds(load: &RoutingLoad) -> impl Fn(&ShedRoundRow) -> bool + '_ {
+    let pins: HashMap<(&str, &str, &str, &str), (&str, u64)> = load
+        .pins
+        .iter()
+        .map(|p| {
+            (
+                (
+                    p.key_id.as_str(),
+                    p.session_id.as_str(),
+                    p.agent_id.as_str(),
+                    p.model.as_str(),
+                ),
+                (p.account_id.as_str(), p.epoch),
+            )
+        })
+        .collect();
+    move |row: &ShedRoundRow| {
+        row.marked
+            && pins.get(&(
+                row.key_id.as_str(),
+                row.session_id.as_str(),
+                row.agent_id.as_str(),
+                row.model.as_str(),
+            )) == Some(&(row.account_id.as_str(), row.epoch))
+    }
+}
+
+/// The loaded rounds by pool and account, each with the marks that still stand, and each account's stamp: the newest
+/// round of any pool on it, so after a restart the cool check still reads a sibling pool's round inside its own dwell,
+/// as it did before.
+fn rounds_of(load: &RoutingLoad) -> (HashMap<(String, String), ShedRound>, HashMap<String, i64>) {
+    let holds = mark_holds(load);
+    let mut rounds: HashMap<(String, String), ShedRound> = HashMap::new();
+    let mut newest: HashMap<String, i64> = HashMap::new();
+    for row in &load.shed_rounds {
+        let round = rounds
+            .entry((row.pool_id.clone(), row.account_id.clone()))
+            .or_insert_with(|| (row.round_at, HashSet::new()));
+        if holds(row) {
+            round.1.insert(PinKey {
+                key_id: row.key_id.clone(),
+                session_id: row.session_id.clone(),
+                agent_id: row.agent_id.clone(),
+                model: row.model.clone(),
+            });
+        }
+        let stamp = newest.entry(row.account_id.clone()).or_insert(row.round_at);
+        *stamp = (*stamp).max(row.round_at);
+    }
+    (rounds, newest)
+}
+
 pub struct RoutingState {
     /// The ledger's standing from its last `Report::Accounting`: while it is degraded a budgeted member's spend rows
     /// may lack a batch the writer still holds. Memory only, so a restart starts clear until the ledger's first
@@ -699,6 +804,10 @@ pub struct RoutingState {
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
     member_spend: HashMap<(String, String, BudgetPeriod), MemberSpend>,
+    /// When the newest round of any pool ran on each account: what a move's cool check reads, so no pool prefers a
+    /// destination another pool just shed from. A stamp of its own, since a pool's marks expire by that pool's dwell
+    /// while a slower pool still has to read the account as just shed.
+    newest_shed: HashMap<String, i64>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
     pins: HashMap<PinKey, PinRow>,
@@ -714,14 +823,23 @@ pub struct RoutingState {
     resolutions: HashMap<String, String>,
     round_robin: HashMap<(String, Tier, String), usize>,
     samples: HashMap<String, UtilizationSample>,
-    /// Each account's latest shedding round. Memory only, so a restart forgets the marks with the dwell and the
-    /// next hot request may start a fresh round.
-    shed_rounds: HashMap<String, ShedRound>,
+    /// Each pool's latest shedding round on an account, by pool id and account id.
+    shed_rounds: HashMap<(String, String), ShedRound>,
 }
 
 impl RoutingState {
     pub fn from_load(load: RoutingLoad) -> RoutingState {
-        let next_epoch = load.pins.iter().map(|p| p.epoch).max().unwrap_or(0) + 1;
+        // A loaded round names the epochs of pins deleted since, and a mark is read back by its epoch, so none of
+        // them is handed out again.
+        let next_epoch = load
+            .pins
+            .iter()
+            .map(|p| p.epoch)
+            .chain(load.shed_rounds.iter().map(|row| row.epoch))
+            .max()
+            .unwrap_or(0)
+            + 1;
+        let (shed_rounds, newest_shed) = rounds_of(&load);
         let mut affinity_map = AffinityMap::from_rows(load.affinity);
         for resolution in &load.resolutions {
             affinity_map.learn_resolution(&resolution.spelling, &resolution.dated_id);
@@ -736,6 +854,7 @@ impl RoutingState {
                     utilization: row.utilization,
                     reset: row.reset,
                     observed_at: row.observed_at,
+                    source: WindowSource::Stored,
                 },
             );
         }
@@ -766,6 +885,7 @@ impl RoutingState {
                 .collect(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
+            newest_shed,
             next_epoch,
             overage: load
                 .overage
@@ -798,7 +918,7 @@ impl RoutingState {
                 .collect(),
             round_robin: HashMap::new(),
             samples,
-            shed_rounds: HashMap::new(),
+            shed_rounds,
         }
     }
 
@@ -899,8 +1019,12 @@ impl RoutingState {
     }
 
     fn spend_mark(&mut self, pin: &PinRow) {
-        if let Some((_, marks)) = self.shed_rounds.get_mut(&pin.account_id) {
-            marks.remove(&pin.key());
+        // The account's rounds are walked rather than the pin's pool resolved through a snapshot this state does
+        // not hold; the walk also spends a mark left in the round of a pool the key moved out of inside its dwell.
+        for ((_, account_id), (_, marks)) in self.shed_rounds.iter_mut() {
+            if account_id == &pin.account_id {
+                marks.remove(&pin.key());
+            }
         }
     }
 
@@ -1203,7 +1327,8 @@ impl RoutingState {
     /// with none named: the reading, plus the share of the router's own requests completed on the account since
     /// it was observed. At or past the reset: zero plus the share of the requests completed since the reset; a
     /// weekly window's reset advanced by whole weeks past `now`, a 5-hour window's `None` until the next reading
-    /// names one. `None` while the account holds no reading of the window.
+    /// names one. A reading the router's own figure moved names `Predicted` as its source. One nothing moved keeps
+    /// its own. `None` while the account holds no reading of the window.
     pub fn predicted(&self, account_id: &str, window: &str, now: i64) -> Option<WindowReading> {
         let reading = self.samples.get(account_id)?.reading(window)?;
         let charges = self
@@ -1227,18 +1352,28 @@ impl RoutingState {
                         utilization: since(next - WEEK_MS),
                         reset: Some(next),
                         observed_at: reading.observed_at,
+                        source: WindowSource::Predicted,
                     })
                 }
                 _ => Some(WindowReading {
                     utilization: since(reset),
                     reset: None,
                     observed_at: reading.observed_at,
+                    source: WindowSource::Predicted,
                 }),
             },
-            _ => Some(WindowReading {
-                utilization: reading.utilization + since(reading.observed_at),
-                ..reading
-            }),
+            _ => {
+                let charged = since(reading.observed_at);
+                Some(WindowReading {
+                    utilization: reading.utilization + charged,
+                    source: if charged != 0.0 {
+                        WindowSource::Predicted
+                    } else {
+                        reading.source
+                    },
+                    ..reading
+                })
+            }
         }
     }
 
@@ -1396,12 +1531,14 @@ impl RoutingState {
         }
     }
 
-    /// The pins of an account, each priced in `unit` through `rates` and decayed to `now`, and the sum over the
-    /// priced pins; under `WindowShare` the subscription cost model's anchor share per second, which orders the
-    /// account's pins as the tier's share does; `None` for a pin burning a type its row cannot price.
+    /// The pins of `account_id` that `keep` admits, each priced in `unit` through `rates` and decayed to `now`, and
+    /// the sum over the priced pins; `keep` is the triggering pool's slice, built by the caller from the snapshot
+    /// this state does not hold. Under `WindowShare` a burn is the subscription cost model's anchor share per
+    /// second, which orders the pins as the tier's share does; `None` for a pin burning a type its row cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,
+        keep: &dyn Fn(&PinRow) -> bool,
         unit: BurnUnit,
         rates: &BurnRates,
         now: i64,
@@ -1411,7 +1548,7 @@ impl RoutingState {
         let mut pins: Vec<(PinRow, Option<f64>)> = self
             .pins
             .values()
-            .filter(|p| p.account_id == account_id)
+            .filter(|p| p.account_id == account_id && keep(p))
             .map(|p| {
                 // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
                 let burn = table
@@ -1432,25 +1569,42 @@ impl RoutingState {
         (pins, sum)
     }
 
-    /// Whether the latest round on the pin's current account, run within `dwell_ms`, marked it. A pin marked
-    /// on one account and moved keeps its key, so the round read is the one of the account it now sits on.
-    pub fn shed_marked(&self, key: &PinKey, now: i64, dwell_ms: i64) -> bool {
+    /// Whether `pool_id`'s latest round on the pin's current account, run within `dwell_ms`, marked it. A pin
+    /// marked on one account and moved keeps its key, so the round read is the one of the account it now sits on.
+    pub fn shed_marked(&self, pool_id: &str, key: &PinKey, now: i64, dwell_ms: i64) -> bool {
         let Some(pin) = self.pin(key) else {
             return false;
         };
         self.shed_rounds
-            .get(&pin.account_id)
+            .get(&(pool_id.to_string(), pin.account_id.clone()))
             .is_some_and(|(at, marks)| now - at < dwell_ms && marks.contains(&pin.key()))
     }
 
-    /// When the account's latest shedding round ran.
-    pub fn last_shed(&self, account_id: &str) -> Option<i64> {
-        self.shed_rounds.get(account_id).map(|(at, _)| *at)
+    /// When `pool_id`'s latest round on the account ran.
+    pub fn last_shed(&self, pool_id: &str, account_id: &str) -> Option<i64> {
+        self.shed_rounds
+            .get(&(pool_id.to_string(), account_id.to_string()))
+            .map(|(at, _)| *at)
     }
 
-    pub(crate) fn record_shed(&mut self, account_id: &str, at: i64, marks: Vec<PinKey>) {
-        self.shed_rounds
-            .insert(account_id.to_string(), (at, marks.into_iter().collect()));
+    /// When the newest round of any pool on the account ran, from the account's own stamp.
+    pub fn newest_shed(&self, account_id: &str) -> Option<i64> {
+        self.newest_shed.get(account_id).copied()
+    }
+
+    /// Writes the pool's round and moves the account's stamp to `at`.
+    pub(crate) fn record_shed(
+        &mut self,
+        pool_id: &str,
+        account_id: &str,
+        at: i64,
+        marks: Vec<PinKey>,
+    ) {
+        self.shed_rounds.insert(
+            (pool_id.to_string(), account_id.to_string()),
+            (at, marks.into_iter().collect()),
+        );
+        self.newest_shed.insert(account_id.to_string(), at);
     }
 
     /// A late failure from account A must not remove a newer pin on account B, so both have to match.
@@ -1685,9 +1839,9 @@ impl RoutingState {
         }
         // None of these needs a deletion written: the overage rows cascade with the account and the next holder's
         // first reading replaces one left under another incarnation, the window and credits rows cascade too and
-        // the purge tick drops one of another incarnation, and charges, round-robin cursors and shedding rounds
-        // are held in memory only. Samples, charges and cursors are keyed by id alone, so the
-        // reload drops those of a holder the id has moved past.
+        // the purge tick drops one of another incarnation, and charges and round-robin cursors are held in memory
+        // only. Samples, charges and cursors are keyed by id alone, so the reload drops those of a holder the id has
+        // moved past.
         let absent = |account_id: &str| snapshot.account(account_id).is_none();
         self.overage
             .retain(|account_id, evidence| !gone(account_id, evidence.incarnation));
@@ -1706,38 +1860,52 @@ impl RoutingState {
         self.round_robin.retain(|(pool_id, _, cohort), _| {
             snapshot.pool(pool_id).is_some() && cohort.split(',').all(|id| !absent(id))
         });
-        // A round is read only within its pool's dwell, so one older than every pool's has nothing left to say.
-        let longest_dwell = snapshot
-            .pools()
-            .map(|pool| {
-                i64::try_from(pool.shedding.source_dwell_seconds)
-                    .ok()
-                    .and_then(|s| s.checked_mul(1_000))
-                    .unwrap_or(i64::MAX)
-            })
-            .max()
-            .unwrap_or(0);
-        self.shed_rounds
-            .retain(|_, (at, _)| now - *at < longest_dwell);
+        // A pool's marks are read within its own dwell alone, and a pool that left the registry has no round to
+        // read. The account's newest round is read by every pool holding the account, each against its own dwell,
+        // so its stamp stays until the longest of those has passed.
+        let dwell_ms = |pool: &PoolRow| seconds_ms(pool.shedding.source_dwell_seconds);
+        self.shed_rounds.retain(|(pool_id, _), (at, _)| {
+            snapshot
+                .pool(pool_id)
+                .is_some_and(|pool| now - *at < dwell_ms(pool))
+        });
+        self.newest_shed.retain(|account_id, at| {
+            snapshot
+                .pools()
+                .filter(|pool| {
+                    snapshot
+                        .members(&pool.id)
+                        .iter()
+                        .any(|m| &m.account_id == account_id)
+                })
+                .map(dwell_ms)
+                .max()
+                .is_some_and(|longest| now - *at < longest)
+        });
         let ttl_of = |key_id: &str| -> Option<i64> {
             snapshot
                 .key(key_id)
                 .and_then(|k| snapshot.pool(&k.pool_id))
                 .map(affinity_ttl_ms)
         };
-        let affinity = self
+        let affinity_entries = self
             .affinity
             .write()
             .expect("affinity lock poisoned")
             .purge(now, ttl_of, |account_id| {
                 snapshot.account(account_id).map(|a| a.incarnation)
             });
+        let affinity = affinity_entries
+            .iter()
+            .map(|purged| (purged.model.clone(), purged.hash.clone()))
+            .collect();
         self.member_spend
             .retain(|(pool_id, account_id, period), _| {
                 member_spend_matches(snapshot, pool_id, account_id, *period)
             });
         Purged {
             affinity,
+            affinity_entries,
             cooldowns,
             pins,
         }
@@ -1776,6 +1944,15 @@ fn member_spend_matches(
 /// that period, its bounds holding `now`) has reached, the latest `period_end`, since a day's end clears nothing
 /// while the month's budget stands. `None` for a member with no budget reached.
 pub fn budget_deadline(member: &PoolMember, spends: &[&MemberSpend], now: i64) -> Option<i64> {
+    budget_reached(member, spends, now).map(|(_, end)| end)
+}
+
+/// The budget behind `budget_deadline`'s end: the reached period whose end is the latest, with that end.
+pub(crate) fn budget_reached(
+    member: &PoolMember,
+    spends: &[&MemberSpend],
+    now: i64,
+) -> Option<(BudgetPeriod, i64)> {
     member
         .budgets()
         .filter_map(|(period, budget)| {
@@ -1783,9 +1960,9 @@ pub fn budget_deadline(member: &PoolMember, spends: &[&MemberSpend], now: i64) -
                 .iter()
                 .find(|s| s.period == period && s.period_start <= now && now < s.period_end)
                 .filter(|s| s.spent_usd >= budget)
-                .map(|s| s.period_end)
+                .map(|s| (period, s.period_end))
         })
-        .max()
+        .max_by_key(|(_, end)| *end)
 }
 
 /// The start of the current overage stretch, on first evidence and on every replacement alike: an account out of
@@ -1867,6 +2044,9 @@ mod tests {
             cache_write_5m_tokens: None,
             cache_write_1h_tokens: None,
             uniform_ttl_ms: None,
+            request_id: "r-1".into(),
+            seq: 1,
+            attempt: 1,
         }
     }
 
@@ -2116,6 +2296,7 @@ mod tests {
             utilization,
             reset: None,
             observed_at,
+            source: WindowSource::Head,
         };
         state.record_sample(
             "a",
@@ -2187,6 +2368,7 @@ mod tests {
             utilization: 0.5,
             reset: None,
             observed_at,
+            source: WindowSource::Head,
         };
         // The account is present, so only the bucket cut can empty its map.
         let snapshot = RegistrySnapshot::from_load(
@@ -2201,6 +2383,7 @@ mod tests {
                     incarnation: 1,
                     revision: 1,
                     state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
                 }],
                 ..Default::default()
             },
@@ -2272,6 +2455,7 @@ mod tests {
                 utilization: 0.9,
                 reset: Some(1_400),
                 observed_at: 1_000,
+                source: WindowSource::Head,
             },
         )
         .with(
@@ -2280,6 +2464,7 @@ mod tests {
                 utilization: 0.3,
                 reset: None,
                 observed_at: 1_000,
+                source: WindowSource::Head,
             },
         );
         assert_eq!(
@@ -2322,6 +2507,7 @@ mod tests {
                     utilization,
                     reset,
                     observed_at: at,
+                    source: WindowSource::Poll,
                 },
             ),
         );
@@ -2353,6 +2539,7 @@ mod tests {
                         utilization: 0.0,
                         reset: Some(reset + (weeks + 1) * WEEK_MS),
                         observed_at,
+                        source: WindowSource::Predicted,
                     }),
                     "{window} past its reset by {weeks} whole weeks"
                 );
@@ -2372,6 +2559,7 @@ mod tests {
                 utilization: 0.0,
                 reset: None,
                 observed_at: 1_000,
+                source: WindowSource::Predicted,
             }),
             "at the reset the window reads zero, and the next reading names the reset after it"
         );
@@ -2401,6 +2589,7 @@ mod tests {
                     utilization: 0.55,
                     reset: Some(HOUR_MS),
                     observed_at: 2_500,
+                    source: WindowSource::Poll,
                 },
             ),
         );
@@ -2430,11 +2619,79 @@ mod tests {
                 utilization: 0.7,
                 reset: None,
                 observed_at: 1_000,
+                source: WindowSource::Poll,
             }),
             "no reset named: the reading stands however old it is"
         );
         read(&mut state, FIVE_HOUR, 0.2, None, 2_000);
         assert!((utilization(&state, FIVE_HOUR, 1_000 + 3 * WEEK_MS) - 0.2).abs() < CLOSE);
+    }
+
+    #[test]
+    fn a_reading_restored_at_start_reads_stored_and_a_charge_turns_it_predicted() {
+        let mut state = RoutingState::from_load(RoutingLoad {
+            windows: vec![phoebis_store::WindowRow {
+                account_id: "a".into(),
+                incarnation: 1,
+                observed_at: 1_000,
+                reset: Some(HOUR_MS),
+                utilization: 0.5,
+                window: FIVE_HOUR.into(),
+            }],
+            ..RoutingLoad::default()
+        });
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 2_000),
+            Some(WindowReading {
+                utilization: 0.5,
+                reset: Some(HOUR_MS),
+                observed_at: 1_000,
+                source: WindowSource::Stored,
+            }),
+            "the registry keeps no origin, and nothing has moved the restored reading"
+        );
+        state.charge("a", 3_000, &[(FIVE_HOUR, 0.25)]);
+        let moved = state
+            .predicted("a", FIVE_HOUR, 4_000)
+            .expect("the account holds a reading of the window");
+        assert_eq!(
+            moved.source,
+            WindowSource::Predicted,
+            "the router's own use since the reading moved it"
+        );
+        assert!((moved.utilization - 0.75).abs() < CLOSE);
+    }
+
+    #[test]
+    fn a_reading_past_its_reset_is_predicted_from_the_router_s_own_use() {
+        let mut state = RoutingState::from_load(RoutingLoad::default());
+        read(&mut state, FIVE_HOUR, 0.5, Some(5_000), 1_000);
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 4_000).map(|r| r.source),
+            Some(WindowSource::Poll),
+            "before its reset, with nothing charged, the reading stands as the poll read it"
+        );
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 5_000),
+            Some(WindowReading {
+                utilization: 0.0,
+                reset: None,
+                observed_at: 1_000,
+                source: WindowSource::Predicted,
+            }),
+            "at the reset the window reads zero, the router's own figure"
+        );
+        state.charge("a", 6_000, &[(FIVE_HOUR, 0.125)]);
+        assert_eq!(
+            state.predicted("a", FIVE_HOUR, 7_000),
+            Some(WindowReading {
+                utilization: 0.125,
+                reset: None,
+                observed_at: 1_000,
+                source: WindowSource::Predicted,
+            }),
+            "past the reset the window reads the share completed since it"
+        );
     }
 
     #[test]
@@ -2542,6 +2799,7 @@ mod tests {
                             utilization: *utilization,
                             reset: None,
                             observed_at: 2_000,
+                            source: WindowSource::Poll,
                         },
                     )
                 },

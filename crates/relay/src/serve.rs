@@ -4,17 +4,23 @@
 //! stream can be wrapped in a [`HeadRecorder`]: the caller's original header spelling and order exist nowhere
 //! else by the time a handler runs.
 
+use std::io;
+use std::pin::Pin;
 use std::sync::Arc;
+use std::task::{Context, Poll};
 use std::time::Duration;
 
 use axum::http::Request;
 use axum::Router;
+use boring::ssl::SslAcceptor;
 use hyper_util::rt::{TokioIo, TokioTimer};
 use hyper_util::server::graceful::GracefulShutdown;
 use hyper_util::service::TowerToHyperService;
-use tokio::net::TcpListener;
+use tokio::io::{AsyncRead, AsyncWrite, ReadBuf};
+use tokio::net::{TcpListener, TcpStream};
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
+use tokio_boring::SslStream;
 
 use crate::casing::{head_queue, HeadQueue, HeadRecorder};
 use crate::messages::{router, Relay};
@@ -33,15 +39,110 @@ pub struct Limits {
     pub max_connections: usize,
 }
 
+/// An accepted connection after its handshake, one type for both loops so hyper is built once per listener.
+pub enum Accepted {
+    Plain(TcpStream),
+    Tls(SslStream<TcpStream>),
+}
+
+impl AsyncRead for Accepted {
+    fn poll_read(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &mut ReadBuf<'_>,
+    ) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Accepted::Plain(stream) => Pin::new(stream).poll_read(cx, buf),
+            Accepted::Tls(stream) => Pin::new(stream).poll_read(cx, buf),
+        }
+    }
+}
+
+impl AsyncWrite for Accepted {
+    fn poll_write(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        buf: &[u8],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Accepted::Plain(stream) => Pin::new(stream).poll_write(cx, buf),
+            Accepted::Tls(stream) => Pin::new(stream).poll_write(cx, buf),
+        }
+    }
+
+    fn poll_write_vectored(
+        self: Pin<&mut Self>,
+        cx: &mut Context<'_>,
+        bufs: &[io::IoSlice<'_>],
+    ) -> Poll<io::Result<usize>> {
+        match self.get_mut() {
+            Accepted::Plain(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
+            Accepted::Tls(stream) => Pin::new(stream).poll_write_vectored(cx, bufs),
+        }
+    }
+
+    fn is_write_vectored(&self) -> bool {
+        match self {
+            Accepted::Plain(stream) => stream.is_write_vectored(),
+            Accepted::Tls(stream) => stream.is_write_vectored(),
+        }
+    }
+
+    fn poll_flush(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Accepted::Plain(stream) => Pin::new(stream).poll_flush(cx),
+            Accepted::Tls(stream) => Pin::new(stream).poll_flush(cx),
+        }
+    }
+
+    fn poll_shutdown(self: Pin<&mut Self>, cx: &mut Context<'_>) -> Poll<io::Result<()>> {
+        match self.get_mut() {
+            Accepted::Plain(stream) => Pin::new(stream).poll_shutdown(cx),
+            Accepted::Tls(stream) => Pin::new(stream).poll_shutdown(cx),
+        }
+    }
+}
+
+/// Why a connection ended before hyper saw it.
+#[derive(Debug, thiserror::Error)]
+pub enum HandshakeError {
+    #[error("the handshake did not finish within {0:?}")]
+    TimedOut(Duration),
+    #[error("{0}")]
+    Failed(String),
+}
+
+/// Runs the TLS handshake when `acceptor` is set, under `bound`; a plain listener answers at once. The error names
+/// the reason and never a byte of the stream.
+pub async fn handshake(
+    stream: TcpStream,
+    acceptor: Option<&SslAcceptor>,
+    bound: Duration,
+) -> Result<Accepted, HandshakeError> {
+    let Some(acceptor) = acceptor else {
+        return Ok(Accepted::Plain(stream));
+    };
+    // hyper's header read timeout starts at its first poll, after this returns, so the handshake has a bound of
+    // its own: a peer that opens a socket and sends no ClientHello holds a slot for the same time a peer that
+    // sends no head does, and no longer.
+    match tokio::time::timeout(bound, tokio_boring::accept(acceptor, stream)).await {
+        Ok(Ok(tls)) => Ok(Accepted::Tls(tls)),
+        Ok(Err(error)) => Err(HandshakeError::Failed(error.to_string())),
+        Err(_) => Err(HandshakeError::TimedOut(bound)),
+    }
+}
+
 /// Serves the relayed routes, and whatever `extra` adds beside them, until `stop` flips, then waits for the
 /// connections already accepted. `extra` is merged rather than nested so a route on it keeps its full path;
-/// the relay's own fallback still answers everything neither names.
+/// the relay's own fallback still answers everything neither names. With `acceptor` set, every connection
+/// completes a TLS handshake before hyper reads it.
 pub async fn serve(
     listener: TcpListener,
     relay: Arc<Relay>,
     extra: Router,
     mut stop: watch::Receiver<bool>,
     limits: Limits,
+    acceptor: Option<Arc<SslAcceptor>>,
 ) -> std::io::Result<()> {
     let app = router(relay).merge(extra);
     // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
@@ -67,9 +168,9 @@ pub async fn serve(
             permit = slots.clone().acquire_owned() => permit.expect("the listener's semaphore is never closed"),
             _ = stopped(&mut stop) => break,
         };
-        let stream = tokio::select! {
+        let (stream, peer) = tokio::select! {
             accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => stream,
+                Ok(accepted) => accepted,
                 Err(error) => {
                     tracing::debug!(%error, "the proxy listener could not accept a connection");
                     tokio::time::sleep(ACCEPT_BACKOFF).await;
@@ -81,17 +182,40 @@ pub async fn serve(
         // The measured client writes a request as soon as it has one, so batching its head with whatever
         // follows would only add a round trip's worth of latency.
         let _ = stream.set_nodelay(true);
-        let queue = head_queue();
-        let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
-        let service = WithOriginalHead {
-            inner: TowerToHyperService::new(app.clone()),
-            queue,
-        };
-        // No upgrades: no route on the relayed surface switches protocols.
-        let connection = graceful.watch(builder.serve_connection(io, service));
+        let watcher = graceful.watcher();
+        let builder = builder.clone();
+        let acceptor = acceptor.clone();
+        let app = app.clone();
+        let mut drain = stop.clone();
+        // The handshake runs here rather than in the accept loop, so a slow peer holds its own slot and not the
+        // loop; the permit is dropped with the task, so a failed handshake releases it.
         tasks.spawn(async move {
             let _slot = permit;
-            if let Err(error) = connection.await {
+            let handshaken = tokio::select! {
+                // Biased toward the handshake: a plain listener's resolves on its first poll, so the stop never
+                // drops a plain connection here.
+                biased;
+                handshaken = handshake(stream, acceptor.as_deref(), limits.header_read_timeout) => handshaken,
+                // A peer still in its handshake has sent no request, so the stop ends it as hyper's graceful
+                // shutdown ends a connection that has read no byte, rather than waiting out the bound.
+                _ = stopped(&mut drain) => return,
+            };
+            let stream = match handshaken {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // A plain-HTTP request on a TLS port lands here too; the bytes are never logged.
+                    tracing::debug!(%peer, %error, "a relayed connection ended at the handshake");
+                    return;
+                }
+            };
+            let queue = head_queue();
+            let io = TokioIo::new(HeadRecorder::new(stream, queue.clone()));
+            let service = WithOriginalHead {
+                inner: TowerToHyperService::new(app),
+                queue,
+            };
+            // No upgrades: no route on the relayed surface switches protocols.
+            if let Err(error) = watcher.watch(builder.serve_connection(io, service)).await {
                 tracing::debug!(%error, "a relayed connection ended early");
             }
         });

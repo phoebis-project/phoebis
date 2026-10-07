@@ -36,7 +36,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
+    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'revision', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
@@ -296,19 +296,13 @@ test('a key\'s processed rule list decodes with the level, the rule, and the coo
   );
 });
 
-test('the model state decodes the cooldowns grouped by model, and the rejections and permits with their detail lifted', () => {
-  const state = d.decodeModelsState(fixture('models_state'));
+test('the model state decodes the cooldowns grouped by model and leaves the rejections and permits to the routing log', () => {
+  const body = fixture('models_state');
+  const state = d.decodeModelsState(body);
   assert.deepEqual(state.cooldowns.map((g) => [g.model, g.rows.length]), [['claude-haiku-4-5-20251001', 1]]);
   assert.equal(state.cooldowns[0].rows[0].accountId, 'business');
-  assert.deepEqual(
-    state.rejections.map((r) => [r.accountId, r.model, r.wireModel, r.requestId, r.upstreamRequestId, r.rejectedBy]),
-    [['business', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'r-failover', 'req-rejected', []]],
-  );
-  assert.deepEqual(
-    state.permits.map((p) => [p.accountId, p.wireModel, p.requestId, p.upstreamRequestId, p.rejectedBy]),
-    [['direct', 'claude-haiku-4-5', 'r-failover', 'req-permitted', ['business']]],
-  );
-  assert.ok(isIso(state.rejections[0].at) && isIso(state.permits[0].at));
+  assert.ok(body.rejections.length > 0 && body.permits.length > 0, 'the route still answers both lists');
+  assert.deepEqual(Object.keys(state), ['cooldowns'], 'the console reads neither list');
 });
 
 test('a pool decodes its policy, status, members, and traffic', () => {
@@ -337,6 +331,35 @@ test('a pool decodes its select-below threshold and encodes it back', () => {
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
   assert.equal(back.select_below_utilization, 0.4);
   assert.equal(d.encodePool({ ...p, name: p.name, selectBelowUtilization: null, status: 'active' }).select_below_utilization, null, 'null clears it rather than leaving it alone');
+});
+
+test('a pool decodes its shedding margin and encodes it back', () => {
+  const row = fixture('pools').pools[0];
+  assert.equal(d.decodePool(row).shedAheadOfPace, null, 'the captured pool sets none');
+  const p = d.decodePool({ ...row, shed_ahead_of_pace: 0.25 });
+  assert.equal(p.shedAheadOfPace, 0.25);
+  const back = d.encodePool({ ...p, name: p.name, status: 'active' });
+  assert.equal(back.shed_ahead_of_pace, 0.25);
+  assert.equal(d.encodePool({ ...p, name: p.name, shedAheadOfPace: null, status: 'active' }).shed_ahead_of_pace, null, 'null clears it rather than leaving it alone');
+});
+
+test('a pool and a key decode the stamp of their last write, which an edit sends back', () => {
+  const pool = fixture('pools').pools[0];
+  const key = fixture('keys').keys[0];
+  const [p, k] = [d.decodePool(pool), d.decodeKey(key)];
+  assert.ok(isIso(p.updatedAt) && isIso(k.updatedAt));
+  assert.deepEqual([p.updatedAt, k.updatedAt], [new Date(pool.updated_at).toISOString(), new Date(key.updated_at).toISOString()]);
+});
+
+test('an account decodes the revision of its row, which an edit sends back', () => {
+  const body = fixture('account');
+  assert.ok(Number.isInteger(body.revision) && body.revision > 0, 'the capture carries the row\'s counter');
+  assert.equal(d.decodeAccount(body).revision, body.revision);
+  for (const row of fixture('accounts').accounts) {
+    const { revision } = d.decodeAccount(row);
+    assert.ok(Number.isInteger(revision) && revision > 0, row.id);
+  }
+  assert.equal(d.decodeAccount({ ...body, revision: undefined }).revision, 0, 'a row whose answer carried none reads 0, which the route refuses as stale');
 });
 
 test('a pool decodes the three strategies and the flag, and encodes the stored flag back', () => {
@@ -400,7 +423,7 @@ test('a pool decodes the engine fields and encodes them back', () => {
     [0.5, 600, 900, true, 'when_needed'],
     'the captured pool holds the balanced shedding preset',
   );
-  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.paceFloor, p.overageMoveGraceMinutes, p.windDownMinutes], [10, 16, 0.05, 30, 30], 'and the balanced failover preset');
+  assert.deepEqual([p.retryInPlaceSeconds, p.inFlightCap, p.paceFloor, p.overageMoveGraceMinutes, p.windDownMinutes], [60, 16, 0.05, 30, 30], 'and the balanced failover preset');
   assert.deepEqual(p.movesPerHour, { spent: 1 });
   const wire = {
     ...row,
@@ -762,6 +785,104 @@ test('a budget reads as a skip obstacle and as a pin release reason', () => {
   assert.ok(d.PIN_RELEASE_REASON_VALUES?.includes('budget'), 'the drawer words a pin released for a member at its budget');
   const released = d.decodeRequestEvent({ at: 1_000, detail: { agent_id: 'main', reasons: ['budget', 'spent'] }, kind: 'pin_expired' });
   assert.deepEqual(released.detail.reasons, ['budget', 'spent']);
+});
+
+test('the routing log page decodes both row shapes from the fixture', () => {
+  const body = fixture('routing_log');
+  const page = d.decodeRoutingLogPage(body);
+  assert.deepEqual(page.rows.map((r) => r.type), body.rows.map((r) => r.type), 'every fixture row decodes, in the route order, under its own type');
+  assert.equal(page.counts, null, 'a page with no request filter answers no counts');
+  assert.equal(page.nextCursor, null);
+  const placed = page.rows.find((r) => r.type === 'decision' && r.requestId === 'r-static');
+  assert.ok(isIso(placed.at), 'a decision time decodes to ISO');
+  assert.deepEqual(placed.fact, [{ entity: null, key: 'prefix', unit: 'tokens', value: 31200 }, { entity: null, key: 'depth', unit: 'count', value: 1 }]);
+  assert.deepEqual(placed.rung, { depth: 1, prefixTokens: 31200, rung: 'static' });
+  assert.deepEqual(placed.cache, { hit: true, inputTokens: 1000, promisedTokens: 31200, readTokens: 500 });
+  const refused = page.rows.find((r) => r.type === 'decision' && r.kind === 'refused');
+  assert.deepEqual(refused.fact, [{ entity: { id: 'retired', kind: 'key' }, key: 'key', unit: null, value: 'retired' }], 'a fact names its entity');
+  assert.deepEqual(refused.refusal, { kind: 'key', reason: 'the key is not in the registry' });
+  const exhausted = page.rows.find((r) => r.type === 'decision' && r.kind === 'exhausted');
+  assert.deepEqual(exhausted.by, { kind: 'exhaustion', tier: null, value: 'timed' });
+  assert.deepEqual(exhausted.exhaustion, { deadline: new Date(1_600_000).toISOString(), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' });
+  const declined = d.decodeDecisionSummary({ ...body.rows.find((r) => r.kind === 'exhausted'), exhaustion: { deadline: null, kind: 'credits', obstacle: 'credits', reason: 'declined', window: null } });
+  assert.equal(declined.exhaustion.reason, 'declined', "an exhaustion's reason is kept, the Fact a credits exhaustion draws");
+  const held = page.rows.find((r) => r.type === 'decision' && r.kind === 'held');
+  assert.deepEqual([held.hold, held.score.unit], [{ accountId: 'business', boundMs: 60_000, cohort: null }, 'percent_per_hour']);
+  const round = page.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');
+  assert.ok(isIso(round.at));
+  assert.deepEqual([round.accountId, round.agentId, round.poolId, round.requestId, round.sessionId], ['business', 'main', 'main', 'r-failover', 's1']);
+  assert.equal(round.detail.persisted, true, "the kind's own fields pass through for the console to read by name");
+  assert.deepEqual(page.rows.find((r) => r.type === 'event' && r.kind === 'overage_started').detail, {}, 'a null detail reads as no fields');
+  assert.deepEqual(d.decodeRoutingLogPage({ ...body, counts: { decisions: 3, events: 4 } }).counts, { decisions: 3, events: 4 });
+});
+
+test('a decision record decodes its six blocks and the completion', () => {
+  const body = fixture('decision');
+  const r = d.decodeDecisionRecord(body);
+  assert.deepEqual([r.version, r.requestId, r.seq], [1, 'r-static', 1]);
+  assert.equal(r.raw, body, 'the record keeps the route answer whole for the card to copy');
+  assert.ok(isIso(r.request.at));
+  assert.deepEqual([r.request.keyId, r.request.poolId, r.request.canonicalModel], ['desktop', 'main', 'claude-sonnet-5']);
+  assert.deepEqual(r.request.lane, { effort: '-', speed: 'standard', thinking: 'none' });
+  assert.equal(r.request.flags.marker, true);
+  assert.deepEqual(r.request.chain, { boundaries: 0, staticBoundaries: 1, staticHash: false });
+  assert.deepEqual([r.pin.found, r.pin.accountId, r.pin.released], ['none', null, []]);
+  assert.equal(r.pinReason, null, 'a record with a pin block names no reason');
+  assert.ok('shed_ahead_of_pace' in body.settings, 'the route names the shedding margin as the pool row does');
+  assert.ok(r.settings.shedAheadOfPace === null || typeof r.settings.shedAheadOfPace === 'number', 'the decoded settings carry the margin under its field name');
+  assert.deepEqual([r.settings.strategy, r.settings.inFlightCap, r.settings.migrateBand], ['pace', 16, 0.05]);
+  assert.ok(isIso(r.settings.poolUpdatedAt));
+  const [chosen, spare] = r.candidates;
+  assert.match(chosen.prefix.static.hash, /^[0-9a-f]{64}$/, 'a prefix lookup carries the boundary hash whole');
+  assert.equal(chosen.prefix.staticMatch.ttlMs, 3_600_000);
+  assert.ok(isIso(chosen.prefix.static.writtenAt));
+  assert.deepEqual([chosen.prefix.content, chosen.prefix.contentMatch, chosen.prefix.withMain], [null, null, false]);
+  assert.deepEqual(chosen.tier, [0, 0, 0]);
+  assert.deepEqual([chosen.windows.fast_input.source, chosen.windows.fast_input.ageMs, chosen.windows.fast_input.ahead], ['head', 5_000, null]);
+  assert.ok(isIso(chosen.windows.fast_input.observedAt));
+  assert.deepEqual(chosen.cooldowns.map((c) => [c.scope, c.blocking]), [['model:claude-haiku-4-5-20251001', false]]);
+  assert.deepEqual([chosen.verdict, spare.verdict, spare.kind, spare.pace.hours], ['chosen', 'not_needed', 'api_key', null]);
+  assert.equal(spare.budget[0].spentUsd, 0.0036);
+  assert.deepEqual(r.walk.map((s) => s.step), ['pin', 'eligible', 'partitions', 'rung:content', 'rung:with_main', 'rung:static']);
+  assert.deepEqual(r.walk[5].facts[0], { accountId: null, key: 'depth', unit: 'count', value: 1 });
+  assert.deepEqual(r.walk[1].facts[0], { accountId: 'business', key: 'standing', unit: null, value: 'eligible' });
+  assert.deepEqual([r.outcome.kind, r.outcome.accountId, r.outcome.rung], ['placed', 'business', { depth: 1, prefixTokens: 31200, rung: 'static' }]);
+  assert.deepEqual(r.outcome.pinWritten, { action: 'created', epoch: 3, hashesStamped: false, lane: 'claude-sonnet-5|standard|none|-', refreshStamped: true });
+  assert.deepEqual(r.outcome.pinEvents, [{ kind: 'pin_created', reason: null }]);
+  assert.equal(r.outcome.completion.hit, true);
+  assert.deepEqual(r.outcome.completion.cacheMapWritten, [{ accountId: 'business', depth: 1, prefixTokens: 31200, tier: 'message', ttlMs: 300_000 }]);
+  assert.ok(isIso(r.outcome.completion.completedAt));
+});
+
+test('a row with null optionals decodes to nulls', () => {
+  const s = d.decodeDecisionSummary({
+    account_id: null, agent_id: null, at: 1_000, attempt: 1, attempt_count: null, by: { kind: 'none', tier: null, value: '' }, cache: null, exhaustion: null, fact: [{ entity: null, key: 'pick', unit: null, value: true }, { entity: null, key: 'idle', unit: 'ms', value: 5 }],
+    fast: false, from_account_id: null, hold: null, key_id: null, kind: 'renewed', model: null, pool_id: null, probe: false, refusal: null, request_id: 'r', rule: null, rung: null, runner_up: null, score: null, seq: 1, session_id: null, skipped: 0, status: null, strategy: 'pace', tier: null, type: 'decision', warmth: null,
+  });
+  assert.deepEqual(
+    [s.accountId, s.agentId, s.attemptCount, s.cache, s.exhaustion, s.fromAccountId, s.hold, s.keyId, s.model, s.poolId, s.refusal, s.rule, s.rung, s.runnerUp, s.score, s.sessionId, s.status, s.tier, s.warmth, s.by.tier],
+    Array(20).fill(null),
+  );
+  assert.deepEqual(s.fact, [{ entity: null, key: 'idle', unit: 'ms', value: 5 }], 'a fact whose value is neither a number nor a string is dropped');
+  const e = d.decodeRoutingEvent({ account_id: null, actor: null, agent_id: null, at: 1_000, detail: null, id: 3, key_id: null, kind: 'router_started', model: null, pool_id: null, request_id: null, session_id: null, type: 'event' });
+  assert.deepEqual([e.accountId, e.actor, e.agentId, e.keyId, e.model, e.poolId, e.requestId, e.sessionId, e.detail], [null, null, null, null, null, null, null, null, {}]);
+  const page = d.decodeRoutingLogPage({ next_cursor: '1000:0:3', rows: [{ type: 'summary' }, { account_id: null, at: 1_000, detail: null, id: 3, kind: 'router_started', type: 'event' }, { at: 1_000, kind: 'placed', type: 'decision' }] });
+  assert.deepEqual(page.rows.map((r) => r.type), ['event'], 'a row of another type, or a decision naming no request, is dropped');
+  assert.equal(page.nextCursor, '1000:0:3');
+  const body = fixture('decision');
+  const bare = d.decodeDecisionRecord({ ...body, outcome: { ...body.outcome, completion: null, hold: null, pin_written: null }, pin: null, pin_reason: 'pinning_off', settings: null });
+  assert.deepEqual([bare.pin, bare.pinReason, bare.settings, bare.outcome.completion, bare.outcome.pinWritten], [null, 'pinning_off', null, null, null]);
+});
+
+test("a refusal's record decodes its pin reason as not looked up", () => {
+  const body = fixture('decision');
+  const refused = { ...body, pin: null, pin_reason: 'not_looked_up', outcome: { ...body.outcome, account_id: null, completion: null, kind: 'refused', pin_events: [], pin_written: null, refusal: { kind: 'client_drift', reason: 'hash' }, rung: null } };
+  const r = d.decodeDecisionRecord(refused);
+  assert.deepEqual([r.pin, r.pinReason, r.outcome.kind, r.outcome.refusal], [null, 'not_looked_up', 'refused', { kind: 'client_drift', reason: 'hash' }]);
+  assert.equal(d.decodeDecisionRecord({ ...refused, pin_reason: 'looked_away' }).pinReason, null, 'a word outside the list reads as none, which the raw answer still carries');
+  assert.equal(d.decodeDecisionRecord(body).pinReason, null, "the fixture's placement reads its pin, so it names no reason");
+  assert.deepEqual([...d.PIN_REASON_VALUES], ['not_looked_up', 'pinning_off']);
+  assert.ok(d.SKIP_OBSTACLE_VALUES.includes('budget_unknown'), 'a trace names a budgeted member passed over while the ledger is behind');
 });
 
 test('request rows fold into analytics groups with the same sums the routes answer', () => {

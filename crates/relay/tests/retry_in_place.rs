@@ -8,7 +8,9 @@ use std::time::{Duration, Instant};
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
-use phoebis_routing::RouterEvent;
+use phoebis_bus::{Bus, Delivery, Event};
+use phoebis_routing::{DecisionRecord, DecisionSummary, RouterEvent};
+use tokio::sync::broadcast;
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-oat01-AAAA";
@@ -46,6 +48,128 @@ async fn drain(resp: axum::http::Response<axum::body::Body>) {
         .await
         .expect("the body ends")
         .unwrap();
+}
+
+/// The router's events up to and including the cache map `request_id`'s answer wrote, under a five-second bound.
+async fn events_through_cache_map(
+    events: &mut broadcast::Receiver<RouterEvent>,
+    request_id: &str,
+) -> Vec<RouterEvent> {
+    let mut seen = Vec::new();
+    loop {
+        let event = tokio::time::timeout(Duration::from_secs(5), events.recv())
+            .await
+            .expect("the router's event arrives")
+            .expect("not lagged");
+        let done = matches!(&event, RouterEvent::CacheMapWritten { request_id: id, .. } if id == request_id);
+        seen.push(event);
+        if done {
+            return seen;
+        }
+    }
+}
+
+/// The decisions among `events` for `request_id` as `(seq, attempt, kind)`, in the order the router made them.
+fn decisions_of(events: &[RouterEvent], request_id: &str) -> Vec<(u32, u32, &'static str)> {
+    events
+        .iter()
+        .filter_map(|event| match event {
+            RouterEvent::Decision {
+                summary, record, ..
+            } if record.request.request_id == request_id => Some(facts(summary, record)),
+            _ => None,
+        })
+        .collect()
+}
+
+fn facts(summary: &DecisionSummary, record: &DecisionRecord) -> (u32, u32, &'static str) {
+    (record.request.seq, record.request.attempt, summary.kind)
+}
+
+/// The `(seq, attempt)` of the cache map `request_id`'s answer wrote.
+fn cache_map_of(events: &[RouterEvent], request_id: &str) -> Option<(u32, u32)> {
+    events.iter().find_map(|event| match event {
+        RouterEvent::CacheMapWritten {
+            request_id: id,
+            seq,
+            attempt,
+            ..
+        } if id == request_id => Some((*seq, *attempt)),
+        _ => None,
+    })
+}
+
+/// The wire attempts the bus announced for `request_id`, in order.
+async fn selected_attempts(sub: &mut phoebis_bus::Subscriber, request_id: &str) -> Vec<u8> {
+    drain_until_complete(sub)
+        .await
+        .iter()
+        .filter_map(|event| match event {
+            Event::AccountSelected(selected) if selected.request_id == request_id => {
+                Some(selected.attempt)
+            }
+            _ => None,
+        })
+        .collect()
+}
+
+#[tokio::test]
+async fn a_completed_first_request_s_decision_names_attempt_one_and_its_cache_map_its_seq() {
+    let up = FakeUpstream::start(messages(json_200_with_usage())).await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = outcome(&resp).request_id;
+    drain(resp).await;
+    let seen = events_through_cache_map(&mut events, &id).await;
+    assert_eq!(decisions_of(&seen, &id), [(1, 1, "placed")]);
+    assert_eq!(cache_map_of(&seen, &id), Some((1, 1)));
+    assert_eq!(selected_attempts(&mut sub, &id).await, [1]);
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_retry_in_place_that_succeeds_reports_its_cache_map_under_the_selecting_seq() {
+    let up = FakeUpstream::start(messages(json_200())).await;
+    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("1"));
+    up.push_credential_rule(A, "/v1/messages", json_200_with_usage());
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let mut events = h.router.subscribe_events();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s1"))
+        .await
+        .unwrap();
+    let o = outcome(&resp);
+    assert_eq!(
+        (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
+        (200, "a", 2)
+    );
+    drain(resp).await;
+    let seen = events_through_cache_map(&mut events, &o.request_id).await;
+    assert_eq!(
+        decisions_of(&seen, &o.request_id),
+        [(1, 1, "placed")],
+        "the retry in place dispatched again without a new selection"
+    );
+    assert_eq!(
+        cache_map_of(&seen, &o.request_id),
+        Some((1, 2)),
+        "the rows reach the selecting decision from the pass that answered"
+    );
+    assert_eq!(selected_attempts(&mut sub, &o.request_id).await, [1, 2]);
+    up.shutdown().await;
 }
 
 #[tokio::test]
@@ -253,8 +377,8 @@ async fn a_retry_after_over_the_bound_or_a_non_portable_request_fails_over_as_to
     assert_eq!(outcome(&first).account_id, "a");
     drain(first).await;
     let pinned = h.router.pins().await.unwrap()[0].clone();
-    // Past the ten-second bound: the pin leaves a and the sibling takes the request at once.
-    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("30"));
+    // Past the one-minute bound: the pin leaves a and the sibling takes the request at once.
+    up.push_credential_rule(A, "/v1/messages", json_429_retry_after("90"));
     let started = Instant::now();
     let resp = h
         .app

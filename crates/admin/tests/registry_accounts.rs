@@ -181,6 +181,121 @@ async fn patching_deleting_and_disconnecting_accounts() {
 }
 
 #[tokio::test]
+async fn the_admin_routes_store_operator_and_the_pairing_confirm_paired() {
+    use phoebis_store::{AccountState, StateCause};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let read = |id: &str| {
+        let row = store.account(id).unwrap().unwrap();
+        (row.state, row.state_cause)
+    };
+    let created = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"console","kind":"api_key","label":"Console","secret":"sk-ant-api03-NEW"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(read("console"), (AccountState::Ready, StateCause::Operator));
+
+    // Each route below starts from a word no admin route writes, so the word it leaves is its own.
+    store
+        .set_state("direct", AccountState::Unpaired, StateCause::Paired)
+        .unwrap();
+    let rekeyed = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"secret":"sk-ant-api03-AGAIN"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(rekeyed.status(), 200);
+    assert_eq!(read("direct"), (AccountState::Ready, StateCause::Operator));
+
+    store
+        .set_state("direct", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    for route in ["pause", "resume"] {
+        assert_eq!(
+            post(
+                &app,
+                &format!("/admin/accounts/direct/{route}"),
+                "",
+                Some(&cookie)
+            )
+            .await
+            .status(),
+            204
+        );
+        assert_eq!(
+            read("direct"),
+            (AccountState::Ready, StateCause::Paired),
+            "{route} moves the flag and leaves the word"
+        );
+    }
+
+    store
+        .set_state(
+            "direct",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts/direct/clear-funding",
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        204
+    );
+    assert_eq!(read("direct"), (AccountState::Ready, StateCause::Operator));
+
+    store
+        .set_state("direct", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    assert_eq!(
+        delete(&app, "/admin/accounts/direct/credentials", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        read("direct"),
+        (AccountState::Unpaired, StateCause::Operator),
+        "an api_key slot rests unpaired after its disconnect, under the same word"
+    );
+
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    assert_eq!(
+        post(
+            &app,
+            &format!("/admin/oauth/sessions/{id}/confirm"),
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    assert_eq!(read("business"), (AccountState::Ready, StateCause::Paired));
+    assert_eq!(
+        delete(&app, "/admin/accounts/business/credentials", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        read("business"),
+        (AccountState::Disconnected, StateCause::Operator)
+    );
+}
+
+#[tokio::test]
 async fn an_account_write_ignores_a_member_the_route_does_not_name() {
     let (app, _up, _store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
@@ -337,7 +452,9 @@ async fn a_disconnect_between_the_exchange_and_the_confirm_answers_a_conflict() 
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     let id = common::exchanged_session_for(&app, &cookie, "business").await;
-    store.bump_lifecycle("business").unwrap();
+    store
+        .bump_lifecycle("business", phoebis_store::StateCause::Operator)
+        .unwrap();
     let confirmed = post(
         &app,
         &format!("/admin/oauth/sessions/{id}/confirm"),
@@ -542,7 +659,11 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
         "not in funding_required"
     );
     store
-        .set_state("direct", phoebis_store::AccountState::FundingRequired)
+        .set_state(
+            "direct",
+            phoebis_store::AccountState::FundingRequired,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     assert_eq!(
         post(
@@ -564,7 +685,7 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
 #[tokio::test]
 async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_any_reading() {
     use phoebis_relay::{FAST_INPUT, FAST_OUTPUT};
-    use phoebis_routing::{UtilizationSample, WindowReading, FIVE_HOUR};
+    use phoebis_routing::{UtilizationSample, WindowReading, WindowSource, FIVE_HOUR};
     let (app, _up, _store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     let row = |id: &'static str| {
@@ -580,6 +701,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
         utilization,
         reset: Some(common::NOW + reset),
         observed_at: common::NOW,
+        source: WindowSource::Head,
     };
     let sample = |windows: &[(&str, WindowReading)]| {
         windows.iter().fold(
@@ -598,6 +720,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
                 (FAST_OUTPUT, reading(0.08, 20_000)),
             ]),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     // A plan window alone is no fast reading, so this account's row keeps its null.
@@ -606,6 +729,7 @@ async fn an_account_row_answers_the_fast_lane_the_router_holds_and_null_before_a
             account_id: "business".into(),
             sample: sample(&[(FIVE_HOUR, reading(0.5, 60_000))]),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     fake_upstream::wait_for_async(std::time::Duration::from_secs(2), || {
@@ -689,7 +813,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
     let now = common::NOW;
     parts.store.set_profile(
         "business",
-        r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
+        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#,
         &SubscriptionRow {
             plan: Some("max".into()),
             tier: Some("default_claude_max_5x".into()),
@@ -882,7 +1006,7 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
         .store
         .set_profile(
             "second",
-            r#"{"account":{"uuid":"s","email_address":"second@example.invalid"}}"#,
+            r#"{"account":{"uuid":"s","email":"second@example.invalid"}}"#,
             &SubscriptionRow::default(),
         )
         .unwrap();
@@ -925,7 +1049,7 @@ async fn a_cancelled_account_stores_the_end_it_was_saved_with_and_answers_the_de
         .store
         .set_profile(
             "business",
-            r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
+            r#"{"account":{"uuid":"u","email":"business@example.invalid"},"organization":{}}"#,
             &phoebis_store::SubscriptionRow {
                 plan: Some("max".into()),
                 tier: Some("default_claude_max_5x".into()),
@@ -1275,6 +1399,10 @@ async fn two_account_editors_from_one_read_meet_one_409() {
     let first = first.await.unwrap();
     assert_eq!(first.status(), 409);
     assert_eq!(
+        first.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
         json(first).await["error"],
         "the account changed while the edit was being saved"
     );
@@ -1291,5 +1419,420 @@ async fn two_account_editors_from_one_read_meet_one_409() {
         ),
         ("Second".to_string(), common::API_KEY.to_string()),
         "the edit read before the other landed wrote nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_account_edit_naming_the_revision_past_its_read_is_refused_when_the_row_moves_onto_it() {
+    let (app, up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.add_credential_rule(
+        "sk-ant-api03-HELD",
+        "/v1/models",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[]}"#.to_vec(),
+        })),
+    );
+    let read = store.account("direct").unwrap().unwrap().edit_token();
+    // The first edit names the token the second edit is about to land, then waits at discovery while it does.
+    let first = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        let body = fenced(r#""secret":"sk-ant-api03-HELD""#, read + 1);
+        async move { patch(&app, "/admin/accounts/direct", &body, Some(&cookie)).await }
+    });
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !up.requests().iter().any(|r| {
+        r.headers
+            .iter()
+            .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-HELD")
+    }) {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the first edit never reached discovery"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    let second = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"label":"Second"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(second.status(), 200);
+    up.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.status(), 409);
+    assert_eq!(
+        first.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    let row = store.account("direct").unwrap().unwrap();
+    assert_eq!(
+        (
+            row.label.clone(),
+            row.edit_token(),
+            store
+                .api_key_credential("direct")
+                .unwrap()
+                .unwrap()
+                .0
+                .expose()
+                .to_string()
+        ),
+        ("Second".to_string(), read + 1, common::API_KEY.to_string()),
+        "a revision the route never read lands nothing, whatever the row moves onto"
+    );
+}
+
+/// The body an account edit sends: its fields, then the revision it read, written into the JSON object.
+fn fenced(fields: &str, revision: impl std::fmt::Display) -> String {
+    format!(r#"{{{fields},"expected_revision":{revision}}}"#)
+}
+
+#[tokio::test]
+async fn an_account_edit_with_a_stale_expected_revision_answers_409_and_writes_nothing() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().edit_token();
+
+    let read = revision("business");
+    let other = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"label":"Someone else"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(other.status(), 200);
+    let stale = patch(
+        &app,
+        "/admin/accounts/business",
+        &fenced(r#""label":"Moved""#, read),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
+        json(stale).await["error"],
+        "the account changed while the edit was being saved"
+    );
+    let row = store.account("business").unwrap().unwrap();
+    assert_eq!(
+        (row.label.as_str(), row.edit_token()),
+        ("Someone else", read + 1),
+        "the edit read before the other landed wrote nothing"
+    );
+}
+
+#[tokio::test]
+async fn an_account_edit_with_the_fresh_revision_lands_and_the_revision_moves() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().edit_token();
+
+    let detail = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    let read = detail["revision"]
+        .as_u64()
+        .expect("the account JSON carries the row's edit token");
+    assert_eq!(read, revision("business"));
+    let list = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let listed = list["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "business")
+        .unwrap();
+    assert_eq!(listed["revision"].as_u64(), Some(read));
+
+    let body = fenced(r#""label":"Moved""#, read);
+    let landed = patch(&app, "/admin/accounts/business", &body, Some(&cookie)).await;
+    assert_eq!(landed.status(), 200);
+    let landed = json(landed).await;
+    assert_eq!(
+        (landed["label"].as_str(), landed["revision"].as_u64()),
+        (Some("Moved"), Some(read + 1))
+    );
+    let again = patch(&app, "/admin/accounts/business", &body, Some(&cookie)).await;
+    assert_eq!(
+        again.status(),
+        409,
+        "the counter moved past the sent revision"
+    );
+    assert_eq!(
+        again.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+}
+
+#[tokio::test]
+async fn a_malformed_expected_revision_on_an_account_answers_400_and_writes_nothing() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+
+    let before = store.account("business").unwrap().unwrap();
+    // A present null is not an absent field, and a string, a fraction and a negative are not a revision.
+    for value in ["null", r#""later""#, "1.5", "-1"] {
+        let refused = patch(
+            &app,
+            "/admin/accounts/business",
+            &fenced(r#""label":"Moved""#, value),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "{value}");
+        assert_eq!(
+            json(refused).await["error"],
+            "expected_revision is the revision the row was read at",
+            "{value}"
+        );
+        let row = store.account("business").unwrap().unwrap();
+        assert_eq!(
+            (row.label.as_str(), row.revision),
+            (before.label.as_str(), before.revision),
+            "{value} wrote nothing"
+        );
+    }
+}
+
+#[tokio::test]
+async fn an_account_edit_without_expected_revision_lands_as_today() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+
+    let read = store.account("business").unwrap().unwrap().revision;
+    let plain = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"label":"Plain"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(plain.status(), 200);
+    let row = store.account("business").unwrap().unwrap();
+    assert_eq!((row.label.as_str(), row.revision), ("Plain", read + 1));
+}
+
+#[tokio::test]
+async fn a_body_naming_no_field_writes_nothing_whatever_revision_it_sends() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+
+    let before = store.account("business").unwrap().unwrap();
+    let empty = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"expected_revision":0}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(empty.status(), 200);
+    let body = json(empty).await;
+    assert_eq!(
+        (body["id"].as_str(), body["label"].as_str()),
+        (Some("business"), Some(before.label.as_str()))
+    );
+    let row = store.account("business").unwrap().unwrap();
+    assert_eq!(
+        (row.label.as_str(), row.revision),
+        (before.label.as_str(), before.revision),
+        "nothing is written, so nothing is fenced"
+    );
+}
+
+#[tokio::test]
+async fn a_subscription_end_edit_is_fenced_as_a_rename_is() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let revision = |id: &str| store.account(id).unwrap().unwrap().edit_token();
+    let end = |revision: u64| {
+        fenced(
+            r#""cancelled":true,"subscription_ends_at":2000000"#,
+            revision,
+        )
+    };
+
+    let read = revision("business");
+    let other = patch(
+        &app,
+        "/admin/accounts/business",
+        r#"{"label":"Someone else"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(other.status(), 200);
+    let stale = patch(&app, "/admin/accounts/business", &end(read), Some(&cookie)).await;
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
+        json(stale).await["error"],
+        "the account changed while the edit was being saved"
+    );
+    assert!(
+        !store
+            .subscription_term("business")
+            .unwrap()
+            .unwrap_or_default()
+            .cancelled,
+        "the end edit read before the rename wrote nothing"
+    );
+
+    let fresh = patch(
+        &app,
+        "/admin/accounts/business",
+        &end(read + 1),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(fresh.status(), 200);
+    let term = store.subscription_term("business").unwrap().unwrap();
+    assert_eq!(
+        (term.cancelled, term.ends_at, revision("business")),
+        (true, Some(2_000_000), read + 2)
+    );
+}
+
+#[tokio::test]
+async fn an_editor_opened_before_its_account_was_deleted_and_created_again_is_refused_and_writes_nothing(
+) {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let create = r#"{"id":"team","kind":"oauth","label":"Team"}"#;
+    let created = post(&app, "/admin/accounts", create, Some(&cookie)).await;
+    assert_eq!(created.status(), 201);
+    let read = json(created).await["revision"]
+        .as_u64()
+        .expect("the account JSON carries the token an edit sends back");
+    assert_eq!(
+        delete(&app, "/admin/accounts/team", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        post(&app, "/admin/accounts", create, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    let replacement = store.account("team").unwrap().unwrap();
+
+    let stale = patch(
+        &app,
+        "/admin/accounts/team",
+        &fenced(r#""label":"Stale","enabled":false"#, read),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(stale.status(), 409);
+    assert_eq!(
+        stale.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
+        store.account("team").unwrap().unwrap(),
+        replacement,
+        "the edit read from the deleted account wrote nothing on its replacement"
+    );
+}
+
+#[tokio::test]
+async fn an_edit_whose_account_is_replaced_while_its_key_is_verified_is_refused_and_writes_nothing()
+{
+    let (app, up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.add_credential_rule(
+        "sk-ant-api03-HELD",
+        "/v1/models",
+        Respond::Gated(Box::new(Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"data":[]}"#.to_vec(),
+        })),
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts",
+            r#"{"id":"spare","kind":"api_key","label":"Spare","secret":"sk-ant-api03-FIRST"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    // The edit reads the row, then waits at discovery while the account is deleted and created again under its id,
+    // which restarts the revision and the lifecycle generation the edit read.
+    let first = tokio::spawn({
+        let (app, cookie) = (app.clone(), cookie.clone());
+        async move {
+            patch(
+                &app,
+                "/admin/accounts/spare",
+                r#"{"label":"First","secret":"sk-ant-api03-HELD"}"#,
+                Some(&cookie),
+            )
+            .await
+        }
+    });
+    let give_up = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !up.requests().iter().any(|r| {
+        r.headers
+            .iter()
+            .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-HELD")
+    }) {
+        assert!(
+            tokio::time::Instant::now() < give_up,
+            "the edit never reached discovery"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+    assert_eq!(
+        delete(&app, "/admin/accounts/spare", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts",
+            r#"{"id":"spare","kind":"api_key","label":"Replacement","secret":"sk-ant-api03-NEXT"}"#,
+            Some(&cookie),
+        )
+        .await
+        .status(),
+        201
+    );
+    let replacement = store.account("spare").unwrap().unwrap();
+    up.release();
+    let first = first.await.unwrap();
+    assert_eq!(first.status(), 409);
+    assert_eq!(
+        first.headers().get("x-phoebis-error-code").unwrap(),
+        "stale_edit"
+    );
+    assert_eq!(
+        (
+            store.account("spare").unwrap().unwrap(),
+            store
+                .api_key_credential("spare")
+                .unwrap()
+                .unwrap()
+                .0
+                .expose()
+                .to_string()
+        ),
+        (replacement, "sk-ant-api03-NEXT".to_string()),
+        "the edit read from the deleted account wrote nothing on its replacement"
     );
 }

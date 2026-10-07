@@ -10,11 +10,14 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_relay::DiscoveryError;
-use phoebis_store::{AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StoreError};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StateCause, StoreError,
+};
 use serde_json::{json, Value};
 
 use crate::routes::{
-    account, account_json, double_option, failure, reload_or_refuse, store_failure, CreatedId,
+    account, account_json, double_option, failure, failure_with_code, fence_revision, present,
+    reload_or_refuse, store_failure, CreatedId,
 };
 use crate::AdminState;
 
@@ -43,6 +46,11 @@ struct PatchInput {
     cancelled: Option<bool>,
     #[serde(default, deserialize_with = "double_option")]
     subscription_ends_at: Option<Option<i64>>,
+    /// The edit token the row was read at, the `revision` of the account JSON, kept raw and apart from an absent field
+    /// as `PoolInput` and `KeyInput` keep theirs, so a present null is refused with its own sentence rather than read
+    /// as "not sent". The write lands only while the row still answers it; absent, the route fences on its own read.
+    #[serde(default, deserialize_with = "present")]
+    expected_revision: Option<Value>,
 }
 
 /// The longest `label` or `notes` an account or key route accepts, in bytes.
@@ -120,6 +128,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             AccountKind::Oauth => AccountState::Unpaired,
             AccountKind::ApiKey => AccountState::Ready,
         },
+        state_cause: StateCause::Operator,
     };
     let secret = input.secret.map(|s| Secret::new(&s));
     // The key is verified before the row exists, so a refused creation leaves nothing behind.
@@ -193,6 +202,10 @@ pub(crate) async fn patch(
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
+    let sent_token = match fence_revision(input.expected_revision.as_ref()) {
+        Ok(token) => token,
+        Err(refusal) => return refusal,
+    };
     if row.kind == AccountKind::Oauth && input.secret.is_some() {
         return failure(
             StatusCode::BAD_REQUEST,
@@ -254,15 +267,26 @@ pub(crate) async fn patch(
         || input.enabled.is_some()
         || cancellation.is_some();
     if edits {
-        // One commit for every field, fenced on the revision the row was read at: an edit built from a stale
-        // read lands nothing, and a combined edit never fences against its own earlier write.
+        // One commit for every field, fenced on the incarnation and the revision the route read, which a sent token
+        // has matched here: an edit built from a stale read, or from an account since deleted and created again under
+        // its id, lands nothing, and a combined edit never fences against its own earlier write.
+        if sent_token.is_some_and(|token| !row.answers_edit_token(token)) {
+            return failure_with_code(
+                StatusCode::CONFLICT,
+                "stale_edit",
+                "the account changed while the edit was being saved",
+            );
+        }
         let update = AccountUpdate {
             id: &id,
             expected_revision: row.revision,
+            incarnation: row.incarnation,
             lifecycle_generation: row.lifecycle_generation,
             label,
             secret: secret.as_ref(),
-            state: secret.as_ref().map(|_| AccountState::Ready),
+            state: secret
+                .as_ref()
+                .map(|_| (AccountState::Ready, StateCause::Operator)),
             at: (state.clock)(),
             actor: ACTOR,
             enabled: input.enabled,
@@ -271,8 +295,9 @@ pub(crate) async fn patch(
         match state.store.commit_account_update(&update) {
             Ok(()) => {}
             Err(StoreError::Stale) => {
-                return failure(
+                return failure_with_code(
                     StatusCode::CONFLICT,
+                    "stale_edit",
                     "the account changed while the edit was being saved",
                 )
             }
@@ -392,7 +417,10 @@ pub(crate) async fn clear_funding(
             "the account is not waiting on funding",
         );
     }
-    if let Err(error) = state.store.set_state(&id, AccountState::Ready) {
+    if let Err(error) = state
+        .store
+        .set_state(&id, AccountState::Ready, StateCause::Operator)
+    {
         return store_failure(error);
     }
     if let Err(refusal) = reload_or_refuse(&state).await {

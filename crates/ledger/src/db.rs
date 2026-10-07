@@ -16,8 +16,8 @@ use rusqlite::{
 
 use crate::query::request_by_id;
 use crate::record::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord,
-    RequestRecord,
+    AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
+    QuotaSampleRecord, RequestRecord,
 };
 use crate::{schema, LedgerError};
 
@@ -323,9 +323,9 @@ impl LedgerDb {
         limit: usize,
     ) -> Result<Vec<EventRecord>, LedgerError> {
         self.read(move |conn| {
-            let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE at >= ?1 AND at < ?2 ORDER BY at, rowid LIMIT ?3")?;
+            let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at < ?2 ORDER BY at, rowid LIMIT ?3")?;
             let rows = stmt.query_map(params![from, to, limit as i64], |r| {
-                Ok(EventRecord { at: r.get(0)?, kind: r.get(1)?, account_id: r.get(2)?, key_id: r.get(3)?, session_id: r.get(4)?, model: r.get(5)?, actor: r.get(6)?, detail: r.get(7)? })
+                Ok(EventRecord { at: r.get(0)?, kind: r.get(1)?, account_id: r.get(2)?, key_id: r.get(3)?, session_id: r.get(4)?, model: r.get(5)?, actor: r.get(6)?, detail: r.get(7)?, pool_id: r.get(8)?, agent_id: r.get(9)?, request_id: r.get(10)? })
             })?;
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
@@ -390,6 +390,17 @@ impl LedgerDb {
             Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
         }).await
     }
+}
+
+/// The newest `at` among the requests, the events and the decisions: when the router that wrote them last did
+/// anything, which is all a start can date its gap from, since nothing marks a clean stop.
+pub(crate) fn newest_row_at(conn: &Connection) -> rusqlite::Result<Option<i64>> {
+    conn.query_row(
+        "SELECT MAX(at) FROM (SELECT MAX(received_at) AS at FROM requests UNION ALL SELECT MAX(at) FROM events \
+         UNION ALL SELECT MAX(at) FROM decisions)",
+        [],
+        |row| row.get(0),
+    )
 }
 
 /// A transaction that takes SQLite's write lock at `BEGIN`, where the busy timeout applies. A deferred one that
@@ -535,10 +546,54 @@ pub(crate) fn insert_request_in(
 
 pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), LedgerError> {
     conn.execute(
-        "INSERT INTO events (at, kind, account_id, key_id, session_id, model, actor, detail) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8)",
-        params![e.at, e.kind, e.account_id, e.key_id, e.session_id, e.model, e.actor, e.detail],
+        "INSERT INTO events (at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11)",
+        params![e.at, e.kind, e.account_id, e.key_id, e.session_id, e.model, e.actor, e.detail, e.pool_id, e.agent_id, e.request_id],
     )?;
     Ok(())
+}
+
+/// `summary` is the summary's JSON, `frame` the record's zstd frame. The caller built both inside the batch.
+pub(crate) fn insert_decision_in(
+    conn: &Connection,
+    row: &DecisionRow,
+    summary: &str,
+    frame: &[u8],
+) -> Result<(), LedgerError> {
+    conn.execute(
+        "INSERT INTO decisions (request_id, seq, attempt, at, kind, probe, key_id, pool_id, account_id, from_account_id, session_id, agent_id, model, summary, record) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15)",
+        params![
+            row.request_id,
+            row.seq,
+            row.attempt,
+            row.at,
+            row.kind,
+            row.probe,
+            row.key_id,
+            row.pool_id,
+            row.account_id,
+            row.from_account_id,
+            row.session_id,
+            row.agent_id,
+            row.model,
+            summary,
+            frame
+        ],
+    )?;
+    Ok(())
+}
+
+/// Sets `cache_map` on the decision `(request_id, seq)` names and answers the rows changed (0 when no decision row
+/// exists). Keyed by the selecting decision alone, so a retry in place that completed on a later attempt still lands
+/// on the decision that selected it.
+pub(crate) fn update_cache_map_in(
+    conn: &Connection,
+    write: &CacheMapWrite,
+    entries: &str,
+) -> Result<usize, LedgerError> {
+    Ok(conn.execute(
+        "UPDATE decisions SET cache_map = ?3 WHERE request_id = ?1 AND seq = ?2",
+        params![write.request_id, write.seq, entries],
+    )?)
 }
 
 pub(crate) const REQUEST_SELECT: &str = "SELECT id, received_at, finished_at, key_id, key_generation, pool_id, session_id, agent_id, parent_agent_id, model, canonical_model, stream, kind, origin, status, outcome, attempts, request_bytes, response_bytes, ttfb_ms, ttfc_ms, duration_ms, error_code, client_drift, kept_warm, bodies_captured, user_agent, effort, thinking_type, thinking_budget, max_tokens, tool_count, system_blocks, message_count, context_edits, temperature, requested_speed, requested_service_tier, presented_retired, rotation_at, request_truncated, response_truncated, client, agent_type, compaction, context_compacted, prev_tool_ms, turn_origin, request_class, forked_from, fork_depth, auto_mode, held FROM requests";
@@ -821,7 +876,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -907,7 +962,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 28, "and answered what the connection holds");
+        assert_eq!(version, 29, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -922,7 +977,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            28,
+            29,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }
@@ -963,7 +1018,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 28,
+                    supported: 29,
                     ..
                 }
             ),

@@ -18,8 +18,9 @@ use phoebis_profile::{
 use phoebis_relay::{router, Accounting, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn as spawn_router, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, ApiKeyRow, Identity, MemberWrite,
-    NewBundle, PoolRow, RulesMode, Secret, StorageKey, Store, Strategy,
+    AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Identity,
+    MemberWrite, NewBundle, PoolRow, RulesMode, Secret, StateCause, StorageKey, Store, StoreError,
+    Strategy,
 };
 use phoebis_transport::request::parse_head;
 // The polls live with the fake so every integration suite has them; only some of them are used here.
@@ -135,6 +136,7 @@ pub async fn harness_on(
                     incarnation: 1,
                     revision: 1,
                     state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
                 })
                 .unwrap();
             match account.kind {
@@ -354,6 +356,34 @@ pub async fn harness_on(
 pub fn clock_of(h: &Harness) -> Clock {
     let c = h.clock.clone();
     Arc::new(move || c.load(Ordering::SeqCst))
+}
+
+/// A label edit through the one account write, fenced on the revision the caller read. The incarnation and the
+/// generation are the row's own at call time, so only the revision half of the admin route's fence can refuse here.
+pub fn rename(
+    h: &Harness,
+    id: &str,
+    revision: u64,
+    label: &str,
+    actor: &str,
+) -> Result<(), StoreError> {
+    let (incarnation, generation) = h
+        .store
+        .account(id)?
+        .map_or((0, 0), |row| (row.incarnation, row.lifecycle_generation));
+    h.store.commit_account_update(&AccountUpdate {
+        id,
+        expected_revision: revision,
+        incarnation,
+        lifecycle_generation: generation,
+        label,
+        secret: None,
+        state: None,
+        at: h.clock.load(Ordering::SeqCst),
+        actor,
+        enabled: None,
+        cancellation: None,
+    })
 }
 
 /// The head fixture captured together with a body fixture: a first-party body checked against a non-first-

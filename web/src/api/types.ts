@@ -95,6 +95,9 @@ export interface Account {
   plan: string | null;
   pools: PoolMembership[];
   requests: { last24h: number; last7d: number; lifetime: number };
+  /** The row's edit token, which an edit sends back as `expected_revision`; an account deleted and created again
+   * under its id never answers one its predecessor did. */
+  revision: number;
   routingEnabled: boolean;
   status: AccountStatus;
   subscription: Subscription | null;
@@ -173,26 +176,12 @@ export interface KeyModels {
   rules: ProcessedRule[];
 }
 
-/** One `model_rejected` or `model_permitted` ledger event, as `GET /admin/models/state` lists it. */
-export interface ModelEvent {
-  accountId: string;
-  at: string;
-  keyId: string | null;
-  model: string;
-  /** The accounts a permit's request failed over past; empty on a rejection. */
-  rejectedBy: string[];
-  requestId: string | null;
-  sessionId: string | null;
-  /** The upstream's own id for the attempt that was rejected or that permitted, `null` when it sent none. */
-  upstreamRequestId: string | null;
-  wireModel: string;
-}
-
-/** `GET /admin/models/state`: the live cooldowns grouped by model, and the newest rejections and permits. */
+/**
+ * `GET /admin/models/state`: the live cooldowns grouped by model. The route also answers the newest rejections and
+ * permits, which the console reads in the routing log instead.
+ */
 export interface ModelsState {
   cooldowns: { model: string; rows: RuleCooldown[] }[];
-  permits: ModelEvent[];
-  rejections: ModelEvent[];
 }
 
 export interface QuotaSample {
@@ -379,8 +368,6 @@ export interface Pool {
   keepalive: PoolKeepalive;
   keys: PoolKey[];
   members: PoolMember[];
-  /** Null disables the shedding round. */
-  migrateAboveUtilization: number | null;
   /** Whether a pin moves off a member whose window for its model is spent while a sibling has allowance left. */
   migrateWhenSpent: boolean;
   /** Under `by_warm_prefix`, the smallest estimated static prefix, in tokens, that places a fresh session. */
@@ -402,6 +389,8 @@ export interface Pool {
   /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
   selectBelowUtilization: number | null;
   sessionPlacement: SessionPlacement;
+  /** Null disables the shedding round. */
+  shedAheadOfPace: number | null;
   /** The share of a hot member's burn one shedding round moves. */
   shedShare: number;
   /** Seconds a member that shed waits before its next round, and a session shed off it stays away. */
@@ -411,6 +400,8 @@ export interface Pool {
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
   traffic24h: TrafficBucket[];
+  /** The stamp of the row's last write, which an edit sends back as `expected_revision`. */
+  updatedAt: string;
   warmSessions: WarmSessions;
   /** Minutes before an account's subscription end from which it takes a fresh session only as the last resort. */
   windDownMinutes: number;
@@ -445,6 +436,8 @@ export interface ApiKey {
   /** Live sessions whose newest request still presented the previous secret; 0 once the grace ends. */
   sessionsOnRetiredSecret: number;
   status: KeyStatus;
+  /** The stamp of the row's last write, which an edit sends back as `expected_revision`. */
+  updatedAt: string;
   usage7d: { cost: number; requests: number; tokens: number };
 }
 
@@ -725,6 +718,335 @@ export interface RequestPage {
   requests: RequestLog[];
 }
 
+/** A decision's kind as the routing log names it. A probe's decision keeps its kind and the row's `probe` marks it. */
+export type DecisionKind = 'exhausted' | 'held' | 'moved' | 'placed' | 'refused' | 'renewed';
+
+/** Why a record pins nothing. `not_looked_up` is a refusal's, made before the pin lookup whatever session it named. */
+export type PinReason = 'not_looked_up' | 'pinning_off';
+
+/** How the console draws a fact's value. */
+export type FactUnit = 'count' | 'ms' | 'percent' | 'percent_per_hour' | 'text' | 'time' | 'tokens' | 'usd';
+
+export interface FactEntity {
+  id: string;
+  kind: 'account' | 'key' | 'model' | 'pool';
+}
+
+/**
+ * One Fact-cell pair as the router sent it: a key from the fact vocabulary, a number or a string, and how to draw
+ * it.
+ */
+export interface SummaryFact {
+  entity: FactEntity | null;
+  key: string;
+  unit: FactUnit | null;
+  value: number | string;
+}
+
+/** What decided the row, the By chip: a rule, a rung, the strategy, a hold, an exhaustion, a refusal or none. */
+export interface DecisionBy {
+  kind: 'exhaustion' | 'hold' | 'none' | 'refusal' | 'rule' | 'rung' | 'strategy';
+  tier: [number, number, number] | null;
+  value: string;
+}
+
+export interface Score {
+  accountId: string;
+  score: number;
+  unit: string;
+}
+
+/** A decision row of the routing log: the summary the router wrote, with the facts of the attempt that completed it. */
+export interface DecisionSummary {
+  type: 'decision';
+  accountId: string | null;
+  agentId: string | null;
+  at: string;
+  attempt: number;
+  /** The request's attempts, null until its row lands. */
+  attemptCount: number | null;
+  by: DecisionBy;
+  /** Null until the completing attempt reports usage, and for a decision that sent nothing upstream. */
+  cache: { hit: boolean; inputTokens: number; promisedTokens: number | null; readTokens: number } | null;
+  exhaustion: { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null } | null;
+  /** One pair, or two at the most. */
+  fact: SummaryFact[];
+  fast: boolean;
+  fromAccountId: string | null;
+  hold: { accountId: string; boundMs: number; cohort: string | null } | null;
+  keyId: string | null;
+  kind: DecisionKind;
+  model: string | null;
+  poolId: string | null;
+  probe: boolean;
+  refusal: { kind: string; reason: string } | null;
+  requestId: string;
+  rule: string | null;
+  rung: Placement | null;
+  runnerUp: Score | null;
+  score: Score | null;
+  /** The decision's place within its request, counted from 1: a hold and the placement after it share an attempt. */
+  seq: number;
+  sessionId: string | null;
+  skipped: number;
+  status: number | null;
+  strategy: string;
+  tier: [number, number, number] | null;
+  warmth: { cause: string; verdict: string } | null;
+}
+
+/** An event row of the routing log, every kind of the ledger's events table. */
+export interface RoutingEvent {
+  type: 'event';
+  accountId: string | null;
+  actor: string | null;
+  agentId: string | null;
+  at: string;
+  /** The kind's own fields, decoded, which the console reads by name through `routingLog.ts`. */
+  detail: Record<string, unknown>;
+  id: number;
+  keyId: string | null;
+  kind: string;
+  model: string | null;
+  poolId: string | null;
+  requestId: string | null;
+  sessionId: string | null;
+}
+
+export type RoutingLogRow = DecisionSummary | RoutingEvent;
+
+export interface RoutingLogPage {
+  /** Answered under a `request` filter alone, the one bounded set. */
+  counts: { decisions: number; events: number } | null;
+  nextCursor: string | null;
+  rows: RoutingLogRow[];
+}
+
+/** `from` and `to` are ISO instants, sent as they are: the route reads RFC 3339. */
+export interface RoutingLogQuery {
+  accountIds?: string[];
+  cursor?: string;
+  from?: string;
+  keyIds?: string[];
+  /** Decision kinds, event kinds and the pseudo-kind `probe`. Absent, it is the route's default set. */
+  kinds?: string[];
+  limit?: number;
+  models?: string[];
+  poolIds?: string[];
+  request?: string;
+  /** A session id or its prefix. */
+  session?: string;
+  to?: string;
+}
+
+/** The request's facts as the engine read them. */
+export interface RecordRequest {
+  agentId: string;
+  at: string;
+  attempt: number;
+  attempted: string[];
+  canonicalModel: string;
+  chain: { boundaries: number; staticBoundaries: number; staticHash: boolean };
+  clientClass: string;
+  flags: { contextCompacted: boolean; count: boolean; fast: boolean; marker: boolean; portable: boolean; probe: boolean };
+  /** The holds this request waited through before the decision, each with the wire attempt that waited. */
+  holds: { accountId: string; attempt: number; cohort: string | null; heldMs: number }[];
+  keyGeneration: number;
+  keyId: string;
+  lane: { effort: string; speed: string; thinking: string };
+  parentAgentId: string | null;
+  poolId: string;
+  registryRevision: number;
+  requestClass: string | null;
+  requestId: string;
+  seq: number;
+}
+
+/** Step 1's reading of the pin, its row's fields null when none was found. */
+export interface RecordPin {
+  accountId: string | null;
+  createdAt: string | null;
+  epoch: number | null;
+  /** `live`, `expired_idle`, `left_pool` or `none`. */
+  found: string;
+  idleMs: number | null;
+  incarnation: number | null;
+  lane: string | null;
+  lastRefreshAt: string | null;
+  lastUsedAt: string | null;
+  marked: boolean;
+  refreshAgeMs: number | null;
+  released: string[];
+  shed: { at: string; from: string } | null;
+  warmth: string | null;
+  warmthCause: string | null;
+}
+
+/** The values that entered the decision, each named as the pool row names the field it was read from. */
+export interface RecordSettings {
+  affinityMode: string;
+  affinityTtlSeconds: number;
+  burnWindowSeconds: number;
+  inFlightCap: number;
+  migrateBand: number;
+  migrateWhenSpent: boolean;
+  minSharedPrefixTokens: number;
+  overageMoveGraceMinutes: number;
+  overagePolicy: string;
+  paceFloor: number;
+  poolUpdatedAt: string;
+  preferSubscription: boolean;
+  retryInPlaceSeconds: number;
+  selectBelowUtilization: number | null;
+  sessionPlacement: string;
+  shedAheadOfPace: number | null;
+  shedShare: number;
+  sourceDwellSeconds: number;
+  strategy: string;
+  subagentPlacement: string;
+  warmSessions: string;
+  windDownMinutes: number;
+}
+
+/** A member's spend against one budget. The spend and its period are null while the ledger has reported none. */
+export interface RecordBudget {
+  budgetUsd: number;
+  observedAt: string | null;
+  period: string;
+  periodEnd: string | null;
+  periodStart: string | null;
+  spentUsd: number | null;
+}
+
+export interface RecordCooldown {
+  /** Whether the row kept this request off the member. */
+  blocking: boolean;
+  reason: string;
+  scope: string;
+  until: string;
+  window: string;
+}
+
+export interface RecordCredits {
+  blocked: string | null;
+  disabledReason: string | null;
+  enabled: boolean;
+  observedAt: string;
+  utilization: number | null;
+}
+
+/** One entry the rung walk visited on a member. `refusedBy` names the gate that refused it, null for one accepted. */
+export interface PrefixEntry {
+  depth: number;
+  /** The boundary's chain hash, 64 lowercase hex characters, as the affinity map keys it. */
+  hash: string;
+  live: boolean;
+  prefixTokens: number;
+  refusedBy: string | null;
+  /** The lifetime left as of `writtenAt`, 0 for a link the cache never confirmed. */
+  ttlMs: number;
+  writtenAt: string;
+}
+
+export interface RecordCandidate {
+  accountId: string;
+  allowanceKnown: boolean;
+  budget: RecordBudget[];
+  cooldowns: RecordCooldown[];
+  credits: RecordCredits | null;
+  enabled: boolean;
+  inFlight: number;
+  inFlightCap: number;
+  inOverage: boolean;
+  incarnation: number;
+  kind: 'api_key' | 'oauth';
+  obstacle: { name: string; reason: string | null; until: string | null; window: string | null } | null;
+  overage: { observedAt: string; reset: string | null; since: string; source: string } | null;
+  pace: { deadline: string | null; end: string | null; hours: number | null; remaining: number; reset: string | null; score: number } | null;
+  partition: string | null;
+  planTier: string | null;
+  /**
+   * Per rung the deepest visited entry and, apart from it, the one the rung accepted on this member. The card's chips
+   * read the match.
+   */
+  prefix: { content: PrefixEntry | null; contentMatch: PrefixEntry | null; static: PrefixEntry | null; staticMatch: PrefixEntry | null; withMain: boolean };
+  priority: number;
+  rank: number | null;
+  score: number | null;
+  state: string;
+  term: { cancelled: boolean; ended: boolean; endsAt: string | null; since: string | null; trialEndsAt: string | null; windingDown: boolean } | null;
+  tier: [number, number, number];
+  verdict: string;
+  windows: Record<string, { ageMs: number; ahead: number | null; observedAt: string; reset: string | null; source: string; utilization: number }>;
+}
+
+/** One step of the rule walk in the engine's order, with the facts it read. */
+export interface WalkStep {
+  facts: WalkFact[];
+  step: string;
+  verdict: string;
+}
+
+/** A fact's value is the engine's own: a number, a word, a flag or a list. */
+export interface WalkFact {
+  accountId: string | null;
+  key: string;
+  unit: string | null;
+  value: unknown;
+}
+
+/** What the record route adds from the attempt row at read time, null for a decision that sent nothing upstream. */
+export interface RecordCompletion {
+  cacheMapWritten: { accountId: string; depth: number; prefixTokens: number; tier: string; ttlMs: number }[] | null;
+  cacheReadTokens: number | null;
+  completedAt: string | null;
+  freed: boolean;
+  heldMs: number | null;
+  hit: boolean | null;
+  inputTokens: number | null;
+  promisedTokens: number | null;
+  status: number | null;
+}
+
+export interface RecordOutcome {
+  accountId: string | null;
+  cohortHold: CohortHold | null;
+  completion: RecordCompletion | null;
+  exhaustion: { deadline: string | null; kind: string; obstacle: string | null; reason: string | null; window: string | null } | null;
+  fromAccountId: string | null;
+  hold: { accountId: string; boundMs: number; cohort: string | null } | null;
+  inOverage: boolean;
+  kind: DecisionKind;
+  /** In the routing task's emit order: two for a replaced expired pin, `pin_expired` then `pin_created`. */
+  pinEvents: { kind: string; reason: string | null }[];
+  pinWritten: { action: string; epoch: number; hashesStamped: boolean; lane: string; refreshStamped: boolean } | null;
+  refusal: { kind: string; reason: string } | null;
+  rule: string | null;
+  rung: Placement | null;
+  /** The pins the shedding round this decision ran marked, or null when no round ran. */
+  shedMarks: { agentId: string; keyId: string; model: string; sessionId: string }[] | null;
+  strategy: string;
+  tier: [number, number, number] | null;
+  upstreamModel: string | null;
+}
+
+/** Record v1 as the record route answers it, every block in camelCase. `raw` is the route's
+ * answer as it arrived, kept for the card's Copy as JSON, and `settings` null for a refusal under a key or pool the
+ * registry no longer held. */
+export interface DecisionRecord {
+  candidates: RecordCandidate[];
+  outcome: RecordOutcome;
+  pin: RecordPin | null;
+  pinReason: PinReason | null;
+  raw: unknown;
+  request: RecordRequest;
+  requestId: string;
+  seq: number;
+  settings: RecordSettings | null;
+  version: number;
+  walk: WalkStep[];
+}
+
 export type AnalyticsGroupBy = 'account' | 'all' | 'client' | 'effort' | 'key' | 'kind' | 'model' | 'pool' | 'request_class' | 'speed' | 'user_agent';
 
 export interface AnalyticsQuery {
@@ -950,6 +1272,7 @@ export type RecipeReason =
   | 'evicted'
   | 'expired'
   | 'idle_limit'
+  | 'ledger_behind'
   | 'net_negative'
   | 'overage'
   | 'paused'

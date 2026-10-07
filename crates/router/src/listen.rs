@@ -7,6 +7,7 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
+use boring::ssl::SslAcceptor;
 use hyper::server::conn::http1;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
@@ -15,6 +16,7 @@ use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 
+use phoebis_relay::handshake;
 pub use phoebis_relay::ListenLimits;
 
 /// How long the loop waits out a listener error. An accept that fails for a reason the process cannot fix,
@@ -23,13 +25,15 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 
 /// Serves `app` until `stop` flips, then waits for the connections already accepted. `upgrades` carries the
 /// admin listener's live WebSocket through hyper's upgrade path; the metrics listener, which never upgrades a
-/// connection, runs without it.
+/// connection, runs without it. With `acceptor` set, every connection completes a TLS handshake before hyper
+/// reads it.
 pub async fn serve(
     listener: TcpListener,
     app: Router,
     mut stop: watch::Receiver<bool>,
     limits: ListenLimits,
     upgrades: bool,
+    acceptor: Option<Arc<SslAcceptor>>,
 ) -> std::io::Result<()> {
     // The admin listener's live WebSocket goes through hyper's own HTTP/1 builder: the auto builder's upgrade
     // path runs its HTTP/2 preface sniff whatever `http1_only` says, and that read has no timeout of its own
@@ -61,9 +65,9 @@ pub async fn serve(
             permit = slots.clone().acquire_owned() => permit.expect("the listener's semaphore is never closed"),
             _ = stopped(&mut stop) => break,
         };
-        let stream = tokio::select! {
+        let (stream, peer) = tokio::select! {
             accepted = listener.accept() => match accepted {
-                Ok((stream, _)) => stream,
+                Ok(accepted) => accepted,
                 Err(error) => {
                     tracing::debug!(%error, "the listener could not accept a connection");
                     tokio::time::sleep(ACCEPT_BACKOFF).await;
@@ -73,17 +77,35 @@ pub async fn serve(
             _ = stopped(&mut stop) => break,
         };
         let _ = stream.set_nodelay(true);
-        let io = TokioIo::new(stream);
         let service = TowerToHyperService::new(app.clone());
         let upgrading = upgrading.clone();
         let plain = Arc::clone(&plain);
-        let drain = stop.clone();
+        let mut drain = stop.clone();
+        let acceptor = acceptor.clone();
         // The permit is released once the connection future itself ends: for an upgraded socket that is when
         // hyper hands it to its `on_upgrade` task, not when the socket later closes, so the live crate's own
         // cap is what bounds those sockets from here on. The auto builder's `serve_connection` is called
         // inside the spawned task, not before it, because the future it returns borrows the builder.
         tasks.spawn(async move {
             let _slot = permit;
+            let handshaken = tokio::select! {
+                // Biased toward the handshake: a plain listener's resolves on its first poll, so the stop never
+                // drops a plain connection here.
+                biased;
+                handshaken = handshake(stream, acceptor.as_deref(), limits.header_read_timeout) => handshaken,
+                // A peer still in its handshake has sent no request, so the stop ends it as hyper's graceful
+                // shutdown ends a connection that has read no byte, rather than waiting out the bound.
+                _ = stopped(&mut drain) => return,
+            };
+            let stream = match handshaken {
+                Ok(stream) => stream,
+                Err(error) => {
+                    // A plain-HTTP request on a TLS port lands here too; the bytes are never logged.
+                    tracing::debug!(%peer, %error, "a connection ended at the handshake");
+                    return;
+                }
+            };
+            let io = TokioIo::new(stream);
             let ended: Result<(), Box<dyn std::error::Error + Send + Sync>> = if upgrades {
                 let conn = upgrading.serve_connection(io, service).with_upgrades();
                 until_drained(conn, http1::UpgradeableConnection::graceful_shutdown, drain)

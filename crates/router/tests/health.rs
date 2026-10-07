@@ -1,4 +1,5 @@
-//! `phoebis health` and the `PHOEBIS_CONFIG` fallback, against listeners this file owns on loopback ports.
+//! `phoebis health` and the `PHOEBIS_CONFIG` fallback, against listeners this file owns on loopback ports, plain and
+//! behind TLS.
 
 use std::io::{Read, Write};
 use std::net::{SocketAddr, TcpListener};
@@ -14,7 +15,7 @@ fn config_file(dir: &Path, name: &str, proxy: SocketAddr) -> PathBuf {
     )
     .unwrap();
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_HEALTH_ADMIN\nproxy:\n  listen: {proxy}\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_HEALTH_ADMIN\nproxy:\n  listen: {proxy}\nstorage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         key.display(),
         dir.join("router.sqlite").display()
     );
@@ -53,11 +54,50 @@ fn answering(status: &'static str) -> (SocketAddr, std::thread::JoinHandle<Strin
     (addr, served)
 }
 
+/// `answering`'s twin behind TLS under a pair the test generates: the request head once the handshake finished, or
+/// `None` when the handshake failed.
+fn answering_tls(status: &'static str) -> (SocketAddr, std::thread::JoinHandle<Option<String>>) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    let acceptor = fake_upstream::acceptor_for(&fake_upstream::generate_pair(&["localhost"]));
+    let served = std::thread::spawn(move || {
+        tokio::runtime::Builder::new_current_thread()
+            .enable_all()
+            .build()
+            .unwrap()
+            .block_on(async move {
+                use tokio::io::{AsyncReadExt, AsyncWriteExt};
+                let listener = tokio::net::TcpListener::from_std(listener).unwrap();
+                let (stream, _) = listener.accept().await.unwrap();
+                let mut stream = tokio_boring::accept(&acceptor, stream).await.ok()?;
+                let mut request = Vec::new();
+                let mut byte = [0u8; 1];
+                while !request.ends_with(b"\r\n\r\n") && stream.read(&mut byte).await.unwrap() == 1
+                {
+                    request.push(byte[0]);
+                }
+                stream
+                    .write_all(
+                        format!(
+                            "HTTP/1.1 {status}\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"
+                        )
+                        .as_bytes(),
+                    )
+                    .await
+                    .unwrap();
+                stream.shutdown().await.unwrap();
+                Some(String::from_utf8(request).unwrap())
+            })
+    });
+    (addr, served)
+}
+
 #[test]
 fn a_listener_answering_200_passes_and_is_asked_for_ready_by_head() {
     let (addr, served) = answering("200 OK");
     assert_eq!(
-        phoebis_router::health::probe(addr, phoebis_router::health::TIMEOUT),
+        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT),
         Ok(addr)
     );
     let request = served.join().unwrap();
@@ -73,7 +113,8 @@ fn a_listener_answering_200_passes_and_is_asked_for_ready_by_head() {
 #[test]
 fn a_status_other_than_200_fails_naming_it() {
     let (addr, served) = answering("503 Service Unavailable");
-    let reason = phoebis_router::health::probe(addr, phoebis_router::health::TIMEOUT).unwrap_err();
+    let reason =
+        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).unwrap_err();
     assert!(reason.contains("503"), "{reason}");
     served.join().unwrap();
 }
@@ -85,12 +126,12 @@ fn a_closed_port_fails_within_the_timeout() {
         .local_addr()
         .unwrap();
     let started = Instant::now();
-    assert!(phoebis_router::health::probe(addr, phoebis_router::health::TIMEOUT).is_err());
+    assert!(phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).is_err());
     assert!(started.elapsed() < phoebis_router::health::TIMEOUT + Duration::from_secs(1));
 }
 
-/// The budget the two stalled-listener tests hand to `probe`: short, so the suite stays fast, while the
-/// subcommand's constant stays at its three seconds.
+/// The budget the four stalled-listener tests hand to `probe`, plain and TLS: short, so the suite stays fast, while
+/// the subcommand's constant stays at its three seconds.
 const SHORT: Duration = Duration::from_secs(1);
 
 #[test]
@@ -104,7 +145,7 @@ fn a_listener_that_accepts_and_never_writes_fails_within_the_budget() {
         drop(stream);
     });
     let started = Instant::now();
-    let reason = phoebis_router::health::probe(addr, SHORT).unwrap_err();
+    let reason = phoebis_router::health::probe(addr, false, SHORT).unwrap_err();
     assert!(
         started.elapsed() < SHORT + Duration::from_millis(500),
         "{:?}",
@@ -130,13 +171,70 @@ fn a_listener_that_trickles_the_status_line_fails_within_the_budget() {
         }
     });
     let started = Instant::now();
-    let reason = phoebis_router::health::probe(addr, SHORT).unwrap_err();
+    let reason = phoebis_router::health::probe(addr, false, SHORT).unwrap_err();
     assert!(
         started.elapsed() < SHORT + Duration::from_millis(500),
         "{:?}",
         started.elapsed()
     );
     assert!(reason.contains("no status line"), "{reason}");
+    trickled.join().unwrap();
+}
+
+#[test]
+fn a_tls_listener_that_accepts_and_never_answers_the_handshake_fails_within_the_budget() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let held = std::thread::spawn(move || {
+        let (stream, _) = listener.accept().unwrap();
+        // Held open until the probe has given up, so the handshake sees silence rather than a closed socket.
+        std::thread::sleep(SHORT + Duration::from_secs(1));
+        drop(stream);
+    });
+    let started = Instant::now();
+    let reason = phoebis_router::health::probe(addr, true, SHORT).unwrap_err();
+    assert!(
+        started.elapsed() < SHORT + Duration::from_millis(500),
+        "{:?}",
+        started.elapsed()
+    );
+    // A listener that never answers ran out the budget; it refused nothing.
+    assert!(
+        reason.contains("no status line") && !reason.contains("refused"),
+        "{reason}"
+    );
+    held.join().unwrap();
+}
+
+#[test]
+fn a_tls_listener_that_trickles_its_handshake_fails_within_the_budget() {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let trickled = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        // A handshake record's header announcing sixteen bytes, then the sixteen, one byte every 400 ms: BoringSSL
+        // reads a record to its announced length one socket read at a time, so only a deadline on every read stops
+        // the handshake before the record completes.
+        let mut record = vec![0x16, 0x03, 0x03, 0x00, 0x10];
+        record.extend([0u8; 16]);
+        for byte in record {
+            if stream.write_all(&[byte]).is_err() {
+                break;
+            }
+            std::thread::sleep(Duration::from_millis(400));
+        }
+    });
+    let started = Instant::now();
+    let reason = phoebis_router::health::probe(addr, true, SHORT).unwrap_err();
+    assert!(
+        started.elapsed() < SHORT + Duration::from_millis(500),
+        "{:?}: {reason}",
+        started.elapsed()
+    );
+    assert!(
+        reason.contains("no status line") && !reason.contains("refused"),
+        "{reason}"
+    );
     trickled.join().unwrap();
 }
 
@@ -158,7 +256,7 @@ fn an_unspecified_listen_is_probed_on_the_loopback_of_its_family() {
     let (addr, served) = answering("200 OK");
     let unspecified: SocketAddr = format!("0.0.0.0:{}", addr.port()).parse().unwrap();
     assert_eq!(
-        phoebis_router::health::probe(unspecified, phoebis_router::health::TIMEOUT),
+        phoebis_router::health::probe(unspecified, false, phoebis_router::health::TIMEOUT),
         Ok(addr)
     );
     served.join().unwrap();
@@ -310,4 +408,49 @@ fn a_status_line_an_eof_cut_short_is_no_status_line() {
     let (code, reason) = health_against("eof", b"HTTP/1.1 200");
     assert_eq!(code, Some(1));
     assert!(reason.ends_with("sent no status line"), "{reason}");
+}
+
+#[test]
+fn the_probe_speaks_tls_to_a_tls_listener() {
+    let (addr, served) = answering_tls("200 OK");
+    assert_eq!(
+        phoebis_router::health::probe(addr, true, phoebis_router::health::TIMEOUT),
+        Ok(addr)
+    );
+    let request = served.join().unwrap().expect("the handshake finished");
+    assert!(
+        request.starts_with("HEAD /api/ready HTTP/1.1\r\n"),
+        "{request}"
+    );
+}
+
+#[test]
+fn a_plain_probe_against_a_tls_listener_reads_no_status_line() {
+    let (addr, served) = answering_tls("200 OK");
+    let reason =
+        phoebis_router::health::probe(addr, false, phoebis_router::health::TIMEOUT).unwrap_err();
+    assert!(
+        reason.contains("sent no status line") || reason.contains("took no request"),
+        "{reason}"
+    );
+    assert_eq!(served.join().unwrap(), None);
+}
+
+#[test]
+fn a_tls_probe_against_a_plain_listener_fails_the_handshake() {
+    // A plain listener that answers whatever it first reads with a 200, so only the handshake can fail the probe.
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    let addr = listener.local_addr().unwrap();
+    let served = std::thread::spawn(move || {
+        let (mut stream, _) = listener.accept().unwrap();
+        let mut hello = [0u8; 512];
+        let _ = stream.read(&mut hello).unwrap();
+        stream
+            .write_all(b"HTTP/1.1 200 OK\r\nContent-Length: 0\r\nConnection: close\r\n\r\n")
+            .unwrap();
+    });
+    let reason =
+        phoebis_router::health::probe(addr, true, phoebis_router::health::TIMEOUT).unwrap_err();
+    assert!(reason.contains("refused the TLS handshake"), "{reason}");
+    served.join().unwrap();
 }

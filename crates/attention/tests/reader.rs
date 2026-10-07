@@ -16,7 +16,9 @@ use phoebis_attention::{
 use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
 use phoebis_ledger::{AttemptRecord, Metrics, PriceTable, Pricing, Record, RequestRecord};
 use phoebis_oauth::PollOutcome;
-use phoebis_store::{AccountState, AttemptOutcome, NewBundle, Secret, StorageKey, Store};
+use phoebis_store::{
+    AccountState, AttemptOutcome, NewBundle, Secret, StateCause, StorageKey, Store,
+};
 use serde_json::json;
 use tower::ServiceExt;
 
@@ -439,10 +441,18 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
     let rig = rig().await;
     let (attention, _arm) = rig.attention(None);
     rig.store
-        .set_state("business", AccountState::ReauthRequired)
+        .set_state(
+            "business",
+            AccountState::ReauthRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     rig.store
-        .set_state("direct", AccountState::FundingRequired)
+        .set_state(
+            "direct",
+            AccountState::FundingRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     read(&attention, NOW + 1_000);
     let conditions = read(&attention, NOW + 5_000);
@@ -467,9 +477,11 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
         })
     );
     rig.store
-        .set_state("business", AccountState::Ready)
+        .set_state("business", AccountState::Ready, StateCause::Operator)
         .unwrap();
-    rig.store.set_state("direct", AccountState::Ready).unwrap();
+    rig.store
+        .set_state("direct", AccountState::Ready, StateCause::Operator)
+        .unwrap();
     let conditions = read(&attention, NOW + 6_000);
     assert!(
         !find(&conditions, Kind::ReauthRequired, "business")
@@ -482,7 +494,11 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
             .holds
     );
     rig.store
-        .set_state("business", AccountState::ReauthRequired)
+        .set_state(
+            "business",
+            AccountState::ReauthRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     let conditions = read(&attention, NOW + 9_000);
     assert_eq!(
@@ -494,7 +510,7 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
     );
     // The relay marks an Anthropic key the upstream refuses as it marks an OAuth login whose refresh is gone.
     rig.store
-        .set_state("direct", AccountState::ReauthRequired)
+        .set_state("direct", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
     let conditions = read(&attention, NOW + 12_000);
     let refused = find(&conditions, Kind::ReauthRequired, "direct").unwrap();
@@ -741,7 +757,8 @@ async fn usage_upstream(status: u16) -> fake_upstream::FakeUpstream {
 }
 
 #[tokio::test]
-async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_and_clears_on_a_clean_poll() {
+async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_through_a_failed_poll_and_clears_on_a_clean_one(
+) {
     let up = usage_upstream(429).await;
     let rig = rig().await;
     let usage = usage_over(&rig, &up);
@@ -781,15 +798,33 @@ async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_and_clears_on_a_
             })
         )
     );
-    // A threshold of 0 applies the switch at the rule's next request, whatever it has counted so far.
-    up.set_rule_after(0, "/api/oauth/usage", usage_answer(200));
+    // A threshold of 0 applies the switch at the rule's next request, whatever it has counted so far. A failed poll
+    // is no clean answer, so the run and its condition stand through it.
+    up.set_rule_after(0, "/api/oauth/usage", usage_answer(500));
     rig.at(NOW + 29 * 60_000 + 240_000);
+    usage.poll("business").await.unwrap();
+    assert_eq!(
+        usage.poll_status("business").unwrap().last_outcome,
+        PollOutcome::Failed
+    );
+    assert!(
+        find(
+            &read(&attention, NOW + 29 * 60_000 + 240_000),
+            Kind::PollBackoff,
+            "business"
+        )
+        .unwrap()
+        .holds,
+        "a 500 inside the run clears nothing"
+    );
+    up.set_rule_after(0, "/api/oauth/usage", usage_answer(200));
+    rig.at(NOW + 29 * 60_000 + 300_000);
     usage.poll("business").await.unwrap();
     assert_eq!(
         usage.poll_status("business").unwrap().last_outcome,
         PollOutcome::Clean
     );
-    let conditions = read(&attention, NOW + 29 * 60_000 + 240_000);
+    let conditions = read(&attention, NOW + 29 * 60_000 + 300_000);
     assert!(
         !find(&conditions, Kind::PollBackoff, "business")
             .unwrap()

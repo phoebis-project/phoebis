@@ -1550,6 +1550,7 @@ dependencies = [
  "fake-upstream",
  "futures",
  "http-body-util",
+ "jiff",
  "phoebis-attention",
  "phoebis-bus",
  "phoebis-keepalive",
@@ -1679,6 +1680,7 @@ dependencies = [
  "tokio",
  "tower",
  "tracing",
+ "zstd",
 ]
 
 [[package]]
@@ -1786,11 +1788,15 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "base64",
+ "boring",
  "clap",
  "fake-upstream",
+ "http-body-util",
  "hyper",
  "hyper-util",
  "jiff",
+ "libc",
  "phoebis-admin",
  "phoebis-attention",
  "phoebis-bus",
@@ -1805,13 +1811,16 @@ dependencies = [
  "phoebis-store",
  "phoebis-transport",
  "phoebis-ui",
+ "rand 0.10.2",
  "reqwest",
+ "rusqlite",
  "serde",
  "serde_json",
  "serde_norway",
  "tempfile",
  "thiserror",
  "tokio",
+ "tokio-boring",
  "tracing",
  "tracing-subscriber",
 ]

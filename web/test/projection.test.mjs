@@ -7,9 +7,9 @@ const ms = (s) => Date.parse(at(s));
 
 // A stream whose 200 head committed at 1.5 s and which the upstream overloaded at 10 s, as the ring keeps it.
 const failedStream = {
-  accountId: 'business',
+  accountId: 'primary',
   agentId: 'main',
-  attempts: [{ accountId: 'business', cooldownSet: null, index: 0, outcome: 'overloaded', startedAt: at(0.2), upstreamStatus: 200, windows: [] }],
+  attempts: [{ accountId: 'primary', cooldownSet: null, index: 0, outcome: 'overloaded', startedAt: at(0.2), upstreamStatus: 200, windows: [] }],
   costUsd: 0.42,
   errorCode: 'overloaded_error',
   id: 'r-stream',
@@ -46,8 +46,8 @@ test('a request before its head reads no status and no response facts on the att
   const failover = {
     ...failedStream,
     attempts: [
-      { accountId: 'personal', cooldownSet: { reason: 'rate_limited', until: at(60) }, index: 0, outcome: 'rate_limited', startedAt: at(0.2), upstreamStatus: 429, windows: [{ id: '5h', resetsAt: at(3600), utilization: 1 }] },
-      { accountId: 'business', cooldownSet: null, index: 1, outcome: 'overloaded', startedAt: at(1), upstreamStatus: 529, windows: [] },
+      { accountId: 'nightly', cooldownSet: { reason: 'rate_limited', until: at(60) }, index: 0, outcome: 'rate_limited', startedAt: at(0.2), upstreamStatus: 429, windows: [{ id: '5h', resetsAt: at(3600), utilization: 1 }] },
+      { accountId: 'primary', cooldownSet: null, index: 1, outcome: 'overloaded', startedAt: at(1), upstreamStatus: 529, windows: [] },
     ],
     errorCode: 'overloaded_error',
     phases: { ...failedStream.phases, headAt: at(3) },

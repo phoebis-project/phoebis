@@ -1,9 +1,9 @@
 import type { CatalogModel, ModelPrice } from '@/api/types';
 
 // Stored out of id order, so a page that renders it verbatim rather than sorting it fails the smoke check
-// that reads the catalog popup as sorted by id.
+// that reads the catalog popup as sorted by id. The effort levels are the ones the API documents for each model.
 export const CATALOG: CatalogModel[] = [
-  { id: 'claude-fable-5-1', displayName: 'Claude Fable 5.1', createdAt: '2026-08-01', effortLevels: ['low', 'medium', 'high'], maxInputTokens: 1_000_000, maxTokens: 128_000 },
+  { id: 'claude-fable-5-1', displayName: 'Claude Fable 5.1', createdAt: '2026-08-01', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], maxInputTokens: 1_000_000, maxTokens: 128_000 },
   { id: 'claude-sonnet-5', displayName: 'Claude Sonnet 5', createdAt: '2026-05-01', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], maxInputTokens: 1_000_000, maxTokens: 128_000 },
   { id: 'claude-sonnet-5-5', displayName: 'Claude Sonnet 5.5', createdAt: '2026-06-01', effortLevels: ['low', 'medium', 'high', 'xhigh', 'max'], maxInputTokens: 1_000_000, maxTokens: 128_000 },
   { id: 'claude-haiku-4-5-20251001', displayName: 'Claude Haiku 4.5', createdAt: '2025-10-01', effortLevels: [], maxInputTokens: 200_000, maxTokens: 64_000 },

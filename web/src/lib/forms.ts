@@ -170,8 +170,8 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   refuse('pinning', 'Pin sessions', AFFINITY_MODE_VALUES.some((mode) => mode === input.affinityMode) ? null : listed('Pin sessions'));
 
   // NaN is a switched-on field left empty, held here so a save never reads it as a margin of 0.
-  const migrate = input.migrateAboveUtilization;
-  refuse('utilization', 'Migrate above utilization (%)', Number.isNaN(migrate) ? 'Migrate above utilization needs a value from 0 to 100.' : ratio(migrate, 0) ? null : 'Migrate above utilization is from 0 to 100.');
+  const shedAhead = input.shedAheadOfPace;
+  refuse('utilization', 'Shed ahead of pace (%)', Number.isNaN(shedAhead) ? 'Shed ahead of pace needs a value from 0 to 100.' : ratio(shedAhead, 0) ? null : 'Shed ahead of pace is from 0 to 100.');
   refuse('utilization', 'Select below utilization (%)', ratio(input.selectBelowUtilization, 0) ? null : 'Select below utilization is from 0 to 100.');
 
   const engine = (group: PoolGroup, key: keyof typeof ENGINE_BOUNDS) =>
@@ -318,11 +318,15 @@ export function keyRefusals(form: Pick<KeyForm, 'captureHours' | 'captureMode' |
 export interface SubscriptionEndForm {
   cancelled: boolean;
   endsAt: string;
+  /** The revision of the row the editor opened with, which the save sends as its fence. */
+  revision: number;
 }
 
-export function subscriptionEndFormOf(account: Pick<Account, 'cancelled' | 'subscription'>): SubscriptionEndForm {
+export function subscriptionEndFormOf(
+  account: Pick<Account, 'cancelled' | 'revision' | 'subscription'>,
+): SubscriptionEndForm {
   const end = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
-  return { cancelled: account.cancelled, endsAt: end ? toLocalInput(Date.parse(end)) : '' };
+  return { cancelled: account.cancelled, endsAt: end ? toLocalInput(Date.parse(end)) : '', revision: account.revision };
 }
 
 /**
@@ -330,8 +334,8 @@ export function subscriptionEndFormOf(account: Pick<Account, 'cancelled' | 'subs
  * clears the field, since the route keeps no end without the flag.
  */
 export function tickCancelled(form: SubscriptionEndForm, cancelled: boolean, derivedEndsAt: string | null): SubscriptionEndForm {
-  if (!cancelled) return { cancelled: false, endsAt: '' };
-  return { cancelled: true, endsAt: form.endsAt || (derivedEndsAt ? toLocalInput(Date.parse(derivedEndsAt)) : '') };
+  if (!cancelled) return { ...form, cancelled: false, endsAt: '' };
+  return { ...form, cancelled: true, endsAt: form.endsAt || (derivedEndsAt ? toLocalInput(Date.parse(derivedEndsAt)) : '') };
 }
 
 /** Why the account route would refuse the pair, or null. */

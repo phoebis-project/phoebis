@@ -25,7 +25,7 @@ use phoebis_transport::{connector_builder, trust_extra_ca, Plane};
 use tokio::task::JoinHandle;
 
 use crate::config::{Config, UpstreamConfig};
-use crate::listen;
+use crate::{listen, tls};
 
 /// How long a shutdown waits for relays that are still running. A stream that has not ended by then is not
 /// going to end sooner because the process keeps waiting.
@@ -225,8 +225,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: Duration::from_secs(60),
+            start_version: Some(env!("CARGO_PKG_VERSION").into()),
         },
     );
+    // The first purge announces the downtime's clock resets and wind-downs: held until here, its rows reach the
+    // mirror and land behind the start row, whose gap they would otherwise date.
+    router_task.release_purge().await;
     // Moved into the admin state below rather than kept here: a local holding its `Bus` clone to the end of
     // `run` would keep the subscribers' queues open past the shutdown's `drop(bus)`.
     let readiness = Arc::new(Readiness {
@@ -246,6 +250,10 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         DISCOVERY_TIMEOUT,
         Duration::from_secs(config.routing.startup_fetch_seconds),
     ));
+    catalog.set_on_change(Arc::new({
+        let ledger = ledger.clone();
+        move |change| ledger.record(phoebis_ledger::catalog_changed(&change))
+    }));
     let relay = Arc::new(
         Relay::new(
             store.clone(),
@@ -353,8 +361,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             admin: Secret::new(config.admin.secret.expose()),
         },
         clock: clock.clone(),
-        plain_http: config.admin.plain_http,
-        origin: config.admin.origin.clone(),
+        tls: config.admin.tls.is_some(),
         vault: vault.clone(),
         started_at: (clock)(),
         router: router_task.clone(),
@@ -432,6 +439,22 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         Duration::from_secs(config.routing.catalog_refresh_seconds),
         REFRESH_TICK,
     );
+    // Read before any bind, so a pair the start cannot serve refuses with its line and no port is taken.
+    let proxy_tls = tls::load("proxy.tls", &config.proxy.tls)?;
+    let admin_tls = tls::load("admin.tls", &config.admin.tls)?;
+    for (listener, key, serving) in [
+        ("proxy", "proxy.tls", &proxy_tls),
+        ("admin", "admin.tls", &admin_tls),
+    ] {
+        if let tls::Serving::Tls(loaded) = serving {
+            tracing::info!(listener, names = ?loaded.leaf.names, not_after = %loaded.leaf.not_after, "serving TLS");
+        }
+        for warning in tls::warnings(key, serving) {
+            tracing::warn!("{warning}");
+        }
+    }
+    let proxy_acceptor = acceptor(proxy_tls);
+    let admin_acceptor = acceptor(admin_tls);
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;
@@ -447,9 +470,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             )
         })?;
     tracing::info!(
-        proxy = %config.proxy.listen,
-        admin = %config.admin.listen,
-        metrics = %config.stats.metrics_listen,
+        proxy = %format_args!("{}://{}", tls::scheme(&config.proxy.tls), config.proxy.listen),
+        admin = %format_args!("{}://{}", tls::scheme(&config.admin.tls), config.admin.listen),
+        metrics = %format_args!("http://{}", config.stats.metrics_listen),
         profile = profile.name,
         "listening"
     );
@@ -506,6 +529,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             header_read_timeout: HEADER_READ_TIMEOUT,
             max_connections: PROXY_MAX_CONNECTIONS,
         },
+        proxy_acceptor,
     ));
     let mut admin_server = tokio::spawn(listen::serve(
         admin_listener,
@@ -517,6 +541,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             max_connections: ADMIN_MAX_CONNECTIONS,
         },
         true,
+        admin_acceptor,
     ));
     let mut metrics_server = tokio::spawn(listen::serve(
         metrics_listener,
@@ -538,6 +563,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             max_connections: METRICS_MAX_CONNECTIONS,
         },
         false,
+        None,
     ));
 
     // A listener that ends on its own is read here, once: a `JoinHandle` polled again after it completed
@@ -692,7 +718,17 @@ fn router_config(
             tables.share_at(window, tier, model, usage, at)
         })
         .with_measured(move |window| measured.measured(window)),
+        // Released once the ledger's mirror subscribed and the start row is recorded, below.
+        hold_first_purge: true,
         ..phoebis_routing::RouterConfig::default()
+    }
+}
+
+/// The accept loop's acceptor for what `tls::load` answered.
+fn acceptor(serving: tls::Serving) -> tls::Acceptor {
+    match serving {
+        tls::Serving::Plain => None,
+        tls::Serving::Tls(loaded) => Some(Arc::new(loaded.acceptor)),
     }
 }
 

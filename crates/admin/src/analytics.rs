@@ -157,10 +157,9 @@ pub(crate) async fn budgets(State(state): State<Arc<AdminState>>) -> Response {
         .budgeted_members()
         .flat_map(|m| {
             let rows = crate::routes::spend_rows(&spends, &m.pool_id, &m.account_id);
-            let kind = snapshot.account(&m.account_id).map(|a| match a.kind {
-                phoebis_store::AccountKind::ApiKey => "api_key",
-                phoebis_store::AccountKind::Oauth => "oauth",
-            });
+            let kind = snapshot
+                .account(&m.account_id)
+                .map(|a| crate::routes::kind_name(a.kind));
             m.budgets()
                 .map(|(period, budget)| {
                     let spend = rows.iter().find(|s| s.period == period);
@@ -296,12 +295,15 @@ pub(crate) async fn burn(
     let kinds: HashMap<String, AccountKind> =
         accounts.iter().map(|a| (a.id.clone(), a.kind)).collect();
     let mut tiers = Tiers::new();
-    for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
-        let tier = match state.store.subscription(&account.id) {
-            Ok(row) => row.and_then(|s| s.tier),
-            Err(e) => return store_failure(e),
-        };
-        tiers.insert(account.id.clone(), tier);
+    // Only the account grouping answers a share, so no other grouping reads a tier or fails on that read.
+    if group_by == "account" {
+        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
+            let tier = match state.store.subscription(&account.id) {
+                Ok(row) => row.and_then(|s| s.tier),
+                Err(e) => return store_failure(e),
+            };
+            tiers.insert(account.id.clone(), tier);
+        }
     }
     let tables = state.tables.clone();
     let bucket = bucket_seconds(from, to);

@@ -101,6 +101,8 @@ const VIEWS = [
   { path: '/analytics#cache-warming', title: 'Analytics', wait: '.analytics-section#cache-warming', slug: 'analytics-cache-warming', mockOnly: true },
   { path: '/sessions', title: 'Sessions', wait: '.sessions-table', slug: 'sessions' },
   { path: '/settings', title: 'Settings', wait: '.envdl', slug: 'settings' },
+  // Last, so every view before it draws the instant it drew without the log in the pass.
+  { path: '/routing-log', title: 'Routing log', wait: '.routing-log__table', slug: 'routing-log' },
 ];
 
 /** How far the page's clock moves per step. */
@@ -590,6 +592,71 @@ async function expertRow(theme) {
   else if (read.expert.bottom > read.version.top) failures.push(`${theme} /pools: the Expert view row ends at ${read.expert.bottom}, past the version row's top at ${read.version.top}`);
 }
 
+/**
+ * The routing log's columns at 1280 by 800 and at 1440 by 900: Fact 150 px at both, Account 246 then 256, Model only
+ * at 1440, and the table as wide as its card with nothing to scroll sideways. The pass's viewport is put back for the
+ * shot.
+ */
+async function routingLogColumns(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const read = () =>
+    page.evaluate(() => {
+      const table = document.querySelector('.routing-log__table');
+      const wrap = table?.closest('.table-wrap');
+      if (!table || !wrap) return null;
+      const width = (name) => {
+        const th = table.querySelector(`thead th.routing-log__${name}`);
+        return th && getComputedStyle(th).display !== 'none' ? Math.round(th.getBoundingClientRect().width * 10) / 10 : null;
+      };
+      return {
+        account: width('account'),
+        client: wrap.clientWidth,
+        fact: width('fact'),
+        model: width('model'),
+        scroll: wrap.scrollWidth,
+        table: Math.round(table.getBoundingClientRect().width * 10) / 10,
+      };
+    });
+  for (const { account, height, model, width } of [
+    { account: 246, height: 800, model: null, width: 1280 },
+    { account: 256, height: 900, model: 150, width: 1440 },
+  ]) {
+    const where = `at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /routing-log columns ${where} ${JSON.stringify(got)}`);
+    if (got === null) {
+      say(`${where} no table to measure`);
+      continue;
+    }
+    if (got.fact !== 150) say(`${where} the Fact column is ${got.fact}px, not 150px`);
+    if (got.account !== account) say(`${where} the Account column is ${got.account}px, not ${account}px`);
+    if (got.model !== model) say(`${where} the Model column is ${got.model === null ? 'hidden' : `${got.model}px`}, not ${model === null ? 'hidden' : `${model}px`}`);
+    if (Math.abs(got.table - got.client) > 0.5) say(`${where} the table is ${got.table}px in a ${got.client}px card`);
+    if (got.scroll > got.client) say(`${where} the table scrolls sideways (${got.scroll}px in ${got.client}px)`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+}
+
+/**
+ * The Diagnostics group: on the Dashboard with the expert view off the sidebar draws neither the heading nor the
+ * Routing log link, and with the log open both are drawn and the link is the active one.
+ */
+async function diagnosticsNav(theme, path) {
+  const read = await page.evaluate(() => {
+    const link = document.querySelector('nav.nav a[href="/routing-log"]');
+    return { active: link?.classList.contains('is-active') ?? null, heading: document.querySelector('nav.nav .nav__heading')?.textContent ?? null, link: link !== null };
+  });
+  measurements.push(`${theme} ${path} diagnostics group ${JSON.stringify(read)}`);
+  if (path === '/routing-log') {
+    if (read.heading !== 'Diagnostics' || !read.link || read.active !== true) failures.push(`${theme} /routing-log: the sidebar reads ${JSON.stringify(read)}, not the Diagnostics heading over the active Routing log link`);
+  } else if (read.heading !== null || read.link) {
+    failures.push(`${theme} ${path}: the sidebar draws ${JSON.stringify(read)} with the expert view off`);
+  }
+}
+
 async function poolChips(theme) {
   const chips = await page.evaluate(() => {
     const box = (el) => {
@@ -730,7 +797,7 @@ async function poolSelectBelow(theme) {
     await expertView(false).catch(() => {});
     return;
   }
-  for (const label of ['Migrate above utilization', 'Select below utilization']) {
+  for (const label of ['Shed ahead of pace', 'Select below utilization']) {
     const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
@@ -751,14 +818,14 @@ async function poolSelectBelow(theme) {
         switch: `${box.width} ${box.height}`,
       };
     };
-    const migrate = read('Migrate above utilization');
+    const migrate = read('Shed ahead of pace');
     const select = read('Select below utilization');
     return migrate && select ? { migrate, select } : null;
   });
   if (!pair) {
     say('the migration and select-below switches are not both drawn to compare');
   } else {
-    measurements.push(`${theme} /pools migrate above ${JSON.stringify(pair.migrate)}`);
+    measurements.push(`${theme} /pools shed ahead of pace ${JSON.stringify(pair.migrate)}`);
     measurements.push(`${theme} /pools select below ${JSON.stringify(pair.select)}`);
     const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.migrate[key]);
     if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the migration control's`);
@@ -789,7 +856,7 @@ async function poolRoutingCards(theme) {
     await expertView(false).catch(() => {});
     return;
   }
-  for (const label of ['Migrate above utilization', 'Select below utilization']) {
+  for (const label of ['Shed ahead of pace', 'Select below utilization']) {
     const toggle = dialog.locator(`button[role="switch"][aria-label="${label}"]`);
     if ((await toggle.count()) !== 1) say(`no ${label} switch`);
     else if ((await toggle.getAttribute('aria-checked')) !== 'true') await toggle.click();
@@ -822,7 +889,7 @@ async function poolRoutingCards(theme) {
         affinityPill: box(idlePill('Session affinity')),
         failoverPill: box(idlePill('Failover preset')),
         handle: handle && knob && track ? { inside: knob.left + knob.width / 2 >= track.left - 1 && knob.right - knob.width / 2 <= track.right + 1, value: handle.getAttribute('aria-valuenow'), width: knob.width } : null,
-        migrateField: box(el.querySelector('input[aria-label="Migrate above utilization (%)"]')),
+        migrateField: box(el.querySelector('input[aria-label="Shed ahead of pace (%)"]')),
         overageChoice: box(idleChoice('Overage policy')),
         overageField: box(el.querySelector('input[aria-label="Overage grace (min)"]') ?? [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Overage grace (min)')?.querySelector('input')),
         preview: preview ? (preview.textContent ?? '').trim() : null,
@@ -959,7 +1026,7 @@ const POOL_DEPENDENTS = {
   // The switch sits in another group, which is chosen to turn it off and back.
   'Probe tuning': [{ switch: 'Keep prompt caches warm', in: 'Keepalive', controls: ['input[type="number"]'] }],
   'Utilization thresholds': [
-    { switch: 'Migrate above utilization', controls: ['input[aria-label="Migrate above utilization (%)"]'] },
+    { switch: 'Shed ahead of pace', controls: ['input[aria-label="Shed ahead of pace (%)"]'] },
     { switch: 'Select below utilization', controls: ['input[aria-label="Select below utilization (%)"]'], expert: true },
   ],
 };
@@ -1745,7 +1812,7 @@ async function quotaChips(theme) {
   for (const card of read.grids) {
     if (card.grid > card.card) say(`${card.name}'s windows run past its card`);
   }
-  if (mock && !read.resets.some((r) => /^expired .+, no reading since$/.test(r.text))) say("the story's team holds an expired window, yet no reset cell reads it");
+  if (mock && !read.resets.some((r) => /^expired .+, no reading since$/.test(r.text))) say("the story's legacy holds an expired window, yet no reset cell reads it");
 }
 
 /**
@@ -2104,7 +2171,7 @@ async function burnCards(theme) {
  * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned account's
  * 7-day entry, on type and swatch size, and, where an account whose tier the cost model does not size draws a tier
  * unknown entry beside it, that muted entry on type, swatch size and colour too. In the mock's story the entry draws
- * for `mail`, whose Sonnet 5 traffic the cost model has no weight for; the router's seed bills no subscription
+ * for `secondary`, whose Sonnet 5 traffic the cost model has no weight for; the router's seed bills no subscription
  * traffic, so there the pass records that the entry is not drawn.
  */
 async function planLegend(theme) {
@@ -2133,7 +2200,7 @@ async function planLegend(theme) {
       return;
     }
     if (read.unlisted === null) {
-      if (mock) failures.push(`${theme} /analytics: the story's mail account runs on a model the cost model cannot price, yet no model unlisted entry draws`);
+      if (mock) failures.push(`${theme} /analytics: the story's secondary account runs on a model the cost model cannot price, yet no model unlisted entry draws`);
       return;
     }
     failures.push(...compare(read.unlisted, read.neighbour, ['type', 'swatch'], `${theme} /analytics: the model unlisted entry against the entry before it`));
@@ -2212,8 +2279,8 @@ async function analyticsTables(theme) {
     if (mock) {
       if (!read.placements?.rows) say('the story places requests by rung, yet the placements card draws no figure');
       if (read.bars.length !== 4) say(`the story budgets four periods across three members, yet the card lists ${read.bars.length}`);
-      if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['evals'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on evals alone`);
-      if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['business', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on business alone`);
+      if (JSON.stringify(read.atBudget.map((r) => r.account)) !== JSON.stringify(['research'])) say(`the at-budget mark sits on ${JSON.stringify(read.atBudget.map((r) => r.account))}, not on research alone`);
+      if (JSON.stringify(read.metered.map((r) => [r.account, r.text])) !== JSON.stringify([['primary', 'metered $12.50']])) say(`the metered word sits on ${JSON.stringify(read.metered.map((r) => [r.account, r.text]))}, not on primary alone`);
       for (const r of read.metered.filter((r) => r.word !== r.figure)) say(`the metered word on ${r.account} reads ${r.word}, not the figure's ${r.figure}`);
     }
   } finally {
@@ -2470,15 +2537,15 @@ async function fastLane(theme, path) {
   }
   if (path === '/quota') {
     if (read.plan === null) {
-      if (mock) failures.push(`${theme} /quota: the story's business holds a fast lane beside its Plan chip, yet no drawn lane sits on a card with one`);
+      if (mock) failures.push(`${theme} /quota: the story's primary holds a fast lane beside its Plan chip, yet no drawn lane sits on a card with one`);
       return;
     }
     if (read.line) failures.push(...compare(read.line, read.planText, ['font', 'label'], `${theme} /quota: the Fast mode line against the Plan chip`));
     if (read.cooldown) failures.push(...compare(read.cooldown, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the fast cooldown chip against the Plan chip`));
-    if (mock && !read.cooldown) failures.push(`${theme} /quota: the story's business cools on its fast lane, yet no cooldown chip is drawn`);
+    if (mock && !read.cooldown) failures.push(`${theme} /quota: the story's primary cools on its fast lane, yet no cooldown chip is drawn`);
   } else {
     if (read.extra === null) {
-      if (mock) failures.push(`${theme} ${path}: the story's business draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
+      if (mock) failures.push(`${theme} ${path}: the story's primary draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
       return;
     }
     failures.push(...compare(read.lane, read.extra, ['border', 'margin', 'padding'], `${theme} ${path}: the fast lane section against the extra-usage section`));
@@ -2486,40 +2553,193 @@ async function fastLane(theme, path) {
 }
 
 /**
- * The newest request's drawer: every attempt draws its selection trace, and each badge the trace and the summary
- * add (a member passed over, the request class) is the same box as the status badge beside them. It runs after the
- * list view's shot, so that shot stays the list alone.
+ * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
+ * its head 70 px at both, the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
+ * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
+ * type and height, and the request class badge its box. A request that ended with no answer draws no chip, so then the
+ * chips are read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or
+ * region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list
+ * alone.
  */
-async function requestDrawer(theme) {
+async function requestDrawerCompact(theme) {
+  const say = (what) => failures.push(`${theme} /requests: ${what}`);
   await page.locator('.requests__table tbody tr').first().click();
   await advance(LOAD_MS);
   try {
-    await page.waitForSelector('.drawer .attempt', { timeout: 15_000 });
+    await page.waitForSelector('.drawer .kv__row', { timeout: 15_000 });
   } catch {
-    failures.push(`${theme} /requests: the drawer drew no attempt`);
+    say('the drawer drew no row');
     return;
   }
-  const drawn = await page.evaluate(() => {
-    const box = (el) => {
-      const s = getComputedStyle(el);
-      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
-    };
-    const status = [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Status')?.querySelector('.badge');
-    const client = [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Client')?.querySelector('.badge');
-    const traces = [...document.querySelectorAll('.drawer .attempt')].map((a) => a.querySelector('.selection-trace'));
-    return {
-      attempts: traces.length,
-      badges: [...(client ? [client] : []), ...document.querySelectorAll('.drawer .selection-trace .badge')].map((b) => ({ box: box(b), text: b.textContent })),
-      overflow: traces.filter((t) => t && t.scrollWidth > t.clientWidth).length,
-      reference: status ? box(status) : null,
-      traces: traces.filter(Boolean).length,
-    };
+  const read = () =>
+    page.evaluate(() => {
+      // A served model's chip is mono, so a chip's type is read by size and line rather than by face.
+      const box = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontSize}/${s.lineHeight}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const badgeBox = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const rowOf = (label) => [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === label)?.querySelector('dd');
+      const table = document.querySelector('.requests__table');
+      const wrap = table?.closest('.table-wrap');
+      const status = rowOf('Status')?.querySelector('.badge');
+      const requestClass = rowOf('Client')?.querySelector('.badge');
+      const head = document.querySelector('.drawer__head');
+      return {
+        answer: rowOf('Answer')?.textContent ?? null,
+        badge: requestClass && status ? { box: badgeBox(requestClass), reference: badgeBox(status), text: requestClass.textContent } : null,
+        chips: [...document.querySelectorAll('.drawer .kv__row')].flatMap((r) => [...r.querySelectorAll('dd .chip')].map((c) => ({ box: box(c), row: r.querySelector('dt')?.textContent, text: c.textContent }))),
+        drawer: Math.round(document.querySelector('.drawer')?.getBoundingClientRect().width ?? 0),
+        head: head ? Math.round(head.getBoundingClientRect().height) : null,
+        heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
+        reference: status ? box(status) : null,
+        table: wrap && table ? { client: wrap.clientWidth, scroll: table.scrollWidth } : null,
+      };
+    });
+  let chips = 0;
+  for (const { drawer, height, width } of [
+    { drawer: 400, height: 800, width: 1280 },
+    { drawer: 440, height: 900, width: 1440 },
+  ]) {
+    const where = `the open drawer at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /requests drawer at ${width} by ${height} ${JSON.stringify(got)}`);
+    if (got.drawer !== drawer) say(`${where} is ${got.drawer}px wide, not ${drawer}px`);
+    if (got.head !== 70) say(`${where}: the head is ${got.head}px tall, not 70px`);
+    if (JSON.stringify(got.heads) !== JSON.stringify(['Time', 'Model', 'Status', 'Attempts', ''])) say(`${where}: the table draws the columns ${JSON.stringify(got.heads)}`);
+    if (got.table === null) say(`${where} has no table to measure`);
+    else if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
+    if (got.reference === null) say(`${where} has no status badge to measure against`);
+    if (got.badge !== null && got.badge.box !== got.badge.reference) say(`${where}: the "${got.badge.text}" class badge measures ${got.badge.box} against the status badge's ${got.badge.reference}`);
+    chips += got.chips.length;
+    for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  if (chips > 0) return;
+  const answered = page.locator('.requests__table tbody tr', { has: page.locator('.requests__status .badge', { hasText: /^200$/ }) }).first();
+  if ((await answered.count()) === 0) {
+    say('no request answered 200 to read the drawer chips on');
+    return;
+  }
+  await answered.click();
+  await advance(LOAD_MS);
+  await settle();
+  const got = await read();
+  measurements.push(`${theme} /requests drawer of the newest answered request ${JSON.stringify(got)}`);
+  if (got.reference === null) say('the newest answered request has no status badge to measure against');
+  if (got.chips.length === 0) say("the newest answered request's drawer draws no chip to measure");
+  for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+}
+
+const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';
+
+/** Opens `row` beneath itself and answers whether a card with its walk arrived. */
+async function openDecision(row) {
+  await row.locator('td.routing-log__kind').click();
+  await advance(LOAD_MS);
+  try {
+    await page.waitForSelector('.routing-log__panel .decision-card__walk', { timeout: 15_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The site's Routing log shot shows a decision card open, so the first decision row (in the mock's story the renewal
+ * at its newest instant) opens before the shot. A second click shuts a row, so `decisionCard` measures this card after
+ * the shot rather than opening it again.
+ */
+async function firstDecisionOpen(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const first = page.locator(DECISION_ROWS).first();
+  if ((await first.count()) === 0) {
+    say('no decision row to open');
+    return;
+  }
+  if (!(await openDecision(first))) say('the first decision row opened to no card');
+  await atRest();
+  await settle();
+}
+
+/**
+ * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the walk and the candidate
+ * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, and every verdict badge of the walk
+ * takes the kind badge's box. A renewal walks no rung, so the Prefix cell's two chips are read on the first rung
+ * placement the page lists. The router's seed places no request by a rung, so there that check stands down.
+ */
+async function decisionCard(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const decisions = page.locator(DECISION_ROWS);
+  // `firstDecisionOpen` has named the missing card already.
+  if ((await page.locator('.routing-log__panel .decision-card__walk').count()) === 0) return;
+  const read = () =>
+    page.evaluate(() => {
+      const box = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const card = document.querySelector('.routing-log__panel .decision-card');
+      const walk = card?.querySelector('.decision-card__walk');
+      const table = card?.querySelector('.decision-card__candidates');
+      const wrap = table?.closest('.table-wrap');
+      const log = document.querySelector('.routing-log__table')?.closest('.table-wrap');
+      const kind = card?.querySelector('.decision-card__verdict > .badge');
+      return {
+        badges: [...(card?.querySelectorAll('.decision-card__walk .badge') ?? [])].map((b) => ({ box: box(b), text: b.textContent })),
+        card: card ? { client: card.clientWidth, scroll: card.scrollWidth, width: Math.round(card.getBoundingClientRect().width) } : null,
+        log: log ? { client: log.clientWidth, scroll: log.scrollWidth } : null,
+        reference: kind ? box(kind) : null,
+        table: wrap && table ? { client: wrap.clientWidth, scroll: wrap.scrollWidth, width: Math.round(table.getBoundingClientRect().width) } : null,
+        walk: walk ? { client: walk.clientWidth, scroll: walk.scrollWidth } : null,
+      };
+    });
+  for (const { height, table, width } of [
+    { height: 800, table: 958, width: 1280 },
+    { height: 900, table: 1118, width: 1440 },
+  ]) {
+    const where = `the open card at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /routing-log decision card at ${width} by ${height} ${JSON.stringify({ ...got, badges: got.badges.length })}`);
+    if (got.card === null || got.walk === null) {
+      say(`${where} draws no walk`);
+      continue;
+    }
+    if (got.card.scroll > got.card.client) say(`${where} runs ${got.card.scroll}px in ${got.card.client}px`);
+    if (got.walk.scroll > got.walk.client) say(`${where}: the walk runs ${got.walk.scroll}px in ${got.walk.client}px`);
+    if (got.table === null) say(`${where} draws no candidate table`);
+    else if (got.table.scroll > got.table.client) say(`${where}: the candidate table scrolls sideways (${got.table.scroll}px in ${got.table.client}px)`);
+    else if (got.table.width !== table) say(`${where}: the candidate table is ${got.table.width}px, not ${table}px`);
+    if (got.log !== null && got.log.scroll > got.log.client) say(`${where}: the log's table scrolls sideways (${got.log.scroll}px in ${got.log.client}px)`);
+    if (got.reference === null) say(`${where} has no kind badge to measure against`);
+    for (const b of got.badges.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the "${b.text}" verdict badge measures ${b.box} against the kind badge's ${got.reference}`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  const rung = decisions.filter({ has: page.locator('td.routing-log__by .chip', { hasText: / rung$/ }) }).first();
+  if ((await rung.count()) === 0) {
+    if (mock) say('the story lists no rung placement whose Prefix cell to read');
+    return;
+  }
+  if (!(await openDecision(rung))) {
+    say('the first rung placement opened to no card');
+    return;
+  }
+  const prefix = await page.evaluate(() => {
+    const cell = [...document.querySelectorAll('.routing-log__panel .decision-card')].at(-1)?.querySelector('.decision-card__candidates tr.is-chosen .decision-card__prefix');
+    const hash = cell?.querySelector('.decision-card__hash');
+    return { hash: hash?.textContent ?? null, title: hash?.getAttribute('title') ?? null, warm: cell?.querySelector('.decision-card__warm')?.textContent ?? null };
   });
-  measurements.push(`${theme} /requests drawer ${JSON.stringify(drawn)}`);
-  if (drawn.traces !== drawn.attempts) failures.push(`${theme} /requests: ${drawn.traces} of ${drawn.attempts} attempts draw a selection trace`);
-  if (drawn.overflow > 0) failures.push(`${theme} /requests: ${drawn.overflow} selection traces run past the drawer`);
-  if (drawn.reference === null) failures.push(`${theme} /requests: the drawer has no status badge to measure against`);
-  for (const b of drawn.badges.filter((x) => drawn.reference !== null && x.box !== drawn.reference)) failures.push(`${theme} /requests: the "${b.text}" badge measures ${b.box} against the status badge's ${drawn.reference}`);
+  measurements.push(`${theme} /routing-log prefix cell ${JSON.stringify(prefix)}`);
+  if (prefix.hash?.length !== 8 || prefix.title?.length !== 64 || !prefix.title.startsWith(prefix.hash) || !/^warm until /.test(prefix.warm ?? '')) say(`the chosen row's Prefix cell reads ${JSON.stringify(prefix)}, not the hash's eight characters with the whole hash on hover and the warm-until chip`);
 }
 
 /** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */
@@ -3163,8 +3383,8 @@ async function sessionsTableFits(theme) {
 
 /**
  * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
- * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, and
- * each item takes a pointer at its centre.
+ * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
+ * item takes a pointer at its centre, and the four entries draw a list 160 px wide and 141 px tall.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3191,7 +3411,7 @@ async function sessionRowMenu(theme) {
     });
     return {
       items,
-      list: { left: Math.round(box.left), right: Math.round(box.right) },
+      list: { height: Math.round(box.height), left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width) },
       lists: 1,
       placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
       wrap: { left: Math.round(edge.left + wrap.clientLeft), right: Math.round(edge.left + wrap.clientLeft + wrap.clientWidth) },
@@ -3204,6 +3424,7 @@ async function sessionRowMenu(theme) {
   if (read.lists !== 1) return say(`${read.lists} lists are open, not one`);
   if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
   if (read.items.length === 0) say('the list draws no item');
+  if (read.list.width !== 160 || read.list.height !== 141) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 141px`);
   for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
 }
 
@@ -3366,6 +3587,7 @@ try {
       if (view.path === '/') {
         await sidebarBrand(theme);
         await attentionLine(theme);
+        await diagnosticsNav(theme, view.path);
       }
       if (view.path === '/' && !mock) {
         await remainingCards(theme);
@@ -3423,6 +3645,11 @@ try {
         await requestsTableFits(theme);
         await speedFilter(theme);
       }
+      if (view.path === '/routing-log') {
+        await routingLogColumns(theme);
+        await diagnosticsNav(theme, view.path);
+        await firstDecisionOpen(theme);
+      }
       if (view.path === '/quota') {
         await quotaChips(theme);
         await quotaPollLines(theme);
@@ -3433,7 +3660,8 @@ try {
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
-      if (view.path === '/requests') await requestDrawer(theme);
+      if (view.path === '/requests') await requestDrawerCompact(theme);
+      if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
     }
   }

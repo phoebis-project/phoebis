@@ -23,19 +23,20 @@ function fastLane(input: number, output: number, resetsInMs: number): Account['f
 }
 
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
-// console draw one name.
+// console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
+// `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold.
 export const ACCOUNTS: Account[] = ([
   {
     ...ACCOUNT_SAMPLE,
-    id: 'business',
+    id: 'primary',
     kind: 'oauth',
-    label: 'business',
-    email: 'business@example.com',
+    label: 'primary',
+    email: 'operator@example.com',
     status: 'cooldown',
     routingEnabled: true,
     pools: [
       { poolId: 'all', priority: 0 },
-      { poolId: 'studio', priority: 0 },
+      { poolId: 'work', priority: 0 },
     ],
     // The poll's week for a model the family table has no row for: kept and shown under its key, read by no rule.
     windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
@@ -50,7 +51,7 @@ export const ACCOUNTS: Account[] = ([
       refreshTokenExpiresAt: ahead(58 * DAY),
     },
     subscription: { billingType: 'annual', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_20x', since: ago(200 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(160 * DAY) },
-    requests: { last24h: 1187, last7d: 7420, lifetime: 184_211 },
+    requests: { last24h: 0, last7d: 0, lifetime: 5_380 },
     // A live model-scoped cooldown, which the pool eligibility check leaves alone (that reads the account-wide
     // scope alone) but which the Models view and this account's own status fold in like any other cooldown. The
     // fast-lane row ahead of it holds fast-mode requests alone, so neither the status nor the header's cooldown
@@ -66,7 +67,7 @@ export const ACCOUNTS: Account[] = ([
       {
         reason: 'model_rejected',
         scope: 'model:claude-haiku-4-5-20251001',
-        setAt: ago(6 * MINUTE),
+        setAt: ago(5 * MINUTE + 50_000),
         until: ahead(54 * MINUTE),
         windowId: null,
       },
@@ -74,10 +75,10 @@ export const ACCOUNTS: Account[] = ([
   },
   {
     ...ACCOUNT_SAMPLE,
-    id: 'mail',
+    id: 'secondary',
     kind: 'oauth',
-    label: 'mail',
-    email: 'mail@example.com',
+    label: 'secondary',
+    email: 'operator+second@example.com',
     status: 'cooldown',
     routingEnabled: true,
     // Cancelled, with both ends set: the stored one the operator saved, the derived one the form would
@@ -96,39 +97,42 @@ export const ACCOUNTS: Account[] = ([
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
     subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
-    requests: { last24h: 364, last7d: 2290, lifetime: 51_902 },
+    requests: { last24h: 0, last7d: 0, lifetime: 1_140 },
     cooldowns: [
       {
         reason: 'rate_limited (5h window exhausted)',
         scope: 'account',
-        setAt: ago(28 * MINUTE),
+        setAt: ago(20 * MINUTE + 29_000),
         until: ahead(1 * HOUR + 12 * MINUTE),
         windowId: '5h',
       },
-      // A second scope, one model, so the account's cooling-down block has an account row and a model row.
+      // A second scope, one model, so the account's cooling-down block has an account row and a model row. Set
+      // before the account cooled, when a request could still reach it.
       {
         reason: 'model_rejected',
         scope: 'model:claude-opus-5',
-        setAt: ago(22 * MINUTE),
-        until: ahead(38 * MINUTE),
+        setAt: ago(34 * MINUTE),
+        until: ahead(26 * MINUTE),
         windowId: null,
       },
     ],
   },
   {
     ...ACCOUNT_SAMPLE,
-    id: 'personal',
+    id: 'nightly',
     kind: 'oauth',
-    label: 'personal',
-    email: 'personal@example.com',
+    label: 'nightly',
+    email: 'operator+nightly@example.com',
     status: 'ready',
     routingEnabled: true,
     pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
-    extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
+    extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
-    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(3 * HOUR) },
+    // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
+    // the day's requests are drawn. The raise stands in until then.
+    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(2 * HOUR + 59 * MINUTE + 48_000) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
       lastError: null,
@@ -137,14 +141,14 @@ export const ACCOUNTS: Account[] = ([
       refreshTokenExpiresAt: ahead(72 * DAY),
     },
     subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(400 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(20 * DAY) },
-    requests: { last24h: 812, last7d: 4103, lifetime: 22_870 },
+    requests: { last24h: 0, last7d: 0, lifetime: 7_420 },
     cooldowns: [],
   },
   {
     ...ACCOUNT_SAMPLE,
-    id: 'console',
+    id: 'overflow',
     kind: 'api_key',
-    label: 'Console workspace',
+    label: 'Overflow workspace',
     email: null,
     status: 'funding_required',
     routingEnabled: true,
@@ -155,14 +159,14 @@ export const ACCOUNTS: Account[] = ([
     fastLane: fastLane(0.18, 0.05, 40_000),
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
-    requests: { last24h: 41, last7d: 233, lifetime: 3_104 },
+    requests: { last24h: 0, last7d: 0, lifetime: 3_104 },
     cooldowns: [],
   },
   {
     ...ACCOUNT_SAMPLE,
-    id: 'evals',
+    id: 'research',
     kind: 'api_key',
-    label: 'Evals workspace',
+    label: 'Research workspace',
     email: null,
     status: 'ready',
     routingEnabled: true,
@@ -173,15 +177,16 @@ export const ACCOUNTS: Account[] = ([
     fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
-    requests: { last24h: 128, last7d: 902, lifetime: 6_517 },
+    // The codex pool's one member, so its lifetime holds what both of that pool's keys sent.
+    requests: { last24h: 0, last7d: 0, lifetime: 3_400 },
     cooldowns: [],
   },
   {
     ...ACCOUNT_SAMPLE,
-    id: 'team',
+    id: 'legacy',
     kind: 'oauth',
-    label: 'team',
-    email: 'team@example.com',
+    label: 'legacy',
+    email: 'operator+old@example.com',
     status: 'reauth_required',
     routingEnabled: false,
     pools: [],
@@ -196,17 +201,18 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_team', plan: null, rateLimitTier: 'claude_team', since: null, trialEndsAt: null, endsAt: null, derivedEndsAt: null },
-    requests: { last24h: 0, last7d: 96, lifetime: 12_406 },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: null, trialEndsAt: null, endsAt: null, derivedEndsAt: null },
+    requests: { last24h: 0, last7d: 0, lifetime: 3_960 },
     cooldowns: [],
   },
-  // Added and never paired: no identity and no profile, so a page has to go by the kind to call it OAuth.
+  // Disconnected: the credential is gone and the identity it paired with stays, as a disconnect leaves the row, and
+  // with no subscription block a page has to go by the kind to call it OAuth.
   {
     ...ACCOUNT_SAMPLE,
     id: 'spare',
     kind: 'oauth',
     label: 'spare',
-    email: null,
+    email: 'operator+spare@example.com',
     status: 'unpaired',
     routingEnabled: true,
     pools: [],
@@ -228,7 +234,7 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
   if (a.kind === 'api_key') return null;
   if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };
   // The refresh keeps failing, so every poll fails while the windows of the last clean read still answer.
-  if (a.id === 'team') {
+  if (a.id === 'legacy') {
     return {
       ...QUOTA_SNAPSHOT_SAMPLE,
       accountId: a.id,
@@ -239,7 +245,7 @@ export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapsh
     };
   }
   // Past thirty minutes of 429s, so the poll_backoff condition holds for this one.
-  if (a.id === 'mail') {
+  if (a.id === 'secondary') {
     const nextAttemptAt = ahead(4 * MINUTE);
     // The hold sentence as the router writes it, its instant cut to whole seconds.
     const lastError = `the usage endpoint rate-limited the account; next attempt at ${nextAttemptAt.slice(0, 10)} ${nextAttemptAt.slice(11, 19)} UTC`;

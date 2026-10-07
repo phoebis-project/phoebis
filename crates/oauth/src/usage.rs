@@ -40,7 +40,9 @@ const USAGE_ENDPOINT: &str = "usage";
 /// read only when `limits[]` is absent from the response.
 const FABLE_KEY_ALIASES: &[&str] = &["cinder_cove", "iguana_necktie"];
 
-const FABLE_WINDOW_KEY: &str = "fable";
+/// The key a snapshot gives the Fable week, so an answer built from the router's windows reads like one the
+/// endpoint gave.
+pub const FABLE_WINDOW_KEY: &str = "fable";
 
 /// How an attempt at the usage or the profile endpoint ended.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
@@ -68,6 +70,33 @@ pub struct PollStatus {
     /// 429s answered in a row, the ladder's step; 0 after a clean answer.
     pub rate_limited_in_a_row: u32,
 }
+
+/// One edge of an account's usage backoff, fired where the service moves `CachedEntry.backoff_since`: a run starts
+/// on the first 429 of either endpoint (`endpoint` names it) and ends on the next clean usage answer. Called with
+/// the cache lock released, after the entry landed, so a hook may take any lock of its own.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BackoffEdge {
+    Started {
+        account_id: String,
+        at: i64,
+        endpoint: &'static str,
+        /// The status or the error class that opened the run.
+        reason: String,
+        attempts: u32,
+        next_attempt_at: i64,
+        /// When the last clean usage answer before the run was read, or `None` when this process read no clean answer.
+        last_clean_at: Option<i64>,
+    },
+    Ended {
+        account_id: String,
+        at: i64,
+        since: i64,
+        attempts: u32,
+        resumed_at: i64,
+    },
+}
+
+pub type BackoffHook = Arc<dyn Fn(BackoffEdge) + Send + Sync>;
 
 #[derive(Clone, Debug)]
 pub struct UsageWindow {
@@ -262,13 +291,15 @@ struct CachedEntry {
 impl CachedEntry {
     /// Counts a 429 against the account: the ladder steps, a run starts unless one is under way, and the hold
     /// becomes the `Retry-After` asked for or else the ladder's step, never shorter than one already armed.
+    /// Answers the run's start when this 429 opened it.
     fn rate_limited(
         &mut self,
         account_id: &str,
         endpoint: &'static str,
         at: i64,
         retry_after: Option<i64>,
-    ) {
+    ) -> Option<BackoffEdge> {
+        let opens_run = self.backoff_since.is_none();
         self.rate_limited_in_a_row = self.rate_limited_in_a_row.saturating_add(1);
         self.backoff_since.get_or_insert(at);
         self.last_outcome = PollOutcome::RateLimited;
@@ -282,6 +313,16 @@ impl CachedEntry {
             retry_after_ms = ?retry_after,
             "the {endpoint} endpoint rate-limited the account"
         );
+        opens_run.then(|| BackoffEdge::Started {
+            account_id: account_id.to_string(),
+            at,
+            endpoint,
+            // A run opens on a 429 alone, so the status is its reason. The hold's sentence is the snapshot's.
+            reason: "429".into(),
+            attempts: self.rate_limited_in_a_row,
+            next_attempt_at: self.not_before,
+            last_clean_at: self.last_clean_at,
+        })
     }
 
     /// The cached snapshot marked as no new reading, for a caller asking while the account waits out its hold:
@@ -325,6 +366,7 @@ type SharedFetch = Shared<BoxFuture<'static, FetchOutcome>>;
 struct Inner {
     cache: Mutex<HashMap<String, CachedEntry>>,
     inflight: Mutex<HashMap<String, SharedFetch>>,
+    on_backoff: Mutex<Option<BackoffHook>>,
     semaphore: Semaphore,
     manager: Arc<CredentialManager>,
     control: Arc<ControlClient>,
@@ -367,6 +409,7 @@ impl UsageService {
             inner: Arc::new(Inner {
                 cache: Mutex::new(HashMap::new()),
                 inflight: Mutex::new(HashMap::new()),
+                on_backoff: Mutex::new(None),
                 semaphore: Semaphore::new(concurrency),
                 manager,
                 control,
@@ -436,6 +479,11 @@ impl UsageService {
             next_attempt_at: (now < entry.not_before).then_some(entry.not_before),
             rate_limited_in_a_row: entry.rate_limited_in_a_row,
         })
+    }
+
+    /// Replaces the hook every backoff edge is handed to. No edge reaches a hook before one is set.
+    pub fn set_on_backoff(&self, hook: BackoffHook) {
+        *self.inner.on_backoff.lock().expect(LOCK_POISONED) = Some(hook);
     }
 
     pub fn invalidate(&self, account_id: &str) {
@@ -673,12 +721,42 @@ impl Inner {
         ended: Option<Identity>,
         result: Result<ParsedUsage, FetchFailure>,
     ) -> FetchOutcome {
-        let mut cache = self.cache.lock().expect(LOCK_POISONED);
+        let (outcome, edge) = {
+            let mut cache = self.cache.lock().expect(LOCK_POISONED);
+            let (outcome, edge) = self.commit_in(
+                &mut cache,
+                account_id,
+                fetched_at,
+                identity_changed,
+                ended,
+                result,
+            );
+            (outcome, self.backoff_hook(edge))
+        };
+        announce(edge);
+        outcome
+    }
+
+    fn backoff_hook(&self, edge: Option<BackoffEdge>) -> Option<(BackoffHook, BackoffEdge)> {
+        let edge = edge?;
+        let hook = self.on_backoff.lock().expect(LOCK_POISONED).clone()?;
+        Some((hook, edge))
+    }
+
+    fn commit_in(
+        &self,
+        cache: &mut HashMap<String, CachedEntry>,
+        account_id: &str,
+        fetched_at: i64,
+        identity_changed: bool,
+        ended: Option<Identity>,
+        result: Result<ParsedUsage, FetchFailure>,
+    ) -> (FetchOutcome, Option<BackoffEdge>) {
         if identity_changed {
             // A hold armed while this fetch was out still marks the answer, as on every other path; an entry an
             // earlier holder of the id left behind is nobody's answer.
             let now = (self.clock)();
-            return match cache.get(account_id) {
+            let outcome = match cache.get(account_id) {
                 Some(entry) if Some(entry.identity) != ended => {
                     Err("account identity changed while fetching usage".to_string())
                 }
@@ -686,6 +764,7 @@ impl Inner {
                 Some(entry) => Ok(entry.snapshot.clone()),
                 None => Err("account identity changed while fetching usage".to_string()),
             };
+            return (outcome, None);
         }
         // A hold armed while this fetch was out belongs to the account rather than to the snapshot it is
         // stored beside, so replacing the entry never shortens it.
@@ -705,6 +784,15 @@ impl Inner {
                     raw_keys: parsed.raw_keys,
                     error: None,
                 };
+                let edge = cache.get(account_id).and_then(|entry| {
+                    entry.backoff_since.map(|since| BackoffEdge::Ended {
+                        account_id: account_id.to_string(),
+                        at: fetched_at,
+                        since,
+                        attempts: entry.rate_limited_in_a_row,
+                        resumed_at: fetched_at,
+                    })
+                });
                 cache.insert(
                     account_id.to_string(),
                     CachedEntry {
@@ -720,7 +808,7 @@ impl Inner {
                         rate_limited_in_a_row: 0,
                     },
                 );
-                Ok(snapshot)
+                (Ok(snapshot), edge)
             }
             Err(failure) => {
                 let previous = cache.get(account_id);
@@ -774,11 +862,11 @@ impl Inner {
                     last_outcome: PollOutcome::Failed,
                     rate_limited_in_a_row,
                 };
-                if let Some((received_at, retry_after)) = rate_limited {
-                    entry.rate_limited(account_id, USAGE_ENDPOINT, received_at, retry_after);
-                }
+                let edge = rate_limited.and_then(|(received_at, retry_after)| {
+                    entry.rate_limited(account_id, USAGE_ENDPOINT, received_at, retry_after)
+                });
                 cache.insert(account_id.to_string(), entry);
-                Ok(snapshot)
+                (Ok(snapshot), edge)
             }
         }
     }
@@ -792,7 +880,22 @@ impl Inner {
         at: i64,
         retry_after: Option<i64>,
     ) {
-        let mut cache = self.cache.lock().expect(LOCK_POISONED);
+        let edge = {
+            let mut cache = self.cache.lock().expect(LOCK_POISONED);
+            let edge = self.rate_limited_in(&mut cache, account_id, endpoint, at, retry_after);
+            self.backoff_hook(edge)
+        };
+        announce(edge);
+    }
+
+    fn rate_limited_in(
+        &self,
+        cache: &mut HashMap<String, CachedEntry>,
+        account_id: &str,
+        endpoint: &'static str,
+        at: i64,
+        retry_after: Option<i64>,
+    ) -> Option<BackoffEdge> {
         match cache.get_mut(account_id) {
             Some(entry) => entry.rate_limited(account_id, endpoint, at, retry_after),
             None => {
@@ -814,9 +917,17 @@ impl Inner {
                     last_outcome: PollOutcome::RateLimited,
                     rate_limited_in_a_row: 0,
                 };
-                entry.rate_limited(account_id, endpoint, at, retry_after);
+                let edge = entry.rate_limited(account_id, endpoint, at, retry_after);
                 cache.insert(account_id.to_string(), entry);
+                edge
             }
         }
+    }
+}
+
+/// Hands an edge to its hook. The caller has released the cache lock.
+fn announce(edge: Option<(BackoffHook, BackoffEdge)>) {
+    if let Some((hook, edge)) = edge {
+        hook(edge);
     }
 }

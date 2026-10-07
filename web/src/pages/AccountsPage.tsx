@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useState } from 'react';
 import { Link, useNavigate, useParams } from 'react-router-dom';
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { api } from '@/api';
+import { api, ApiError } from '@/api';
 import type { Account, AccountStatus, PairingPreview, PairingSession, QuotaHistory } from '@/api/types';
 import { useSession } from '@/app/session';
 import { CatalogDialog } from '@/components/CatalogDialog';
@@ -16,6 +16,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, 
 import { accountPatchOf, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
+import { aroundSubject, logHref } from '@/lib/routingLog';
 import { joinTrend } from '@/lib/trend';
 
 type SortKey = 'name' | 'reset' | 'status' | 'usage';
@@ -187,11 +188,18 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const [confirm, setConfirm] = useState<{ body: string; danger?: boolean; label: string; onConfirm: () => void; title: string } | null>(null);
   const [editing, setEditing] = useState(false);
   const [draft, setDraft] = useState('');
+  // The revision the title editor opened with; the end editor's form carries its own, and this editor has no form.
+  const [labelRevision, setLabelRevision] = useState(0);
   // Null while the subscription end is not being edited.
   const [endForm, setEndForm] = useState<SubscriptionEndForm | null>(null);
+  // One stale refusal per editor, so neither shows the other's.
+  const [labelStale, setLabelStale] = useState<string | null>(null);
+  const [endStale, setEndStale] = useState<string | null>(null);
   useEffect(() => {
     setEditing(false);
     setEndForm(null);
+    setLabelStale(null);
+    setEndStale(null);
   }, [account.id]);
   // The list holds its refresh while anything here is open or running. The cleanup reports false too: Delete account
   // navigates away inside its action, so the detail can unmount before `busy` clears.
@@ -212,7 +220,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const extra = account.extraUsage;
   const overage = account.overage;
   /** True once the router took the change. */
-  const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string)): Promise<boolean> => {
+  const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string), onStale?: (message: string) => void): Promise<boolean> => {
     setBusy(true);
     try {
       const result = await action();
@@ -220,7 +228,10 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
       onChanged();
       return true;
     } catch (e) {
-      onToast(e instanceof Error ? e.message : String(e));
+      // The row moved under the editor: the edit is about values that are gone, so the operator reloads and
+      // re-applies it rather than saving over what someone else wrote.
+      if (onStale && e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') onStale(e.message);
+      else onToast(e instanceof Error ? e.message : String(e));
       return false;
     } finally {
       setBusy(false);
@@ -229,10 +240,10 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const act = (title: string, body: string, label: string, action: () => Promise<unknown>, done: string, danger = false) => setConfirm({ title, body, label, danger, onConfirm: () => void run(action, done) });
   // The editors close only once the router took the change, so a refusal leaves what was typed in front of the operator.
   const save = async () => {
-    if (await run(() => api.renameAccount(account.id, draft.trim()), 'Label saved')) setEditing(false);
+    if (await run(() => api.renameAccount(account.id, draft.trim(), labelRevision), 'Label saved', setLabelStale)) setEditing(false);
   };
   const saveEnd = async (form: SubscriptionEndForm) => {
-    if (await run(() => api.updateAccount(account.id, accountPatchOf(form)), 'Subscription end saved')) setEndForm(null);
+    if (await run(() => api.updateAccount(account.id, accountPatchOf(form), form.revision), 'Subscription end saved', setEndStale)) setEndForm(null);
   };
 
   return (
@@ -247,7 +258,16 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                 <Button size="sm" variant="primary" disabled={busy || draft.trim() === ''} onClick={() => void save()}>
                   Save
                 </Button>
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEditing(false)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    setEditing(false);
+                    if (labelStale) onChanged();
+                    setLabelStale(null);
+                  }}
+                >
                   Cancel
                 </Button>
               </span>
@@ -260,6 +280,8 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   aria-label="Edit label"
                   onClick={() => {
                     setDraft(account.label);
+                    setLabelRevision(account.revision);
+                    setLabelStale(null);
                     setEditing(true);
                   }}
                 >
@@ -268,6 +290,26 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
               </>
             )}
           </h2>
+          {/* Under the title rather than in it: an h2 holds inline content alone. */}
+          {editing && labelStale && (
+            <div className="callout callout--critical" role="alert">
+              <IconWarning size={16} />
+              <div>
+                {labelStale}{' '}
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => {
+                    setEditing(false);
+                    setLabelStale(null);
+                    onChanged();
+                  }}
+                >
+                  Reload
+                </Button>
+              </div>
+            </div>
+          )}
           {account.email && <p className="detail__sub mono">{account.email}</p>}
           <div className="detail__badges">
             <Badge tone={STATUS_TONE[account.status]} dot>
@@ -403,7 +445,14 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           actions={
             // Kept while the editor is open, so the card's rows do not jump as the head loses its button.
             isOauth ? (
-              <Button size="sm" disabled={endForm !== null} onClick={() => setEndForm(subscriptionEndFormOf(account))}>
+              <Button
+                size="sm"
+                disabled={endForm !== null}
+                onClick={() => {
+                  setEndStale(null);
+                  setEndForm(subscriptionEndFormOf(account));
+                }}
+              >
                 Edit end
               </Button>
             ) : undefined
@@ -448,11 +497,39 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   <div>{endRefusal}</div>
                 </div>
               )}
+              {endStale && (
+                <div className="callout callout--critical" role="alert">
+                  <IconWarning size={16} />
+                  <div>
+                    {endStale}{' '}
+                    <Button
+                      size="sm"
+                      variant="ghost"
+                      onClick={() => {
+                        setEndForm(null);
+                        setEndStale(null);
+                        onChanged();
+                      }}
+                    >
+                      Reload
+                    </Button>
+                  </div>
+                </div>
+              )}
               <span className="row">
                 <Button size="sm" variant="primary" disabled={busy || endRefusal !== null} onClick={() => void saveEnd(endForm)}>
                   Save
                 </Button>
-                <Button size="sm" variant="ghost" disabled={busy} onClick={() => setEndForm(null)}>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  disabled={busy}
+                  onClick={() => {
+                    setEndForm(null);
+                    if (endStale) onChanged();
+                    setEndStale(null);
+                  }}
+                >
                   Cancel
                 </Button>
               </span>
@@ -557,7 +634,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
               }
             />
           </Card>
-          <Card title="Requests">
+          <Card title="Requests" actions={<Link to={logHref({ accounts: [account.id], ...aroundSubject(null, now) })}>Routing log</Link>}>
             <div className="req-totals">
               <div>
                 <span className="stat__label">Last 24h</span>

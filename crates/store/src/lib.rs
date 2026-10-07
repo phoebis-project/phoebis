@@ -9,6 +9,7 @@ mod registry;
 mod routing;
 mod schema;
 
+pub mod backup;
 pub mod crypto;
 pub mod permissions;
 
@@ -28,8 +29,9 @@ use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub use accounts::{
-    AccountKind, AccountRow, AccountState, Identity, SubscriptionRow, INFERENCE_HOST,
+    AccountKind, AccountRow, AccountState, Identity, StateCause, SubscriptionRow, INFERENCE_HOST,
 };
+pub use backup::{snapshot, BackupError, Snapshot, RETRY_PAUSE};
 pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,
@@ -44,7 +46,7 @@ pub use registry::{
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
-    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, WindowRow,
+    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, ShedPin, ShedRoundRow, WindowRow,
 };
 pub use schema::SCHEMA_VERSION;
 
@@ -201,6 +203,19 @@ impl StorageKey {
         let mut bytes = [0u8; 32];
         rand::rng().fill_bytes(&mut bytes);
         Self(bytes)
+    }
+
+    /// The key as the 64 lowercase hex characters `from_file` reads, zeroed when dropped; `init` writes it and nothing
+    /// else reads it.
+    pub fn to_hex(&self) -> zeroize::Zeroizing<String> {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        // Sized up front, so pushing never reallocates and leaves an unzeroed copy of the key behind.
+        let mut hex = zeroize::Zeroizing::new(String::with_capacity(64));
+        for byte in self.0.iter() {
+            hex.push(char::from(DIGITS[usize::from(byte >> 4)]));
+            hex.push(char::from(DIGITS[usize::from(byte & 0x0f)]));
+        }
+        hex
     }
 
     /// Reads a key file holding exactly 32 raw bytes, or 64 ASCII hex characters with at most one trailing `\n`
@@ -1075,6 +1090,7 @@ mod tests {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Unpaired,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         store
@@ -1170,6 +1186,7 @@ mod tests {
             incarnation: 1,
             revision: 1,
             state: AccountState::Unpaired,
+            state_cause: StateCause::Operator,
         }
     }
 
@@ -1583,6 +1600,24 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn a_key_written_as_its_hex_and_a_newline_reads_back_as_the_same_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("storage.key");
+        let key = StorageKey::generate();
+        let hex = key.to_hex();
+        assert_eq!(hex.len(), 64);
+        assert!(
+            hex.bytes()
+                .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b)),
+            "lowercase hex"
+        );
+        std::fs::write(&path, format!("{}\n", hex.as_str())).unwrap();
+        let read = StorageKey::from_file(&path).unwrap();
+        assert_eq!(read.to_hex(), hex);
+        assert_eq!(read.0, key.0);
     }
 
     #[test]

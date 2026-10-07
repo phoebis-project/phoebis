@@ -10,9 +10,9 @@ __pycache__/
 
 # Runtime data
 /config.yaml
+/data/
 /deploy/*.env
 /deploy/storage.key
-/data/
 *.sqlite
 *.sqlite-shm
 *.sqlite-wal

@@ -14,7 +14,7 @@
         "subagent_placement": "by_cohort",
         "session_placement": "by_strategy",
         "min_shared_prefix_tokens": 20000,
-        "migrate_above_utilization": null,
+        "shed_ahead_of_pace": null,
         "select_below_utilization": null,
         "model_rules": [
           {
@@ -27,7 +27,7 @@
         "source_dwell_seconds": 900,
         "migrate_when_spent": true,
         "warm_sessions": "when_needed",
-        "retry_in_place_seconds": 10,
+        "retry_in_place_seconds": 60,
         "in_flight_cap": 16,
         "pace_floor": 0.05,
         "overage_move_grace_minutes": 30,
@@ -69,8 +69,8 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1790987341272,
-        "updated_at": 1790987341272,
+        "created_at": 1791268384988,
+        "updated_at": 1791268384988,
         "members": [
           {
             "account_id": "business",
@@ -109,7 +109,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "LGWWN5RB",
+            "prefix": "HnZ0xSv5",
             "enabled": true
           }
         ],

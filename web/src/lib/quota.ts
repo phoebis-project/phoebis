@@ -1,4 +1,4 @@
-import type { Account, RateLimitWindow, WindowId } from '@/api/types';
+import type { Account, PollOutcome, RateLimitWindow, WindowId } from '@/api/types';
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -43,6 +43,9 @@ export const STATUS_LABEL: Record<Account['status'], string> = {
   ready: 'Ready',
   unpaired: 'Not paired',
 };
+
+/** How the usage poll last answered, in the words the Quota page and the routing log share. */
+export const POLL_OUTCOME_LABEL: Record<PollOutcome, string> = { clean: 'clean', failed: 'failed', rate_limited: 'rate limited' };
 
 export type BadgeTone = 'accent' | 'critical' | 'good' | 'neutral' | 'serious' | 'warning';
 

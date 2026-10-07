@@ -39,8 +39,8 @@ pub use cache_ttl::{
 };
 pub use casing::{head_queue, HeadQueue, HeadRecorder, OriginalHead};
 pub use catalog::{
-    derive, derive_all, Catalog, CatalogRow, CatalogService, Discovered, DiscoveryError,
-    Prefetched, Warmth, ERROR_HOLD, MAX_BODY, REFRESH_TICK,
+    derive, derive_all, Catalog, CatalogChange, CatalogHook, CatalogRow, CatalogService,
+    Discovered, DiscoveryError, Prefetched, Warmth, ERROR_HOLD, MAX_BODY, REFRESH_TICK,
 };
 pub use chains::{canonical, Chains};
 pub use classify::{
@@ -48,7 +48,7 @@ pub use classify::{
     SPEND_CAP_REASON,
 };
 pub use drift::DriftGuard;
-pub use errors::{anthropic_error, auth_error_response, key_refusal_response};
+pub use errors::{anthropic_error, auth_error_response, key_refusal_response, LEDGER_BEHIND};
 pub use exhaustion::exhaustion_response;
 pub use headers::{outbound_headers, CredentialKind};
 pub use hold::{hold, Commit, Held, HeldRead, Inspect, INSPECT_BUFFER};
@@ -63,7 +63,7 @@ pub use ratelimit::{
     head_sample, retry_after, upstream_date, Bucket, BucketHeaders, UnifiedHeaders, FAST_INPUT,
     FAST_OUTPUT,
 };
-pub use serve::{serve, Limits as ListenLimits};
+pub use serve::{handshake, serve, Accepted, HandshakeError, Limits as ListenLimits};
 pub use sse::{SseEvent, SseParser};
 
 #[cfg(feature = "debug-hooks")]

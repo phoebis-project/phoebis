@@ -4,7 +4,7 @@ import { joinTrend } from './dist/api.js';
 
 // Minute offsets from a 5-minute boundary, so each sample's bucket reads off its offset.
 const at = (minutes, seconds = 0) => new Date(Date.UTC(2026, 8, 16, 14, 30) + minutes * 60_000 + seconds * 1000).toISOString();
-const series = (windowId, samples) => ({ accountId: 'business', samples: samples.map(([t, utilization]) => ({ at: t, utilization })), windowId });
+const series = (windowId, samples) => ({ accountId: 'primary', samples: samples.map(([t, utilization]) => ({ at: t, utilization })), windowId });
 
 test('samples on one bucket at different instants join', () => {
   const history = [

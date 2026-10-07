@@ -13,6 +13,12 @@ were lost is stored as truncated with a `ledger_gap` event naming the request. O
 folded into the hour's rollup, which is what the analytics routes report, so a long range costs one row per hour
 rather than one per request.
 
+Every routing decision lands as its own row in a decisions table beside the attempt rows: one zstd-compressed record per
+decision holding the request's facts, the settings in force, every pool member's standing at decision time, the rule
+walk and the outcome, keyed by the request and the decision's place in it, so a hold and the placement after it are two
+rows. The small trace on the attempt row stays for the analytics. The router emits the record as it emits its events,
+and the ledger stores it.
+
 A `ledger_gap` event names one of these reasons:
 
 | Reason | Meaning |
@@ -61,8 +67,8 @@ waits for the period to end or its budget to be raised, rather than for a price 
 traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
-spelling the request carried, `model_permitted` the account that served the same request afterwards; the request
-drawer lists both.
+spelling the request carried, `model_permitted` the account that served the same request afterwards. The
+[routing log](#routing-log) lists both.
 
 Percentiles for every millisecond latency and for output tokens per second come from a fixed, log-spaced,
 64-bucket histogram. A range spanning several hours merges its hourly histograms bucket by bucket before reading
@@ -89,7 +95,8 @@ accepts requests and bounded by `routing.startup_fetch_seconds`, so selection ho
 request after a restart; an account whose first answer is a 429 serves from the windows kept in the registry from its
 last run, predicted forward, and its backoff starts at once, and one whose first answer is a transport failure or
 another error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each
-account five minutes after the startup step, on the account's phase, and its profile an hour after.
+account five minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile
+an hour after.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honoured up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
@@ -195,11 +202,12 @@ included, whether or not the router dropped it on the way upstream.
 A batch the ledger cannot write is retried in place after 1, 2, 4 and 8 seconds, then one record at a time; a record the
 file as a whole refuses (a corrupt, full, read-only or unopenable file, an I/O error) is held and retried every 10
 seconds until it lands; a record that fails on its own is dropped with a `ledger_gap` when it carries no money and
-parked in the ledger file when it does, and every parked record is tried again once at the next start, its parked row
-deleted in the transaction that lands the record, so its charge counts once. A parked record keeps its request and
-attempt rows and not its captured bodies, so the capture of a parked request is gone while its cost is kept. While a
-batch is under retry the ledger is degraded: the system page shows it, `phoebis_ledger_degraded` reads 1, and routing
-treats every budgeted member's spend as unknown until a batch lands and the spend is read again.
+parked in the ledger file when it does, and every parked record is tried again once at the next start or by `phoebis
+ledger replay-parked`, its parked row deleted in the transaction that lands the record, so its charge counts once. A
+parked record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone
+while its cost is kept. While a batch is under retry the ledger is degraded: the system page shows it,
+`phoebis_ledger_degraded` reads 1, and routing treats every budgeted member's spend as unknown until a batch lands and
+the spend is read again.
 
 The routing state writer is bounded the same way: a stalled registry file leaves its writes in memory, coalesced per
 row, and the system page's `router.writer` reads `degraded` until they drain. A batch the registry file as a whole
@@ -210,11 +218,13 @@ refusal drops it.
 
 | Data | Kept for |
 | --- | --- |
-| Requests, attempts, events, kept-warm marks | `stats.retention_days` (90 days by default; 0 forever) |
+| Requests, attempts, events, decisions, kept-warm marks | `stats.retention_days` (90 days by default; 0 forever) |
 | Quota and extra-usage samples | `stats.retention_days` (90 days by default; 0 forever) |
 | Resolved credential refresh attempts and registry changes | `stats.retention_days` (90 days by default; 0 forever) |
 | Captured bodies | The hours the capture named |
 | Hourly rollups | `stats.rollup_retention_days` (400 days; 0 forever, otherwise at least `stats.retention_days`) |
+
+A routing decision leaves in the purge that takes its request; one whose request never landed leaves at the same age.
 
 The purge that enforces these runs once an hour on its own connection, in slices of 1,000 rows per transaction, so the
 writer never waits behind a whole pass and the day's cut costs the WAL one slice at a time. Every five-minute poll's
@@ -296,15 +306,17 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
 pool or key where it is fixed, or nothing for an item with no such place (a drift refusal that named no key, a parked
 record without a pool, a pool deleted since, one of the router's own writers); it reads the same conditions the
-[`phoebis_attention` gauge](#conditions-and-gauges) exports. Four tiles report requests, tokens, estimated cost, and the
-error rate over the last 24 hours, and a line under them says when the figures were read, or that the last refresh
-failed and why. Two cards below show how much of the pooled 5-hour and 7-day capacity is left: each subscription account
-is weighed by its tier's capacity on the window from the subscription cost model, in Max 20x windows, and listed with
-its own remaining share, and the line under the ring reads the windows left against the pooled capacity, such as 0.39 of
-1.30 Max 20x windows left. A window whose reset has passed with no reading since counts as a full allowance. An account
-whose tier the model does not size, or whose tier has no capacity on the window, is named under the ring instead, with
-the reason. The 5-hour ring's subtitle opens the cost reference on its Tiers and peak band tab. The page ends with the
-most recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
+[`phoebis_attention` gauge](#conditions-and-gauges) exports. The pool exhausted item opens the
+[routing log](#routing-log) instead, on the pool's exhausted decisions from the moment the condition began. Four tiles
+report requests, tokens, estimated cost, and the error rate over the last 24 hours, and a line under them says when the
+figures were read, or that the last refresh failed and why. Two cards below show how much of the pooled 5-hour and 7-day
+capacity is left: each subscription account is weighed by its tier's capacity on the window from the subscription cost
+model, in Max 20x windows, and listed with its own remaining share, and the line under the ring reads the windows left
+against the pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A window whose reset has passed with no reading
+since counts as a full allowance. An account whose tier the model does not size, or whose tier has no capacity on the
+window, is named under the ring instead, with the reason. The 5-hour ring's subtitle opens the cost reference on its
+Tiers and peak band tab. The page ends with the most recent requests and a sessions card that leads with the router's
+live pins and the accounts they sit on.
 
 ### Observe
 
@@ -342,8 +354,8 @@ timeline lays the same windows across a calendar, zoomable between a two-week we
 ### Models
 
 The Models view lists a key's processed rules with their level and the accounts cooling for a matching model, every
-model-scoped cooldown grouped by model with a clear button per row, and the newest rejections and permits
-([routing](routing.md#model-rules)).
+model-scoped cooldown grouped by model with a clear button per row, and a link to the routing log's model rejected and
+model permitted rows ([routing](routing.md#model-rules)).
 
 ### Requests
 
@@ -356,7 +368,7 @@ reads the family and version, with the whole id on hover. The client column show
 user agent (`claude-code/<entrypoint>` or `other`), cut at 12 characters, whole on hover, and the agent
 type beneath it on a subagent's turn.
 One row is one client request however many attempts it took, and the attempt trail reads as
-"mail 429, business 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
+"secondary 429, primary 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
 succeed names how it ended beside its status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request
 that waited for a slot while every account was at its cap carries a held marker beside its attempts with the time it
 waited. The search matches the request id, the session, the key, the model, the error code, and an attempt's account,
@@ -375,32 +387,149 @@ status, the user agent, the model as the client spelled it and, when
 it differs, the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on
 setting; carried the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or
 not requested), and the client hints: the agent type, the compaction and context-compacted markers, the turn origin, and
-the tool time before the turn; the trail names an account the model was rejected on and the one that served it, and each
-attempt names the upstream's request id under its head and, on the answer that served, the message id a Claude Code
-transcript's assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends a
-per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
-with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
-moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now. When the session moved
-during the request, the drawer says from which account to which and why: rate limited, wound down, account marked, over
-its plan, back to plan, load shed, or window spent. When its pin was released without a move, the drawer says from which
-account and every reason the router found, among: already tried this request, the account at its spend budget, the
-creating request's own client error, an account cooldown, the account deleted, disconnected, idle past the affinity
-window, funding required, in overage, paused, needing reauthorization, released outright, window spent, the subscription
-ended, never paired, or no longer serving the model. The drawer also shows the strategy the selection used, the tier it
-drew from, whether the pin continued and was renewed, moved (naming the rule), or was placed afresh, whether the cache
-answered the request and by how many of its input tokens, and every candidate the selection passed over with the
-obstacle in its way: already tried, above the ceiling, at its in-flight cap, at its spend budget, an account cooldown,
-at the pace floor, an operator hold, in overage, ranked behind another candidate, its subscription ended, its window
-spent, or winding down. A placement names where it landed: by its messages or by its static prefix at the depth that
-matched, or with the main conversation. A request held while every account was at its cap names the account it was held
-on: its cohort's, or else the last one it waited on, and how long it waited. The cache line reads a placement as a hit
-or a miss against the prefix it was promised: a placement by its messages is a hit when the response read at least that
-prefix, one by its static prefix when it read anything, and one with the main conversation keeps the plain cache line.
-The drawer shows the captured request and response bodies, each with Copy, which copies the text as shown; a body past
-256 KiB shows compact until Pretty-print is pressed.
+the tool time before the turn. The drawer's Request section names the upstream's request id for each attempt and, on the
+answer that served, the message id a Claude Code transcript's assistant entry carries. The drawer's effort is the level
+the upstream applies: when the client sends a per-turn control entry, the last entry's level, else the request's
+top-level `output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its
+own prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
+Refresh brings it up to now. The drawer opens on the answer's facts: the status, the outcome, the serving account and
+model, the answer's stop reason and region, and the cache miss reason. The usage follows, then the request's identity
+with the upstream request and message ids under it, its shape, the client hints and the captured bodies. Its head
+carries a "Routing log" link and each row a "Routing" link beside "Details", both opening the
+[routing log](#routing-log) on that request with a quarter hour either side. While the drawer is open the table shows a
+compact set of columns (time, model, status and attempts), and the chosen set returns when it closes. The drawer shows
+the captured request and response bodies, each with Copy, which copies the text as shown; a body past 256 KiB shows
+compact until Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)
+
+### Routing log
+
+The Routing log sits under the Diagnostics heading at the foot of the navigation, above the Expert view switch. The
+heading shows while the expert view is on or while the log is open, and every link into the log opens it whatever the
+mode, without turning the expert view on.
+
+The log is one stream of routing decisions and the state changes that explain them, newest first, 25 rows a page with
+First, Previous and Next. A row reads the time, with a decision's request beneath it as a link to the request's drawer,
+the kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), the
+session's first eight characters with the agent beneath, the account (a move names the account it left and the one it
+landed on, a pool or key event names its pool or key), the model, By and Fact, and Details, which opens the request's
+drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it (`static
+rung`), the strategy and the tier's priority (`Pace P0`), where a hold waited (`cohort`, `session pin`), what exhausted
+the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for a
+renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so, one labeled value or
+two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a time the row's
+own time already gives. Every account, key, pool, model, session and request a row names is a link, and a column with
+nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
+
+The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
+then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
+page's address, so a filtered view is a link, a reload keeps it and Back returns to the view before it: `from` and `to`
+as ISO instants (`2026-09-16T14:15:00.000Z`), `accounts`, `keys`, `kinds`, `models` and `pools` as comma lists, and
+`session` and `request`. A `kinds` value replaces the default set, so `kinds=probe` lists probe decisions alone. A
+kind this build does not know stays in the address, and the route's refusal shows where the rows would be. A filter
+change returns to the first page, and Refresh reads up to now.
+
+A request filter opens a line above the table that counts the request's decisions and events and offers three
+widenings: this session (an hour either side of the request's time), this account (a quarter hour either side) and this
+minute (the clock minute that holds it). Any other narrowing draws the same line with what the rows are narrowed to,
+the range and the page's count. Clear returns to the unfiltered view.
+
+Follow, off by default, reads the list every 5 seconds with the range ending now. Each read takes every row that
+arrived since the read before, up to eight pages of them. When more arrived than that, a line above the list reads
+"More rows arrived than Follow could fetch. Reload to read them.", and Next reads on from the last row Follow fetched.
+A new row lands at the top in the accent tint until the next read, a filter change keeps Follow on, and paging to an
+older page turns it off.
+
+Probe decisions and warm prefix expiries are hidden by default. The Kinds filter lists them last in their groups, and
+its button reads "Kinds (2 hidden)" until another set is chosen.
+
+Every row opens. A click anywhere on a row but a link opens it beneath itself on a tint and a second click shuts it,
+and another page or another filter starts with every row shut. A decision row loads its record and draws its card, a
+probe decision's included. A card opened on a request that is still running reads its record again when Follow brings
+the answer. The verdict line names the decision with its accounts and its pool as links ("Moved
+secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in codex") and chips for the tier, the rule or
+the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
+router decided" numbers the walk in the engine's order: the pin, every member's eligibility, the move rules, the cool
+reading and the cap filter after a fired rule, the renewal, the three rungs, the partitions, the pick, and a hold or an
+exhaustion. Each line reads the step, its verdict in a badge and the facts the engine read as chips, one value or one
+key-value pair each, a member's fact keyed by the member. The rules after a fired one never run, so they fold into one
+line, "Rules after spent". A rung line adds the entry the rung took, or the deepest one a gate refused: the boundary's
+hash as its first eight characters with the whole hash and any refusing gate on hover, and `warm until 14:58` from the
+entry's write and its TTL, which an entry the cache never confirmed leaves out. A refusal's walk is two lines, the
+admission with its reason and the rest of the walk not run.
+
+The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
+with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
+each (the utilization, the reset, the reading's source and age), or an Anthropic key's one merged reading, the requests
+in flight against the cap, the Pace score, the prefix entry, and the verdict with the one chip that decided it (`429 on
+5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed over. Three folds, closed until
+opened, hold the request's facts, the pin and its warmth (a record that pins nothing reads why: not looked
+up or pinning off) and the twenty settings in force.
+A refusal under a key or pool the registry no longer holds says so in its place. The outcome
+lists the pin written, the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL
+tier of its deepest entry, the hold, the answer an exhaustion or a refusal gave, and the spend against a budget. The
+foot repeats the three widenings for the row, names the record's version (Record v1), and Copy as JSON copies the
+record route's answer whole, every field the card does not draw included. A record the retention purged reads "The
+record left with the retention" in the card's place.
+
+An event row opens to a bordered panel of pairs: When to the second in UTC, the account and the pool as links, then the
+kind's own pairs. An event that names a request ends with Source request, which opens the log on that request a quarter
+hour either side of the event, and Details, which opens the request's drawer. The kinds and what each row records:
+
+| Event | What it records |
+| --- | --- |
+| account state changed | An account's state moved, with the old state, the new one and who moved it. |
+| budget period ended | A member's budget period closed, with the spend it closed on. |
+| budget reached | A member's spend crossed its budget, so the pool answers exhausted for it until the period ends. |
+| catalog changed | An account's model catalog gained or lost models. |
+| cooldown cleared | A cooldown ended by its deadline, by hand or by a recovery. |
+| cooldown set | An answer cooled an account, its fast lane or one model on it until a time. |
+| fast credits changed | An account's usage credits for fast mode became available or unavailable. |
+| ledger gap | The ledger could not record a request whole, and the reason names what it is missing. |
+| model permitted | An account served a model another account had rejected. |
+| model rejected | An account answered 404 for a model, which cools that model on the account. |
+| overage ended | An account left overage at its 7-day reset. |
+| overage started | An account went into overage, so its requests draw on extra usage. |
+| pin created | A placement pinned a session to an account. |
+| pin expired | A pin was released, idle past the pin window or for the reasons it lists. |
+| pin moved | A rule or a failover moved a session's pin to another account. |
+| pin released | An operator released a session's pin by hand. |
+| poll backoff ended | The usage poll answered cleanly again after backing off. |
+| poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
+| re-auth required | An account's refresh was refused, and routing to it stays off until it is paired again. |
+| refresh failed | An access-token refresh failed. |
+| refresh succeeded | An access-token refresh succeeded. |
+| refresh uncertain | An access-token refresh ended without a clear answer. |
+| registry changed | An operator edited a pool, a key or an account, field by field where the change names them. |
+| router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
+| shedding round | A round marked pins on an account ahead of pace and kept the marks across a restart. |
+| warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL, listed only when the kind is chosen. |
+| wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
+| window reset | A quota window reset, with the reading before it. |
+| window spent | A response head or the poll read a quota window at its limit. |
+
+An account state change names who moved the state in the console's words: `credential refused` when the upstream refused
+the account's credential, `credit balance` when it named the credit balance, `refresh failed` when the token refresh
+failed for good, `by hand` for an operator's change, and `paired` for a pairing's confirm. A deleted account's last row
+reads `deleted`, as its new state and as who moved it.
+
+Other views open the log on what they show. A Requests row and its drawer open it on the request a quarter hour either
+side. The Sessions row menu's "View in routing log" opens the session's decisions an hour either side of its last
+request, ending no later than now, or over the last hour for a session with no request. On a pool card, the "Moves in
+the last hour" tile's figure opens the pool's moved decisions over the last hour. The figure counts the rule moves on
+the pool's member accounts in the last hour (`drain`, `overage`, `return_to_plan`, `shed` and `spent`), a keepalive
+probe's move included, which the log lists only with probe decisions chosen. Its title lists the moves by reason with
+the failovers apart, since the log draws a failover as a later attempt's placement. The card's pool exhausted row and
+the dashboard's pool exhausted item open the pool's exhausted decisions from the moment the condition began. The Routing
+log action on an account's Requests card shows the account's rows over the last hour, and the Models view's link opens
+the model rejected and model permitted rows of the last 24 hours.
+
+![The Routing log view: the merged stream with the renewal's decision card
+open](assets/routing-log-light.png#only-light)
+![The Routing log view: the merged stream with the renewal's decision card
+open](assets/routing-log-dark.png#only-dark)
 
 ### Analytics
 
@@ -503,7 +632,7 @@ at the first read.
 | `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
 | `funding_required` | the Anthropic-key account | the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
-| `ledger_record_parked` | the pool, or `-` for a record without one | the start after the fault lands the parked rows |
+| `ledger_record_parked` | the pool, or `-` for a record without one | the next start or replay lands the parked rows |
 | `poll_backoff` | the polled account | a poll answers clean |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
@@ -541,9 +670,10 @@ re-pairing settles a refresh still pending; a pairing records its own committed 
 nothing was pending. The detail counts the run's failures and gives the newest attempt's outcome and error.
 
 **`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own; each is
-tried again once at the next start, and the condition clears when the table empties. The subject is the pool the record
-was served under, or `-` for a record without one; a pool deleted since shows under its id with nothing to open. The
-item dates from the oldest row, and the detail counts the rows and names the accounts.
+tried again once at the next start or by `phoebis ledger replay-parked`, and the condition clears when the table
+empties. The subject is the pool the record was served under, or `-` for a record without one; a pool deleted since
+shows under its id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names
+the accounts.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,

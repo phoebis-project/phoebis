@@ -2,8 +2,10 @@
 
 mod common;
 
+use std::sync::Arc;
 use std::time::Duration;
 
+use boring::ssl::SslAcceptor;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use phoebis_bus::{Bus, Delivery, Event};
@@ -13,6 +15,7 @@ use tokio::io::{AsyncReadExt, AsyncWriteExt};
 /// it until its end or the listener ends first.
 async fn listening(
     limits: phoebis_relay::ListenLimits,
+    acceptor: Option<Arc<SslAcceptor>>,
 ) -> (
     std::net::SocketAddr,
     FakeUpstream,
@@ -34,6 +37,7 @@ async fn listening(
         axum::Router::new(),
         stop_rx,
         limits,
+        acceptor,
     ));
     (addr, up, stop)
 }
@@ -45,13 +49,108 @@ async fn a_connection_that_sends_no_head_is_closed_at_the_header_read_timeout() 
         header_read_timeout: Duration::from_millis(300),
         max_connections: 8,
     };
-    let (addr, up, _stop) = listening(limits).await;
+    let (addr, up, _stop) = listening(limits, None).await;
     let mut idle = tokio::net::TcpStream::connect(addr).await.unwrap();
     let mut buf = [0u8; 16];
     let read = tokio::time::timeout(Duration::from_secs(3), idle.read(&mut buf)).await;
     assert!(
         matches!(read, Ok(Ok(0)) | Ok(Err(_))),
         "the listener closed the idle connection: {read:?}"
+    );
+    up.shutdown().await;
+}
+
+/// The handshake runs under the header read timeout, so a peer that opens a socket and sends no ClientHello is
+/// held to it like a peer that sends no head; with one slot, the handshake behind it proves the slot came back.
+#[tokio::test]
+async fn a_tls_listener_drops_a_silent_peer_at_the_bound_and_serves_a_finished_handshake() {
+    let pair = fake_upstream::generate_pair(&["localhost", "127.0.0.1"]);
+    let limits = phoebis_relay::ListenLimits {
+        drain_timeout: Duration::from_secs(30),
+        header_read_timeout: Duration::from_millis(200),
+        max_connections: 1,
+    };
+    let (addr, up, _stop) =
+        listening(limits, Some(Arc::new(fake_upstream::acceptor_for(&pair)))).await;
+    let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut buf = [0u8; 16];
+    let read = tokio::time::timeout(Duration::from_secs(3), silent.read(&mut buf)).await;
+    assert!(
+        matches!(read, Ok(Ok(0)) | Ok(Err(_))),
+        "the listener dropped the silent peer: {read:?}"
+    );
+    let socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut tls = tokio::time::timeout(
+        Duration::from_secs(3),
+        tokio_boring::connect(
+            fake_upstream::connector_trusting(&pair),
+            "localhost",
+            socket,
+        ),
+    )
+    .await
+    .expect("the slot came back and the handshake finished")
+    .unwrap();
+    assert_eq!(tls.ssl().selected_alpn_protocol(), Some(&b"http/1.1"[..]));
+    tls.write_all(b"HEAD /api/hello HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), tls.read_to_end(&mut answer)).await;
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
+    up.shutdown().await;
+}
+
+/// A peer that opens a socket on a TLS listener and sends nothing has no request to finish, so the stop ends its
+/// handshake as it ends a plain connection that has read no byte, rather than waiting out the handshake's bound.
+/// The served request behind it proves the silent peer was accepted, and its handshake running, before the stop.
+#[tokio::test]
+async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
+    let pair = fake_upstream::generate_pair(&["localhost"]);
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("acct", "sk-ant-oat01-PLACEHOLDER", 0)],
+        PoolSpec::default(),
+    )
+    .await;
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let (stop, stop_rx) = tokio::sync::watch::channel(false);
+    let limits = phoebis_relay::ListenLimits {
+        drain_timeout: Duration::from_secs(30),
+        header_read_timeout: Duration::from_secs(30),
+        max_connections: 8,
+    };
+    let serving = tokio::spawn(phoebis_relay::serve(
+        listener,
+        h.relay.clone(),
+        axum::Router::new(),
+        stop_rx,
+        limits,
+        Some(Arc::new(fake_upstream::acceptor_for(&pair))),
+    ));
+    let _silent = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let socket = tokio::net::TcpStream::connect(addr).await.unwrap();
+    let mut tls = tokio_boring::connect(
+        fake_upstream::connector_trusting(&pair),
+        "localhost",
+        socket,
+    )
+    .await
+    .unwrap();
+    tls.write_all(b"HEAD /api/hello HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+        .await
+        .unwrap();
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(Duration::from_secs(3), tls.read_to_end(&mut answer)).await;
+    assert!(String::from_utf8_lossy(&answer).starts_with("HTTP/1.1 200"));
+    stop.send(true).unwrap();
+    let returned = tokio::time::timeout(Duration::from_secs(3), serving).await;
+    assert!(
+        matches!(returned, Ok(Ok(Ok(())))),
+        "the listener returned with a silent peer mid-handshake: {returned:?}"
     );
     up.shutdown().await;
 }
@@ -63,7 +162,7 @@ async fn the_connection_cap_holds_the_next_accept_until_a_slot_frees() {
         header_read_timeout: Duration::from_millis(500),
         max_connections: 2,
     };
-    let (addr, up, _stop) = listening(limits).await;
+    let (addr, up, _stop) = listening(limits, None).await;
     let _first = tokio::net::TcpStream::connect(addr).await.unwrap();
     let _second = tokio::net::TcpStream::connect(addr).await.unwrap();
     let mut third = tokio::net::TcpStream::connect(addr).await.unwrap();
@@ -116,6 +215,7 @@ async fn a_request_still_in_flight_at_the_drain_deadline_is_ended_before_serve_r
         axum::Router::new(),
         stop_rx,
         limits,
+        None,
     ));
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
     let body = r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#;
@@ -200,6 +300,7 @@ async fn a_body_task_cut_at_the_deadline_publishes_its_completion_before_the_dra
         axum::Router::new(),
         stop_rx,
         limits,
+        None,
     ));
     let mut client = tokio::net::TcpStream::connect(addr).await.unwrap();
     let body = r#"{"model":"claude-sonnet-4-5","messages":[{"role":"user","content":"hi"}],"max_tokens":8,"metadata":{"user_id":"{\"account_uuid\":\"\",\"session_id\":\"s-1\"}"}}"#;

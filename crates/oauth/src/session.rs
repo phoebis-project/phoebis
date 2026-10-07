@@ -331,6 +331,12 @@ impl PairingSessions {
         if matches!(session.status, PairingStatus::Expired) {
             return Err(PairingError::Expired);
         }
+        // An ended session keeps the status it ended with: a confirm already installed the credential, a failure
+        // already named its reason, a cancel already counted; relabeling any of them would say the opposite of
+        // what happened.
+        if !is_in_flight(&session.status) {
+            return Err(PairingError::AlreadyConsumed);
+        }
         // A confirmation already holds this session and may be part way through installing the credential.
         // Cancelling it here is what used to leave an account paired behind a cancelled session.
         if matches!(session.status, PairingStatus::Confirming { .. }) {
@@ -389,8 +395,8 @@ fn expire_if_stale(session: &mut PairingSession, now: i64) {
     }
 }
 
-/// The first end keeps its stamp: the sweep counts a session's lifetime from it, so a repeated owner `DELETE` never
-/// extends how long an ended session is kept.
+/// Keeps the first end's stamp, which the sweep counts a session's lifetime from. Every caller ends a session still
+/// in flight, and `cancel` refuses one that has ended.
 fn end(session: &mut PairingSession, status: PairingStatus, now: i64) {
     session.status = status;
     session.ended_at.get_or_insert(now);

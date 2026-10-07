@@ -249,7 +249,6 @@ async fn the_binary_is_populated_through_the_admin_api_and_routes_without_a_rest
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  plain_http: true
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -497,7 +496,7 @@ async fn a_key_set_off_through_the_admin_api_strips_the_next_request_and_set_bac
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
@@ -697,7 +696,6 @@ async fn no_socket_is_accepted_on_the_admin_listener_once_shutdown_has_returned(
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_SHUTDOWN_ADMIN
-  plain_http: true
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -788,7 +786,6 @@ async fn a_forced_429_on_one_seat_migrates_the_session_through_the_binary() {
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  plain_http: true
 proxy:
   listen: 127.0.0.1:{proxy_port}
 routing:
@@ -1009,7 +1006,7 @@ async fn a_fast_session_is_served_fast_walked_on_a_fast_429_and_refused_locally_
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_FAST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         key = dir.path().join("storage.key").display(),
         db = dir.path().join("phoebis.sqlite").display(),
         ledger = dir.path().join("ledger.sqlite").display(),
@@ -1303,7 +1300,6 @@ async fn a_session_crossing_into_overage_migrates_under_prefer_plan_through_the_
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  plain_http: true
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -1589,30 +1585,17 @@ usage:
 }
 
 #[test]
-fn plain_http_is_allowed_on_any_address_and_a_secure_listener_needs_an_origin() {
+fn a_listener_without_tls_loads_on_any_address_and_a_rootless_storage_path_does_not() {
     use phoebis_router::config::{load, ConfigError};
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-    let loopback_plain =
-        "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
-    let public_plain =
-        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
-    let public_plain_with_origin =
-        "  listen: 0.0.0.0:8081\n  origin: http://phoebis.lan:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
-    let public_secure =
-        "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: false";
-    assert!(load(&config_with(dir.path(), "ok", loopback_plain)).is_ok());
-    assert!(load(&config_with(dir.path(), "public", public_plain)).is_ok());
-    let pinned = load(&config_with(dir.path(), "pinned", public_plain_with_origin)).unwrap();
-    assert_eq!(
-        pinned.admin.origin.as_deref(),
-        Some("http://phoebis.lan:8081")
-    );
-    assert!(matches!(
-        load(&config_with(dir.path(), "origin", public_secure)),
-        Err(ConfigError::MissingOrigin)
-    ));
+    let loopback_plain = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET";
+    let public_bare = "  listen: 0.0.0.0:8081\n  secret_env: TEST_ADMIN_SECRET";
+    for (name, admin) in [("ok", loopback_plain), ("public-bare", public_bare)] {
+        let config = load(&config_with(dir.path(), name, admin)).unwrap();
+        assert!(config.admin.tls.is_none(), "{name}: {:?}", config.admin);
+    }
 
     // A storage path that names no database file inside a directory never reaches the store.
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", loopback_plain)).unwrap();
@@ -1637,7 +1620,7 @@ fn stats_and_cooldown_settings_are_validated_with_the_specs_bounds() {
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-    let base = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
+    let base = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET";
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", base)).unwrap();
     let with = |name: &str, extra: &str| {
         let path = dir.path().join(format!("{name}.yaml"));
@@ -1814,7 +1797,7 @@ fn keepalive_limits_are_validated_with_the_go_engines_bounds() {
     let dir = tempfile::tempdir().unwrap();
     let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
     std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
-    let base = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true";
+    let base = "  listen: 127.0.0.1:8081\n  secret_env: TEST_ADMIN_SECRET";
     let text = std::fs::read_to_string(config_with(dir.path(), "ok", base)).unwrap();
     let with = |name: &str, extra: &str| {
         let path = dir.path().join(format!("{name}.yaml"));
@@ -1902,7 +1885,7 @@ async fn the_binary_ledgers_serves_statistics_and_metrics_and_lands_the_ledger_o
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  api_prices_path: {prices}\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  subscription_costs_path: {costs}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  api_prices_path: {prices}\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n  subscription_costs_path: {costs}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), prices = dir.path().join("api_prices.yaml").display(),
         costs = dir.path().join("subscription_costs.yaml").display(),
         key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(),
@@ -2163,6 +2146,7 @@ fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
                 incarnation: 1,
                 revision: 1,
                 state: phoebis_store::AccountState::Ready,
+                state_cause: phoebis_store::StateCause::Operator,
             })
             .unwrap();
         store
@@ -2282,7 +2266,7 @@ async fn a_client_request_folds_the_pins_typed_burn_and_the_sessions_route_price
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_BURN_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(),
         key = key_path.display(),
         db = db_path.display(),
@@ -2453,7 +2437,7 @@ async fn the_proxy_listener_binds_after_the_startup_fetch_or_its_bound_whichever
                        ledger_path: &std::path::Path,
                        routing: &str| {
         format!(
-            "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_STARTUP_ADMIN\n  plain_http: true\n\
+            "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_STARTUP_ADMIN\n\
              proxy:\n  listen: 127.0.0.1:{proxy_port}\n{routing}\
              stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
              storage:\n  encryption_key_file: {key}\n  path: {db}\n\
@@ -2719,6 +2703,7 @@ fn pair_oauth(store: &phoebis_store::Store, id: &str, token: &str, account_uuid:
             incarnation: 1,
             revision: 1,
             state: phoebis_store::AccountState::Ready,
+            state_cause: phoebis_store::StateCause::Operator,
         })
         .unwrap();
     // A re-paired id takes the next incarnation, which the credential write is fenced on.
@@ -2871,7 +2856,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
         std::fs::write(
             &cfg_path,
             format!(
-                "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_PERSISTED_ADMIN\n  plain_http: true\n\
+                "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_PERSISTED_ADMIN\n\
                  proxy:\n  listen: 127.0.0.1:{proxy_port}\n\
                  routing:\n  startup_fetch_seconds: 5\n\
                  stats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\n\
@@ -2912,6 +2897,9 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
             tokio::time::sleep(std::time::Duration::from_millis(5)).await;
         }
     }
+    // With the persisted windows lost, `a` and `b` tie (one profile fixture, no reading) and Pace breaks the tie at
+    // random, so a `served_by` check alone passes half the time; the usage `GET`'s two windows are what pin the
+    // reload, and the routing task's tests pin the ranking.
     let served_by = |up: &FakeUpstream| {
         up.requests()
             .iter()
@@ -3067,7 +3055,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nkeepalive:\n  max_sessions: 64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nkeepalive:\n  max_sessions: 64\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3293,7 +3281,7 @@ async fn the_companion_registers_through_the_binary_under_the_clients_environmen
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3466,7 +3454,6 @@ async fn the_admin_listener_serves_the_ui_beside_the_api() {
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  plain_http: true
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:
@@ -3576,7 +3563,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     .unwrap();
     let (proxy_port, admin_port, metrics_port) = (free_port(), free_port(), free_port());
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
+        "admin:\n  listen: 127.0.0.1:{admin_port}\n  secret_env: TEST_ADMIN_SECRET\nproxy:\n  listen: 127.0.0.1:{proxy_port}\nrouting:\n  cooldown_fallback_seconds: 3600\nstats:\n  ledger_path: {ledger}\n  metrics_listen: 127.0.0.1:{metrics_port}\nstorage:\n  encryption_key_file: {key}\n  path: {db}\nupstream:\n  resolve_override: {addr}\n  extra_ca_pem: {ca}\nusage:\n  cache_ttl_seconds: 60\n  refresh_concurrency: 2\n",
         ledger = dir.path().join("ledger.sqlite").display(), key = dir.path().join("storage.key").display(), db = dir.path().join("phoebis.sqlite").display(), addr = up.addr(), ca = dir.path().join("ca.pem").display(),
     );
     let cfg_path = dir.path().join("config.yaml");
@@ -3740,8 +3727,8 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .count();
     assert_eq!(
         pngs,
-        22,
-        "eleven views in two themes under {}",
+        24,
+        "twelve views in two themes under {}",
         shots.display()
     );
     println!("screenshots: {}", shots.display());
@@ -3842,7 +3829,6 @@ async fn the_four_client_runs_relayed_through_the_binary_grade_equal_to_the_fixt
 admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-  plain_http: true
 proxy:
   listen: 127.0.0.1:{proxy_port}
 stats:

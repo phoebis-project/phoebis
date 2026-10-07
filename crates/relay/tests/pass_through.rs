@@ -5,10 +5,11 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
+use boring::ssl::SslAcceptor;
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
 use phoebis_relay::Relay;
 use phoebis_store::{AccountKind, ApiKeyRow, RulesMode};
-use tokio::io::{AsyncReadExt, AsyncWriteExt};
+use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
 use tower::ServiceExt;
 
@@ -252,7 +253,10 @@ async fn a_head_in_an_order_the_capture_never_had_travels_in_that_order() {
 }
 
 /// The listener the socket tests drive, and the stop channel that drains it.
-async fn listening(relay: Arc<Relay>) -> (SocketAddr, tokio::sync::watch::Sender<bool>) {
+async fn listening(
+    relay: Arc<Relay>,
+    acceptor: Option<Arc<SslAcceptor>>,
+) -> (SocketAddr, tokio::sync::watch::Sender<bool>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
     let (stop, stop_rx) = tokio::sync::watch::channel(false);
@@ -266,6 +270,7 @@ async fn listening(relay: Arc<Relay>) -> (SocketAddr, tokio::sync::watch::Sender
             header_read_timeout: Duration::from_secs(30),
             max_connections: 64,
         },
+        acceptor,
     ));
     (addr, stop)
 }
@@ -284,7 +289,7 @@ fn raw_request(addr: SocketAddr, trace: &str) -> Vec<u8> {
 
 /// Reads one whole response off the socket, so the connection is ready for the next request. A relayed body
 /// reaches the caller in hyper's chunked framing, so both endings have to be recognised.
-async fn read_response(socket: &mut TcpStream) -> String {
+async fn read_response(socket: &mut (impl AsyncRead + Unpin)) -> String {
     let mut buffer = Vec::new();
     loop {
         let mut chunk = [0u8; 512];
@@ -326,7 +331,7 @@ async fn socket_harness(up: &FakeUpstream) -> Harness {
 async fn a_head_read_off_a_socket_reaches_the_upstream_with_the_callers_own_spelling() {
     let up = upstream().await;
     let h = socket_harness(&up).await;
-    let (addr, stop) = listening(h.relay.clone()).await;
+    let (addr, stop) = listening(h.relay.clone(), None).await;
     let mut socket = TcpStream::connect(addr).await.unwrap();
     socket.write_all(&raw_request(addr, "first")).await.unwrap();
     assert!(read_response(&mut socket)
@@ -349,6 +354,44 @@ async fn a_head_read_off_a_socket_reaches_the_upstream_with_the_callers_own_spel
     up.shutdown().await;
 }
 
+/// The recorder wraps the TLS stream rather than the socket, so a listener that terminates TLS hands the relay the
+/// caller's own spelling as a plain one does.
+#[tokio::test]
+async fn the_callers_header_spelling_survives_a_tls_connection() {
+    let up = upstream().await;
+    let h = socket_harness(&up).await;
+    let pair = fake_upstream::generate_pair(&["localhost"]);
+    let (addr, stop) = listening(
+        h.relay.clone(),
+        Some(Arc::new(fake_upstream::acceptor_for(&pair))),
+    )
+    .await;
+    let socket = TcpStream::connect(addr).await.unwrap();
+    let mut tls = tokio_boring::connect(
+        fake_upstream::connector_trusting(&pair),
+        "localhost",
+        socket,
+    )
+    .await
+    .unwrap();
+    tls.write_all(&raw_request(addr, "first")).await.unwrap();
+    assert!(read_response(&mut tls).await.starts_with("HTTP/1.1 200 "));
+    assert_eq!(
+        names(&up.requests()[0]),
+        [
+            "Host",
+            "AccePT",
+            "X-CoRp-TrAcE",
+            "x-api-key",
+            "anthropic-VERSION",
+            "Content-Length",
+        ],
+        "hyper's lowercase map is not what the upstream sees over TLS either"
+    );
+    let _ = stop.send(true);
+    up.shutdown().await;
+}
+
 /// A caller may write the same line twice. Hyper keeps one `Content-Length` in its map, but the recorded head
 /// holds both lines, and a relay-owned slot filled once per line would frame the upstream request twice and
 /// claim the OAuth beta twice.
@@ -361,7 +404,7 @@ async fn a_duplicated_caller_line_fills_a_relay_owned_slot_once() {
         PoolSpec::default(),
     )
     .await;
-    let (addr, stop) = listening(h.relay.clone()).await;
+    let (addr, stop) = listening(h.relay.clone(), None).await;
     let native = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::Oauth);
     let mut raw = format!(
         "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {KEY}\r\n\
@@ -449,7 +492,7 @@ async fn an_lf_terminated_head_ends_where_hyper_ends_it() {
         )
         .unwrap();
     h.router.reload().await.unwrap();
-    let (addr, stop) = listening(h.relay.clone()).await;
+    let (addr, stop) = listening(h.relay.clone(), None).await;
     let mut socket = TcpStream::connect(addr).await.unwrap();
     socket
         .write_all(&session_request(addr, "\n", "first", KEY))
@@ -487,7 +530,7 @@ async fn two_beta_lines_reach_the_upstream_as_one_list() {
         PoolSpec::default(),
     )
     .await;
-    let (addr, stop) = listening(h.relay.clone()).await;
+    let (addr, stop) = listening(h.relay.clone(), None).await;
     let native = phoebis_profile::fixtures::body(phoebis_profile::fixtures::BodyFixture::Oauth);
     let mut raw = format!(
         "POST /v1/messages?beta=true HTTP/1.1\r\nHost: {addr}\r\nAuthorization: Bearer {KEY}\r\n\
@@ -525,7 +568,7 @@ async fn two_beta_lines_reach_the_upstream_as_one_list() {
 async fn the_second_request_on_a_keep_alive_connection_keeps_its_own_spelling_too() {
     let up = upstream().await;
     let h = socket_harness(&up).await;
-    let (addr, stop) = listening(h.relay.clone()).await;
+    let (addr, stop) = listening(h.relay.clone(), None).await;
     let mut socket = TcpStream::connect(addr).await.unwrap();
     for trace in ["first", "second"] {
         socket.write_all(&raw_request(addr, trace)).await.unwrap();

@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 
 use crate::credentials::store_api_key_secret;
-use crate::{AccountRow, AccountState, Secret, Store, StoreError, LOCK_POISONED};
+use crate::{AccountRow, AccountState, Secret, StateCause, Store, StoreError, LOCK_POISONED};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Strategy {
@@ -120,7 +120,7 @@ pub struct Failover {
 impl Default for Failover {
     fn default() -> Self {
         Failover {
-            retry_in_place_seconds: 10,
+            retry_in_place_seconds: 60,
             in_flight_cap: 16,
             pace_floor: 0.05,
             overage_move_grace_minutes: 30,
@@ -391,7 +391,7 @@ pub struct PoolRow {
     pub strategy: Strategy,
     pub affinity_ttl_seconds: u64,
     pub overage_policy: OveragePolicy,
-    pub migrate_above_utilization: Option<f64>,
+    pub shed_ahead_of_pace: Option<f64>,
     pub select_below_utilization: Option<f64>,
     pub model_rules: Vec<ModelRule>,
     pub keepalive_json: String,
@@ -428,7 +428,7 @@ impl PoolRow {
             strategy: Strategy::Pace,
             affinity_ttl_seconds: 3600,
             overage_policy: OveragePolicy::PreferPlan,
-            migrate_above_utilization: None,
+            shed_ahead_of_pace: None,
             select_below_utilization: None,
             model_rules: Vec::new(),
             keepalive_json: "{}".into(),
@@ -580,11 +580,14 @@ pub struct AccountUpdate<'a> {
     /// The revision the edit was built from. The commit only lands while the row still carries it, so two edits
     /// built from one read cannot both land, and an endpoint and a secret nothing checked together never combine.
     pub expected_revision: u64,
+    /// The incarnation the edit was built from. A slot deleted and created again under the same id restarts its
+    /// revision and lifecycle generation at 1, so only this tells the replacement from the row the edit read.
+    pub incarnation: u64,
     pub lifecycle_generation: u64,
     pub label: &'a str,
     pub secret: Option<&'a Secret>,
-    /// The staged state; `None` leaves it.
-    pub state: Option<AccountState>,
+    /// The staged state with who moves it. `None` leaves both the state and its word.
+    pub state: Option<(AccountState, StateCause)>,
     pub at: i64,
     pub actor: &'a str,
     /// The staged `enabled` flag; `None` leaves it.
@@ -632,7 +635,7 @@ fn now_ms() -> i64 {
 /// The stamp a fenced row takes on its next write: one past `previous` when the clock has not moved, so a write
 /// inside the millisecond of the stamp it fenced on still moves it, and an edit read before it cannot pass.
 fn stamp_past(previous: i64) -> i64 {
-    now_ms().max(previous + 1)
+    now_ms().max(previous.saturating_add(1))
 }
 
 fn rules_json(rules: &[ModelRule]) -> Result<String, StoreError> {
@@ -762,7 +765,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, created_at, updated_at) \
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, shed_ahead_of_pace, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, created_at, updated_at) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?30)",
             params![
                 row.id,
@@ -771,7 +774,7 @@ impl Store {
                 row.strategy,
                 row.affinity_ttl_seconds as i64,
                 row.overage_policy,
-                row.migrate_above_utilization,
+                row.shed_ahead_of_pace,
                 row.select_below_utilization,
                 rules_json(&row.model_rules)?,
                 row.keepalive_json,
@@ -830,7 +833,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let at = stamp_past(expected_updated_at);
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, migrate_above_utilization = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, auto_mode_server = ?29, updated_at = ?30 WHERE id = ?1 AND updated_at = ?31",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, shed_ahead_of_pace = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, auto_mode_server = ?29, updated_at = ?30 WHERE id = ?1 AND updated_at = ?31",
             params![
                 row.id,
                 row.label,
@@ -838,7 +841,7 @@ impl Store {
                 row.strategy,
                 row.affinity_ttl_seconds as i64,
                 row.overage_policy,
-                row.migrate_above_utilization,
+                row.shed_ahead_of_pace,
                 row.select_below_utilization,
                 rules_json(&row.model_rules)?,
                 row.keepalive_json,
@@ -1190,8 +1193,8 @@ impl Store {
             .map(serde_json::to_string)
             .transpose()?;
         tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?8, ?8)",
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?10, ?8, ?8)",
             params![
                 row.id,
                 row.kind,
@@ -1202,6 +1205,7 @@ impl Store {
                 row.state,
                 at,
                 crate::accounts::next_incarnation(&tx, &row.id)? as i64,
+                row.state_cause,
             ],
         )?;
         if let Some(secret) = secret {
@@ -1224,30 +1228,34 @@ impl Store {
     }
 
     /// An edit lands whole, in one revision: every staged field or none. Discovery ran against the staged secret,
-    /// and the row moving underneath (another edit, a disconnect, a deletion) means the edit is about a row that
-    /// no longer exists as it was read.
+    /// and the row moving underneath (another edit, a disconnect, a deletion, a replacement under the same id) means
+    /// the edit is about a row that no longer exists as it was read.
     pub fn commit_account_update(&self, u: &AccountUpdate<'_>) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let cancelled = u.cancellation.map(|(cancelled, _)| cancelled);
         let ends_at = u.cancellation.and_then(|(_, ends_at)| ends_at);
+        let (state, cause) = u.state.unzip();
         // The end goes with the flag, as `set_cancelled` writes them: dropped the moment the flag is off.
         let updated = tx.execute(
-            "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), enabled = COALESCE(?7, enabled), \
+            "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), \
+             state_cause = COALESCE(?11, state_cause), enabled = COALESCE(?7, enabled), \
              cancelled = COALESCE(?8, cancelled), \
              subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at WHEN ?8 THEN ?9 ELSE NULL END, \
              revision = revision + 1, updated_at = ?4 \
-             WHERE id = ?1 AND lifecycle_generation = ?5 AND revision = ?6",
+             WHERE id = ?1 AND incarnation = ?10 AND lifecycle_generation = ?5 AND revision = ?6",
             params![
                 u.id,
                 u.label,
-                u.state,
+                state,
                 u.at,
                 u.lifecycle_generation as i64,
                 u.expected_revision as i64,
                 u.enabled,
                 cancelled,
                 ends_at,
+                u.incarnation as i64,
+                cause,
             ],
         )?;
         if updated == 0 {
@@ -1274,7 +1282,7 @@ impl Store {
             &serde_json::json!({
                 "label": u.label,
                 "secret": u.secret.is_some(),
-                "state": u.state.map(AccountState::as_str),
+                "state": state.map(AccountState::as_str),
                 "enabled": u.enabled,
                 "cancelled": cancelled,
                 "subscription_ends_at": ends_at,
@@ -1364,7 +1372,7 @@ fn set_pool_members_in(
     Ok(())
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, migrate_above_utilization, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server FROM pools";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, shed_ahead_of_pace, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server FROM pools";
 const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
@@ -1390,7 +1398,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
         strategy: r.get(3)?,
         affinity_ttl_seconds: r.get::<_, i64>(4)? as u64,
         overage_policy: r.get(5)?,
-        migrate_above_utilization: r.get(6)?,
+        shed_ahead_of_pace: r.get(6)?,
         select_below_utilization: r.get(7)?,
         model_rules: json_rules(rules).map_err(|e| {
             rusqlite::Error::FromSqlConversionFailure(8, rusqlite::types::Type::Text, Box::new(e))
@@ -1461,7 +1469,7 @@ fn pool_diff(row: &PoolRow) -> String {
         "strategy": row.strategy.as_str(),
         "affinity_ttl_seconds": row.affinity_ttl_seconds,
         "overage_policy": row.overage_policy.as_str(),
-        "migrate_above_utilization": row.migrate_above_utilization,
+        "shed_ahead_of_pace": row.shed_ahead_of_pace,
         "select_below_utilization": row.select_below_utilization,
         "model_rules": row.model_rules,
         "body_capture_hours": row.body_capture_hours,

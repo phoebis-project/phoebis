@@ -257,6 +257,11 @@ pub(crate) struct AffinityFacts {
     pub message_ttl_ms: Option<i64>,
     /// `uniform_ttl` of the same body.
     pub uniform_ttl_ms: Option<i64>,
+    /// The request, the decision that selected the account and the wire attempt that answered, so the rows the
+    /// report writes reach the selecting decision's row.
+    pub request_id: String,
+    pub seq: u32,
+    pub attempt: u32,
 }
 
 impl AffinityFacts {
@@ -324,6 +329,9 @@ impl AffinityFacts {
             cache_write_5m_tokens: usage.and_then(|u| u.cache_write_5m_tokens),
             cache_write_1h_tokens: usage.and_then(|u| u.cache_write_1h_tokens),
             uniform_ttl_ms: self.uniform_ttl_ms,
+            request_id: self.request_id,
+            seq: self.seq,
+            attempt: self.attempt,
         };
         let file = move |router: &RouterHandle, seq: Option<u64>| {
             if let Some(seq) = seq {

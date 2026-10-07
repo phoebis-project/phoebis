@@ -4,6 +4,24 @@ The router is one binary, `phoebis`, built from this repository, and one YAML fi
 database files, and the environment variable that holds its secret. This page walks the build, the service install, the
 commands, and every setting the file accepts, with its default, its bounds, and the message a bad value gets.
 
+## Download a release
+
+Every release carries a static binary for `x86_64` and `aarch64` Linux, which runs on any Linux of its architecture
+with no shared library, glibc version or distribution in the way:
+
+```sh
+release=https://github.com/daystrom-labs/phoebis/releases/download/<version>
+curl -LO "$release/phoebis-<version>-x86_64-unknown-linux-musl.tar.gz"
+curl -LO "$release/SHA256SUMS"
+sha256sum -c SHA256SUMS --ignore-missing
+tar -xzf phoebis-<version>-x86_64-unknown-linux-musl.tar.gz
+sudo install -m 0755 phoebis-<version>-x86_64-unknown-linux-musl/phoebis /usr/local/bin/phoebis
+```
+
+On an `aarch64` host the archive is `phoebis-<version>-aarch64-unknown-linux-musl.tar.gz`. Each archive holds `phoebis`
+and `LICENSE`, and `SHA256SUMS` lists both, so `--ignore-missing` checks the one you downloaded. An operator who builds
+from source follows [Build](#build) instead.
+
 ## Build
 
 ```sh
@@ -22,53 +40,49 @@ clang, and libclang.
 
 ```sh
 cargo build --release
-install -d -m 0700 ~/.config/phoebis
-[ -e ~/.config/phoebis/storage.key ] ||
-  (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/.config/phoebis/storage.key)
-sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
-  -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
-  deploy/config.example.yaml > ~/.config/phoebis/config.yaml
+target/release/phoebis init --config ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
-export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36)
+export PHOEBIS_ADMIN_SECRET=<the printed secret>
 target/release/phoebis
 ```
 
-The key is created once and never replaced: every stored credential is sealed under it and there is no re-key.
-`PHOEBIS_CONFIG` names the file for every `phoebis` call in that shell ([commands](#commands)).
+`init` writes the bootstrap file, the storage key beside it and an empty `data/` directory, and prints the admin secret
+once as `PHOEBIS_ADMIN_SECRET=<secret>` ([commands](#commands)). The key is created once and never replaced: every
+stored credential is sealed under it and there is no re-key. `PHOEBIS_CONFIG` names the file for every `phoebis` call in
+that shell. `init` refuses to replace a key, and refuses a data directory that already holds a registry.
 
 ## Install as a service
 
-```sh title="Install the binary, the unit, and the key file"
+```sh title="Install the binary, the unit, and the bootstrap files"
 sudo install -m 0755 target/release/phoebis /usr/local/bin/phoebis
 sudo useradd --system --home /var/lib/phoebis --shell /usr/sbin/nologin phoebis
-sudo install -d -m 0700 -o phoebis -g phoebis /var/lib/phoebis
 sudo install -d -m 0755 /etc/phoebis
 sudo install -m 0644 deploy/phoebis.service /etc/systemd/system/phoebis.service
-sudo install -m 0600 deploy/phoebis.env.example /etc/phoebis/phoebis.env
-sudo install -m 0600 -o phoebis -g phoebis /dev/null /etc/phoebis/storage.key
-head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | sudo tee /etc/phoebis/storage.key >/dev/null
-sudo install -m 0644 deploy/config.example.yaml /etc/phoebis/config.yaml
 sudo install -m 0644 crates/ledger/api_prices.yaml /etc/phoebis/api_prices.yaml
+sudo phoebis init --config /etc/phoebis/config.yaml --data-dir /var/lib/phoebis \
+  --env-file /etc/phoebis/phoebis.env --owner phoebis
 sudo systemctl daemon-reload
 ```
 
-Edit `/etc/phoebis/phoebis.env` and replace the secret with a long random string. The key file is created empty at
-0600 before the key is written, rather than through a redirect, because a `tee` under `umask 022` would leave it
-world-readable between the write and a later `chmod`. The key seals every credential in
-`router.sqlite`, so it stays out of any backup that carries the database.
+Where the proxy serves the LAN, add `--proxy-listen 0.0.0.0:8317` to the `init` line, and either `--proxy-cert` with
+`--proxy-key` where a pair you hold terminates TLS, or `--tls self-signed` to have `init` write a local CA and a leaf
+under `/etc/phoebis/tls/` and print the `ca.pem` each client trusts; without either the listener serves plain HTTP there
+and the client's key crosses the LAN in the clear. `init` creates the key file at `0600` in one open, so no moment
+exists in which the key is readable by anyone else, and the environment file at `0600` with the secret it generated. The
+bootstrap file and the environment file are root's; the key file and the data directory are owned by `phoebis`. The key
+seals every credential in `router.sqlite`, so it stays out of any backup that carries the database.
 
 `deploy/phoebis.service` runs the process as the `phoebis` user with `EnvironmentFile=/etc/phoebis/phoebis.env`;
 `phoebis` never reads the environment file itself, systemd hands the values over. `TimeoutStopSec=40` covers the
 30-second drain, and `ProtectSystem=strict` with `StateDirectory=phoebis` is the hardening around it.
 
-Edit `/etc/phoebis/config.yaml` next. The installed file's paths are relative and its key file is
-`/run/secrets/router-storage-key`, so point `storage.encryption_key_file` at `/etc/phoebis/storage.key`,
-`storage.path` and `stats.ledger_path` under `/var/lib/phoebis/`, and `stats.api_prices_path` at
-`/etc/phoebis/api_prices.yaml`. Leave `stats.subscription_costs_path` at its default: the shipped model is the plan
-meter's current measurement and a release updates it, and a copy at `/etc/phoebis/subscription_costs.yaml` would
-shadow every later release's constants until it was copied again. Set `admin.origin`, or `admin.plain_http: true` on
-a loopback listener behind an SSH tunnel. Then validate it before
-enabling the service:
+The file `init` wrote names your listeners; to reach the console or the proxy from another machine, pass
+`--admin-listen` or `--proxy-listen`, with `--admin-cert` and `--admin-key` or `--proxy-cert` and `--proxy-key` for TLS,
+or `--tls self-signed` for a pair `init` writes, or edit the `tls` key as [TLS on the listeners](#tls-on-the-listeners)
+says. It names `/etc/phoebis/subscription_costs.yaml` as `stats.subscription_costs_path`, beside the price table; leave
+that file uninstalled: the shipped model is the plan meter's current measurement and a release updates it, and a copy
+there would shadow every later release's constants until it was copied again. Then validate it before enabling the
+service:
 
 ```sh
 sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-config --config /etc/phoebis/config.yaml'
@@ -93,16 +107,22 @@ host's loopback only. In an empty directory:
 
 ```sh title="Set up the compose directory"
 install -m 0644 deploy/compose.yaml compose.yaml
-install -m 0644 deploy/config.container.yaml config.yaml
-install -m 0600 deploy/phoebis.env.example phoebis.env
-sudo install -m 0400 -o 65532 -g 65532 /dev/null storage.key
-head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' | sudo tee storage.key >/dev/null
+phoebis init --container
+sudo chown 65532:65532 storage.key && sudo chmod 0400 storage.key
 ```
 
-Edit `phoebis.env` and replace the secret with a long random string; both it and `storage.key` hold secrets and
-stay out of version control. The key file is owned by uid 65532 at mode `0400` because Compose
-mounts a file secret with the host file's owner and mode, and that uid is the one the process runs as. Set
-`image:` in `compose.yaml` to the version you want, then:
+`init --container` writes three files beside `compose.yaml`: `config.yaml` with the container's paths and both listeners
+on every interface over plain HTTP (no `tls` key), `storage.key`, and `phoebis.env` with a generated admin secret.
+`storage.key` and `phoebis.env` hold secrets and stay out of version control. Without the binary on the host, the image
+runs the same command against the directory:
+
+```sh title="Write the compose directory's files from the image"
+docker run --rm -it -u "$(id -u)" -v "$PWD:/work" ghcr.io/daystrom-labs/phoebis:<version> \
+  init --container --config /work/config.yaml
+```
+
+The key file is owned by uid 65532 at mode `0400` because Compose mounts a file secret with the host file's owner and
+mode, and that uid is the one the process runs as. Set `image:` in `compose.yaml` to the version you want, then:
 
 ```sh title="Start, watch, and stop"
 docker compose up -d
@@ -114,7 +134,8 @@ docker compose down          # SIGTERM, then up to 40 seconds for the 30-second 
 The health check runs `phoebis health`, which loads and validates the configuration, secrets included, from the
 container's own environment and then asks the proxy listener whether the router is ready: a file it cannot read, a value
 it refuses, an unset secret variable, or a router loop, ledger consumer or store that died therefore reads as
-`unhealthy` rather than as a passing check, with the reason in `docker inspect`.
+`unhealthy` rather than as a passing check, with the reason in `docker inspect`. `health` speaks TLS to a proxy listener
+that terminates it.
 
 A ledger writer that stops draining fills its queue. Once the queue is half full (2,048 of 4,096 records) the router
 refuses new inference, token-count and keepalive probe requests with its own 503 `ledger_behind` and `Retry-After: 5`
@@ -123,14 +144,23 @@ rather than accepting requests it cannot record, so the proxy listener's connect
 answer itself. A request refused while the queue is that full has its row recorded only if the ledger's bus queue
 still has room; one it had none for counts under `phoebis_bus_dropped_total{subscriber="ledger"}`.
 
-The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone,
-so it is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
-`config.yaml` sets `admin.plain_http: true` with no `origin`, so the cookie is issued without `Secure` and any
-hostname that reaches the port logs in. Publishing the port on a LAN address is one edit to the `ports` line
-(`"8081:8081"`), and then the admin secret at login and the session cookie on every call cross that LAN in the
-clear; that is the same trust decision the proxy port's publication already makes. For TLS, set `plain_http:
-false`, set `origin` to the front's `https://` URL, terminate TLS in front of the published port, and open exactly
-the hostname and port `origin` names: a login from any other origin is refused with `403`.
+The console answers at `http://localhost:8081`: the example publishes the admin port on the host's loopback alone, so it
+is reached from the host's own browser or through an SSH tunnel whose local end is loopback, and nobody else.
+`config.yaml` names no `tls` pair for the admin listener, so it serves plain HTTP, the cookie is issued without `Secure`
+and any hostname that reaches the port logs in. Publishing the port on a LAN address is one edit to the `ports` line
+(`"8081:8081"`), and then the admin secret at login and the session cookie on every call cross that LAN in the clear;
+that is the same trust decision the proxy port's publication already makes. For TLS, mount a certificate pair read-only
+beside the configuration and name the mounted paths under `tls`, the certificate world-readable and the key at `0400`
+owned by uid 65532; the clients trust the pair's issuer, through `NODE_EXTRA_CA_CERTS` when it is a private CA.
+`init --container --tls self-signed` writes such a pair for both listeners under `tls/` beside `compose.yaml`, the
+directories at `0755` and both certificates at `0644` so uid 65532 reads them through the mount, and names it in
+`config.yaml` as `/etc/phoebis/tls/...`; add `- ./tls:/etc/phoebis/tls:ro` to the service's `volumes`, own
+`tls/proxy/key.pem` and `tls/admin/key.pem` by uid 65532 at `0400`, as the summary says, and hand the clients
+`tls/ca.pem`. `tls/ca.key` stays at `0600` and yours, so the container cannot read the CA's key though the directory is
+mounted; renewing the leaves there runs under `sudo`, as [Commands](#commands) says. A front can terminate TLS instead:
+it forwards to the plain listener and passes `Host` through unchanged beside `X-Forwarded-Proto: https`, so the cookie
+is issued with `Secure` and the Origin check sees the front's hostname in both headers and requires the `https://`
+scheme in `Origin`, as it does on a listener that terminates TLS itself.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
 place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/api_prices.yaml` on
@@ -144,18 +174,30 @@ subscription cost model dropped at `/var/lib/phoebis/subscription_costs.yaml` th
 | Command | Effect |
 | --- | --- |
 | `phoebis --config ./config.yaml` | Serves the three listeners until Ctrl-C or SIGTERM, then drains up to 30 seconds. |
-| `phoebis check-config --config ./config.yaml` | Validates the file, key file, key canary and both schema versions. |
+| `phoebis init --config ./config.yaml` | Writes the bootstrap file, the storage key and the admin secret, once. |
+| `phoebis check-config --config ./config.yaml` | Validates the file, key file, canary, schemas and certificate pairs. |
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
+| `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
+| `phoebis backup --to <dir>` | Copies both databases into `<dir>` with a manifest; exit 0 once it is written. |
+| `phoebis account add <id> --kind oauth|api_key` | Creates an account and prints its id. |
+| `phoebis account pair <id>` | Pairs an `oauth` account: prints the sign-in URL, reads the callback URL, confirms. |
+| `phoebis account confirm <pairing id>` | Confirms a pairing that `account pair --no-confirm` left exchanged. |
+| `phoebis account clear-cooldown <id>` | Clears one of the account's cooldowns, the account-wide one by default. |
+| `phoebis pool create <id>` | Creates a pool and prints its id. |
+| `phoebis key create <id> --pool <id>` | Creates a key in the pool and prints its secret, once. |
+| `phoebis ledger replay-parked` | Lands the ledger's parked priced records now, without a restart. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
 that path instead, and the flag wins when both are given. `check-config` takes no lock, runs no migration and opens
-no socket; it reads the key file, the registry's canary and the registry's and the ledger's schema versions read-only,
-so it is safe to run against a production file while the router is up. It prints, in order:
+no socket; it reads the key file, the registry's canary, the registry's and the ledger's schema versions and each
+listener's certificate pair read-only, so it is safe to run against a production file while the router is up. It
+prints, in order:
 
 1. `{config path} is valid`
-2. `proxy listens on {config.proxy.listen}`
-3. `admin listens on {config.admin.listen}`
+2. `proxy listens on {config.proxy.listen} over plain HTTP`, or `proxy listens on {addr} over TLS (certificate
+   {cert_file}, expires {date})` for a certificate pair ([TLS on the listeners](#tls-on-the-listeners))
+3. the admin line in the same two shapes, with `admin` and `config.admin.listen`
 4. `metrics listens on {config.stats.metrics_listen}`
 5. `proxy: body budget {n} bytes, body read {n}s, key body reads {n}, max request {n} bytes, sign cch placeholder
    {on|off}, upstream gzip {auto|on|off}`
@@ -169,12 +211,18 @@ so it is safe to run against a production file while the router is up. It prints
     the key, and the next start seals one` for a registry from before the canary
 12. `warning: environment variable {name} is unset or empty`, when the secret variable is unset
 
-Further warning lines name a storage key file, data directory or database whose mode or owner is wider than the router
-expects; the router starts either way and logs the same warnings.
+Further warning lines name a storage key file, data directory, database or TLS key file whose mode or owner is wider
+than the router expects, and a certificate that expires within 30 days (`warning: proxy.tls.cert_file {path} expires in
+{n} days ({date})`); the router starts either way and logs the same warnings. A TLS key owned by root and readable by
+its group alone, such as `0640 root:phoebis` as `init --owner phoebis` writes it, earns no warning from a process that
+runs as root or holds that group.
 
 A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and `the registry at
 {config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at
 {config.stats.ledger_path}`, since the start refuses either file the same way.
+
+An unreadable, mismatched, expired or not-yet-valid certificate pair fails the check with exit 1 and the line the start
+prints, naming the key and the path ([TLS on the listeners](#tls-on-the-listeners)).
 
 On shutdown, Ctrl-C or SIGTERM, the router drains in-flight requests for up to 30 seconds and then ends whatever is
 still running. That 30 seconds also covers the keepalive shutdown ahead of it, so a slow keepalive shutdown leaves the
@@ -183,11 +231,224 @@ credential refresh still in flight is waited for up to its own 30-second timeout
 rotated is stored rather than lost to the next start's quarantine.
 
 `health` loads the file the way the service does, so it needs the same environment. It connects to `proxy.listen`, or to
-the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, and
-prints `proxy answers on {addr}` on a `200` or one line saying why not (`proxy on {addr} answered 503, not 200` when the
-router loop, the ledger consumer or the store is dead); the whole probe, connect included, is bounded by three seconds.
-`/api/hello` stays the liveness answer the client itself probes. The container image runs `health` as its health check
-every 30 seconds ([the container](#run-the-container)).
+the loopback address of the same family when the listener is bound on every interface, sends `HEAD /api/ready`, over TLS
+when `proxy.tls` terminates it, without checking the certificate (the probe dials its own process and asks whether
+`/api/ready` answers, not who answers), and prints `proxy answers on {addr}` on a `200` or one line saying why not
+(`proxy on {addr} answered 503, not 200` when the router loop, the ledger consumer or the store is dead); the whole
+probe, connect included, is bounded by three seconds. `/api/hello` stays the liveness answer the client itself probes.
+The container image runs `health` as its health check every 30 seconds ([the container](#run-the-container)).
+
+`init` writes a first installation and refuses to touch anything that exists. It writes, in this order, the storage key
+file (64 hex characters and a newline, created at `0600` in one open), the environment file when `--env-file` names one
+(`0600`, `<NAME>=<secret>` and `RUST_LOG=info`), and the bootstrap file at `--config` (`0644`); it creates the data
+directory and every missing parent of those paths at `0700`. It opens no database, so the first start creates both and
+seals the key canary. The bootstrap file is [the example](#the-bootstrap-file) with the two listeners,
+`admin.secret_env`, the key file, both databases under the data directory, `stats.api_prices_path` (`api_prices.yaml`
+beside the bootstrap file) and `stats.subscription_costs_path` (`subscription_costs.yaml` beside it) filled in, every
+path absolute and every other line as the example spells it. The admin secret is 32 random bytes in base64url, 43
+characters, and never lands in the bootstrap file. `init` loads the written file the way `check-config` does before it
+answers.
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--admin-cert PATH`, `--admin-key PATH` | unset | An operator's pair as `admin.tls`, both paths made absolute. |
+| `--admin-listen ADDR` | `127.0.0.1:8081` | The admin listener's address. |
+| `--container` | off | Writes the compose directory's shape, below. |
+| `--data-dir PATH` | `data` beside the file | Holds `router.sqlite` and `ledger.sqlite`. |
+| `--env-file PATH` | unset | Writes the admin secret there rather than printing it. |
+| `--key-file PATH` | `storage.key` beside the file | The storage key file. |
+| `--non-interactive` | off | Asks nothing, even on a terminal. |
+| `--owner USER` | unset | Gives that user the key file and each directory `init` created for the service; needs root. |
+| `--proxy-cert PATH`, `--proxy-key PATH` | unset | An operator's pair as `proxy.tls`, both paths made absolute. |
+| `--proxy-listen ADDR` | `127.0.0.1:8317` | The proxy listener's address. |
+| `--secret-env NAME` | `PHOEBIS_ADMIN_SECRET` | The admin secret's variable, written as `admin.secret_env`. |
+| `--tls self-signed|files|none` | `none`, or asked | What a listener off loopback without a pair gets. |
+
+`init` reads neither file of a pair; `check-config` and the start check it. A pair on a loopback address is written as
+given, and a listener with no pair gets no `tls` line on any address. `--owner` hands over the key file, the data
+directory when `init` created it, and every parent `init` created on the way to the key file, the data directory or the
+bootstrap file, all to the user and its primary group, so the service can traverse them. A directory that existed keeps
+its owner. The bootstrap file, the environment file and a parent created only for the environment file stay the
+caller's, since systemd reads the environment file as root.
+
+`--tls self-signed` writes a local CA (`ca.pem` at `0644`, `ca.key` at `0600`) and, for each listener that leaves
+loopback without a pair, a leaf and its key under `tls/` beside the bootstrap file, the directory at `0700`, and names
+the pair in that listener's `tls`. Each leaf and its key (`cert.pem` and `key.pem` at `0600`) sit in a generation
+directory `tls/<listener>.<16 hex digits>` at `0700`, which the relative link `tls/<listener>` points at, and the file
+names the pair through that link (`tls/proxy/cert.pem` and `tls/proxy/key.pem`), so a pair goes live by one switch of
+the link and a stop before the switch leaves the previous pair live. A CA already under `tls/` is reused rather than
+replaced. The CA lasts ten years and a leaf 365 days; the leaf names the host's name, `localhost`, both loopback
+addresses and the listen address, or every address of the host when it binds every interface, and the CA is constrained
+to those DNS names, while the addresses are not constrained. A loopback listener gets no leaf. Under `--owner` the
+directory and each generation directory are `0750`, each leaf `0644 root:root` and each leaf's key `0640 root:<owner>`,
+the shape [TLS on the listeners](#tls-on-the-listeners) gives an operator's pair; `ca.key` stays root's alone. After the
+path lines the summary prints
+`clients must trust <dir>/tls/ca.pem; copy it to each client and set NODE_EXTRA_CA_CERTS to the copy`. The router reads
+the pair at start and renews nothing: `check-config` warns 30 days before a leaf expires, and
+`phoebis init --tls self-signed --config <path>` run again against the existing bootstrap file writes new leaves under
+the same CA into new generation directories, keeps the owner and mode of each directory and file it replaces, switches
+each link, removes the generations before the one each switch replaced, touches nothing else and asks for a stop and
+start; the clients keep their anchor. A renewal holds an exclusive lock on `tls/renewal.lock` for the whole run, and a
+second renewal started meanwhile refuses with
+`{path}: another renewal holds the lock; run this one again once it finishes`. Every leaf is written and checked before
+any link switches, so a refused renewal leaves every pair as it was, and a certificate under `tls/` that the CA did not
+sign, such as an operator's pair named there, is refused rather than replaced. In the container shape the file names
+`/etc/phoebis/tls/...` and the renewal writes the pairs under `tls/` beside `compose.yaml`; run it there with `sudo`,
+since the leaf keys belong to uid 65532 by then and only root gives the new keys that owner. Remove `tls/ca.pem` and
+`tls/ca.key` only for a new CA, which every client must trust again.
+
+Without `--env-file`, stdout carries one line, `PHOEBIS_ADMIN_SECRET=<secret>` under the default name, and the secret is
+printed nowhere else, so `(umask 077; phoebis init --non-interactive > phoebis.env)` writes a usable environment file
+that only its owner reads; a bare redirect under the usual umask leaves the secret readable by others. `--env-file`
+writes that line beside `RUST_LOG=info` to the file it names, at `0600`. Everything else goes to stderr. On a terminal
+(stdin and stderr both) and without `--non-interactive`, `init` asks, once the refusals below have found nothing, for
+what the flags did not give, in this order: the proxy address, the admin address, and for each that leaves loopback with
+no pair, `self-signed` for a pair `init` generates, `files` and then the two paths, or `none` for plain HTTP, the
+default; `--tls` answers that question for every listener, so a run that carries it is not asked. An empty answer takes
+the default shown in brackets, and an address that does not parse is asked again. Then it prints one line per path
+written with its mode and owner, where the secret went, and the next command, `phoebis check-config --config <path>`.
+
+`init` exits 1 with one `Error:` line and nothing written when the bootstrap file, the key file or the environment file
+already exists, when `--tls self-signed` would write a leaf whose link under `tls/` already exists
+(`{path} already exists; init never overwrites a certificate pair`) or the key file or the environment file sits on or
+under a path it writes there, when a `router.sqlite` or `ledger.sqlite` already sits in the data directory
+(`{path} exists and a new key cannot open it; keep the key that sealed it, or name an empty --data-dir`), when input
+ends before a question is answered, when `--owner` runs off root or names no user, when `--tls files` names no pair for
+a listener off loopback (`--tls files needs --proxy-cert and --proxy-key for proxy on {addr}`), when a renewal meets a
+bootstrap file that names no pair under `tls/`, carries any other flag, finds a certificate there that the CA did not
+sign or finds another renewal holding its lock, and when the CA under `tls/` is half there, does not parse, does not
+match its key, has expired or does not cover the host's name (each line naming the file and saying
+`remove tls/ca.pem and tls/ca.key for a new CA, which every client must trust again`). A directory or a file it cannot
+write exits 1 too, after removing what the run wrote, which the line names. A usage error, such as `--proxy-cert`
+without `--proxy-key` or an address that does not parse, exits 2.
+
+Under `--container` the bootstrap file's directory is the compose directory: `init` writes `storage.key` and
+`phoebis.env` beside the file, the container's paths inside it (`/run/secrets/router-storage-key`,
+`/var/lib/phoebis/router.sqlite`, `/var/lib/phoebis/ledger.sqlite`, `/var/lib/phoebis/api_prices.yaml` and
+`/var/lib/phoebis/subscription_costs.yaml`), both listeners on every interface with no `tls` line, and
+`metrics_listen: 0.0.0.0:9464`. It asks nothing and creates no data directory, since `/var/lib/phoebis` is the volume
+inside the container. The listen and TLS flags still apply; `--data-dir`, `--env-file` and `--key-file` are usage errors
+beside it. Under `--tls self-signed`, `tls/` and each generation directory are `0755` and each certificate `0644`, which
+uid 65532 reads through the mount, while every key stays `0600` and yours. The summary ends with the steps that remain,
+the key file's owner and mode and the image tag in `compose.yaml`, under `--tls self-signed` the read-only mount of
+`./tls` and the owner of `tls/proxy/key.pem` and `tls/admin/key.pem` too, and with
+`docker compose run --rm phoebis check-config` as the next command, since the key's path in the file is the container's.
+
+`status` probes the proxy listener, reads the admin API and prints one screen of readiness, pools, accounts and live
+pins ([Is it up?](operations.md#is-it-up) shows the screen and reads it line by line). It probes `proxy.listen` as
+`health` does, then reads `GET /admin/system`, `/admin/attention`, `/admin/pools`, `/admin/accounts` and
+`/admin/sessions`, each call under the `--timeout` deadline; a read that fails prints one line in its section, and the
+rest of the screen still prints. No line passes 80 columns, and `--all` prints every pin and every account in no pool
+rather than the first 20 of each. `--json` prints one object instead: `health` (`ready`, `addr` and `reason`, or `null`
+when no probe ran), the five answers verbatim (`null` for a read that failed) and `errors`, each failed read's reason
+under its name. Neither output carries the admin secret. `status` exits 0 when the probe, where it ran, answered `200`
+and `/admin/system` answered `ready`; 1 when the proxy does not answer, a component is dead, the secret is refused (`the
+admin secret was refused`), the admin listener does not answer, or the file does not load; 2 for a usage error. After a
+refused secret or a throttled login the reads that follow print its line without calling again, so a run with a wrong
+secret counts one failed login toward the throttle.
+
+The commands that call the admin API, `status` among them, send the admin secret as `Authorization: Bearer`, one
+connection per call, and share five flags:
+
+| Flag | Default | Effect |
+| --- | --- | --- |
+| `--ca PATH` | the system roots | The CA bundle trusted in place of the system roots, for a pair a private CA signed. |
+| `--json` | off | Prints the answer as JSON on stdout. |
+| `--secret-env NAME` | `admin.secret_env` | The variable the admin secret is read from; unset, the call is refused. |
+| `--timeout SECONDS` | `10` | Each call's deadline, the connect and the TLS handshake included. |
+| `--url URL` | from `admin.listen` and `admin.tls` | The admin listener's base, `http://` or `https://` and a host. |
+
+`--url` defaults to the scheme `admin.tls` gives and the address of `admin.listen`, on the loopback of its family when
+the listener is bound on every interface, as `health` reaches the proxy; `--ca` names the CA to trust in place of the
+system roots, for a listener whose pair a private CA signed. With `--url` and `--secret-env` both given the file is not
+read, so the binary reads a router on another machine: `status` then has no proxy listener to probe, prints `proxy: not
+probed, no configuration file names the listener`, and reads readiness from `/admin/system` alone. Without both, the
+file at `--config` must load.
+
+`backup` copies the registry and the ledger into a directory, each through SQLite's online backup API as one
+consistent snapshot while the router serves or while it is stopped, and writes `manifest.json` last
+([Operations](operations.md#backup) shows the container line and the restore). `--to` names the directory, which
+`backup` creates with every missing parent at `0700`, or an existing empty one, with a warning when its mode is wider;
+without it the directory is `./phoebis-backup-<YYYYMMDD>T<HHMMSS>Z`, stamped in UTC. Inside go `router.sqlite`,
+`ledger.sqlite` and `manifest.json`, each at `0600`. The manifest names the key file at `storage.encryption_key_file`,
+which `backup` never reads; a key file that does not exist earns a warning and the backup proceeds. `backup` loads the
+file the way `check-config` does, without the admin secret, and takes no lock and opens no socket. Stderr carries one
+`wrote {path} ({n} bytes)` line per file, the two `quick_check` results, the manifest's path, and last `the key file
+{path} is not in this backup; keep it apart, the registry copy is sealed under it`; stdout stays empty unless `--json`
+prints the manifest there.
+
+`backup` exits 1 with one `Error:` line and nothing written when the file does not load, when `--to` names a file or a
+directory that is not empty (`{path} is not an empty directory`), or when either database does not exist (`a backup
+carries both databases; {path} does not exist`). A copy that fails, a database another connection holds locked for ten
+seconds among them, removes every file and directory the run created and exits 1 with `backup failed: {reason};
+nothing was written to {dir}`. It exits 0 once the manifest is written, and 2 for a usage error.
+
+`account add` creates an account through `POST /admin/accounts`. `--kind` is `oauth`, for a subscription paired
+afterwards, or `api_key`, for an Anthropic key, and `--label` defaults to the account id. An `api_key` account's
+Anthropic API key comes from the variable `--api-key-env NAME` names, or from the first line of stdin under
+`--secret-stdin`; it never travels in a flag, so neither the process list nor the shell history carries it, and
+`--secret-env` stays the admin secret's variable. The router checks the key against the upstream before it creates the
+account. Stdout carries the account's id, and stderr its fields, one `field: value` line each, sorted by field.
+
+`account pair` pairs an `oauth` account through the three pairing routes, the calls [Pairing](pairing.md#with-curl)
+makes by hand. It starts the pairing with `POST /admin/oauth/sessions`, prints on stderr the instruction to open the
+authorization URL, sign in and paste the callback URL, with the URL on its own line, and reads one line from stdin: the
+URL the browser lands on, or `<code> <state>`, the code and the state separated by one space. It posts that line to the
+callback route, prints the pending identity as `pending: {email} ({organization})`, confirms, and prints `paired {id} as
+{email}`. `--login` is `claude_ai` (the default) or `console`. End of input or an empty line before the paste cancels
+the pairing with `DELETE /admin/oauth/sessions/{id}`, prints `the pairing was cancelled: input ended before the callback
+URL was pasted` and exits 1. A refused call prints its line and exits 1, and running `account pair` again replaces a
+pairing it left standing. The command keeps no state: the pairing lives in the router until it expires, ten minutes
+after the start.
+
+`--no-confirm` stops after the callback and prints `pairing {pairing id} exchanged; finish it with: phoebis account
+confirm {pairing id}`. `account confirm` posts the confirm route for that id and prints `paired {account id}`; a pairing
+another caller started answers `404 admin session does not own this pairing session`, and one past its expiry `409
+pairing session expired`. A pairing is the starting credential's to finish, and every command holding the admin secret
+is the same caller, so a pairing that `--no-confirm` leaves is finished from any shell with the admin secret and not
+from the console, whose login is another caller. Under `--json` stdout carries each route's answer as its own line, the
+start's first, so a script holds the pairing id and the redirect while the command waits for the paste; the lines on
+stderr stay as they are. Both commands exit 0 once the pairing is confirmed, or exchanged under `--no-confirm`, and 1
+otherwise.
+
+`account clear-cooldown` clears one cooldown through `DELETE /admin/accounts/{id}/cooldowns/{scope}`, one call with no
+body. `--scope` is `account` (the default), `fast`, `fast_credits` or `model:<canonical>`. It prints `cleared {scope} on
+{id}` on stderr, and a cooldown the account does not hold answers `404 no such cooldown`.
+
+`pool create` creates a pool through `POST /admin/pools`. `--label` defaults to the id, `--member
+<account>[:<priority>]` adds a member at that priority (`0` without the colon) and repeats, and `--strategy` is `pace`,
+`priority` or `round_robin`. Stdout carries the pool's id, and stderr its fields as `account add` prints them.
+
+`key create` creates a key in the pool `--pool` names through `POST /admin/keys`, and `--label` defaults to the id.
+Stdout carries the key's secret as its one line, printed once and nowhere else, so `phoebis key create laptop --pool
+home --label Laptop > laptop.secret` captures the secret alone; stderr carries the key's other fields. When stdout
+cannot take the secret, a full disk under that redirect among them, or the answer carries none, `key create` exits 1
+with `the secret of key {id} {reason}; POST /admin/keys/{id}/rotate issues a new one` on stderr, since the router keeps
+no copy to print again.
+
+`--body PATH` on `pool create` and `key create` reads a JSON object from the file, or from stdin for `-`, and sends it
+merged under the flags: a flag wins where both name a field, and a default (the label from the id, an empty member list)
+fills only a field neither names, so every field [the pool route](api.md#post-adminpools) and [the key
+route](api.md#post-adminkeys) accept is reachable without a flag of its own. The subcommand validates no field, and the
+route's `400` prints as it comes.
+
+`ledger replay-parked` lands the priced records the ledger parked, the pass every start runs, through [the replay
+route](api.md#post-adminledgerparkedreplay) rather than a restart. It prints `landed {n}, remaining {m}` on stderr,
+`remaining` the parked records the ledger still refuses.
+
+These seven take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line the
+route wrote and nothing on stderr but errors; `account pair` prints one such line per route and keeps its own lines on
+stderr. A refused call prints `{status} {message}` from the route's answer on stderr and exits 1, a refused secret as
+`the admin secret was refused`; a call that does not reach the listener prints one line naming the URL and exits 1. Each
+exits 0 when the route accepts the call, `key create` only once its secret reached stdout, and 2 for a usage error. No
+output carries the admin secret or an upstream key.
+
+The commands' own refusals exit 1 before any call:
+
+- `--body {path}: {reason}` or `--member {member}: {reason}`, for a body file or a member that does not read
+- `--secret-stdin read no secret from stdin`, for an Anthropic API key that stdin did not carry
+- `an api_key account needs --api-key-env or --secret-stdin`, for an Anthropic API key with neither source
+- `environment variable {name} is unset or empty`, for the Anthropic API key's `--api-key-env` variable
 
 ## Environment variables
 
@@ -207,6 +468,8 @@ and defaults to `info`.
 Nothing else is named here: an account's upstream credential and the keys downstream clients present belong to
 the registry, not the bootstrap file.
 
+`init --env-file` writes the file the service reads with a generated secret; without it, `init` prints the secret once.
+
 ## The bootstrap file
 
 ```yaml title="deploy/config.example.yaml"
@@ -214,10 +477,8 @@ the registry, not the bootstrap file.
 # file can be committed and read by anyone who may read the deployment.
 admin:
   listen: 127.0.0.1:8081
-  origin: https://phoebis.example
-  # With plain_http the session cookie is served without Secure and origin is optional, on any address. Left
-  # false here, so origin is required and TLS is terminated in front.
-  plain_http: false
+  # tls: {cert_file: ..., key_file: ...} names your certificate pair and the listener terminates TLS.
+  # Without tls the listener serves plain HTTP on the address named, loopback or not.
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
   # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
@@ -227,6 +488,8 @@ keepalive:
   max_sessions: 128
 proxy:
   listen: 127.0.0.1:8317
+  # tls: {cert_file: ..., key_file: ...} names your certificate pair and the listener terminates TLS.
+  # Without tls the listener serves plain HTTP on the address named, loopback or not.
   # The bounds on the request bodies the proxy holds, at their defaults; uncomment a key to change it.
   # body_budget_bytes: 536870912
   # body_read_seconds: 60
@@ -296,24 +559,29 @@ is the trail.
 | Key | Default | Accepts |
 | --- | --- | --- |
 | `listen` | required | a socket address |
-| `origin` | unset | the origin every mutation's `Origin` header must equal; required unless `plain_http` |
-| `plain_http` | `false` | `true` serves the console over plain HTTP on any address |
 | `secret_env` | required | the variable holding the admin secret |
+| `tls` | unset, plain HTTP | `{cert_file, key_file}` |
 
-With `plain_http: true` the session cookie is issued without `Secure` and `origin` may be left unset. On a
-loopback listener behind an SSH tunnel that costs nothing. On any other address the admin secret at login and
-the session cookie on every call cross the network in the clear, so publishing the admin port on a LAN is the
-operator's trust decision, as it already is for the proxy listener. An `origin` set under the flag, such as
-`http://phoebis.lan:8081`, is still compared against every mutation's `Origin` header and every WebSocket upgrade.
-For TLS, keep the flag off, set `origin` to the front's `https://` URL, and terminate TLS in front of the
-listener; a browser returns the `Secure` cookie to `http://localhost` as well, so the flag-off shape also works
-from the host's own browser when `origin` names `http://localhost:8081`.
+The `tls` key is optional on every address. Without it the listener serves plain HTTP and issues the cookie without
+`Secure`, which costs nothing behind an SSH tunnel and sends the admin secret at login and the session cookie on every
+call in the clear on a network address; a front's `X-Forwarded-Proto: https`, below, is the one exception. A certificate
+pair terminates TLS on the listener on any address and the cookie carries `Secure`. Every mutation and every WebSocket
+upgrade that carries an `Origin` must name the request's own `Host` with it, and with the `https://` scheme where the
+listener terminates TLS; a request with no `Origin` is admitted. A front that terminates TLS forwards to a loopback
+listener over plain HTTP and passes `Host` through unchanged beside `X-Forwarded-Proto: https`; the cookie is then
+issued with `Secure`, and the Origin check sees the front's hostname in both headers and requires the `https://` scheme
+in `Origin`, as it does on a listener that terminates TLS itself.
 
 Refused with:
 
 - `listen`: a YAML error
-- `origin`: `admin.origin is required unless admin.plain_http is set`
 - `secret_env`: `environment variable {name} is unset or empty`
+- `tls`: `admin.tls: must be a mapping with cert_file and key_file` under `the configuration is not valid YAML` for a
+  word in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one
+  of the two ([TLS on the listeners](#tls-on-the-listeners))
+
+Removed keys: `admin.origin` has no replacement, the Origin check compares against the request's own `Host` in every
+mode; `admin.plain_http: true` has no replacement either: a listener without `tls` serves plain HTTP on any address.
 
 ### keepalive
 
@@ -332,9 +600,10 @@ the session expiry sweeps it. The companion's lease is 90 seconds and four probe
 
 ### proxy
 
-Required: `listen`, a socket address, refused with a YAML error. Four keys bound the request bodies the proxy holds;
-`sign_cch_placeholder` decides whether a restored billing placeholder is signed, and `upstream_gzip` how the edited body
-leaves toward the upstream. All six are tunable in the file for power users and have no console control.
+Required: `listen`, a socket address, refused with a YAML error. `tls` names what the listener serves ([TLS on the
+listeners](#tls-on-the-listeners)). Four keys bound the request bodies the proxy holds; `sign_cch_placeholder` decides
+whether a restored billing placeholder is signed, and `upstream_gzip` how the edited body leaves toward the upstream.
+All six are tunable in the file for power users and have no console control.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
@@ -343,6 +612,7 @@ leaves toward the upstream. All six are tunable in the file for power users and 
 | `key_body_reads` | `128` | 1 to 4096 |
 | `max_request_bytes` | `33554432` | 1024 to 33554432 |
 | `sign_cch_placeholder` | `false` | `true` or `false` |
+| `tls` | unset, plain HTTP | `{cert_file, key_file}` |
 | `upstream_gzip` | `auto` | `auto`, `on` or `off` |
 
 Refused with:
@@ -353,6 +623,9 @@ Refused with:
 - `key_body_reads`: `proxy.key_body_reads must be between 1 and 4096, not {value}`
 - `max_request_bytes`: `proxy.max_request_bytes must be between 1024 and 33554432, not {value}`
 - `sign_cch_placeholder`: a YAML error for anything but a boolean
+- `tls`: `proxy.tls: must be a mapping with cert_file and key_file` under `the configuration is not valid YAML` for a
+  word in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one
+  of the two ([TLS on the listeners](#tls-on-the-listeners))
 - `upstream_gzip`: `proxy.upstream_gzip must be auto, on or off, not {value}`
 
 `max_request_bytes` is the per-body bound, the Messages API's own request limit, so the router never refuses what the
@@ -374,6 +647,68 @@ worst case is reserved against `body_budget_bytes` before the body is inflated);
 refused. `upstream_gzip` says how the edited body leaves toward the upstream: `auto` sends gzip when the client sent
 gzip and identity otherwise, `on` always gzip, `off` always identity; the `content-encoding` and `content-length` toward
 the upstream follow the bytes actually sent.
+
+### TLS on the listeners
+
+The proxy and the admin listener each take one `tls` key under their block, a mapping with `cert_file` and `key_file`
+naming your certificate pair; the listener then terminates TLS itself:
+
+```yaml title="config.yaml"
+proxy:
+  listen: 0.0.0.0:8317
+  tls:
+    cert_file: /etc/phoebis/proxy.pem
+    key_file: /etc/phoebis/proxy.key
+```
+
+Without the key a listener serves plain HTTP on the address named, loopback or not; no address requires the key. A
+plain listener on a network address sends in the clear what a certificate would cover: on the admin listener the
+admin secret at login and the session cookie on every call, on the proxy the client's key on every request. That is
+your trust decision for that network, and the file records it by naming no pair. Both listeners speak HTTP/1.1 only,
+and the handshake steers a client that offers HTTP/2 to HTTP/1.1.
+
+`cert_file` is PEM with the leaf first and any intermediates after it; `key_file` is the matching private key in PEM,
+PKCS#8 or the traditional RSA and EC forms. Under the service unit, keep both under `/etc/phoebis`: the certificate at
+`0644 root:root`, the key at `0640 root:phoebis` or `0600 phoebis:phoebis`, which is how
+`init --owner phoebis --tls self-signed` installs a generated pair under `/etc/phoebis/tls/`. In the container, mount
+them read-only beside the configuration, with the key at `0400` owned by uid 65532. A Tailscale certificate, a
+certificate from a LAN CA, or one an ACME client renews all serve.
+
+The running router generates no certificate; `phoebis init --tls self-signed` writes a local CA and a leaf per network
+listener under `tls/` beside the bootstrap file ([Commands](#commands)), and its `ca.pem` is a private CA like any
+other. A certificate from a public CA needs nothing on the clients. A certificate from a private CA (`init`'s own
+`tls/ca.pem`, a LAN CA, a Tailscale certificate's issuer, a CA you run) needs the clients to trust that CA: copy its
+certificate to each client machine and set `NODE_EXTRA_CA_CERTS=<path>` beside `ANTHROPIC_BASE_URL` in the client's
+[environment block](client.md#the-environment-block); the client checks the CA before anything else, so the leaf needs
+no pin. `phoebis status` and the subcommands take the same file through `--ca`.
+
+The start reads the pair once and never watches it; a renewal is stop, replace, start, and the 30-second drain, inside
+the 40-second stop grace, bounds the gap.
+
+`check-config` and the start refuse a `tls` value that is not the mapping with:
+
+- `proxy.tls: must be a mapping with cert_file and key_file`, under `the configuration is not valid YAML`, for a word
+  in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one of the
+  two
+
+The start reads the pair before it binds a port, and `check-config` reads it the same way; both refuse it with one line
+naming the key and the path:
+
+- `proxy.tls.cert_file {path}: {OS error}` or `proxy.tls.key_file {path}: {OS error}` for a file it cannot read
+- `proxy.tls.cert_file {path}: holds no PEM certificate`
+- `proxy.tls.cert_file {path}: holds a PEM certificate block that does not parse`, the leaf's or an intermediate's
+- `proxy.tls.key_file {path}: holds no PEM private key`
+- `proxy.tls.key_file {path}: does not match the certificate in {cert_file}`
+- `proxy.tls.cert_file {path}: expired on {date}`
+- `proxy.tls.cert_file {path}: not valid before {date}`
+
+The admin listener's lines carry `admin.tls` in place of `proxy.tls`. The start logs `serving TLS` for each listener
+that terminates TLS, with its leaf's names and `not_after`, and the `listening` line names each listener's scheme.
+
+A plain-HTTP request to a listener that terminates TLS gets no HTTP answer: the handshake fails and the connection
+closes, so `curl` reports `curl: (35)` and a Node client `ECONNRESET` or `EPROTO`. Put `https://` in the caller's URL.
+
+The metrics listener has no `tls` key and serves plain HTTP.
 
 ### routing
 
@@ -428,7 +763,7 @@ Defaults whole.
 | `body_capture_max_hours` | `72` | 1 to 168 |
 | `ledger_path` | `./data/ledger.sqlite` | a file path with a parent directory, not the same file as `storage.path` |
 | `metrics_listen` | `127.0.0.1:9464` | a socket address |
-| `retention_days` | `90` | 0 for forever, otherwise any number of days; also covers the quota and extra-usage samples |
+| `retention_days` | `90` | 0 for forever, else a number of days; also covers decisions, quota and extra-usage samples |
 | `rollup_retention_days` | `400` | 0 for forever, otherwise at least `retention_days` |
 | `subscription_costs_path` | `./subscription_costs.yaml` | a path; a missing file is fine |
 
@@ -489,8 +824,8 @@ Refused with:
 - `cache_ttl_seconds`: `usage.cache_ttl_seconds must be between 1 and 3600, not {value}`
 - `refresh_concurrency`: `usage.refresh_concurrency must be between 1 and 16, not {value}`
 
-The checks above run in a fixed order at load, not block by block: `admin`'s loopback-or-origin rule, then
-`usage.cache_ttl_seconds`, `usage.refresh_concurrency`, `storage.path`, the `proxy` bounds,
+The checks above run in a fixed order at load, not block by block: `usage.cache_ttl_seconds`,
+`usage.refresh_concurrency`, `storage.path`, the `proxy` bounds,
 `routing.model_rejection_seconds`, `routing.cooldown_fallback_seconds`, the `keepalive` bounds,
 `routing.startup_fetch_seconds`, `routing.catalog_refresh_seconds`, the four `sessions` keys,
 `stats.body_capture_max_hours`, `stats.rollup_retention_days`, `stats.ledger_path`, and last whether
@@ -507,9 +842,11 @@ version, skip every ledger migration, and leave `requests` without the columns t
 creates the parent directory at mode 0700 when it is missing, the database at mode 0600, and a `lock` file
 beside the database that keeps a second process off the same data.
 
+The registry's `lock` file is not taken by `check-config`, `backup` or any subcommand.
+
 `storage.encryption_key_file` points at a separate file holding 32 raw bytes or 64 hex characters. It seals
 every credential in the database, so keep it outside any backup that carries the database, which is useless
-without it.
+without it. `phoebis backup` leaves the key out and says so.
 
 The registry file also holds the relay's session memory: for each key, conversation (the client's session id), and
 agent, the previous request id and the prompt id the
@@ -530,7 +867,7 @@ holds the request path rather than losing request facts; only captured bodies st
 may outrun its recorder, and a `ledger_gap` event records what was lost. Captured bodies live in this file,
 which makes it as sensitive as the registry even though it holds no credential, so give it the same care.
 
-No script in this repository backs these files up; [Operations](operations.md) says how.
+`phoebis backup` takes the snapshot; [Operations](operations.md#backup) says how and how to restore it.
 
 ![The Settings view: the downstream client block, Appearance and About
 ](assets/settings-light.png#only-light)
@@ -550,7 +887,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Cooldown booking | Seven days ahead of each announcement; a later announcement books the next stretch. |
 | Decoded output | 1 MiB per stream chunk, 64 KiB for an inspected or buffered body, 4 MiB for a control-plane answer. |
 | Drain window | 30 seconds for requests still in flight on shutdown; a request still running then is ended. |
-| Header read timeout | 30 seconds for a connection to send its request head, on all three listeners. |
+| Header read timeout | 30 seconds for a request head on all three listeners, after the TLS handshake's own 30. |
 | Keepalive ticker | One scheduling pass per second; a probe answer is read up to 256 KiB. |
 | Ledger assembler | 16,384 requests in flight, 64 MiB captured, oldest or largest evicted as `ledger_gap`. |
 | Ledger channel | 4,096 records; `ledger_behind` at 2,048 queued; an event or sample past it drops as a `ledger_gap`. |
@@ -558,6 +895,7 @@ Rows in alphabetical order of the limit's name. None of these has a bootstrap ke
 | Name resolution | 5 seconds per lookup of an upstream or catalog host. |
 | Relay waits | 600 seconds for a response head, 600 seconds between stream events. |
 | Stream hold before commit | 30 seconds or 64 KiB, whichever comes first. |
+| TLS handshake | Bounded by the header read timeout, 30 seconds. |
 | Upstream connection pool | 8 idle connections per account and host pair, discarded after 60 seconds idle. |
 | User agent | 256 bytes kept on a request row and a live entry; a longer value is cut. |
 

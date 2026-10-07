@@ -1,7 +1,7 @@
 use phoebis_routing::{resolve, Candidate, KeyRefusal, RegistrySnapshot, ResolveError};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, ModelRule, PoolMember, PoolRow,
-    RegistryLoad, RulesMode, Strategy,
+    RegistryLoad, RulesMode, StateCause, Strategy,
 };
 
 const DIGEST_KEY: [u8; 32] = [7; 32];
@@ -17,6 +17,7 @@ fn account_kind(id: &str, kind: AccountKind) -> AccountRow {
         incarnation: 1,
         revision: 1,
         state: AccountState::Ready,
+        state_cause: StateCause::Operator,
     }
 }
 

@@ -39,17 +39,11 @@ pub struct Config {
 #[serde(deny_unknown_fields)]
 pub struct AdminConfig {
     pub listen: SocketAddr,
-    /// The URL origin the admin API compares every mutation's `Origin` header against.
-    #[serde(default)]
-    pub origin: Option<String>,
-    /// Serves the session cookie without `Secure` and makes `origin` optional, on any listen address. Off
-    /// loopback that puts the admin secret and the cookie on the wire in the clear, which is the operator's
-    /// trust decision for the network the listener is published on, as it is for the proxy listener.
-    #[serde(default)]
-    pub plain_http: bool,
     #[serde(default = "unresolved", skip)]
     pub secret: Secret,
     pub secret_env: String,
+    #[serde(default, deserialize_with = "present_tls")]
+    pub tls: Option<ListenerTls>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -72,9 +66,88 @@ pub struct ProxyConfig {
     /// rejection of the placeholder proves it necessary.
     #[serde(default)]
     pub sign_cch_placeholder: bool,
+    #[serde(default, deserialize_with = "present_tls")]
+    pub tls: Option<ListenerTls>,
     /// How the edited body leaves toward the upstream: `auto` mirrors the client, `on` always gzip, `off` never.
     #[serde(default = "default_upstream_gzip")]
     pub upstream_gzip: String,
+}
+
+/// One public listener's `tls` key: the operator's certificate pair, and the listener terminates TLS. Absent, the
+/// listener serves plain HTTP on the address named, loopback or not; the file records that trust decision by naming
+/// no pair, and no address requires one.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ListenerTls {
+    /// PEM, the leaf first with any intermediates after it.
+    pub cert_file: PathBuf,
+    /// PEM, the matching private key.
+    pub key_file: PathBuf,
+}
+
+/// The line for a string or a null in the key's place, a stray key, a missing key or a repeated one; serde puts the
+/// key's path in front of it. A hand-written visitor rather than a derive, so a word earns this line and not serde's
+/// "invalid type" one, which names no key.
+const TLS_SHAPES: &str = "must be a mapping with cert_file and key_file";
+
+impl<'de> Deserialize<'de> for ListenerTls {
+    fn deserialize<D: serde::Deserializer<'de>>(deserializer: D) -> Result<Self, D::Error> {
+        struct Shapes;
+
+        impl<'de> serde::de::Visitor<'de> for Shapes {
+            type Value = ListenerTls;
+
+            fn expecting(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+                f.write_str("a mapping with cert_file and key_file")
+            }
+
+            fn visit_str<E: serde::de::Error>(self, _word: &str) -> Result<ListenerTls, E> {
+                Err(E::custom(TLS_SHAPES))
+            }
+
+            fn visit_unit<E: serde::de::Error>(self) -> Result<ListenerTls, E> {
+                Err(E::custom(TLS_SHAPES))
+            }
+
+            fn visit_none<E: serde::de::Error>(self) -> Result<ListenerTls, E> {
+                Err(E::custom(TLS_SHAPES))
+            }
+
+            fn visit_map<M: serde::de::MapAccess<'de>>(
+                self,
+                mut map: M,
+            ) -> Result<ListenerTls, M::Error> {
+                let (mut cert_file, mut key_file) = (None, None);
+                while let Some(key) = map.next_key::<String>()? {
+                    let slot = match key.as_str() {
+                        "cert_file" => &mut cert_file,
+                        "key_file" => &mut key_file,
+                        _ => return Err(serde::de::Error::custom(TLS_SHAPES)),
+                    };
+                    if slot.replace(map.next_value::<PathBuf>()?).is_some() {
+                        return Err(serde::de::Error::custom(TLS_SHAPES));
+                    }
+                }
+                match (cert_file, key_file) {
+                    (Some(cert_file), Some(key_file)) => Ok(ListenerTls {
+                        cert_file,
+                        key_file,
+                    }),
+                    _ => Err(serde::de::Error::custom(TLS_SHAPES)),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(Shapes)
+    }
+}
+
+/// A present `tls` key must hold the pair. Serde's own `Option` reads a YAML null, the key written with nothing
+/// beneath it, as an absent key, and the listener would then serve plain HTTP on an address whose operator meant to
+/// name a pair; only a missing key means plain HTTP.
+fn present_tls<'de, D: serde::Deserializer<'de>>(
+    deserializer: D,
+) -> Result<Option<ListenerTls>, D::Error> {
+    ListenerTls::deserialize(deserializer).map(Some)
 }
 
 #[derive(Debug, Deserialize)]
@@ -198,8 +271,6 @@ pub enum ConfigError {
     MemoryIdleOutOfRange { value: u64 },
     #[error("sessions.memory_retention_days must be between 1 and 3650, not {value}")]
     MemoryRetentionOutOfRange { value: u32 },
-    #[error("admin.origin is required unless admin.plain_http is set")]
-    MissingOrigin,
     #[error("environment variable {name} is unset or empty")]
     MissingSecret { name: String },
     #[error("routing.model_rejection_seconds must be between 1 and 604800, not {value}")]
@@ -256,10 +327,9 @@ impl fmt::Debug for AdminConfig {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("AdminConfig")
             .field("listen", &self.listen)
-            .field("origin", &self.origin)
-            .field("plain_http", &self.plain_http)
             .field("secret", &"***")
             .field("secret_env", &self.secret_env)
+            .field("tls", &self.tls)
             .finish()
     }
 }
@@ -310,11 +380,6 @@ impl Default for UsageConfig {
 }
 
 fn check_shape(config: &Config) -> Result<(), ConfigError> {
-    if !config.admin.plain_http && config.admin.origin.is_none() {
-        // Without an origin to compare against, the admin API has nothing to tell a browser's cross-site
-        // write from an operator's own.
-        return Err(ConfigError::MissingOrigin);
-    }
     if !(1..=3600).contains(&config.usage.cache_ttl_seconds) {
         return Err(ConfigError::UsageCacheTtlOutOfRange {
             value: config.usage.cache_ttl_seconds,
@@ -497,7 +562,7 @@ pub fn secret_is_unset(name: &str) -> bool {
 /// refuses to start rather than run with a secret every reader of the repository already knows.
 const PLACEHOLDER_ADMIN_SECRET: &str = "replace-with-a-long-random-string";
 
-fn from_env(name: &str) -> Result<Secret, ConfigError> {
+pub(crate) fn from_env(name: &str) -> Result<Secret, ConfigError> {
     let value = match std::env::var(name) {
         // The value is never part of the error: a variable set to something unusable still holds a secret.
         Ok(value) if !value.is_empty() => value,
@@ -628,7 +693,7 @@ mod tests {
             "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
         )
         .unwrap();
-        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\n{body}", key.display(), dir.join("router.sqlite").display());
+        let yaml = format!("admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\nproxy:\n  listen: 127.0.0.1:0\nstorage:\n  encryption_key_file: {}\n  path: {}\n{body}", key.display(), dir.join("router.sqlite").display());
         let path = dir.join(format!("{name}.yaml"));
         std::fs::write(&path, yaml).unwrap();
         path
@@ -644,7 +709,7 @@ mod tests {
         )
         .unwrap();
         let yaml = format!(
-            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n  plain_http: true\n\
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CFG_ADMIN\n\
              proxy:\n  listen: 127.0.0.1:0\n{keys}storage:\n  encryption_key_file: {}\n  path: {}\n",
             key.display(),
             dir.join("router.sqlite").display()
@@ -752,6 +817,152 @@ mod tests {
             (1_024, "on"),
             "a budget of one body at the per-body bound is enough"
         );
+    }
+
+    #[test]
+    fn the_tls_key_is_the_pair_and_every_other_shape_is_refused_naming_the_two_keys() {
+        let dir = tempfile::tempdir().unwrap();
+        let pair = load_unresolved(&file_with_proxy(
+            dir.path(),
+            "pair",
+            "  tls:\n    cert_file: /a\n    key_file: /b\n",
+        ))
+        .unwrap()
+        .proxy;
+        assert_eq!(
+            pair.tls,
+            Some(ListenerTls {
+                cert_file: "/a".into(),
+                key_file: "/b".into(),
+            })
+        );
+        let refused = |name: &str, keys: &str| {
+            let error = load_unresolved(&file_with_proxy(dir.path(), name, keys)).unwrap_err();
+            let chain = chain(&error);
+            assert!(
+                matches!(error, ConfigError::Syntax(_))
+                    && chain.contains("proxy.tls")
+                    && chain.contains("must be a mapping with cert_file and key_file"),
+                "{name}: {chain}"
+            );
+        };
+        for word in ["plain_http", "self_signed", "mutual"] {
+            refused(word, &format!("  tls: {word}\n"));
+        }
+        for (name, keys) in [
+            ("stray", "  tls:\n    cert_file: /a\n    chain: /c\n"),
+            ("half", "  tls:\n    cert_file: /a\n"),
+            (
+                "twice",
+                "  tls:\n    cert_file: /a\n    cert_file: /b\n    key_file: /c\n",
+            ),
+            ("empty", "  tls:\n"),
+            ("tilde", "  tls: ~\n"),
+            ("null", "  tls: null\n"),
+        ] {
+            refused(name, keys);
+        }
+        let admin = file_with_proxy(dir.path(), "admin-empty", "");
+        under(&admin, "admin", "  tls:\n");
+        let error = load_unresolved(&admin).unwrap_err();
+        let chain = chain(&error);
+        assert!(
+            chain.contains("admin.tls") && chain.contains(TLS_SHAPES),
+            "admin-empty: {chain}"
+        );
+    }
+
+    #[test]
+    fn a_listener_without_tls_loads_on_every_address_and_serves_plain_http() {
+        let dir = tempfile::tempdir().unwrap();
+        let key = dir.path().join("storage.key");
+        std::fs::write(
+            &key,
+            "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
+        )
+        .unwrap();
+        let binding = |name: &str, admin: &str, proxy: &str| {
+            let path = dir.path().join(format!("{name}.yaml"));
+            let yaml = format!(
+                "admin:\n{admin}  secret_env: TEST_CFG_ADMIN\nproxy:\n{proxy}\
+                 storage:\n  encryption_key_file: {}\n  path: {}\n",
+                key.display(),
+                dir.path().join("router.sqlite").display()
+            );
+            std::fs::write(&path, yaml).unwrap();
+            path
+        };
+        let loopback = "  listen: 127.0.0.1:0\n";
+        let both = load_unresolved(&binding("loopback", loopback, loopback)).unwrap();
+        assert_eq!((&both.proxy.tls, &both.admin.tls), (&None, &None));
+        assert_eq!(crate::tls::scheme(&None), "http");
+        for unspecified in ["0.0.0.0:0", "\"[::]:0\""] {
+            let bare = format!("  listen: {unspecified}\n");
+            let proxy = load_unresolved(&binding("proxy-bare", loopback, &bare))
+                .unwrap()
+                .proxy;
+            assert!(
+                proxy.listen.ip().is_unspecified() && proxy.tls.is_none(),
+                "{unspecified}: {proxy:?}"
+            );
+            assert_eq!(crate::tls::scheme(&proxy.tls), "http", "{unspecified}");
+            let admin = load_unresolved(&binding("admin-bare", &bare, loopback))
+                .unwrap()
+                .admin;
+            assert!(
+                admin.listen.ip().is_unspecified() && admin.tls.is_none(),
+                "{unspecified}: {admin:?}"
+            );
+            assert_eq!(crate::tls::scheme(&admin.tls), "http", "{unspecified}");
+        }
+    }
+
+    /// Places `lines` at the top of `block` in a file a helper wrote: a key has to sit inside its block for serde
+    /// to read it as that block's member rather than as a second top-level key.
+    fn under(path: &std::path::Path, block: &str, lines: &str) {
+        let text = std::fs::read_to_string(path).unwrap();
+        let header = format!("{block}:\n");
+        assert!(text.contains(&header), "the template has no {block} block");
+        std::fs::write(path, text.replacen(&header, &format!("{header}{lines}"), 1)).unwrap();
+    }
+
+    /// The error's line and every cause beneath it, the way `check-config` prints them.
+    fn chain(error: &ConfigError) -> String {
+        let mut chain = error.to_string();
+        let mut source = std::error::Error::source(error);
+        while let Some(cause) = source {
+            chain.push_str(": ");
+            chain.push_str(&cause.to_string());
+            source = cause.source();
+        }
+        chain
+    }
+
+    #[test]
+    fn the_removed_admin_keys_are_refused_as_unknown_fields() {
+        let dir = tempfile::tempdir().unwrap();
+        for (key, lines) in [
+            (
+                "origin",
+                include_str!("../tests/fixtures/removed-keys/admin-origin.yaml"),
+            ),
+            (
+                "plain_http",
+                include_str!("../tests/fixtures/removed-keys/admin-plain-http.yaml"),
+            ),
+        ] {
+            let path = file(dir.path(), key, "");
+            under(&path, "admin", lines);
+            let error = load_unresolved(&path).unwrap_err();
+            let chain = chain(&error);
+            assert!(
+                matches!(error, ConfigError::Syntax(_))
+                    && chain.contains("unknown field")
+                    && chain.contains(&format!("`{key}`"))
+                    && chain.contains("expected one of `listen`, `secret_env`, `tls`"),
+                "{key}: {chain}"
+            );
+        }
     }
 
     #[test]
@@ -1102,7 +1313,7 @@ mod tests {
         )
         .unwrap();
         let yaml = format!(
-            "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n  plain_http: true\n\
+            "admin:\n  listen: 127.0.0.1:0\n  secret_env: {secret_env}\n\
              proxy:\n  listen: 127.0.0.1:0\n\
              storage:\n  encryption_key_file: {}\n  path: {}\nusage:\n  cache_ttl_seconds: 60\n  \
              refresh_concurrency: 2\n",

@@ -67,68 +67,40 @@ async fn a_dead_cookie_on_logout_answers_204_with_the_clear() {
 }
 
 #[tokio::test]
-async fn the_cookie_carries_secure_exactly_when_plain_http_is_off() {
-    use common::{post, post_from};
-    let (loopback, _up) = common::admin_app().await;
-    let plain = post(
-        &loopback,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-    )
-    .await;
-    assert_eq!(plain.status(), 204);
-    assert!(!cookie_attributes(&plain).contains("Secure"));
+async fn the_cookie_carries_secure_under_tls_or_a_fronts_https_and_not_otherwise() {
+    use common::{post, post_forwarded};
+    const BODY: &str = r#"{"secret":"admin-secret"}"#;
+    let (plain, _up) = common::admin_app().await;
+    let bare = post(&plain, "/admin/session", BODY, None).await;
+    assert_eq!(bare.status(), 204);
+    assert!(!cookie_attributes(&bare).contains("Secure"));
 
-    let (pinned, _up) = common::admin_app_with_origin("https://phoebis.example").await;
-    let secure = post_from(
-        &pinned,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-        "https://phoebis.example",
-    )
-    .await;
-    assert_eq!(secure.status(), 204);
+    let (tls, _up) = common::admin_app_tls().await;
+    let terminated = post(&tls, "/admin/session", BODY, None).await;
+    assert_eq!(terminated.status(), 204);
     // The whole attribute, not a substring of one: `contains` would also pass on a cookie value that happened
     // to carry the word.
-    assert!(cookie_attributes(&secure).ends_with("; Secure"));
-}
+    assert!(cookie_attributes(&terminated).ends_with("; Secure"));
 
-#[tokio::test]
-async fn an_origin_set_under_plain_http_is_still_enforced() {
-    use common::{json, post_from};
-    let (app, _up) = common::admin_app_plain_with_origin("http://phoebis.lan:8081").await;
-    let forged = post_from(
-        &app,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-        "http://elsewhere",
-    )
-    .await;
-    assert_eq!(forged.status(), 403);
-    assert_eq!(json(forged).await["error"], "origin is not allowed");
+    let fronted = post_forwarded(&plain, "/admin/session", BODY, None, "https").await;
+    assert_eq!(fronted.status(), 204);
+    assert!(cookie_attributes(&fronted).ends_with("; Secure"));
 
-    let allowed = post_from(
-        &app,
-        "/admin/session",
-        r#"{"secret":"admin-secret"}"#,
-        None,
-        "http://phoebis.lan:8081",
-    )
-    .await;
-    assert_eq!(allowed.status(), 204);
-    assert!(!cookie_attributes(&allowed).contains("Secure"));
+    let chained = post_forwarded(&plain, "/admin/session", BODY, None, "http, https").await;
+    assert_eq!(chained.status(), 204);
+    assert!(
+        !cookie_attributes(&chained).contains("Secure"),
+        "the first value is the browser's leg"
+    );
 }
 
 /// A WebSocket handshake carries a cookie and no body, so a forged page could open the live feed with nothing
 /// but the browser's own credentials; the origin check covers the upgrade exactly as it covers a write.
 #[tokio::test]
-async fn an_origin_set_under_plain_http_refuses_a_websocket_upgrade() {
-    use common::{json, login_from};
-    let (app, _up) = common::admin_app_plain_with_origin("http://phoebis.lan:8081").await;
-    let cookie = login_from(&app, "admin-secret", "http://phoebis.lan:8081").await;
+async fn a_websocket_upgrade_whose_origin_names_another_authority_is_refused() {
+    use common::{json, login};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
     let forged = handshake(&app, &cookie, "http://elsewhere").await;
     assert_eq!(forged.status(), 403);
     assert_eq!(json(forged).await["error"], "origin is not allowed");
@@ -143,7 +115,7 @@ async fn an_origin_set_under_plain_http_refuses_a_websocket_upgrade() {
     );
 }
 
-/// The head a browser sends to open `/admin/live`, with the `Origin` under test.
+/// The head a browser on `http://phoebis.lan:8081` sends to open `/admin/live`, with the `Origin` under test.
 async fn handshake(
     app: &axum::Router,
     cookie: &str,
@@ -153,6 +125,7 @@ async fn handshake(
     let request = axum::http::Request::builder()
         .method("GET")
         .uri("/admin/live")
+        .header("host", "phoebis.lan:8081")
         .header("cookie", format!("phoebis_admin={cookie}"))
         .header("origin", origin)
         .header("connection", "Upgrade")
@@ -175,7 +148,7 @@ fn cookie_attributes(response: &axum::http::Response<axum::body::Body>) -> Strin
 }
 
 #[tokio::test]
-async fn without_a_configured_origin_a_foreign_origin_is_refused_and_a_missing_one_is_admitted() {
+async fn a_foreign_origin_is_refused_and_a_missing_one_is_admitted() {
     use common::{json, login, post, post_from, send_with_host};
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -200,6 +173,193 @@ async fn without_a_configured_origin_a_foreign_origin_is_refused_and_a_missing_o
     );
     let none = post(&parts.app, pause, "", Some(&cookie)).await;
     assert_ne!(none.status(), 403, "curl sends no Origin");
+}
+
+/// A page on this host over plain HTTP could drive a bodiless write with a cookie some browsers send across
+/// schemes, so a listener that terminates TLS admits only its own `https://` origin.
+#[tokio::test]
+async fn an_origin_must_be_https_when_the_admin_listener_terminates_tls() {
+    use common::{cookie_of, json, post, send_with_host};
+    const HOST: &str = "phoebis.example";
+    let (tls, _up) = common::admin_app_tls().await;
+    let forced = send_with_host(
+        &tls,
+        "POST",
+        "/admin/session",
+        r#"{"secret":"admin-secret"}"#,
+        None,
+        "http://phoebis.example",
+        HOST,
+    )
+    .await;
+    assert_eq!(forced.status(), 403);
+    assert!(
+        forced.headers().get("set-cookie").is_none(),
+        "a refused login sets no cookie"
+    );
+    assert_eq!(json(forced).await["error"], "origin is not allowed");
+    let login = post(&tls, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
+    assert_eq!(login.status(), 204);
+    let cookie = cookie_of(&login);
+    let pause = "/admin/accounts/business/pause";
+    let plain = send_with_host(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+    )
+    .await;
+    assert_eq!(plain.status(), 403);
+    assert_eq!(json(plain).await["error"], "origin is not allowed");
+    let secure = send_with_host(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "https://phoebis.example",
+        HOST,
+    )
+    .await;
+    assert_ne!(
+        secure.status(),
+        403,
+        "the listener's own https origin is admitted"
+    );
+    let upgrade = handshake(&tls, &cookie, "http://phoebis.lan:8081").await;
+    assert_eq!(upgrade.status(), 403);
+    assert_eq!(json(upgrade).await["error"], "origin is not allowed");
+    let upgrade = handshake(&tls, &cookie, "https://phoebis.lan:8081").await;
+    assert_eq!(upgrade.status(), 400);
+    assert_eq!(
+        json(upgrade).await["error"],
+        "this route upgrades to a WebSocket"
+    );
+}
+
+/// A front that terminates TLS reports the browser's leg in `X-Forwarded-Proto`, and an https leg needs an https
+/// origin as a listener that terminates TLS does.
+#[tokio::test]
+async fn a_fronts_https_makes_the_origin_https_only_on_a_plain_listener() {
+    use common::{json, login, send_fronted};
+    const HOST: &str = "phoebis.example";
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pause = "/admin/accounts/business/pause";
+    let plain = send_fronted(
+        &app,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+        "https",
+    )
+    .await;
+    assert_eq!(plain.status(), 403);
+    assert_eq!(json(plain).await["error"], "origin is not allowed");
+    let secure = send_fronted(
+        &app,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "https://phoebis.example",
+        HOST,
+        "https",
+    )
+    .await;
+    assert_ne!(secure.status(), 403, "the front's https origin is admitted");
+    let chained = send_fronted(
+        &app,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+        "http, https",
+    )
+    .await;
+    assert_ne!(
+        chained.status(),
+        403,
+        "the first value is the browser's leg"
+    );
+}
+
+#[tokio::test]
+async fn a_plain_listener_behind_no_front_admits_an_origin_of_either_scheme() {
+    use common::{login, send_with_host};
+    const HOST: &str = "phoebis.example";
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pause = "/admin/accounts/business/pause";
+    for origin in ["http://phoebis.example", "https://phoebis.example"] {
+        let response = send_with_host(&app, "POST", pause, "", Some(&cookie), origin, HOST).await;
+        assert_ne!(
+            response.status(),
+            403,
+            "{origin} names the request's own host"
+        );
+    }
+}
+
+/// The scheme is required on a listener that terminates TLS whatever a front says, so a downgrade word relaxes
+/// nothing.
+#[tokio::test]
+async fn a_forwarded_header_on_a_listener_that_terminates_tls_changes_nothing() {
+    use common::{json, login, send_fronted};
+    const HOST: &str = "phoebis.example";
+    let (tls, _up) = common::admin_app_tls().await;
+    let cookie = login(&tls, "admin-secret").await;
+    let pause = "/admin/accounts/business/pause";
+    let downgraded = send_fronted(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+        "http",
+    )
+    .await;
+    assert_eq!(downgraded.status(), 403, "a downgrade word relaxes nothing");
+    assert_eq!(json(downgraded).await["error"], "origin is not allowed");
+    let secure = send_fronted(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "https://phoebis.example",
+        HOST,
+        "http",
+    )
+    .await;
+    assert_ne!(
+        secure.status(),
+        403,
+        "the listener's own https origin is admitted"
+    );
+    let plain = send_fronted(
+        &tls,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "http://phoebis.example",
+        HOST,
+        "https",
+    )
+    .await;
+    assert_eq!(plain.status(), 403);
+    assert_eq!(json(plain).await["error"], "origin is not allowed");
 }
 
 #[tokio::test]
@@ -247,6 +407,208 @@ async fn a_body_carrying_mutation_needs_the_json_content_type() {
         415,
         "a mutation with no body carries no content type"
     );
+}
+
+/// A scripted call: `Authorization: Bearer <bearer>`, no cookie, and the `Origin` and body given, a body typed
+/// `application/json`.
+async fn with_bearer(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    bearer: &str,
+    origin: Option<&str>,
+    body: &str,
+) -> axum::http::Response<axum::body::Body> {
+    let content_type = (!body.is_empty()).then_some("application/json");
+    let authorization = format!("Bearer {bearer}");
+    authorized(
+        app,
+        method,
+        path,
+        &authorization,
+        origin,
+        content_type,
+        body,
+    )
+    .await
+}
+
+/// A call carrying the `Authorization` value given whole, no cookie, and the `Origin` and `Content-Type` given.
+async fn authorized(
+    app: &axum::Router,
+    method: &str,
+    path: &str,
+    authorization: &str,
+    origin: Option<&str>,
+    content_type: Option<&str>,
+    body: &str,
+) -> axum::http::Response<axum::body::Body> {
+    use tower::ServiceExt;
+    let mut request = axum::http::Request::builder()
+        .method(method)
+        .uri(path)
+        .header("authorization", authorization);
+    if let Some(origin) = origin {
+        request = request.header("origin", origin);
+    }
+    if let Some(content_type) = content_type {
+        request = request.header("content-type", content_type);
+    }
+    if !body.is_empty() {
+        request = request.header("content-length", body.len().to_string());
+    }
+    app.clone()
+        .oneshot(
+            request
+                .body(axum::body::Body::from(body.to_owned()))
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_bearer_admits_a_read_and_a_mutation_without_a_cookie_or_an_origin() {
+    use common::json;
+    let (app, _up) = common::admin_app().await;
+    let system = with_bearer(&app, "GET", "/admin/system", "admin-secret", None, "").await;
+    assert_eq!(system.status(), 200);
+    let pause = "/admin/accounts/business/pause";
+    let paused = with_bearer(
+        &app,
+        "POST",
+        pause,
+        "admin-secret",
+        Some("http://elsewhere"),
+        "",
+    )
+    .await;
+    assert_eq!(paused.status(), 204, "the bearer skips the Origin check");
+    let whoami = with_bearer(&app, "GET", "/admin/session", "admin-secret", None, "").await;
+    assert_eq!(whoami.status(), 200);
+    assert_eq!(
+        json(whoami).await,
+        serde_json::json!({"session_id": "bearer"})
+    );
+    // The scheme word is matched ignoring case, and the JSON rule still holds under a bearer.
+    let lower = authorized(
+        &app,
+        "GET",
+        "/admin/system",
+        "bearer admin-secret",
+        None,
+        None,
+        "",
+    )
+    .await;
+    assert_eq!(lower.status(), 200);
+    let untyped = authorized(
+        &app,
+        "POST",
+        "/admin/keys",
+        "Bearer admin-secret",
+        None,
+        Some("text/plain"),
+        r#"{"id":"k","label":"K","pool_id":"main"}"#,
+    )
+    .await;
+    assert_eq!(untyped.status(), 415);
+    assert_eq!(
+        json(untyped).await["error"],
+        "content type must be application/json"
+    );
+}
+
+#[tokio::test]
+async fn a_wrong_bearer_is_refused_and_counts_toward_the_throttle() {
+    use common::{json, post};
+    let (app, _up) = common::admin_app().await;
+    for attempt in 0..5 {
+        let refused = with_bearer(&app, "GET", "/admin/system", "nope", None, "").await;
+        assert_eq!(refused.status(), 401, "attempt {attempt}");
+        assert_eq!(json(refused).await["error"], "secret does not match");
+    }
+    let sixth = with_bearer(&app, "GET", "/admin/system", "nope", None, "").await;
+    assert_eq!(sixth.status(), 429);
+    assert_eq!(
+        json(sixth).await["error"],
+        "too many failed logins, try again in a minute"
+    );
+    let login = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
+    assert_eq!(
+        login.status(),
+        429,
+        "the bearers' failures throttle the login"
+    );
+    let correct = with_bearer(&app, "GET", "/admin/system", "admin-secret", None, "").await;
+    assert_eq!(
+        correct.status(),
+        429,
+        "a throttled process refuses a bearer too"
+    );
+}
+
+#[tokio::test]
+async fn a_bearer_on_the_login_route_is_ignored() {
+    use common::json;
+    let (app, _up) = common::admin_app().await;
+    let bodiless = with_bearer(&app, "POST", "/admin/session", "admin-secret", None, "").await;
+    assert_eq!(bodiless.status(), 400);
+    assert_eq!(json(bodiless).await["error"], "body must carry a secret");
+    // The login stays the cookie's door: its Origin check holds with a bearer on it, and a wrong bearer neither
+    // refuses a correct login nor counts against the throttle.
+    let login = r#"{"secret":"admin-secret"}"#;
+    let foreign = with_bearer(
+        &app,
+        "POST",
+        "/admin/session",
+        "admin-secret",
+        Some("http://elsewhere"),
+        login,
+    )
+    .await;
+    assert_eq!(foreign.status(), 403);
+    assert_eq!(json(foreign).await["error"], "origin is not allowed");
+    for attempt in 0..6 {
+        let wrong = with_bearer(&app, "POST", "/admin/session", "nope", None, login).await;
+        assert_eq!(wrong.status(), 204, "attempt {attempt}");
+        assert!(wrong.headers().contains_key("set-cookie"));
+    }
+}
+
+#[tokio::test]
+async fn a_bearer_cannot_hold_the_live_socket() {
+    use futures::StreamExt;
+    let (app, _up) = common::admin_app().await;
+    let addr = common::serve(app).await;
+    let mut request =
+        tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
+            "ws://{addr}/admin/live"
+        ))
+        .unwrap();
+    request
+        .headers_mut()
+        .insert("authorization", "Bearer admin-secret".parse().unwrap());
+    match tokio_tungstenite::connect_async(request).await {
+        Err(tokio_tungstenite::tungstenite::Error::Http(refused)) => {
+            assert!(refused.status().is_client_error(), "{refused:?}");
+        }
+        Err(other) => panic!("the upgrade failed below HTTP: {other:?}"),
+        Ok((mut ws, _)) => {
+            // Open, the socket ends at the feed's first liveness check, before the snapshot leaves.
+            let first = tokio::time::timeout(std::time::Duration::from_secs(5), ws.next())
+                .await
+                .expect("the socket ends without waiting on the client");
+            assert!(
+                matches!(
+                    first,
+                    None | Some(Err(_))
+                        | Some(Ok(tokio_tungstenite::tungstenite::Message::Close(_)))
+                ),
+                "a bearer was served the feed: {first:?}"
+            );
+        }
+    }
 }
 
 #[tokio::test]
@@ -781,7 +1143,11 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
     let disconnected = json(get(&h.app, path, Some(&cookie)).await).await;
     assert_eq!(answer(&disconnected), no_credential, "{disconnected}");
     h.store
-        .set_state("business", phoebis_store::AccountState::Unpaired)
+        .set_state(
+            "business",
+            phoebis_store::AccountState::Unpaired,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     let unpaired = json(get(&h.app, path, Some(&cookie)).await).await;
     assert_eq!(answer(&unpaired), no_credential, "{unpaired}");
@@ -860,7 +1226,9 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
 #[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
-    use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
+    use phoebis_routing::{
+        Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    };
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
@@ -875,6 +1243,7 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
                         utilization: 0.25,
                         reset: Some(NOW + 3_600_000),
                         observed_at: NOW - 120_000,
+                        source: WindowSource::Stored,
                     },
                 )
                 .with(
@@ -883,9 +1252,11 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
                         utilization: 0.5,
                         reset: Some(NOW + 86_400_000),
                         observed_at: NOW - 60_000,
+                        source: WindowSource::Stored,
                     },
                 ),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     let held = wait_json(&h.app, path, &cookie, |v| v["error"].is_null()).await;
@@ -929,7 +1300,8 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
 async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
     use phoebis_routing::{
-        Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+        Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+        SEVEN_DAY_FABLE,
     };
     const HOUR: i64 = 3_600_000;
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
@@ -939,6 +1311,7 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         utilization,
         reset,
         observed_at: read_at,
+        source: WindowSource::Stored,
     };
     h.router
         .report(Report::Sample {
@@ -948,6 +1321,7 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
                 .with(SEVEN_DAY, reading(0.5, Some(NOW + 72 * HOUR)))
                 .with(SEVEN_DAY_FABLE, reading(0.2, Some(NOW + 72 * HOUR))),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     wait_json(&h.app, "/admin/accounts/business/usage", &cookie, |v| {
@@ -1102,58 +1476,65 @@ async fn verifying_an_api_key_account_reports_the_upstream_status() {
 }
 
 #[tokio::test]
-async fn mutations_require_the_configured_origin() {
-    use common::{cookie_of, get, post, post_from};
-    const ORIGIN: &str = "https://phoebis.example";
-    let (app, _up) = common::admin_app_with_origin(ORIGIN).await;
-    assert_eq!(
-        post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None)
-            .await
-            .status(),
-        403,
-        "a forced login is the one mutation an unauthenticated caller can reach"
-    );
-    let ok = post_from(
+async fn a_refused_origin_answers_no_store_and_nosniff_and_a_login_needs_no_origin() {
+    use common::{cookie_of, get, json, post, send_with_host};
+    const HOST: &str = "phoebis.example";
+    let (app, _up) = common::admin_app().await;
+    // A forced login is the one mutation an unauthenticated caller can reach, so the gate checks it too.
+    let forced = send_with_host(
         &app,
+        "POST",
         "/admin/session",
         r#"{"secret":"admin-secret"}"#,
         None,
-        ORIGIN,
+        "https://evil.example",
+        HOST,
     )
     .await;
-    assert_eq!(ok.status(), 204);
-    let cookie = cookie_of(&ok);
-    let bare = post(&app, "/admin/accounts/business/pause", "", Some(&cookie)).await;
-    assert_eq!(bare.status(), 403);
+    assert_eq!(forced.status(), 403);
+    assert!(
+        forced.headers().get("set-cookie").is_none(),
+        "a refused login sets no cookie"
+    );
+    assert_eq!(json(forced).await["error"], "origin is not allowed");
+    let login = post(&app, "/admin/session", r#"{"secret":"admin-secret"}"#, None).await;
     assert_eq!(
-        bare.headers().get("cache-control").unwrap(),
+        login.status(),
+        204,
+        "a login with no Origin is the operator's own hand"
+    );
+    let cookie = cookie_of(&login);
+    let pause = "/admin/accounts/business/pause";
+    let forged = send_with_host(
+        &app,
+        "POST",
+        pause,
+        "",
+        Some(&cookie),
+        "https://evil.example",
+        HOST,
+    )
+    .await;
+    assert_eq!(forged.status(), 403);
+    assert_eq!(
+        forged.headers().get("cache-control").unwrap(),
         "no-store",
         "a refusal is no more cacheable than an answer"
     );
     assert_eq!(
-        bare.headers().get("x-content-type-options").unwrap(),
+        forged.headers().get("x-content-type-options").unwrap(),
         "nosniff",
         "and no more sniffable"
     );
     assert_eq!(
-        post_from(
+        send_with_host(
             &app,
-            "/admin/accounts/business/pause",
+            "POST",
+            pause,
             "",
             Some(&cookie),
-            "https://evil.example"
-        )
-        .await
-        .status(),
-        403
-    );
-    assert_eq!(
-        post_from(
-            &app,
-            "/admin/accounts/business/pause",
-            "",
-            Some(&cookie),
-            ORIGIN
+            "https://phoebis.example",
+            HOST
         )
         .await
         .status(),
@@ -1459,11 +1840,11 @@ async fn a_confirmed_pairing_leaves_the_vault_ten_minutes_after_its_confirm() {
     );
 }
 
-/// An ended pairing's lifetime runs from its first end: a repeated owner `DELETE` answers as the first did and
-/// never extends how long the session and its vault record are kept.
+/// An ended pairing's lifetime runs from its first end: a repeated owner `DELETE` answers `409` and never extends
+/// how long the session and its vault record are kept.
 #[tokio::test]
 async fn a_repeated_delete_of_an_ended_pairing_keeps_its_first_end() {
-    use common::{delete, login};
+    use common::{delete, json, login};
     use std::sync::atomic::Ordering;
     let parts = common::admin_parts_sweepable().await;
     let cookie = login(&parts.app, "admin-secret").await;
@@ -1473,12 +1854,39 @@ async fn a_repeated_delete_of_an_ended_pairing_keeps_its_first_end() {
     parts
         .clock_cell
         .store(common::NOW + 300_000, Ordering::SeqCst);
-    assert_eq!(delete(&parts.app, &path, Some(&cookie)).await.status(), 204);
+    let again = delete(&parts.app, &path, Some(&cookie)).await;
+    assert_eq!(again.status(), 409);
+    assert_eq!(
+        json(again).await["error"],
+        "pairing session already consumed"
+    );
     let at = common::NOW + 600_000;
     assert_eq!(
         (parts.vault.sweep(at), parts.pairing.sweep(at)),
         (1, 1),
         "both leave ten minutes after the first DELETE"
+    );
+}
+
+#[test]
+fn a_record_discarded_twice_leaves_one_lifetime_after_its_first_discard() {
+    let vault = phoebis_admin::PairingVault::new();
+    vault.open(
+        "pairing",
+        "business",
+        "owner",
+        0,
+        common::NOW + 600_000,
+        common::NOW,
+    );
+    vault.discard("pairing", common::NOW);
+    // A callback whose exchange returns after the owner cancelled discards the record a second time.
+    vault.discard("pairing", common::NOW + 300_000);
+    assert_eq!(vault.sweep(common::NOW + 600_000 - 1), 0);
+    assert_eq!(
+        vault.sweep(common::NOW + 600_000),
+        1,
+        "the record leaves ten minutes after its first discard"
     );
 }
 
@@ -2235,6 +2643,9 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
         detail: Some(
             r#"{"agent_id":"main","epoch":2,"from_account":"direct","reason":"cooldown"}"#.into(),
         ),
+        pool_id: None,
+        agent_id: Some("main".into()),
+        request_id: None,
     }));
 
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {

@@ -8,7 +8,7 @@ use axum::body::Body;
 use common::*;
 use fake_upstream::{FakeUpstream, Rule};
 use http_body_util::BodyExt;
-use phoebis_store::{AccountState, NewBundle, Secret};
+use phoebis_store::{AccountState, NewBundle, Secret, StateCause};
 use tower::ServiceExt;
 
 const A: &str = "sk-ant-api03-AAAA";
@@ -142,11 +142,13 @@ async fn a_disconnected_and_reconnected_account_serves_its_new_credential() {
     let up = upstream().await;
     let h = harness(&up, &[api_key("a", A, 0)], PoolSpec::default()).await;
     legs(&h, 1).await;
-    h.store.bump_lifecycle("a").unwrap();
+    h.store.bump_lifecycle("a", StateCause::Operator).unwrap();
     h.store
         .set_api_key_secret("a", &Secret::new(A_ROTATED))
         .unwrap();
-    h.store.set_state("a", AccountState::Ready).unwrap();
+    h.store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
     h.router.reload().await.unwrap();
     let snapshot = h.router.snapshot();
     let row = snapshot.account("a").unwrap();
