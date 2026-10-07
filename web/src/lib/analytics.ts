@@ -1,6 +1,6 @@
 import type { Api } from '@/api/client';
 import type { Account, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts } from '@/api/types';
-import { tierCapacity } from '@/lib/costs';
+import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 
 /** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
@@ -155,11 +155,14 @@ export async function readBurn(
 
 /**
  * The accounts whose stored tier the cost model sizes, matched as the ledger matches it: as stored, then with the
- * `default_` prefix taken off or put on, since only one spelling has been seen on the wire. A tier the model lists with
- * no 5-hour capacity sizes nothing, since the route prices no share of that window on it.
+ * `default_` prefix taken off or put on, since only one spelling has been seen on the wire. The plan chart reads a
+ * listed tier as sized and draws a window it has no capacity on as model unlisted. With `window`, a tier sizes an
+ * account only where it has a capacity on that window, as the shed preview needs for the 5-hour window: the sessions
+ * route reads no burn for a pin of a tier without one.
  */
-export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts): Set<string> {
-  return new Set(accounts.filter((a) => a.subscription !== null && tierCapacity(costs, a.subscription.rateLimitTier, 'five_hour') !== null).map((a) => a.id));
+export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, window?: CostWindow): Set<string> {
+  const sizes = (tier: string) => (window === undefined ? tierRow(costs, tier) !== undefined : tierCapacity(costs, tier, window) !== null);
+  return new Set(accounts.filter((a) => a.subscription !== null && sizes(a.subscription.rateLimitTier)).map((a) => a.id));
 }
 
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */

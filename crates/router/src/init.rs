@@ -566,7 +566,7 @@ fn fills(plan: &Plan) -> Vec<Fill> {
     let (key_file, tables) = if plan.container {
         (PathBuf::from(CONTAINER_KEY_FILE), plan.data_dir.clone())
     } else {
-        // The service recipe installs the price table beside the bootstrap file, since the loader's relative default
+        // The service recipe installs the price table beside the bootstrap file, since the loader's relative defaults
         // would resolve against whatever directory starts the process.
         (
             plan.key_file.clone(),
@@ -579,13 +579,13 @@ fn fills(plan: &Plan) -> Vec<Fill> {
         listen_fill("proxy", &plan.proxy),
         value_fill(
             "stats",
-            "ledger_path",
-            path(&plan.data_dir.join("ledger.sqlite")),
+            "api_prices_path",
+            path(&tables.join("api_prices.yaml")),
         ),
         value_fill(
             "stats",
-            "api_prices_path",
-            path(&tables.join("api_prices.yaml")),
+            "ledger_path",
+            path(&plan.data_dir.join("ledger.sqlite")),
         ),
         value_fill(
             "stats",

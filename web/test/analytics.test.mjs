@@ -269,17 +269,30 @@ test("the mock's burn fold prices only rows with tokens and nulls a window on an
   for (const rows of [[priced, unpriced], [unpriced, priced]]) assert.equal(shareOf(rows), null, 'a row the cost model cannot price nulls the window');
 });
 
-test('an account is sized when the cost model holds its stored tier', () => {
-  const account = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
-  const accounts = [account('stored', 'default_claude_max_20x'), account('bare', 'claude_max_20x'), account('team', 'claude_team'), account('key', null)];
-  const costs = { ...EMPTY, capacity: { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } } };
-  assert.deepEqual([...d.sizedAccounts(accounts, costs)].sort(), ['bare', 'stored']);
-  const unmeasured = { ...costs, capacity: { ...costs.capacity, default_claude_ai: { fiveHour: null, sevenDay: 1 } } };
+const sizedAccount = (id, rateLimitTier) => ({ id, kind: rateLimitTier === null ? 'api_key' : 'oauth', subscription: rateLimitTier === null ? null : { rateLimitTier } });
+const SIZED_ACCOUNTS = [sizedAccount('stored', 'default_claude_max_20x'), sizedAccount('bare', 'claude_max_20x'), sizedAccount('team', 'claude_team'), sizedAccount('key', null)];
+const SIZED_COSTS = { ...EMPTY, capacity: { default_claude_max_20x: { fiveHour: 1, sevenDay: 1 } } };
+// Pro listed with a 7-day capacity alone, Max 5x with a 5-hour capacity alone.
+const ONE_WINDOW = { ...SIZED_COSTS, capacity: { ...SIZED_COSTS.capacity, default_claude_ai: { fiveHour: null, sevenDay: 1 }, default_claude_max_5x: { fiveHour: 1, sevenDay: null } } };
+const ONE_WINDOW_ACCOUNTS = [...SIZED_ACCOUNTS, sizedAccount('pro', 'default_claude_ai'), sizedAccount('max5', 'default_claude_max_5x')];
+
+test('an account is sized for the plan chart when the cost model lists its stored tier, whatever windows it has a capacity on', () => {
+  assert.deepEqual([...d.sizedAccounts(SIZED_ACCOUNTS, SIZED_COSTS)].sort(), ['bare', 'stored']);
   assert.deepEqual(
-    [...d.sizedAccounts([...accounts, account('pro', 'default_claude_ai')], unmeasured)].sort(),
-    ['bare', 'stored'],
-    'a tier the model lists with no 5-hour capacity sizes nothing, as the route prices nothing on it',
+    [...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW)].sort(),
+    ['bare', 'max5', 'pro', 'stored'],
+    'a listed tier with no capacity on a window draws that window as model unlisted, never as tier unknown',
   );
+});
+
+test('an account is sized on a window only when its listed tier has a capacity there, as the shed preview reads the 5-hour one', () => {
+  assert.deepEqual([...d.sizedAccounts(SIZED_ACCOUNTS, SIZED_COSTS, 'five_hour')].sort(), ['bare', 'stored']);
+  assert.deepEqual(
+    [...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW, 'five_hour')].sort(),
+    ['bare', 'max5', 'stored'],
+    'the sessions route reads no burn for a pin of a tier with no 5-hour capacity, so the preview leaves it out',
+  );
+  assert.deepEqual([...d.sizedAccounts(ONE_WINDOW_ACCOUNTS, ONE_WINDOW, 'seven_day')].sort(), ['bare', 'pro', 'stored'], 'the window named is the one read');
 });
 
 test('a burn read outside the account grouping reads no accounts, so a failed account read leaves it whole', async () => {
