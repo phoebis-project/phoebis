@@ -1,15 +1,18 @@
-//! `account add`, `account clear-cooldown`, `account pair`, `account confirm`, `pool create`, `key create` and `ledger
-//! replay-parked` from the outside: the binary against a router started in-process on loopback, over plain HTTP and
-//! over TLS, with the file, without it, and with a refused secret, the fake upstream standing in for the provider a
-//! pairing exchanges its code with; and `clear-cooldown` and `key create` against a scripted admin listener, each case
-//! pinning one of two things: the one request a subcommand sends, or an answer it cannot print.
+//! `account add`, `account clear-cooldown`, `account pair`, `account confirm`, `pool create`, `key create`, `ledger
+//! replay-parked` and `tls reload` from the outside: the binary against a router started in-process on loopback, over
+//! plain HTTP and over TLS, with the file, without it, and with a refused secret, the fake upstream standing in for the
+//! provider a pairing exchanges its code with, and `clear-cooldown` and `key create` against a scripted admin listener,
+//! each case pinning one of two things: the one request a subcommand sends, or an answer it cannot print.
 
 use std::path::{Path, PathBuf};
 use std::process::{Output, Stdio};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
-use fake_upstream::{generate_pair, FakeUpstream, GeneratedPair, Respond, Rule};
+use fake_upstream::{
+    generate_pair, generate_pair_valid_between, generate_pair_valid_until, FakeUpstream,
+    GeneratedPair, Respond, Rule,
+};
 use hyper::Method;
 use phoebis_profile::fixtures::{control_response, ControlFixture};
 use phoebis_router::admin_client::{AdminClient, Common};
@@ -59,6 +62,8 @@ struct Running {
     stop: tokio::sync::oneshot::Sender<()>,
     server: tokio::task::JoinHandle<anyhow::Result<()>>,
     admin: u16,
+    /// The CA that signed the admin listener's pair, written by `start` only when it was given one.
+    admin_ca: Option<PathBuf>,
     config: PathBuf,
     dir: tempfile::TempDir,
     secret_env: String,
@@ -84,20 +89,29 @@ impl Running {
     }
 
     /// A route's answer read through the subcommands' own client, so the check shares no code with the subcommand
-    /// beyond the transport.
+    /// beyond the transport. The call goes over TLS, trusting the admin pair's CA, when the router was started with
+    /// one.
+    ///
+    /// The lock spans the call too: a call over TLS builds its connector through `SslConnector::builder`, which reads
+    /// `SSL_CERT_FILE` through C `getenv`, and each test runs on its own current-thread runtime, so no task of this
+    /// test waits on the lock it holds.
+    #[allow(clippy::await_holding_lock)]
     async fn get(&self, path: &str) -> Value {
+        let scheme = if self.admin_ca.is_some() {
+            "https"
+        } else {
+            "http"
+        };
         let common = Common {
-            ca: None,
+            ca: self.admin_ca.clone(),
             json: false,
             secret_env: Some(self.secret_env.clone()),
             timeout: 10,
-            url: Some(format!("http://127.0.0.1:{}", self.admin)),
+            url: Some(format!("{scheme}://127.0.0.1:{}", self.admin)),
         };
-        let client = {
-            let _env = env_lock();
-            std::env::set_var(&self.secret_env, ADMIN_SECRET);
-            AdminClient::from_flags(&common, &self.config).unwrap()
-        };
+        let _env = env_lock();
+        std::env::set_var(&self.secret_env, ADMIN_SECRET);
+        let client = AdminClient::from_flags(&common, &self.config).unwrap();
         client
             .expect(Method::GET, path, None)
             .await
@@ -232,8 +246,8 @@ fn state(start: &Value) -> &str {
         .unwrap()
 }
 
-/// Starts the router with `admin_pair`, when given, as `admin.tls`, the admin secret read from `secret_env`, and an
-/// upstream whose discovery answers 200 and whose token, profile and roles routes answer the control fixtures, so a
+/// Starts the router with `admin_pair`, when given, as `admin.tls` and its CA written to `admin-ca.pem`, the admin
+/// secret read from `secret_env`, and an upstream whose discovery answers 200 and whose token, profile and roles routes answer the control fixtures, so a
 /// pairing's exchange reaches it as the provider; returns once the admin listener accepts, and a start that ends first
 /// fails the test with its own error rather than at the settle deadline.
 async fn start(admin_pair: Option<&GeneratedPair>, secret_env: &str) -> Running {
@@ -267,6 +281,11 @@ async fn start(admin_pair: Option<&GeneratedPair>, secret_env: &str) -> Running 
     .await;
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("upstream-ca.pem"), up.ca_pem()).unwrap();
+    let admin_ca = admin_pair.map(|pair| {
+        let path = dir.path().join("admin-ca.pem");
+        std::fs::write(&path, &pair.ca_pem).unwrap();
+        path
+    });
     let admin_tls = match admin_pair {
         Some(pair) => {
             let (cert, key) = pair.write_to(dir.path(), "admin");
@@ -327,6 +346,7 @@ upstream:
         stop,
         server,
         admin,
+        admin_ca,
         config,
         dir,
         secret_env: secret_env.to_owned(),
@@ -1138,4 +1158,117 @@ async fn key_create_exits_one_naming_the_rotate_route_when_the_answer_carries_no
         ),
         "{stderr}"
     );
+}
+
+/// The hosts an admin pair names, so the file's `https://127.0.0.1:{port}` verifies.
+const ADMIN_HOSTS: [&str; 2] = ["localhost", "127.0.0.1"];
+
+/// `--ca` with the admin pair's CA, which `start` wrote.
+fn trusting(running: &Running) -> String {
+    running
+        .admin_ca
+        .as_ref()
+        .expect("the router was started with an admin pair")
+        .display()
+        .to_string()
+}
+
+#[tokio::test]
+async fn tls_reload_prints_one_line_per_listener_and_exits_0_once_every_pair_reloaded() {
+    let pair = generate_pair_valid_between(&ADMIN_HOSTS, (2020, 1, 1), (2099, 1, 1));
+    let running = start(Some(&pair), "TEST_SUB_TLS_RELOAD").await;
+    let reloaded = running
+        .run(&["tls", "reload", "--ca", &trusting(&running)])
+        .await;
+    assert_exit(&reloaded, 0);
+    let (stdout, stderr) = text(&reloaded);
+    assert_eq!(
+        stdout,
+        format!(
+            "proxy: plain HTTP, nothing to reload\nadmin: reloaded, certificate {} expires \
+             2099-01-01T00:00:00Z\n",
+            running.dir.path().join("admin.pem").display()
+        )
+    );
+    assert_eq!(stderr, "");
+    assert_no_secret(&reloaded, &[ADMIN_SECRET, &pair.key_pem]);
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn tls_reload_names_a_refused_pair_and_exits_1() {
+    let pair = generate_pair(&ADMIN_HOSTS);
+    let running = start(Some(&pair), "TEST_SUB_TLS_REFUSED_PAIR").await;
+    let (cert, key) = (
+        running.dir.path().join("admin.pem"),
+        running.dir.path().join("admin.key"),
+    );
+    std::fs::write(&key, generate_pair(&ADMIN_HOSTS).key_pem).unwrap();
+    let refused = running
+        .run(&["tls", "reload", "--ca", &trusting(&running)])
+        .await;
+    assert_exit(&refused, 1);
+    assert_eq!(
+        text(&refused).0,
+        format!(
+            "proxy: plain HTTP, nothing to reload\nadmin: not reloaded, admin.tls.key_file {}: does not match \
+             the certificate in {}. The router keeps the pair it was serving.\n",
+            key.display(),
+            cert.display()
+        )
+    );
+    assert_no_secret(&refused, &[ADMIN_SECRET]);
+    // Over TLS under the pair's CA: the listener still serves the pair it loaded at start.
+    let system = running.get("/admin/system").await;
+    assert!(system["version"].is_string(), "{system}");
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn tls_reload_json_prints_the_routes_body() {
+    // Four hundred days and an hour on: four hundred whole days whatever the clock reads.
+    let not_after = jiff::Timestamp::now().as_second() + 400 * 86_400 + 3_600;
+    let pair = generate_pair_valid_until(&ADMIN_HOSTS, not_after);
+    let running = start(Some(&pair), "TEST_SUB_TLS_JSON").await;
+    let printed = running
+        .run(&["tls", "reload", "--ca", &trusting(&running), "--json"])
+        .await;
+    assert_exit(&printed, 0);
+    let body: Value = serde_json::from_str(&text(&printed).0).unwrap();
+    assert_eq!(
+        body,
+        serde_json::json!({"listeners": [
+            {"listener": "proxy", "serving": "plain"},
+            {
+                "listener": "admin",
+                "serving": "tls",
+                "reloaded": true,
+                "cert_file": running.dir.path().join("admin.pem").display().to_string(),
+                "expires": jiff::Timestamp::from_second(not_after).unwrap().to_string(),
+                "days_left": 400,
+            },
+        ]})
+    );
+    running.stop().await;
+}
+
+#[tokio::test]
+async fn tls_reload_with_a_refused_secret_exits_1_and_prints_no_secret() {
+    const WRONG: &str = "not-the-admin-secret-tls";
+    let pair = generate_pair(&ADMIN_HOSTS);
+    let running = start(Some(&pair), "TEST_SUB_TLS_WRONG").await;
+    let refused = phoebis(
+        &["tls", "reload", "--ca", &trusting(&running)],
+        &running.config,
+        &[("TEST_SUB_TLS_WRONG", WRONG)],
+        &[],
+        None,
+    )
+    .await;
+    assert_exit(&refused, 1);
+    let (stdout, stderr) = text(&refused);
+    assert_eq!(stdout, "");
+    assert_eq!(stderr, "the admin secret was refused\n");
+    assert_no_secret(&refused, &[WRONG, ADMIN_SECRET]);
+    running.stop().await;
 }

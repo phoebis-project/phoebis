@@ -1,7 +1,7 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
 //! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins,
-//! copy both databases into a backup, or create or pair an account, create a pool or a key, clear a cooldown and land
-//! the ledger's parked records over the admin API.
+//! have it re-read its listeners' certificate pairs, copy both databases into a backup, or create or pair an account,
+//! create a pool or a key, clear a cooldown and land the ledger's parked records over the admin API.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -9,10 +9,11 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
-use phoebis_router::admin_client::{self, AdminClient};
+use phoebis_router::admin_client::{self, AdminClient, ClientError};
 use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
 use phoebis_router::subcommands::{self, AccountCommand, KeyCommand, LedgerCommand, PoolCommand};
+use phoebis_router::tls_reload::{self, TlsReloadArgs};
 use phoebis_router::{init, tls};
 
 #[derive(Parser)]
@@ -64,6 +65,16 @@ enum Command {
     /// Probe the proxy listener, read the admin API and print one screen of readiness, pools, accounts and live pins:
     /// exit 0 when ready, 1 otherwise.
     Status(StatusArgs),
+    /// Ask the running router to re-read every listener's certificate pair.
+    #[command(subcommand)]
+    Tls(TlsCommand),
+}
+
+#[derive(Subcommand)]
+enum TlsCommand {
+    /// Re-read every listener's certificate pair over the admin API: exit 0 once every pair reloaded, 1 otherwise. A
+    /// pair that does not load leaves the listener serving the pair it had.
+    Reload(TlsReloadArgs),
 }
 
 fn main() -> anyhow::Result<()> {
@@ -308,6 +319,7 @@ fn main() -> anyhow::Result<()> {
             std::process::exit(code)
         }
         Some(Command::Status(args)) => run_status(&cli.config, &args),
+        Some(Command::Tls(TlsCommand::Reload(args))) => run_tls_reload(&cli.config, &args),
         None => {
             let config = phoebis_router::config::load(&cli.config)?;
             tokio::runtime::Builder::new_multi_thread()
@@ -460,6 +472,45 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
         .write_all(printed.as_bytes())
         .and_then(|()| stdout.flush());
     std::process::exit(status::exit_code(&reads))
+}
+
+/// `phoebis tls reload`. It never returns, for the reason `run_status` gives.
+fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
+    let client = AdminClient::from_flags(&args.common, config_path).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(error.exit_code())
+    });
+    let runtime = admin_client::runtime().unwrap_or_else(|error| {
+        eprintln!("cannot start the runtime: {error}");
+        std::process::exit(1)
+    });
+    let body = runtime
+        .block_on(tls_reload::read(
+            &client,
+            Duration::from_secs(args.common.timeout),
+        ))
+        .unwrap_or_else(|error| {
+            match &error {
+                ClientError::Transport { url, reason } => {
+                    eprintln!("the admin listener did not answer on {url}: {reason}")
+                }
+                error => eprintln!("{error}"),
+            }
+            std::process::exit(error.exit_code())
+        });
+    let printed = if args.common.json {
+        serde_json::to_string_pretty(&body)
+            .map(|json| format!("{json}\n"))
+            .unwrap_or_default()
+    } else {
+        tls_reload::render(&body)
+    };
+    let mut stdout = std::io::stdout().lock();
+    // The router has reloaded by now, and a reader that went away does not undo it.
+    let _ = stdout
+        .write_all(printed.as_bytes())
+        .and_then(|()| stdout.flush());
+    std::process::exit(tls_reload::exit_code(&body))
 }
 
 #[cfg(test)]

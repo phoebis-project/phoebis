@@ -271,8 +271,19 @@ grace period that covers the drain, and the new binary migrates both databases o
 compose ps` reads `healthy` once `phoebis health` has read the router as ready, and `GET /admin/system` confirms the
 version.
 
-A certificate pair is read at start and never watched: a renewal is stop, replace, start, and the 30-second drain,
-inside the 40-second stop grace, bounds the gap.
+A listener's pair is read at start and re-read on `phoebis tls reload`. Write the certificate and the key, then reload.
+`certbot` and `acme.sh` do so in their deploy hooks, here for the service unit's paths and its environment file:
+
+```sh
+sudo certbot certonly -d phoebis.example.com --deploy-hook '
+  install -m 0644 "$RENEWED_LINEAGE/fullchain.pem" /etc/phoebis/proxy.pem &&
+  install -m 0640 -g phoebis "$RENEWED_LINEAGE/privkey.pem" /etc/phoebis/proxy.key &&
+  set -a && . /etc/phoebis/phoebis.env && set +a &&
+  phoebis tls reload --config /etc/phoebis/config.yaml'
+```
+
+A pair that fails to load keeps the old pair live and the command exits 1 with the loader's line. The next reload
+clears it.
 
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
 own transaction. The registry's migrations may drop or rebuild a table, and a ledger migration can rebuild a table

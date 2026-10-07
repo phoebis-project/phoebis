@@ -309,6 +309,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     });
     // Both daily budgets are read back from the store so a restart resets neither cap.
     keepalive.load_spent_today().await;
+    // Empty here because the admin state and the attention reader take it before the pairs load below. The load fills
+    // it before any listener binds, so nothing reads it empty.
+    let tls_live = tls::LiveSet::new();
     let (attention, mut attention_handles) =
         phoebis_attention::spawn(phoebis_attention::AttentionParts {
             bus: bus.clone(),
@@ -341,6 +344,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         },
         clock: clock.clone(),
         tls: config.admin.tls.is_some(),
+        tls_reload: Some(tls_live.clone()),
         vault: vault.clone(),
         started_at: (clock)(),
         router: router_task.clone(),
@@ -427,8 +431,12 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             tracing::warn!("{warning}");
         }
     }
-    let proxy_acceptor = acceptor(proxy_tls);
-    let admin_acceptor = acceptor(admin_tls);
+    let loaded_at = clock();
+    let proxy_live = live_pair("proxy.tls", proxy_tls, loaded_at);
+    let admin_live = live_pair("admin.tls", admin_tls, loaded_at);
+    let proxy_acceptor = acceptor(&proxy_live);
+    let admin_acceptor = acceptor(&admin_live);
+    tls_live.fill(vec![("proxy", proxy_live), ("admin", admin_live)]);
     let proxy_listener = tokio::net::TcpListener::bind(config.proxy.listen)
         .await
         .with_context(|| format!("binding proxy.listen {}", config.proxy.listen))?;
@@ -698,12 +706,17 @@ fn router_config(
     }
 }
 
-/// The accept loop's acceptor for what `tls::load` answered.
-fn acceptor(serving: tls::Serving) -> tls::Acceptor {
+/// The listener's pair as the router serves it, for what `tls::load` answered: `None` is plain HTTP.
+fn live_pair(key: &'static str, serving: tls::Serving, now: i64) -> Option<tls::Live> {
     match serving {
         tls::Serving::Plain => None,
-        tls::Serving::Tls(loaded) => Some(Arc::new(loaded.acceptor)),
+        tls::Serving::Tls(loaded) => Some(tls::Live::new(key, loaded, now)),
     }
+}
+
+/// The accept loop's acceptor: the pair's own, so a reload reaches the loop.
+fn acceptor(live: &Option<tls::Live>) -> tls::Acceptor {
+    live.as_ref().map(tls::Live::acceptor)
 }
 
 /// One listener's outcome: the task either panicked or the serve future itself failed.

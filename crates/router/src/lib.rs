@@ -10,3 +10,4 @@ pub mod listen;
 pub mod status;
 pub mod subcommands;
 pub mod tls;
+pub mod tls_reload;

@@ -5,9 +5,8 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use boring::ssl::SslAcceptor;
 use fake_upstream::{FakeUpstream, RecordedRequest, Respond, Rule};
-use phoebis_relay::Relay;
+use phoebis_relay::{LiveAcceptor, Relay};
 use phoebis_store::{AccountKind, ApiKeyRow, RulesMode};
 use tokio::io::{AsyncRead, AsyncReadExt, AsyncWriteExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -255,7 +254,7 @@ async fn a_head_in_an_order_the_capture_never_had_travels_in_that_order() {
 /// The listener the socket tests drive, and the stop channel that drains it.
 async fn listening(
     relay: Arc<Relay>,
-    acceptor: Option<Arc<SslAcceptor>>,
+    acceptor: Option<Arc<LiveAcceptor>>,
 ) -> (SocketAddr, tokio::sync::watch::Sender<bool>) {
     let listener = TcpListener::bind(("127.0.0.1", 0)).await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -361,11 +360,8 @@ async fn the_callers_header_spelling_survives_a_tls_connection() {
     let up = upstream().await;
     let h = socket_harness(&up).await;
     let pair = fake_upstream::generate_pair(&["localhost"]);
-    let (addr, stop) = listening(
-        h.relay.clone(),
-        Some(Arc::new(fake_upstream::acceptor_for(&pair))),
-    )
-    .await;
+    let acceptor = LiveAcceptor::new(fake_upstream::acceptor_for(&pair));
+    let (addr, stop) = listening(h.relay.clone(), Some(Arc::new(acceptor))).await;
     let socket = TcpStream::connect(addr).await.unwrap();
     let mut tls = tokio_boring::connect(
         fake_upstream::connector_trusting(&pair),

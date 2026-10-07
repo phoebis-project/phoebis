@@ -147,10 +147,11 @@ and any hostname that reaches the port logs in. Publishing the port on a LAN add
 (`"8081:8081"`), and then the admin secret at login and the session cookie on every call cross that LAN in the clear;
 that is the same trust decision the proxy port's publication already makes. For TLS, mount a certificate pair read-only
 beside the configuration and name the mounted paths under `tls`, the certificate world-readable and the key at `0400`
-owned by uid 65532; the clients trust the pair's issuer, through `NODE_EXTRA_CA_CERTS` when it is a private CA. A front
-can terminate TLS instead: it forwards to the plain listener and passes `Host` through unchanged beside
-`X-Forwarded-Proto: https`, so the cookie is issued with `Secure` and the Origin check sees the front's hostname in both
-headers and requires the `https://` scheme in `Origin`, as it does on a listener that terminates TLS itself.
+owned by uid 65532, and reload a replaced pair with `docker compose exec phoebis phoebis tls reload`. The clients trust
+the pair's issuer, through `NODE_EXTRA_CA_CERTS` when it is a private CA. A front can terminate TLS instead: it forwards
+to the plain listener and passes `Host` through unchanged beside `X-Forwarded-Proto: https`, so the cookie is issued
+with `Secure` and the Origin check sees the front's hostname in both headers and requires the `https://` scheme in
+`Origin`, as it does on a listener that terminates TLS itself.
 
 The named volume `phoebis-data` takes the image's ownership of `/var/lib/phoebis` on first use; a bind mount in its
 place needs `chown 65532` on the host directory first. A price table dropped at `/var/lib/phoebis/pricing.yaml` on the
@@ -168,6 +169,7 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | `phoebis health --config ./config.yaml` | Probes the proxy listener's readiness: exit 0 when ready, 1 otherwise. |
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
 | `phoebis backup --to <dir>` | Copies both databases into `<dir>` with a manifest; exit 0 once it is written. |
+| `phoebis tls reload --config ./config.yaml` | Re-reads every listener's certificate pair: exit 0 once each reloaded. |
 | `phoebis account add <id> --kind oauth|api_key` | Creates an account and prints its id. |
 | `phoebis account pair <id>` | Pairs an `oauth` account: prints the sign-in URL, reads the callback URL, confirms. |
 | `phoebis account confirm <pairing id>` | Confirms a pairing that `account pair --no-confirm` left exchanged. |
@@ -631,8 +633,19 @@ certificate to each client machine and set `NODE_EXTRA_CA_CERTS=<path>` beside `
 [environment block](client.md#the-environment-block). The client checks the CA before anything else, so the leaf needs
 no pin. `phoebis status` and the subcommands take the same file through `--ca`.
 
-The start reads the pair once and never watches it; a renewal is stop, replace, start, and the 30-second drain, inside
-the 40-second stop grace, bounds the gap.
+The start reads the pair once. A renewal is: replace both files, then `phoebis tls reload`, which asks the running
+router to re-read every listener's pair. A pair that fails to load (a key that does not match its certificate, a file
+the service user cannot read) keeps the pair the router was serving and the command exits 1 naming the refusal, and the
+next reload clears it. A reload that lands between the two writes meets a key mismatch and is retried once both files
+are in place. The service user reads the pair at reload as it did at start, so a new pair keeps the modes above.
+
+`phoebis tls reload` takes the flags `status` takes, `--ca`, `--config`, `--json`, `--secret-env`, `--timeout` and
+`--url` ([the shared flags](#commands)), and posts [the reload route](api.md#post-admintlsreload). It prints one line
+per listener on stdout: `proxy: reloaded, certificate {path} expires {date}`, `proxy: not reloaded, {the loader's
+line}. The router keeps the pair it was serving.`, or `proxy: plain HTTP, nothing to reload`, and the same for `admin`.
+`--json` prints the route's body instead. It exits 0 once every pair reloaded, a plain listener aside, 1 when any pair
+was refused, the secret was refused, the admin listener did not answer or the file does not load, and 2 for a usage
+error.
 
 `check-config` and the start refuse a `tls` value that is not the mapping with:
 

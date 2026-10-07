@@ -916,6 +916,7 @@ async fn build_app(
         },
         clock,
         tls,
+        tls_reload: None,
         vault: vault.clone(),
         started_at: NOW,
         router: router_handle.clone(),

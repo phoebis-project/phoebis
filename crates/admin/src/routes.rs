@@ -36,7 +36,7 @@ use serde_json::{json, Value};
 
 use crate::{
     accounts, analytics, attention, dashboard, keepalive, keys, live, models, pools, pricing,
-    requests, sessions, settings, AdminState, LoginError,
+    requests, sessions, settings, tls, AdminState, LoginError,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -125,6 +125,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/sessions/costs", get(sessions::costs))
         .route("/admin/settings", get(settings::show))
         .route("/admin/system", get(system))
+        .route("/admin/tls/reload", post(tls::reload))
         .route("/admin", any(unknown_admin_route))
         .route("/admin/{*rest}", any(unknown_admin_route))
         .layer(from_fn_with_state(state.clone(), gate))

@@ -9,6 +9,7 @@ version.workspace = true
 axum = { workspace = true }
 base64 = { workspace = true }
 bytes = { workspace = true }
+jiff = { workspace = true }
 phoebis-attention = { path = "../attention" }
 phoebis-bus = { path = "../bus" }
 phoebis-keepalive = { path = "../keepalive" }

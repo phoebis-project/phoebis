@@ -2793,3 +2793,18 @@ async fn deleting_either_fast_cooldown_clears_its_own_row_and_leaves_the_others(
         "scope is account, fast, fast_credits or model:<canonical>"
     );
 }
+
+#[tokio::test]
+async fn the_tls_reload_route_answers_401_without_a_session_and_an_empty_list_where_no_listener_is_known(
+) {
+    use common::{json, login, post};
+    let (app, _up) = common::admin_app().await;
+    assert_eq!(
+        post(&app, "/admin/tls/reload", "", None).await.status(),
+        401
+    );
+    let cookie = login(&app, "admin-secret").await;
+    let reloaded = post(&app, "/admin/tls/reload", "", Some(&cookie)).await;
+    assert_eq!(reloaded.status(), 200);
+    assert_eq!(json(reloaded).await, serde_json::json!({"listeners": []}));
+}

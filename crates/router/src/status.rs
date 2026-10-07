@@ -885,20 +885,11 @@ mod tests {
         }
     }
 
-    /// A pair whose leaf's `not_after` is midnight UTC `days` days on, so it has `days - 1` whole days left and part
-    /// of one.
+    /// A pair whose leaf's `not_after` is `days` days and an hour from now, so it has `days` whole days left and part
+    /// of one whatever the clock reads.
     fn expiring_pair(dir: &Path, days: i64) -> (std::path::PathBuf, std::path::PathBuf) {
-        let date = Timestamp::now()
-            .to_zoned(TimeZone::UTC)
-            .date()
-            .checked_add(jiff::Span::new().days(days))
-            .unwrap();
-        fake_upstream::generate_pair_valid_between(
-            &["localhost"],
-            (2020, 1, 1),
-            (i32::from(date.year()), date.month() as u8, date.day() as u8),
-        )
-        .write_to(dir, "proxy")
+        let not_after = Timestamp::now().as_second() + days * 86_400 + 3_600;
+        fake_upstream::generate_pair_valid_until(&["localhost"], not_after).write_to(dir, "proxy")
     }
 
     #[test]
@@ -996,7 +987,7 @@ mod tests {
             ..fixture_reads()
         };
         let dir = tempfile::tempdir().unwrap();
-        let (cert, key) = expiring_pair(dir.path(), 31);
+        let (cert, key) = expiring_pair(dir.path(), 30);
         let tls = Some(ListenerTls {
             cert_file: cert.clone(),
             key_file: key,
