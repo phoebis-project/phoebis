@@ -1,5 +1,5 @@
 import { PIN_RELEASE_REASON_VALUES, planLabel } from '@/api/decode';
-import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogPage, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { moveLabel, own } from './analytics';
 import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortModel } from './format';
 import { POLL_OUTCOME_LABEL } from './quota';
@@ -594,6 +594,10 @@ export function entityHref(kind: FactEntity['kind'] | 'request' | 'session', id:
       return `/accounts/${encodeURIComponent(id)}`;
     case 'request':
       return `/requests/${encodeURIComponent(id)}`;
+    // The Keys and Pools pages find and focus their entity by the address's hash.
+    case 'key':
+    case 'pool':
+      return `/${kind}s#${encodeURIComponent(id)}`;
     default:
       return `/${kind === 'session' ? 'sessions' : `${kind}s`}?${new URLSearchParams({ [kind]: id })}`;
   }
@@ -668,6 +672,45 @@ export const ROUTING_LOG_CODEC = {
     return params;
   },
 };
+
+export const identityOf = (row: RoutingLogRow) => (row.type === 'decision' ? `${row.requestId}/${row.seq}` : `event/${row.id}`);
+
+/** The route's order: newest first, a decision before an event at one instant. */
+export function compareRows(a: RoutingLogRow, b: RoutingLogRow): number {
+  const at = Date.parse(b.at) - Date.parse(a.at);
+  if (at !== 0) return at;
+  if (a.type !== b.type) return a.type === 'decision' ? -1 : 1;
+  if (a.type === 'decision' && b.type === 'decision') return a.requestId === b.requestId ? b.seq - a.seq : a.requestId < b.requestId ? 1 : -1;
+  return (b as RoutingEvent).id - (a as RoutingEvent).id;
+}
+
+/** A poll's answer over the rows shown, one row per identity, so a row the poll reads again never lands twice. */
+export function merged(shown: RoutingLogRow[], polled: RoutingLogRow[]): RoutingLogRow[] {
+  const byIdentity = new Map(shown.map((r) => [identityOf(r), r]));
+  for (const r of polled) byIdentity.set(identityOf(r), r);
+  return [...byIdentity.values()].sort(compareRows);
+}
+
+/** The pages one Follow poll reads at most, so a burst of arrivals cannot keep a poll reading without end. */
+export const FOLLOW_PAGES = 8;
+export const FOLLOW_OVERRUN = 'More rows arrived than Follow could fetch. Reload to read them.';
+
+/**
+ * One Follow poll: the newest page and each one after it until a page holds a row the list already shows, or the
+ * route has no more. `overrun` is the cursor past the last row read when `FOLLOW_PAGES` pages ran out first, so the
+ * rows between it and the list stay reachable.
+ */
+export async function followPages(read: (cursor: string | undefined) => Promise<RoutingLogPage>, known: ReadonlySet<string>): Promise<{ overrun: string | null; rows: RoutingLogRow[] }> {
+  const rows: RoutingLogRow[] = [];
+  let cursor: string | undefined;
+  for (let n = 0; n < FOLLOW_PAGES; n += 1) {
+    const page = await read(cursor);
+    rows.push(...page.rows);
+    if (page.nextCursor === null || page.rows.some((r) => known.has(identityOf(r)))) return { overrun: null, rows };
+    cursor = page.nextCursor;
+  }
+  return { overrun: cursor ?? null, rows };
+}
 
 /** The log's address for `link`: the plural keys comma-joined, the range as two ISO instants after the filters. */
 export function logHref(link: LogLink): string {
@@ -1067,12 +1110,28 @@ function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number)
   return `${words(reason || 'cooldown')}${until}`;
 }
 
+/**
+ * The budget a member's budget obstacle names by its period. A record that names none reads the budget whose spend
+ * reached its amount.
+ */
+const reachedBudget = (c: RecordCandidate) => c.budget.find((b) => b.period === c.obstacle?.reason) ?? c.budget.find((b) => b.spentUsd !== null && b.spentUsd >= b.budgetUsd);
+
+/** A member's state other than ready, as the console's account views word it. */
+const MEMBER_STATE_WORD: Record<string, string> = { deleted: 'deleted', disconnected: 'disconnected', funding_required: 'needs funding', reauth_required: 'needs re-auth', unpaired: 'not paired' };
+
+/**
+ * The engine's `operator` obstacle covers a pause and a state other than ready alike, so the member's own `enabled`
+ * and `state` tell them apart. A deleted member reads disabled too, and its state says why.
+ */
+const pausedByHand = (c: RecordCandidate) => !c.enabled && c.state !== 'deleted';
+const stateHint = (state: string) => (state === 'deleted' ? 'the account left the registry' : own(STATE_EFFECT, state) ? STATE_EFFECT[state] : undefined);
+
 function obstacleWords(c: RecordCandidate, now: number): string {
   const o = c.obstacle;
   if (o === null) return '';
   switch (o.name) {
     case 'budget': {
-      const b = c.budget.find((x) => x.period === o.reason) ?? c.budget[0];
+      const b = reachedBudget(c);
       return b && b.spentUsd !== null ? `budget ${fmtUsd(b.spentUsd)} of ${fmtUsd(b.budgetUsd)}` : 'budget';
     }
     case 'cooldown':
@@ -1080,7 +1139,7 @@ function obstacleWords(c: RecordCandidate, now: number): string {
     case 'credits':
       return `credits ${o.reason === null ? 'unavailable' : wordOf(CREDITS_WORD, o.reason)}`;
     case 'operator':
-      return o.reason === null ? 'held by hand' : wordOf(STATE_WORD, o.reason);
+      return pausedByHand(c) ? 'held by hand' : wordOf(MEMBER_STATE_WORD, c.state);
     case 'spent':
       return `${o.window !== null ? wordOf(WINDOW_WORD, o.window) : 'window'} spent`;
     default:
@@ -1089,7 +1148,7 @@ function obstacleWords(c: RecordCandidate, now: number): string {
 }
 
 function verdictChipOf(c: RecordCandidate, now: number): Chip | null {
-  if (c.obstacle !== null) return { title: hintOf(c.obstacle.name), value: obstacleWords(c, now) };
+  if (c.obstacle !== null) return { title: c.obstacle.name === 'operator' && !pausedByHand(c) ? (stateHint(c.state) ?? hintOf('operator')) : hintOf(c.obstacle.name), value: obstacleWords(c, now) };
   if (c.partition !== null) return { title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) };
   if (c.verdict === 'destination') return plain('not placed');
   if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return plain('at its cap');
@@ -1238,7 +1297,10 @@ export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionS
     rows.push({ chips: member.budget.map((b) => plain(budget(b), wordOf(PERIOD_WORD, b.period))), label: 'Spend' });
   } else if (o.exhaustion !== null) {
     const reached = record.candidates.filter((m) => m.obstacle?.name === 'budget');
-    const chips = reached.flatMap((m) => m.budget.filter((b) => b.period === m.obstacle?.reason).map((b) => ({ label: m.accountId, labelEntity: accountEntity(m.accountId), value: budget(b) })));
+    const chips = reached.flatMap((m) => {
+      const b = reachedBudget(m);
+      return b ? [{ label: m.accountId, labelEntity: accountEntity(m.accountId), value: budget(b) }] : [];
+    });
     if (chips.length > 0) rows.push({ chips, label: 'Spend' });
   }
   return rows;
@@ -1274,7 +1336,11 @@ const GAP_MEANING: Record<string, string> = {
   poison: "a record failed alone after its batch's retries",
 };
 const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: 'the poll' };
-const PERCENT_PER_HOUR = (share: number) => `${(share * 100).toFixed(1)} %/h`;
+/**
+ * A shedding round's rate drawn per hour: the engine reads a pin's burn per second, as a share of the 5-hour window or,
+ * for a round funded in dollars, as dollars.
+ */
+const hourlyRate = (perSecond: number, unit: string | null) => (unit === 'usd' ? `${fmtUsd(perSecond * 3_600)}/h` : `${(perSecond * 3_600 * 100).toFixed(1)} %/h`);
 
 /** An event's detail as pairs: When, Account and Pool first, then the kind's own. */
 export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
@@ -1483,11 +1549,12 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
       const target = num(d.target);
       const share = num(d.shed_share);
       const dwell = num(d.dwell_seconds);
+      const unit = str(d.unit);
       add('Started by', request, session, agent === null ? null : plain(agent, 'agent'));
       add('Reading', pct(d.utilization, w), pct(d.threshold, 'threshold'));
       add('Unit', text(d.unit));
       add('Burn window', num(d.burn_window_seconds) === null ? null : plain(span((num(d.burn_window_seconds) ?? 0) * 1_000)));
-      add('Share', share === null ? null : plain(fmtPct(share), 'share'), burn === null ? null : plain(PERCENT_PER_HOUR(burn), 'burn'), target === null ? null : plain(PERCENT_PER_HOUR(target), 'to shed'));
+      add('Share', share === null ? null : plain(fmtPct(share), 'share'), burn === null ? null : plain(hourlyRate(burn, unit), 'burn'), target === null ? null : plain(hourlyRate(target, unit), 'to shed'));
       add('Warm sessions', text(d.warm_sessions));
       const pins = list(d.pins).map(rec);
       if (pins.length > 0) {
@@ -1500,7 +1567,7 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
               const id = str(p.session_id) ?? '';
               const b = num(p.burn);
               const last = num(p.last_input_tokens);
-              return [sessionChip(id), plain(str(p.agent_id) ?? '-'), plain(p.cold === true ? 'cold' : 'warm'), plain(b === null ? '-' : PERCENT_PER_HOUR(b)), plain(last === null ? '-' : fmtCompact(last)), plain(p.marked === true ? 'marked' : (str(p.note) ?? '-'))];
+              return [sessionChip(id), plain(str(p.agent_id) ?? '-'), plain(p.cold === true ? 'cold' : 'warm'), plain(b === null ? '-' : hourlyRate(b, unit)), plain(last === null ? '-' : fmtCompact(last)), plain(p.marked === true ? 'marked' : (str(p.note) ?? '-'))];
             }),
           },
         });

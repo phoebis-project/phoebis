@@ -76,9 +76,13 @@ function EntryChips({ entry, now }: { entry: PrefixEntry; now: number }) {
   );
 }
 
-/** The open decision row's card: loads the record on mount and draws the six parts of the spec's card. */
+/**
+ * The open decision row's card: loads the record on mount and draws the six parts of the spec's card. The record is
+ * read again when the row's answer moves, so a card opened on a running request completes when Follow brings it.
+ */
 export function DecisionCard({ now, onWiden, row }: { now: number; onWiden: (link: LogLink) => void; row: DecisionSummary }) {
-  const loaded = useAsync(() => api.getDecision(row.requestId, row.seq), [row.requestId, row.seq]);
+  const answer = JSON.stringify([row.status, row.attemptCount, row.cache]);
+  const loaded = useAsync(() => api.getDecision(row.requestId, row.seq), [row.requestId, row.seq, answer]);
   if (loaded.data === null && loaded.error !== null) {
     return (
       <div className="decision-card">

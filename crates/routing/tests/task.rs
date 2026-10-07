@@ -6695,6 +6695,7 @@ async fn the_purge_tick_emits_a_clock_reset_once_per_window() {
             reset_at,
             next_reset,
             observed,
+            restored,
             at,
         } => assert_eq!(
             (
@@ -6704,9 +6705,10 @@ async fn the_purge_tick_emits_a_clock_reset_once_per_window() {
                 reset_at,
                 next_reset,
                 observed,
+                restored,
                 at
             ),
-            ("a", FIVE_HOUR, 0.7, 2_000, None, "clock", 2_000)
+            ("a", FIVE_HOUR, 0.7, 2_000, None, "clock", false, 2_000)
         ),
         other => panic!("the tick's reset, not {other:?}"),
     }
@@ -6833,6 +6835,7 @@ async fn a_member_entering_its_wind_down_emits_once() {
             ends_at,
             wind_down_minutes,
             end_source,
+            restored,
             at,
         } => assert_eq!(
             (
@@ -6841,12 +6844,37 @@ async fn a_member_entering_its_wind_down_emits_once() {
                 ends_at,
                 wind_down_minutes,
                 end_source,
+                restored,
                 at
             ),
-            ("a", "p", end, 30, "cancelled", inside)
+            ("a", "p", end, 30, "cancelled", false, inside)
         ),
         other => panic!("the wind-down's start, not {other:?}"),
     }
+    no_further_event(&mut events).await;
+}
+
+#[tokio::test]
+async fn the_first_purge_after_the_start_marks_the_wind_downs_it_finds_as_restored() {
+    use phoebis_routing::RouterEvent;
+    let store = seeded(&["a"]);
+    // Ten minutes out under the pool's thirty-minute wind-down: inside the window before the router starts.
+    let end = 1_000 + 10 * 60_000;
+    store.set_cancelled("a", true, Some(end)).unwrap();
+    let now = Arc::new(AtomicI64::new(1_000));
+    let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
+    let mut events = handle.subscribe_events();
+    match next_event(&mut events).await {
+        RouterEvent::WindDownStarted {
+            account_id,
+            ends_at,
+            restored,
+            ..
+        } => assert_eq!((account_id.as_str(), ends_at, restored), ("a", end, true)),
+        other => panic!("the restored wind-down, not {other:?}"),
+    }
+    // A reload's purge is a later one, and the member is still inside the window it already announced.
+    handle.reload().await.unwrap();
     no_further_event(&mut events).await;
 }
 

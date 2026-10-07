@@ -5952,6 +5952,93 @@ fn a_decision_s_completion_is_the_attempt_that_answered_after_a_retry_in_place()
     );
 }
 
+/// A decision row's identity, its account, and the answering attempt's status and cache read.
+type AnsweredFacts = (String, Option<String>, Option<u16>, Option<u64>);
+
+#[test]
+fn a_decision_reads_only_its_own_account_s_answer_before_the_request_s_next_decision() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    let on = |mut row: DecisionRow, account: &str| {
+        row.account_id = Some(account.into());
+        row.record.outcome.account_id = Some(account.into());
+        row
+    };
+    let attempt_on = |account: &str, attempt: AttemptRecord| AttemptRecord {
+        account_id: account.into(),
+        ..attempt
+    };
+    // A credential failure on `a` fails over before the wire counter advances, so `b` is selected on the same
+    // attempt and is the one that answers.
+    put_decision(&db, &on(logged("r1", 1, 1, 100, "placed"), "a"));
+    put_decision(&db, &on(logged("r1", 2, 1, 100, "placed"), "b"));
+    put_request(
+        &db,
+        "r1",
+        &[attempt_on("b", logged_attempt("r1", 1, 200, Some(400)))],
+        None,
+    );
+    // The decision for `b` never reached the ledger: `a`'s interval runs on, and `b`'s answer is still not `a`'s.
+    put_decision(&db, &on(logged("r2", 1, 1, 200, "placed"), "a"));
+    put_request(
+        &db,
+        "r2",
+        &[
+            attempt_on("a", logged_attempt("r2", 1, 429, None)),
+            attempt_on("b", logged_attempt("r2", 2, 200, Some(400))),
+        ],
+        None,
+    );
+    let page = db
+        .read_blocking(|c| phoebis_ledger::list_routing_log(c, &log_filter(), None, 25))
+        .unwrap();
+    let listed: Vec<AnsweredFacts> = page
+        .rows
+        .iter()
+        .map(|row| match row {
+            phoebis_ledger::RoutingLogRow::Decision(d) => (
+                format!("{}/{}", d.request_id, d.seq),
+                d.account_id.clone(),
+                d.status,
+                d.cache.as_ref().map(|c| c.read_tokens),
+            ),
+            phoebis_ledger::RoutingLogRow::Event(_) => panic!("no event was written"),
+        })
+        .collect();
+    assert_eq!(
+        listed,
+        [
+            ("r2/1".to_string(), Some("a".to_string()), Some(429), None),
+            ("r1/2".to_string(), Some("b".to_string()), Some(200), Some(400)),
+            ("r1/1".to_string(), Some("a".to_string()), None, None),
+        ],
+        "a decision superseded on its own attempt reads no answer, and none reads another account's"
+    );
+    let completion = |request: &str, seq: u32| {
+        let record = db
+            .read_blocking(|c| phoebis_ledger::decision_record(c, request, seq))
+            .unwrap()
+            .expect("the decision is stored");
+        let completion = &record["outcome"]["completion"];
+        (
+            completion["status"].clone(),
+            completion["cache_read_tokens"].clone(),
+        )
+    };
+    assert_eq!(
+        completion("r1", 1),
+        (serde_json::Value::Null, serde_json::Value::Null),
+        "the record of the account never contacted carries no answer"
+    );
+    assert_eq!(
+        completion("r1", 2),
+        (serde_json::json!(200), serde_json::json!(400))
+    );
+    assert_eq!(
+        completion("r2", 1),
+        (serde_json::json!(429), serde_json::Value::Null)
+    );
+}
+
 #[test]
 fn a_record_read_decodes_the_frame_and_composes_the_completion() {
     let db = LedgerDb::open_in_memory().unwrap();

@@ -1784,6 +1784,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             ends_at: now + 86_400_000,
             wind_down_minutes: 1_440,
             end_source: "cancelled",
+            restored: false,
             at: at(4),
         },
         RouterEvent::WindowReset {
@@ -1793,6 +1794,7 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             reset_at: at(5),
             next_reset: Some(at(5) + 7 * 86_400_000),
             observed: "sample",
+            restored: false,
             at: at(5),
         },
     ];

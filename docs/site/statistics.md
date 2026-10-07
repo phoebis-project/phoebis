@@ -421,15 +421,19 @@ widenings: this session (an hour either side of the request's time), this accoun
 minute (the clock minute that holds it). Any other narrowing draws the same line with what the rows are narrowed to,
 the range and the page's count. Clear returns to the unfiltered view.
 
-Follow, off by default, reads the list every 5 seconds with the range ending now. A new row lands at the top in the
-accent tint until the next read, a filter change keeps Follow on, and paging to an older page turns it off.
+Follow, off by default, reads the list every 5 seconds with the range ending now. Each read takes every row that
+arrived since the read before, up to eight pages of them. When more arrived than that, a line above the list reads
+"More rows arrived than Follow could fetch. Reload to read them.", and Next reads on from the last row Follow fetched.
+A new row lands at the top in the accent tint until the next read, a filter change keeps Follow on, and paging to an
+older page turns it off.
 
 Probe decisions and warm prefix expiries are hidden by default. The Kinds filter lists them last in their groups, and
 its button reads "Kinds (2 hidden)" until another set is chosen.
 
 Every row opens. A click anywhere on a row but a link opens it beneath itself on a tint and a second click shuts it,
 and another page or another filter starts with every row shut. A decision row loads its record and draws its card, a
-probe decision's included. The verdict line names the decision with its accounts and its pool as links ("Moved
+probe decision's included. A card opened on a request that is still running reads its record again when Follow brings
+the answer. The verdict line names the decision with its accounts and its pool as links ("Moved
 secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in codex") and chips for the tier, the rule or
 the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
 router decided" numbers the walk in the engine's order: the pin, every member's eligibility, the move rules, the cool

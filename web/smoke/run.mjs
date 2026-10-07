@@ -6681,6 +6681,91 @@ m.unmount();
     });
     page.unmount();
   }
+  // Every row the route holds between `from` and `to`, newest first, read page by page.
+  const everyRow = async (from, to) => {
+    const all = [];
+    let cursor;
+    do {
+      const page = await api.listRoutingLog({ cursor, from: iso(from), limit: 200, to: iso(to) });
+      all.push(...page.rows);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    return all;
+  };
+  {
+    // The key's revocation names the key in its row: the link opens the Keys page on that key's row, focused.
+    const page = await mount('/routing-log?kinds=registry_changed', { now: CLOCK_ORIGIN });
+    const link = trs(page)
+      .flatMap((tr) => [...tr.querySelectorAll('a')])
+      .find((a) => a.getAttribute('href')?.startsWith('/keys'));
+    const href = link?.getAttribute('href') ?? null;
+    link?.click();
+    await page.settle(600);
+    const at = page.location();
+    const focused = document.activeElement;
+    results.push({
+      name: "/routing-log a row's key link opens the Keys page focused on that key",
+      ok: href === '/keys#ci' && at.pathname === '/keys' && at.hash === '#ci' && focused?.tagName === 'TR' && focused.id === 'ci',
+      missing: [String(href), JSON.stringify(at), `${focused?.tagName} ${focused?.id}`],
+    });
+    page.unmount();
+  }
+  const rowKey = (r) => `${clockText(r.at)} ${r.type === 'decision' ? r.requestId : '-'}`;
+  const drawnKeys = (page) => trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
+  {
+    // The list ends an hour back, so the first poll, whose range ends now, finds the whole last hour arrived: more
+    // rows than one page holds.
+    const from = CLOCK_ORIGIN - 2 * HOUR;
+    const page = await mount(`/routing-log?from=${iso(from)}&to=${iso(CLOCK_ORIGIN - HOUR)}`, { now: CLOCK_ORIGIN });
+    const listed = trs(page).length;
+    followToggle(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle(1_000);
+    polls.restore();
+    const sent = polls.calls.map((c) => c[0]);
+    const all = await everyRow(from, CLOCK_ORIGIN + 5_000);
+    const arrived = all.filter((r) => Date.parse(r.at) > CLOCK_ORIGIN - HOUR).length;
+    const expected = all.slice(0, arrived + listed).map(rowKey);
+    const drawn = drawnKeys(page);
+    results.push({
+      name: '/routing-log Follow reads every page that arrived between two polls, each row once and in order',
+      ok:
+        listed > 0 && arrived > 25 && sent.length === 2 && sent[0].cursor === undefined && typeof sent[1].cursor === 'string' && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
+        JSON.stringify(drawn) === JSON.stringify(expected) && page.container.querySelector('.routing-log__overrun') === null,
+      missing: [`${listed} listed, ${arrived} arrived, ${drawn.length} drawn of ${expected.length}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
+    });
+    page.unmount();
+  }
+  {
+    // A day back, the poll finds more arrived than its eight pages read: it draws the newest of them, says so above the
+    // list, and Next reads on from the last row it read.
+    const from = CLOCK_ORIGIN - 24 * HOUR;
+    const page = await mount(`/routing-log?from=${iso(from)}&to=${iso(from + HOUR)}`, { now: CLOCK_ORIGIN });
+    const listed = trs(page).length;
+    followToggle(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle(2_000);
+    polls.restore();
+    const all = await everyRow(from, CLOCK_ORIGIN + 5_000);
+    const line = page.container.querySelector('.routing-log__overrun')?.textContent ?? null;
+    const drawn = drawnKeys(page);
+    pagerButton(page, 'Next page')?.click();
+    await page.settle();
+    const next = drawnKeys(page);
+    results.push({
+      name: '/routing-log Follow past its eight pages says more rows arrived and Next reads the rows it left',
+      ok:
+        polls.calls.length === 8 && line === 'More rows arrived than Follow could fetch. Reload to read them.' && all.length > 200 + listed + 25 &&
+        JSON.stringify(drawn.slice(0, 200)) === JSON.stringify(all.slice(0, 200).map(rowKey)) && drawn.length === 200 + listed &&
+        JSON.stringify(next) === JSON.stringify(all.slice(200, 225).map(rowKey)),
+      missing: [`${polls.calls.length} reads, line ${line}`, `${drawn.length} drawn`, `next ${next.slice(0, 2).join(' | ')}`, `gap ${all.slice(200, 202).map(rowKey).join(' | ')}`],
+    });
+    page.unmount();
+  }
   {
     // A failure's notice dwells 6 s and the poll runs every 5 s, so a streak that reported every poll would show its
     // notice again at the third.
@@ -6757,7 +6842,7 @@ m.unmount();
     });
   }
   {
-    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys\?key=[^&]+$/, model: /^\/models\?model=[^&]+$/, pool: /^\/pools\?pool=[^&]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?session=[^&]+$/ };
+    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/models\?model=[^&]+$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?session=[^&]+$/ };
     const wrong = [];
     const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
     const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
@@ -6924,7 +7009,7 @@ m.unmount();
         ok:
           JSON.stringify(folds.map((f) => f.querySelector('summary')?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
           JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
-          request.Key?.querySelector('a')?.getAttribute('href') === `/keys?key=${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools?pool=${record.request.poolId}` &&
+          request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
           JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
           JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
           JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twenty) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
@@ -7109,7 +7194,7 @@ m.unmount();
     results.push({
       name: "/routing-log the exhaustion's card reads the obstacles in order",
       ok:
-        sentenceOf(card) === `Exhausted in [${record.request.poolId}]` && card?.querySelector('.decision-card__sentence a')?.getAttribute('href') === `/pools?pool=${record.request.poolId}` && line?.verdict === 'exhausted' &&
+        sentenceOf(card) === `Exhausted in [${record.request.poolId}]` && card?.querySelector('.decision-card__sentence a')?.getAttribute('href') === `/pools#${record.request.poolId}` && line?.verdict === 'exhausted' &&
         weighed.length > 0 && JSON.stringify(drawn.map((t) => t.replace(/^obstacle/, ''))) === JSON.stringify(weighed.map((w) => String(w).split(':').pop().replace(/_/g, ' '))) &&
         JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['status 429', 'window overage', 'retry after 00:00']),
       missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
@@ -7381,7 +7466,7 @@ m.unmount();
         name: `/routing-log the ${kind} detail reads its pairs`,
         ok:
           JSON.stringify(pairs.slice(0, head.length).map((p) => [p.label, p.dd?.textContent])) === JSON.stringify(head) &&
-          (e.accountId === null || href('Account') === `/accounts/${e.accountId}`) && (e.poolId === null || href('Pool') === `/pools?pool=${e.poolId}`) &&
+          (e.accountId === null || href('Account') === `/accounts/${e.accountId}`) && (e.poolId === null || href('Pool') === `/pools#${e.poolId}`) &&
           JSON.stringify(pairs.slice(head.length).map((p) => p.label)) === JSON.stringify(OWN[kind]) && (e.requestId === null) === (detail?.querySelector('.event-detail__foot') === null) &&
           Object.entries(VALUES[kind]?.(e) ?? {}).every(([label, want]) => JSON.stringify(ddWords(pairs.find((p) => p.label === label)?.dd)) === JSON.stringify(want)),
         missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),

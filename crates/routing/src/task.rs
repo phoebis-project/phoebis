@@ -197,6 +197,9 @@ pub enum RouterEvent {
         reset_at: i64,
         next_reset: Option<i64>,
         observed: &'static str,
+        /// Announced by the first purge after the start, over a reading the router restored: the previous run may
+        /// have announced it already, which the ledger decides from its own newest row.
+        restored: bool,
         at: i64,
     },
     /// The entries the purge removed for one root on one account, with the largest among them. `deepest.depth` is
@@ -219,6 +222,9 @@ pub enum RouterEvent {
         ends_at: i64,
         wind_down_minutes: u32,
         end_source: &'static str,
+        /// Announced by the first purge after the start, which finds every member already inside its window: the
+        /// previous run may have announced it already, which the ledger decides from its own newest row.
+        restored: bool,
         at: i64,
     },
     /// The writer reported an `AccountState` row its write moved to another state: the state written, the row's
@@ -1291,6 +1297,8 @@ struct Task {
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
     /// The first purge waits while set. `Command::ReleasePurge` clears it.
     purge_held: bool,
+    /// Whether a purge ran since the start: the first one announces the restored state again.
+    purged: bool,
     /// Whether a registry load runs; at most one does.
     loading: bool,
     /// The affinity reports a test's hold keeps unapplied, in queue order; `None` while no hold is on.
@@ -1425,6 +1433,7 @@ pub fn spawn(
         #[cfg(any(test, feature = "debug-hooks"))]
         parked: None,
         purge_held,
+        purged: false,
         pending,
         reload_waiters: Vec::new(),
         reports,
@@ -3259,8 +3268,9 @@ impl Task {
                 });
             }
         }
-        self.clock_resets(now);
-        self.wind_downs(&snapshot, now);
+        let restored = !std::mem::replace(&mut self.purged, true);
+        self.clock_resets(now, restored);
+        self.wind_downs(&snapshot, now, restored);
         self.expiries(&purged.affinity_entries, now);
         let mut writes: Vec<StateWrite> = purged
             .cooldowns
@@ -3337,6 +3347,7 @@ impl Task {
                     reset_at,
                     next_reset,
                     observed: "sample",
+                    restored: false,
                     at: now,
                 });
             }
@@ -3370,7 +3381,7 @@ impl Task {
     }
 
     /// Every stored plan reading whose reset the clock has passed with no newer sample, announced once.
-    fn clock_resets(&mut self, now: i64) {
+    fn clock_resets(&mut self, now: i64, restored: bool) {
         let passed: Vec<(String, String, WindowReading)> = self
             .state
             .samples()
@@ -3397,6 +3408,7 @@ impl Task {
                     reset_at,
                     next_reset: None,
                     observed: "clock",
+                    restored,
                     at: now,
                 });
             }
@@ -3407,7 +3419,7 @@ impl Task {
     }
 
     /// Every pool member inside its wind-down now that was not at the last tick, announced once while it stays.
-    fn wind_downs(&mut self, snapshot: &RegistrySnapshot, now: i64) {
+    fn wind_downs(&mut self, snapshot: &RegistrySnapshot, now: i64, restored: bool) {
         let mut winding = HashSet::new();
         for pool in snapshot.pools() {
             let minutes = pool.failover.wind_down_minutes;
@@ -3429,6 +3441,7 @@ impl Task {
                         ends_at,
                         wind_down_minutes: minutes,
                         end_source: if term.cancelled { "cancelled" } else { "trial" },
+                        restored,
                         at: now,
                     });
                 }

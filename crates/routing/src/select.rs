@@ -5,9 +5,9 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityMode, CooldownRow, OveragePolicy, PinBurn,
-    PinKey, PinRow, PoolMember, PoolRow, SessionPlacement, ShedPin, Strategy, SubagentPlacement,
-    WarmSessions,
+    AccountKind, AccountRow, AccountState, AffinityMode, BudgetPeriod, CooldownRow, OveragePolicy,
+    PinBurn, PinKey, PinRow, PoolMember, PoolRow, SessionPlacement, ShedPin, Strategy,
+    SubagentPlacement, WarmSessions,
 };
 use rand::{Rng, RngExt};
 
@@ -21,7 +21,7 @@ use crate::record::{
     WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION,
 };
 use crate::state::{
-    budget_deadline, shed_marks, warm, BurnUnit, CreditsState, MemberSpend, PinRef, RoutingState,
+    budget_reached, shed_marks, warm, BurnUnit, CreditsState, MemberSpend, PinRef, RoutingState,
     StateWrite, Tier, WindowReading, FAST_INPUT, FAST_OUTPUT, FIVE_HOUR, SEVEN_DAY,
     SEVEN_DAY_FABLE, WEEK_MS,
 };
@@ -471,9 +471,11 @@ pub enum SelectResult {
 /// wait for.
 enum Obstacle {
     Attempted,
-    /// The member's spend reached one of its budgets; `until` is the latest end among the budgets reached.
+    /// The member's spend reached one of its budgets; `until` is the latest end among the budgets reached and
+    /// `period` the budget that end belongs to, the one the record names.
     Budget {
         until: i64,
+        period: BudgetPeriod,
     },
     /// The ledger is degraded, so the member's spend rows may be stale; a budgeted member is not placed on until
     /// the writer catches up and the spend is read afresh. Untimed: no deadline clears it.
@@ -508,20 +510,20 @@ fn obstacle_name(obstacle: &Obstacle) -> &'static str {
 }
 
 /// The member's spend at or above either of its budgets, still inside the bounds the ledger reported it for:
-/// answers the latest end among the budgets reached. A row of a period the member carries no budget for, or
-/// whose bounds do not hold `now`, is no obstacle, and neither is a member with no budget configured.
+/// answers the budget reached whose period ends last, with that end. A row of a period the member carries no
+/// budget for, or whose bounds do not hold `now`, is no obstacle, and neither is a member with no budget configured.
 fn budget_exhausted(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
     pool_id: &str,
     account_id: &str,
     now: i64,
-) -> Option<i64> {
+) -> Option<(BudgetPeriod, i64)> {
     let member = budgeted_member(snapshot, pool_id, account_id)?;
     let spends = state
         .member_spends_of(pool_id, account_id)
         .collect::<Vec<_>>();
-    budget_deadline(member, &spends, now)
+    budget_reached(member, &spends, now)
 }
 
 /// The pool's member for `account_id` while it carries a budget; `None` for a member without one.
@@ -1027,7 +1029,7 @@ fn run(
             };
             match pinned.map(|(_, o)| o) {
                 // The window names the obstacle for the relay, which renders it on the wire as the overage claim.
-                Some(Obstacle::Budget { until }) => {
+                Some(Obstacle::Budget { until, .. }) => {
                     let exhaustion = Exhaustion::Timed {
                         deadline: *until,
                         window: BUDGET_WINDOW.into(),
@@ -2348,10 +2350,13 @@ fn obstacle(
     if budget_unknown(state, snapshot, &pool.id, &candidate.account_id) {
         return Some(Obstacle::BudgetUnknown);
     }
-    if let Some(until) = budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now) {
+    if let Some((period, until)) =
+        budget_exhausted(state, snapshot, &pool.id, &candidate.account_id, now)
+    {
         // A period that ends inside the fast window would answer a retry the fast lane still refuses.
         return Some(Obstacle::Budget {
             until: fast_limited.map_or(until, |row| until.max(row.until)),
+            period,
         });
     }
     if let Some(row) = fast_limited {
@@ -3141,7 +3146,7 @@ fn exhaustion_of(obstacles: Vec<Obstacle>) -> Exhaustion {
     let cooldowns: Vec<(i64, String, String)> = obstacles
         .into_iter()
         .filter_map(|o| match o {
-            Obstacle::Budget { until } => Some((until, "overage".into(), "budget".into())),
+            Obstacle::Budget { until, .. } => Some((until, "overage".into(), "budget".into())),
             // A credits row's window is the upstream's refusal reason, a claim the client does not know; the
             // credits it refused are the overage the client does.
             Obstacle::Cooldown { until, reason, .. } if reason == FAST_CREDITS_REASON => {
@@ -3332,7 +3337,9 @@ fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
             until,
             window,
         } => (Some(reason.clone()), Some(window.clone()), Some(*until)),
-        Obstacle::Budget { until } => (None, None, Some(*until)),
+        Obstacle::Budget { until, period } => {
+            (Some(period.as_str().to_string()), None, Some(*until))
+        }
         Obstacle::Credits { reason } => (Some(reason.clone()), None, None),
         Obstacle::Attempted | Obstacle::BudgetUnknown | Obstacle::Ended | Obstacle::Operator => {
             (None, None, None)
@@ -3630,12 +3637,10 @@ fn finish(
             "not_needed"
         };
     }
-    let pool_size = pool.map_or(0, |p| snapshot.members(&p.id).len());
     let read = Readings {
         outcome: &outcome,
         request,
         pool,
-        pool_size,
         candidates: &candidates,
         walk: &walk,
         pin: pin.as_ref(),
@@ -3691,7 +3696,6 @@ struct Readings<'r> {
     outcome: &'r Outcome,
     request: &'r SelectRequest,
     pool: Option<&'r PoolRow>,
-    pool_size: usize,
     candidates: &'r [CandidateFacts],
     walk: &'r [WalkStep],
     pin: Option<&'r PinFacts>,
@@ -3867,8 +3871,16 @@ impl Readings<'_> {
     fn pick_fact(&self) -> Vec<SummaryFact> {
         let text =
             |key: &'static str, value: String| summary_fact(key, FactValue::Text(value), "text");
-        let attempt = usize::try_from(self.request.attempt).unwrap_or(usize::MAX);
-        if attempt > 1 && attempt == self.pool_size {
+        // Read off the accounts tried rather than the wire attempt: a retry in place advances the attempt on one
+        // account, and a credential failure moves on to the next without advancing it.
+        let chosen = self.outcome.account_id.as_deref();
+        let mut others = self
+            .candidates
+            .iter()
+            .filter(|c| Some(c.account_id.as_str()) != chosen)
+            .peekable();
+        if others.peek().is_some() && others.all(|c| self.request.attempted.contains(&c.account_id))
+        {
             return vec![text("pick", "last account".into())];
         }
         let tier_size = self.candidates.iter().filter(|c| c.rank.is_some()).count();

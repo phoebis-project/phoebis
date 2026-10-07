@@ -8212,7 +8212,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "fact": [
             {
               "key": "pick",
-              "value": "only candidate",
+              "value": "last account",
               "unit": "text",
               "entity": null
             }
@@ -9403,7 +9403,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "shedding_rounds_stale": 1,
             "windows_loaded": 2,
             "affinity_entries_loaded": 5,
-            "down_since": 1791377774193,
+            "down_since": 1791397146397,
             "holds_lost": true
           }
         },

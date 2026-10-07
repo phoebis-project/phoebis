@@ -650,10 +650,10 @@ pub enum RoutingLogRow {
     Event(EventListRow),
 }
 
-/// The summary column parsed, with the joined facts of the completing attempt (the newest attempt row at or after
-/// the decision's `attempt` and before the next dispatching decision's, by `seq`). `attempt` stays the decision's
-/// own, `cache` is `None` until the completing attempt has usage, and a `held`, `exhausted` or `refused` decision
-/// joins no attempt (`status` and `cache` null).
+/// The summary column parsed, with the joined facts of the completing attempt (the newest attempt row on the
+/// decision's account at or after the decision's `attempt` and before the request's next decision's, by `seq`).
+/// `attempt` stays the decision's own, `cache` is `None` until the completing attempt has usage, and a `held`,
+/// `exhausted` or `refused` decision joins no attempt (`status` and `cache` null).
 #[derive(Clone, Debug, PartialEq)]
 pub struct DecisionListRow {
     pub request_id: String,
@@ -707,10 +707,12 @@ pub struct RoutingLogPage {
     pub counts: Option<(u64, u64)>,
 }
 
-/// The attempt a dispatching decision completed on: the newest attempt row at or after its own and below the attempt
-/// of the request's next decision on a later attempt, so a retry in place, a refresh replay or a strip retry reads
-/// the pass that answered, and a hold and its placement (one attempt, two decisions) join it to the placement alone.
-const COMPLETING_ATTEMPT: &str = "CASE WHEN d.kind IN ('placed', 'renewed', 'moved') THEN (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = d.request_id AND x.attempt >= d.attempt AND x.attempt < COALESCE((SELECT MIN(n.attempt) FROM decisions n WHERE n.request_id = d.request_id AND n.seq > d.seq AND n.attempt > d.attempt), 9223372036854775807)) END";
+/// The attempt a dispatching decision completed on: the newest attempt row on the decision's own account at or after
+/// its attempt and below the attempt of the request's next decision, so a retry in place, a refresh replay or a strip
+/// retry reads the pass that answered. A successor on the same attempt (a credential failure fails over before the
+/// wire counter advances) leaves the decision no attempt of its own, and the account match keeps a successor whose
+/// decision never reached the ledger from lending its answer.
+const COMPLETING_ATTEMPT: &str = "CASE WHEN d.kind IN ('placed', 'renewed', 'moved') THEN (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = d.request_id AND x.account_id = d.account_id AND x.attempt >= d.attempt AND x.attempt < COALESCE((SELECT MIN(n.attempt) FROM decisions n WHERE n.request_id = d.request_id AND n.seq > d.seq), 9223372036854775807)) END";
 
 /// The completing attempt's columns the log reads, every field `None` where none joined.
 struct Answered {

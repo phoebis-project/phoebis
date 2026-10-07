@@ -13317,3 +13317,81 @@ fn a_four_member_shed_move_serializes_under_sixteen_kilobytes() {
     let size = serde_json::to_vec(&d.record).unwrap().len();
     assert!(size < 16_384, "{size} bytes");
 }
+
+#[test]
+fn a_budget_obstacle_names_the_period_whose_budget_reached_its_limit() {
+    let s = with_member_budget(
+        &snapshot(Pool {
+            members: vec![("a", 0), ("b", 1)],
+            ..Pool::default()
+        }),
+        "a",
+        Some(5.0),
+        Some(10.0),
+    );
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let obstacle_of_a = |st: &mut RoutingState, session: &str| {
+        let d = decide(
+            st,
+            &s,
+            &request(&s, Some(session), "claude-sonnet-5", true, &[], 1_000),
+            &mut rng(),
+        );
+        assert_eq!(picked(&d.result), "b");
+        let o = candidate(&d.record, "a")
+            .obstacle
+            .clone()
+            .expect("a is out at its budget");
+        (o.name, o.reason, o.until)
+    };
+    st.record_member_spend(
+        &s,
+        vec![
+            spend_of_a(BudgetPeriod::Day, 10_000, 1.0),
+            spend_of_a(BudgetPeriod::Month, 100_000, 12.0),
+        ],
+    );
+    assert_eq!(
+        obstacle_of_a(&mut st, "s1"),
+        ("budget", Some("month".to_string()), Some(100_000)),
+        "the day's budget has room, so the month's is the one that excluded a"
+    );
+    st.record_member_spend(
+        &s,
+        vec![
+            spend_of_a(BudgetPeriod::Day, 10_000, 5.0),
+            spend_of_a(BudgetPeriod::Month, 100_000, 1.0),
+        ],
+    );
+    assert_eq!(
+        obstacle_of_a(&mut st, "s2"),
+        ("budget", Some("day".to_string()), Some(10_000))
+    );
+}
+
+#[test]
+fn the_last_account_fact_reads_the_accounts_tried_rather_than_the_wire_attempt() {
+    let s = snapshot(Pool::default());
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    let last = ("pick", FactValue::Text("last account".into()), Some("text"));
+    // A retry in place on a, then its failover: the third wire attempt, with c still untried.
+    let retried = SelectRequest {
+        attempt: 3,
+        ..request(&s, None, "claude-sonnet-5", true, &["a"], 1_000)
+    };
+    let d = decide(&mut st, &s, &retried, &mut rng());
+    assert_ne!(picked(&d.result), "a");
+    assert!(
+        !summary_facts(&d).contains(&last),
+        "c remains, so the pick is no last account: {:?}",
+        summary_facts(&d)
+    );
+    // Two credential failures consumed a and b before the wire counter moved.
+    let consumed = SelectRequest {
+        attempt: 1,
+        ..request(&s, None, "claude-sonnet-5", true, &["a", "b"], 1_000)
+    };
+    let d = decide(&mut st, &s, &consumed, &mut rng());
+    assert_eq!(picked(&d.result), "c");
+    assert_eq!(summary_facts(&d), vec![last]);
+}

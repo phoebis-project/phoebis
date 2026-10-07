@@ -913,6 +913,7 @@ async fn a_clock_reset_the_previous_run_announced_is_not_written_again() {
         reset_at,
         next_reset: None,
         observed,
+        restored: observed == "clock",
         at: NOW,
     };
     // The first purge after a start walks every restored reading: a reset that passed before the previous run's
@@ -963,6 +964,7 @@ async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
         ends_at: opened_at + 30 * 60_000,
         wind_down_minutes: 30,
         end_source: "cancelled",
+        restored: true,
         at: NOW,
     };
     h.router.emit(wind_down(down_since - 1));
@@ -988,6 +990,49 @@ async fn a_wind_down_the_previous_run_announced_is_not_written_again() {
         [down_since + 1 + 30 * 60_000],
         "a window that opened before the previous run's last row was that run's to announce"
     );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_wind_down_a_cancellation_after_the_start_opens_lands_whenever_its_window_opened() {
+    let up = FakeUpstream::start(vec![]).await;
+    let down_since = NOW - 60_000;
+    let h = harness_after_a_run(&up, down_since).await;
+    // A reload runs a purge, so the start's own walk over the restored state is behind the cancellation.
+    h.router.reload().await.unwrap();
+    // Ten minutes out under the pool's thirty-minute wind-down: the window opened twenty minutes ago, before the
+    // previous run's last row, and no run announced it.
+    let ends_at = NOW + 10 * 60_000;
+    h.store.set_cancelled("a", true, Some(ends_at)).unwrap();
+    h.router.reload().await.unwrap();
+    let wind_downs = || async {
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "wind_down_started")
+            .map(|e| {
+                let detail: serde_json::Value =
+                    serde_json::from_str(e.detail.as_deref().unwrap()).unwrap();
+                detail["ends_at"].as_i64().unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    let rows = wait_for_async(Duration::from_secs(5), || async {
+        let rows = wind_downs().await;
+        (!rows.is_empty()).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        rows,
+        [ends_at],
+        "the cancellation's wind-down is this run's"
+    );
+    h.router.reload().await.unwrap();
+    stays_for_async(Duration::from_millis(200), || async {
+        wind_downs().await.len() == 1
+    })
+    .await;
     up.shutdown().await;
 }
 

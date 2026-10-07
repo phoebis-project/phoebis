@@ -251,6 +251,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             reset_at,
             next_reset,
             observed,
+            restored: _,
             at,
         } => EventRecord {
             at: *at,
@@ -304,6 +305,7 @@ pub fn event_of(event: &RouterEvent) -> Option<EventRecord> {
             ends_at,
             wind_down_minutes,
             end_source,
+            restored: _,
             at,
         } => EventRecord {
             at: *at,
@@ -504,7 +506,8 @@ fn record_reauth(ledger: &Ledger, account_id: &str, at: i64) {
 
 /// Whether the previous run announced this already: the first purge after a start walks every restored reading
 /// and pool member, so a clock reset that passed, or a wind-down that opened, before that run's last row was that
-/// run's to announce. A fresh file has no previous run.
+/// run's to announce. A later purge announces what this run found, whenever its window opened, and a fresh file has
+/// no previous run.
 fn announced_before(event: &RouterEvent, down_since: Option<i64>) -> bool {
     let Some(down_since) = down_since else {
         return false;
@@ -512,10 +515,12 @@ fn announced_before(event: &RouterEvent, down_since: Option<i64>) -> bool {
     match event {
         RouterEvent::WindowReset {
             observed: "clock",
+            restored: true,
             reset_at,
             ..
         } => *reset_at < down_since,
         RouterEvent::WindDownStarted {
+            restored: true,
             ends_at,
             wind_down_minutes,
             ..
@@ -1096,6 +1101,7 @@ mod tests {
             reset_at: 2_000,
             next_reset: None,
             observed: "clock",
+            restored: false,
             at: 2_050,
         })
         .expect("a reset row");
@@ -1168,6 +1174,7 @@ mod tests {
             ends_at: 9_000,
             wind_down_minutes: 30,
             end_source: "cancelled",
+            restored: false,
             at: 5_000,
         })
         .expect("a wind-down row");

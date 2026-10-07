@@ -1944,6 +1944,15 @@ fn member_spend_matches(
 /// that period, its bounds holding `now`) has reached, the latest `period_end`, since a day's end clears nothing
 /// while the month's budget stands. `None` for a member with no budget reached.
 pub fn budget_deadline(member: &PoolMember, spends: &[&MemberSpend], now: i64) -> Option<i64> {
+    budget_reached(member, spends, now).map(|(_, end)| end)
+}
+
+/// The budget behind `budget_deadline`'s end: the reached period whose end is the latest, with that end.
+pub(crate) fn budget_reached(
+    member: &PoolMember,
+    spends: &[&MemberSpend],
+    now: i64,
+) -> Option<(BudgetPeriod, i64)> {
     member
         .budgets()
         .filter_map(|(period, budget)| {
@@ -1951,9 +1960,9 @@ pub fn budget_deadline(member: &PoolMember, spends: &[&MemberSpend], now: i64) -
                 .iter()
                 .find(|s| s.period == period && s.period_start <= now && now < s.period_end)
                 .filter(|s| s.spent_usd >= budget)
-                .map(|s| s.period_end)
+                .map(|s| (period, s.period_end))
         })
-        .max()
+        .max_by_key(|(_, end)| *end)
 }
 
 /// The start of the current overage stretch, on first evidence and on every replacement alike: an account out of

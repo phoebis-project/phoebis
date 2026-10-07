@@ -776,7 +776,8 @@ function byAndFact(spec: Spec, record: DecisionRecord, pick: ReturnType<typeof p
     const rung = record.outcome.rung;
     if (rung?.rung === 'with_main') return [];
     if (rung) return [summaryFact('prefix', rung.prefixTokens, 'tokens'), summaryFact('depth', rung.depth, 'count')];
-    if (spec.attempt > 1 && spec.attempt === pool.members.length) return [summaryFact('pick', 'last account', 'text')];
+    const others = record.candidates.filter((c) => c.accountId !== spec.accountId);
+    if (others.length > 0 && others.every((c) => record.request.attempted.includes(c.accountId))) return [summaryFact('pick', 'last account', 'text')];
     if (pick.tierSize <= 1) return [summaryFact('pick', 'only candidate', 'text')];
     if (pool.strategy === 'pace' && pick.score && pick.runnerUp) {
       return [summaryFact('gap', Math.round((pick.score.score - pick.runnerUp.score) * 100_000) / 100_000, pick.score.unit as SummaryFact['unit']), { entity: { id: pick.runnerUp.accountId, kind: 'account' }, key: 'over', unit: null, value: pick.runnerUp.accountId }];
@@ -901,13 +902,14 @@ const sessionId = (prefix: string) => REQUESTS.find((r) => r.sessionId?.startsWi
 
 /**
  * The 11:00 round's four pins on secondary in its order: the cold ones by burn, the warm ones, the last unmarked. Each
- * holds Sonnet 5, the one model secondary serves.
+ * holds Sonnet 5, the one model secondary serves. A burn is a share of the 5-hour window a second, as the engine reads
+ * a pin's: the first pin's is 7.1% an hour.
  */
 const ROUND_PINS: ShedRound['pins'] = [
-  { agentId: 'c21e', burn: 0.071, cold: true, lastInputTokens: 64_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('76ddb35b') },
-  { agentId: 'main', burn: 0.034, cold: true, lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('0d588de5') },
-  { agentId: 'e90b', burn: 0.142, cold: false, lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('c64358b5') },
-  { agentId: 'e90b', burn: 0.052, cold: false, lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-5', note: 'current', sessionId: sessionId('407dd39b') },
+  { agentId: 'c21e', burn: 0.071 / 3_600, cold: true, lastInputTokens: 64_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('76ddb35b') },
+  { agentId: 'main', burn: 0.034 / 3_600, cold: true, lastInputTokens: 22_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('0d588de5') },
+  { agentId: 'e90b', burn: 0.142 / 3_600, cold: false, lastInputTokens: 88_000, marked: true, model: 'claude-sonnet-5', note: null, sessionId: sessionId('c64358b5') },
+  { agentId: 'e90b', burn: 0.052 / 3_600, cold: false, lastInputTokens: 41_000, marked: false, model: 'claude-sonnet-5', note: 'current', sessionId: sessionId('407dd39b') },
 ];
 
 /**
@@ -1138,7 +1140,7 @@ function buildEvents(): RoutingEvent[] {
   const roundReading = round?.candidates.find((c) => c.accountId === 'secondary')?.windows.five_hour;
   const beforeReset = oauthWindows('primary', fiveHourReset - 1, () => OLDER_FACTOR).find((w) => w.id === '5h')?.utilization ?? null;
   const elapsed = roundReading ? Math.round((roundReading.utilization - (roundReading.ahead ?? 0)) * 1000) / 1000 : 0;
-  const burnSum = 0.299;
+  const burnSum = 0.299 / 3_600;
   seeds.push(
     // The story hour.
     ...expiries(),
@@ -1168,8 +1170,8 @@ function buildEvents(): RoutingEvent[] {
         margin: roundReading?.ahead === null || roundReading?.ahead === undefined ? null : Math.round((roundReading.ahead - (pool.shedAheadOfPace ?? 0)) * 1000) / 1000,
         marks: round?.outcome.shedMarks?.map((m) => ({ agent_id: m.agentId, key_id: m.keyId, model: m.model, session_id: m.sessionId })) ?? [],
         persisted: true,
-        pins: ROUND_PINS.map((p) => ({ agent_id: p.agentId, burn: p.burn, cold: p.cold, key_id: 'desktop', last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note, per_rewrite: Math.round((p.burn / (p.lastInputTokens / 1_000)) * 10_000) / 10_000, session_id: p.sessionId })),
-        shed_share: pool.shedShare, target: Math.round(burnSum * pool.shedShare * 10_000) / 10_000, threshold: pool.shedAheadOfPace, unit: 'window_share', utilization: roundReading?.utilization ?? null, warm_sessions: pool.warmSessions, window: 'five_hour',
+        pins: ROUND_PINS.map((p) => ({ agent_id: p.agentId, burn: p.burn, cold: p.cold, key_id: 'desktop', last_input_tokens: p.lastInputTokens, marked: p.marked, model: p.model, note: p.note, per_rewrite: p.burn / (p.lastInputTokens / 1_000), session_id: p.sessionId })),
+        shed_share: pool.shedShare, target: burnSum * pool.shedShare, threshold: pool.shedAheadOfPace, unit: 'window_share', utilization: roundReading?.utilization ?? null, warm_sessions: pool.warmSessions, window: 'five_hour',
       },
       keyId: 'desktop',
       kind: 'shedding_round',

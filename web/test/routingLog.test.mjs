@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import { test } from 'node:test';
 
 // Every clock time below is read in UTC whatever the host's zone; `node --test` gives each file a process of its own.
@@ -295,8 +296,9 @@ test('each entity links to the route of its kind', () => {
   assert.equal(d.entityHref('account', 'primary'), '/accounts/primary');
   assert.equal(d.entityHref('request', 'req_1d9c3e55-0b2'), '/requests/req_1d9c3e55-0b2');
   assert.equal(d.entityHref('session', '407dd39b-dd60'), '/sessions?session=407dd39b-dd60');
-  assert.equal(d.entityHref('pool', 'all'), '/pools?pool=all');
-  assert.equal(d.entityHref('key', 'laptop'), '/keys?key=laptop');
+  assert.equal(d.entityHref('pool', 'all'), '/pools#all');
+  assert.equal(d.entityHref('key', 'laptop'), '/keys#laptop');
+  assert.equal(d.entityHref('key', 'ci key/2'), '/keys#ci%20key%2F2');
   assert.equal(d.entityHref('model', 'claude-sonnet-5'), '/models?model=claude-sonnet-5');
 });
 
@@ -336,6 +338,42 @@ test("the log's address keeps a kind this build does not know, so the route's re
 test('this minute is the clock minute that holds the moment, its last millisecond the end, never past now', () => {
   assert.deepEqual(d.clockMinute(ms(14, 2, 10), NOW), { from: ms(14, 2), to: ms(14, 3) - 1 });
   assert.deepEqual(d.clockMinute(ms(14, 29, 10), ms(14, 29, 30)), { from: ms(14, 29), to: ms(14, 29, 30) });
+});
+
+/** `count` decisions a second apart, newest first, and the route over them: pages of 25, the cursor a row index. */
+function arrivals(count) {
+  const rows = Array.from({ length: count }, (_, i) => decision({ at: iso(ms(14, 29) - i * 1_000), requestId: `req_${String(i).padStart(3, '0')}` }));
+  const reads = [];
+  const read = async (cursor) => {
+    reads.push(cursor);
+    const start = cursor === undefined ? 0 : Number(cursor);
+    return { counts: null, nextCursor: start + 25 < rows.length ? String(start + 25) : null, rows: rows.slice(start, start + 25) };
+  };
+  return { read, reads, rows };
+}
+
+test('a Follow poll reads every page that arrived down to a row the list holds', async () => {
+  // The list holds the oldest 25, and 100 more arrived before the poll.
+  const route = arrivals(125);
+  const shown = route.rows.slice(100);
+  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)));
+  assert.deepEqual(route.reads, [undefined, '25', '50', '75', '100'], 'the fifth page reaches the rows the list holds');
+  assert.equal(polled.overrun, null);
+  assert.deepEqual(d.merged(shown, polled.rows).map(d.identityOf), route.rows.map(d.identityOf), 'every row once, in the route order');
+});
+
+test('a Follow poll stops at eight pages and names the cursor that reaches the rows it left', async () => {
+  // 300 arrived over the 25 the list holds: eight pages bring the newest 200.
+  const route = arrivals(325);
+  const shown = route.rows.slice(300);
+  const polled = await d.followPages(route.read, new Set(shown.map(d.identityOf)));
+  assert.equal(route.reads.length, d.FOLLOW_PAGES);
+  assert.equal(d.FOLLOW_PAGES, 8);
+  assert.deepEqual(polled.rows.map(d.identityOf), route.rows.slice(0, 200).map(d.identityOf));
+  assert.equal(polled.overrun, '200');
+  const gap = await route.read(polled.overrun);
+  assert.equal(d.identityOf(gap.rows[0]), d.identityOf(route.rows[200]), 'the overrun cursor reads the first row the poll left');
+  assert.equal(d.FOLLOW_OVERRUN, 'More rows arrived than Follow could fetch. Reload to read them.');
 });
 
 test('model ids order fable, opus, sonnet, haiku, newest version first', () => {
@@ -495,8 +533,17 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'rate_limited', until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '429 on 5h until 15:42', 'in a cooldown']);
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'model_rejected', until: until(15, 24), window: 'model_rejection' }, verdict: 'out' }), ['out', 'model 404 until 15:24', 'in a cooldown']);
   assert.deepEqual(verdict({ obstacle: { name: 'cooldown', reason: 'fast_rate_limit', until: until(14, 42), window: 'fast' }, verdict: 'out' }), ['out', 'fast lane 429 until 14:42', 'in a cooldown']);
-  assert.deepEqual(verdict({ obstacle: { name: 'operator', reason: 'funding_required', until: null, window: null }, verdict: 'out' }), ['out', 'funding required', 'held by an operator']);
+  const operator = { name: 'operator', reason: null, until: null, window: null };
+  assert.deepEqual(verdict({ enabled: false, obstacle: operator, verdict: 'out' }), ['out', 'held by hand', 'held by an operator']);
+  assert.deepEqual(verdict({ obstacle: operator, state: 'funding_required', verdict: 'out' }), ['out', 'needs funding', 'the account leaves every eligible set until funded']);
+  assert.deepEqual(verdict({ obstacle: operator, state: 'reauth_required', verdict: 'out' }), ['out', 'needs re-auth', 'the account leaves every eligible set until it is paired again']);
+  assert.deepEqual(verdict({ enabled: false, obstacle: operator, state: 'deleted', verdict: 'out' }), ['out', 'deleted', 'the account left the registry']);
   assert.deepEqual(verdict({ budget: [{ budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1.1 }], obstacle: { name: 'budget', reason: 'day', until: iso(MIDNIGHT), window: null }, verdict: 'out' }), ['out', 'budget $1.10 of $5.00', 'at its spend budget for the period']);
+  const daily = { budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1 };
+  const monthly = { budgetUsd: 10, observedAt: iso(NOW), period: 'month', periodEnd: iso(Date.UTC(2026, 9, 1)), periodStart: iso(Date.UTC(2026, 8, 1)), spentUsd: 12 };
+  const month = { name: 'budget', reason: 'month', until: iso(Date.UTC(2026, 9, 1)), window: null };
+  assert.deepEqual(verdict({ budget: [daily, monthly], obstacle: month, verdict: 'out' }), ['out', 'budget $12.00 of $10.00', 'at its spend budget for the period']);
+  assert.deepEqual(verdict({ budget: [daily, monthly], obstacle: { ...month, reason: null }, verdict: 'out' }), ['out', 'budget $12.00 of $10.00', 'at its spend budget for the period'], 'a record that names no period reads the budget its spend reached');
   assert.deepEqual(verdict({ obstacle: { name: 'spent', reason: null, until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '5h spent', 'its window spent']);
   assert.deepEqual(verdict({ obstacle: { name: 'credits', reason: 'org_spend_cap_reached', until: null, window: null }, verdict: 'out' }), ['out', 'credits spend cap reached', 'its usage credits unavailable for fast mode']);
   assert.deepEqual(verdict({ obstacle: { name: 'budget_unknown', reason: null, until: null, window: null }, verdict: 'out' }), ['out', 'budget unknown', 'its spend unknown while the ledger is degraded']);
@@ -543,6 +590,16 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.deepEqual(d.outcomeRows(refused, NOW, drift)[0].chips[2].entity, { id: 'laptop', kind: 'key' });
   const spend = record({ candidates: [candidate({ budget: [{ budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1.1 }] })] });
   assert.deepEqual(rows(spend), [['Spend', ['daily budget $1.10 of $5.00']]]);
+  // The member a monthly budget excluded while its daily one had room: the Spend row names the monthly one.
+  const daily = { budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1 };
+  const monthly = { budgetUsd: 10, observedAt: iso(NOW), period: 'month', periodEnd: iso(Date.UTC(2026, 9, 1)), periodStart: iso(Date.UTC(2026, 8, 1)), spentUsd: 12 };
+  const reachedBy = (reason) =>
+    record({
+      candidates: [candidate({ accountId: 'research', budget: [daily, monthly], obstacle: { name: 'budget', reason, until: iso(Date.UTC(2026, 9, 1)), window: null }, verdict: 'out' })],
+      outcome: { accountId: null, exhaustion: { deadline: iso(Date.UTC(2026, 9, 1)), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, kind: 'exhausted', upstreamModel: null },
+    });
+  assert.deepEqual(rows(reachedBy('month')).find(([label]) => label === 'Spend'), ['Spend', ['research $12.00 of $10.00']]);
+  assert.deepEqual(rows(reachedBy(null)).find(([label]) => label === 'Spend'), ['Spend', ['research $12.00 of $10.00']], 'a record that names no period reads the budget its spend reached');
 });
 
 /** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */
@@ -573,9 +630,9 @@ const DETAIL_EVENTS = {
   router_started: [{ affinity_entries_loaded: 34, down_since: ms(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests']],
   shedding_round: [
     {
-      ahead: 0.91, burn_sum: 0.299, burn_window_seconds: 600, dwell_seconds: 900, dwell_until: ms(11, 15), elapsed_share: 0.06, margin: 0.01, marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }], persisted: true,
-      pins: [{ agent_id: 'c21e', burn: 0.07, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-sonnet-5', note: null, per_rewrite: 0.0015, session_id: 's1' }],
-      shed_share: 0.5, target: 0.1495, threshold: 0.9, unit: 'window_share', utilization: 0.97, warm_sessions: 'when_needed', window: 'five_hour',
+      ahead: 0.91, burn_sum: 0.299 / 3_600, burn_window_seconds: 600, dwell_seconds: 900, dwell_until: ms(11, 15), elapsed_share: 0.06, margin: 0.01, marks: [{ agent_id: 'c21e', key_id: 'desktop', model: 'claude-sonnet-5', session_id: 's1' }], persisted: true,
+      pins: [{ agent_id: 'c21e', burn: 0.07 / 3_600, cold: true, key_id: 'desktop', last_input_tokens: 48_100, marked: true, model: 'claude-sonnet-5', note: null, per_rewrite: 0.07 / 3_600 / 48_100, session_id: 's1' }],
+      shed_share: 0.5, target: 0.1495 / 3_600, threshold: 0.9, unit: 'window_share', utilization: 0.97, warm_sessions: 'when_needed', window: 'five_hour',
     },
     ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
   ],
@@ -603,6 +660,20 @@ test('every event kind has its detail pairs starting with When, Account and Pool
   assert.deepEqual(round.table.rows.map((r) => r.map(chipText)), [['s1', 'c21e', 'cold', '7.0 %/h', '48.1K', 'marked']]);
   const restart = d.detailPairs(event('shedding_round', DETAIL_EVENTS.shedding_round[0]), NOW).find((p) => p.label === 'Survive a restart');
   assert.deepEqual(texts(restart.chips), ['persisted']);
+});
+
+test("a shedding round's rates are the engine's per second, drawn per hour in the round's unit", () => {
+  const fixture = d.decodeRoutingLogPage(JSON.parse(readFileSync(new URL('./fixtures/routing_log.json', import.meta.url), 'utf8')).body);
+  const round = fixture.rows.find((r) => r.type === 'event' && r.kind === 'shedding_round');
+  const drawn = (row) => {
+    const pairs = d.detailPairs(row, NOW);
+    return { pins: pairs.find((p) => p.label === 'Pins').table.rows.map((r) => chipText(r[3])), share: texts(pairs.find((p) => p.label === 'Share').chips) };
+  };
+  // The router's row: a burn sum of 0.12 and a pin of 0.07 a second, in shares of the 5-hour window.
+  assert.deepEqual([round.detail.unit, round.detail.burn_sum, round.detail.pins[0].burn], ['window_share', 0.12, 0.07]);
+  assert.deepEqual(drawn(round), { pins: ['25200.0 %/h'], share: ['share 50%', 'burn 43200.0 %/h', 'to shed 21600.0 %/h'] });
+  const dollars = { ...round, detail: { ...round.detail, burn_sum: 0.0005, pins: [{ ...round.detail.pins[0], burn: 0.0002 }], target: 0.00025, unit: 'usd' } };
+  assert.deepEqual(drawn(dollars), { pins: ['$0.72/h'], share: ['share 50%', 'burn $1.80/h', 'to shed $0.90/h'] });
 });
 
 test("the hash chip is eight characters and warm-until reads the entry's TTL", () => {
