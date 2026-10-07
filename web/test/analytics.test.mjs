@@ -377,3 +377,17 @@ test('the session fold groups a user agent under its first product token, as the
   const named = d.foldGroups(rows, 'user_agent', { agentGroups: ['claude-cli/2.1.269'] });
   assert.deepEqual(named.map((g) => [g.key, g.requests]), [['claude-cli/2.1.269', 2], ['other', 2]], 'a pattern list names its groups by the token, as the breakdown route matches them');
 });
+
+test('the cooldown move reason reads failed over and the other seven keep their words', () => {
+  assert.deepEqual(d.PIN_MIGRATION_LABEL, {
+    cooldown: 'failed over',
+    drain: 'winding down',
+    fast_lane: 'fast lane cooling',
+    mark: 'account marked',
+    overage: 'overage',
+    return_to_plan: 'returned to plan',
+    shed: 'shed',
+    spent: 'window spent',
+  });
+  assert.equal(d.moveLabel('cooldown'), 'failed over', 'every reader of the map takes the word through moveLabel');
+});

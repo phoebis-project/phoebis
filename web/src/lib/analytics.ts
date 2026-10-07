@@ -2,9 +2,9 @@ import type { Api } from '@/api/client';
 import type { Account, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, CostTable, PinMigrationReason, Placement, PlacementRow } from '@/api/types';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 
-/** Why a session's pin moved, as the request drawer, its selection trace and the rewrites legend word it. */
+/** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
-  cooldown: 'rate limited',
+  cooldown: 'failed over',
   drain: 'winding down',
   fast_lane: 'fast lane cooling',
   mark: 'account marked',

@@ -1598,6 +1598,13 @@
   grid-template-columns: minmax(0, 1fr) 440px;
 }
 
+/* The compact set needs 568 px beside the drawer, which a 440 px drawer does not leave at 1280 by 800. */
+@media (max-width: 1359px) {
+  .requests.has-drawer {
+    grid-template-columns: minmax(0, 1fr) 400px;
+  }
+}
+
 /* The ten default columns fit a 990px card at 1280px only with the cells 8px apart and the Client
    text cut at a bound, whole on the cell's title. */
 .requests__table th,
@@ -1662,6 +1669,16 @@
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+}
+
+/* At 1280 by 800 the default set leaves the links' column room for one word at the table's 13 px, so the two links
+   take the sub line's 11.5 px and stack there, sharing a line wherever the table has the room. */
+.requests__links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0 10px;
+  font-size: 11.5px;
 }
 
 /* The routing log. The columns are fixed, so a long value is cut behind an ellipsis rather than widening the table: the
@@ -2185,6 +2202,28 @@
   overflow-wrap: anywhere;
 }
 
+.drawer__actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+}
+
+/* The Routing log button is a link, so its hover keeps the button's look rather than a link's underline. */
+.drawer__actions a.btn:hover {
+  text-decoration: none;
+}
+
+/* The drawer's chips take the status badge's height and type, so the Outcome's values read as one line of pills. An
+   upstream id is one unbroken token, which would otherwise scroll the drawer sideways. */
+.drawer .chip {
+  max-width: 100%;
+  padding: 1px 7px;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
 .drawer__body {
   display: flex;
   flex-direction: column;
@@ -2252,11 +2291,6 @@
   border-radius: 50%;
 }
 
-/* An upstream id is one unbroken token; without this a long one would scroll the drawer sideways. */
-.attempt__id {
-  overflow-wrap: anywhere;
-}
-
 .attempt__windows {
   display: flex;
   flex-direction: column;
@@ -2277,38 +2311,11 @@
   text-align: right;
 }
 
-.attempt__response {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 4px;
-}
-
 .attempt__cooldown {
   display: flex;
   gap: 8px;
   align-items: center;
   font-size: 12.5px;
-}
-
-.attempt__hold,
-.attempt__migration {
-  font-size: 12.5px;
-  margin: 6px 0 0;
-}
-
-.selection-trace {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12.5px;
-}
-
-.selection-trace__row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  align-items: center;
 }
 
 .usage-table td {

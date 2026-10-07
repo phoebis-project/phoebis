@@ -103,6 +103,18 @@ async function emailLines(name, rows) {
   results.push({ name, ok: rows.length > 0 && wrong.length === 0, missing: wrong.map(([id, line]) => `${id}: ${JSON.stringify(line)}`) });
 }
 const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
+/** The request drawer's sections, in the order it draws them. */
+const DRAWER_SECTIONS = ['Outcome', 'Usage', 'Request', 'Request shape', 'Client hints', 'Captured bodies'];
+/** A row of the request drawer by its label, wherever its section is. */
+const drawerRowOf = (page, label) => [...page.container.querySelectorAll('.drawer .kv__row')].find((row) => row.querySelector('dt')?.textContent?.trim() === label);
+/** A drawer row's chips: the label, whether the chip is mono, its hover and the value after the label. */
+const drawerChips = (row) =>
+  [...(row?.querySelectorAll('dd .chip') ?? [])].map((chip) => ({
+    label: chip.querySelector('.chip__label')?.textContent?.trim() ?? null,
+    mono: chip.classList.contains('mono'),
+    title: chip.getAttribute('title'),
+    value: [...chip.childNodes].filter((n) => !(n.nodeType === 1 && n.classList.contains('chip__label'))).map((n) => n.textContent).join('').trim(),
+  }));
 /** A wait as the TTFB column reads a duration, spelled out here so the checks hold the console's formatter to it. */
 const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 /** A live row's cell under the header that reads `header` in the mount's live table, so a check names its column. */
@@ -138,9 +150,6 @@ const DOT_TITLES = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot
 // shape each check needs rather than by position.
 const laptopRow = requests.find((r) => r.keyId === 'laptop' && r.status === 200) ?? requests.find((r) => r.keyId === 'laptop');
 const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.length > 1) ?? requests.find((r) => r.keyId === 'desktop');
-// More than one attempt, since a single-attempt 429 also ends rate-limited with a cooldown and never failed
-// over; and at least one attempt that reported quota windows, which is what the window slots below read.
-const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet) && r.attempts.some((a) => a.windows.length > 0));
 {
   const ciProbes = requests.filter((r) => r.keyId === 'ci' && r.kind === 'probe').length;
   results.push({ name: 'fixture: a key that opts out of cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
@@ -1858,7 +1867,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
   results.push({
     name: '/pools six tiles per card, the sixth the count of moves in the last hour split by reason in its title',
-    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '5', 'rate limited 2, window spent 2, fast lane cooling 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
+    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '5', 'failed over 2, window spent 2, fast lane cooling 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
     missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
   });
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
@@ -5243,16 +5252,18 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await m.settle(700);
   speed?.querySelector('.mselect__trigger')?.click();
   await m.settle(150);
-  // Each row opens its drawer in turn, so the check reads the serving attempt's own line rather than the story's rule;
-  // a request refused before any attempt shows none and files under the speed its shape asked for.
+  // Each row opens its drawer in turn, so the check reads the serving attempt's Answer row rather than the story's
+  // rule. A request refused before any attempt draws no Answer row and files under the speed its shape asked for.
   const servedAs = [];
   for (const tr of [...m.container.querySelectorAll('.requests__table tbody tr')]) {
     tr.click();
     await m.settle(300);
-    const lines = [...m.container.querySelectorAll('.drawer .attempt .attempt__response')];
-    const asked = [...m.container.querySelectorAll('.drawer .kv__row')].find((row) => row.querySelector('dt')?.textContent?.trim() === 'Speed, service tier')?.querySelector('dd')?.textContent?.trim() ?? '';
-    const attempted = m.container.querySelectorAll('.drawer .attempt').length > 0;
-    servedAs.push([...(lines.at(-1)?.children ?? [])].map((span) => span.textContent?.trim()).includes('fast') ? 'fast' : !attempted && asked.startsWith('fast,') ? 'fast' : (lines.at(-1)?.textContent ?? `no response line, asked ${asked}`));
+    const answer = drawerRowOf(m, 'Answer')?.querySelector('dd');
+    const asked = drawerRowOf(m, 'Speed, service tier')?.querySelector('dd')?.textContent?.trim() ?? '';
+    const chips = [...(answer?.querySelectorAll('.chip') ?? [])].map((chip) => chip.textContent?.trim());
+    // The row's own trail says whether an attempt was made, so a drawer that drew no Answer row for one fails.
+    const attempted = tr.querySelector('.trail') !== null;
+    servedAs.push(chips.includes('fast') ? 'fast' : !attempted && asked.startsWith('fast,') ? 'fast' : (answer?.textContent ?? `no Answer row, asked ${asked}`));
   }
   const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
   results.push({ name: speedCheck, ok: servedAs.length > 0 && servedAs.length === fastDay && servedAs.every((s) => s === 'fast'), missing: [`${servedAs.length} rows against ${fastDay}`, ...new Set(servedAs)] });
@@ -5441,16 +5452,30 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
 }
 await m.navigate(`/requests/${laptopRow.id}`);
-expect('/requests/:laptop drawer', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
 {
-  // The two ids sit right under the served attempt's head, the request id first, as the drawer draws them.
+  // The titles are read as titles, since the Outcome row and the bodies' Request block would carry two of the words.
+  const titles = [...m.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? '');
+  const needles = ['Session', 'Agent', 'succeeded', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Response', 'cache_control', 'ephemeral_5m_input_tokens'];
+  const missing = [...DRAWER_SECTIONS.filter((t) => !titles.includes(t)).map((t) => `section ${t}`), ...needles.filter((n) => !m.text().includes(n))];
+  results.push({ name: '/requests/:laptop drawer', ok: missing.length === 0, missing });
+}
+{
+  // The two ids sit in the Request section's row for the served attempt, the request id first, each a mono chip.
   const served = laptopRow.attempts[laptopRow.attempts.length - 1];
-  const head = [...m.container.querySelectorAll('.attempt')].at(-1)?.querySelector('.attempt__head');
-  const lines = [head?.nextElementSibling, head?.nextElementSibling?.nextElementSibling].map((e) => (e?.classList.contains('attempt__id') ? e.textContent : 'no id line'));
+  const row = drawerRowOf(m, `Attempt ${served.index + 1}`);
+  const section = row?.closest('section')?.querySelector('.section-title')?.textContent?.trim() ?? 'no section';
+  const chips = drawerChips(row);
   results.push({
     name: '/requests/:laptop drawer names the upstream request id and message id under the served attempt',
-    ok: /^req_/.test(served.upstreamRequestId ?? '') && /^msg_/.test(served.upstreamMessageId ?? '') && lines[0] === `request ${served.upstreamRequestId}` && lines[1] === `message ${served.upstreamMessageId}`,
-    missing: lines,
+    ok:
+      /^req_/.test(served.upstreamRequestId ?? '') &&
+      /^msg_/.test(served.upstreamMessageId ?? '') &&
+      section === 'Request' &&
+      JSON.stringify(chips) === JSON.stringify([
+        { label: null, mono: true, title: "The upstream's request id", value: served.upstreamRequestId },
+        { label: null, mono: true, title: "The upstream's message id", value: served.upstreamMessageId },
+      ]),
+    missing: [section, JSON.stringify(chips)],
   });
   await m.navigate('/requests');
   await m.settle(300);
@@ -5598,24 +5623,6 @@ await m.navigate(`/requests/${laptopRow.id}`);
 }
 await m.navigate(`/requests/${desktopRow.id}`);
 expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
-if (failoverRow) {
-  await m.navigate(`/requests/${failoverRow.id}`);
-  {
-    // Read from the drawer's badge, since the list's trail titles carry the same words.
-    const missing = ['Rate limited', 'used', 'resets'].filter((n) => !m.text().includes(n));
-    const cooldown = m.container.querySelector('.drawer .attempt__cooldown .badge')?.textContent ?? '';
-    results.push({ name: '/requests/:failover drawer', ok: missing.length === 0 && cooldown === 'cooldown set', missing: [...missing, cooldown ? `badge ${JSON.stringify(cooldown)}` : 'no cooldown badge in the drawer'] });
-  }
-  const slots = [...m.container.querySelectorAll('.attempt__windows')].map((u) => [...u.querySelectorAll('li')].map((li) => li.children[0]?.textContent).join(','));
-  // An Anthropic-key account reports no quota windows at all, so its attempt carries the cache row alone.
-  results.push({
-    name: '/requests attempts read all three windows then the cache row, in a fixed order',
-    ok: slots.length > 0 && slots.some((s) => s === '5h,7d,Fable,Cache') && slots.every((s) => s === '5h,7d,Fable,Cache' || s === 'Cache'),
-    missing: [...new Set(slots)],
-  });
-} else {
-  results.push({ name: '/requests a failover row whose attempts reported quota windows', ok: false, missing: ['fixture'] });
-}
 {
   const row = (label) => [...(m.container.querySelector('.drawer')?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
   const server = requests.find((r) => r.autoMode === 'server');
@@ -5645,18 +5652,6 @@ if (failoverRow) {
     const summary = [...m.container.querySelectorAll('.kv__row')].map((row) => `${row.querySelector('dt')?.textContent}: ${row.querySelector('dd')?.textContent}`);
     const model = summary.indexOf(`Model: ${story.model}`);
     results.push({ name: '/requests/:story drawer shows the client\'s spelling, then the canonical id', ok: model >= 0 && summary[model + 1] === `Canonical model: ${story.canonicalModel}`, missing: summary.slice(0, 10) });
-    expect('/requests/:story drawer names the account that rejected the model and the one that served it', m.text(), ['Canonical model', `Model rejected by ${rejected.accountId}: ${story.model}`, `Model permitted by ${permitted.accountId} after ${rejected.accountId}`]);
-    const lines = [...m.container.querySelectorAll('.attempt__migration')].filter((p) => p.textContent?.startsWith('Model '));
-    const hrefs = lines.map((p) => [...p.querySelectorAll('a')].map((a) => a.getAttribute('href')).join(' '));
-    results.push({ name: '/requests/:story drawer links each account the model events name', ok: JSON.stringify(hrefs) === JSON.stringify([`/accounts/${rejected.accountId}`, `/accounts/${permitted.accountId} /accounts/${rejected.accountId}`]), missing: hrefs });
-    // The route lists the session's events by time, so another request's rejection in the same window arrives
-    // with this one's; only the request id the event carries keeps it off this drawer.
-    requestEvents.set(story.id, own.map((e) => (e.kind.startsWith('model_') ? { ...e, detail: { ...e.detail, source_request_id: 'req_elsewhere' } } : e)));
-    await m.navigate(`/requests/${desktopRow.id === story.id ? laptopRow.id : desktopRow.id}`);
-    await m.navigate(`/requests/${story.id}`);
-    await m.settle(400);
-    results.push({ name: "/requests another request's model events are not drawn", ok: !m.text().includes('Model rejected by') && !m.text().includes('Model permitted by'), missing: m.text().includes('Model rejected by') ? ["another request's rejection is drawn on this one"] : [] });
-    requestEvents.set(story.id, own);
   }
   const sameNames = requests.find((r) => r.kind === 'inference' && r.model === r.canonicalModel);
   if (sameNames) {
@@ -5665,279 +5660,64 @@ if (failoverRow) {
   }
 }
 {
-  const spentId = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.detail?.reason === 'spent'))?.[0];
-  results.push({ name: 'fixture: a request moved for a spent window exists', ok: spentId !== undefined, missing: [] });
-  if (spentId) {
-    await m.navigate(`/requests/${spentId}`);
-    expect('/requests/:spent drawer names the move and its reason', m.text(), ['Session moved from', 'window spent']);
-    // Moving to a request whose events fail to load must not leave the previous request's move on screen. The
-    // unmoved row is on the same pin, so only the request the events were read for can filter the stale one out.
-    const spentRow = requests.find((r) => r.id === spentId);
-    const unmoved = requests.find((r) => r.id !== spentId && !requestEvents.has(r.id) && r.keyId === spentRow.keyId && r.sessionId === spentRow.sessionId && r.canonicalModel === spentRow.canonicalModel);
-    results.push({ name: 'fixture: an unmoved request on the same pin as the moved one', ok: unmoved !== undefined, missing: [] });
-    if (unmoved) {
-      failNextCall('getRequest', `/admin/requests/${unmoved.id}`, 'the ledger is unavailable');
-      await m.navigate(`/requests/${unmoved.id}`);
-      await m.settle(400);
-      results.push({ name: '/requests a failed events load never draws the move of the request before it', ok: !m.text().includes('Session moved'), missing: m.text().includes('Session moved') ? ['the previous move is still drawn'] : [] });
-    }
-    // The route lists the session's events by time, so a move that belongs to another key's pin can arrive
-    // with this request's own events; only the key, session, and model match keeps it off the screen.
-    const own = requestEvents.get(spentId);
-    requestEvents.set(spentId, own.map((e) => ({ ...e, keyId: `${e.keyId}-elsewhere` })));
-    await m.navigate(`/requests/${spentId}`);
-    await m.settle(400);
-    results.push({ name: "/requests a move under another pin's key is not drawn", ok: !m.text().includes('Session moved'), missing: m.text().includes('Session moved') ? ["another pin's move is drawn on this request"] : [] });
-    requestEvents.set(spentId, own);
-  }
-}
-{
-  const releasedId = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.kind === 'pin_expired'))?.[0];
-  results.push({ name: 'fixture: a request whose pin was released exists', ok: releasedId !== undefined, missing: [] });
-  if (releasedId) {
-    await m.navigate(`/requests/${releasedId}`);
-    expect('/requests/:released drawer names the release and every reason', m.text(), ['Session released from', 'account cooled, window spent']);
-  }
-  // No story row releases a pin off a fast lane, so one row carries the two reasons while this check reads it.
-  const fastReleased = requests.find((r) => r.routingSessionId !== null && r.kind !== 'probe' && r.status === 200 && !requestEvents.has(r.id));
-  results.push({ name: 'fixture: a request to plant a fast-lane release on', ok: fastReleased !== undefined, missing: [] });
-  if (fastReleased) {
-    requestEvents.set(fastReleased.id, [{ accountId: fastReleased.accountId, at: fastReleased.at, detail: { agent_id: fastReleased.agentId, reasons: ['fast_credits', 'fast_rate_limit'] }, keyId: fastReleased.keyId, kind: 'pin_expired', model: fastReleased.canonicalModel, sessionId: fastReleased.routingSessionId }]);
-    await m.navigate(`/requests/${fastReleased.id}`);
-    await m.settle(300);
-    expect('/requests/:released drawer words both fast-lane reasons', m.text(), ['Session released from', 'usage credits unavailable for fast mode, fast lane rate limited']);
-    requestEvents.delete(fastReleased.id);
-  }
-  for (const [reason, label] of [['client_error', 'client error'], ['subscription_ended', 'subscription ended']]) {
-    const id = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.kind === 'pin_expired' && e.detail?.reasons?.includes(reason)))?.[0];
-    results.push({ name: `fixture: a request whose pin was released for ${reason}`, ok: id !== undefined, missing: [] });
-    if (id) {
-      await m.navigate(`/requests/${id}`);
-      await m.settle(300);
-      expect(`/requests/:released drawer words ${reason}`, m.text(), ['Session released from', label]);
-    }
-  }
-}
-{
-  // Every attempt carries its trace; the drawer draws one block per attempt, with the placement, the members passed
-  // over as badges, and the cache read against the request's input.
-  const traceOf = (el) => ({ head: el.querySelector('.selection-trace__row')?.textContent ?? '', skipped: [...el.querySelectorAll('.selection-trace__row .badge')].map((b) => b.textContent?.trim()) });
+  // The shed story's request sends a request class, which the Request section draws as a badge beside the client.
   const shed = requests.find((r) => r.attempts.some((a) => a.selection?.moved === 'shed'));
   results.push({ name: 'fixture: a request whose session was shed onto its account', ok: shed !== undefined, missing: [] });
   if (shed) {
     await m.navigate(`/requests/${shed.id}`);
     await m.settle(300);
-    const attempt = shed.attempts.find((a) => a.selection?.moved === 'shed');
-    const blocks = [...m.container.querySelectorAll('.drawer .attempt')].map((li) => li.querySelector('.selection-trace'));
-    const drawn = blocks[attempt.index] ? traceOf(blocks[attempt.index]) : { head: '', skipped: [] };
-    const tier = attempt.selection.tier;
-    results.push({
-      name: '/requests drawer draws a moved attempt\'s trace: the strategy, the tier, the move and each member passed over',
-      ok:
-        blocks.length === shed.attempts.length &&
-        blocks.every((b) => b !== null) &&
-        drawn.head.startsWith('Selection') &&
-        drawn.head.includes(`group ${tier[0]}, priority ${tier[1]}`) &&
-        drawn.head.includes('moved: shed') &&
-        JSON.stringify(drawn.skipped) === JSON.stringify(attempt.selection.skipped.map((s) => `${s.accountId}: ${s.obstacle}`)),
-      missing: [shed.id, drawn.head, ...drawn.skipped],
-    });
-    const read = attempt.selection.cacheRead;
-    results.push({ name: '/requests drawer reads the answering attempt\'s cache read as a hit or a miss against its input', ok: read !== null && drawn.head.includes(`${read > 0 ? 'hit' : 'miss'}, `) && drawn.head.includes('input tokens read from cache'), missing: [String(read), drawn.head] });
     const client = [...m.container.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Client')?.querySelector('dd');
     results.push({ name: '/requests drawer shows the request class as a badge beside the client', ok: shed.requestClass !== null && client?.querySelector('.badge')?.textContent === shed.requestClass && client?.firstChild?.textContent === shed.client, missing: [client?.textContent ?? 'no client row', String(shed.requestClass)] });
   }
-  const renewed = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.renewed);
-  results.push({ name: 'fixture: a request that renewed its pin', ok: renewed !== undefined, missing: [] });
-  if (renewed) {
-    await m.navigate(`/requests/${renewed.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    results.push({ name: '/requests drawer reads a renewed pin as continued, with no tier and nothing passed over', ok: drawn.head.includes('continued, pin renewed') && !drawn.head.includes('group ') && drawn.skipped.length === 0, missing: [drawn.head, ...drawn.skipped] });
-    expect('/requests drawer needles for the trace', m.text(), ['Selection', 'renewed']);
-  }
-  const fresh = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection && !r.attempts[0].selection.renewed && r.attempts[0].selection.moved === null && r.attempts[0].selection.placement === null && r.attempts[0].selection.skipped.length > 0);
-  results.push({ name: 'fixture: a request placed afresh past other members', ok: fresh !== undefined, missing: [] });
-  if (fresh) {
-    await m.navigate(`/requests/${fresh.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    results.push({ name: '/requests drawer reads a fresh placement', ok: drawn.head.includes('fresh placement') && drawn.skipped.length === fresh.attempts[0].selection.skipped.length, missing: [drawn.head, ...drawn.skipped] });
-    // No story trace passes a member over for its credits, so this one carries such a member while the check reads it.
-    const selection = fresh.attempts[0].selection;
-    const skipped = selection.skipped;
-    selection.skipped = [...skipped, { accountId: 'credits-probe', obstacle: 'credits' }];
-    await m.navigate('/requests');
-    await m.navigate(`/requests/${fresh.id}`);
-    await m.settle(300);
-    const credits = [...m.container.querySelectorAll('.drawer .selection-trace .badge')].find((b) => b.textContent?.trim() === 'credits-probe: credits');
-    results.push({ name: '/requests drawer hints why a member was passed over for its credits', ok: credits?.getAttribute('title') === 'its usage credits unavailable for fast mode', missing: [credits ? String(credits.getAttribute('title')) : 'no credits badge'] });
-    selection.skipped = skipped;
-  }
-  // A placement by a warm prefix reads its rung and depth, and the cache read against the prefix it was promised.
-  const placedBy = (verdict) =>
-    requests.find((r) => {
-      const s = r.attempts.length === 1 ? r.attempts[0].selection : null;
-      return s?.placement?.rung === 'content' && s.cacheRead !== null && (s.cacheRead >= s.placement.prefixTokens) === verdict;
-    });
-  for (const [verdict, word] of [[true, 'hit'], [false, 'miss']]) {
-    const placed = placedBy(verdict);
-    results.push({ name: `fixture: a request placed by its messages whose cache read is a ${word}`, ok: placed !== undefined, missing: [] });
-    if (!placed) continue;
-    await m.navigate(`/requests/${placed.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    const depth = placed.attempts[0].selection.placement.depth;
-    results.push({
-      name: `/requests drawer reads a placement by its messages as a ${word} against the prefix it was promised`,
-      ok: drawn.head.includes(`placed by its messages, depth ${depth}`) && new RegExp(`${word}, [0-9.]+[KM]? of [0-9.]+[KM]? promised tokens read`).test(drawn.head) && !drawn.head.includes('group ') && !drawn.head.includes('fresh placement'),
-      missing: [placed.id, drawn.head],
-    });
-  }
-  const held = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.cohort);
-  results.push({ name: 'fixture: a subagent placed after a hold on its cohort', ok: held !== undefined, missing: [] });
-  if (held) {
-    await m.navigate(`/requests/${held.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    const { cohort, heldMs } = held.attempts[0].selection.cohortHold;
-    const wait = waitText(heldMs);
-    results.push({ name: '/requests drawer names the account a hold waited on and how long it waited', ok: drawn.head.includes(`held ${wait} on ${cohort} before placing`), missing: [wait, drawn.head] });
-  }
-  // The lines a trace draws more rarely: a placement beside a move, a placement with the main conversation, which
-  // promises no size and so keeps the plain cache line, and a hold on the strategy's choice, which names no cohort.
-  const movedPlaced = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.moved && r.attempts[0].selection.placement);
-  const withMain = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.placement?.rung === 'with_main' && r.attempts[0].selection.cacheRead !== null && r.attempts[0].selection.cohortHold === null);
-  const strategyHold = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.cohort === null && r.attempts[0].selection.placement === null);
-  results.push({ name: 'fixture: a placement beside a move, one with the main conversation, and a hold with no cohort', ok: movedPlaced !== undefined && withMain !== undefined && strategyHold !== undefined, missing: [String(movedPlaced?.id), String(withMain?.id), String(strategyHold?.id)] });
-  if (movedPlaced) {
-    await m.navigate(`/requests/${movedPlaced.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    const { moved, placement } = movedPlaced.attempts[0].selection;
-    results.push({ name: '/requests drawer reads a placement beside the move that led to it', ok: moved === 'spent' && drawn.head.includes('moved: window spent') && drawn.head.includes(`placed by its static prefix, depth ${placement.depth}`), missing: [movedPlaced.id, drawn.head] });
-  }
-  if (withMain) {
-    await m.navigate(`/requests/${withMain.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    results.push({
-      name: '/requests drawer reads a placement with the main conversation against the input, since it promised no size',
-      ok: drawn.head.includes('placed with the main conversation') && drawn.head.includes('input tokens read from cache') && !drawn.head.includes('promised tokens') && !drawn.head.includes('before placing'),
-      missing: [withMain.id, drawn.head],
-    });
-  }
-  if (strategyHold) {
-    await m.navigate(`/requests/${strategyHold.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    const waited = strategyHold.attempts[0].selection.cohortHold.waitedOn;
-    results.push({ name: '/requests drawer names the last account a hold with no cohort waited on and the wait', ok: drawn.head.includes('fresh placement') && drawn.head.includes(`held 1.3 s on ${waited[waited.length - 1]} before placing`), missing: [strategyHold.id, drawn.head] });
-  }
-  // An attempt placed after every hold names them in its trace, so the drawer draws no line of the row's own.
-  const servedAfterHold = requests.find((r) => r.held !== null && r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.heldMs === r.held.heldMs);
-  results.push({ name: 'fixture: a request served after its hold', ok: servedAfterHold !== undefined, missing: [] });
-  if (servedAfterHold) {
-    await m.navigate(`/requests/${servedAfterHold.id}`);
-    await m.settle(300);
-    results.push({
-      name: "/requests drawer of a request served after its hold names the hold in the attempt's trace alone",
-      ok: m.container.querySelector('.drawer .attempt__hold') === null && (m.container.querySelector('.drawer .selection-trace')?.textContent ?? '').includes('before placing'),
-      missing: [servedAfterHold.id, m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line'],
-    });
-  }
-  // An attempt that failed over before the request waited out its bound predates the hold, so its trace names none
-  // of it and the drawer reads the row's own beside the attempt.
-  const heldAfter = requests.find((r) => r.held !== null && r.attempts.length > 0 && r.attempts.every((a) => a.selection?.cohortHold?.heldMs !== r.held.heldMs));
-  results.push({ name: 'fixture: a request held after an attempt that failed over, answered without a second dispatch', ok: heldAfter !== undefined && heldAfter.errorCode === 'accounts_at_cap', missing: [String(heldAfter?.id)] });
-  if (heldAfter) {
-    await m.navigate(`/requests/${heldAfter.id}`);
-    await m.settle(300);
-    const line = m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line';
-    const on = heldAfter.held.cohort ?? heldAfter.held.waitedOn.at(-1);
-    const { heldMs } = heldAfter.held;
-    const wait = waitText(heldMs);
-    results.push({
-      name: '/requests drawer of a request held after an attempt names the hold its attempt never followed under Attempts',
-      ok: line === `held ${wait} on ${on}` && m.container.querySelectorAll('.drawer .attempt').length === heldAfter.attempts.length,
-      missing: [heldAfter.id, line],
-    });
-  }
-  // With nothing dispatched, no attempt's trace can name the hold, so the drawer reads the row's own.
-  const unplaced = requests.find((r) => r.held !== null && r.attempts.length === 0);
-  results.push({ name: 'fixture: a request held with nothing dispatched', ok: unplaced !== undefined, missing: [] });
-  if (unplaced) {
-    await m.navigate(`/requests/${unplaced.id}`);
-    await m.settle(300);
-    const line = m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line';
-    const on = unplaced.held.cohort ?? unplaced.held.waitedOn.at(-1);
-    const wait = waitText(unplaced.held.heldMs);
-    results.push({
-      name: '/requests drawer of a request held with nothing dispatched names the hold and its wait under Attempts',
-      ok: line === `held ${wait} on ${on}` && m.container.querySelectorAll('.drawer .attempt').length === 0 && m.container.querySelectorAll('.drawer .selection-trace').length === 0,
-      missing: [unplaced.id, line],
-    });
-  }
 }
 {
-  const fableAttempt = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d_fable')));
-  results.push({ name: 'fixture reports a Fable window on some attempts', ok: Boolean(fableAttempt), missing: [] });
-  const noFable = requests.find((r) => r.attempts.some((a) => a.windows.length > 0 && !a.windows.some((w) => w.id === '7d_fable')));
-  results.push({ name: 'fixture also has attempts with no Fable headers', ok: Boolean(noFable), missing: [] });
-  if (fableAttempt) {
-    await m.navigate(`/requests/${fableAttempt.id}`);
-    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
-    results.push({ name: '/requests Fable row reads a utilization and a reset', ok: rows.some((r) => /^Fable \d+% used resets /.test(r)), missing: rows.slice(0, 3) });
-  }
-  const unsampled = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.utilization === null && w.resetsAt !== null)));
-  results.push({ name: 'fixture has a window reported with a reset and no utilization', ok: Boolean(unsampled), missing: [] });
-  if (unsampled) {
-    await m.navigate(`/requests/${unsampled.id}`);
-    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
-    results.push({ name: '/requests a window with no utilization reads not reported rather than 0% used', ok: rows.some((r) => /^(5h|7d|Fable) utilization not reported resets /.test(r)) && !rows.some((r) => /^(5h|7d|Fable) 0% used/.test(r)), missing: rows.slice(0, 4) });
-  }
-  if (noFable) {
-    await m.navigate(`/requests/${noFable.id}`);
-    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
-    results.push({ name: '/requests Fable row reads n/a without Fable headers', ok: rows.some((r) => r === 'Fable n/a not reported'), missing: rows.slice(0, 3) });
-  }
-}
-{
-  const cacheRows = () => [...m.container.querySelectorAll('.attempt__windows li')].filter((li) => li.children[0]?.textContent?.trim() === 'Cache').map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' ').trim());
+  // The Outcome's Cache row reads the serving attempt, the last one, so each story row is picked by that attempt.
+  const cacheRows = () => {
+    const dd = drawerRowOf(m, 'Cache')?.querySelector('dd');
+    return dd ? [`Cache ${dd.textContent?.trim() ?? ''}`] : [];
+  };
+  const reasonInk = () => drawerRowOf(m, 'Cache')?.querySelector('dd')?.firstElementChild?.className ?? 'no Cache row';
+  const serving = (r) => r.attempts.at(-1) ?? null;
   {
     const failed = requests.filter((r) => r.attempts.some((a) => a.upstreamStatus !== 200 && a.cacheMissReason !== null));
     results.push({ name: 'fixture diagnoses nothing on an attempt that drew no response', ok: failed.length === 0, missing: failed.slice(0, 3).map((r) => r.id) });
   }
-  const changedRow = requests.find((r) => r.attempts.some((a) => a.cacheMissReason?.endsWith('_changed')));
+  const changedRow = requests.find((r) => serving(r)?.cacheMissReason?.endsWith('_changed'));
   results.push({ name: 'fixture diagnoses a cache divergence', ok: Boolean(changedRow), missing: [] });
   if (changedRow) {
     await m.navigate(`/requests/${changedRow.id}`);
     const rows = cacheRows();
-    results.push({ name: '/requests cache row names the divergence and where it fell, with no token count', ok: rows.some((r) => /^Cache (Model changed|System prompt changed|Tools changed|History edited) diverged at (model|system|tools|messages)$/.test(r)), missing: rows });
+    results.push({ name: '/requests cache row names the divergence and where it fell, with no token count', ok: rows.some((r) => /^Cache (Model changed|System prompt changed|Tools changed|History edited), diverged at (model|system|tools|messages)$/.test(r)), missing: rows });
   }
   const noneRow = requests.find((r) => r.attempts.length === 1 && r.attempts[0].cacheMissReason === 'none' && r.usage.cacheRead > 0);
   results.push({ name: 'fixture has an attempt that found no divergence', ok: Boolean(noneRow), missing: [] });
   if (noneRow) {
     await m.navigate(`/requests/${noneRow.id}`);
     const rows = cacheRows();
-    results.push({ name: '/requests cache row reads read and write tokens when nothing diverged', ok: rows.some((r) => /^Cache No divergence [\d.,]+[KMB]? read, [\d.,]+[KMB]? written$/.test(r)), missing: rows });
+    results.push({ name: '/requests cache row reads read and write tokens when nothing diverged', ok: rows.some((r) => /^Cache No divergence, [\d.,]+[KMB]? read, [\d.,]+[KMB]? written$/.test(r)), missing: rows });
   }
-  const notAsked = requests.find((r) => r.attempts.some((a) => a.cacheMissReason === 'not_requested'));
+  const notAsked = requests.find((r) => serving(r)?.cacheMissReason === 'not_requested');
   results.push({ name: 'fixture has an attempt the client asked no diagnostics for', ok: Boolean(notAsked), missing: [] });
   if (notAsked) {
     await m.navigate(`/requests/${notAsked.id}`);
     const rows = cacheRows();
     results.push({ name: '/requests cache row reads Not requested, muted, with no detail', ok: rows.includes('Cache Not requested'), missing: rows });
-    const muted = [...m.container.querySelectorAll('.attempt__windows li')].filter((li) => li.children[0]?.textContent?.trim() === 'Cache' && li.children[1]?.className === 'muted').length;
-    results.push({ name: '/requests Not requested is muted', ok: muted >= 1, missing: [String(muted)] });
+    results.push({ name: '/requests Not requested is muted', ok: reasonInk() === 'muted', missing: [reasonInk()] });
   }
-  const failedOver = requests.find((r) => r.attempts.some((a) => a.cacheMissReason === 'previous_message_not_found'));
+  const failedOver = requests.find((r) => serving(r)?.cacheMissReason === 'previous_message_not_found');
   results.push({ name: 'fixture diagnoses a failover as previous message not found', ok: Boolean(failedOver), missing: [] });
   if (failedOver) {
     await m.navigate(`/requests/${failedOver.id}`);
     const rows = cacheRows();
     results.push({ name: '/requests cache row names the failover reason', ok: rows.includes('Cache Previous message not found'), missing: rows });
-    results.push({ name: '/requests an attempt with no response reads n/a', ok: rows.includes('Cache n/a no response to read'), missing: rows });
+  }
+  // A request whose last attempt failed has no answer to read diagnostics from.
+  const unanswered = requests.find((r) => r.attempts.length > 0 && serving(r).cacheMissReason === null);
+  if (!unanswered) results.push({ name: '/requests an attempt with no response reads n/a', ok: false, missing: ['fixture'] });
+  else {
+    await m.navigate(`/requests/${unanswered.id}`);
+    const rows = cacheRows();
+    results.push({ name: '/requests an attempt with no response reads n/a', ok: rows.includes('Cache n/a, no response to read') && reasonInk() === 'muted', missing: [...rows, reasonInk()] });
   }
   // The route passes any reason name through, so one that names a member every object inherits must read as
   // itself rather than reach the member. The mock serves the row by reference, so the name is put back after.
@@ -5952,7 +5732,174 @@ if (failoverRow) {
     results.push({ name: '/requests cache row reads a reason named __proto__ under its own name', ok: rows.includes('Cache __proto__') && thrown.length === 0, missing: [...rows, ...thrown.map((p) => p.slice(0, 120))] });
   }
 }
+{
+  // The drawer draws its six sections and nothing of the attempts, however many the request made. Each attempt's
+  // routing is read in the routing log.
+  const several = requests.find((r) => r.attempts.length >= 3);
+  const none = requests.find((r) => r.attempts.length === 0);
+  const read = [];
+  for (const r of [several, none, laptopRow].filter(Boolean)) {
+    await m.navigate(`/requests/${r.id}`);
+    await m.settle(300);
+    read.push({
+      attempts: m.container.querySelectorAll('.drawer .attempt, .drawer .selection-trace').length,
+      id: r.id,
+      titles: [...m.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? ''),
+    });
+  }
+  results.push({
+    name: '/requests the drawer draws Outcome, Usage, Request, Request shape, Client hints and Captured bodies in that order and no Attempts',
+    ok: several !== undefined && none !== undefined && read.length === 3 && read.every((d) => JSON.stringify(d.titles) === JSON.stringify(DRAWER_SECTIONS) && d.attempts === 0),
+    missing: read.map((d) => JSON.stringify(d)),
+  });
+
+  // An attempt that carries no upstream id has no row. The mock serves the row by reference, so the ids are put back.
+  const target = requests.find((r) => r.attempts.length >= 3 && r.attempts.at(-1).upstreamMessageId !== null);
+  if (!target) results.push({ name: '/requests the Request section lists one Upstream ids row per attempt that carries one', ok: false, missing: ['fixture'] });
+  else {
+    const blank = target.attempts[1];
+    const kept = { message: blank.upstreamMessageId, request: blank.upstreamRequestId };
+    blank.upstreamMessageId = null;
+    blank.upstreamRequestId = null;
+    await m.navigate(`/requests/${laptopRow.id === target.id ? desktopRow.id : laptopRow.id}`);
+    await m.navigate(`/requests/${target.id}`);
+    await m.settle(300);
+    const section = [...m.container.querySelectorAll('.drawer section')].find((s) => s.querySelector('.section-title')?.textContent?.trim() === 'Request');
+    const labels = [...(section?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
+    const rows = labels.filter((l) => /^Attempt \d+$/.test(l)).map((l) => ({ chips: drawerChips(drawerRowOf(m, l)), label: l }));
+    blank.upstreamMessageId = kept.message;
+    blank.upstreamRequestId = kept.request;
+    const expected = target.attempts
+      .filter((a) => a.index !== blank.index)
+      .map((a) => ({
+        chips: [
+          ...(a.upstreamRequestId === null ? [] : [{ label: null, mono: true, title: "The upstream's request id", value: a.upstreamRequestId }]),
+          ...(a.upstreamMessageId === null ? [] : [{ label: null, mono: true, title: "The upstream's message id", value: a.upstreamMessageId }]),
+        ],
+        label: `Attempt ${a.index + 1}`,
+      }));
+    results.push({
+      name: '/requests the Request section lists one Upstream ids row per attempt that carries one',
+      ok: JSON.stringify(rows) === JSON.stringify(expected) && labels.indexOf(expected[0]?.label) === labels.indexOf('Kind') + 1,
+      missing: [JSON.stringify(labels), JSON.stringify(rows)],
+    });
+  }
+}
 m.unmount();
+
+// The two links into the routing log open it on the request a quarter hour either side of it, its end at most now,
+// read on the frozen clock so the range is the one the page computed.
+{
+  const QUARTER = 15 * 60_000;
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  const expectedOf = (r) => ({
+    from: new Date(Date.parse(r.at) - QUARTER).toISOString(),
+    path: '/routing-log',
+    request: r.id,
+    to: new Date(Math.min(Date.parse(r.at) + (r.durationMs ?? 0) + QUARTER, CLOCK_ORIGIN)).toISOString(),
+  });
+  const readHref = (href) => {
+    const url = new URL(href ?? '', 'http://console.test');
+    return { from: url.searchParams.get('from'), path: url.pathname, request: url.searchParams.get('request'), to: url.searchParams.get('to') };
+  };
+  const page = await mount('/requests', { now: CLOCK_ORIGIN });
+  const linksOf = (tr) => [...(tr.lastElementChild?.querySelectorAll('a') ?? [])].map((a) => ({ href: a.getAttribute('href') ?? '', text: a.textContent?.trim() ?? '' }));
+  const rows = [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
+    const links = linksOf(tr);
+    const id = decodeURIComponent(links.find((l) => l.text === 'Details')?.href.split('?')[0].split('/').pop() ?? '');
+    return { id, links };
+  });
+  const wrong = rows.filter(({ id, links }) => {
+    const r = byId.get(id);
+    return !r || JSON.stringify(links.map((l) => l.text)) !== JSON.stringify(['Routing', 'Details']) || JSON.stringify(readHref(links[0].href)) !== JSON.stringify(expectedOf(r));
+  });
+  const capped = rows.filter(({ id }) => byId.has(id) && expectedOf(byId.get(id)).to === new Date(CLOCK_ORIGIN).toISOString()).length;
+
+  // The head's link, on the newest row and on the oldest the page lists: the first ends at now, the second does not.
+  const heads = [];
+  for (const row of [rows[0], rows.at(-1)].filter(Boolean)) {
+    await page.navigate(`/requests/${row.id}`);
+    await page.settle(300);
+    const head = page.container.querySelector('.drawer__head');
+    const link = [...(head?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Routing log');
+    const title = head?.querySelector('.drawer__title');
+    const close = head?.querySelector('button[aria-label="Close details"]');
+    const between = Boolean(link && title && close && title.compareDocumentPosition(link) & window.Node.DOCUMENT_POSITION_FOLLOWING && link.compareDocumentPosition(close) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+    heads.push({ between, button: Boolean(link?.classList.contains('btn--secondary') && link.classList.contains('btn--sm')), href: link?.getAttribute('href') ?? null, id: row.id, row: row.links[0]?.href ?? null });
+  }
+  results.push({
+    name: "/requests the drawer's head links Routing log on the request with a quarter hour either side",
+    ok:
+      heads.length === 2 &&
+      heads.every((h) => h.between && h.button && JSON.stringify(readHref(h.href)) === JSON.stringify(expectedOf(byId.get(h.id)))) &&
+      readHref(heads[0].href).to === new Date(CLOCK_ORIGIN).toISOString() &&
+      readHref(heads[1].href).to !== new Date(CLOCK_ORIGIN).toISOString(),
+    missing: heads.map((h) => JSON.stringify({ ...h, expected: byId.has(h.id) ? expectedOf(byId.get(h.id)) : null, read: readHref(h.href) })),
+  });
+
+  // Routing goes straight to the log: the row's click would open the drawer, the link's never reaches it.
+  await page.navigate('/requests');
+  await page.settle(300);
+  const first = page.container.querySelector('.requests__table tbody tr');
+  const routing = [...(first?.lastElementChild?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Routing');
+  const href = routing?.getAttribute('href') ?? '';
+  routing?.click();
+  await page.settle(300);
+  const landed = page.location();
+  results.push({
+    name: '/requests each row links Routing beside Details to the same URL',
+    ok:
+      rows.length > 0 &&
+      wrong.length === 0 &&
+      capped > 0 &&
+      capped < rows.length &&
+      heads.every((h) => h.row === h.href) &&
+      landed.pathname === '/routing-log' &&
+      `${landed.pathname}${landed.search}` === href,
+    missing: [`${rows.length} rows, ${capped} ending at now`, ...wrong.slice(0, 3).map((w) => JSON.stringify(w)), ...heads.map((h) => `${h.row} against ${h.href}`), JSON.stringify(landed)],
+  });
+  page.unmount();
+}
+
+// The open drawer narrows the table to the columns that leave it room, and the chosen set returns when it closes.
+{
+  const COMPACT = ['Time', 'Model', 'Status', 'Attempts', ''];
+  const page = await mount('/requests', { now: CLOCK_ORIGIN });
+  const heads = () => [...page.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
+  const cells = () => [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children.length);
+  const colsButton = () => [...page.container.querySelectorAll('.filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
+  const turn = async (label) => {
+    colsButton()?.click();
+    await page.settle(100);
+    [...page.container.querySelectorAll('.cols-popover label')].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
+    await page.settle(100);
+    colsButton()?.click();
+    await page.settle(100);
+  };
+  await turn('Pool');
+  const chosen = heads();
+  page.container.querySelector('.requests__table tbody tr')?.click();
+  await page.settle(300);
+  const open = { cells: [...new Set(cells())], columns: colsButton()?.textContent?.trim(), drawer: page.container.querySelector('.drawer') !== null, heads: heads() };
+  page.container.querySelector('button[aria-label="Close details"]')?.click();
+  await page.settle(300);
+  const closed = { drawer: page.container.querySelector('.drawer') !== null, heads: heads() };
+  await turn('Pool');
+  results.push({
+    name: '/requests the table shows Time, Model, Status and Attempts while the drawer is open and the chosen set after it closes',
+    ok:
+      chosen.includes('Pool') &&
+      chosen.length === 12 &&
+      open.drawer &&
+      JSON.stringify(open.heads) === JSON.stringify(COMPACT) &&
+      JSON.stringify(open.cells) === JSON.stringify([COMPACT.length]) &&
+      open.columns === 'Columns (11)' &&
+      !closed.drawer &&
+      JSON.stringify(closed.heads) === JSON.stringify(chosen),
+    missing: [JSON.stringify(chosen), JSON.stringify(open), JSON.stringify(closed)],
+  });
+  page.unmount();
+}
 
 // The search commits as the pattern fields do: once typing pauses, or at once on Enter. The clock stands still, so only
 // a tick fires the pause's timer and a commit without one can only come from the key.
@@ -6029,10 +5976,16 @@ m.unmount();
   // The drawer is a route of its own, so a row, its Details link, Close and Escape each carry the address's filters.
   const drawerCheck = '/requests opening and closing the drawer keeps the filters in the address';
   const kept = await mount('/requests?keys=laptop');
-  const state = () => ({ drawer: kept.container.querySelector('.drawer') !== null, keys: column(kept, 'Key'), trigger: trigger(kept, 'Keys') });
+  // The open drawer takes the Key column out of the table, so each row's key is read off the request its id names.
+  const keysOf = (page) =>
+    [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
+      const shown = tr.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
+      return requests.find((r) => shown !== '' && r.id.startsWith(shown))?.keyId ?? '';
+    });
+  const state = () => ({ drawer: kept.container.querySelector('.drawer') !== null, keys: keysOf(kept), trigger: trigger(kept, 'Keys') });
   const held = (s) => s.trigger === 'Keys (1)' && s.keys.length > 0 && s.keys.every((k) => k === 'laptop');
   const before = state();
-  const details = kept.container.querySelector('.requests__table tbody tr a')?.getAttribute('href') ?? 'no Details link';
+  const details = [...(kept.container.querySelector('.requests__table tbody tr')?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Details')?.getAttribute('href') ?? 'no Details link';
   kept.container.querySelector('.requests__table tbody tr')?.click();
   await kept.settle();
   const clicked = state();
@@ -7768,7 +7721,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
   const moves = await api.getAnalyticsRewrites({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
   const moveLegend = legendOf('Migration rewrites').slice(2);
-  results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Rate limited') && moveLegend.includes('Shed'), missing: moveLegend });
+  results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Failed over') && moveLegend.includes('Shed'), missing: moveLegend });
 
   await tab(m, 'Burn');
   const planned = legendOf('Plan per hour');

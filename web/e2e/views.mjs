@@ -2551,40 +2551,86 @@ async function fastLane(theme, path) {
 }
 
 /**
- * The newest request's drawer: every attempt draws its selection trace, and each badge the trace and the summary
- * add (a member passed over, the request class) is the same box as the status badge beside them. It runs after the
- * list view's shot, so that shot stays the list alone.
+ * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
+ * the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll sideways at both, and
+ * every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's type and height, and
+ * the request class badge its box. A request that ended with no answer draws no chip, so then the chips are read on the
+ * newest request that answered 200. The router's seeded answers name no stop reason, speed or region, so there the ids'
+ * chips carry that measure. It runs after the list view's shot, so that shot stays the list alone.
  */
-async function requestDrawer(theme) {
+async function requestDrawerCompact(theme) {
+  const say = (what) => failures.push(`${theme} /requests: ${what}`);
   await page.locator('.requests__table tbody tr').first().click();
   await advance(LOAD_MS);
   try {
-    await page.waitForSelector('.drawer .attempt', { timeout: 15_000 });
+    await page.waitForSelector('.drawer .kv__row', { timeout: 15_000 });
   } catch {
-    failures.push(`${theme} /requests: the drawer drew no attempt`);
+    say('the drawer drew no row');
     return;
   }
-  const drawn = await page.evaluate(() => {
-    const box = (el) => {
-      const s = getComputedStyle(el);
-      return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
-    };
-    const status = [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Status')?.querySelector('.badge');
-    const client = [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === 'Client')?.querySelector('.badge');
-    const traces = [...document.querySelectorAll('.drawer .attempt')].map((a) => a.querySelector('.selection-trace'));
-    return {
-      attempts: traces.length,
-      badges: [...(client ? [client] : []), ...document.querySelectorAll('.drawer .selection-trace .badge')].map((b) => ({ box: box(b), text: b.textContent })),
-      overflow: traces.filter((t) => t && t.scrollWidth > t.clientWidth).length,
-      reference: status ? box(status) : null,
-      traces: traces.filter(Boolean).length,
-    };
-  });
-  measurements.push(`${theme} /requests drawer ${JSON.stringify(drawn)}`);
-  if (drawn.traces !== drawn.attempts) failures.push(`${theme} /requests: ${drawn.traces} of ${drawn.attempts} attempts draw a selection trace`);
-  if (drawn.overflow > 0) failures.push(`${theme} /requests: ${drawn.overflow} selection traces run past the drawer`);
-  if (drawn.reference === null) failures.push(`${theme} /requests: the drawer has no status badge to measure against`);
-  for (const b of drawn.badges.filter((x) => drawn.reference !== null && x.box !== drawn.reference)) failures.push(`${theme} /requests: the "${b.text}" badge measures ${b.box} against the status badge's ${drawn.reference}`);
+  const read = () =>
+    page.evaluate(() => {
+      // A served model's chip is mono, so a chip's type is read by size and line rather than by face.
+      const box = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontSize}/${s.lineHeight}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const badgeBox = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const rowOf = (label) => [...document.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent === label)?.querySelector('dd');
+      const table = document.querySelector('.requests__table');
+      const wrap = table?.closest('.table-wrap');
+      const status = rowOf('Status')?.querySelector('.badge');
+      const requestClass = rowOf('Client')?.querySelector('.badge');
+      const head = document.querySelector('.drawer__head');
+      return {
+        answer: rowOf('Answer')?.textContent ?? null,
+        badge: requestClass && status ? { box: badgeBox(requestClass), reference: badgeBox(status), text: requestClass.textContent } : null,
+        chips: [...document.querySelectorAll('.drawer .kv__row')].flatMap((r) => [...r.querySelectorAll('dd .chip')].map((c) => ({ box: box(c), row: r.querySelector('dt')?.textContent, text: c.textContent }))),
+        drawer: Math.round(document.querySelector('.drawer')?.getBoundingClientRect().width ?? 0),
+        head: head ? Math.round(head.getBoundingClientRect().height) : null,
+        heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
+        reference: status ? box(status) : null,
+        table: wrap && table ? { client: wrap.clientWidth, scroll: table.scrollWidth } : null,
+      };
+    });
+  let chips = 0;
+  for (const { drawer, height, width } of [
+    { drawer: 400, height: 800, width: 1280 },
+    { drawer: 440, height: 900, width: 1440 },
+  ]) {
+    const where = `the open drawer at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /requests drawer at ${width} by ${height} ${JSON.stringify(got)}`);
+    if (got.drawer !== drawer) say(`${where} is ${got.drawer}px wide, not ${drawer}px`);
+    if (JSON.stringify(got.heads) !== JSON.stringify(['Time', 'Model', 'Status', 'Attempts', ''])) say(`${where}: the table draws the columns ${JSON.stringify(got.heads)}`);
+    if (got.table === null) say(`${where} has no table to measure`);
+    else if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
+    if (got.reference === null) say(`${where} has no status badge to measure against`);
+    if (got.badge !== null && got.badge.box !== got.badge.reference) say(`${where}: the "${got.badge.text}" class badge measures ${got.badge.box} against the status badge's ${got.badge.reference}`);
+    chips += got.chips.length;
+    for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  if (chips > 0) return;
+  const answered = page.locator('.requests__table tbody tr', { has: page.locator('.requests__status .badge', { hasText: /^200$/ }) }).first();
+  if ((await answered.count()) === 0) {
+    say('no request answered 200 to read the drawer chips on');
+    return;
+  }
+  await answered.click();
+  await advance(LOAD_MS);
+  await settle();
+  const got = await read();
+  measurements.push(`${theme} /requests drawer of the newest answered request ${JSON.stringify(got)}`);
+  if (got.reference === null) say('the newest answered request has no status badge to measure against');
+  if (got.chips.length === 0) say("the newest answered request's drawer draws no chip to measure");
+  for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
 }
 
 /**
@@ -3549,7 +3595,7 @@ try {
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
-      if (view.path === '/requests') await requestDrawer(theme);
+      if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
     }
