@@ -1492,7 +1492,7 @@ impl Relay {
             (Some(version), _) if trace.kind == Kind::Inference && facts.carries_line => {
                 restorable_version(version).map(|version| RestoreContext {
                     cli_version: version.to_string(),
-                    prompt_units: facts.prompt_units,
+                    prompt_units: facts.prompt_units.clone(),
                     prompt_id: memory_key.as_ref().map(|key| {
                         self.memory.prompt_id(
                             key,
@@ -1539,7 +1539,7 @@ impl Relay {
         if let Some(context) = &restore {
             let check = VersionCheck {
                 client_version: &context.cli_version,
-                prompt_units: context.prompt_units,
+                prompt_units: &context.prompt_units,
             };
             if matches!(crate::body::carries_a_stamp(&raw), Ok(true)) {
                 if let Some(kind) = crate::body::version_drift(&raw, check) {
@@ -4035,7 +4035,7 @@ impl From<Failure> for LocalRefusal {
 /// attempt actually tries.
 struct RestoreContext {
     cli_version: String,
-    prompt_units: [u16; 3],
+    prompt_units: Vec<[u16; 3]>,
     prompt_id: Option<String>,
     system_is_array: bool,
 }

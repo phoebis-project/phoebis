@@ -11,10 +11,12 @@ pub struct BodyFacts {
     /// The last `messages` entry whose role is not `system` has role `user` and carries no `tool_result`
     /// block: a per-turn control entry after the user's turn is the client's, not a turn of its own.
     pub fresh_user_turn: bool,
-    /// UTF-16 code units 4, 7, and 20 of the user's own prompt (the last `text` block of the first `user`
-    /// message; the system-reminder blocks precede it), matching the client's own JavaScript string indexing;
-    /// `b'0' as u16` where the text is shorter, for the version suffix.
-    pub prompt_units: [u16; 3],
+    /// UTF-16 code units 4, 7, and 20 of each `text` block of the first `user` message, in the wire's order,
+    /// matching the client's own JavaScript string indexing; `b'0' as u16` where a text is shorter. The client
+    /// hashes the first text of its first non-meta user message for the version suffix, and the meta flag never
+    /// reaches the wire: the blocks it prepends (a system reminder, a slash command's caveat and output) and the
+    /// user's own words all land as text blocks of one message, so every block is a candidate.
+    pub prompt_units: Vec<[u16; 3]>,
     /// The `cc_prompt_id` the caller's own attribution line carries, absent from a reduced-shape request and
     /// from a value spelled any other way than the client spells one.
     pub prompt_id: Option<String>,
@@ -70,7 +72,7 @@ impl BodyFacts {
         let Some(root) = tolerant_value(body) else {
             return BodyFacts {
                 fresh_user_turn: false,
-                prompt_units: [b'0' as u16; 3],
+                prompt_units: vec![[b'0' as u16; 3]],
                 prompt_id: None,
                 turn_origin: None,
                 carries_line: false,
@@ -107,9 +109,9 @@ impl BodyFacts {
                 m.iter()
                     .find(|msg| msg.get("role").and_then(Value::as_str) == Some("user"))
             })
-            .and_then(last_text)
-            .map(prompt_units_of)
-            .unwrap_or([b'0' as u16; 3]);
+            .map(|message| texts(message).map(prompt_units_of).collect::<Vec<_>>())
+            .filter(|candidates| !candidates.is_empty())
+            .unwrap_or_else(|| vec![[b'0' as u16; 3]]);
         // Read once and shared by every field the line may carry, so a change to one field's spelling rule
         // never has to re-walk the body to find the text the others already have in hand.
         let first_system_text = root
@@ -298,18 +300,17 @@ fn is_fresh_user_turn(message: &Value) -> bool {
     }
 }
 
-/// The last `text` block of a message: a string content is the text itself, an array is scanned back to front
-/// since the system-reminder blocks a client prepends precede the user's own words.
-fn last_text(message: &Value) -> Option<&str> {
+/// The `text` blocks of a message in order: a string content is one text, an array yields each `text` block.
+fn texts(message: &Value) -> Box<dyn Iterator<Item = &str> + '_> {
     match message.get("content") {
-        Some(Value::String(s)) => Some(s.as_str()),
-        Some(Value::Array(blocks)) => blocks
-            .iter()
-            .rev()
-            .find(|b| b.get("type").and_then(Value::as_str) == Some("text"))
-            .and_then(|b| b.get("text"))
-            .and_then(Value::as_str),
-        _ => None,
+        Some(Value::String(s)) => Box::new(std::iter::once(s.as_str())),
+        Some(Value::Array(blocks)) => Box::new(
+            blocks
+                .iter()
+                .filter(|b| b.get("type").and_then(Value::as_str) == Some("text"))
+                .filter_map(|b| b.get("text").and_then(Value::as_str)),
+        ),
+        _ => Box::new(std::iter::empty()),
     }
 }
 
@@ -435,18 +436,22 @@ mod tests {
     #[test]
     fn the_prompt_units_of_a_short_prompt_pad_with_zero() {
         let body = br#"{"messages":[{"role":"user","content":"hi"}]}"#;
-        assert_eq!(BodyFacts::read(body).prompt_units, [b'0' as u16; 3]);
+        assert_eq!(BodyFacts::read(body).prompt_units, vec![[b'0' as u16; 3]]);
     }
 
     #[test]
-    fn the_last_text_block_of_the_first_user_message_is_read_past_system_reminders() {
+    fn every_text_block_of_the_first_user_message_is_a_candidate() {
         let body = br#"{"messages":[{"role":"user","content":[
             {"type":"text","text":"<system-reminder>ignored</system-reminder>"},
+            {"type":"image","source":{}},
             {"type":"text","text":"01234567890123456789X1"}
-        ]}]}"#;
+        ]},{"role":"user","content":"a later message is not read"}]}"#;
         assert_eq!(
             BodyFacts::read(body).prompt_units,
-            [b'4' as u16, b'7' as u16, b'X' as u16]
+            vec![
+                [b't' as u16, b'-' as u16, b'o' as u16],
+                [b'4' as u16, b'7' as u16, b'X' as u16]
+            ]
         );
     }
 
@@ -458,7 +463,7 @@ mod tests {
         let body = format!(r#"{{"messages":[{{"role":"user","content":"{text}"}}]}}"#);
         assert_eq!(
             BodyFacts::read(body.as_bytes()).prompt_units,
-            [b'c' as u16, b'f' as u16, b's' as u16]
+            vec![[b'c' as u16, b'f' as u16, b's' as u16]]
         );
     }
 
@@ -466,7 +471,7 @@ mod tests {
     fn an_unparseable_body_reads_as_not_a_fresh_turn_with_zeroed_units() {
         let facts = BodyFacts::read(b"not json");
         assert!(!facts.fresh_user_turn);
-        assert_eq!(facts.prompt_units, [b'0' as u16; 3]);
+        assert_eq!(facts.prompt_units, vec![[b'0' as u16; 3]]);
     }
 
     #[test]
@@ -737,14 +742,14 @@ mod tests {
         assert!(facts.carries_line);
         assert_eq!(
             facts.prompt_units,
-            [0xFFFD, u16::from(b'g'), u16::from(b't')]
+            vec![[0xFFFD, u16::from(b'g'), u16::from(b't')]]
         );
         assert_eq!(
             crate::body::version_drift(
                 body.as_bytes(),
                 crate::body::VersionCheck {
                     client_version: "2.1.269",
-                    prompt_units: facts.prompt_units,
+                    prompt_units: &facts.prompt_units,
                 }
             ),
             None

@@ -1038,7 +1038,7 @@ fn set_max_20x(store: &phoebis_store::Store) {
     store
         .set_profile(
             "business",
-            r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
+            r#"{"account":{"uuid":"u","email":"business@example.invalid"},"organization":{}}"#,
             &phoebis_store::SubscriptionRow {
                 plan: Some("max".into()),
                 tier: Some("default_claude_max_20x".into()),
