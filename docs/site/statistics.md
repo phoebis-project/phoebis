@@ -467,14 +467,14 @@ hour either side of the event, and Details, which opens the request's drawer. Th
 
 | Event | What it records |
 | --- | --- |
-| account state changed | An account's state moved, with the old state, the new one and the cause the registry stored. |
+| account state changed | An account's state moved, with the old state, the new one and who moved it. |
 | budget period ended | A member's budget period closed, with the spend it closed on. |
 | budget reached | A member's spend crossed its budget, so the pool answers exhausted for it until the period ends. |
 | catalog changed | An account's model catalog gained or lost models. |
 | cooldown cleared | A cooldown ended by its deadline, by hand or by a recovery. |
 | cooldown set | An answer cooled an account, its fast lane or one model on it until a time. |
 | fast credits changed | An account's usage credits for fast mode became available or unavailable. |
-| ledger gap | The ledger dropped part of a captured body, so the stored response is truncated. |
+| ledger gap | The ledger could not record a request whole, and the reason names what it is missing. |
 | model permitted | An account served a model another account had rejected. |
 | model rejected | An account answered 404 for a model, which cools that model on the account. |
 | overage ended | An account left overage at its 7-day reset. |
@@ -496,6 +496,11 @@ hour either side of the event, and Details, which opens the request's drawer. Th
 | wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
 | window reset | A quota window reset, with the reading before it. |
 | window spent | A response head or the poll read a quota window at its limit. |
+
+An account state change names who moved the state in the console's words: `credential refused` when the upstream refused
+the account's credential, `credit balance` when it named the credit balance, `refresh failed` when the token refresh
+failed for good, `by hand` for an operator's change, and `paired` for a pairing's confirm. A deleted account's last row
+reads `deleted`, as its new state and as who moved it.
 
 ### Analytics
 

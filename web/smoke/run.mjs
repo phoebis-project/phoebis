@@ -6758,21 +6758,8 @@ m.unmount();
       scan('renewal, folds open', card);
     }
     {
-      // Copy as JSON hands the route's answer to the clipboard as it arrived, every field the card does not draw
-      // included.
-      let copied = null;
-      Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (t) => ((copied = t), Promise.resolve()) } });
-      const foot = card?.querySelector('.decision-card__foot');
-      [...(foot?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Copy as JSON')?.click();
-      await page.settle(50);
-      Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: undefined });
-      const widen = [...(foot?.querySelectorAll('button.link-btn') ?? [])].map((b) => b.textContent);
-      results.push({
-        name: '/routing-log the foot reads Record v1 and Copy as JSON copies the record whole with the full hash',
-        ok: foot?.querySelector('.decision-card__record')?.textContent === 'Record v1' && JSON.stringify(widen) === JSON.stringify(['this session', 'this account', 'this minute']) && copied !== null && JSON.stringify(JSON.parse(copied)) === JSON.stringify(record.raw) && copied === JSON.stringify(record.raw, null, 2),
-        missing: [foot?.textContent ?? 'no foot', String(copied).slice(0, 80)],
-      });
       // A widening replaces the request filter with the account's quarter hour around the row.
+      const foot = card?.querySelector('.decision-card__foot');
       const at = Date.parse(record.request.at);
       [...(foot?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent === 'this account')?.click();
       await page.settle(300);
@@ -6810,6 +6797,22 @@ m.unmount();
         refused !== undefined && theirs?.querySelector('.decision-card__hash')?.textContent === refused.prefix.static.hash.slice(0, 8) && (theirs?.querySelector('.decision-card__hash')?.getAttribute('title') ?? '').includes(refused.prefix.static.refusedBy) &&
         !(card?.textContent ?? '').includes(chosen.prefix.static.hash.slice(0, 8)),
       missing: [...rungs.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), `${hash?.textContent} ${hash?.getAttribute('title')}`, warm?.textContent ?? 'no warm-until', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
+    });
+    // Copy as JSON hands the route's answer to the clipboard as it arrived, every field the card does not draw
+    // included: here the whole hash of the entry the rung took, which the card cuts to eight characters.
+    let copied = null;
+    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (t) => ((copied = t), Promise.resolve()) } });
+    const foot = card?.querySelector('.decision-card__foot');
+    [...(foot?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Copy as JSON')?.click();
+    await page.settle(50);
+    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: undefined });
+    const widen = [...(foot?.querySelectorAll('button.link-btn') ?? [])].map((b) => b.textContent);
+    results.push({
+      name: '/routing-log the foot reads Record v1 and Copy as JSON copies the record whole with the full hash',
+      ok:
+        foot?.querySelector('.decision-card__record')?.textContent === 'Record v1' && JSON.stringify(widen) === JSON.stringify(['this session', 'this account', 'this minute']) && copied !== null &&
+        copied === JSON.stringify(record.raw, null, 2) && copied.includes(`"${chosen.prefix.staticMatch.hash}"`) && chosen.prefix.staticMatch.hash.length === 64,
+      missing: [foot?.textContent ?? 'no foot', String(copied).slice(0, 80)],
     });
     page.unmount();
   }
@@ -7113,18 +7116,36 @@ m.unmount();
     page.unmount();
   }
   {
+    // No story refusal names a key or pool the registry has since dropped, so the route's answer drops its settings
+    // while the check reads it.
+    const original = api.getDecision;
+    api.getDecision = async (id, seq) => {
+      const r = await original.call(api, id, seq);
+      return r && { ...r, settings: null };
+    };
+    const { card, page } = await story('req_e0a4c6f2-118');
+    api.getDecision = original;
+    const fold = card?.querySelectorAll('details.decision-card__fold')[2];
+    results.push({
+      name: "/routing-log a refusal under a key or pool the registry no longer holds reads so in the settings fold",
+      ok: fold?.querySelector('summary')?.textContent === 'Settings in force' && fold.querySelector('.kv') === null && (fold.textContent ?? '').endsWith('The key and its pool had left the registry'),
+      missing: [fold?.textContent ?? 'no fold'],
+    });
+    page.unmount();
+  }
+  {
     // Each event kind opens to its pairs: When to the second in UTC, then the account and the pool as links, then the
     // kind's own. The wind-down is dated at the instant it fires, five days past the pinned clock, so no range up to
     // the clock lists it: its page is mounted on a clock a minute past the event, its `to` a minute past the event.
     const OWN = {
-      account_state_changed: ['From', 'To', 'Cause', 'Detail'],
+      account_state_changed: ['From', 'To', 'Cause', 'Detail', 'Effect'],
       budget_period_ended: ['Previous period', 'Spent', 'Period start'],
       budget_reached: ['Budget', 'Spent', 'Period ends', 'Effect', 'Crossed by'],
       catalog_changed: ['Added', 'Models'],
       cooldown_cleared: ['Scope', 'Cleared'],
       cooldown_set: ['Scope', 'Reason', 'Window', 'Until', 'Set by'],
       fast_credits_changed: ['Before', 'After', 'Cause', 'Effect'],
-      ledger_gap: ['Reason', 'Effect', 'Request'],
+      ledger_gap: ['Reason', 'Meaning', 'Effect', 'Request'],
       model_permitted: ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request'],
       model_rejected: ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request'],
       overage_ended: ['Since', 'Lasted'],
@@ -7139,13 +7160,13 @@ m.unmount();
       refresh_failed: [],
       refresh_succeeded: [],
       refresh_uncertain: [],
-      registry_changed: ['Change', 'Actor'],
+      registry_changed: ['Change', 'shed ahead of pace', 'Actor', 'Reading it'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
       shedding_round: ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
       warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
       wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
       window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
-      window_spent: ['Window', 'Reading', 'Read from', 'Resets', 'Request'],
+      window_spent: ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request'],
     };
     const EVENT_KINDS = [
       'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'model_permitted', 'model_rejected',
@@ -7153,9 +7174,21 @@ m.unmount();
       'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+    const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
+    // The pairs the event carries the facts for, worded as spec 8.4's rows: the state's effect, the gap's meaning, a
+    // registry edit's reading, the spent window's effect and the backoff's span.
+    const VALUES = {
+      account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
+      ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
+      poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
+      registry_changed: (e) => ({ 'Reading it': [`decisions before ${hhmm(Date.parse(e.at))} carry shed ahead of pace off`] }),
+      window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request'] }),
+    };
     const modelLinks = {};
     for (const kind of EVENT_KINDS) {
-      const [e] = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 7 * DAY), kinds: [kind], limit: 1, to: iso(CLOCK_ORIGIN + 7 * DAY) })).rows;
+      // The story's newest registry change revokes a key and names no field, so the pool edit stands for the kind.
+      const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 7 * DAY), kinds: [kind], limit: 25, to: iso(CLOCK_ORIGIN + 7 * DAY) })).rows;
+      const e = listed.find((r) => Object.keys(r.detail.diff ?? {}).length > 0) ?? listed[0];
       if (!e) {
         results.push({ name: `/routing-log the ${kind} detail reads its pairs`, ok: false, missing: ['no event of the kind in the story'] });
         continue;
@@ -7174,7 +7207,8 @@ m.unmount();
         ok:
           JSON.stringify(pairs.slice(0, head.length).map((p) => [p.label, p.dd?.textContent])) === JSON.stringify(head) &&
           (e.accountId === null || href('Account') === `/accounts/${e.accountId}`) && (e.poolId === null || href('Pool') === `/pools?pool=${e.poolId}`) &&
-          JSON.stringify(pairs.slice(head.length).map((p) => p.label)) === JSON.stringify(OWN[kind]) && (e.requestId === null) === (detail?.querySelector('.event-detail__foot') === null),
+          JSON.stringify(pairs.slice(head.length).map((p) => p.label)) === JSON.stringify(OWN[kind]) && (e.requestId === null) === (detail?.querySelector('.event-detail__foot') === null) &&
+          Object.entries(VALUES[kind]?.(e) ?? {}).every(([label, want]) => JSON.stringify(ddWords(pairs.find((p) => p.label === label)?.dd)) === JSON.stringify(want)),
         missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
       });
       page.unmount();
@@ -7228,10 +7262,17 @@ m.unmount();
     await page.settle(300);
     const paged = page.container.querySelectorAll('.routing-log__panel').length;
     const chevrons = trs(page).filter((tr) => tr.classList.contains('routing-log__row')).every((tr) => tr.firstElementChild?.classList.contains('routing-log__chevron'));
+    // Back on the page the row was opened on, it is shut too: the open rows went with the page they were opened on.
+    const pager = (label) => [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === label);
+    pager('First page')?.click();
+    await page.settle(300);
+    const back = page.container.querySelectorAll('.routing-log__panel').length;
+    pager('Next page')?.click();
+    await page.settle(300);
     results.push({
       name: '/routing-log a click anywhere but a link opens the row and shuts it again, and another page starts with every row shut',
-      ok: opened === 1 && shut === 0 && paged === 0 && chevrons && first?.querySelector('td.routing-log__chevron svg') !== null,
-      missing: [`opened ${opened}, shut ${shut}, after paging ${paged}, chevrons ${chevrons}`],
+      ok: opened === 1 && shut === 0 && paged === 0 && back === 0 && chevrons && first?.querySelector('td.routing-log__chevron svg') !== null,
+      missing: [`opened ${opened}, shut ${shut}, after paging ${paged}, back on the first page ${back}, chevrons ${chevrons}`],
     });
     // Every decision and every event of the default hour opens, the second page's rows and then the first's, and the
     // cards and details join the scan.

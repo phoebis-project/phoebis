@@ -537,14 +537,14 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
 
 /** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */
 const DETAIL_EVENTS = {
-  account_state_changed: [{ cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }, ['From', 'To', 'Cause', 'Detail']],
+  account_state_changed: [{ cause: 'funding_refused', detail: 'Your credit balance is too low', from: 'ready', to: 'funding_required' }, ['From', 'To', 'Cause', 'Detail', 'Effect']],
   budget_period_ended: [{ period: 'day', period_start: ms(0, 0) - 24 * HOUR, previous_spent_usd: 18.2 }, ['Previous period', 'Spent', 'Period start']],
   budget_reached: [{ budget_usd: 20, period: 'day', period_end: MIDNIGHT, source_request_id: 'req_1', spent_usd: 20.4 }, ['Budget', 'Spent', 'Period ends', 'Effect', 'Crossed by']],
   catalog_changed: [{ added: ['claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5'] }, ['Added', 'Removed', 'Models']],
   cooldown_cleared: [{ cause: 'expired', scope: 'account' }, ['Scope', 'Cleared']],
   cooldown_set: [{ reason: 'rate_limited', scope: 'account', source_request_id: 'req_1', until: ms(15, 42), window: 'five_hour' }, ['Scope', 'Reason', 'Window', 'Until', 'Set by']],
   fast_credits_changed: [{ after: { disabled_reason: null, enabled: true, utilization: 0.31 }, before: { disabled_reason: null, enabled: true, utilization: 1 }, blocked_after: null, blocked_before: 'org_spend_cap_reached', observed_at: ms(11, 30) }, ['Before', 'After', 'Cause', 'Effect']],
-  ledger_gap: [{ reason: 'chunk_skipped', request_id: 'req_1' }, ['Reason', 'Effect', 'Request']],
+  ledger_gap: [{ reason: 'chunk_skipped', request_id: 'req_1' }, ['Reason', 'Meaning', 'Effect', 'Request']],
   model_permitted: [{ attempt: 2, rejected_by: ['secondary'], request_id: 'req_012', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request']],
   model_rejected: [{ attempt: 1, request_id: 'req_011', source_request_id: 'req_1', wire_model: 'claude-haiku-4-5' }, ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request']],
   overage_ended: [{ since: ms(10, 0) - 24 * HOUR }, ['Since', 'Lasted']],
@@ -559,7 +559,7 @@ const DETAIL_EVENTS = {
   refresh_failed: [{}, []],
   refresh_succeeded: [{}, []],
   refresh_uncertain: [{}, []],
-  registry_changed: [{ diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, ['Change', 'shed ahead of pace', 'Actor']],
+  registry_changed: [{ diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, ['Change', 'shed ahead of pace', 'Actor', 'Reading it']],
   router_started: [{ affinity_entries_loaded: 34, down_since: ms(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests']],
   shedding_round: [
     {
@@ -572,7 +572,7 @@ const DETAIL_EVENTS = {
   warm_prefix_expired: [{ cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000, written_at: ms(14, 19, 52) }, entries: 1, root: 's0' }, ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed']],
   wind_down_started: [{ end_source: 'cancelled', ends_at: ms(15, 0), wind_down_minutes: 30 }, ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from']],
   window_reset: [{ next_reset: ms(19, 0), observed: 'sample', reset_at: ms(14, 0), utilization_before: 0.92, window: 'five_hour' }, ['Window', 'Before the reset', 'Prediction', 'Next reset']],
-  window_spent: [{ reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }, ['Window', 'Reading', 'Read from', 'Resets', 'Request']],
+  window_spent: [{ reset: ms(15, 42), source: 'head', source_request_id: 'req_1', utilization: 1, window: 'five_hour' }, ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request']],
 };
 
 test('every event kind has its detail pairs starting with When, Account and Pool', () => {
@@ -650,4 +650,52 @@ test('the settings in force read the twenty in the card order', () => {
   assert.deepEqual(d.SETTINGS_ROWS.map((s) => d.settingValue(s.key, SETTINGS)), ['Pace', 'subscriptions first', 'prefer plan', '10 min', 'when cached', 'by warm prefix', '20K', 'by cohort', 'off', '90%', 'on', '30 min', '30 min', '50%', '10 min', '15 min', 'when needed', '16', '1 min', '5%']);
   assert.equal(Object.keys(d.OBSTACLE_HINT).length, 14);
   assert.equal(d.OBSTACLE_HINT.budget_unknown, 'its spend unknown while the ledger is degraded');
+});
+
+test('the event detail draws the pairs its event carries: the effect, the meaning, the reading and the backoff span', () => {
+  const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, o), NOW).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual(pairs('account_state_changed', { cause: 'funding_refused', detail: null, from: 'ready', to: 'funding_required' }).Effect, ['the account leaves every eligible set until funded']);
+  assert.deepEqual(pairs('account_state_changed', { cause: 'deleted', detail: null, from: 'ready', to: 'deleted' }).Effect, ['the account left the registry and this is its last row']);
+  assert.deepEqual(pairs('account_state_changed', { cause: 'operator', detail: null, from: 'funding_required', to: 'ready' }).Effect, ['the account joins the eligible sets again']);
+  assert.deepEqual(pairs('window_spent', { reset: ms(15, 42), source: 'head', utilization: 1, window: 'five_hour' }).Effect, ['a pinned session moves by the spent rule at its next request']);
+  const skipped = pairs('ledger_gap', { reason: 'chunk_skipped', request_id: 'req_1' }, { requestId: 'req_1' });
+  assert.deepEqual([skipped.Meaning, skipped.Effect], [['an interior chunk of the capture was dropped at the bus'], ['the captured response is stored truncated']]);
+  const missing = pairs('ledger_gap', { reason: 'attempt_missing', request_id: 'req_1' }, { requestId: 'req_1' });
+  assert.deepEqual([missing.Meaning, missing.Effect], [['the bus dropped an account selection and the trail is short an attempt row'], undefined]);
+  for (const reason of ['attempt_missing', 'capture_budget', 'chunk_dropped', 'chunk_skipped', 'expired', 'in_flight_cap', 'poison']) assert.ok(pairs('ledger_gap', { reason }).Meaning?.[0], reason);
+  const edit = pairs('registry_changed', { diff: { pace_floor: { from: 0.05, to: 0.1 }, shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', at: iso(ms(9, 5, 12)), poolId: 'all' });
+  assert.deepEqual(edit['Reading it'], ['decisions before 09:05 carry pace floor 5%', 'decisions before 09:05 carry shed ahead of pace off']);
+  assert.deepEqual(pairs('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) })['Backed off'], ['from 07:50', 'to 08:15']);
+});
+
+test('the catalog change lists its models fable, opus, sonnet, haiku, newest first', () => {
+  const pairs = Object.fromEntries(d.detailPairs(event('catalog_changed', { added: ['claude-haiku-4-5', 'claude-opus-5', 'claude-fable-5-1', 'claude-opus-5-5'], count: 12, removed: ['claude-sonnet-4-5', 'claude-opus-4-5', 'claude-sonnet-5'] }), NOW).map((p) => [p.label, texts(p.chips)]));
+  assert.deepEqual(pairs.Added, ['claude-fable-5-1', 'claude-opus-5-5', 'claude-opus-5', 'claude-haiku-4-5']);
+  assert.deepEqual(pairs.Removed, ['claude-opus-4-5', 'claude-sonnet-5', 'claude-sonnet-4-5']);
+});
+
+test('the verdict line reads the cache pending only while the answer has not ended, and keys a landing depth by its rung', () => {
+  const chips = (r, row) => texts(d.verdictChips(r, row));
+  const ended = record({ outcome: { completion: completion({ completedAt: iso(ms(14, 27, 30)), status: 200 }) } });
+  assert.ok(!chips(ended, decision({ by: strategy('pace', [0, 0, 0]) })).some((c) => c.includes('pending')));
+  const open = record({ outcome: { completion: completion({}) } });
+  assert.equal(chips(open, decision({ by: strategy('pace', [0, 0, 0]) })).at(-1), 'cache pending');
+  const moved = record({ candidates: [candidate({ verdict: 'chosen' })], outcome: { fromAccountId: 'secondary', kind: 'moved', rule: 'spent', rung: { depth: 2, prefixTokens: 31_200, rung: 'static' } } });
+  const drawn = d.verdictChips(moved, decision({ by: by('rule', 'spent'), kind: 'moved' }));
+  assert.deepEqual(texts(drawn), ['tier plan quota P0', 'spent rule', 'static rung depth 2']);
+  assert.equal(drawn[2].title, d.PLACED.static(2));
+});
+
+test('the card carries the hover hints of the hold, the promise and the placement', () => {
+  assert.equal(d.HOLD_HINT, 'Every account the placement could land on was at its in-flight cap, so the request waited first');
+  assert.equal(d.PROMISE_HINT.content, 'A placement by its messages hits when the cache reads the whole prefix it was promised');
+  assert.equal(d.PLACED.static(2), 'placed by its static prefix, depth 2');
+  const held = record({ outcome: { hold: { accountId: 'primary', boundMs: 10_000, cohort: 'primary' }, kind: 'held' } });
+  assert.equal(d.outcomeRows(held, NOW).find((r) => r.label === 'Hold').title, d.HOLD_HINT);
+  const promised = record({ outcome: { completion: completion({ cacheReadTokens: 31_000, completedAt: iso(NOW), hit: true, inputTokens: 200, promisedTokens: 31_200, status: 200 }), rung: { depth: 2, prefixTokens: 31_200, rung: 'static' } } });
+  assert.equal(d.outcomeRows(promised, NOW).find((r) => r.label === 'Cache read').title, d.PROMISE_HINT.static);
+  const row = decision({ by: by('rung', 'static') });
+  const verdict = d.verdictChips(promised, row);
+  assert.equal(verdict.find((c) => c.value === 'static rung').title, d.PLACED.static(2));
+  assert.equal(verdict.find((c) => c.label === 'cache hit').title, d.PROMISE_HINT.static);
 });

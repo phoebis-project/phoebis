@@ -1,8 +1,9 @@
 import type { SKIP_OBSTACLE_VALUES } from '@/api/decode';
-import type { Placement, PoolStrategy, SelectionTrace as Trace, Usage } from '@/api/types';
+import type { PoolStrategy, SelectionTrace as Trace, Usage } from '@/api/types';
 import { Badge } from '@/components/ui/primitives';
 import { moveLabel, own } from '@/lib/analytics';
 import { fmtCompact, fmtMs, placementHit } from '@/lib/format';
+import { HOLD_HINT, PLACED, PROMISE_HINT } from '@/lib/routingLog';
 import { STRATEGY_LABEL } from '@/lib/selection';
 
 type Obstacle = (typeof SKIP_OBSTACLE_VALUES)[number];
@@ -27,18 +28,6 @@ const OBSTACLE_HINT: Record<Obstacle, string> = {
 
 const strategyLabel = (s: string) => (own(STRATEGY_LABEL, s) ? STRATEGY_LABEL[s as PoolStrategy] : s);
 const obstacleHint = (o: string) => (own(OBSTACLE_HINT, o) ? OBSTACLE_HINT[o as Obstacle] : undefined);
-
-const PLACED: Record<Placement['rung'], (depth: number) => string> = {
-  content: (depth) => `placed by its messages, depth ${depth}`,
-  static: (depth) => `placed by its static prefix, depth ${depth}`,
-  with_main: () => 'placed with the main conversation',
-};
-const HOLD_HINT = 'Every account the placement could land on was at its in-flight cap, so the request waited first';
-const PROMISE_HINT: Record<Placement['rung'], string> = {
-  content: 'A placement by its messages hits when the cache reads the whole prefix it was promised',
-  static: 'A placement by its static prefix hits when the cache reads anything',
-  with_main: 'A placement beside the main conversation hits when the cache reads anything',
-};
 
 /**
  * Why one attempt landed where it did: the strategy and the tier it chose in, whether it continued the session's

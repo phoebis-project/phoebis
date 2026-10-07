@@ -142,6 +142,7 @@ export function RoutingLogPage() {
   // The open rows belong to the page they were opened on, so another page or another filter starts with every row shut.
   const pageKey = `${cursor ?? ''}|${address}`;
   const [opened, setOpened] = useState<{ for: string; ids: Set<string> }>({ for: pageKey, ids: new Set() });
+  if (opened.for !== pageKey) setOpened({ for: pageKey, ids: new Set() });
   const open = opened.for === pageKey ? opened.ids : new Set<string>();
   const toggle = (id: string) =>
     setOpened((o) => {

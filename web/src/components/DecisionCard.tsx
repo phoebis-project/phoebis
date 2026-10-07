@@ -61,7 +61,7 @@ export function rowValue(chips: Chip[]) {
   return <Chips chips={chips} />;
 }
 
-export const keyValueRows = (rows: CardRow[]) => rows.map((r) => ({ label: r.label, value: rowValue(r.chips) }));
+export const keyValueRows = (rows: CardRow[]) => rows.map((r) => ({ label: r.label, title: r.title, value: rowValue(r.chips) }));
 
 /** The rung's entry: its hash's first eight characters, the rest on hover, and when it stops being warm. */
 function EntryChips({ entry, now }: { entry: PrefixEntry; now: number }) {

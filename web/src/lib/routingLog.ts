@@ -1,5 +1,5 @@
 import { PIN_RELEASE_REASON_VALUES, planLabel } from '@/api/decode';
-import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
+import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, Placement, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { moveLabel, own } from './analytics';
 import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortModel } from './format';
 import { POLL_OUTCOME_LABEL } from './quota';
@@ -692,6 +692,20 @@ export const OBSTACLE_HINT: Record<string, string> = {
 };
 const hintOf = (name: string) => (own(OBSTACLE_HINT, name) ? OBSTACLE_HINT[name] : undefined);
 
+/** How a rung placed the request, the hover of the card's rung chip. */
+export const PLACED: Record<Placement['rung'], (depth: number) => string> = {
+  content: (depth) => `placed by its messages, depth ${depth}`,
+  static: (depth) => `placed by its static prefix, depth ${depth}`,
+  with_main: () => 'placed with the main conversation',
+};
+export const HOLD_HINT = 'Every account the placement could land on was at its in-flight cap, so the request waited first';
+/** What a placement's cache read is weighed against, the hover of the card's cache verdict. */
+export const PROMISE_HINT: Record<Placement['rung'], string> = {
+  content: 'A placement by its messages hits when the cache reads the whole prefix it was promised',
+  static: 'A placement by its static prefix hits when the cache reads anything',
+  with_main: 'A placement beside the main conversation hits when the cache reads anything',
+};
+
 /** A boundary's hash as its chip draws it. The whole 64 characters ride the chip's hover. */
 export const shortHash = (hash: string) => hash.slice(0, 8);
 
@@ -934,14 +948,23 @@ export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip
   const member = memberOf(record, o.accountId);
   const tier = o.tier ?? member?.tier ?? null;
   if (tier !== null && o.accountId !== null) chips.push(plain(`${tierWord(tier, member?.kind ?? null, 'plan quota')} P${tier[1]}`, 'tier'));
-  chips.push(decisionBy(row));
-  if (o.rung !== null && o.rung.rung !== 'with_main') chips.push(plain(String(o.rung.depth), 'depth'));
+  const rung = o.rung;
+  const placed = rung === null ? undefined : PLACED[rung.rung](rung.depth);
+  if (row.by.kind === 'rung') {
+    chips.push({ ...decisionBy(row), title: placed });
+    if (rung !== null && rung.rung !== 'with_main') chips.push(plain(String(rung.depth), 'depth'));
+  } else {
+    chips.push(decisionBy(row));
+    // A move or a hold's placement can land by a rung too, so its depth is keyed by the rung, never by the rule.
+    if (rung !== null) chips.push({ ...(rung.rung === 'with_main' ? plain(RUNG_WORD.with_main) : plain(`depth ${rung.depth}`, RUNG_WORD[rung.rung])), title: placed });
+  }
   if (record.pin?.found === 'live' && record.pin.warmth) chips.push(plain(wordOf(WARMTH_WORD, record.pin.warmth), 'pin'));
   const c = o.completion;
+  const promise = rung !== null && c !== null && c.promisedTokens !== null ? PROMISE_HINT[rung.rung] : undefined;
   if (c !== null && c.hit !== null && c.cacheReadTokens !== null) {
     const read = fmtCompact(c.cacheReadTokens);
-    chips.push(plain(c.promisedTokens !== null ? `${read} of ${fmtCompact(c.promisedTokens)} promised` : `${read} of ${fmtCompact(c.cacheReadTokens + (c.inputTokens ?? 0))}`, c.hit ? 'cache hit' : 'cache miss'));
-  } else if (c !== null && (c.status === null || c.status === 200)) {
+    chips.push({ ...plain(c.promisedTokens !== null ? `${read} of ${fmtCompact(c.promisedTokens)} promised` : `${read} of ${fmtCompact(c.cacheReadTokens + (c.inputTokens ?? 0))}`, c.hit ? 'cache hit' : 'cache miss'), title: promise });
+  } else if (c !== null && c.completedAt === null) {
     chips.push(plain('cache pending'));
   }
   return chips;
@@ -1086,11 +1109,11 @@ const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane
 const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
 
 /** The card's outcome: Pin written, Cache-map entries, Cache read, Hold, Answer and Spend, each where it applies. */
-export function outcomeRows(record: DecisionRecord, now: number): { chips: Chip[]; label: string }[] {
+export function outcomeRows(record: DecisionRecord, now: number): CardRow[] {
   const o = record.outcome;
   const c = o.completion;
   const at = Date.parse(record.request.at);
-  const rows: { chips: Chip[]; label: string }[] = [];
+  const rows: CardRow[] = [];
   if (o.pinWritten !== null && o.accountId !== null) {
     rows.push({ chips: [accountChip(o.accountId, `${o.pinWritten.action} on`), plain(fmtInt(o.pinWritten.epoch), 'epoch'), ...(o.pinWritten.refreshStamped ? [plain(fmtTime(record.request.at), 'refresh')] : [])], label: 'Pin written' });
   }
@@ -1108,6 +1131,7 @@ export function outcomeRows(record: DecisionRecord, now: number): { chips: Chip[
       rows.push({
         chips: [plain(c.hit ? 'hit' : 'miss'), plain(c.promisedTokens !== null ? `${read} of ${fmtCompact(c.promisedTokens)} promised` : `${read} of ${fmtCompact(c.cacheReadTokens + (c.inputTokens ?? 0))} input`, 'read'), ...(deepest ? [plain(ttlWord(deepest.ttlMs), 'tier')] : [])],
         label: 'Cache read',
+        ...(o.rung !== null && c.promisedTokens !== null ? { title: PROMISE_HINT[o.rung.rung] } : {}),
       });
     } else if (c.completedAt === null) {
       rows.push({ chips: [plain('pending')], label: 'Cache read' });
@@ -1115,12 +1139,12 @@ export function outcomeRows(record: DecisionRecord, now: number): { chips: Chip[
   }
   if (o.hold !== null) {
     const place = str(record.walk.find((s) => s.step === 'hold')?.facts.find((f) => f.key === 'place')?.value) ?? (o.hold.cohort !== null ? 'cohort' : 'strategy_pick');
-    rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound')], label: 'Hold' });
+    rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound')], label: 'Hold', title: HOLD_HINT });
   } else if (o.cohortHold !== null) {
     const h = o.cohortHold;
     const on = h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? null;
     const held = c?.heldMs ?? h.heldMs;
-    rows.push({ chips: [...(on === null ? [] : [accountChip(on, 'on')]), plain(h.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(held), c?.freed ? 'freed after' : 'held')], label: 'Hold' });
+    rows.push({ chips: [...(on === null ? [] : [accountChip(on, 'on')]), plain(h.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(held), c?.freed ? 'freed after' : 'held')], label: 'Hold', title: HOLD_HINT });
   }
   if (o.exhaustion !== null) {
     const x = o.exhaustion;
@@ -1160,6 +1184,25 @@ export interface DetailPair {
 /** An instant to the second in UTC, the detail's When. */
 const utcSecond = (ms: number) => `${new Date(ms).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
 const RULE_MOVES = new Set(['drain', 'overage', 'return_to_plan', 'shed', 'spent']);
+/** What an account's new state means for routing, by the state it moved to. */
+const STATE_EFFECT: Record<string, string> = {
+  deleted: 'the account left the registry and this is its last row',
+  disconnected: 'the account leaves every eligible set until it is connected again',
+  funding_required: 'the account leaves every eligible set until funded',
+  ready: 'the account joins the eligible sets again',
+  reauth_required: 'the account leaves every eligible set until it is paired again',
+  unpaired: 'the account leaves every eligible set until it is paired',
+};
+/** What each reason the ledger writer gives for a gap means. */
+const GAP_MEANING: Record<string, string> = {
+  attempt_missing: 'the bus dropped an account selection and the trail is short an attempt row',
+  capture_budget: 'the capture budget ran out and the largest capture gave up its bodies',
+  chunk_dropped: 'the completion counted more chunks than reached the ledger',
+  chunk_skipped: 'an interior chunk of the capture was dropped at the bus',
+  expired: 'the completion never reached the ledger within the in-flight window',
+  in_flight_cap: 'the requests in flight reached their cap and the oldest entry was evicted',
+  poison: "a record failed alone after its batch's retries",
+};
 const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: 'the poll' };
 const PERCENT_PER_HOUR = (share: number) => `${(share * 100).toFixed(1)} %/h`;
 
@@ -1207,6 +1250,7 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
       add('To', text(d.to, STATE_WORD));
       add('Cause', text(d.cause, CAUSE_WORD));
       add('Detail', str(d.detail) === null ? null : plain(str(d.detail) ?? ''));
+      add('Effect', text(d.to, STATE_EFFECT));
       break;
     case 'budget_period_ended': {
       const spent = num(d.previous_spent_usd);
@@ -1226,8 +1270,9 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
       break;
     }
     case 'catalog_changed':
-      add('Added', ...list(d.added).map((m) => modelChip(String(m))));
-      add('Removed', ...list(d.removed).map((m) => modelChip(String(m))));
+      // The writer lists the models alphabetically, and every cell that lists models reads them by family and version.
+      add('Added', ...list(d.added).map(String).sort(compareModels).map((m) => modelChip(m)));
+      add('Removed', ...list(d.removed).map(String).sort(compareModels).map((m) => modelChip(m)));
       add('Models', count(d.count));
       break;
     case 'cooldown_cleared':
@@ -1254,6 +1299,7 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
     }
     case 'ledger_gap':
       add('Reason', text(d.reason));
+      add('Meaning', str(d.reason) !== null && own(GAP_MEANING, str(d.reason) ?? '') ? plain(GAP_MEANING[str(d.reason) ?? '']) : null);
       if (str(d.reason)?.startsWith('chunk')) add('Effect', plain('the captured response is stored truncated'));
       add('Request', request);
       break;
@@ -1307,11 +1353,14 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
       add('Actor', plain(row.actor ?? 'admin'));
       pin();
       break;
-    case 'poll_backoff_ended':
-      add('Backed off', num(d.duration_ms) === null ? null : plain(span(num(d.duration_ms) ?? 0)));
+    case 'poll_backoff_ended': {
+      const resumed = num(d.resumed_at) ?? atOf(row);
+      const lasted = num(d.duration_ms);
+      add('Backed off', lasted === null ? null : plain(formatFact(resumed - lasted, 'time', now), 'from'), plain(formatFact(resumed, 'time', now), 'to'));
       add('Attempts', count(d.attempts));
       add('Resumed', time(d.resumed_at));
       break;
+    }
     case 'poll_backoff_started':
       add('Reason', plain(POLL_OUTCOME_LABEL.rate_limited));
       add('Attempts', count(d.attempts));
@@ -1342,6 +1391,12 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
         add('Fields', plain(fmtInt(diff.length)));
       }
       add('Actor', row.actor === null ? null : plain(row.actor));
+      // A record holds the settings it was decided under, so one written before the edit reads each field's old value.
+      if (diff.every(([, change]) => isChange(change))) {
+        const before = formatFact(atOf(row), 'time', now);
+        const was = (field: string, v: unknown) => (v === null || v === undefined ? 'off' : fieldValue(field, v));
+        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${words(field)} ${was(field, rec(change).from)}`)));
+      }
       break;
     }
     case 'router_started':
@@ -1419,6 +1474,7 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
       add('Reading', pct(d.utilization));
       add('Read from', text(d.source, SOURCE_WORD));
       add('Resets', time(d.reset));
+      add('Effect', plain('a pinned session moves by the spent rule at its next request'));
       add('Request', request);
       break;
   }
@@ -1429,6 +1485,7 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
 export interface CardRow {
   chips: Chip[];
   label: string;
+  title?: string;
 }
 
 /** The Request facts fold: the request as the engine read it, each entity a link, the lane and flags as chips. */

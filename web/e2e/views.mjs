@@ -2590,8 +2590,9 @@ async function requestDrawer(theme) {
 /**
  * The routing log's decision card, opened from the first decision row once the log's shot is taken: at 1280 by 800 and
  * 1440 by 900 the walk and the candidate table (958 px, then 1118 px) sit inside the card with nothing to scroll
- * sideways, and every verdict badge of the walk takes the kind badge's box. A renewal walks no rung, so the Prefix cell's two chips are read on the
- * first rung placement the page lists. The router's seed places no request by a rung, so there that check stands down.
+ * sideways, and every verdict badge of the walk takes the kind badge's box. A renewal walks no rung, so the Prefix
+ * cell's two chips are read on the first rung placement the page lists. The router's seed places no request by a rung,
+ * so there that check stands down.
  */
 async function decisionCard(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
