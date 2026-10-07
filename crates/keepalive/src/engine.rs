@@ -372,31 +372,15 @@ pub(crate) struct Agent {
     pub migrations: u64,
     pub usage: ProbeUsage,
     /// The savings ledger of this agent: the running net the pause rule reads, the grace probes left under a
-    /// negative net, the cost of every probe since the last real request (settled as wasted when the recipe
-    /// stops), and whether a probe with full coverage ran since that request.
+    /// negative net, and every probe since the last real request with the entry it wrote (settled as wasted when
+    /// the recipe stops, and the newest of them the coverage the next request reads).
     pub net: Net,
     pub grace_left: u32,
-    pub unanswered: Vec<f64>,
-    /// The speed of the recipe a bus gap or a failed request left `unanswered` under: the recipe is gone by the time
-    /// the next request batches them, and its speed is what a warm return on them is read against.
-    pub left_fast: Option<bool>,
+    pub unanswered: Vec<UnansweredProbe>,
     /// The probes a superseding real request took over from `unanswered`, with the keys they were paid under: the
     /// request moves the agent's model, account, pool and key generation before its completion decides them. A
     /// probe sent while it is open lands on `unanswered`, for the request after it.
     pub kept: Vec<Kept>,
-    pub covered_since_real: bool,
-    /// The account the covering probe warmed. The credit binds to it: a later request that fails over reads
-    /// a prefix ordinary traffic cached on the other account, which no probe of this recipe paid for.
-    pub covered_account: Option<String>,
-    /// The unit the covering probe's own cost settled in, so the credit it earns later settles in the same one;
-    /// a probe the cost table cannot price falls the unit back to dollars along with the cost, so the two never split.
-    pub covered_unit: Option<SavingsUnit>,
-    /// The covering probe's recipe was sent fast: it kept the fast lane's cache, which a standard request never
-    /// reads, and the reverse.
-    pub covered_fast: bool,
-    /// When the covering probe's entry lapses. The credit needs the credited request to arrive before it: an entry
-    /// that lapsed kept nothing warm, whatever the gap since the last real request says.
-    pub covered_until: Option<i64>,
     pub last_real_at: Option<i64>,
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
@@ -437,13 +421,7 @@ impl Agent {
             net: Net::default(),
             grace_left: 0,
             unanswered: Vec::new(),
-            left_fast: None,
             kept: Vec::new(),
-            covered_since_real: false,
-            covered_account: None,
-            covered_unit: None,
-            covered_fast: false,
-            covered_until: None,
             last_real_at: None,
             last_stop: None,
         }
@@ -534,7 +512,26 @@ struct Skipped {
     fast: bool,
 }
 
-/// Unanswered probes with the rollup keys they were paid under, which their settlement files under.
+/// One probe the next real request has not answered yet: what it cost and the unit it settled in, the lineage a
+/// request has to match to be read as its answer, and the end of the entry it wrote, which settles it on its own.
+#[derive(Clone, Debug, PartialEq)]
+pub(crate) struct UnansweredProbe {
+    pub cost: f64,
+    pub unit: Option<SavingsUnit>,
+    pub account: Option<String>,
+    pub fast: bool,
+    pub model: String,
+    /// `job.started + ttl_ms` as the landing computes the entry's end, for a probe that read the whole prefix and
+    /// for one that read nothing and rewrote it alike.
+    pub expires: i64,
+    /// Whether the probe established valid full-prefix coverage: false at the push, true once the landing's checks
+    /// passed (a full read, or an accepted complete rewrite). A probe paused as `PartialCacheCoverage`,
+    /// `NoProbeCacheEvidence`, an unexpected output or a missing account keeps false and is still paid for and
+    /// settled, so the cost record and the coverage record never merge.
+    pub covered: bool,
+}
+
+/// One unanswered probe with the rollup keys it was paid under, which its settlement files under.
 #[derive(Clone, Debug, PartialEq)]
 pub(crate) struct Kept {
     pub key_generation: i64,
@@ -542,22 +539,21 @@ pub(crate) struct Kept {
     pub canonical_model: String,
     pub account: Option<String>,
     pub fast: bool,
-    pub costs: Vec<f64>,
-    /// When the entry the probes kept expires, taken as the batch is kept because the keeping request moves the
-    /// agent's entry to its own: a read arriving at or past it found the entry gone.
+    pub cost: f64,
+    /// When the entry this probe wrote expires: a read arriving at or past it found the entry gone.
     pub entry_expires: i64,
 }
 
 impl Kept {
-    fn of(agent: &Agent, fast: bool, costs: Vec<f64>) -> Kept {
+    fn of(agent: &Agent, probe: &UnansweredProbe) -> Kept {
         Kept {
             key_generation: agent.key_generation,
             pool_id: agent.pool_id.clone(),
-            canonical_model: agent.canonical_model.clone(),
-            account: agent.account.clone(),
-            fast,
-            costs,
-            entry_expires: agent.cache_started + agent.ttl_ms,
+            canonical_model: probe.model.clone(),
+            account: probe.account.clone(),
+            fast: probe.fast,
+            cost: probe.cost,
+            entry_expires: probe.expires,
         }
     }
 
@@ -569,7 +565,7 @@ impl Kept {
             canonical_model: self.canonical_model,
             account: self.account,
             label,
-            costs: self.costs,
+            costs: vec![self.cost],
             fast: self.fast,
         }
     }
@@ -784,10 +780,11 @@ impl Inner {
 
     /// `discard` for a real request that supersedes the recipe: the probes the recipe leaves unanswered were paying
     /// for that request, so it keeps them until the first of these decides them: its completion, once it reached
-    /// the upstream (a warm return on the lineage they kept clears them; any other return, on another lineage, with
-    /// no read or past the entry, settles them under `cold_return`), a labelled discard (under its label), or the
-    /// agent's lapse or eviction. A request the engine takes no observation of, or one refused or cancelled before
-    /// the upstream answered, leaves them kept for whichever comes next.
+    /// the upstream (each probe on its own: a warm return on its lineage inside its entry clears it, one past its
+    /// entry settles it under `expired`, and any other return, on another lineage or with no read, under
+    /// `cold_return`), a labelled discard (under its label), or the agent's lapse or eviction. A request the engine
+    /// takes no observation of, or one refused or cancelled before the upstream answered, leaves them kept for
+    /// whichever comes next.
     pub(crate) fn discard_keeping_unanswered(
         &mut self,
         key: &SessionKey,
@@ -799,13 +796,13 @@ impl Inner {
     }
 
     /// The decision `discard_keeping_unanswered` defers, taken by the completion of the request that kept the
-    /// probes, `read` being what the completion read from the cache. Each batch answers to the lineage it was paid
-    /// under, since a request that failed before any head leaves its batch behind with the agent already moved to
-    /// that request's model and entry: a warm return is one on the batch's model, speed and account, arriving
-    /// before the entry the batch kept expired, that read the cache. A kept-warm credit takes no shortcut here: a
-    /// batch off the lineage the credited request read kept nothing it read. The model is the batch's as
-    /// resolutions followed it. A probe sent while the request was open is not among them: it pays for the
-    /// request after this one.
+    /// probes, `read` being what the completion read from the cache. Each probe answers to the lineage it was paid
+    /// under and to the entry it wrote, since a request that failed before any head leaves its probes behind with
+    /// the agent already moved to that request's model and entry: a warm return is one on the probe's model, speed
+    /// and account, arriving before that probe's entry expired, that read the cache. A kept-warm credit takes no
+    /// shortcut here: a probe off the lineage the credited request read kept nothing it read. The model is the
+    /// probe's as resolutions followed it. A probe sent while the request was open is not among them: it pays for
+    /// the request after this one.
     pub(crate) fn decide_unanswered(&mut self, key: &SessionKey, agent_id: &str, read: u64) {
         let Some(agent) = self
             .sessions
@@ -818,13 +815,19 @@ impl Inner {
         // The read happened when the request reached the cache, so a stream that outlives the entry still read it.
         let arrived = agent.current.as_ref().map(|o| o.started);
         for kept in std::mem::take(&mut agent.kept) {
-            let warm = read > 0
-                && kept.canonical_model == agent.canonical_model
+            let lineage = kept.canonical_model == agent.canonical_model
                 && kept.fast == fast
-                && kept.account == agent.account
-                && arrived.is_some_and(|at| at < kept.entry_expires);
-            if !warm {
-                self.settlements.push(kept.settle(key, Wasted::ColdReturn));
+                && kept.account == agent.account;
+            // A probe whose entry was gone when the request arrived kept nothing the request could read, whatever it
+            // read: `expired` is its own label, so a credited request never sits beside a cold return it
+            // contradicts.
+            let label = match arrived {
+                Some(at) if at >= kept.entry_expires => Some(Wasted::Expired),
+                Some(_) if read > 0 && lineage => None,
+                _ => Some(Wasted::ColdReturn),
+            };
+            if let Some(label) = label {
+                self.settlements.push(kept.settle(key, label));
             }
         }
     }
@@ -845,11 +848,9 @@ impl Inner {
         else {
             return;
         };
-        let mut fast = false;
         if let Some(observation) = agent.current.take() {
             self.pending.remove(&observation.id);
             self.retained -= observation.recipe.size;
-            fast = observation.recipe.fast;
         }
         agent.expires = None;
         agent.retry_at = None;
@@ -857,28 +858,22 @@ impl Inner {
         agent.paused = false;
         agent.last_stop = wasted;
         if unanswered == Unanswered::Leave {
-            if !agent.unanswered.is_empty() {
-                agent.left_fast.get_or_insert(fast);
-            }
             return;
         }
-        let fast = agent.left_fast.take().unwrap_or(fast);
-        let costs = std::mem::take(&mut agent.unanswered);
+        let probes = std::mem::take(&mut agent.unanswered);
         if unanswered == Unanswered::Keep {
-            // A batch apiece: a request whose completion never came leaves its batch for the next one, which may
-            // keep probes paid under other keys.
-            if !costs.is_empty() {
-                let batch = Kept::of(agent, fast, costs);
-                agent.kept.push(batch);
-            }
+            // A row apiece: a request whose completion never came leaves its probes for the next one, which may
+            // keep probes paid under other keys, and each settles by the entry it wrote.
+            let kept: Vec<Kept> = probes.iter().map(|probe| Kept::of(agent, probe)).collect();
+            agent.kept.extend(kept);
             return;
         }
         let Some(label) = wasted else {
             return;
         };
-        if !costs.is_empty() {
+        for probe in &probes {
             self.settlements
-                .push(Kept::of(agent, fast, costs).settle(key, label));
+                .push(Kept::of(agent, probe).settle(key, label));
         }
         for kept in std::mem::take(&mut agent.kept) {
             self.settlements.push(kept.settle(key, label));
@@ -937,6 +932,11 @@ impl Inner {
                 for kept in &mut agent.kept {
                     if let Some(dated) = canonical.get(&kept.canonical_model) {
                         kept.canonical_model = dated.clone();
+                    }
+                }
+                for probe in &mut agent.unanswered {
+                    if let Some(dated) = canonical.get(&probe.model) {
+                        probe.model = dated.clone();
                     }
                 }
             }
@@ -1225,12 +1225,7 @@ impl Engine {
             reason: agent.reason,
             request_generation: agent.generation,
             state: agent.state,
-            unanswered: agent.unanswered.len()
-                + agent
-                    .kept
-                    .iter()
-                    .map(|kept| kept.costs.len())
-                    .sum::<usize>(),
+            unanswered: agent.unanswered.len() + agent.kept.len(),
         })
     }
 
@@ -1301,7 +1296,7 @@ impl Engine {
             None => KeepalivePolicy::default(),
         };
         // The hijack guard: an auxiliary or foreign request must not touch the recipe, the schedule, or the
-        // covered-since-real flag a re-arming request's credit depends on. `reason` stays the recipe's gating
+        // unanswered probes a re-arming request's credit depends on. `reason` stays the recipe's gating
         // state, since a hold's `began` check, the completion's gate-reason match, and the view's armed-or-held
         // state all read that field as state; the agent's own `last_guard` carries the verdict itself, every
         // request's, for the view to show.
@@ -1341,18 +1336,24 @@ impl Engine {
             return;
         }
         // What the previous recipe proved, taken before anything below overwrites it and consumed with the
-        // observation: the kept-warm credit reads this and nothing on the agent.
+        // observation: the kept-warm credit reads this and nothing on the agent. The newest unanswered probe wrote
+        // the entry this request can read, a rewrite included, so its coverage is the one taken, and it leaves with
+        // the probes this request keeps.
         let prior = {
             let agent = &inner.sessions[&key].agents[&agent_id];
+            let newest = agent.unanswered.last();
             agent.last_real_at.map(|real_at| PriorCoverage {
-                account: agent.covered_account.clone(),
-                covered: agent.covered_since_real,
-                unit: agent.covered_unit,
-                model: agent.canonical_model.clone(),
-                fast: agent.covered_fast,
+                account: newest.and_then(|probe| probe.account.clone()),
+                covered: newest.is_some_and(|probe| probe.covered),
+                unit: newest.and_then(|probe| probe.unit),
+                model: newest.map_or_else(
+                    || agent.canonical_model.clone(),
+                    |probe| probe.model.clone(),
+                ),
+                fast: newest.is_some_and(|probe| probe.fast),
                 real_at,
                 ttl_ms: agent.ttl_ms,
-                until: agent.covered_until,
+                until: newest.map(|probe| probe.expires),
             })
         };
         let poisoned = inner.gap_backlog > 0;
@@ -1360,11 +1361,6 @@ impl Engine {
         let session = inner.sessions.get_mut(&key).unwrap();
         session.last_real_at = Some(now);
         let agent = session.agents.get_mut(&agent_id).unwrap();
-        agent.covered_since_real = false;
-        agent.covered_account = None;
-        agent.covered_unit = None;
-        agent.covered_fast = false;
-        agent.covered_until = None;
         if agent.state == AgentState::Unknown {
             inner.set_reason(&key, &agent_id, Reason::AgentUnknown);
             return;
@@ -1611,8 +1607,8 @@ impl Engine {
                     let gap_exceeded = agent.last_real_at.unwrap_or(now) - prior.real_at > ttl;
                     // The entry the probe kept has to be there when this request arrives, on the boundary the
                     // settlement and the scheduler read (`arrived < entry_expires`, `now >= expires`): a request
-                    // at or after the lapse read a cache nothing the probe paid for kept, so its batch is a cold
-                    // return, and a credit here would contradict that settlement.
+                    // at or after the lapse read a cache nothing the probe paid for kept, so that probe settles as
+                    // expired, and a credit here would contradict that settlement.
                     let entry_alive = prior
                         .until
                         .is_some_and(|until| agent.last_real_at.unwrap_or(now) < until);

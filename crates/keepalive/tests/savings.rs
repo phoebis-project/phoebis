@@ -100,7 +100,8 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
             && (r.status("main").net_usd - (SAVING_2000 - probe.probe_cost_usd)).abs() < 1e-12
     );
     assert!(row(&r, &second).await.kept_warm);
-    // The same gap without a probe, or with a cold probe, credits nothing.
+    // The same gap without a probe credits nothing. A probe that read nothing and rewrote the prefix covers from its
+    // own write, so the request that reads the entry it wrote is credited under it.
     let third = r.observe_with("main", &body).await;
     r.advance(330_000);
     let fourth = r.observe_with("main", &body).await;
@@ -109,14 +110,18 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
     r.step().await;
     r.advance(60_000);
     let fifth = r.observe_with("main", &body).await;
-    for id in [&third, &fourth, &fifth] {
+    for id in [&third, &fourth] {
         assert!(
             !row(&r, id).await.kept_warm,
-            "{id}: neither the probe-less gap nor the cold probe credited"
+            "{id}: the probe-less gap credited nothing"
         );
     }
+    assert!(
+        row(&r, &fifth).await.kept_warm,
+        "the rewrite kept the entry the fifth request read"
+    );
     let rows = rollups(&r, |rows| probe_rows(rows).requests >= 2).await;
-    assert_eq!(inference_rows(&rows).kept_warm_requests, 1);
+    assert_eq!(inference_rows(&rows).kept_warm_requests, 2);
     // A model switch discards the recipe the probe warmed: after a covering probe on the first model, a request
     // on another model past the TTL is not credited, and a request back on the first model inside the second's
     // TTL is not either, since no probe covered it since the switch.
@@ -132,13 +137,14 @@ async fn a_request_after_an_expiry_gap_with_a_covering_probe_is_kept_warm() {
         "a switch of model earns no credit in either direction"
     );
     let rows = rollups(&r, |rows| probe_rows(rows).requests >= 3).await;
-    assert_eq!(inference_rows(&rows).kept_warm_requests, 1);
+    assert_eq!(inference_rows(&rows).kept_warm_requests, 2);
+    let saved = 2.0 * SAVING_2000;
     let text = r
         .metrics
         .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
     assert!(
         text.contains(&format!(
-            r#"phoebis_keepalive_saved_usd_total{{pool="main"}} {SAVING_2000}"#
+            r#"phoebis_keepalive_saved_usd_total{{pool="main"}} {saved}"#
         )),
         "{text}"
     );
@@ -179,6 +185,65 @@ async fn a_request_under_the_dated_id_keeps_the_credit_of_a_probe_on_a_recipe_re
         inference_rows(&rows).kept_warm_tokens,
         2_000,
         "the probe covered the recipe the request continues, whichever name each was taken under"
+    );
+    assert!(row(&r, &second).await.kept_warm);
+}
+
+/// A probe that landed under the spelling keeps its credit when the model resolves before the next request: the
+/// scheduler's tick moves the unanswered probe to the dated id beside the recipe, so the request named by the dated
+/// id reads the entry that probe wrote as its own lineage.
+#[tokio::test]
+async fn a_model_resolved_between_a_probe_and_the_next_request_keeps_the_warm_credit() {
+    let dated = "claude-sonnet-4-5-20250929";
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe("main").await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.canonical_model.as_str()),
+        (1, "claude-sonnet-4-5"),
+        "the probe landed under the spelling"
+    );
+    let listing = relay_common::catalog_rules().remove(0);
+    r.h.catalog_up
+        .push_credential_rule(A, &listing.path_prefix, listing.respond);
+    let a = r.h.store.account("a").unwrap().unwrap();
+    r.h.catalog.refresh(&a).await;
+    assert_eq!(
+        r.h.catalog.lookup("claude-sonnet-4-5").as_deref(),
+        Some(dated)
+    );
+    // A tick with nothing due still follows the resolution.
+    r.step().await;
+    assert_eq!(
+        (
+            r.status("main").probes,
+            r.status("main").canonical_model.as_str()
+        ),
+        (1, dated)
+    );
+    // Past the first request's five-minute TTL and inside the probe's entry, which runs to 570 s.
+    r.advance(60_000);
+    let second = r.observe("main").await;
+    r.ledger.clone().shutdown().await.unwrap();
+    let rows =
+        r.db.read_blocking(|c| {
+            read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+        })
+        .unwrap();
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe_rows(&rows).wasted_probe_reasons
+        ),
+        (1, BTreeMap::new()),
+        "the probe's lineage followed the resolution, so the request answered it and was credited"
     );
     assert!(row(&r, &second).await.kept_warm);
 }
@@ -865,11 +930,13 @@ fn probe_rows_at(rows: &[RollupRow], fast: bool) -> RollupRow {
     sum
 }
 
-/// A credit answers only the batch whose lineage it read. A fast probe's batch, kept by a standard request that failed
-/// before any head, waits beside the batch of a standard probe a bus gap left; the standard request that earns the
-/// credit read the standard lane, so the fast batch settles as a cold return at its price.
+/// A credit answers only the probe whose lineage it read. A fast probe, kept by a standard request that failed before
+/// any head, waits beside a standard probe a bus gap left. The standard request that earns the credit arrives 600 s
+/// in and reads the standard lane, after the fast probe's entry lapsed 570 s in, so the fast probe settles by its own
+/// entry as expired, at its price on the fast lane's row.
 #[tokio::test]
-async fn a_credit_on_the_standard_lane_settles_a_fast_batch_kept_beside_it_as_a_cold_return() {
+async fn a_credit_on_the_standard_lane_leaves_the_fast_probe_kept_beside_it_to_settle_by_its_own_entry(
+) {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -919,8 +986,8 @@ async fn a_credit_on_the_standard_lane_settles_a_fast_batch_kept_beside_it_as_a_
             fast_probes.wasted_probe_reasons.clone(),
             standard_probes.wasted_probes
         ),
-        (1, BTreeMap::from([("cold_return".to_string(), 1)]), 0),
-        "the credit answered the standard batch and nothing on the fast lane"
+        (1, BTreeMap::from([("expired".to_string(), 1)]), 0),
+        "the credit answered the standard probe and nothing on the fast lane"
     );
     assert!(
         fast_probes.wasted_probe_usd > 0.0
@@ -932,8 +999,9 @@ async fn a_credit_on_the_standard_lane_settles_a_fast_batch_kept_beside_it_as_a_
 /// A kept-warm credit needs the entry the covering probe kept to be there when the credited request arrives, on the
 /// instant the settlement and the scheduler read as the entry gone. On the lineage trace above, the standard probe
 /// refreshes its five-minute entry 560 s in and nothing is admitted until the fourth request, which arrives one
-/// millisecond before that entry lapses, as it lapses, or a minute after: only the first is credited, and past the
-/// lapse the standard batch settles as a cold return beside the fast one.
+/// millisecond before that entry lapses, as it lapses, or a minute after: only the first is credited, and from the
+/// lapse on the standard probe settles as expired. The fast probe's entry lapsed 570 s in, before any of them, so it
+/// settles as expired in all three.
 #[tokio::test]
 async fn a_kept_warm_credit_needs_the_covering_entry_alive_when_the_request_arrives() {
     for (offset, credited) in [(299_999, 1), (300_000, 0), (360_000, 0)] {
@@ -982,11 +1050,11 @@ async fn a_kept_warm_credit_needs_the_covering_entry_alive_when_the_request_arri
             .unwrap();
         let (fast_probes, standard_probes) =
             (probe_rows_at(&rows, true), probe_rows_at(&rows, false));
-        let cold_return = BTreeMap::from([("cold_return".to_string(), 1)]);
+        let expired = BTreeMap::from([("expired".to_string(), 1)]);
         let standard_settled = if credited == 1 {
             (0, BTreeMap::new())
         } else {
-            (1, cold_return.clone())
+            (1, expired.clone())
         };
         assert_eq!(
             (
@@ -997,7 +1065,7 @@ async fn a_kept_warm_credit_needs_the_covering_entry_alive_when_the_request_arri
                     standard_probes.wasted_probe_reasons.clone()
                 ),
             ),
-            (credited, cold_return, standard_settled),
+            (credited, expired, standard_settled),
             "arrived {arrived} ms in"
         );
         assert!(
@@ -1122,11 +1190,11 @@ async fn a_credit_binds_to_the_account_the_probe_warmed() {
     );
 }
 
-/// A batch answers only to a read that arrived while the entry its probes kept was still there. A request that failed
-/// before any head leaves the batch kept; the next request on the same model, speed and account arrives as that entry
-/// expires and reads the cache, which nothing the probe paid for kept, so the batch settles as a cold return.
+/// A probe answers only to a read that arrived while the entry it wrote was still there. A request that failed before
+/// any head leaves the probe kept. The next request on the same model, speed and account arrives as that entry expires
+/// and reads the cache, which nothing the probe paid for kept, so the probe settles as expired.
 #[tokio::test]
-async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_a_cold_return() {
+async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_expired() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -1141,7 +1209,7 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_a_cold_
     r.engine.observe(r.observed("second", "main", BODY));
     r.engine.observe(r.selected("second", "a"));
     r.engine.observe(failed(&r, "second", None));
-    assert_eq!(r.status("main").unanswered, 1, "the batch stays kept");
+    assert_eq!(r.status("main").unanswered, 1, "the probe stays kept");
     // The probe refreshed its five-minute entry 270 s in, so it expires 570 s in.
     r.advance_attended(290_000);
     open_request(&r, "third", 2_000, 0);
@@ -1159,13 +1227,175 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_a_cold_
             inference_rows(&rows).kept_warm_requests,
             probe.wasted_probe_reasons.clone()
         ),
-        (0, BTreeMap::from([("cold_return".to_string(), 1)])),
+        (0, BTreeMap::from([("expired".to_string(), 1)])),
         "the read arrived as the probe's entry expired"
     );
     assert!(
         probe.wasted_probe_usd > 0.0
             && (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
         "{probe:?}"
+    );
+}
+
+/// Every rollup row the rig wrote, read once the ledger has landed everything the test sent it.
+async fn final_rollups(r: &Rig) -> Vec<RollupRow> {
+    r.ledger.clone().shutdown().await.unwrap();
+    r.db.read_blocking(|c| {
+        read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+    })
+    .unwrap()
+}
+
+/// The fixture of the per-probe settlement cases: a request at 0 s writes a five-minute entry, the first probe reads
+/// it back 270 s in and keeps its own entry to 570 s, and the second, due 540 s in inside that entry, reads nothing
+/// and rewrites the prefix, keeping its own entry to 840 s. Both stay unanswered for the request each case sends.
+/// Answers the first probe's cost, read off the rollup before the second probe runs.
+async fn a_covering_probe_then_a_rewrite(r: &mut Rig) -> f64 {
+    open_request(r, "first", 0, 2_000);
+    r.engine.observe(completed(r, "first", 0));
+    r.advance_attended(270_000);
+    r.step().await;
+    let first_cost =
+        probe_rows(&rollups(r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await).probe_cost_usd;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.advance_attended(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.unanswered, status.cold, status.reason),
+        (2, 2, 1, Reason::Scheduled),
+        "the second probe rewrote the entry 540 s in: {status:?}"
+    );
+    first_cost
+}
+
+/// The request reads the entry the newest probe wrote. The first probe's entry lapsed 570 s in, before the request
+/// arrived 600 s in, so it settles as expired whatever the request read. The rewrite 540 s in kept the entry the
+/// request read, so it is answered and the credit settles in its unit, dollars on this account: the Saved and Wasted
+/// figures name different probes and never contradict each other.
+#[tokio::test]
+async fn a_covering_probe_whose_entry_lapsed_settles_expired_while_the_rewrite_after_it_is_answered(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    let first_cost = a_covering_probe_then_a_rewrite(&mut r).await;
+    r.advance_attended(60_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    let status = r.status("main");
+    assert_eq!(status.unanswered, 0);
+    let rows = final_rollups(&r).await;
+    let (credit, probe) = (inference_rows(&rows), probe_rows(&rows));
+    assert_eq!(
+        (
+            credit.kept_warm_requests,
+            credit.kept_warm_tokens,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (1, 2_000, 1, BTreeMap::from([("expired".to_string(), 1)])),
+        "the rewrite kept the entry the request read, and the first probe's had lapsed"
+    );
+    assert!(
+        credit.saved_usd_gross > 0.0 && (probe.wasted_probe_usd - first_cost).abs() < 1e-12,
+        "the first probe is the wasted one: {first_cost} against {probe:?}"
+    );
+    assert!(
+        (status.net_usd - (credit.saved_usd_gross - probe.probe_cost_usd)).abs() < 1e-12,
+        "the credit settled in dollars beside both probes' costs: {status:?}"
+    );
+}
+
+/// A request past both probes' entries reads nothing either probe kept, whatever it reads: both settle as expired, and
+/// the newest probe's lapsed entry earns no credit.
+#[tokio::test]
+async fn a_request_past_both_entries_settles_both_probes_expired_and_earns_no_credit() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_covering_probe_then_a_rewrite(&mut r).await;
+    r.advance_attended(360_000);
+    open_request(&r, "second", 2_000, 0);
+    r.engine.observe(completed(&r, "second", 2_000));
+    assert_eq!(r.status("main").unanswered, 0);
+    let rows = final_rollups(&r).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (0, 2, BTreeMap::from([("expired".to_string(), 2)])),
+        "the request arrived 900 s in, past 570 s and 840 s"
+    );
+    assert!(
+        (probe.wasted_probe_usd - probe.probe_cost_usd).abs() < 1e-12,
+        "{probe:?}"
+    );
+}
+
+/// A request inside both probes' entries that reads nothing kept no prefix either probe paid for: both settle as cold
+/// returns.
+#[tokio::test]
+async fn a_request_inside_both_entries_that_reads_nothing_settles_both_as_cold_returns() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_covering_probe_then_a_rewrite(&mut r).await;
+    r.advance_attended(20_000);
+    open_request(&r, "second", 0, 2_000);
+    r.engine.observe(completed(&r, "second", 0));
+    assert_eq!(r.status("main").unanswered, 0);
+    let rows = final_rollups(&r).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (0, 2, BTreeMap::from([("cold_return".to_string(), 2)])),
+        "the request arrived 560 s in, before 570 s and 840 s"
+    );
+}
+
+/// Each probe settles by its own entry. A request that reads nothing 600 s in arrives after the first probe's entry
+/// lapsed and inside the rewrite's: the first settles as expired and the second as a cold return.
+#[tokio::test]
+async fn a_request_past_the_first_entry_and_inside_the_second_that_reads_nothing_settles_one_expired_and_one_cold_return(
+) {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    a_covering_probe_then_a_rewrite(&mut r).await;
+    r.advance_attended(60_000);
+    open_request(&r, "second", 0, 2_000);
+    r.engine.observe(completed(&r, "second", 0));
+    assert_eq!(r.status("main").unanswered, 0);
+    let rows = final_rollups(&r).await;
+    let probe = probe_rows(&rows);
+    assert_eq!(
+        (
+            inference_rows(&rows).kept_warm_requests,
+            probe.wasted_probes,
+            probe.wasted_probe_reasons.clone()
+        ),
+        (
+            0,
+            2,
+            BTreeMap::from([("cold_return".to_string(), 1), ("expired".to_string(), 1)])
+        ),
+        "the request arrived 600 s in, after 570 s and before 840 s"
     );
 }
 

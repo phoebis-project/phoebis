@@ -28,7 +28,8 @@ they move a real request.
 
 A probe costs a cache read at list price. The ledger credits the gross saving a later kept-warm request earns
 against that cost, per pool and per hour, and `GET /admin/keepalive/overview` reports the net of the two, which
-can go negative when probes outspend what they save.
+can go negative when probes outspend what they save. The credit goes to the probe whose entry the request read, a
+probe that rewrote the entry included, in that probe's unit.
 
 A probe of a request sent fast runs fast too, since the replay keeps the body as sent: it draws usage credits at the
 fast rates, settles in dollars whatever the account's funding, and counts toward the dollar cap and no share cap; a
@@ -101,7 +102,8 @@ body the way a compaction does. A request matching neither the chain nor the pre
 and its recipe is left alone the same way an auxiliary one is. A body carrying no chain at all re-arms on every
 request, the fallback the router's own warmth check applies for a client that sends none.
 
-The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it. An auxiliary or a
+The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it, and it goes to the
+probe whose entry that request read, a probe that rewrote the entry included, in that probe's unit. An auxiliary or a
 foreign request may still read a warm cache, but it never resets the recipe's schedule and settles nothing.
 
 ## Tuning fields
@@ -283,14 +285,15 @@ counts no failure toward `cold_probe_limit`, so a ledger that stays behind never
 counts no tick toward `max_idle_ticks`. The entry's expiry and `max_idle_seconds` still bound the hold. Past the expiry
 the recipe ends under `expired`, as under any other hold.
 
-A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
-lapses or is evicted, or when the next request after the probe reads nothing from the entry it kept:
+A wasted probe settles on its own, by the end of the entry it wrote and never by the batch it was sent in, with one of
+seven reasons: when the recipe stops with a probe unanswered, when it lapses or is evicted, or when the next request
+after the probe reads nothing from the entry it kept:
 
 | Reason | What settles it |
 | --- | --- |
-| `cold_return` | The next request read no cache, or on another account, model or speed, or after the entry lapsed. |
+| `cold_return` | The next request read no cache, or on another account, model or speed, inside the probe's entry. |
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
-| `expired` | The recipe's cache entry expired before its probe was due. |
+| `expired` | The probe's entry expired before the next request arrived, or the recipe's before its probe was due. |
 | `idle_limit` | The pool's idle limits ran out before a real request answered the probe. |
 | `released` | By an operator's release, a key's opt-out, or the companion reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |

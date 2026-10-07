@@ -1008,6 +1008,46 @@ async fn a_migration_does_not_accumulate_a_cold_streak() {
     );
 }
 
+/// A probe that read nothing and rewrote the whole prefix covers from its own write, and the cold streak still
+/// counts it: a rewrite every probe is a prefix never kept warm, so two in a row pause the recipe at the limit.
+#[tokio::test]
+async fn an_uncovered_rewrite_still_counts_toward_the_cold_probe_limit() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            cold_probe_limit: 2,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.cold, status.reason),
+        (1, 1, Reason::Scheduled),
+        "the first rewrite lands and counts one: {status:?}"
+    );
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.probes,
+            status.unanswered,
+            status.cold,
+            status.reason,
+            status.next_probe_at
+        ),
+        (2, 2, 2, Reason::RepeatedColdProbe, None),
+        "the second rewrite reaches the limit: {status:?}"
+    );
+}
+
 #[tokio::test]
 async fn probe_outcomes_are_classified() {
     for (name, respond, reason, armed) in [

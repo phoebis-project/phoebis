@@ -16,7 +16,9 @@ use phoebis_routing::{PinUsage, BUDGET_WINDOW};
 use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
 use serde_json::Value;
 
-use crate::engine::{Agent, Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, Wasted};
+use crate::engine::{
+    Agent, Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, UnansweredProbe, Wasted,
+};
 use crate::recipe::Recipe;
 use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_type};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
@@ -563,7 +565,21 @@ impl Inner {
             .agents
             .get_mut(agent_id)
             .unwrap();
-        agent.unanswered.push(record.cost_usd);
+        // The end of the entry this probe wrote, computed once as the landing reads it, so a probe a check below
+        // pauses still settles by its own entry.
+        let ttl = record.usage.ttl_ms(
+            agent.ttl_ms,
+            result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms),
+        );
+        agent.unanswered.push(UnansweredProbe {
+            cost: record.cost_usd,
+            unit: covered_unit,
+            account: Some(record.account.clone()),
+            fast: job.recipe.fast,
+            model: agent.canonical_model.clone(),
+            expires: job.started + ttl,
+            covered: false,
+        });
         debit(agent, unit, cost);
         let Some(account) = result.account.clone() else {
             self.set_reason(key, agent_id, Reason::MissingAccount);
@@ -654,19 +670,14 @@ impl Inner {
             .unwrap();
         agent.failures = 0;
         agent.retry_at = None;
-        agent.ttl_ms = usage.ttl_ms(
-            agent.ttl_ms,
-            result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms),
-        );
+        agent.ttl_ms = ttl;
         agent.cache_started = job.started;
-        agent.expires = Some(job.started + agent.ttl_ms);
+        agent.expires = Some(job.started + ttl);
         agent.jitter_frac = rand::random::<f64>();
-        if covered {
-            agent.covered_since_real = true;
-            agent.covered_account = Some(record.account.clone());
-            agent.covered_unit = covered_unit;
-            agent.covered_fast = job.recipe.fast;
-            agent.covered_until = agent.expires;
+        // A full read and an accepted complete rewrite alike leave the whole prefix in an entry the next request
+        // can read, so either covers from here.
+        if let Some(probe) = agent.unanswered.last_mut() {
+            probe.covered = true;
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.
