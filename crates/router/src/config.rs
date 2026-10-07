@@ -561,9 +561,10 @@ pub fn secret_is_unset(name: &str) -> bool {
 const PLACEHOLDER_ADMIN_SECRET: &str = "replace-with-a-long-random-string";
 
 pub(crate) fn from_env(name: &str) -> Result<Secret, ConfigError> {
-    let value = match std::env::var(name) {
-        // The value is never part of the error: a variable set to something unusable still holds a secret.
-        Ok(value) if !value.is_empty() => value,
+    let value = match std::env::var_os(name) {
+        // The value is never part of the error: a variable set to something unusable still holds a secret. A byte
+        // that is not UTF-8 reads as U+FFFD, so the shape check below refuses it rather than calling it unset.
+        Some(value) if !value.is_empty() => value.to_string_lossy().into_owned(),
         _ => {
             return Err(ConfigError::MissingSecret {
                 name: name.to_string(),
@@ -1360,6 +1361,8 @@ mod tests {
         for (name, secret) in [
             ("TEST_CFG_SHAPE_NON_ASCII", "sixteen-chars-ok-é"),
             ("TEST_CFG_SHAPE_SPACES", " sixteen-chars-ok "),
+            ("TEST_CFG_SHAPE_LEADING", " sixteen-chars-ok"),
+            ("TEST_CFG_SHAPE_TRAILING", "sixteen-chars-ok "),
         ] {
             std::env::set_var(name, secret);
             let refused = load(&file_with_secret_env(dir.path(), name, name));

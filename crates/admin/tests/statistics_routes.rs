@@ -997,6 +997,28 @@ async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
     );
 }
 
+/// Only a row priced in the window share reads a tier, so a subscription account with no pin in the window costs the
+/// route no read and cannot fail it.
+#[tokio::test]
+async fn a_failed_tier_read_on_an_account_no_row_prices_leaves_the_sessions_route_at_200() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = std::sync::Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let parts = common::admin_parts_full_on(store).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    )
+    .unwrap();
+    drop(conn);
+    let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
+    assert_eq!(listed.status(), 200);
+    assert_eq!(json(listed).await, serde_json::json!({"sessions": []}));
+}
+
 #[tokio::test]
 async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
     let parts = common::admin_parts_full().await;

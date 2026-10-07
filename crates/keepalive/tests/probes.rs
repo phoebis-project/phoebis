@@ -1624,6 +1624,14 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
         0.0,
         "no window share was spent"
     );
+    // Three more ticks with the registry still unreadable, each asking the router and reading every tier.
+    let asked = r.engine.router_views();
+    for _ in 0..3 {
+        r.advance(1_000);
+        r.step().await;
+    }
+    assert_eq!(r.engine.router_views(), asked + 3);
+    assert_eq!(r.status("main").probes, 1);
     let text = captured.text();
     let settled: Vec<&str> = text
         .lines()
@@ -1642,10 +1650,43 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
         "{}",
         settled[0]
     );
+    let scheduled: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            line.contains(
+                "the account's tier could not be read, so the tier map leaves the account out",
+            )
+        })
+        .collect();
+    assert_eq!(
+        scheduled.len(),
+        1,
+        "the scheduler says it once for the failing streak, not once a tick:\n{text}"
+    );
     assert!(
-        text.lines().any(|line| line.contains(
-            "the account's tier could not be read, so the tier map leaves the account out"
-        ) && line.contains("account=o")),
-        "the scheduler's read says why the account has no tier:\n{text}"
+        scheduled[0].contains("account=o") && !scheduled[0].contains(OAUTH_SECRET),
+        "{}",
+        scheduled[0]
+    );
+    // A read that succeeds ends the streak, so the next failure is a new one and says so.
+    for rename in [
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier_held TO subscription_tier;",
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    ] {
+        let conn = rusqlite::Connection::open(&registry).unwrap();
+        conn.execute_batch(rename).unwrap();
+        drop(conn);
+        r.advance(1_000);
+        r.step().await;
+    }
+    assert_eq!(
+        captured
+            .text()
+            .lines()
+            .filter(|line| line.contains(
+                "the account's tier could not be read, so the tier map leaves the account out"
+            ))
+            .count(),
+        2
     );
 }

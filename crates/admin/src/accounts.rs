@@ -271,7 +271,7 @@ pub(crate) async fn patch(
                 "the account changed while the edit was being saved",
             );
         }
-        // The token matched here, so every field's commit below is fenced on the incarnation and the revision the
+        // Any token sent matched here, so every field's commit below is fenced on the incarnation and the revision the
         // route read: an edit built from a stale read, or from an account since deleted and created again under its
         // id, lands nothing, and a combined edit never fences against its own earlier write.
         let update = AccountUpdate {

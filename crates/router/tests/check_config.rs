@@ -6,6 +6,7 @@
 //! certificate pair as the start does, prints each listener's scheme on any address, refuses a pair the start refuses
 //! with the loader's line, and refuses a word in the `tls` key's place.
 
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
@@ -656,7 +657,15 @@ fn a_set_secret_shorter_than_sixteen_characters_fails_check_config() {
 fn a_secret_with_a_non_ascii_character_or_a_surrounding_space_fails_check_config() {
     let dir = tempfile::tempdir().unwrap();
     let config = config_file(dir.path(), "shape", "");
-    for secret in ["sixteen-chars-ok-é", " sixteen-chars-ok "] {
+    // A byte that is not UTF-8 is a character outside the shape too, never an unset variable.
+    let not_utf8 = std::ffi::OsStr::from_bytes(b"sixteen-chars-ok-\xff");
+    for secret in [
+        std::ffi::OsStr::new("sixteen-chars-ok-é"),
+        not_utf8,
+        std::ffi::OsStr::new(" sixteen-chars-ok "),
+        std::ffi::OsStr::new(" sixteen-chars-ok"),
+        std::ffi::OsStr::new("sixteen-chars-ok "),
+    ] {
         let out = check_config(phoebis().env("TEST_CHECK_CONFIG_ADMIN", secret), &config);
         assert_eq!(out.status.code(), Some(1), "{secret:?}: {}", printed(&out));
         assert!(

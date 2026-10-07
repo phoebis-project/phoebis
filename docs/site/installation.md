@@ -87,8 +87,9 @@ sudo bash -c 'set -a; . /etc/phoebis/phoebis.env; set +a; exec phoebis check-con
 `check-config` reads `admin.secret_env` from the process environment when it is set and prints
 `warning: environment variable PHOEBIS_ADMIN_SECRET is unset or empty` when it is not, so sourcing the env file is
 optional for it; the service and `phoebis health` still refuse an unset secret. The secret is printable ASCII without
-surrounding spaces, at least 16 characters, and not the example file's placeholder. The start, `check-config`, `status`
-and `tls reload` refuse another shape with the same line. Once it is clean, `sudo systemctl enable --now phoebis`.
+surrounding spaces, at least 16 characters, and not the example file's placeholder. The start, `check-config`,
+`health`, `status` and `tls reload` refuse another shape with the same line. Once it is clean,
+`sudo systemctl enable --now phoebis`.
 
 ## Run the container
 
@@ -468,7 +469,8 @@ in `Origin`, as it does on a listener that terminates TLS itself.
 Refused with:
 
 - `listen`: a YAML error
-- `secret_env`: `environment variable {name} is unset or empty`
+- `secret_env`: `environment variable {name} is unset or empty`, and the lines for a value shorter than 16
+  characters, the example file's placeholder or another shape ([environment variables](#environment-variables))
 - `tls`: `admin.tls: must be a mapping with cert_file and key_file` under `the configuration is not valid YAML` for a
   word in the key's place, the key with nothing beneath it, a third key, a repeated key, or a mapping that lacks one
   of the two ([TLS on the listeners](#tls-on-the-listeners))

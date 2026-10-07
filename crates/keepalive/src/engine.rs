@@ -621,6 +621,9 @@ pub struct Engine {
     /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
     /// Cheap enough to keep in every build; only the reader is gated.
     router_view_calls: AtomicU64,
+    /// The accounts whose last tier read failed. The scheduler reads every tier on each tick, so it warns when a
+    /// failing streak starts rather than once a second for as long as the registry stays unreadable.
+    unreadable_tiers: Mutex<BTreeSet<String>>,
 }
 
 impl Engine {
@@ -645,6 +648,7 @@ impl Engine {
             idle: Notify::new(),
             workers: TaskTracker::new(),
             router_view_calls: AtomicU64::new(0),
+            unreadable_tiers: Mutex::new(BTreeSet::new()),
         })
     }
 
@@ -2165,14 +2169,21 @@ impl Engine {
             .accounts()
             .filter(|a| a.kind == AccountKind::Oauth)
             .filter_map(|a| {
-                let tier = match self.parts.store.subscription(&a.id) {
-                    Ok(row) => row?.tier?,
+                let read = self.parts.store.subscription(&a.id);
+                let mut unreadable = self.unreadable_tiers.lock().expect(LOCK_POISONED);
+                let tier = match read {
+                    Ok(row) => {
+                        unreadable.remove(&a.id);
+                        row?.tier?
+                    }
                     Err(error) => {
-                        tracing::warn!(
-                            account = %a.id,
-                            %error,
-                            "the account's tier could not be read, so the tier map leaves the account out"
-                        );
+                        if unreadable.insert(a.id.clone()) {
+                            tracing::warn!(
+                                account = %a.id,
+                                %error,
+                                "the account's tier could not be read, so the tier map leaves the account out"
+                            );
+                        }
                         return None;
                     }
                 };
