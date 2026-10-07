@@ -65,7 +65,7 @@ sudo systemctl daemon-reload
 ```
 
 Where the proxy serves the LAN, add `--proxy-listen 0.0.0.0:8317` to the `init` line, and `--proxy-cert` with
-`--proxy-key` where a pair you hold terminates TLS, without them the listener serves plain HTTP there and the client's
+`--proxy-key` where a pair you hold terminates TLS. Without them the listener serves plain HTTP there and the client's
 key crosses the LAN in the clear. `init` creates the key file at `0600` in one open, so no moment exists in which the
 key is readable by anyone else, and the environment file at `0600` with the secret it generated. The bootstrap file and
 the environment file are root's; the key file and the data directory are owned by `phoebis`. The key seals every
@@ -203,8 +203,7 @@ prints, in order:
 Further warning lines name a storage key file, data directory, database or TLS key file whose mode or owner is wider
 than the router expects, and a certificate that expires within 30 days (`warning: proxy.tls.cert_file {path} expires in
 {n} days ({date})`); the router starts either way and logs the same warnings. A TLS key owned by root and readable by
-its group alone, such as `0640 root:phoebis` as `init --owner phoebis` writes it, earns no warning from a process that
-runs as root or holds that group.
+its group alone, such as `0640 root:phoebis`, earns no warning from a process that runs as root or holds that group.
 
 A registry or a ledger whose schema is newer than the binary reads fails the check with exit 1 and `the registry at
 {config.storage.path} is at schema {n}, newer than the {m} this build reads`, or the same line naming `the ledger at

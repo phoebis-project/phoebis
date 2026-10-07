@@ -958,6 +958,25 @@ mod tests {
                 "--admin-key",
                 "k.pem",
             ]),
+            args(&[
+                "--proxy-listen",
+                "0.0.0.0:8317",
+                "--proxy-cert",
+                "c.pem",
+                "--proxy-key",
+                "k.pem",
+            ]),
+            args(&[
+                "--container",
+                "--proxy-cert",
+                "c.pem",
+                "--proxy-key",
+                "k.pem",
+                "--admin-cert",
+                "c.pem",
+                "--admin-key",
+                "k.pem",
+            ]),
         ];
         for shape in &shapes {
             let plan = plan(&config, shape).unwrap();
@@ -1006,6 +1025,31 @@ mod tests {
                 ]),
             ),
             ("container", args(&["--container"])),
+            (
+                "proxy-pair",
+                args(&[
+                    "--proxy-listen",
+                    "0.0.0.0:8317",
+                    "--proxy-cert",
+                    "c.pem",
+                    "--proxy-key",
+                    "k.pem",
+                ]),
+            ),
+            (
+                "container-pairs",
+                args(&[
+                    "--container",
+                    "--proxy-cert",
+                    "c.pem",
+                    "--proxy-key",
+                    "k.pem",
+                    "--admin-cert",
+                    "c.pem",
+                    "--admin-key",
+                    "k.pem",
+                ]),
+            ),
         ];
         for (name, shape) in &shapes {
             let config = dir.path().join(name).join("config.yaml");
