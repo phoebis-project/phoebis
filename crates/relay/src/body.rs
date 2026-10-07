@@ -1250,6 +1250,22 @@ mod tests {
         );
     }
 
+    #[test]
+    fn a_lone_surrogate_beside_an_escaped_cch_is_refused_before_anything_is_sent() {
+        let sent = br#"{"model":"m","system":[{"type":"text","text":"x-anthropic-billing-header: v=1 \udc00 cch\u003d01234;"}],"messages":[]}"#;
+        assert!(
+            phoebis_cch::find_cch(sent).is_none(),
+            "the raw walk misses the stamp"
+        );
+        assert!(
+            matches!(
+                carries_a_stamp(sent),
+                Err(RelayError::BodyShape(BodyMember::BillingStamp))
+            ),
+            "the decoded walk reads the stamp beside the lone surrogate"
+        );
+    }
+
     /// The recorded first-party body with `stamps` in place of its one `cch=9b244;` field.
     fn a_line_stamped(stamps: &str) -> Vec<u8> {
         String::from_utf8(fixture_body(BodyFixture::FirstParty9b244).to_vec())

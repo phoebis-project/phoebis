@@ -674,17 +674,18 @@ retry on the same account is charged at its dispatch. The count is kept by the r
 token count is not counted: it occupies no slot, is never passed over at the cap and is never held for one. An account
 at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling above
 `select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that could serve is at
-its cap is the request held: it waits up to `retry_in_place_seconds` for a slot on the account it would have chosen and
-lands there when one frees; past the bound it is selected again with that account passed over, and with every account
+its cap is the request held: it waits for a slot on the account it would have chosen, and every hold of one request
+shares one bound of `retry_in_place_seconds` from the first hold, whatever the pool's size. A slot that frees inside it
+lands the request there, and past it the request is selected again with that account passed over, and with every account
 passed over it is answered `429` with the error type `rate_limit_error`, the error code `accounts_at_cap`, the message
 `every account in this pool is at its in-flight cap`, and a `Retry-After` of the pool's `retry_in_place_seconds` held
 between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats a longer one as a block it
-does not retry. A request is held at most once per account: a hold that runs out, or whose freed slot another request
-takes first, adds the account to the request's attempted set and the selection runs again; with every account held for
-and passed over, the answer is the `429` above. A request that dialled an account before its holds ran out, and a pool
-with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin
-under any agent is never held, and a move whose every destination is at its cap is not made: the pin renews in place and
-the next request judges the move again; a held subagent waits where its cohort is.
+does not retry. A request is held at most once per account and never past the request's one bound: a hold that runs out,
+or whose freed slot another request takes first, adds the account to the request's attempted set and the selection runs
+again. With every account passed over, the answer is the `429` above. A request that dialled an account before its holds
+ran out, and a pool with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session
+already holds a pin under any agent is never held, and a move whose every destination is at its cap is not made: the pin
+renews in place and the next request judges the move again; a held subagent waits where its cohort is.
 
 ### When nothing can serve
 

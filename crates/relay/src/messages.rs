@@ -1617,6 +1617,9 @@ impl Relay {
         // request can take it before the next selection; without this the same account could hold the request
         // again on every pass.
         let mut held_for: Vec<String> = Vec::new();
+        // Set by the request's first hold and shared by every later one, so a pool of any size holds the request
+        // one `retry_in_place` at most.
+        let mut hold_deadline: Option<tokio::time::Instant> = None;
         // Whether a hold ran out, and whether any leg dialled: an untimed exhaustion reached through holds alone
         // is a pool at its cap, which frees on its own, not one only an operator can clear.
         let mut held_out = false;
@@ -1752,19 +1755,23 @@ impl Relay {
                     account_id,
                     mut hold,
                 } => {
-                    // The account had its one hold of this request, so at its cap it is passed over as one whose
-                    // wait ran out.
-                    if held_for.contains(&account_id) {
+                    // The account had its one hold of this request, or the request's one bound has passed: at its
+                    // cap it is passed over as one whose wait ran out.
+                    if held_for.contains(&account_id)
+                        || hold_deadline.is_some_and(|at| tokio::time::Instant::now() >= at)
+                    {
                         held_out = true;
                         attempted.push(account_id);
                         continue;
                     }
                     let started = tokio::time::Instant::now();
-                    let deadline = started + admitted.retry_in_place;
+                    let hold_deadline = *hold_deadline.get_or_insert_with(|| {
+                        tokio::time::Instant::now() + admitted.retry_in_place
+                    });
                     let freed = self
                         .router
                         .in_flight()
-                        .wait_for_slot(&account_id, failover.in_flight_cap, deadline)
+                        .wait_for_slot(&account_id, failover.in_flight_cap, hold_deadline)
                         .await;
                     // Measured here, the one place that knows: the trace of the attempt that follows names the
                     // wait, and so does the completion when no attempt follows.

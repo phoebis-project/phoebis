@@ -759,11 +759,21 @@ fn each_first_block_member<'a>(
 }
 
 /// Whether a string token, quotes included, is a billing line claiming a hash once decoded. A token a strict
-/// decoder refuses (a lone surrogate escape) is read by its bytes, as `find_cch` reads every line, so this count
-/// never falls below the raw walk's.
+/// decoder refuses for a lone surrogate escape is read through the same mapping the relay reads a body through, so
+/// an escaped header name or `cch=` beside one is decoded and counted. A token nothing can decode is read by its
+/// bytes, as `find_cch` reads every line, so this count never falls below the raw walk's.
 fn reads_as_a_stamp(token: &[u8]) -> bool {
     const PREFIX: &str = "x-anthropic-billing-header:";
-    match serde_json::from_slice::<String>(token) {
+    let decoded = serde_json::from_slice::<String>(token).or_else(|_| {
+        let mut lone = Vec::new();
+        lone_surrogate_escapes(token, 0, &mut lone);
+        let mut mapped = token.to_vec();
+        for at in lone {
+            mapped[at + 2..at + 6].copy_from_slice(b"FFFD");
+        }
+        serde_json::from_slice::<String>(&mapped)
+    });
+    match decoded {
         Ok(line) => line.starts_with(PREFIX) && line.contains("cch="),
         Err(_) => token[1..].starts_with(PREFIX.as_bytes()) && find(token, b"cch=").is_some(),
     }
@@ -1469,8 +1479,38 @@ mod tests {
         assert_eq!(
             decoded_stamp_count(&surrogate),
             1,
-            "a line a strict decoder refuses is read by its bytes, as the raw walk reads it"
+            "a line a strict decoder refuses for a lone surrogate counts, as the raw walk counts it"
         );
+    }
+
+    #[test]
+    fn a_lone_surrogate_beside_an_escaped_cch_counts_as_a_stamp_in_the_decoded_walk() {
+        let body = |line: &str| {
+            format!(r#"{{"system":[{{"type":"text","text":"{line}"}}],"model":"m"}}"#).into_bytes()
+        };
+
+        let escaped_cch = body(r"x-anthropic-billing-header: v=1 \udc00 cch\u003d01234;");
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&escaped_cch).is_err(),
+            "a strict decoder refuses the line"
+        );
+        assert!(
+            find_cch(&escaped_cch).is_none(),
+            "the raw bytes spell no cch="
+        );
+        assert_eq!(
+            decoded_stamp_count(&escaped_cch),
+            1,
+            "read through the lone surrogate mapping, the line decodes to a stamp"
+        );
+
+        let escaped_colon = body(r"x-anthropic-billing-header\u003a v=1 \udc00 cch=01234;");
+        assert!(find_cch(&escaped_colon).is_none());
+        assert_eq!(decoded_stamp_count(&escaped_colon), 1);
+
+        let plain = body("x-anthropic-billing-header: v=1 cch=01234;");
+        assert!(find_cch(&plain).is_some());
+        assert_eq!(decoded_stamp_count(&plain), 1);
     }
 
     #[test]
