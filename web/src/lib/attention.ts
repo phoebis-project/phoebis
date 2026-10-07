@@ -96,7 +96,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     case 'ledger_record_parked': {
       const n = count(d.count);
       const accounts = Array.isArray(d.accounts) ? d.accounts.filter((a): a is string => typeof a === 'string') : [];
-      return `${n} priced ${n === 1 ? 'record' : 'records'} parked, landing at the next start${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
+      return `${n} priced ${n === 1 ? 'record' : 'records'} parked, landing at the next start or replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
     }
     case 'poll_backoff': {
       const n = count(d.rate_limited_in_a_row);

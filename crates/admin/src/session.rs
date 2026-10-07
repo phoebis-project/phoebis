@@ -43,15 +43,17 @@ struct SessionRec {
 }
 
 struct State {
-    /// Unix milliseconds of each recent failure, oldest first; pruned to `THROTTLE_WINDOW_MS` on every login.
+    /// Unix milliseconds of each recent failure, oldest first; pruned to `THROTTLE_WINDOW_MS` on every login and
+    /// bearer check.
     failures: Vec<i64>,
-    /// Keyed by the cookie value, which is the bearer credential for the session.
+    /// Keyed by the cookie value, which is the session's credential.
     sessions: HashMap<String, SessionRec>,
 }
 
 pub struct Sessions {
     absolute: Duration,
-    /// Keys the digests the login compares, drawn per process: the compare needs equal lengths, not a secret key.
+    /// Keys the digests the login and the bearer compare, drawn per process: the compare needs equal lengths, not a
+    /// secret key.
     compare_key: [u8; 32],
     idle: Duration,
     state: Mutex<State>,
@@ -80,6 +82,40 @@ impl Sessions {
         now: i64,
     ) -> Result<String, LoginError> {
         let mut state = self.state.lock().expect(LOCK_POISONED);
+        self.check(&mut state, presented, secrets, now)?;
+        let cookie = random_token();
+        state.sessions.insert(
+            cookie.clone(),
+            SessionRec {
+                created_at: now,
+                id: random_token(),
+                last_seen: now,
+            },
+        );
+        Ok(cookie)
+    }
+
+    /// A scripted caller's one-shot check: the same keyed, constant-time compare as `login`, the same failure
+    /// vector and the same throttle, so a bearer costs a guesser what a login costs. Opens no session.
+    pub fn bearer(
+        &self,
+        presented: &str,
+        secrets: &AdminSecrets,
+        now: i64,
+    ) -> Result<(), LoginError> {
+        let mut state = self.state.lock().expect(LOCK_POISONED);
+        self.check(&mut state, presented, secrets, now)
+    }
+
+    /// The throttle and the compare `login` and `bearer` share, under the caller's lock so a failure lands in the
+    /// window the next check reads.
+    fn check(
+        &self,
+        state: &mut State,
+        presented: &str,
+        secrets: &AdminSecrets,
+        now: i64,
+    ) -> Result<(), LoginError> {
         state.failures.retain(|at| now - *at < THROTTLE_WINDOW_MS);
         if state.failures.len() >= MAX_FAILURES {
             return Err(LoginError::Throttled);
@@ -91,16 +127,7 @@ impl Sessions {
             state.failures.push(now);
             return Err(LoginError::Invalid);
         }
-        let cookie = random_token();
-        state.sessions.insert(
-            cookie.clone(),
-            SessionRec {
-                created_at: now,
-                id: random_token(),
-                last_seen: now,
-            },
-        );
-        Ok(cookie)
+        Ok(())
     }
 
     /// Resolves a cookie into the session id, renewing the idle deadline. A session past either deadline is
@@ -181,6 +208,42 @@ mod tests {
             Err(LoginError::Throttled)
         ));
         assert!(sessions.login("admin-secret", &secrets(), 60_001).is_ok());
+    }
+
+    #[test]
+    fn a_bearer_matches_as_a_login_does_and_opens_no_session() {
+        let sessions = Sessions::new(Duration::from_secs(900), Duration::from_secs(43_200));
+        assert!(sessions.bearer("admin-secret", &secrets(), 0).is_ok());
+        assert!(matches!(
+            sessions.bearer("admin-secre", &secrets(), 0),
+            Err(LoginError::Invalid)
+        ));
+        assert!(matches!(
+            sessions.bearer("admin-secret-and-more", &secrets(), 0),
+            Err(LoginError::Invalid)
+        ));
+        assert!(sessions.state.lock().unwrap().sessions.is_empty());
+        assert_eq!(sessions.state.lock().unwrap().failures, vec![0, 0]);
+    }
+
+    #[test]
+    fn wrong_bearers_count_toward_the_login_throttle() {
+        let sessions = Sessions::new(Duration::from_secs(900), Duration::from_secs(43_200));
+        for at in 0..5 {
+            assert!(matches!(
+                sessions.bearer("nope", &secrets(), at),
+                Err(LoginError::Invalid)
+            ));
+        }
+        assert!(matches!(
+            sessions.login("admin-secret", &secrets(), 5),
+            Err(LoginError::Throttled)
+        ));
+        assert!(matches!(
+            sessions.bearer("admin-secret", &secrets(), 5),
+            Err(LoginError::Throttled)
+        ));
+        assert!(sessions.bearer("admin-secret", &secrets(), 60_001).is_ok());
     }
 
     #[test]

@@ -25,29 +25,26 @@ The documentation lives under [`docs/site/`](docs/site/index.md) and is publishe
 
 ```sh
 cargo build --release
-install -d -m 0700 ~/.config/phoebis
-[ -e ~/.config/phoebis/storage.key ] ||
-  (umask 077; head -c 32 /dev/urandom | od -An -tx1 | tr -d ' \n' > ~/.config/phoebis/storage.key)
-sed -e "s#/run/secrets/router-storage-key#$HOME/.config/phoebis/storage.key#" \
-  -e 's/plain_http: false/plain_http: true/' -e '/^  origin:/d' \
-  deploy/config.example.yaml > ~/.config/phoebis/config.yaml
+target/release/phoebis init --config ~/.config/phoebis/config.yaml
 export PHOEBIS_CONFIG=$HOME/.config/phoebis/config.yaml
-export PHOEBIS_ADMIN_SECRET=$(openssl rand -base64 36)
+export PHOEBIS_ADMIN_SECRET=<the printed secret>
 target/release/phoebis
 ```
 
-The key is created once and never replaced: every stored credential is sealed under it and there is no re-key.
-`PHOEBIS_CONFIG` names the file for every `phoebis` call in that shell, so nothing host-specific lands in the checkout.
-That runs the proxy on `127.0.0.1:8317`, the admin listener with the console on `127.0.0.1:8081`, and metrics on
-`127.0.0.1:9464`, with both databases under `./data/`. The build embeds the console and needs Node 20.19 or a later 20,
-or 22.12 or later; `PHOEBIS_SKIP_UI_BUILD=1` builds without it. `phoebis check-config` validates the file, the key
-file and the registry's key canary, taking no lock and opening no socket. Installing as a service, and every setting
-of the file, is on the [installation page](docs/site/installation.md).
+`init` writes the bootstrap file and the storage key, and prints the admin secret once. The key is created once and
+never replaced: every stored credential is sealed under it and there is no re-key. `PHOEBIS_CONFIG` names the file for
+every `phoebis` call in that shell, so nothing host-specific lands in the checkout. `init` wrote the proxy on
+`127.0.0.1:8317`, the admin listener with the console on `127.0.0.1:8081`, and metrics on `127.0.0.1:9464`, with both
+databases under `~/.config/phoebis/data/`. The build embeds the console and needs Node 20.19 or a later 20, or 22.12 or
+later; `PHOEBIS_SKIP_UI_BUILD=1` builds without it. `phoebis check-config` validates the file, the key file and the
+registry's key canary, taking no lock and opening no socket. Installing as a service, and every setting of the file, is
+on the [installation page](docs/site/installation.md).
 
-The same binary is published as a container image, `ghcr.io/daystrom-labs/phoebis`, for amd64 and arm64
-with every release; `deploy/compose.yaml` and `deploy/config.container.yaml` run it under bridge networking, and
-the image's `HEALTHCHECK` runs `phoebis health`, which reads not-ready when the router loop, the ledger consumer or the
-store is dead ([how](docs/site/installation.md#run-the-container)).
+The same binary is published as a container image, `ghcr.io/daystrom-labs/phoebis`, for amd64 and arm64, and as a
+static binary per architecture on every release ([download](docs/site/installation.md#download-a-release)).
+`deploy/compose.yaml` and `deploy/config.container.yaml` run the image under bridge networking, and the image's
+`HEALTHCHECK` runs `phoebis health`, which reads not-ready when the router loop, the ledger consumer or the store is
+dead ([how](docs/site/installation.md#run-the-container)).
 
 ## Where things are
 
@@ -59,7 +56,7 @@ store is dead ([how](docs/site/installation.md#run-the-container)).
 | [Pools, keys, and routing](docs/site/routing.md) | Pace, load shedding, cooldowns, failover, overage. |
 | [Keepalive](docs/site/keepalive.md) | Keeping prompt caches warm: the companion, the gates, the tuning, the cost. |
 | [Statistics](docs/site/statistics.md) | Ledger, plan meter, views, metrics, live feed, gauges. |
-| [Operations](docs/site/operations.md) | Backup, storage key, upgrades, client re-pinning, publishing, releasing. |
+| [Operations](docs/site/operations.md) | Backup, restore, storage key, upgrades, re-pinning, publishing, releasing. |
 | [Changelog](docs/site/changelog.md) | What changed for an operator, by date. |
 
 The browser pass over the console is in

@@ -2,7 +2,9 @@
 //! names the routing keys in its summary, and passes every shipped deploy config. It reads the key file as the start
 //! does and proves the key against the registry's canary, or against the sealed rows of a registry from before the
 //! canary, refuses a registry or a ledger a newer build wrote, and warns about an unset secret variable while
-//! refusing a set one the start refuses.
+//! refusing a set one the start refuses. It reads each listener's certificate pair as the start does, prints each
+//! listener's scheme on any address, refuses a pair the start refuses with the loader's line, and refuses a word in
+//! the `tls` key's place.
 
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
@@ -18,7 +20,7 @@ fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
     let key = dir.join("storage.key");
     std::fs::write(&key, HEX_KEY).unwrap();
     let yaml = format!(
-        "admin:\n  listen: 127.0.0.1:0\n  plain_http: true\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n\
+        "admin:\n  listen: 127.0.0.1:0\n  secret_env: TEST_CHECK_CONFIG_ADMIN\n\
          proxy:\n  listen: 127.0.0.1:0\n\
          storage:\n  encryption_key_file: {}\n  path: {}\n{extra}",
         key.display(),
@@ -27,6 +29,73 @@ fn config_file(dir: &Path, name: &str, extra: &str) -> PathBuf {
     let path = dir.join(format!("{name}.yaml"));
     std::fs::write(&path, yaml).unwrap();
     path
+}
+
+/// `config_file`'s template with `admin_lines` inside its `admin` block: a second top-level `admin` would be refused
+/// as a duplicate key, never as the unknown field a removed admin key has to prove.
+fn config_file_with_admin(dir: &Path, name: &str, admin_lines: &str) -> PathBuf {
+    let path = config_file(dir, name, "");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        text.replacen("admin:\n", &format!("admin:\n{admin_lines}"), 1),
+    )
+    .unwrap();
+    path
+}
+
+/// `config_file`'s template with `proxy_lines` inside its `proxy` block.
+fn config_file_with_proxy(dir: &Path, name: &str, proxy_lines: &str) -> PathBuf {
+    let path = config_file(dir, name, "");
+    let text = std::fs::read_to_string(&path).unwrap();
+    std::fs::write(
+        &path,
+        text.replacen("proxy:\n", &format!("proxy:\n{proxy_lines}"), 1),
+    )
+    .unwrap();
+    path
+}
+
+/// A pair valid between the two dates, written where an operator's would sit, both files at `0600`.
+fn pair_files(
+    dir: &Path,
+    hosts: &[&str],
+    not_before: (i32, u8, u8),
+    not_after: (i32, u8, u8),
+) -> (PathBuf, PathBuf) {
+    let (cert, key) = fake_upstream::generate_pair_valid_between(hosts, not_before, not_after)
+        .write_to(dir, "proxy");
+    for file in [&cert, &key] {
+        std::fs::set_permissions(file, std::fs::Permissions::from_mode(0o600)).unwrap();
+    }
+    (cert, key)
+}
+
+/// The `proxy.tls` mapping naming the pair.
+fn pair_lines(cert: &Path, key: &Path) -> String {
+    format!(
+        "  tls:\n    cert_file: {}\n    key_file: {}\n",
+        cert.display(),
+        key.display()
+    )
+}
+
+/// The leaf's `not_after` as BoringSSL prints it, read from the file rather than from the router's loader.
+fn not_after(cert: &Path) -> String {
+    boring::x509::X509::from_pem(&std::fs::read(cert).unwrap())
+        .unwrap()
+        .not_after()
+        .to_string()
+}
+
+/// A date `days` from today in UTC, as the fake upstream's generator takes it.
+fn days_from_today(days: i64) -> (i32, u8, u8) {
+    let date = jiff::Timestamp::now()
+        .to_zoned(jiff::tz::TimeZone::UTC)
+        .date()
+        .checked_add(jiff::Span::new().days(days))
+        .unwrap();
+    (i32::from(date.year()), date.month() as u8, date.day() as u8)
 }
 
 fn phoebis() -> Command {
@@ -203,23 +272,44 @@ fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the
     );
 }
 
-const REMOVED_KEY: &str = "routing:\n  catalog_cache_seconds: 60\n"; // removed name
+/// Each removed key with the block it sat in and its lines.
+const REMOVED_KEYS: [(&str, &str); 3] = [
+    ("routing", "  catalog_cache_seconds: 60\n"), // removed name
+    (
+        "admin",
+        include_str!("fixtures/removed-keys/admin-origin.yaml"),
+    ),
+    (
+        "admin",
+        include_str!("fixtures/removed-keys/admin-plain-http.yaml"),
+    ),
+];
 
 #[test]
 fn a_removed_key_fails_check_config_as_invalid_yaml() {
     let dir = tempfile::tempdir().unwrap();
-    let config = config_file(dir.path(), "removed-key", REMOVED_KEY);
-    let out = phoebis()
-        .args(["check-config", "--config"])
-        .arg(&config)
-        .output()
-        .unwrap();
-    assert!(!out.status.success());
-    let stderr = String::from_utf8_lossy(&out.stderr);
-    assert!(
-        stderr.contains("the configuration is not valid YAML") && stderr.contains("unknown field"),
-        "{stderr}"
-    );
+    for (n, (block, lines)) in REMOVED_KEYS.into_iter().enumerate() {
+        let name = format!("removed-key-{n}");
+        let config = match block {
+            "admin" => config_file_with_admin(dir.path(), &name, lines),
+            _ => config_file(dir.path(), &name, &format!("{block}:\n{lines}")),
+        };
+        let key = lines
+            .lines()
+            .next()
+            .and_then(|line| line.split_once(':'))
+            .map(|(key, _)| key.trim())
+            .unwrap();
+        let out = check_config(&mut phoebis(), &config);
+        assert!(!out.status.success(), "{block}: {lines}{}", printed(&out));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("the configuration is not valid YAML")
+                && stderr.contains(&format!("unknown field `{key}`")),
+            "{block}: {lines}{}",
+            printed(&out)
+        );
+    }
 }
 
 #[test]
@@ -514,4 +604,246 @@ fn a_set_secret_holding_the_example_placeholder_fails_check_config() {
         "{}",
         printed(&out)
     );
+}
+
+#[test]
+fn a_plain_listener_prints_over_plain_http() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "plain", "");
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.get(1..4),
+        Some(
+            &[
+                "proxy listens on 127.0.0.1:0 over plain HTTP",
+                "admin listens on 127.0.0.1:0 over plain HTTP",
+                "metrics listens on 127.0.0.1:9464",
+            ][..]
+        ),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_pair_prints_over_tls_with_its_certificate_and_expiry() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cert, key) = pair_files(dir.path(), &["localhost"], (2020, 1, 1), (2100, 1, 1));
+    let config = config_file_with_proxy(dir.path(), "pair", &pair_lines(&cert, &key));
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.get(1..3),
+        Some(
+            &[
+                format!(
+                    "proxy listens on 127.0.0.1:0 over TLS (certificate {}, expires {})",
+                    cert.display(),
+                    not_after(&cert)
+                )
+                .as_str(),
+                "admin listens on 127.0.0.1:0 over plain HTTP",
+            ][..]
+        ),
+        "{}",
+        printed(&out)
+    );
+    // A key at 0600 and a leaf decades from expiry earn neither TLS warning. The storage key is written at the umask,
+    // so its own warning may stand.
+    let key = key.display().to_string();
+    assert!(
+        !stdout
+            .lines()
+            .any(|line| line.contains(&key) || line.contains("expires in")),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_pair_within_thirty_days_of_expiry_warns_and_passes() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cert, key) = pair_files(
+        dir.path(),
+        &["localhost"],
+        (2020, 1, 1),
+        days_from_today(10),
+    );
+    let config = config_file_with_proxy(dir.path(), "near-expiry", &pair_lines(&cert, &key));
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let prefix = format!(
+        "warning: proxy.tls.cert_file {} expires in ",
+        cert.display()
+    );
+    // Midnight UTC ten days on is nine whole days and some hours from any moment of today, and eight when the check
+    // runs past the midnight that followed the date's reading.
+    let days = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix(&prefix))
+        .unwrap_or_else(|| panic!("no expiry warning: {}", printed(&out)));
+    assert!(
+        ["8 days (", "9 days (", "10 days ("]
+            .iter()
+            .any(|count| days.starts_with(count)),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        days.ends_with(&format!("({})", not_after(&cert))),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_key_file_readable_by_others_warns() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cert, key) = pair_files(dir.path(), &["localhost"], (2020, 1, 1), (2100, 1, 1));
+    std::fs::set_permissions(&key, std::fs::Permissions::from_mode(0o644)).unwrap();
+    let config = config_file_with_proxy(dir.path(), "wide-tls-key", &pair_lines(&cert, &key));
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).lines().any(|line| line
+            == format!(
+                "warning: {} is readable by group or other (mode 0644); expected 0600",
+                key.display()
+            )),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_refused_pair_fails_check_config_with_the_loaders_line() {
+    let dir = tempfile::tempdir().unwrap();
+    let (cert, key) = pair_files(dir.path(), &["localhost"], (2020, 1, 1), (2100, 1, 1));
+    let missing = dir.path().join("absent.pem");
+    let other = tempfile::tempdir().unwrap();
+    let (_, other_key) = pair_files(other.path(), &["localhost"], (2020, 1, 1), (2100, 1, 1));
+    let expired_dir = tempfile::tempdir().unwrap();
+    let (expired, expired_key) = pair_files(
+        expired_dir.path(),
+        &["localhost"],
+        (2020, 1, 1),
+        (2021, 1, 1),
+    );
+    let early_dir = tempfile::tempdir().unwrap();
+    let (early, early_key) = pair_files(
+        early_dir.path(),
+        &["localhost"],
+        days_from_today(2),
+        (2100, 1, 1),
+    );
+    let cases = [
+        (
+            "missing-cert",
+            &missing,
+            &key,
+            "proxy.tls.cert_file ",
+            missing.clone(),
+            ": ",
+        ),
+        (
+            "other-key",
+            &cert,
+            &other_key,
+            "proxy.tls.key_file ",
+            other_key.clone(),
+            "does not match",
+        ),
+        (
+            "expired",
+            &expired,
+            &expired_key,
+            "proxy.tls.cert_file ",
+            expired.clone(),
+            "expired on",
+        ),
+        (
+            "early",
+            &early,
+            &early_key,
+            "proxy.tls.cert_file ",
+            early.clone(),
+            "not valid before",
+        ),
+    ];
+    for (name, cert, key, named_key, path, reason) in cases {
+        let config = config_file_with_proxy(dir.path(), name, &pair_lines(cert, key));
+        let out = check_config(&mut phoebis(), &config);
+        assert_eq!(out.status.code(), Some(1), "{name}: {}", printed(&out));
+        assert!(out.stdout.is_empty(), "{name}: {}", printed(&out));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        let line = stderr.lines().next().unwrap_or_default();
+        assert!(
+            line.starts_with(&format!("Error: {named_key}{}", path.display()))
+                && line.contains(reason),
+            "{name}: {}",
+            printed(&out)
+        );
+    }
+}
+
+#[test]
+fn a_listener_without_tls_on_an_unspecified_address_prints_over_plain_http() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "unspecified", "");
+    let text = std::fs::read_to_string(&config).unwrap();
+    // `check-config` opens no socket, so neither address is bound by the test.
+    std::fs::write(
+        &config,
+        text.replacen(
+            "admin:\n  listen: 127.0.0.1:0\n",
+            "admin:\n  listen: \"[::]:0\"\n",
+            1,
+        )
+        .replacen(
+            "proxy:\n  listen: 127.0.0.1:0\n",
+            "proxy:\n  listen: 0.0.0.0:0\n",
+            1,
+        ),
+    )
+    .unwrap();
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    assert_eq!(
+        lines.get(1..4),
+        Some(
+            &[
+                "proxy listens on 0.0.0.0:0 over plain HTTP",
+                "admin listens on [::]:0 over plain HTTP",
+                "metrics listens on 127.0.0.1:9464",
+            ][..]
+        ),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
+fn a_tls_word_fails_check_config_naming_the_two_keys() {
+    let dir = tempfile::tempdir().unwrap();
+    for word in ["self_signed", "plain_http"] {
+        let config = config_file_with_proxy(dir.path(), word, &format!("  tls: {word}\n"));
+        let out = check_config(&mut phoebis(), &config);
+        assert_eq!(out.status.code(), Some(1), "{word}: {}", printed(&out));
+        assert!(out.stdout.is_empty(), "{word}: {}", printed(&out));
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("Error: the configuration is not valid YAML")
+                && stderr.contains("proxy.tls: must be a mapping with cert_file and key_file"),
+            "{word}: {}",
+            printed(&out)
+        );
+    }
 }

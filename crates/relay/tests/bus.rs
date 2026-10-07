@@ -1338,6 +1338,7 @@ async fn a_probe_is_authenticated_by_key_id_and_published_under_origin_keepalive
             header_read_timeout: Duration::from_secs(30),
             max_connections: 64,
         },
+        None,
     ));
     let client = reqwest::Client::new();
     let resp = client

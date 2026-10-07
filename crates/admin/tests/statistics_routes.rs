@@ -306,6 +306,116 @@ async fn the_system_document_reads_a_degraded_ledger_its_retry_and_its_parked_re
     );
 }
 
+/// `POST` with the admin secret as a bearer and no cookie, the subcommands' own call.
+async fn post_bearer(
+    app: &axum::Router,
+    path: &str,
+    bearer: &str,
+) -> axum::http::Response<axum::body::Body> {
+    use tower::ServiceExt;
+    app.clone()
+        .oneshot(
+            axum::http::Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("authorization", format!("Bearer {bearer}"))
+                .body(axum::body::Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn the_replay_route_answers_the_counts_on_an_empty_table() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 200);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"landed": 0, "remaining": 0})
+    );
+    let scripted = post_bearer(&parts.app, "/admin/ledger/parked/replay", "admin-secret").await;
+    assert_eq!(scripted.status(), 200);
+    assert_eq!(
+        json(scripted).await,
+        serde_json::json!({"landed": 0, "remaining": 0})
+    );
+    let anonymous = post(&parts.app, "/admin/ledger/parked/replay", "", None).await;
+    assert_eq!(anonymous.status(), 401);
+}
+
+/// A parked row the replay tries and cannot land stays in the table with the error it met this time, and the answer
+/// and the system document count it.
+#[tokio::test]
+async fn the_replay_route_counts_a_row_it_could_not_land_as_remaining() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    common::park_unreadable(&parts.db, "main", "business", common::NOW);
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 200);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"landed": 0, "remaining": 1})
+    );
+    let error = parts
+        .db
+        .read(|c| {
+            Ok(c.query_row("SELECT error FROM parked_records", [], |r| {
+                r.get::<_, String>(0)
+            })?)
+        })
+        .await
+        .unwrap();
+    assert_ne!(
+        error, "refused by test",
+        "the replay tried the row and kept the error it met"
+    );
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(
+        system["ledger"]["parked_priced"].as_u64(),
+        Some(1),
+        "{system}"
+    );
+}
+
+/// A pass that could not read the parked rows never ran, so it is a failure rather than an answer of nothing landed
+/// and every row kept: a caller reading the counts would stop retrying.
+#[tokio::test]
+async fn the_replay_route_answers_500_when_the_parked_rows_cannot_be_read() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    common::park_unreadable(&parts.db, "main", "business", common::NOW);
+    // The row read names the column; the count the answer would carry does not, so it still reads.
+    parts
+        .db
+        .write(|c| {
+            c.execute_batch("ALTER TABLE parked_records RENAME COLUMN record TO record_held;")?;
+            Ok(())
+        })
+        .unwrap();
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 500);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"error": "ledger failure"})
+    );
+}
+
+#[tokio::test]
+async fn the_replay_route_answers_500_once_the_ledger_writer_has_stopped() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    parts.ledger.clone().shutdown().await.unwrap();
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 500);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"error": "ledger failure"})
+    );
+}
+
 #[tokio::test]
 async fn a_store_whose_read_fails_reads_not_ready_on_the_system_document_until_it_answers_again() {
     let parts = common::admin_parts_full().await;
@@ -682,11 +792,11 @@ async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
         tokio_tungstenite::connect_async(request)
     };
     assert!(connect(None).await.is_err(), "no session, no upgrade");
-    // A pinned origin: an authenticated handshake from another origin is refused by the gate.
-    let pinned = common::admin_parts_full_with_origin("https://phoebis.example").await;
+    // Over a real socket the client sets `Host` to the served address: an authenticated handshake whose origin
+    // names another authority is refused by the gate, and one naming the served address is admitted.
+    let pinned = common::admin_parts_full().await;
     let pinned_addr = common::serve(pinned.app.clone()).await;
-    let pinned_cookie =
-        common::login_from(&pinned.app, "admin-secret", "https://phoebis.example").await;
+    let pinned_cookie = common::login(&pinned.app, "admin-secret").await;
     let mut foreign =
         tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
             "ws://{pinned_addr}/admin/live"
@@ -713,12 +823,12 @@ async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
         format!("phoebis_admin={pinned_cookie}").parse().unwrap(),
     );
     same.headers_mut()
-        .insert("origin", "https://phoebis.example".parse().unwrap());
+        .insert("origin", format!("http://{pinned_addr}").parse().unwrap());
     let (mut same_ws, _) = tokio_tungstenite::connect_async(same).await.unwrap();
     assert_eq!(
         common::next_text(&mut same_ws).await["kind"],
         "snapshot",
-        "the configured origin is admitted"
+        "an origin naming the request's own host is admitted"
     );
     let _ = same_ws.close(None).await;
     let (mut admin_ws, _) = connect(Some(admin.clone())).await.unwrap();

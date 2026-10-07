@@ -45,7 +45,7 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
 /// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
 /// back), an account that serves nothing until the operator acts, a credential about to lapse, priced records the
-/// ledger file keeps until the next start lands them, windows that read stale.
+/// ledger file keeps until the next start or a replay lands them, windows that read stale.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,

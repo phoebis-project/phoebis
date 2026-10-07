@@ -13,13 +13,18 @@ _CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1
 CLAUDE_CODE_GATEWAY_HINT_HEADERS=1
 DISABLE_TELEMETRY=1
 CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1
+NODE_EXTRA_CA_CERTS=<path to the CA's PEM>   # a private CA only
 ```
+
+When the proxy listener's certificate comes from a private CA, the client trusts that CA through `NODE_EXTRA_CA_CERTS`:
+for a pair `phoebis init --tls self-signed` wrote, that is a copy of the router's `tls/ca.pem`; a public CA needs
+nothing here. The client checks the CA before anything else, so the leaf needs no pin.
 
 ### ANTHROPIC_BASE_URL
 
-Points Claude Code at the router's proxy listener, through the reverse proxy that terminates TLS when there is
-one. Every model request and the keepalive companion's reports go here. Plain HTTP is accepted on any address, by
-the router and by the companion alike.
+Points Claude Code at the router's proxy listener. The scheme follows the listener: `http://127.0.0.1:8317` on the
+loopback shape, `https://<host>:8317` when the proxy listener terminates TLS. Every model request and the keepalive
+companion's reports go here. Plain HTTP is accepted on any address, by the router and by the companion alike.
 
 ### CLAUDE_CODE_OAUTH_TOKEN
 
@@ -204,7 +209,9 @@ reports the router's state and carries the readiness body instead. The two keepa
 created again reaches none of the sessions its previous holder left behind.
 
 pool's members are unusable for the moment, and the answer when an account's authentication failure is the request's
-last word: the router never forwards an upstream `401`, and the answer names no account and no reason.
+last word: the router never forwards an upstream `401`, and the answer names no account and no reason. `phoebis status`
+prints the live pins, one line per session with its account and pin state, which is the terminal read of which account a
+session holds.
 
 A token count (`POST /v1/messages/count_tokens`) is relayed through the same selection and failover loop as a
 message and travels as the client sent it under every policy: the markers it carries keep their TTLs, no

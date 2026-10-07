@@ -116,19 +116,13 @@ pub struct Full {
 }
 
 pub async fn admin_parts_full() -> Full {
-    full_from(app_with(None, ACCOUNT_UUID, None, None).await)
-}
-
-/// The full harness with the admin origin pinned, which is what every configuration outside the loopback
-/// development mode runs, and the only shape in which the origin check on a handshake is exercised.
-pub async fn admin_parts_full_with_origin(origin: &str) -> Full {
-    full_from(app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await)
+    full_from(app_with(None, ACCOUNT_UUID, false, None).await)
 }
 
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
 /// spawn, so a test that needs a pin in the list has to write it before this call.
 pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
-    full_from(app_with(None, ACCOUNT_UUID, None, Some(store)).await)
+    full_from(app_with(None, ACCOUNT_UUID, false, Some(store)).await)
 }
 
 fn full_from(parts: Parts) -> Full {
@@ -172,12 +166,12 @@ pub fn generation(store: &Store, key_id: &str) -> i64 {
 }
 
 pub async fn admin_app() -> (Router, FakeUpstream) {
-    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    let parts = app_with(None, ACCOUNT_UUID, false, None).await;
     (parts.app, parts.up)
 }
 
 pub async fn admin_app_paired() -> (Router, FakeUpstream) {
-    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
+    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, false, None).await;
     (parts.app, parts.up)
 }
 
@@ -197,8 +191,7 @@ pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
     let parts = build_app(
         Some(fixture_identity()),
         ACCOUNT_UUID,
-        None,
-        true,
+        false,
         None,
         usage_ttl,
     )
@@ -216,7 +209,7 @@ pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
 /// A paired slot whose upstream now answers as a different account, which is how the re-pairing test
 /// presents somebody else's login to a slot that is already bound.
 pub async fn admin_app_paired_as(uuid: &str) -> (Router, FakeUpstream) {
-    let parts = app_with(Some(fixture_identity()), uuid, None, None).await;
+    let parts = app_with(Some(fixture_identity()), uuid, false, None).await;
     (parts.app, parts.up)
 }
 
@@ -229,7 +222,7 @@ pub async fn admin_app_quarantined(detail: &str) -> (Router, FakeUpstream) {
 /// The unpaired app with the store and the router behind it, for the tests that have to look past the HTTP
 /// surface at what a write did to the registry or to the published snapshot.
 pub async fn admin_parts() -> (Router, FakeUpstream, Arc<Store>, RouterHandle) {
-    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    let parts = app_with(None, ACCOUNT_UUID, false, None).await;
     (parts.app, parts.up, parts.store, parts.router)
 }
 
@@ -242,7 +235,7 @@ pub async fn admin_parts_with_vault() -> (
     RouterHandle,
     Arc<PairingVault>,
 ) {
-    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    let parts = app_with(None, ACCOUNT_UUID, false, None).await;
     (parts.app, parts.up, parts.store, parts.router, parts.vault)
 }
 
@@ -257,7 +250,7 @@ pub struct Sweepable {
 }
 
 pub async fn admin_parts_sweepable() -> Sweepable {
-    let parts = app_with(None, ACCOUNT_UUID, None, None).await;
+    let parts = app_with(None, ACCOUNT_UUID, false, None).await;
     Sweepable {
         app: parts.app,
         clock_cell: parts.clock_cell,
@@ -270,14 +263,14 @@ pub async fn admin_parts_sweepable() -> Sweepable {
 /// A second app over a store another `Parts` already opened, so its router task loads whatever the store
 /// holds at this moment rather than what it held when the first app started.
 pub async fn admin_parts_on(store: Arc<Store>) -> (Router, FakeUpstream, Arc<Store>, RouterHandle) {
-    let parts = app_with(None, ACCOUNT_UUID, None, Some(store)).await;
+    let parts = app_with(None, ACCOUNT_UUID, false, Some(store)).await;
     (parts.app, parts.up, parts.store, parts.router)
 }
 
 /// A paired slot with the store and the manager behind it, for a test that reads what a confirmation did to the
 /// bundle the manager hands out.
 pub async fn paired_parts() -> (Router, FakeUpstream, Arc<Store>, Arc<CredentialManager>) {
-    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
+    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, false, None).await;
     (parts.app, parts.up, parts.store, parts.manager)
 }
 
@@ -286,7 +279,7 @@ pub async fn paired_parts() -> (Router, FakeUpstream, Arc<Store>, Arc<Credential
 pub async fn quarantined_parts(
     detail: &str,
 ) -> (Router, FakeUpstream, Arc<Store>, Arc<CredentialManager>) {
-    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
+    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, false, None).await;
     let attempt = parts
         .store
         .open_refresh_attempt("business", 1, 1, 1)
@@ -307,7 +300,7 @@ pub async fn backing_off_parts() -> (
     Arc<CredentialManager>,
     Arc<AtomicI64>,
 ) {
-    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, None, None).await;
+    let parts = app_with(Some(fixture_identity()), ACCOUNT_UUID, false, None).await;
     parts
         .store
         .commit_credentials(
@@ -360,24 +353,10 @@ pub fn succeed_token_requests(up: &FakeUpstream) {
     );
 }
 
-/// An app that pins its admin origin, as every configuration outside plain HTTP must.
-pub async fn admin_app_with_origin(origin: &str) -> (Router, FakeUpstream) {
-    let parts = app_with(None, ACCOUNT_UUID, Some(origin.to_string()), None).await;
-    (parts.app, parts.up)
-}
-
-/// The origin-pinned app with `plain_http` on as well: the one shape that still enforces an origin while the
-/// cookie travels without `Secure`, which no other builder produces since they tie the two together.
-pub async fn admin_app_plain_with_origin(origin: &str) -> (Router, FakeUpstream) {
-    let parts = build_app(
-        None,
-        ACCOUNT_UUID,
-        Some(origin.to_string()),
-        true,
-        None,
-        USAGE_TTL,
-    )
-    .await;
+/// The app with `tls` set, for the cookie's flag and the `https://` a presented `Origin` then needs; every other
+/// builder runs plain.
+pub async fn admin_app_tls() -> (Router, FakeUpstream) {
+    let parts = app_with(None, ACCOUNT_UUID, true, None).await;
     (parts.app, parts.up)
 }
 
@@ -398,6 +377,28 @@ pub async fn post_from(
     origin: &str,
 ) -> Response<Body> {
     send(app, "POST", path, body, cookie, Some(origin)).await
+}
+
+/// A login or mutation carrying `X-Forwarded-Proto` as a front would set it.
+pub async fn post_forwarded(
+    app: &Router,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    proto: &str,
+) -> Response<Body> {
+    send_ex(
+        app,
+        "POST",
+        path,
+        body,
+        cookie,
+        None,
+        None,
+        Some("application/json"),
+        Some(proto),
+    )
+    .await
 }
 
 pub async fn delete(app: &Router, path: &str, cookie: Option<&str>) -> Response<Body> {
@@ -460,21 +461,6 @@ pub async fn login(app: &Router, secret: &str) -> String {
         "/admin/session",
         &format!(r#"{{"secret":"{secret}"}}"#),
         None,
-    )
-    .await;
-    assert_eq!(response.status(), StatusCode::NO_CONTENT);
-    cookie_of(&response)
-}
-
-/// A login carrying the `Origin` a browser would attach, which an app with a pinned origin requires on the
-/// one mutation an unauthenticated caller reaches.
-pub async fn login_from(app: &Router, secret: &str, origin: &str) -> String {
-    let response = post_from(
-        app,
-        "/admin/session",
-        &format!(r#"{{"secret":"{secret}"}}"#),
-        None,
-        origin,
     )
     .await;
     assert_eq!(response.status(), StatusCode::NO_CONTENT);
@@ -568,6 +554,7 @@ async fn send(
         origin,
         None,
         Some("application/json"),
+        None,
     )
     .await
 }
@@ -592,6 +579,33 @@ pub async fn send_with_host(
         Some(origin),
         Some(host),
         Some("application/json"),
+        None,
+    )
+    .await
+}
+
+/// A request naming its own `Origin` and `Host` behind a front, with `X-Forwarded-Proto` as the front sets it.
+#[allow(clippy::too_many_arguments)]
+pub async fn send_fronted(
+    app: &Router,
+    method: &str,
+    path: &str,
+    body: &str,
+    cookie: Option<&str>,
+    origin: &str,
+    host: &str,
+    proto: &str,
+) -> Response<Body> {
+    send_ex(
+        app,
+        method,
+        path,
+        body,
+        cookie,
+        Some(origin),
+        Some(host),
+        Some("application/json"),
+        Some(proto),
     )
     .await
 }
@@ -605,7 +619,18 @@ pub async fn send_typed(
     cookie: Option<&str>,
     content_type: Option<&str>,
 ) -> Response<Body> {
-    send_ex(app, method, path, body, cookie, None, None, content_type).await
+    send_ex(
+        app,
+        method,
+        path,
+        body,
+        cookie,
+        None,
+        None,
+        content_type,
+        None,
+    )
+    .await
 }
 
 // A real request's `Content-Length` reflects what a client actually sent; a non-empty body here carries the
@@ -620,6 +645,7 @@ async fn send_ex(
     origin: Option<&str>,
     host: Option<&str>,
     content_type: Option<&str>,
+    forwarded_proto: Option<&str>,
 ) -> Response<Body> {
     let mut request = Request::builder().method(method).uri(path);
     if let Some(content_type) = content_type {
@@ -636,6 +662,9 @@ async fn send_ex(
     }
     if let Some(host) = host {
         request = request.header("host", host);
+    }
+    if let Some(proto) = forwarded_proto {
+        request = request.header("x-forwarded-proto", proto);
     }
     app.clone()
         .oneshot(request.body(Body::from(body.to_owned())).unwrap())
@@ -654,27 +683,16 @@ fn fixture_identity() -> Identity {
 async fn app_with(
     identity: Option<Identity>,
     upstream_uuid: &str,
-    origin: Option<String>,
+    tls: bool,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    // Every builder but the plain-with-origin one ties this to whether an origin is pinned.
-    let plain_http = origin.is_none();
-    build_app(
-        identity,
-        upstream_uuid,
-        origin,
-        plain_http,
-        store,
-        USAGE_TTL,
-    )
-    .await
+    build_app(identity, upstream_uuid, tls, store, USAGE_TTL).await
 }
 
 async fn build_app(
     identity: Option<Identity>,
     upstream_uuid: &str,
-    origin: Option<String>,
-    plain_http: bool,
+    tls: bool,
     store: Option<Arc<Store>>,
     usage_ttl: Duration,
 ) -> Parts {
@@ -899,8 +917,7 @@ async fn build_app(
             admin: Secret::new("admin-secret"),
         },
         clock,
-        plain_http,
-        origin,
+        tls,
         vault: vault.clone(),
         started_at: NOW,
         router: router_handle.clone(),

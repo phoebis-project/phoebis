@@ -1,16 +1,18 @@
 name: Release
 on:
-  # A pull request that touches the image's inputs builds amd64 without pushing, so a broken Dockerfile is caught
-  # before a release runs it.
+  # A pull request that touches the image's or the static binary's inputs builds amd64 without pushing, so a broken
+  # Dockerfile or cross build is caught before a release runs it.
   pull_request:
     paths:
       - .dockerignore
       - .github/workflows/release.yml
       - Cargo.lock
       - Cargo.toml
+      - Cross.toml
       - Dockerfile
       - crates/**
       - deploy/**
+      - rust-toolchain.toml
       - web/**
       - "!web/e2e/**"
       - "!web/smoke/**"
@@ -47,8 +49,8 @@ jobs:
             echo "Cargo.toml has no single workspace version"
             exit 1
           fi
-          amd64='{"platform":"linux/amd64","runner":"ubuntu-24.04","slug":"linux-amd64"}'
-          arm64='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","slug":"linux-arm64"}'
+          amd64='{"platform":"linux/amd64","runner":"ubuntu-24.04","slug":"linux-amd64","target":"x86_64-unknown-linux-musl"}'
+          arm64='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","slug":"linux-arm64","target":"aarch64-unknown-linux-musl"}'
           # ghcr.io accepts lower-case names only; GITHUB_REPOSITORY keeps the owner's spelling.
           registry_image="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "registry_image=$registry_image" >> "$GITHUB_OUTPUT"
@@ -137,6 +139,77 @@ jobs:
           name: image-linux-amd64
           path: /tmp/phoebis.tar
           retention-days: 1
+  binary:
+    needs: guard
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.guard.outputs.matrix) }}
+    # Both triples build on the amd64 runner: cross's target images are amd64, and cross compiling the arm64 asset
+    # there is what the tool is for; the smoke below runs each asset on its own platform.
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: read
+    env:
+      BORING_BSSL_RUST_CPPLIB: stdc++
+      PHOEBIS_SKIP_UI_BUILD: "1"
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version-file: web/.nvmrc
+      - run: cd web && npm ci --no-audit --no-fund && npm run build
+      - run: rustup toolchain install && rustup target add ${{ matrix.target }}
+      - run: cargo install cross --locked --version 0.2.5
+      - run: cross build --release --locked --target ${{ matrix.target }} --package phoebis-router
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: binary-${{ matrix.slug }}
+          path: target/${{ matrix.target }}/release/phoebis
+          retention-days: 1
+  binary-smoke:
+    needs: [guard, binary]
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJSON(needs.guard.outputs.matrix) }}
+    runs-on: ${{ matrix.runner }}
+    permissions:
+      contents: read
+    env:
+      TARGET: ${{ matrix.target }}
+      VERSION: ${{ needs.guard.outputs.version }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: binary-${{ matrix.slug }}
+      - run: |
+          chmod 0755 phoebis
+          printed=$(./phoebis --version)
+          [ "$printed" = "phoebis $VERSION" ] || { echo "--version printed '$printed', not 'phoebis $VERSION'"; exit 1; }
+          linked=$(file ./phoebis)
+          case "$linked" in
+            *'statically linked'*|*'static-pie linked'*) ;;
+            *) echo "the binary is not static: $linked"; exit 1;;
+          esac
+          if ldd ./phoebis 2>&1 | grep -qv 'not a dynamic executable\|statically linked'; then
+            echo "ldd found a dynamic dependency"; ldd ./phoebis; exit 1
+          fi
+          tmp=$(mktemp -d)
+          ./phoebis init --non-interactive --config "$tmp/config.yaml" > "$tmp/secret.env"
+          ./phoebis check-config --config "$tmp/config.yaml"
+          asset="phoebis-$VERSION-$TARGET"
+          mkdir "$asset" && cp phoebis LICENSE "$asset/"
+          tar -czf "$asset.tar.gz" "$asset"
+          sha256sum "$asset.tar.gz" | tee "$asset.tar.gz.sha256"
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          if-no-files-found: error
+          name: asset-${{ matrix.slug }}
+          path: phoebis-*.tar.gz
+          retention-days: 1
   smoke:
     needs: [guard, build]
     runs-on: ubuntu-24.04
@@ -213,6 +286,37 @@ jobs:
           asset=$(printf '%s' "$shell" | grep -o '/assets/[^"'"'"' ]*' | head -1)
           [ -n "$asset" ] || { echo "the console page references no /assets/ path"; exit 1; }
           curl -fsSo /dev/null "http://127.0.0.1:18081$asset" || { echo "console asset $asset was not served"; exit 1; }
+          # The container's environment carries the secret, so this smokes the bearer path, the five reads and the screen.
+          docker exec phoebis-smoke phoebis status > "$tmp/status.txt" || { cat "$tmp/status.txt"; echo "status exited non-zero"; exit 1; }
+          head -n 1 "$tmp/status.txt" | grep -q ', ready$' || { cat "$tmp/status.txt"; echo "status's first line does not end in ready"; exit 1; }
+          # The two copies and the manifest land on the volume; backup creates the missing parent.
+          docker exec phoebis-smoke phoebis backup --to /var/lib/phoebis/backups/smoke
+          # A second, short container with a certificate pair on the admin listener, generated here: the image must
+          # terminate TLS with an operator's pair and serve the console shell to a client that trusts that certificate.
+          openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:P-256 -nodes -days 2 -subj /CN=localhost \
+            -addext subjectAltName=DNS:localhost,IP:127.0.0.1 -keyout "$tmp/admin.key" -out "$tmp/admin.pem" 2>/dev/null
+          chmod 0444 "$tmp/admin.pem" "$tmp/admin.key"   # uid 65532 reads both; the start warns about the key's mode
+          awk '{print} /^  listen: 0.0.0.0:8081$/ && !done {print "  tls:"; \
+            print "    cert_file: /etc/phoebis/admin.pem"; print "    key_file: /etc/phoebis/admin.key"; done=1}' \
+            deploy/config.container.yaml > "$tmp/config.tls.yaml"
+          docker volume create phoebis-smoke-tls
+          docker run -d --name phoebis-smoke-tls --env-file "$tmp/phoebis.env" -p 127.0.0.1:18082:8081 \
+            -v "$tmp/config.tls.yaml:/etc/phoebis/config.yaml:ro" \
+            -v "$tmp/admin.pem:/etc/phoebis/admin.pem:ro" -v "$tmp/admin.key:/etc/phoebis/admin.key:ro" \
+            -v "$tmp/storage.key:/run/secrets/router-storage-key:ro" \
+            -v phoebis-smoke-tls:/var/lib/phoebis "$REF"
+          status=starting
+          for _ in $(seq 1 30); do
+            status=$(docker inspect -f '{{.State.Health.Status}}' phoebis-smoke-tls)
+            [ "$status" = healthy ] && break
+            sleep 1
+          done
+          [ "$status" = healthy ] || { docker logs phoebis-smoke-tls; echo "the TLS container is '$status' after 30 s"; exit 1; }
+          tls_shell=$(curl --cacert "$tmp/admin.pem" -fsS https://127.0.0.1:18082/)
+          case "$tls_shell" in
+            *'<!-- phoebis-ui placeholder -->'*|'') echo "the TLS listener did not serve the console shell"; exit 1;;
+          esac
+          docker stop -t 40 phoebis-smoke-tls && docker rm phoebis-smoke-tls && docker volume rm phoebis-smoke-tls
           started=$(date +%s)
           docker stop -t 40 phoebis-smoke
           stopped=$(( $(date +%s) - started ))
@@ -221,10 +325,11 @@ jobs:
           echo "healthy, and stopped in ${stopped}s"
   publish:
     if: needs.guard.outputs.push == 'true'
-    needs: [guard, smoke]
+    needs: [guard, smoke, binary-smoke]
     runs-on: ubuntu-24.04
+    # The one job that writes the repository's contents: it uploads the release's archives.
     permissions:
-      contents: read
+      contents: write
       packages: write
     env:
       IMAGE: ${{ needs.guard.outputs.registry_image }}
@@ -235,6 +340,11 @@ jobs:
           merge-multiple: true
           path: ${{ runner.temp }}/digests
           pattern: digest-*
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          merge-multiple: true
+          path: ${{ runner.temp }}/assets
+          pattern: asset-*
       - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
       - uses: docker/login-action@dbcb813823bdd20940b903addbd779551569679f # v4.6.0
         with:
@@ -266,3 +376,9 @@ jobs:
           docker buildx imagetools inspect "$IMAGE:$VERSION" --format '{{json .Manifest}}' \
             | jq -e '[.manifests[] | select(.platform.os == "linux") | .platform.architecture] | unique
                      | contains(["amd64", "arm64"])'
+      - env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        working-directory: ${{ runner.temp }}/assets
+        run: |
+          sha256sum phoebis-*.tar.gz > SHA256SUMS
+          gh release upload "$VERSION" phoebis-*.tar.gz SHA256SUMS --clobber --repo "$GITHUB_REPOSITORY"

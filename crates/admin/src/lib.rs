@@ -10,6 +10,7 @@ mod attention;
 mod dashboard;
 mod keepalive;
 mod keys;
+mod ledger;
 mod live;
 mod models;
 mod pools;
@@ -58,10 +59,9 @@ pub struct AdminState {
     pub sessions: Arc<Sessions>,
     pub secrets: AdminSecrets,
     pub clock: Clock,
-    pub plain_http: bool,
-    /// The admin origin every mutation's `Origin` header is compared against. `None` only under `plain_http`,
-    /// which is the one mode that may leave it unset.
-    pub origin: Option<String>,
+    /// Whether the admin listener terminates TLS, which decides the session cookie's `Secure` flag and makes a
+    /// presented `Origin` need `https://`.
+    pub tls: bool,
     pub vault: Arc<PairingVault>,
     /// Unix milliseconds this state was built, which `GET /system` reports as uptime.
     pub started_at: i64,
