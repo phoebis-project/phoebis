@@ -243,7 +243,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'reauth_required', 'funding_required', 'refresh_failed', 'ledger_record_parked', 'poll_backoff'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff'] as const;
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
 
 /** One condition that holds now, as `GET /admin/attention` answers it. */
@@ -259,7 +259,8 @@ export interface AttentionItem {
   since: string;
   /**
    * An account or a pool by id and label, a client version as both, or one of the router's own components as both:
-   * the ledger or the routing state writer, or `-` for a parked record without a pool.
+   * the ledger or the routing state writer, a listener's pair by its key (`proxy.tls`, `admin.tls`), or `-` for a
+   * parked record without a pool.
    */
   subject: { id: string; label: string; type: 'account' | 'client' | 'pool' | 'router' };
 }

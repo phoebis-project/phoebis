@@ -882,6 +882,7 @@ async fn build_app(
         ledger: Some(ledger.clone()),
         router: router_handle.clone(),
         store: store.clone(),
+        tls: None,
         usage: Some(usage.clone()),
     });
     let settings = Arc::new(SettingsView {

@@ -2,7 +2,7 @@ import type { AttentionItem } from '@/api/types';
 import { accountById } from './accounts';
 import { KEYS, POOLS } from './pools';
 import { ATTENTION_ITEM_SAMPLE } from './samples';
-import { DAY, HOUR, MINUTE, ago } from './time';
+import { DAY, HOUR, MINUTE, NOW, ago } from './time';
 
 const ms = (at: string | null | undefined) => (at ? Date.parse(at) : null);
 
@@ -16,10 +16,11 @@ const ofAccount = (id: string): Pick<AttentionItem, 'link' | 'pools' | 'subject'
 const secondaryPoll = accountById.get('secondary')?.usage?.poll ?? null;
 
 /**
- * One item per kind on the story's accounts, pools and keys, in the route's order: codex exhausted since the runner's
- * key last asked it, a client build refused on the laptop key, the routing state writer keeping its writes in memory,
- * legacy's lapsed credential, the Overflow workspace out of funding as its account reads, legacy's refreshes failing, a
- * priced record of codex's one member parked in the ledger file, and the backoff secondary's poll is in.
+ * One item per kind but a failed certificate reload, on the story's accounts, pools, keys and proxy listener, in the
+ * route's order: codex exhausted since the runner's key last asked it, a client build refused on the laptop key, the
+ * routing state writer keeping its writes in memory, legacy's lapsed credential, the Overflow workspace out of funding
+ * as its account reads, legacy's refreshes failing, the proxy listener's certificate 12 days from its end, a priced
+ * record of codex's one member parked in the ledger file, and the backoff secondary's poll is in.
  */
 export const ATTENTION: AttentionItem[] = [
   {
@@ -69,6 +70,15 @@ export const ATTENTION: AttentionItem[] = [
     detail: { account: 'legacy', failures: 5, last_error: 'refresh_token rejected: invalid_grant', outcome: 'failed' },
     kind: 'refresh_failed',
     since: ago(2 * DAY + 2 * HOUR + 50 * MINUTE),
+  },
+  {
+    ...ATTENTION_ITEM_SAMPLE,
+    detail: { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires: NOW + 12 * DAY },
+    kind: 'certificate_expiring',
+    link: null,
+    pools: [],
+    since: ago(18 * DAY),
+    subject: { id: 'proxy.tls', label: 'proxy.tls', type: 'router' },
   },
   {
     ...ATTENTION_ITEM_SAMPLE,

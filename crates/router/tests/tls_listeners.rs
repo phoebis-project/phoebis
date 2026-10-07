@@ -1,7 +1,8 @@
 //! Both public listeners terminate TLS from an operator's certificate pair: the router started in-process with a
 //! pair the test generates and trusts from its own clients alone, `phoebis health` probing its proxy listener over
 //! TLS, a pair the start cannot serve refused before any port is taken, and `POST /admin/tls/reload` putting a new pair
-//! in front of the next connection or keeping the old one when the new one does not load.
+//! in front of the next connection or keeping the old one when the new one does not load, with an attention item until
+//! a reload lands.
 
 use std::path::Path;
 use std::sync::Mutex;
@@ -14,6 +15,7 @@ use fake_upstream::{
 use hyper::Method;
 use phoebis_router::admin_client::{AdminClient, Answer, Common};
 use phoebis_router::config::Config;
+use phoebis_router::status;
 use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
@@ -267,8 +269,8 @@ async fn a_key_that_does_not_match_the_certificate_refuses_the_start_naming_the_
     up.shutdown().await;
 }
 
-/// `POST /admin/tls/reload` through the subcommands' admin client under the bearer, on the plain admin listener.
-async fn reload(admin_port: u16, config: &Path) -> Answer {
+/// The subcommands' admin client under the bearer, on the plain admin listener.
+fn admin_client(admin_port: u16, config: &Path) -> AdminClient {
     let common = Common {
         ca: None,
         json: false,
@@ -276,14 +278,47 @@ async fn reload(admin_port: u16, config: &Path) -> Answer {
         timeout: 10,
         url: Some(format!("http://127.0.0.1:{admin_port}")),
     };
-    let client = {
-        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
-        AdminClient::from_flags(&common, config).unwrap()
-    };
-    client
+    let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    AdminClient::from_flags(&common, config).unwrap()
+}
+
+/// `POST /admin/tls/reload` through the admin client.
+async fn reload(admin_port: u16, config: &Path) -> Answer {
+    admin_client(admin_port, config)
         .call(Method::POST, "/admin/tls/reload", None)
         .await
         .unwrap_or_else(|error| panic!("the reload call failed: {error}"))
+}
+
+/// The items `GET /admin/attention` answers, and the `attention:` line of the `status` screen over the same router.
+async fn attention(admin_port: u16, config: &Path) -> (Vec<serde_json::Value>, String) {
+    let client = admin_client(admin_port, config);
+    let answer = client
+        .call(Method::GET, "/admin/attention", None)
+        .await
+        .unwrap_or_else(|error| panic!("the attention call failed: {error}"));
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let reads = status::read(&client, None, SETTLE).await;
+    let listeners = status::Listeners {
+        admin: format!("http://127.0.0.1:{admin_port}"),
+        certificates: Vec::new(),
+        metrics: None,
+        proxy: None,
+    };
+    let screen = status::render(
+        &reads,
+        &listeners,
+        "0.1.0",
+        jiff::Timestamp::now(),
+        &jiff::tz::TimeZone::UTC,
+        false,
+    );
+    let line = screen
+        .lines()
+        .find(|line| line.starts_with("  attention: "))
+        .unwrap_or_else(|| panic!("no attention line:\n{screen}"))
+        .to_owned();
+    (answer.body["items"].as_array().unwrap().clone(), line)
 }
 
 /// A connection to the proxy listener whose handshake finished under a client trusting `pair`'s CA alone.
@@ -442,10 +477,48 @@ async fn a_reload_with_a_mismatched_key_keeps_the_old_pair_serving() {
         listeners[1],
         json!({"listener": "admin", "serving": "plain"})
     );
+    let (items, line) = attention(admin_port, &dir.path().join("config.yaml")).await;
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(
+        (
+            &items[0]["kind"],
+            &items[0]["subject"],
+            &items[0]["link"],
+            &items[0]["pools"],
+            &items[0]["detail"]["error"],
+        ),
+        (
+            &json!("certificate_reload_failed"),
+            &json!({"type": "router", "id": "proxy.tls", "label": "proxy.tls"}),
+            &json!(null),
+            &json!([]),
+            &json!(error),
+        ),
+        "the refused reload raises the item on the listener's subject"
+    );
+    assert!(
+        line.starts_with("  attention: certificate_reload_failed proxy.tls since "),
+        "{line}"
+    );
 
     let mut next = handshaken(proxy_port, &old).await;
     assert_eq!(served_not_after(&next), not_after(&old));
     assert_ready(&mut next).await;
+
+    std::fs::write(&key, &old.key_pem).unwrap();
+    let answer = reload(admin_port, &dir.path().join("config.yaml")).await;
+    assert_eq!(
+        answer.body["listeners"][0]["reloaded"],
+        json!(true),
+        "{}",
+        answer.body
+    );
+    let (items, line) = attention(admin_port, &dir.path().join("config.yaml")).await;
+    assert_eq!(
+        (items.len(), line.as_str()),
+        (0, "  attention: none"),
+        "a reload that lands clears the item: {items:?}"
+    );
 
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();

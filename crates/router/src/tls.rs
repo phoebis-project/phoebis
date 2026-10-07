@@ -12,6 +12,7 @@ use boring::pkey::PKey;
 use boring::ssl::{select_next_proto, AlpnError, SslAcceptor, SslMethod};
 use boring::x509::X509;
 use phoebis_admin::{Reloaded, TlsReload};
+use phoebis_attention::TlsPairs;
 use phoebis_relay::LiveAcceptor;
 
 use crate::config::ListenerTls;
@@ -523,6 +524,22 @@ impl TlsReload for LiveSet {
     }
 }
 
+impl TlsPairs for LiveSet {
+    fn pairs(&self) -> Vec<phoebis_attention::PairFacts> {
+        self.facts()
+            .into_iter()
+            .map(|pair| phoebis_attention::PairFacts {
+                key: pair.key.to_owned(),
+                cert_file: pair.cert_file,
+                key_file: pair.key_file,
+                not_after_ms: pair.not_after_ms,
+                loaded_at: pair.loaded_at,
+                failed: pair.failed,
+            })
+            .collect()
+    }
+}
+
 /// Unix milliseconds as a UTC timestamp for a log line, or the raw figure when it is out of range.
 fn instant(ms: i64) -> String {
     jiff::Timestamp::from_millisecond(ms).map_or_else(|_| ms.to_string(), |at| at.to_string())
@@ -694,6 +711,47 @@ mod tests {
             "{refused:?}"
         );
         assert_eq!(set.facts()[0].loaded_at, 2_000);
+    }
+
+    #[test]
+    fn the_attention_reader_reads_each_pair_with_its_key_its_end_and_its_failed_reload() {
+        assert_eq!(
+            i64::from(EXPIRY_WARNING_DAYS),
+            phoebis_attention::CERTIFICATE_WARNING_DAYS,
+            "the dashboard warns from the day check-config and status do"
+        );
+        let dir = tempfile::tempdir().unwrap();
+        let not_after = jiff::Timestamp::now().as_second() + 90 * 86_400;
+        let (cert, key) =
+            generate_pair_valid_until(&["localhost"], not_after).write_to(dir.path(), "proxy");
+        let set = LiveSet::new();
+        set.fill(vec![
+            (
+                "proxy",
+                Some(Live::new(
+                    "proxy.tls",
+                    load_pair("proxy.tls", &cert, &key).unwrap(),
+                    1_000,
+                )),
+            ),
+            ("admin", None),
+        ]);
+        std::fs::write(&key, generate_pair(&["localhost"]).key_pem).unwrap();
+        let refused = set.reload(2_000);
+        let Some(("proxy", Reloaded::Refused { error })) = refused.first().cloned() else {
+            panic!("{refused:?}");
+        };
+        assert_eq!(
+            TlsPairs::pairs(&*set),
+            [phoebis_attention::PairFacts {
+                key: "proxy.tls".to_owned(),
+                cert_file: cert,
+                key_file: key,
+                not_after_ms: not_after * 1_000,
+                loaded_at: 1_000,
+                failed: Some((2_000, error)),
+            }]
+        );
     }
 
     #[test]

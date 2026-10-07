@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ATTENTION_KIND_VALUES, ATTENTION_LABEL, ATTENTION_REFRESH_MS, ATTENTION_TONE, attentionDetail, attentionHref, attentionTitle, createAttentionPoll, fmtAbsolute } from './dist/api.js';
+import { ATTENTION_KIND_VALUES, ATTENTION_LABEL, ATTENTION_REFRESH_MS, ATTENTION_TONE, attentionDetail, attentionHref, attentionTitle, createAttentionPoll, decodeAttention, fmtAbsolute } from './dist/api.js';
 
 const NOW = Date.parse('2026-09-18T12:00:00.000Z');
 const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], since: '2026-09-18T10:00:00.000Z', subject: { id: kind, label: kind, type: 'account' }, ...over });
@@ -8,11 +8,19 @@ const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], si
 const flush = () => new Promise((resolve) => setImmediate(resolve));
 
 test('the attention kinds rank worst first, the order the route answers in', () => {
-  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'reauth_required', 'funding_required', 'refresh_failed', 'ledger_record_parked', 'poll_backoff']);
+  assert.deepEqual([...ATTENTION_KIND_VALUES], ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff']);
+});
+
+test("a listener's two certificate kinds decode as themselves, never as the worst kind", () => {
+  const router = { link: null, pools: [], since: 1_000_000, subject: { id: 'proxy.tls', label: 'proxy.tls', type: 'router' } };
+  const kinds = ['certificate_expiring', 'certificate_reload_failed'].map((kind) => decodeAttention({ ...router, detail: {}, kind }).kind);
+  assert.deepEqual(kinds, ['certificate_expiring', 'certificate_reload_failed']);
 });
 
 test('each attention kind has its word and its tone, a client drift serious', () => {
   assert.deepEqual(ATTENTION_LABEL, {
+    certificate_expiring: 'Certificate expiring',
+    certificate_reload_failed: 'Certificate reload failed',
     client_drift: 'Client drift',
     funding_required: 'Funding required',
     ledger_record_parked: 'Priced record parked',
@@ -22,7 +30,7 @@ test('each attention kind has its word and its tone, a client drift serious', ()
     refresh_failed: 'Credential refresh failed',
     writer_degraded: 'State writer degraded',
   });
-  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'critical', 'serious', 'critical', 'serious', 'warning']);
+  assert.deepEqual(ATTENTION_KIND_VALUES.map((kind) => ATTENTION_TONE[kind]), ['critical', 'serious', 'serious', 'serious', 'critical', 'serious', 'critical', 'warning', 'serious', 'warning']);
 });
 
 test('an item opens the page where its condition is fixed, and an item without a link opens nothing', () => {
@@ -53,10 +61,43 @@ test("a row reads each kind's detail as one sentence", () => {
   assert.equal(sentence('ledger_record_parked', { accounts: [], count: 2, pool: 'codex' }), '2 priced records parked, landing at the next start or replay', 'a record that names no account adds none');
 });
 
+test("a listener's certificate items read the listener, the file, the date and what to do", () => {
+  const listener = (kind, id, detail) => attentionDetail(item(kind, { detail, subject: { id, label: id, type: 'router' } }), NOW);
+  const ahead = NOW + 12 * 86_400_000;
+  const behind = NOW - 3 * 86_400_000;
+  const date = (ms) => fmtAbsolute(new Date(ms).toISOString());
+  assert.equal(
+    listener('certificate_expiring', 'proxy.tls', { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires: ahead }),
+    `The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (${date(ahead)}). Replace the pair and run phoebis tls reload.`,
+  );
+  assert.equal(
+    listener('certificate_expiring', 'admin.tls', { cert_file: '/etc/phoebis/admin.pem', days_left: -3, expires: behind }),
+    `The admin listener's certificate /etc/phoebis/admin.pem expired 3 days ago (${date(behind)}). Replace the pair and run phoebis tls reload.`,
+    'a leaf past its end counts the days since',
+  );
+  assert.equal(
+    listener('certificate_expiring', 'proxy.tls', { cert_file: '/etc/phoebis/proxy.pem', days_left: 1, expires: NOW + 86_400_000 }),
+    `The proxy listener's certificate /etc/phoebis/proxy.pem expires in 1 day (${date(NOW + 86_400_000)}). Replace the pair and run phoebis tls reload.`,
+  );
+  const loaded = NOW - 40 * 86_400_000;
+  assert.equal(
+    listener('certificate_reload_failed', 'proxy.tls', {
+      cert_file: '/etc/phoebis/proxy.pem',
+      error: 'proxy.tls.key_file /etc/phoebis/proxy.key: does not match the certificate in /etc/phoebis/proxy.pem',
+      key_file: '/etc/phoebis/proxy.key',
+      serving_since: loaded,
+    }),
+    `The proxy listener's pair did not load: proxy.tls.key_file /etc/phoebis/proxy.key: does not match the certificate in /etc/phoebis/proxy.pem. The router keeps serving the pair it loaded at ${date(loaded)}.`,
+  );
+});
+
 test("a badge's title lists the detail's members, an instant read as one, then the age", () => {
   const backoff = item('poll_backoff', { detail: { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, since: new Date(NOW - 42 * 60_000).toISOString() });
   assert.equal(attentionTitle(backoff, NOW), ['account: secondary', `backoff_since: ${fmtAbsolute(new Date(NOW - 42 * 60_000).toISOString())}`, 'rate_limited_in_a_row: 6', 'started 42m ago'].join('\n'));
   assert.equal(attentionTitle(item('pool_exhausted', { detail: { pool: 'codex', key: 'ci' } }), NOW), ['key: ci', 'pool: codex', 'started 2h 0m ago'].join('\n'), 'the members read in name order');
+  const expires = NOW + 12 * 86_400_000;
+  const expiring = item('certificate_expiring', { detail: { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires }, since: new Date(NOW - 18 * 86_400_000).toISOString() });
+  assert.equal(attentionTitle(expiring, NOW), ['cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', `expires: ${fmtAbsolute(new Date(expires).toISOString())}`, 'started 18d 0h ago'].join('\n'), "a certificate's end reads as an instant");
 });
 
 test('one poll serves every reader, reads again on its schedule, and keeps the last list through a failed read', async (t) => {

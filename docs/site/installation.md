@@ -647,6 +647,11 @@ The router keeps the pair it was serving.`, or `proxy: plain HTTP, nothing to re
 was refused, the secret was refused, the admin listener did not answer or the file does not load, and 2 for a usage
 error.
 
+The dashboard raises two attention items for a listener's pair: `certificate_expiring` while the loaded leaf is within
+30 days of its end (past it included), and `certificate_reload_failed` from a reload the loader refused until a later
+reload lands or the router restarts. Both read the pair the router serves, so a file replaced on disk and not yet
+reloaded changes neither. `check-config` and `status` read the files.
+
 `check-config` and the start refuse a `tls` value that is not the mapping with:
 
 - `proxy.tls: must be a mapping with cert_file and key_file`, under `the configuration is not valid YAML`, for a word

@@ -282,8 +282,9 @@ sudo certbot certonly -d phoebis.example.com --deploy-hook '
   phoebis tls reload --config /etc/phoebis/config.yaml'
 ```
 
-A pair that fails to load keeps the old pair live and the command exits 1 with the loader's line. The next reload
-clears it.
+A pair that fails to load keeps the old pair live and the command exits 1 with the loader's line. The dashboard shows
+the failure as `certificate_reload_failed` until the next reload clears it, and `certificate_expiring` 30 days before a
+loaded leaf's end.
 
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
 own transaction. The registry's migrations may drop or rebuild a table, and a ledger migration can rebuild a table

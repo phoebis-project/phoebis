@@ -1,7 +1,7 @@
-//! The eight conditions, read fresh on every call: the account states and the pools from the registry, the refresh
+//! The ten conditions, read fresh on every call: the account states and the pools from the registry, the refresh
 //! runs from the store, the parked records and the ledger's degraded state from the ledger, the routing state
-//! writer's from the router, the poll's standing from the usage service, and the exhaustions and drift refusals from
-//! the request outcomes the bus arm keeps.
+//! writer's and the listeners' pairs from the router, the poll's standing from the usage service, and the exhaustions
+//! and drift refusals from the request outcomes the bus arm keeps.
 
 use std::collections::{HashMap, HashSet};
 
@@ -14,10 +14,16 @@ use phoebis_store::{
 };
 use serde_json::json;
 
-use crate::AttentionError;
+use crate::{AttentionError, PairFacts};
 
 /// How long after a run's first 429 the poll backoff condition holds, so a single 429 or a short run never reads 1.
 pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
+
+/// A loaded leaf this many whole days or fewer from its `not_after` holds `certificate_expiring`: the router's
+/// `EXPIRY_WARNING_DAYS`, which `check-config` and `status` warn under, carried here since this crate cannot name it.
+pub const CERTIFICATE_WARNING_DAYS: i64 = 30;
+
+const DAY_MS: i64 = 86_400_000;
 
 /// How many of a holder's newest settled refresh attempts one read walks: two make the condition, and the rest date
 /// the run's start as far back as the read reaches, which bounds the scan a scrape pays per account.
@@ -44,16 +50,20 @@ const RELEASE_VERSION_MAX_BYTES: usize = 32;
 
 /// Declared worst first, so the derived order is the ranking: a pool that serves nothing, a client build refused in
 /// every pool, a writer that cannot persist what the router decides (a degraded ledger also holds budgeted members
-/// back), an account that serves nothing until the operator acts, a credential about to lapse, priced records the
-/// ledger file keeps until the next start or a replay lands them, windows that read stale.
+/// back), a listener serving a pair whose replacement did not load (the next start would refuse the files as they
+/// stand), an account that serves nothing until the operator acts, an account's credential about to lapse, the
+/// router's own certificate about to lapse, priced records the ledger file keeps until the next start or a replay
+/// lands them, windows that read stale.
 #[derive(Clone, Copy, Debug, Hash, PartialEq, Eq, PartialOrd, Ord)]
 pub enum Kind {
     PoolExhausted,
     ClientDrift,
     WriterDegraded,
+    CertificateReloadFailed,
     ReauthRequired,
     FundingRequired,
     RefreshFailed,
+    CertificateExpiring,
     LedgerRecordParked,
     PollBackoff,
 }
@@ -64,9 +74,11 @@ impl Kind {
             Kind::PoolExhausted => "pool_exhausted",
             Kind::ClientDrift => "client_drift",
             Kind::WriterDegraded => "writer_degraded",
+            Kind::CertificateReloadFailed => "certificate_reload_failed",
             Kind::ReauthRequired => "reauth_required",
             Kind::FundingRequired => "funding_required",
             Kind::RefreshFailed => "refresh_failed",
+            Kind::CertificateExpiring => "certificate_expiring",
             Kind::LedgerRecordParked => "ledger_record_parked",
             Kind::PollBackoff => "poll_backoff",
         }
@@ -78,8 +90,8 @@ pub enum SubjectKind {
     Account,
     Client,
     Pool,
-    /// One of the process's own components: the ledger or the routing state writer, or `-` for a parked record
-    /// served under no pool.
+    /// One of the process's own components: the ledger or the routing state writer, a listener's pair by its key
+    /// (`proxy.tls`, `admin.tls`), or `-` for a parked record served under no pool.
     Router,
 }
 
@@ -366,7 +378,8 @@ pub(crate) fn refresh_runs(
 /// this one function, so a scrape and the dashboard never disagree. The caller reads the registry's `accounts` and
 /// their `refresh_runs`, and the parked rows, before it takes the reader's state, and a read that fails fails the
 /// whole answer, since a series answered without its evidence could clear a real alarm. `parked` is `None` where no
-/// ledger is built, and `ledger_record_parked` then has no series.
+/// ledger is built, and `ledger_record_parked` then has no series. `pairs` is `None` where no listener is built, and
+/// neither certificate kind then has a series.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn conditions(
     state: &mut ReaderState,
@@ -375,6 +388,7 @@ pub(crate) fn conditions(
     router: &RouterHandle,
     ledger_degraded: bool,
     parked: Option<&[ParkedSummary]>,
+    pairs: Option<&[PairFacts]>,
     usage: Option<&UsageService>,
     now: i64,
 ) -> Result<Vec<Condition>, AttentionError> {
@@ -417,6 +431,34 @@ pub(crate) fn conditions(
                 now,
             ),
             json!({ "component": component }),
+        ));
+    }
+    // The pairs the router serves rather than the files on disk: a pair replaced and not yet reloaded changes neither
+    // condition, and the operator who reads the files has `status` and `check-config`.
+    for pair in pairs.unwrap_or_default() {
+        let cert_file = pair.cert_file.display().to_string();
+        out.push(condition_for(
+            Kind::CertificateReloadFailed,
+            Subject::router(&pair.key),
+            pair.failed.is_some(),
+            pair.failed.as_ref().map(|(at, _)| *at),
+            json!({
+                "cert_file": cert_file,
+                "error": pair.failed.as_ref().map(|(_, line)| line),
+                "key_file": pair.key_file.display().to_string(),
+                "serving_since": pair.loaded_at,
+            }),
+        ));
+        // Counted from this read's clock rather than at the load, so a pair loaded with time to spare raises the
+        // condition when its day comes without a reload. Dated from `not_after`, so a restart keeps the date.
+        let days_left = (pair.not_after_ms - now).div_euclid(DAY_MS);
+        let expiring = days_left <= CERTIFICATE_WARNING_DAYS;
+        out.push(condition_for(
+            Kind::CertificateExpiring,
+            Subject::router(&pair.key),
+            expiring,
+            expiring.then_some(pair.not_after_ms - CERTIFICATE_WARNING_DAYS * DAY_MS),
+            json!({ "cert_file": cert_file, "days_left": days_left, "expires": pair.not_after_ms }),
         ));
     }
     if let Some(parked) = parked {

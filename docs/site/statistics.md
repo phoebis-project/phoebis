@@ -497,9 +497,11 @@ at the first read.
 | `client_drift` | the client version | an inference request from that version is relayed, or a re-pinned build starts |
 | `writer_degraded` | the ledger | a batch lands and the spend refresh after it succeeds |
 | `writer_degraded` | the routing state writer | the backlog drains |
+| `certificate_reload_failed` | the listener key | a reload lands or the router restarts |
 | `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
 | `funding_required` | the Anthropic-key account | the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
+| `certificate_expiring` | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | the pool, or `-` for a record without one | the next start or replay lands the parked rows |
 | `poll_backoff` | the polled account | a poll answers clean |
 
@@ -525,6 +527,12 @@ neither writer records when it degraded, so the item dates from the first read o
 nothing. While the ledger's holds, routing treats every budgeted member's spend as unknown
 ([routing](routing.md#pools)).
 
+**`certificate_reload_failed`** holds from a `phoebis tls reload` whose pair the loader refused until a later reload
+lands or the router restarts, and the listener keeps serving the pair it had
+([TLS on the listeners](installation.md#tls-on-the-listeners)). The subject is the listener key, `proxy.tls` or
+`admin.tls`, and the item opens nothing. It dates from the refused reload, and the detail names the two files, the
+loader's line and when the pair still served was loaded.
+
 **`reauth_required`** holds while the account's state is `reauth_required`, read from the registry
 ([account states](pairing.md#account-states)). The registry records no time for a state change, so the item dates from
 the first read of this process that saw the state. The detail names the account and its label.
@@ -536,6 +544,11 @@ over the account's credit balance; it is read from the registry and dated and de
 a run read from the registry. A refresh that commits ends the run, and so does one a newer credential superseded, as a
 re-pairing settles a refresh still pending; a pairing records its own committed attempt, so it ends the run even when
 nothing was pending. The detail counts the run's failures and gives the newest attempt's outcome and error.
+
+**`certificate_expiring`** holds while the leaf a listener serves is within 30 days of its end, past the end included.
+It reads the pair the router loaded rather than the files, so a pair replaced on disk counts once `phoebis tls reload`
+loads it. The subject is the listener key, and the item opens nothing. It dates from 30 days before the leaf's end, so a
+restart keeps the date, and the detail names the certificate file, the end and the whole days left, negative once past.
 
 **`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own; each is
 tried again once at the next start or by `phoebis ledger replay-parked`, and the condition clears when the table

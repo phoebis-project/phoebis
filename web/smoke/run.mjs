@@ -253,7 +253,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   };
   results.push({ name: '/ the attention line runs on one schedule, registered as the dashboard mounts', ok: ticks.length === 1, missing: [`intervals at ${ATTENTION_REFRESH_MS} ms: ${ticks.length}`] });
   // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits.
-  const members = (title) => title.split('\n').slice(0, -1).map((l) => l.replace(/^(backoff_since|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
+  const members = (title) => title.split('\n').slice(0, -1).map((l) => l.replace(/^(backoff_since|expires|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
   const read = badges().map((b) => [b.text, b.tone, b.href, members(b.title)]);
   const want = [
     ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
@@ -262,6 +262,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
     ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['account: legacy', 'label: legacy']],
     ['Funding required: Overflow workspace', 'badge--serious', '/accounts/overflow', ['account: overflow', 'label: Overflow workspace']],
     ['Credential refresh failed: legacy', 'badge--critical', '/accounts/legacy', ['account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    ['Certificate expiring: proxy.tls', 'badge--warning', null, ['cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     ['Priced record parked: codex', 'badge--serious', '/pools#codex', ['accounts: ["research"]', 'count: 1', 'pool: codex']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
   ];
@@ -269,11 +270,12 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   results.push({
     name: '/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed and titled with its detail and age',
     ok:
-      lead() === '8 need attention' &&
+      lead() === '9 need attention' &&
       JSON.stringify(read) === JSON.stringify(want) &&
       ages[0] === 'started 2d 0h ago' &&
-      /^started 1h [01]m ago$/.test(ages[6] ?? '') &&
-      /^started 4[23]m ago$/.test(ages[7] ?? '') &&
+      ages[6] === 'started 18d 0h ago' &&
+      /^started 1h [01]m ago$/.test(ages[7] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[8] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
@@ -334,7 +336,7 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its eight items again', ok: lead() === '8 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its nine items again', ok: lead() === '9 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 }
 

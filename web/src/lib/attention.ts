@@ -2,6 +2,8 @@ import type { AttentionItem, AttentionKind } from '@/api/types';
 import { fmtAbsolute, fmtRelative } from './format';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
+  certificate_expiring: 'Certificate expiring',
+  certificate_reload_failed: 'Certificate reload failed',
   client_drift: 'Client drift',
   funding_required: 'Funding required',
   ledger_record_parked: 'Priced record parked',
@@ -12,6 +14,8 @@ export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   writer_degraded: 'State writer degraded',
 };
 export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'warning'> = {
+  certificate_expiring: 'warning',
+  certificate_reload_failed: 'serious',
   client_drift: 'serious',
   funding_required: 'serious',
   ledger_record_parked: 'serious',
@@ -45,6 +49,9 @@ export function anchorOf(hash: string): string | null {
 const text = (v: unknown): string | null => (typeof v === 'string' && v !== '' ? v : null);
 const count = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0);
 const instant = (v: unknown): string | null => (typeof v === 'number' && Number.isFinite(v) ? new Date(v).toISOString() : null);
+const days = (n: number): string => `${n} ${n === 1 ? 'day' : 'days'}`;
+/** The listener a certificate item's subject names: `proxy.tls` is the proxy listener's pair. */
+const listenerOf = ({ subject }: AttentionItem): string => subject.id.replace(/\.tls$/, '');
 
 /** The item's detail as the one line a pool card's row draws. */
 export function attentionDetail(item: AttentionItem, now: number): string {
@@ -79,6 +86,14 @@ export function attentionDetail(item: AttentionItem, now: number): string {
       const next = instant(d.next_attempt_at);
       return `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row${next ? `, next attempt ${fmtRelative(next, now)}` : ''}`;
     }
+    case 'certificate_expiring': {
+      const left = count(d.days_left);
+      const file = text(d.cert_file);
+      const end = left < 0 ? `expired ${days(-left)} ago` : `expires in ${days(left)}`;
+      return `The ${listenerOf(item)} listener's certificate${file ? ` ${file}` : ''} ${end} (${fmtAbsolute(instant(d.expires))}). Replace the pair and run phoebis tls reload.`;
+    }
+    case 'certificate_reload_failed':
+      return `The ${listenerOf(item)} listener's pair did not load: ${text(d.error) ?? ''}. The router keeps serving the pair it loaded at ${fmtAbsolute(instant(d.serving_since))}.`;
   }
 }
 
@@ -92,7 +107,7 @@ export function attentionTitle(item: AttentionItem, now: number): string {
     .filter(([, v]) => v !== null && v !== undefined)
     .sort(([a], [b]) => a.localeCompare(b))
     .map(([name, v]) => {
-      const at = /_(at|since)$/.test(name) ? instant(v) : null;
+      const at = /_(at|since)$|^expires$/.test(name) ? instant(v) : null;
       return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v) : String(v)}`;
     });
   return [...members, `started ${fmtRelative(item.since, now)}`].join('\n');
