@@ -265,6 +265,12 @@ export interface AttentionItem {
   subject: { id: string; label: string; type: 'account' | 'client' | 'pool' | 'router' };
 }
 
+/** What `POST /admin/ledger/parked/replay` landed, and the parked records the ledger still refuses. */
+export interface ReplayOutcome {
+  landed: number;
+  remaining: number;
+}
+
 export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 

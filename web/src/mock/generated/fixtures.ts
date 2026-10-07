@@ -6709,6 +6709,19 @@ export const FIXTURES: Record<string, Fixture> = {
       ]
     }
   },
+  "replay": {
+    "route": "POST /admin/ledger/parked/replay",
+    "body": {
+      "landed": 0,
+      "remaining": 0
+    }
+  },
+  "replay_held": {
+    "route": "POST /admin/ledger/parked/replay",
+    "body": {
+      "error": "the ledger writer is held, try again"
+    }
+  },
   "request": {
     "route": "GET /admin/requests/r-failover",
     "body": {

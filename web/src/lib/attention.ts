@@ -79,7 +79,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
     case 'ledger_record_parked': {
       const n = count(d.count);
       const accounts = Array.isArray(d.accounts) ? d.accounts.filter((a): a is string => typeof a === 'string') : [];
-      return `${n} priced ${n === 1 ? 'record' : 'records'} parked, landing at the next start or replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
+      return `${n} priced ${n === 1 ? 'record' : 'records'} parked, landing at the next start or on the dashboard's Replay${accounts.length ? ` (${accounts.join(', ')})` : ''}`;
     }
     case 'poll_backoff': {
       const n = count(d.rate_limited_in_a_row);
@@ -125,9 +125,14 @@ export interface AttentionRead {
 /**
  * One schedule for every reader on the page: the first subscription reads at once and starts the interval, the window
  * regaining focus reads again, and the last one leaving stops both. Nothing runs before a subscription, since the
- * node test bundle loads this module with no window and no reader.
+ * node test bundle loads this module with no window and no reader. `refresh` reads once now, for a write that changed
+ * what the route answers.
  */
-export function createAttentionPoll(read: () => Promise<AttentionItem[]>) {
+export function createAttentionPoll(read: () => Promise<AttentionItem[]>): {
+  refresh: () => Promise<void>;
+  snapshot: () => AttentionRead;
+  subscribe: (listener: () => void) => () => void;
+} {
   let state: AttentionRead = { error: null, items: null, loadedAt: null };
   const listeners = new Set<() => void>();
   let timer: ReturnType<typeof setInterval> | null = null;
@@ -148,6 +153,7 @@ export function createAttentionPoll(read: () => Promise<AttentionItem[]>) {
   };
   const tick = () => void refresh();
   return {
+    refresh,
     snapshot: (): AttentionRead => state,
     subscribe: (listener: () => void): (() => void) => {
       listeners.add(listener);

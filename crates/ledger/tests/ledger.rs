@@ -3658,26 +3658,6 @@ fn drop_trigger(db: &LedgerDb, name: &str) {
     .unwrap();
 }
 
-/// Caps the writer connection's file at the pages it holds once a vacuum has left none free, so the next insert
-/// that needs a page meets `SQLITE_FULL`.
-fn fill_the_disk(db: &LedgerDb) {
-    db.write(|c| {
-        c.execute_batch("VACUUM;")?;
-        let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0))?;
-        c.pragma_update(None, "max_page_count", pages)?;
-        Ok(())
-    })
-    .unwrap();
-}
-
-fn free_the_disk(db: &LedgerDb) {
-    db.write(|c| {
-        c.pragma_update(None, "max_page_count", 1_073_741_823)?;
-        Ok(())
-    })
-    .unwrap();
-}
-
 /// A finished request of pool `main` on account `a`.
 fn finished_row(id: &str) -> RequestRecord {
     RequestRecord {
@@ -4059,7 +4039,7 @@ async fn a_full_disk_holds_the_batch_and_recovers_with_the_spend_refreshed() {
     )
     .await;
     budget_member_a(&h).await;
-    fill_the_disk(&h.db);
+    h.db.fill_the_disk();
     // A user agent that spans many pages, so the row needs pages the cap refuses.
     let wide = "x".repeat(512 << 10);
     let refused =
@@ -4129,7 +4109,7 @@ async fn a_full_disk_holds_the_batch_and_recovers_with_the_spend_refreshed() {
         "the scrape reads the degraded state"
     );
 
-    free_the_disk(&h.db);
+    h.db.free_the_disk();
     step(&h, BATCH_RETRY_HOLD);
     wait_for_async(Duration::from_secs(5), || async {
         (!h.ledger.degraded() && !h.router.accounting_degraded().await.unwrap()).then_some(())
@@ -4310,22 +4290,25 @@ async fn a_landing_batch_whose_spend_read_fails_keeps_the_degradation() {
 /// Parks the priced record `finished(id, true)` straight into the file at `path`, as a writer that met a poison row
 /// would have, with `error` and `at` as its last try.
 fn park_in_file(path: &std::path::Path, id: &str, error: &str, at: i64) {
+    park_in(&LedgerDb::open(path).unwrap(), id, error, at);
+}
+
+/// A parked priced record of member `a` in `db`, one the writer lands once nothing refuses it.
+fn park_in(db: &LedgerDb, id: &str, error: &str, at: i64) {
     let record = serde_json::to_string(&phoebis_ledger::ParkedRecord {
         request: finished_row(id),
         attempts: vec![serving_attempt(id, true)],
     })
     .unwrap();
-    LedgerDb::open(path)
-        .unwrap()
-        .write(|c| {
-            c.execute(
-                "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
-                 VALUES (?1, ?1, ?2, 'main', 'a', ?3, ?4)",
-                rusqlite::params![at, id, record, error],
-            )?;
-            Ok(())
-        })
-        .unwrap();
+    db.write(|c| {
+        c.execute(
+            "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+             VALUES (?1, ?1, ?2, 'main', 'a', ?3, ?4)",
+            rusqlite::params![at, id, record, error],
+        )?;
+        Ok(())
+    })
+    .unwrap();
 }
 
 /// A stop while a batch waits out its hold gives the batch the drain's one try; what the database still refuses then
@@ -4341,7 +4324,7 @@ async fn a_stop_during_a_hold_tries_the_batch_once_more_and_counts_what_is_still
         quick(),
     )
     .await;
-    fill_the_disk(&h.db);
+    h.db.fill_the_disk();
     h.ledger
         .record_request(Record::Request {
             request: RequestRecord {
@@ -4527,7 +4510,7 @@ async fn replay_parked_lands_a_parked_record_whose_cause_is_gone() {
     drop_trigger(&h.db, "refuse");
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
-        h.ledger.replay_parked(now).await.unwrap(),
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
         Replayed {
             landed: 1,
             remaining: 0
@@ -4561,13 +4544,13 @@ async fn a_replay_whose_parked_rows_cannot_be_read_answers_the_error() {
     // The row read names the column; the count a reply carries does not, so only the pass itself fails.
     rename_parked_record(&h.db, "record", "record_held");
     let now = h.clock.load(Ordering::SeqCst);
-    let error = h.ledger.replay_parked(now).await.unwrap_err();
+    let error = h.ledger.replay_parked(now, BOUND).await.unwrap_err();
     assert!(error.to_string().contains("record"), "{error}");
     assert_eq!(parked_rows(&h).await, 1);
 
     rename_parked_record(&h.db, "record_held", "record");
     assert_eq!(
-        h.ledger.replay_parked(now).await.unwrap(),
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
         Replayed {
             landed: 1,
             remaining: 0
@@ -4606,7 +4589,7 @@ async fn a_replay_whose_acknowledgement_is_refused_keeps_the_row_and_a_retry_cha
     let charged = charged_to_a(&h).await;
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
-        h.ledger.replay_parked(now).await.unwrap(),
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
         Replayed {
             landed: 0,
             remaining: 1
@@ -4620,7 +4603,7 @@ async fn a_replay_whose_acknowledgement_is_refused_keeps_the_row_and_a_retry_cha
 
     drop_trigger(&h.db, "refuse_ack");
     assert_eq!(
-        h.ledger.replay_parked(now).await.unwrap(),
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
         Replayed {
             landed: 1,
             remaining: 0
@@ -4701,7 +4684,7 @@ async fn a_replay_that_crosses_a_budget_is_followed_by_a_refused_selection() {
     );
 
     let now = h.clock.load(Ordering::SeqCst);
-    let replayed = h.ledger.replay_parked(now).await.unwrap();
+    let replayed = h.ledger.replay_parked(now, BOUND).await.unwrap();
     assert_eq!(replayed.landed, 1, "{replayed:?}");
     let refused = h
         .app
@@ -4735,13 +4718,240 @@ async fn two_replays_at_once_land_the_row_once() {
     park_poison(&h).await;
     drop_trigger(&h.db, "refuse");
     let now = h.clock.load(Ordering::SeqCst);
-    let (first, second) = tokio::join!(h.ledger.replay_parked(now), h.ledger.replay_parked(now));
+    let (first, second) = tokio::join!(
+        h.ledger.replay_parked(now, BOUND),
+        h.ledger.replay_parked(now, BOUND)
+    );
     let (first, second) = (first.unwrap(), second.unwrap());
     assert_eq!(first.landed + second.landed, 1, "{first:?} {second:?}");
     assert_eq!((first.remaining, second.remaining), (0, 0));
     assert_eq!(rows_of(&h, "requests", "id", "poison").await, 1);
     assert_eq!(rows_of(&h, "attempts", "request_id", "poison").await, 1);
     assert_eq!(charged_to_a(&h).await, 1_000_000);
+    up.shutdown().await;
+}
+
+/// The replay route's bound on the writer's turn.
+const BOUND: Duration = Duration::from_secs(30);
+
+/// Parks `id` once the writer is past its start-up pass, which would otherwise land the row before the test asks: a
+/// replay answers from the writer's loop alone, and the loop starts after the pass.
+async fn park_landable(h: &Harness, id: &str) {
+    let now = h.clock.load(Ordering::SeqCst);
+    assert_eq!(
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
+        Replayed::default()
+    );
+    park_in(&h.db, id, "refused by test", NOW);
+}
+
+/// A batch of one unpriced request held on the full disk past its in-place retries, so the writer waits out
+/// `BATCH_RETRY_HOLD` and takes no turn between batches until the disk is freed.
+async fn hold_a_batch(h: &Harness) {
+    h.db.fill_the_disk();
+    h.ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..finished_row("held")
+            },
+            attempts: vec![serving_attempt("held", false)],
+            bodies: None,
+        })
+        .await;
+    through_the_retries(h).await;
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(h) == 6).then_some(())
+    })
+    .await;
+}
+
+/// A replay asked for on a task, so the test can step the ledger's clock while it waits.
+fn replay_on_a_task(
+    h: &Harness,
+    now: i64,
+) -> tokio::task::JoinHandle<Result<Replayed, LedgerError>> {
+    let ledger = h.ledger.clone();
+    tokio::spawn(async move { ledger.replay_parked(now, BOUND).await })
+}
+
+/// The parked rows counted on the writer's connection, for a test that holds the reader.
+fn parked_on_the_writer(h: &Harness) -> i64 {
+    h.db.write(|c| Ok(c.query_row("SELECT COUNT(*) FROM parked_records", [], |r| r.get(0))?))
+        .unwrap()
+}
+
+/// Frees the disk and steps the clock a hold at a time until the held batch lands.
+async fn free_the_writer(h: &Harness) {
+    h.db.free_the_disk();
+    step_until(h, BATCH_RETRY_HOLD, || retrying(h) == 0).await;
+}
+
+/// A replay asked for while the writer holds a batch waits its bound on the ledger's clock and answers that the writer
+/// is held. The message it left in the control channel is the caller's once the deadline passed, so the writer drops
+/// it unrun when it comes back, and the replay after it lands the row.
+#[tokio::test]
+async fn a_replay_asked_under_a_held_batch_answers_held_past_its_bound_and_never_runs() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_landable(&h, "parked").await;
+    hold_a_batch(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let replay = replay_on_a_task(&h, now);
+    stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
+    step(&h, BOUND + Duration::from_secs(1));
+    let answer = tokio::time::timeout(Duration::from_secs(5), replay)
+        .await
+        .expect("the replay answers once its bound passed")
+        .unwrap();
+    assert!(matches!(answer, Err(LedgerError::WriterHeld)), "{answer:?}");
+    // The step also ran out the hold, and the batch met the full disk once more.
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 7).then_some(())
+    })
+    .await;
+    free_the_writer(&h).await;
+    assert_eq!(parked_rows(&h).await, 1);
+    assert_eq!(
+        charged_to_a(&h).await,
+        0,
+        "the parked charge has not landed"
+    );
+    // The control channel is read in order, so the message given up on reaches the writer ahead of this one: a landed
+    // row here means the first never ran.
+    assert_eq!(
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
+    up.shutdown().await;
+}
+
+/// The control channel holds one message, so a second replay asked for under the same held batch waits to send behind
+/// the first. Both waits run to one deadline, so both answer held as the bound passes and neither replay runs.
+#[tokio::test]
+async fn two_replays_asked_under_a_held_batch_both_answer_held_past_the_bound_and_neither_runs() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_landable(&h, "parked").await;
+    hold_a_batch(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let (first, second) = (replay_on_a_task(&h, now), replay_on_a_task(&h, now));
+    stays_for(Duration::from_millis(400), || {
+        !first.is_finished() && !second.is_finished()
+    })
+    .await;
+    step(&h, BOUND + Duration::from_secs(1));
+    // The waits read the ledger's clock every 250 ms, so a second covers both seeing the deadline, and a send left
+    // outside the bound would wait on the writer for good.
+    let answers = tokio::time::timeout(Duration::from_secs(1), async {
+        (first.await.unwrap(), second.await.unwrap())
+    })
+    .await
+    .expect("both replays answer within a clock read of their deadline");
+    assert!(
+        matches!(
+            answers,
+            (Err(LedgerError::WriterHeld), Err(LedgerError::WriterHeld))
+        ),
+        "{answers:?}"
+    );
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 7).then_some(())
+    })
+    .await;
+    free_the_writer(&h).await;
+    assert_eq!(parked_rows(&h).await, 1);
+    assert_eq!(
+        charged_to_a(&h).await,
+        0,
+        "the parked charge has not landed"
+    );
+    assert_eq!(
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
+    up.shutdown().await;
+}
+
+/// The claim decides who owns a replay, never the clock: a replay the writer took before the deadline answers its
+/// rows to a caller still waiting past it. The test holds the reader connection from before the claim until after the
+/// deadline, so the writer has landed the row and waits on the count it answers with while the bound runs out.
+#[tokio::test]
+async fn a_replay_the_writer_claimed_inside_the_bound_answers_its_rows_past_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_landable(&h, "parked").await;
+    hold_a_batch(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let replay = replay_on_a_task(&h, now);
+    stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
+    let (taken, held) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let reader = std::thread::spawn({
+        let db = h.db.clone();
+        move || {
+            db.read_blocking(|_| {
+                taken.send(()).unwrap();
+                released.recv().unwrap();
+                Ok(())
+            })
+            .unwrap()
+        }
+    });
+    held.recv().unwrap();
+    h.db.free_the_disk();
+    // Halfway: the hold runs out, the batch lands, and the writer's next turn claims the replay and lands the row.
+    step(&h, BOUND / 2);
+    wait_for(Duration::from_secs(5), || {
+        (parked_on_the_writer(&h) == 0).then_some(())
+    })
+    .await;
+    step(&h, BOUND / 2 + Duration::from_secs(1));
+    stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
+    release.send(()).unwrap();
+    reader.join().unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(5), replay)
+        .await
+        .expect("the claimed replay answers once the count is read")
+        .unwrap();
+    assert_eq!(
+        answer.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(rows_of(&h, "requests", "id", "parked").await, 1);
+    assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
     up.shutdown().await;
 }
 

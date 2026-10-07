@@ -52,6 +52,7 @@ const SYNC = {
   models_state: { decode: (b) => d.decodeModelsState(b), mock: (api) => api.getModelsState() },
   pairing_started: { decode: (b) => d.decodePairingSession(b), mock: (api) => api.startPairing('legacy') },
   pools: { decode: (b) => b.pools.map(d.decodePool), mock: (api) => api.listPools() },
+  replay: { decode: (b) => d.decodeReplay(b), mock: (api) => api.replayParked() },
   request: { decode: (b) => ({ events: b.events.map(d.decodeRequestEvent), request: d.decodeRequest(b.request) }), mock: async (api) => { for (const r of (await api.listRequests({ limit: 500 })).requests) { const detail = await api.getRequest(r.id); if (detail.events.length) return detail; } throw new Error('no mock request carries an event'); } },
   // `.request`/`.response` are CapturedBodies' own declared-`unknown` fields (decode.ts's decodeBodies passes
   // them through raw), the same class of value OPAQUE covers for `.detail`.
@@ -62,7 +63,7 @@ const SYNC = {
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */
-const UNCONSUMED = ['bound_refusals', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
+const UNCONSUMED = ['bound_refusals', 'live_past', 'pool_traffic', 'pricing', 'replay_held', 'sessions_costs', 'system'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');

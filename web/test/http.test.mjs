@@ -349,7 +349,7 @@ test('the request detail reads the row and its events from one GET, and a purged
 
 const keyEdit = { autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
 
-test('a key create and a key edit send the auto mode override in snake_case', async () => {
+test('a key creation and a key edit send the auto mode override in snake_case', async () => {
   const row = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
   const calls = stub((url, init) => answer(200, { ...row, ...JSON.parse(init.body), ...(init.method === 'POST' ? { secret: 'phoebis-fixture' } : {}) }));
   const api = new HttpApi();
@@ -443,6 +443,18 @@ test('listCatalogOf reads each named catalog once and answers the union by id, a
   const none = stub(() => answer(500));
   assert.deepEqual(await new HttpApi().listCatalogOf([]), []);
   assert.equal(none.length, 0, 'no account named, no read');
+});
+
+test("the replay is one POST that decodes its counts, and a held writer's 503 reaches no toast, since the line draws it", async () => {
+  let failures = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => undefined, onUnauthorized: () => undefined });
+  const body = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body('replay')));
+  assert.deepEqual(await new HttpApi().replayParked(), { landed: 0, remaining: 0 });
+  assert.deepEqual(calls.map((c) => [c.init.method, c.url, c.init.body]), [['POST', '/admin/ledger/parked/replay', undefined]]);
+  stub(() => answer(503, body('replay_held')));
+  await assert.rejects(new HttpApi().replayParked(), (e) => e instanceof ApiError && e.status === 503 && e.message === 'the ledger writer is held, try again');
+  assert.equal(failures, 0, 'the dashboard line draws the refusal in its own slot');
 });
 
 test('the attention read is one GET, and its failures reach no toast, since the line draws its own', async () => {

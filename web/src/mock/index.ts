@@ -226,6 +226,19 @@ export const emptyStore = (): boolean => {
   }
 };
 
+/**
+ * Set to stand in for a ledger writer holding a batch past the replay route's bound: a replay answers the route's `503`
+ * and lands nothing.
+ */
+export const HELD_WRITER_KEY = 'phoebis.mockHeldWriter';
+const heldWriter = (): boolean => {
+  try {
+    return localStorage.getItem(HELD_WRITER_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
@@ -363,6 +376,8 @@ export class MockApi implements Api {
   private buried = new Map<string, number>();
   private keys: ApiKey[] = [...KEYS];
   private pairings = new Map<string, { accountId: string; state: string }>();
+  /** Set by the first replay, which lands the story's parked records. */
+  private parkedLanded = false;
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
   private pools: Omit<Pool, 'keys'>[] = POOLS.map((p) => ({
     ...p,
@@ -611,9 +626,10 @@ export class MockApi implements Api {
     return latency(seriesOf(emptyStore() ? [] : ALL_ROLLUPS, query));
   }
 
-  /** The story's conditions, or none for a fresh installation. */
+  /** The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them. */
   getAttention() {
-    return latency(emptyStore() ? [] : ATTENTION);
+    if (emptyStore()) return latency([]);
+    return latency(this.parkedLanded ? ATTENTION.filter((i) => i.kind !== 'ledger_record_parked') : ATTENTION);
   }
 
   async getCapturedBodies(requestId: string) {
@@ -815,6 +831,14 @@ export class MockApi implements Api {
       return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
     }
     return latency(this.withPool(this.putAccount(revised({ ...a, label }))), 250);
+  }
+
+  /** The first replay lands the story's parked count to zero, and a later one finds nothing to land. */
+  async replayParked() {
+    if (heldWriter()) return Promise.reject(new ApiError(503, 'the ledger writer is held, try again', null));
+    const parked = emptyStore() || this.parkedLanded ? [] : ATTENTION.filter((i) => i.kind === 'ledger_record_parked');
+    if (parked.length > 0) this.parkedLanded = true;
+    return latency({ landed: parked.reduce((n, i) => n + (typeof i.detail.count === 'number' ? i.detail.count : 0), 0), remaining: 0 }, 250);
   }
 
   async resumeAccount(accountId: string) {

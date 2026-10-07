@@ -269,7 +269,7 @@ async fn a_key_that_does_not_match_the_certificate_refuses_the_start_naming_the_
     up.shutdown().await;
 }
 
-/// The subcommands' admin client under the bearer, on the plain admin listener.
+/// The admin client of `status` and `tls reload` under the bearer, on the plain admin listener.
 fn admin_client(admin_port: u16, config: &Path) -> AdminClient {
     let common = Common {
         ca: None,

@@ -215,6 +215,12 @@ export function useAttention(): AttentionRead {
   return useSyncExternalStore(attention.subscribe, attention.snapshot);
 }
 
+/** One read of the attention poll now, published to every mounted reader, so the Replay button clears the parked
+ *  badge without waiting for the next tick or a focus. */
+export function refreshAttention(): Promise<void> {
+  return attention.refresh();
+}
+
 /** A shared clock so every countdown on a page advances in the same tick. */
 export function useNow(intervalMs = 15_000): number {
   const [now, setNow] = useState(() => clock.now());

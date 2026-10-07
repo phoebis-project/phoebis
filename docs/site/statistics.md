@@ -182,10 +182,10 @@ included, whether or not the router dropped it on the way upstream.
 A batch the ledger cannot write is retried in place after 1, 2, 4 and 8 seconds, then one record at a time; a record the
 file as a whole refuses (a corrupt, full, read-only or unopenable file, an I/O error) is held and retried every 10
 seconds until it lands; a record that fails on its own is dropped with a `ledger_gap` when it carries no money and
-parked in the ledger file when it does, and every parked record is tried again once at the next start or by `phoebis
-ledger replay-parked`, its parked row deleted in the transaction that lands the record, so its charge counts once. A
-parked record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone
-while its cost is kept. While a batch is under retry the ledger is degraded: the system page shows it,
+parked in the ledger file when it does, and every parked record is tried again once at the next start or on the
+dashboard's Replay, its parked row deleted in the transaction that lands the record, so its charge counts once. A parked
+record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while
+its cost is kept. While a batch is under retry the ledger is degraded: the system page shows it,
 `phoebis_ledger_degraded` reads 1, and routing treats every budgeted member's spend as unknown until a batch lands and
 the spend is read again.
 
@@ -502,7 +502,7 @@ at the first read.
 | `funding_required` | the Anthropic-key account | the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `certificate_expiring` | the listener key | a pair with more than 30 days left is loaded |
-| `ledger_record_parked` | the pool, or `-` for a record without one | the next start or replay lands the parked rows |
+| `ledger_record_parked` | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `poll_backoff` | the polled account | a poll answers clean |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
@@ -551,10 +551,9 @@ loads it. The subject is the listener key, and the item opens nothing. It dates 
 restart keeps the date, and the detail names the certificate file, the end and the whole days left, negative once past.
 
 **`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own; each is
-tried again once at the next start or by `phoebis ledger replay-parked`, and the condition clears when the table
-empties. The subject is the pool the record was served under, or `-` for a record without one; a pool deleted since
-shows under its id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names
-the accounts.
+tried again once at the next start or on the dashboard's Replay, and the condition clears when the table empties. The
+subject is the pool the record was served under, or `-` for a record without one; a pool deleted since shows under its
+id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names the accounts.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,

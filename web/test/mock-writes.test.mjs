@@ -37,7 +37,29 @@ test('the mock derives an id from a name the way the client does, which the slug
   for (const id of [pool.id, long.id, key.id]) assert.match(id, /^[a-z0-9][a-z0-9-]{0,63}$/);
 });
 
-test('a pool create refuses the values a pool edit refuses', async () => {
+test("the first replay lands the story's parked record, whose item leaves the attention answer, and a second finds nothing", async () => {
+  const api = await signedIn();
+  const parked = async () => (await api.getAttention()).filter((i) => i.kind === 'ledger_record_parked').length;
+  assert.equal(await parked(), 1);
+  assert.deepEqual(await api.replayParked(), { landed: 1, remaining: 0 });
+  assert.equal(await parked(), 0);
+  assert.deepEqual(await api.replayParked(), { landed: 0, remaining: 0 });
+});
+
+test("a held writer's replay answers the route's 503 and lands nothing", async () => {
+  const api = await signedIn();
+  // The story's switches live in the browser's storage, which Node lacks, so the case lends the mock a stand-in.
+  const stored = new Map([['phoebis.mockHeldWriter', '1']]);
+  globalThis.localStorage = { getItem: (key) => stored.get(key) ?? null };
+  try {
+    await assert.rejects(() => api.replayParked(), refusedAs(503, 'the ledger writer is held, try again'));
+  } finally {
+    delete globalThis.localStorage;
+  }
+  assert.equal((await api.getAttention()).filter((i) => i.kind === 'ledger_record_parked').length, 1, 'the parked record is still the story\'s');
+});
+
+test('a pool creation refuses the values a pool edit refuses', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
   await assert.rejects(() => api.createPool({ ...all, affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false }, name: 'short' }), refusedAs(400, 'affinity_ttl_seconds is 0 or at least 60'));

@@ -235,6 +235,29 @@ impl LedgerDb {
         self.fail_next_read.store(true, Ordering::SeqCst);
     }
 
+    /// Caps the writer connection's file at the pages it holds once a vacuum has left none free, so the next insert
+    /// that needs a page meets `SQLITE_FULL` and the writer holds its batch under retry.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fill_the_disk(&self) {
+        self.write(|c| {
+            c.execute_batch("VACUUM;")?;
+            let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+            c.pragma_update(None, "max_page_count", pages)?;
+            Ok(())
+        })
+        .expect("the test's cap on the ledger file applies");
+    }
+
+    /// Lifts the cap, so the held batch lands on its next retry.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn free_the_disk(&self) {
+        self.write(|c| {
+            c.pragma_update(None, "max_page_count", 1_073_741_823)?;
+            Ok(())
+        })
+        .expect("the test's cap on the ledger file lifts");
+    }
+
     /// Parks one priced record the writer could not land, `parked_at` and `last_tried_at` both `at`.
     pub(crate) fn insert_parked(
         &self,

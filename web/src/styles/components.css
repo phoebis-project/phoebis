@@ -1380,6 +1380,12 @@ textarea.input {
   text-overflow: ellipsis;
 }
 
+/* The Replay button sits in a badge row, so it takes the badges' 22 px and the row keeps its height. */
+.attention-line > .pill {
+  height: 22px;
+  padding-block: 0;
+}
+
 .stat-grid {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));

@@ -3,11 +3,14 @@ mod common;
 use std::time::Duration;
 
 use common::{delete, get, json, login, post, wait_json};
+use fake_upstream::{stays_for, wait_for};
 use futures::StreamExt;
 use phoebis_bus::{
     Delivery, Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk,
 };
-use phoebis_ledger::{AttemptRecord, EventRecord, Record, RequestRecord};
+use phoebis_ledger::{
+    AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord, BATCH_RETRY_HOLD,
+};
 
 const HOUR: i64 = 3_600_000;
 
@@ -298,7 +301,7 @@ async fn the_system_document_reads_a_degraded_ledger_its_retry_and_its_parked_re
     );
 }
 
-/// `POST` with the admin secret as a bearer and no cookie, the subcommands' own call.
+/// `POST` with the admin secret as a bearer and no cookie, the admin client's own call.
 async fn post_bearer(
     app: &axum::Router,
     path: &str,
@@ -405,6 +408,171 @@ async fn the_replay_route_answers_500_once_the_ledger_writer_has_stopped() {
     assert_eq!(
         json(replayed).await,
         serde_json::json!({"error": "ledger failure"})
+    );
+}
+
+/// Steps the harness clock, which the ledger's waits read.
+fn step(parts: &common::Full, by: Duration) {
+    parts
+        .clock_cell
+        .fetch_add(by.as_millis() as i64, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn retrying(parts: &common::Full) -> u64 {
+    parts
+        .ledger
+        .stats()
+        .retrying
+        .load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Parks a priced record the writer can land, once its start-up pass is behind it: a replay answers from the writer's
+/// loop alone, which starts after the pass, so the pass cannot take the row before the case asks.
+async fn park_landable(parts: &common::Full, cookie: &str) {
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(cookie)).await;
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"landed": 0, "remaining": 0})
+    );
+    let Record::Request {
+        request, attempts, ..
+    } = record("parked", common::NOW, "claude-sonnet-5", "s1")
+    else {
+        unreachable!("`record` builds a request")
+    };
+    let parked = serde_json::to_string(&ParkedRecord { request, attempts }).unwrap();
+    parts
+        .db
+        .write(|c| {
+            c.execute(
+                "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+                 VALUES (?1, ?1, 'parked', 'main', 'business', ?2, 'refused by test')",
+                rusqlite::params![common::NOW, parked],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// A request row too wide for the capped file, so the writer holds its batch under retry and takes no turn between
+/// batches until the disk is freed.
+async fn hold_the_writer(parts: &common::Full) {
+    parts.db.fill_the_disk();
+    let Record::Request {
+        request, attempts, ..
+    } = record("held", common::NOW, "claude-sonnet-5", "s1")
+    else {
+        unreachable!("`record` builds a request")
+    };
+    parts
+        .ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..request
+            },
+            attempts,
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (retrying(parts) == 1).then_some(())
+    })
+    .await;
+}
+
+/// Frees the disk and steps the clock a hold at a time until the held batch lands: the writer waits on an in-place
+/// retry or on its hold, and reads the clock every 250 ms, so each step gets a second to be seen.
+async fn free_the_writer(parts: &common::Full) {
+    parts.db.free_the_disk();
+    for _ in 0..10 {
+        step(parts, BATCH_RETRY_HOLD);
+        let until = std::time::Instant::now() + Duration::from_secs(1);
+        while std::time::Instant::now() < until {
+            if retrying(parts) == 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    panic!("the held batch never landed");
+}
+
+/// The replay route called on a task, so the case can step the clock while it waits.
+fn replay_on_a_task(
+    parts: &common::Full,
+    cookie: &str,
+) -> tokio::task::JoinHandle<axum::http::Response<axum::body::Body>> {
+    let (app, cookie) = (parts.app.clone(), cookie.to_string());
+    tokio::spawn(async move { post(&app, "/admin/ledger/parked/replay", "", Some(&cookie)).await })
+}
+
+/// The route waits its bound on the ledger's clock for the writer's turn. A writer still holding a batch past it is
+/// answered `503`, and the replay the route gave up on never runs, so the replay after the writer is freed lands the
+/// row.
+#[tokio::test]
+async fn the_replay_route_answers_503_after_its_bound_while_the_writer_is_held_and_replays_nothing()
+{
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    park_landable(&parts, &cookie).await;
+    hold_the_writer(&parts).await;
+    let asked = replay_on_a_task(&parts, &cookie);
+    stays_for(Duration::from_millis(400), || !asked.is_finished()).await;
+    step(&parts, Duration::from_secs(31));
+    let refused = tokio::time::timeout(Duration::from_secs(5), asked)
+        .await
+        .expect("the route answers once its bound passed")
+        .unwrap();
+    assert_eq!(refused.status(), 503);
+    assert_eq!(
+        json(refused).await,
+        serde_json::json!({"error": "the ledger writer is held, try again"})
+    );
+    free_the_writer(&parts).await;
+    // The control channel is read in order, so the message given up on reaches the writer ahead of this one: a landed
+    // row here means the first never ran.
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 200);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"landed": 1, "remaining": 0})
+    );
+}
+
+/// A replay the writer took inside the bound answers its counts, even when the clock passed the bound before the
+/// route's answer is read.
+#[tokio::test]
+async fn the_replay_route_answers_200_for_a_replay_the_writer_claimed_inside_the_bound() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    park_landable(&parts, &cookie).await;
+    hold_the_writer(&parts).await;
+    let asked = replay_on_a_task(&parts, &cookie);
+    stays_for(Duration::from_millis(400), || !asked.is_finished()).await;
+    parts.db.free_the_disk();
+    step(&parts, Duration::from_secs(15));
+    let landed = || {
+        parts
+            .db
+            .write(|c| {
+                Ok(c.query_row("SELECT COUNT(*) FROM parked_records", [], |r| {
+                    r.get::<_, i64>(0)
+                })?)
+            })
+            .unwrap()
+            == 0
+    };
+    wait_for(Duration::from_secs(5), || landed().then_some(())).await;
+    step(&parts, Duration::from_secs(16));
+    let answered = tokio::time::timeout(Duration::from_secs(5), asked)
+        .await
+        .expect("the claimed replay answers")
+        .unwrap();
+    assert_eq!(answered.status(), 200);
+    assert_eq!(
+        json(answered).await,
+        serde_json::json!({"landed": 1, "remaining": 0})
     );
 }
 

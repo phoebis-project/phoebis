@@ -85,9 +85,10 @@ impl Attention {
     /// Every subject of every kind, holding or clear; a failed store or ledger read fails the whole read.
     pub fn conditions(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
         // Read from the file on every call, as `refresh_failed` reads the registry, so the condition holds across a
-        // restart and clears on its own when the start lands the rows. A read that fails fails the whole answer, as
-        // the refresh read's does: a scrape never reports clear what it could not read. Read before the state lock,
-        // so a read waiting on the ledger's reader connection never holds the bus arm's `observe` behind it.
+        // restart and clears on its own when the next start or a replay lands the rows. A read that fails fails the
+        // whole answer, as the refresh read's does: a scrape never reports clear what it could not read. Read before
+        // the state lock, so a read waiting on the ledger's reader connection never holds the bus arm's `observe`
+        // behind it.
         let parked = self
             .ledger
             .as_ref()

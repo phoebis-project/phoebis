@@ -246,6 +246,8 @@ export class HttpApi implements Api {
   releaseSession = (keyId: string, sessionId: string) => call<void>('POST', `/admin/sessions/${enc(keyId)}/${enc(sessionId)}/release`);
   renameAccount = async (accountId: string, label: string, revision?: number) =>
     d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision({ label }, revision)));
+  // Quiet: the dashboard's line draws a refusal, the held writer's `503` among them, in its own slot.
+  replayParked = async () => d.decodeReplay(await call('POST', '/admin/ledger/parked/replay', undefined, false, { quiet: true }));
   resumeAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/resume`);
   revokeKey = (id: string) => call<void>('POST', `/admin/keys/${enc(id)}/revoke`);
   rotateKey = async (id: string): Promise<CreatedApiKey> => {

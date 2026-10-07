@@ -170,13 +170,6 @@ needs `docker login ghcr.io` with a token carrying `read:packages` while the rep
 | `phoebis status --config ./config.yaml` | Prints readiness, pools, accounts and live pins: exit 0 when ready. |
 | `phoebis backup --to <dir>` | Copies both databases into `<dir>` with a manifest; exit 0 once it is written. |
 | `phoebis tls reload --config ./config.yaml` | Re-reads every listener's certificate pair: exit 0 once each reloaded. |
-| `phoebis account add <id> --kind oauth|api_key` | Creates an account and prints its id. |
-| `phoebis account pair <id>` | Pairs an `oauth` account: prints the sign-in URL, reads the callback URL, confirms. |
-| `phoebis account confirm <pairing id>` | Confirms a pairing that `account pair --no-confirm` left exchanged. |
-| `phoebis account clear-cooldown <id>` | Clears one of the account's cooldowns, the account-wide one by default. |
-| `phoebis pool create <id>` | Creates a pool and prints its id. |
-| `phoebis key create <id> --pool <id>` | Creates a key in the pool and prints its secret, once. |
-| `phoebis ledger replay-parked` | Lands the ledger's parked priced records now, without a restart. |
 | `phoebis --version` | Prints the version. |
 
 `--config` defaults to `./config.yaml`; when the flag is absent and `PHOEBIS_CONFIG` is set, every subcommand reads
@@ -321,6 +314,8 @@ read, so the binary reads a router on another machine: `status` then has no prox
 probed, no configuration file names the listener`, and reads readiness from `/admin/system` alone. Without both, the
 file at `--config` must load.
 
+`status` and `tls reload` take the shared flags above. Every account, pool and key is created and edited in the console.
+
 `backup` copies the registry and the ledger into a directory, each through SQLite's online backup API as one
 consistent snapshot while the router serves or while it is stopped, and writes `manifest.json` last
 ([Operations](operations.md#backup) shows the container line and the restore). `--to` names the directory, which
@@ -338,73 +333,6 @@ directory that is not empty (`{path} is not an empty directory`), or when either
 carries both databases; {path} does not exist`). A copy that fails, a database another connection holds locked for ten
 seconds among them, removes every file and directory the run created and exits 1 with `backup failed: {reason};
 nothing was written to {dir}`. It exits 0 once the manifest is written, and 2 for a usage error.
-
-`account add` creates an account through `POST /admin/accounts`. `--kind` is `oauth`, for a subscription paired
-afterwards, or `api_key`, for an Anthropic key, and `--label` defaults to the account id. An `api_key` account's
-Anthropic API key comes from the variable `--api-key-env NAME` names, or from the first line of stdin under
-`--secret-stdin`; it never travels in a flag, so neither the process list nor the shell history carries it, and
-`--secret-env` stays the admin secret's variable. The router checks the key against the upstream before it creates the
-account. Stdout carries the account's id, and stderr its fields, one `field: value` line each, sorted by field.
-
-`account pair` pairs an `oauth` account through the three pairing routes, the calls [Pairing](pairing.md#with-curl)
-makes by hand. It starts the pairing with `POST /admin/oauth/sessions`, prints on stderr the instruction to open the
-authorization URL, sign in and paste the callback URL, with the URL on its own line, and reads one line from stdin: the
-URL the browser lands on, or `<code> <state>`, the code and the state separated by one space. It posts that line to the
-callback route, prints the pending identity as `pending: {email} ({organization})`, confirms, and prints `paired {id} as
-{email}`. `--login` is `claude_ai` (the default) or `console`. End of input or an empty line before the paste cancels
-the pairing with `DELETE /admin/oauth/sessions/{id}`, prints `the pairing was cancelled: input ended before the callback
-URL was pasted` and exits 1. A refused call prints its line and exits 1, and running `account pair` again replaces a
-pairing it left standing. The command keeps no state: the pairing lives in the router until it expires, ten minutes
-after the start.
-
-`--no-confirm` stops after the callback and prints `pairing {pairing id} exchanged; finish it with: phoebis account
-confirm {pairing id}`. `account confirm` posts the confirm route for that id and prints `paired {account id}`; a pairing
-another caller started answers `404 admin session does not own this pairing session`, and one past its expiry `409
-pairing session expired`. A pairing is the starting credential's to finish, and every command holding the admin secret
-is the same caller, so a pairing that `--no-confirm` leaves is finished from any shell with the admin secret and not
-from the console, whose login is another caller. Under `--json` stdout carries each route's answer as its own line, the
-start's first, so a script holds the pairing id and the redirect while the command waits for the paste; the lines on
-stderr stay as they are. Both commands exit 0 once the pairing is confirmed, or exchanged under `--no-confirm`, and 1
-otherwise.
-
-`account clear-cooldown` clears one cooldown through `DELETE /admin/accounts/{id}/cooldowns/{scope}`, one call with no
-body. `--scope` is `account` (the default), `fast`, `fast_credits` or `model:<canonical>`. It prints `cleared {scope} on
-{id}` on stderr, and a cooldown the account does not hold answers `404 no such cooldown`.
-
-`pool create` creates a pool through `POST /admin/pools`. `--label` defaults to the id, `--member
-<account>[:<priority>]` adds a member at that priority (`0` without the colon) and repeats, and `--strategy` is `pace`,
-`priority` or `round_robin`. Stdout carries the pool's id, and stderr its fields as `account add` prints them.
-
-`key create` creates a key in the pool `--pool` names through `POST /admin/keys`, and `--label` defaults to the id.
-Stdout carries the key's secret as its one line, printed once and nowhere else, so `phoebis key create laptop --pool
-home --label Laptop > laptop.secret` captures the secret alone; stderr carries the key's other fields. When stdout
-cannot take the secret, a full disk under that redirect among them, or the answer carries none, `key create` exits 1
-with `the secret of key {id} {reason}; POST /admin/keys/{id}/rotate issues a new one` on stderr, since the router keeps
-no copy to print again.
-
-`--body PATH` on `pool create` and `key create` reads a JSON object from the file, or from stdin for `-`, and sends it
-merged under the flags: a flag wins where both name a field, and a default (the label from the id, an empty member list)
-fills only a field neither names, so every field [the pool route](api.md#post-adminpools) and [the key
-route](api.md#post-adminkeys) accept is reachable without a flag of its own. The subcommand validates no field, and the
-route's `400` prints as it comes.
-
-`ledger replay-parked` lands the priced records the ledger parked, the pass every start runs, through [the replay
-route](api.md#post-adminledgerparkedreplay) rather than a restart. It prints `landed {n}, remaining {m}` on stderr,
-`remaining` the parked records the ledger still refuses.
-
-These seven take the shared flags above. Under `--json` each prints the route's answer on stdout as the one line the
-route wrote and nothing on stderr but errors; `account pair` prints one such line per route and keeps its own lines on
-stderr. A refused call prints `{status} {message}` from the route's answer on stderr and exits 1, a refused secret as
-`the admin secret was refused`; a call that does not reach the listener prints one line naming the URL and exits 1. Each
-exits 0 when the route accepts the call, `key create` only once its secret reached stdout, and 2 for a usage error. No
-output carries the admin secret or an upstream key.
-
-The commands' own refusals exit 1 before any call:
-
-- `--body {path}: {reason}` or `--member {member}: {reason}`, for a body file or a member that does not read
-- `--secret-stdin read no secret from stdin`, for an Anthropic API key that stdin did not carry
-- `an api_key account needs --api-key-env or --secret-stdin`, for an Anthropic API key with neither source
-- `environment variable {name} is unset or empty`, for the Anthropic API key's `--api-key-env` variable
 
 ## Environment variables
 
@@ -631,7 +559,7 @@ The router generates no certificate. A certificate from a public CA needs nothin
 private CA (a LAN CA, a Tailscale certificate's issuer, a CA you run) needs the clients to trust that CA: copy its
 certificate to each client machine and set `NODE_EXTRA_CA_CERTS=<path>` beside `ANTHROPIC_BASE_URL` in the client's
 [environment block](client.md#the-environment-block). The client checks the CA before anything else, so the leaf needs
-no pin. `phoebis status` and the subcommands take the same file through `--ca`.
+no pin. `phoebis status` and `phoebis tls reload` take the same file through `--ca`.
 
 The start reads the pair once. A renewal is: replace both files, then `phoebis tls reload`, which asks the running
 router to re-read every listener's pair. A pair that fails to load (a key that does not match its certificate, a file

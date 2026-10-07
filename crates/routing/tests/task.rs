@@ -2203,7 +2203,7 @@ async fn one_reload_over_a_delete_and_a_recreate_keeps_none_of_the_previous_hold
     assert_eq!(handle.overages().await.unwrap().len(), 1);
     assert_eq!(handle.samples().await.unwrap().len(), 1);
 
-    // A key delete and a key create under the same id, and an account delete and recreate under the same id,
+    // A key deleted and created again under the same id, and an account delete and recreate under the same id,
     // all committed before the one reload.
     store.delete_api_key("k", "test").unwrap();
     insert_key_k(&store);

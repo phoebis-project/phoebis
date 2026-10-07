@@ -340,6 +340,47 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   dash.unmount();
 }
 
+{
+  // The story holds one parked record, so the line carries the Replay button after its badges. The held writer's
+  // refusal reads in the slot beside it and in no toast, and a replay then lands the record: its counts read in the
+  // slot, and the read the button asks for afterwards takes the parked badge and the button off the line.
+  const dash = await mount('/');
+  const line = () => dash.container.querySelector('.attention-line');
+  const button = () => [...(line()?.querySelectorAll('button.pill') ?? [])].find((b) => b.textContent?.trim() === 'Replay parked records');
+  const slot = () => line()?.querySelector('.attention-line__replay')?.textContent ?? null;
+  const parked = () => [...(line()?.querySelectorAll('.badge') ?? [])].some((b) => b.textContent?.trim().startsWith('Priced record parked'));
+  const lastBadge = [...(line()?.querySelectorAll('.badge') ?? [])].pop();
+  results.push({
+    name: '/ the attention line carries the Replay button after its badges while a parked record shows, and no answer yet',
+    ok: parked() && button() !== undefined && button()?.disabled === false && lastBadge?.nextElementSibling === button() && slot() === null,
+    missing: [`parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button', `after ${lastBadge?.textContent ?? 'no badge'}`, `slot ${JSON.stringify(slot())}`],
+  });
+  localStorage.setItem('phoebis.mockHeldWriter', '1');
+  button()?.click();
+  await dash.settle(500);
+  localStorage.removeItem('phoebis.mockHeldWriter');
+  const toasts = dash.container.querySelectorAll('[role="status"]').length;
+  results.push({
+    name: "/ a replay under the held writer reads the route's refusal in the slot beside the button, in no toast, and the parked badge stays",
+    ok: slot() === 'the ledger writer is held, try again' && toasts === 0 && parked() && button()?.disabled === false,
+    missing: [`slot ${JSON.stringify(slot())}`, `toasts ${toasts}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+  });
+  button()?.click();
+  // Inside the mock's 250 ms answer, so the button reads as the replay runs.
+  await dash.settle(50);
+  const running = button()?.disabled;
+  await dash.settle(700);
+  results.push({
+    name: '/ a replay reads its counts in the slot, and the read after it takes the parked badge and the button off the line',
+    ok: running === true && slot() === 'Landed 1, 0 still parked' && !parked() && button() === undefined,
+    missing: [`disabled while it runs ${running}`, `slot ${JSON.stringify(slot())}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+  });
+  // The replay landed the story's record for good, and the checks below read it on the codex card, so the story takes
+  // it back.
+  api.parkedLanded = false;
+  dash.unmount();
+}
+
 let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
 results.push({ name: 'data-theme set', ok: document.documentElement.getAttribute('data-theme') === 'light', missing: [document.documentElement.getAttribute('data-theme')] });
@@ -1962,7 +2003,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const writerRows = [...cards.values()].filter((c) => [...c.querySelectorAll('ul.attention .badge')].some((b) => b.textContent?.trim() === 'State writer degraded')).length;
     results.push({
       name: "/pools a pool's card draws its parked records' row with the count and the accounts, and no card draws the state writer",
-      ok: parkedRow?.querySelector('.attention__detail')?.textContent === '1 priced record parked, landing at the next start or replay (research)' && writerRows === 0,
+      ok: parkedRow?.querySelector('.attention__detail')?.textContent === "1 priced record parked, landing at the next start or on the dashboard's Replay (research)" && writerRows === 0,
       missing: [parkedRow?.querySelector('.attention__detail')?.textContent ?? 'no parked row', `writer rows ${writerRows}`],
     });
   }
@@ -2064,7 +2105,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     row('Re-auth required', 'badge--critical', 'legacy', '/accounts/legacy', 'serves nothing until its credential is renewed', '5h 0m ago'),
     row('Funding required', 'badge--serious', 'Research workspace', '/accounts/research', 'serves nothing until its organization is funded again', '4h 0m ago'),
     row('Credential refresh failed', 'badge--critical', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
-    row('Priced record parked', 'badge--serious', 'codex', null, '2 priced records parked, landing at the next start or replay (research, secondary)', '8h 0m ago'),
+    row('Priced record parked', 'badge--serious', 'codex', null, "2 priced records parked, landing at the next start or on the dashboard's Replay (research, secondary)", '8h 0m ago'),
     row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h 0m ago'),
   ];
   results.push({

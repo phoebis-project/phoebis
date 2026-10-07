@@ -3,15 +3,17 @@
 mod common;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::time::Duration;
 
 use common::{deltas_until, get, json, login, next_text, patch, post, serve, wait_json};
+use fake_upstream::{stays_for, wait_for};
 use phoebis_bus::{
     AccountSelected, AttemptOutcome, Event, Kind, Origin, Phase, RequestComplete, RequestObserved,
     RequestShape, ResponseChunk, ResponseFacts, ResponseHead, Usage,
 };
 use phoebis_ledger::{
     AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record,
-    RequestRecord,
+    RequestRecord, BATCH_RETRY_HOLD,
 };
 use phoebis_routing::{lane_key, ClientClass};
 use phoebis_store::{AccountState, Identity, NewBundle, Secret, SubscriptionRow};
@@ -962,6 +964,15 @@ async fn every_route_is_captured_and_holds_its_shape() {
             message_id: None,
             finished_at: now,
         }));
+    // The replay's counts while the parked table is still empty.
+    let replayed = post(app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 200);
+    hold(
+        &planted,
+        "replay",
+        "POST /admin/ledger/parked/replay",
+        json(replayed).await,
+    );
     // One priced record parked on the harness's pool, so the attention capture carries the parked item beside the
     // exhaustion.
     common::park_unreadable(&parts.db, "main", "business", now);
@@ -1172,4 +1183,67 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "GET /admin/live",
         j!({ "snapshot": snapshot, "deltas": deltas }),
     );
+    // Last, since it steps the clock: the refusal of a replay whose bound passed while the writer held a batch on the
+    // capped file, then the writer freed.
+    hold(
+        &planted,
+        "replay_held",
+        "POST /admin/ledger/parked/replay",
+        replay_held(&parts, &cookie).await,
+    );
+}
+
+/// The `503` body of a replay asked for while the writer holds a batch past the route's bound. The batch is a row too
+/// wide for the capped file, and the clock steps past the bound while the replay waits, then a hold at a time once the
+/// disk is freed, until the batch lands.
+async fn replay_held(parts: &common::Full, cookie: &str) -> Value {
+    let step = |by: Duration| {
+        parts
+            .clock_cell
+            .fetch_add(by.as_millis() as i64, std::sync::atomic::Ordering::SeqCst)
+    };
+    let retrying = || {
+        parts
+            .ledger
+            .stats()
+            .retrying
+            .load(std::sync::atomic::Ordering::SeqCst)
+    };
+    parts.db.fill_the_disk();
+    parts
+        .ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..request(0, "held", common::NOW, "desktop", "s1", 200, "succeeded")
+            },
+            attempts: vec![],
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || (retrying() == 1).then_some(())).await;
+    let asked = tokio::spawn({
+        let (app, cookie) = (parts.app.clone(), cookie.to_string());
+        async move { post(&app, "/admin/ledger/parked/replay", "", Some(&cookie)).await }
+    });
+    stays_for(Duration::from_millis(400), || !asked.is_finished()).await;
+    step(Duration::from_secs(31));
+    let refused = tokio::time::timeout(Duration::from_secs(5), asked)
+        .await
+        .expect("the route answers once its bound passed")
+        .unwrap();
+    assert_eq!(refused.status(), 503);
+    let body = json(refused).await;
+    parts.db.free_the_disk();
+    for _ in 0..10 {
+        step(BATCH_RETRY_HOLD);
+        let until = std::time::Instant::now() + Duration::from_secs(1);
+        while retrying() != 0 && std::time::Instant::now() < until {
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+        if retrying() == 0 {
+            return body;
+        }
+    }
+    panic!("the held batch never landed");
 }

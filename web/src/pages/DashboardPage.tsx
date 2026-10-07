@@ -10,7 +10,7 @@ import { AttentionLine } from '@/components/ui/AttentionLine';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
-import { useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
+import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 
@@ -49,7 +49,7 @@ export function DashboardPage() {
 
   return (
     <div className="stack">
-      <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} />
+      <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />
       {failedFirst(overview) ? (
         <ReadFailed title="Could not load the 24-hour figures" error={overview.error} retry={overview.reload} />
       ) : (

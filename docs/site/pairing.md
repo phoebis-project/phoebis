@@ -49,8 +49,7 @@ and credential on the right](assets/accounts-dark.png#only-dark)
 
 ## With `curl`
 
-`phoebis account pair <id>` runs the same three calls from a shell: it prints the authorization URL, reads the callback
-URL you paste, and confirms ([commands](installation.md#commands)); the `curl` lines below are the same flow by hand.
+The `curl` lines below are the same flow by hand.
 
 Every admin mutation that carries an `Origin` header must name the request's own `Host` with it, with the `https://`
 scheme where the admin listener terminates TLS or a front sends `X-Forwarded-Proto: https` ([access](api.md#access)),

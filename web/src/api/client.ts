@@ -32,6 +32,7 @@ import type {
   PoolKeepalive,
   PoolStrategy,
   QuotaHistory,
+  ReplayOutcome,
   RequestDetail,
   RequestPage,
   RequestQuery,
@@ -198,6 +199,8 @@ export interface Api {
   releaseSession(keyId: string, sessionId: string): Promise<void>;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
   renameAccount(accountId: string, label: string, revision?: number): Promise<Account>;
+  /** `POST /admin/ledger/parked/replay`; a `503` under a held writer is thrown as an `ApiError` the caller draws. */
+  replayParked(): Promise<ReplayOutcome>;
   resumeAccount(accountId: string): Promise<void>;
   revokeKey(id: string): Promise<void>;
   rotateKey(id: string): Promise<CreatedApiKey>;

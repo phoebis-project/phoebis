@@ -34,6 +34,7 @@ url = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 futures = { workspace = true }
 http-body-util = { workspace = true }
+phoebis-ledger = { path = "../ledger", features = ["test-support"] }
 phoebis-store = { path = "../store", features = ["debug-hooks", "test-support"] }
 rusqlite = { workspace = true }
 tempfile = { workspace = true }

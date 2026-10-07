@@ -56,9 +56,9 @@ test("a row reads each kind's detail as one sentence", () => {
   assert.equal(sentence('poll_backoff', { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 1 }), '1 rate-limited answer in a row');
   assert.equal(sentence('writer_degraded', { component: 'ledger' }), 'ledger batches are being retried; budgeted members are held back until a batch lands');
   assert.equal(sentence('writer_degraded', { component: 'routing' }), 'routing state is kept in memory until the registry file takes writes again');
-  assert.equal(sentence('ledger_record_parked', { accounts: ['research'], count: 1, pool: 'codex' }), '1 priced record parked, landing at the next start or replay (research)');
-  assert.equal(sentence('ledger_record_parked', { accounts: ['primary', 'overflow'], count: 3, pool: null }), '3 priced records parked, landing at the next start or replay (primary, overflow)');
-  assert.equal(sentence('ledger_record_parked', { accounts: [], count: 2, pool: 'codex' }), '2 priced records parked, landing at the next start or replay', 'a record that names no account adds none');
+  assert.equal(sentence('ledger_record_parked', { accounts: ['research'], count: 1, pool: 'codex' }), "1 priced record parked, landing at the next start or on the dashboard's Replay (research)");
+  assert.equal(sentence('ledger_record_parked', { accounts: ['primary', 'overflow'], count: 3, pool: null }), "3 priced records parked, landing at the next start or on the dashboard's Replay (primary, overflow)");
+  assert.equal(sentence('ledger_record_parked', { accounts: [], count: 2, pool: 'codex' }), "2 priced records parked, landing at the next start or on the dashboard's Replay", 'a record that names no account adds none');
 });
 
 test("a listener's certificate items read the listener, the file, the date and what to do", () => {
