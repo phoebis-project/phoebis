@@ -4865,7 +4865,7 @@ fn the_blocker_refuses_a_hot_account_and_the_request_lands_by_the_strategy() {
 }
 
 #[test]
-fn the_blocker_passes_an_anthropic_key_candidate_while_its_bucket_holds_room() {
+fn the_blocker_passes_an_api_key_candidate_while_its_bucket_holds_room() {
     let scenario = |seed: &dyn Fn(&mut RoutingState), expected: &str, why: &str| {
         let s = snapshot(Pool {
             members: vec![("a", 1), ("b", 0)],
@@ -10251,7 +10251,7 @@ fn a_hot_api_key_sibling_is_not_preferred() {
 }
 
 #[test]
-fn an_anthropic_key_sibling_is_cool_while_its_bucket_holds_room() {
+fn an_api_key_sibling_is_cool_while_its_bucket_holds_room() {
     let run = |bucket: f64, cooling: bool| -> (String, Option<MigrateReason>) {
         let s = snapshot(Pool {
             shed_ahead: Some(0.2),

@@ -51,7 +51,7 @@ const HISTORICAL_HINT = 'A holder of this key id that no longer exists; the ledg
 const HISTORICAL_NO_RECIPE_HINT = 'Belongs to an earlier holder of this key id; nothing is scheduled for it';
 const HISTORICAL_CAUSE = 'this key id was created again and the session belongs to the earlier holder';
 const KIND_HINT: Record<Account['kind'], string> = {
-  api_key: 'Anthropic key account: billed per token, no quota windows',
+  api_key: 'API-key account: billed per token, no quota windows',
   oauth: 'Subscription account: quota windows apply',
 };
 const COMPANION_HINT: Record<CompanionState, string> = {
@@ -65,7 +65,7 @@ const MIGRATED_PROBE_HINT =
 const HELD_PROBE_HINT = 'The router refused the probe while its ledger caught up. It was sent again and counts for neither the cold streak nor the net.';
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
 const NET_HINT =
-  "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the account's 5-hour window on plan quota, dollars on an Anthropic key or in overage. An agent whose account changed funding carries both. A fast-mode session's probes settle in dollars whatever the account's funding, since they draw usage credits.";
+  "What the agent's probes saved minus what they cost, in the unit each probe settled in: a share of the account's 5-hour window on plan quota, dollars on an API key or in overage. An agent whose account changed funding carries both. A fast-mode session's probes settle in dollars whatever the account's funding, since they draw usage credits.";
 
 /** Each balance that is not zero, so an agent that settled in one unit shows that unit alone. */
 const netOf = (agent: Pick<KeepaliveRecipe, 'netFiveHourShare' | 'netUsd'>): { text: string }[] => [

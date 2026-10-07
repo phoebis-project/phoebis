@@ -18,7 +18,7 @@ if (Number.isNaN(clockOrigin)) {
   console.error('PHOEBIS_E2E_CLOCK is not an instant');
   process.exit(2);
 }
-// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one Anthropic-key
+// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one API-key
 // account, a list with nothing in it); the mock's story has subscription accounts and no empty list there.
 const mock = process.env.PHOEBIS_E2E_MOCK === '1';
 
@@ -1624,7 +1624,7 @@ async function deleteAccountButton(theme) {
 /**
  * The line under an account's name on the dashboard, in the Accounts list and head, and in the pool dialog's
  * members table is its email, and an account without one draws no line: its label a second time says nothing,
- * and an empty line reads as a value that failed to load. The router's seed has one Anthropic-key account and no
+ * and an empty line reads as a value that failed to load. The router's seed has one API-key account and no
  * email, so every line is absent there; the mock's story has both kinds, so each view draws both.
  */
 async function accountLines(theme, path) {
@@ -1788,7 +1788,7 @@ async function quotaCardHeights(theme) {
 }
 
 /**
- * Both quota donuts against a registry with no subscription account: the seed has one Anthropic-key account, so
+ * Both quota donuts against a registry with no subscription account: the seed has one API-key account, so
  * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
  */
 async function remainingCards(theme) {
@@ -2544,7 +2544,7 @@ const compare = (mine, neighbour, keys, what) => {
  * The identity card's subscription end editor on an OAuth account: its date field is the box of the status filter
  * beside the list (the page's other plain control; the label editor's field takes the heading's type), its checkbox
  * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
- * of the card. Ticking the box prefills a date. The router's seed has only an Anthropic-key account, which has no
+ * of the card. Ticking the box prefills a date. The router's seed has only an API-key account, which has no
  * editor, so there the check stands down; the mock's first account is an OAuth one.
  */
 async function subscriptionEndForm(theme) {

@@ -388,7 +388,7 @@ export function AnalyticsPage() {
   const speedLoading = sessionId === null ? bySpeed.data === null || bySpeed.stale : loading;
   const effortLoading = sessionId === null ? byEffort.data === null || byEffort.stale : loading;
   const speedError = sessionId === null ? bySpeed.error : null;
-  // Usage credits alone fund a fast answer, on a subscription account as on an Anthropic key.
+  // Usage credits alone fund a fast answer, on a subscription account as on an API key.
   const fastSpend = speedPoints.reduce((n, p) => n + (p.groups.find((g) => g.key === 'fast')?.costUsd ?? 0), 0);
   const groupLabel = GROUP_LABEL[groupBy];
 
@@ -1386,7 +1386,7 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
 
-const SPEND_NOTE = "Dollars per minute: Anthropic-key traffic, and a subscription account's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
+const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
  *  answers, and its own label names the plan unit, which the dollars axis does not chart. */
 const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode, tier unknown)', window_share: 'Other (fast mode)' };
@@ -1446,7 +1446,7 @@ function BurnCharts({
   // Read off the buckets, not the lines: the class grouping draws its two lines even over a range with no traffic.
   const empty = !loading && error === null && rows.length === 0 ? 'No traffic in this range.' : undefined;
   const byAccount = groupBy === 'account';
-  // Every other grouping mixes both kinds of account, so its lines chart the dollars their Anthropic-key traffic and
+  // Every other grouping mixes both kinds of account, so its lines chart the dollars their API-key traffic and
   // fast-mode answers spent; under the account grouping a subscription account, or a folded rest of them, draws a
   // dollar line only for the usage credits its fast-mode answers spent.
   const spent = lines.map((l, i) => ({ i, l })).filter(({ l }) => !byAccount || l.unit === 'usd' || l.usdPerMinute > 0);
@@ -1638,7 +1638,7 @@ function PlacementTable({ error, rows, unfiltered }: { error: string | null; row
   );
 }
 
-const BUDGET_HINT = "Each budgeted member's spend in its current period, an Anthropic-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here";
+const BUDGET_HINT = "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here";
 
 /** Spend against each member's budget; a member at its budget is skipped until its period ends. */
 function BudgetTable({ budgets, error, now }: { budgets: MemberBudget[] | null; error: string | null; now: number }) {

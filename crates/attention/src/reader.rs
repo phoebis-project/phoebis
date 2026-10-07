@@ -555,8 +555,8 @@ pub(crate) fn conditions(
                 }),
                 detail,
             };
-        // Every account carries the re-auth series, since the relay marks an Anthropic key the upstream refuses the
-        // same way as an OAuth login; only an Anthropic key runs out of funding. The registry records no time for a
+        // Every account carries the re-auth series, since the relay marks an API key the upstream refuses the
+        // same way as an OAuth login; only an API key runs out of funding. The registry records no time for a
         // state change, so the first read that sees the state dates it.
         let mut states = vec![(Kind::ReauthRequired, AccountState::ReauthRequired)];
         if account.kind == AccountKind::ApiKey {

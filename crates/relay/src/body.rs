@@ -179,7 +179,7 @@ pub fn edit_body(body: &mut Vec<u8>, edit: &NativeEdit<'_>) -> Result<BodyEdits,
             return Err(RelayError::BodyShape(BodyMember::Safeguards));
         }
     }
-    // An Anthropic-key account has no identity to splice: the measured client never carried one for it.
+    // An API-key account has no identity to splice: the measured client never carried one for it.
     let account_uuid_replaced = match edit.account_uuid {
         None => false,
         Some(uuid) => {

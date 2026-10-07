@@ -133,7 +133,7 @@ the model's own turn: every session post carries a `safeguards` member near the 
 permission rules with their literal text, the working and home directories, the trusted directories, the git state
 and the user identity) and the `dangerous-tool-use-2026-09-03` beta, and the answer's `message_delta` carries one
 verdict per tool use. A Max account answered a verdict for every reviewed tool use through a gateway that relays the
-member unchanged, as the router does with the setting on; an Anthropic-key account has not been measured. A session post
+member unchanged, as the router does with the setting on; an API-key account has not been measured. A session post
 that asks takes two to four seconds against one to two for one that does not, and the client's own classifier request
 about 1.3 seconds.
 

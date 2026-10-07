@@ -633,7 +633,7 @@ impl Store {
         self.loads.load(Ordering::SeqCst)
     }
 
-    /// Reads of an account row, its revision, an Anthropic key or an OAuth bundle since start: the reads a
+    /// Reads of an account row, its revision, an API key or an OAuth bundle since start: the reads a
     /// request's credential would pay, counted apart from the session memory and the routing writer, which take
     /// the same connection, so a test can prove a leg pays none.
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -962,7 +962,7 @@ fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<
     Ok(Some(rows.iter().any(|row| row.opens_under(key))))
 }
 
-/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles and Anthropic-key
+/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles and API-key
 /// secrets. `read_canary` meets the file as it is, without `prepare`, so a table the registry does
 /// not have yet holds nothing sealed rather than failing the read.
 fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
@@ -1285,7 +1285,7 @@ mod tests {
     }
 
     #[test]
-    fn a_registry_whose_only_sealed_row_is_an_anthropic_key_secret_proves_the_key_against_it() {
+    fn a_registry_whose_only_sealed_row_is_an_api_key_secret_proves_the_key_against_it() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();

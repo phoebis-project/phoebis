@@ -519,7 +519,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     // The bump deleted the bundle outside the manager, so the copy it keeps goes with it.
     state.manager.invalidate(&id);
     state.catalog.evict(&id);
-    // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An Anthropic-key slot
+    // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An API-key slot
     // has no pairing to run, so it rests where a slot that never had a key rests.
     if row.kind == AccountKind::ApiKey {
         if let Err(error) = state.store.set_state(&id, AccountState::Unpaired) {
@@ -600,7 +600,7 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
     }
 }
 
-/// Answers whether an Anthropic key still works, by asking the cheapest authenticated endpoint there is: the
+/// Answers whether an API key still works, by asking the cheapest authenticated endpoint there is: the
 /// catalog discovery, which goes to the account's own host over the pool that host belongs to.
 async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
@@ -610,7 +610,7 @@ async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) ->
     if row.kind != AccountKind::ApiKey {
         return failure(
             StatusCode::BAD_REQUEST,
-            "only an Anthropic-key account is verified this way",
+            "only an API-key account is verified this way",
         );
     }
     let (ok, status) = match state.catalog.discover(&row).await {
@@ -618,7 +618,7 @@ async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) ->
         Err(DiscoveryError::Unauthorized) => (false, 401),
         Err(DiscoveryError::Status(status)) => (false, status),
         Err(DiscoveryError::NoCredential) => {
-            return failure(StatusCode::CONFLICT, "account holds no Anthropic key")
+            return failure(StatusCode::CONFLICT, "account holds no API key")
         }
         Err(error) => return failure(StatusCode::BAD_GATEWAY, &format!("upstream: {error}")),
     };
@@ -652,7 +652,7 @@ async fn pairing_start(
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    // An Anthropic-key slot has no login to run: committing an OAuth bundle onto it would leave a credential
+    // An API-key slot has no login to run: committing an OAuth bundle onto it would leave a credential
     // the relay never reaches for, since it picks the credential by the account's kind.
     if row.kind != AccountKind::Oauth {
         return failure(
@@ -1313,7 +1313,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     }
     let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
     // Composed as the usage `GET` composes its answer, over the router's windows the list already read once, so one
-    // list read carries every account's standing. The poll never reads an Anthropic-key account.
+    // list read carries every account's standing. The poll never reads an API-key account.
     let usage = (row.kind == AccountKind::Oauth).then(|| {
         let (poll, unread) = poll_standing(state, row);
         let latest = state.usage.latest(&row.id);

@@ -101,7 +101,7 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
   const api = await signedIn();
   const all = await storyPool(api);
   const overflow = all.members.find((m) => m.accountId === 'overflow');
-  assert.deepEqual([overflow.budgetDailyUsd, overflow.budgetMonthlyUsd], [5, 50], 'the story budgets its Anthropic-key member by the day and the month');
+  assert.deepEqual([overflow.budgetDailyUsd, overflow.budgetMonthlyUsd], [5, 50], 'the story budgets its API-key member by the day and the month');
   const edit = {
     ...all,
     affinityMode: 'always',
@@ -458,7 +458,7 @@ test('the quota snapshots never answer a status or a poll outcome the decoder ca
   const api = await signedIn();
   for (let read = 0; read < 2; read += 1) {
     const accounts = await api.listAccounts();
-    assert.deepEqual(accounts.filter((a) => (a.kind === 'api_key') !== (a.usage === null)).map((a) => a.id), [], `read ${read + 1}: a block on every subscription row and none on an Anthropic-key row`);
+    assert.deepEqual(accounts.filter((a) => (a.kind === 'api_key') !== (a.usage === null)).map((a) => a.id), [], `read ${read + 1}: a block on every subscription row and none on an API-key row`);
     const snapshots = accounts.flatMap((a) => (a.usage ? [a.usage] : []));
     assert.deepEqual(snapshots.map((s) => s.status).filter((s) => s !== 'error' && s !== 'success'), [], `read ${read + 1}`);
     const polls = snapshots.map((s) => s.poll);

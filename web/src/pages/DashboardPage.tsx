@@ -133,7 +133,7 @@ function RemainingCard({ title, subtitle, windowId, accounts, tiers, now, failur
       ) : figures === null ? (
         <Skeleton height={148} />
       ) : figures.rows.length === 0 && figures.leftOut.length === 0 ? (
-        // A registry of Anthropic-key accounts alone has no window to draw, and an empty ring reads as exhausted.
+        // A registry of API-key accounts alone has no window to draw, and an empty ring reads as exhausted.
         <EmptyState title="No subscription accounts" body="A subscription account reports the window this card draws." />
       ) : figures.rows.length === 0 ? (
         <>
@@ -211,7 +211,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
             cooldown ends {fmtRelative(cooldown.until, now)}
           </span>
         )}
-        {account.kind === 'api_key' && <span className="muted">Anthropic key</span>}
+        {account.kind === 'api_key' && <span className="muted">API key</span>}
       </div>
     </Link>
   );

@@ -83,7 +83,7 @@ changing it takes a restart. The lease and the four probe workers are fixed. See
 Enabling `keepalive.enabled` on a pool needs `affinity_ttl_seconds` of at least 300 seconds, refused otherwise with
 "keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter
 than the shortest cache TTL cannot keep the session on the account it warmed." A probe follows the session's pin to a
-subscription account as to an Anthropic-key one. A key with `keepalive_opt_out` is never retained.
+subscription account as to an API-key one. A key with `keepalive_opt_out` is never retained.
 
 In the console: Pools, Edit, the Keepalive group under Caching for "Keep prompt caches warm" and the daily probe cost
 cap, and the Probe tuning group beside it.

@@ -113,12 +113,12 @@ The registry carries a canary sealed under the key at its first open, and every 
 any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
 is refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry
 from before the canary existed is proved against its sealed rows instead, up to the first 32 of each kind (credentials
-and Anthropic-key secrets), passing when any of them opens, by `check-config` and at start, and is sealed at that
+and API-key secrets), passing when any of them opens, by `check-config` and at start, and is sealed at that
 start.
 
 `init` refuses a data directory that already holds a registry, so a lost key is never papered over by a new one.
 
-The key seals OAuth credential bundles and Anthropic-key secrets. `Store::digest_key` also derives, from this same key,
+The key seals OAuth credential bundles and API-key secrets. `Store::digest_key` also derives, from this same key,
 the digest every downstream key authenticates against: the secrets the admin API mints and hands to clients and the
 companion.
 
@@ -147,7 +147,7 @@ compose run --rm phoebis backup --to /var/lib/phoebis/backups/<name>` once it is
 as uid 65532, either from the host against `router.sqlite` on the `phoebis-data` volume or from a one-off container that
 carries `sqlite3` and mounts that volume.
 
-The sequence discards every secret the registry holds, and nothing else: the Anthropic-key secrets, the canary and the
+The sequence discards every secret the registry holds, and nothing else: the API-key secrets, the canary and the
 OAuth credential bundles go, and each account rests where the Accounts view's Disconnect leaves it, with its open
 refresh attempts settled. The accounts, downstream keys, pins, pools and session memory stay. `-bail` stops at the
 first statement that fails, and the transaction it leaves open rolls back, so the file is either wholly changed or
@@ -308,7 +308,7 @@ agents, the Stainless headers, the three beta lists, the control-plane URLs and 
 list, checked against the fixtures under `crates/profile/fixtures/`.
 A newer client build is not relayed in its own shape automatically: headers travel as the
 client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the OAuth beta,
-claimed for a subscription credential and stripped for an Anthropic key on every request that carries the line; the
+claimed for a subscription credential and stripped for an API key on every request that carries the line; the
 cache-diagnosis beta under the pool's `cache_diagnostics` switch; and the extended-TTL beta the cache TTL rewrite adds
 or drops. The profile's beta lists record what the measured client sends, as the fixtures show, and the fields the
 router restores for a Claude Code request are the ones on the [client page](client.md#the-environment-block), not what a

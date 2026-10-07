@@ -190,7 +190,7 @@ const missRng = createRng(1_517);
 function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
   return attempts.map((a) => {
     if (a.upstreamStatus !== 200 || kind === 'count_tokens') return a;
-    // An Anthropic-key account in this fixture answers without the beta, so the client never sees a comparison.
+    // An API-key account in this fixture answers without the beta, so the client never sees a comparison.
     if (ACCOUNTS.find((x) => x.id === a.accountId)?.kind !== 'oauth') return { ...a, cacheMissReason: 'not_requested' as const };
     // A failover lands on an account that never saw the turn before this one.
     if (a.index > 0) return { ...a, cacheMissReason: 'previous_message_not_found' as const };
@@ -398,7 +398,7 @@ function buildRequests(): RequestLog[] {
     unsampled.attempts = unsampled.attempts.map((a) => ({ ...a, windows: a.windows.map((w) => (w.id === '7d' ? { ...w, utilization: null } : w)) }));
   }
   // The drawer and the Models view need one request an account refused the model of. The newest desktop turn that
-  // failed over past a 429 to an Anthropic-key account or to the unmeasured one takes it: the client spelled the model
+  // failed over past a 429 to an API-key account or to the unmeasured one takes it: the client spelled the model
   // without the date the router resolved it to, and a pool member the request had not tried answered 404 for that
   // model first. The cost table has no row for that model, so its tokens never land in a priced subscription's
   // share. Nothing here draws from a stream, so every row after it keeps its values.
@@ -618,7 +618,7 @@ function traceRequests() {
       }
       const account = accountOf.get(a.accountId);
       const overage = account?.overage?.inUse === true ? 1 : 0;
-      // The kind order walks the plan-funded subscriptions, the ones in overage, then the Anthropic keys.
+      // The kind order walks the plan-funded subscriptions, the ones in overage, then the API keys.
       const group = pool?.preferSubscription ? (account?.kind === 'api_key' ? 2 : overage) : 0;
       const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
       const tried = new Set(all.slice(0, i).map((x) => x.accountId));

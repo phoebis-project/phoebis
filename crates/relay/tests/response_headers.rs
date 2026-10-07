@@ -11,7 +11,7 @@ use tower::ServiceExt;
 const OA: &str = "sk-ant-oat01-AAAA0001";
 
 /// The upstream's own identity and cookie, the caller-visible request id, and a header of each rate-limit family:
-/// the unified windows, the Anthropic-key bucket and the fast-token limit.
+/// the unified windows, the API-key bucket and the fast-token limit.
 fn upstream_headers() -> Vec<(&'static str, &'static str)> {
     vec![
         ("anthropic-organization-id", "org_01ABCDEF"),

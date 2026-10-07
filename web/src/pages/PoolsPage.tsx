@@ -701,7 +701,7 @@ function PoolCard({
 }
 
 /**
- * A member's spend against each budget it carries, an Anthropic-key member's whole spend and a subscription member's
+ * A member's spend against each budget it carries, an API-key member's whole spend and a subscription member's
  * metered spend (overage and fast answers), one line each under its name; a member without a budget draws none.
  */
 function MemberBudget({ member }: { member: PoolMember }) {
@@ -1212,7 +1212,7 @@ export function PoolDialog({
           <PageLink to="/accounts">Accounts page</PageLink>.
         </p>
         <p className="field__hint">
-          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an Anthropic-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
+          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
         </p>
         {accountsFailed !== null ? (
           <ErrorState
@@ -1470,7 +1470,7 @@ export function PoolDialog({
           beside
           hint={
             <>
-              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then Anthropic keys; <GroupLink id="members">priority</GroupLink> orders each of those groups.
+              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then API keys; <GroupLink id="members">priority</GroupLink> orders each of those groups.
             </>
           }
         >
@@ -1785,7 +1785,7 @@ export function PoolDialog({
           plain
           hint={
             <>
-              For subscription accounts billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an Anthropic-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/accounts">Accounts page</PageLink> shows which account is in overage.
+              For subscription accounts billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an API-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/accounts">Accounts page</PageLink> shows which account is in overage.
             </>
           }
         >
@@ -1854,7 +1854,7 @@ export function PoolDialog({
         <Field
           label="Write cost"
           plain
-          hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an Anthropic-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
+          hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
         >
           <div className="row">
             <CostReferenceLink />
@@ -1955,7 +1955,7 @@ export function PoolDialog({
               input={{ min: 0, step: 0.5, value: form.capUsd, onChange: (e) => set('capUsd', Number(e.target.value)), 'aria-label': 'Daily probe cost cap in dollars', 'aria-invalid': invalid('Daily probe cost cap in dollars') }}
               hint={
                 <>
-                  Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
+                  Per UTC day, for probes paid in dollars: on API-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
                 </>
               }
             />

@@ -85,7 +85,7 @@ test('the account list folds state, enabled, and cooldowns onto one status', () 
   assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [{ scope: 'account', until: 1, reason: 'rate_limit', window: '5h', set_at: 0 }] }).status, 'cooldown');
 });
 
-test('an account row decodes its usage block and null for an Anthropic-key account', () => {
+test('an account row decodes its usage block and null for an API-key account', () => {
   const rows = fixture('accounts').accounts;
   const [business, direct] = ['business', 'direct'].map((id) => d.decodeAccount(rows.find((r) => r.id === id)));
   const at = d.iso(rows.find((r) => r.id === 'business').usage.poll.last_attempt_at);
@@ -96,7 +96,7 @@ test('an account row decodes its usage block and null for an Anthropic-key accou
     poll: { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 },
     status: 'success',
   });
-  assert.equal(direct.usage, null, 'the poll never reads an Anthropic-key account');
+  assert.equal(direct.usage, null, 'the poll never reads an API-key account');
   const spare = d.decodeAccount({ ...rows[0], id: 'spare', usage: { error: 'no credential is stored for this account; pair it to load quota', fetched_at: null, poll: null } }).usage;
   assert.deepEqual([spare.accountId, spare.status, spare.fetchedAt, spare.poll], ['spare', 'error', null, null], 'the sentence standing in for a snapshot reads as an error');
 });
@@ -488,7 +488,7 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   assert.deepEqual(
     [direct.kind, direct.budgetDailyUsd, direct.budgetMonthlyUsd, direct.budgetUntil, direct.spends],
     ['api_key', null, 50, null, [{ period: 'month', periodEnd: new Date(report.period_end).toISOString(), spentUsd: report.spent_usd }]],
-    'the budgeted Anthropic-key member reads its budgets and the spend the ledger reported against each',
+    'the budgeted API-key member reads its budgets and the spend the ledger reported against each',
   );
   const business = p.members.find((m) => m.accountId === 'business');
   const [metered] = row.members[0].spends;
@@ -535,7 +535,7 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   assert.deepEqual(
     [defaults.members[0].budgetDailyUsd, defaults.members[0].budgetMonthlyUsd, defaults.members[0].budgetUntil, defaults.members[0].spends, defaults.members[0].kind],
     [null, null, null, [], 'oauth'],
-    'a member row without the fields reads no budget, no spend and no Anthropic key',
+    'a member row without the fields reads no budget, no spend and no API key',
   );
   assert.equal(defaults.keys[0].enabled, true, 'a key row without the fields reads the store defaults');
   const odd = d.decodePool({
@@ -711,7 +711,7 @@ test('the burn series decodes each point with its instant, both token sides, and
   assert.deepEqual(
     [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.unit, direct.usd],
     ['direct', null, null, 'usd', body.points.at(-1).usd],
-    'an Anthropic-key point spends dollars and reads no window',
+    'an API-key point spends dollars and reads no window',
   );
   assert.ok(burn.points.every((p) => isIso(p.at)));
   // Every grouping but the account one answers the shares and the unit as null.
@@ -838,7 +838,7 @@ test('the fold uses the ledger formulas for failovers, throughput, and cache mis
   const [g] = d.foldGroups([slowStart], 'all');
   assert.ok(g.percentiles.outputTps.p50 >= 90 && g.percentiles.outputTps.p50 <= 110, `p50 ${g.percentiles.outputTps.p50} is the bucket holding 100`);
   assert.equal(d.foldGroups([{ ...slowStart, ttftMs: null }], 'all')[0].histograms.outputTps.reduce((a, b) => a + b, 0), 0, 'no first-content timing, no sample');
-  // An Anthropic-key request with writes and no diagnostic is a miss by tokens, whatever the reason says.
+  // An API-key request with writes and no diagnostic is a miss by tokens, whatever the reason says.
   const apiKey = { ...base, attempts: [{ ...attempt, cacheMissReason: null }], usage: { ...base.usage, cacheRead: 0, cacheWrite5m: 300 } };
   const [m] = d.foldGroups([apiKey], 'all');
   assert.deepEqual([m.cacheHits, m.cacheMisses, m.uncached], [0, 1, 0]);

@@ -242,7 +242,7 @@ export const ACCOUNTS: Account[] = ([
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
-/** The poll block the route answers on a row: none for an Anthropic-key account, which the poll never reads. */
+/** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
 export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
   if (a.kind === 'api_key') return null;
   if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };

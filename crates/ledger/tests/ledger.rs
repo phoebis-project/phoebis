@@ -3842,7 +3842,7 @@ fn finished(id: &str, priced: bool) -> Record {
     }
 }
 
-/// A harness over an on-disk ledger at `path`, its pool's one member the Anthropic-key account `a`, whose whole spend
+/// A harness over an on-disk ledger at `path`, its pool's one member the API-key account `a`, whose whole spend
 /// counts toward a budget.
 async fn on_disk(
     up: &FakeUpstream,

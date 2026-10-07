@@ -1347,15 +1347,15 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(m.container.querySelectorAll('dialog[open]').length)] });
   const kinds = [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])];
-  kinds.find((b) => b.textContent?.trim() === 'Anthropic key')?.click();
+  kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
   const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
   const choices = [...(dlg?.querySelectorAll('[role="group"]') ?? [])].map((g) => g.getAttribute('aria-label') ?? '');
   const inputs = dlg?.querySelectorAll('input').length ?? 0;
-  const subtitle = 'Subscription logins share your Claude.ai quota. Anthropic keys bill per token against a Console workspace.';
+  const subtitle = 'Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace.';
   results.push({
-    name: '/accounts the Anthropic-key form asks for an id, a label, and the key, and nothing else',
-    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'Anthropic key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
+    name: '/accounts the API-key form asks for an id, a label, and the key, and nothing else',
+    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
     missing: [...fields, ...choices, `${inputs} inputs`, (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
   });
   const pairs = [...(dlg?.querySelectorAll('.form-row') ?? [])].map((r) => [...r.querySelectorAll('.field__label')].map((l) => l.textContent?.trim() ?? ''));
@@ -1484,7 +1484,7 @@ expect('/accounts/secondary', m.text(), [
 await m.navigate('/accounts/nightly');
 expect('/accounts/nightly', m.text(), ['in use', 'Payment method declined', 'Overage since 3h']);
 {
-  // The funding flag is an Anthropic key's state, so this OAuth account in overage reads ready and offers no clear.
+  // The funding flag is an API key's state, so this OAuth account in overage reads ready and offers no clear.
   const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
   const head = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '');
   results.push({ name: '/accounts/nightly an OAuth account in overage reads ready and offers no funding clear', ok: badges[0] === 'Ready' && !head.includes('Clear funding flag'), missing: [...badges, ...head] });
@@ -1586,7 +1586,7 @@ await emailLines('/accounts/overflow the head draws no line under the name of an
 {
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  results.push({ name: '/accounts/overflow the identity card reads the type and draws no base URL row', ok: rows.includes('Type=Anthropic key') && !rows.some((r) => r.startsWith('Base URL=')), missing: rows });
+  results.push({ name: '/accounts/overflow the identity card reads the type and draws no base URL row', ok: rows.includes('Type=API key') && !rows.some((r) => r.startsWith('Base URL=')), missing: rows });
 }
 await m.navigate('/accounts/spare');
 {
@@ -1595,8 +1595,8 @@ await m.navigate('/accounts/spare');
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   results.push({
-    name: '/accounts/spare an unpaired OAuth account reads as OAuth, never as an Anthropic key',
-    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('Anthropic key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-',
+    name: '/accounts/spare an unpaired OAuth account reads as OAuth, never as an API key',
+    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('API key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-',
     missing: rows,
   });
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete account')?.click();
@@ -1904,10 +1904,10 @@ const tab = async (page, label) => {
   const metered = spentOf('primary');
   const whole = spentOf('overflow');
   results.push({
-    name: "/analytics a subscription member's spent cell reads its metered spend, an Anthropic-key member's its whole spend",
+    name: "/analytics a subscription member's spent cell reads its metered spend, an API-key member's its whole spend",
     ok:
       card?.querySelector('.card__subtitle')?.textContent ===
-        "Each budgeted member's spend in its current period, an Anthropic-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here" &&
+        "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here" &&
       metered?.querySelector('.num')?.textContent === 'metered $12.50' &&
       metered?.querySelector('.num .muted')?.textContent === 'metered ' &&
       (whole?.querySelector('.num')?.textContent ?? '').startsWith('$') &&
@@ -2023,7 +2023,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const accountsOf = (name) => rows(name).map((tr) => cell(tr, 1).querySelector('a')?.textContent?.trim());
   results.push({ name: '/pools the serving table lists the members in selection order', ok: JSON.stringify(accountsOf('all')) === JSON.stringify(['primary', 'secondary', 'nightly', 'Overflow workspace']), missing: accountsOf('all') });
   const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
-  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'Anthropic keys P1']), missing: tiers });
+  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'API keys P1']), missing: tiers });
   const standing = (name, label) => {
     const tr = rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label);
     const td = tr ? cell(tr, 2) : null;
@@ -2050,7 +2050,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools an ineligible member says why', ok: standing('all', 'secondary').why === 'secondary: in cooldown, skipped by selection', missing: [standing('all', 'secondary').why] });
   const spend = (name, label) =>
     [...(rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label)?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((s) => s.textContent?.replace(/\s+/g, ' ').trim());
-  results.push({ name: '/pools an Anthropic-key member reads its spend against each budget, the day before the month', ok: JSON.stringify(spend('all', 'Overflow workspace')) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]', missing: spend('all', 'Overflow workspace') });
+  results.push({ name: '/pools an API-key member reads its spend against each budget, the day before the month', ok: JSON.stringify(spend('all', 'Overflow workspace')) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]', missing: spend('all', 'Overflow workspace') });
   results.push({
     name: '/pools a subscription member reads its metered spend against its budget, and a member without one draws no spend line',
     ok: spend('all', 'primary').length === 1 && spend('all', 'primary')[0].startsWith('metered $12.50 of $30.00 this month') && spend('all', 'secondary').length === 0,
@@ -2213,7 +2213,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -2839,7 +2839,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       name: '/pools the write cost line says when each rule set applies, and the grid says which TTL a keepalive probe follows',
       ok:
         (writeCost?.querySelector(':scope > .field__hint')?.textContent ?? '') ===
-          'Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an Anthropic-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way.' &&
+          'Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way.' &&
         gridHint === "The TTL each turn writes with, by agent. A keepalive probe replays the turn under its agent's TTL, so the first probe after a turn and every later one follow the same rule." &&
         meteredMain?.value === '5m',
       missing: [writeCost?.querySelector(':scope > .field__hint')?.textContent ?? 'no write cost hint', gridHint || 'no grid hint', meteredMain?.value ?? 'no metered main select'],
@@ -2917,7 +2917,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok: stored === '20000' && refused[0] === true && refused[1] === 'The minimum shared prefix is a whole number of tokens, 0 or more.' && JSON.stringify(cohortOnly) === '[false,true]' && JSON.stringify(neither) === '[true,true,false]' && save()?.disabled === false,
       missing: [String(stored), ...refused.map(String), JSON.stringify(cohortOnly), JSON.stringify(neither)],
     });
-    // Every member row carries a daily and a monthly budget, a subscription member's as an Anthropic-key member's; a
+    // Every member row carries a daily and a monthly budget, a subscription member's as an API-key member's; a
     // budget the member write refuses holds the save.
     const daily = (label) => dlg?.querySelector(`input[aria-label="Daily budget for ${label}, USD"]`);
     const monthly = (label) => dlg?.querySelector(`input[aria-label="Monthly budget for ${label}, USD"]`);
@@ -2925,10 +2925,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const rows = [daily('Overflow workspace'), monthly('Overflow workspace')].flatMap(field);
     const subscription = [daily('primary'), monthly('primary')].flatMap(field);
     const hint =
-      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an Anthropic-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers); set one, both, or neither.";
+      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers); set one, both, or neither.";
     const heads = [...(group(dlg, 'Members')?.querySelectorAll('.members-table thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({
-      name: "/pools every member row carries a daily and a monthly budget field, a subscription member's as an Anthropic-key member's",
+      name: "/pools every member row carries a daily and a monthly budget field, a subscription member's as an API-key member's",
       ok:
         JSON.stringify(rows) === '["5","none","0.01","any","50","none","0.01","any"]' &&
         JSON.stringify(subscription) === '["","none","0.01","any","30","none","0.01","any"]' &&
@@ -5824,7 +5824,7 @@ if (failoverRow) {
     results.push({ name: '/requests/:failover drawer', ok: missing.length === 0 && cooldown === 'cooldown set', missing: [...missing, cooldown ? `badge ${JSON.stringify(cooldown)}` : 'no cooldown badge in the drawer'] });
   }
   const slots = [...m.container.querySelectorAll('.attempt__windows')].map((u) => [...u.querySelectorAll('li')].map((li) => li.children[0]?.textContent).join(','));
-  // An Anthropic-key account reports no quota windows at all, so its attempt carries the cache row alone.
+  // An API-key account reports no quota windows at all, so its attempt carries the cache row alone.
   results.push({
     name: '/requests attempts read all three windows then the cache row, in a fixed order',
     ok: slots.length > 0 && slots.some((s) => s === '5h,7d,Fable,Cache') && slots.every((s) => s === '5h,7d,Fable,Cache' || s === 'Cache'),
@@ -7367,7 +7367,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
     const ci = body.find((row) => row[0] === 'ci') ?? [];
-    results.push({ name: '/analytics an Anthropic-key account only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
+    results.push({ name: '/analytics an API-key account only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
     results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });
@@ -8182,7 +8182,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   {
     // The kind badge gave its width to the fit, so the cell's title names the account's kind and its description
     // carries the same words to a reader that never hovers.
-    const KINDS = { 'Anthropic key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
+    const KINDS = { 'API-key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
     const titled = rows().map((r) => cell(r, 'Account')).filter((c) => KINDS[c?.getAttribute('title') ?? ''] !== undefined);
     const kinds = titled.map((c) => KINDS[c.getAttribute('title')]);
     const undescribed = titled.filter((c) => {

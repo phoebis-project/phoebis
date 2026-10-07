@@ -60,7 +60,7 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("writer_degraded", "ledger".to_string(), false),
             ("writer_degraded", "routing".to_string(), false),
         ],
-        "every account carries its re-auth state, an Anthropic key its funding, and an OAuth account its refresh run \
+        "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run \
          and, before any poll status exists, its backoff; every pool its parked records, and each writer its state"
     );
 }
@@ -532,7 +532,7 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
         Some(NOW + 9_000),
         "a state that cleared and came back dates from the read that saw it again"
     );
-    // The relay marks an Anthropic key the upstream refuses as it marks an OAuth login whose refresh is gone.
+    // The relay marks an API key the upstream refuses as it marks an OAuth login whose refresh is gone.
     rig.store
         .set_state("direct", AccountState::ReauthRequired)
         .unwrap();
@@ -796,7 +796,7 @@ async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_through_a_failed
     );
     assert!(
         find(&before, Kind::PollBackoff, "direct").is_none(),
-        "the poll never asks an Anthropic key"
+        "the poll never asks an API key"
     );
     usage.poll("business").await.unwrap();
     // A second 429 once the first step's two minutes have passed: the run keeps its start and climbs the ladder.

@@ -54,9 +54,9 @@ by the static prefix, by a subagent's fallback to its parent agent's pin, or, wi
 any request's landing on another agent's pin of its session, is a hit when it read at all.
 
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
-day and the current month, an Anthropic-key member's rows whole, a subscription member's metered rows alone (`overage`
+day and the current month, an API-key member's rows whole, a subscription member's metered rows alone (`overage`
 and `fast`); a keepalive probe's cost counts toward it the same as any other request's, since a probe on an
-Anthropic-key member still draws real money. The table in force is fixed at startup, so a member held at its budget
+API-key member still draws real money. The table in force is fixed at startup, so a member held at its budget
 waits for the period to end or its budget to be raised, rather than for a price correction. The rollups file each hour's
 traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
 
@@ -118,12 +118,12 @@ or `NaN`, which no budget trips on.
 ## Plan meter
 
 A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
-with the window named; an Anthropic-key account, and a subscription account in overage, read dollars.
+with the window named; an API-key account, and a subscription account in overage, read dollars.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, or the burn a shedding round ranks by.
 It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which Spend per minute
 charts under every grouping; a member's budget counts them at the fast cells, a subscription member's as an
-Anthropic-key member's.
+API-key member's.
 
 The cost table (`crates/ledger/cost_table.yaml`) ships beside the price table: per window, model and token type, the
 share of a Max 20x subscription's window that one million tokens consume, a number where the plan meter measured the
@@ -431,7 +431,7 @@ per-group table's Rejected beside them) and the error rate, with a Failovers cha
 it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range counted,
 by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar per level
 the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day window and
-an Anthropic-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account,
+an API-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account,
 key, request class, or session; the 5-hour share carries the peak band's weight, the 7-day share none. The shares read
 under the account grouping alone, since shares of different accounts' windows do not add, and the Spend per minute chart
 draws dollars alone, a subscription account's among them only for its fast-mode answers; past the seven lines a chart
@@ -500,8 +500,8 @@ at the first read.
 | `writer_degraded` | the ledger | a batch lands and the spend refresh after it succeeds |
 | `writer_degraded` | the routing state writer | the backlog drains |
 | `certificate_reload_failed` | the listener key | a reload lands or the router restarts |
-| `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
-| `funding_required` | the Anthropic-key account | the operator clears funding |
+| `reauth_required` | the account | the account is paired again, or an API-key account gets a new secret |
+| `funding_required` | the API-key account | the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
 | `certificate_expiring` | the listener key | a pair with more than 30 days left is loaded |
 | `ledger_record_parked` | the pool, or `-` for a record without one | the next start or the Replay button lands them |

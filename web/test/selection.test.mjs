@@ -162,7 +162,7 @@ test('a pin counts only while the session holds it', () => {
   );
 });
 
-test('the kind order walks plan oauth, overage oauth, then Anthropic keys ahead of priority', () => {
+test('the kind order walks plan oauth, overage oauth, then API keys ahead of priority', () => {
   const trio = [account('key', { kind: 'api_key' }), account('over', { extraUsage: extraUsageOn }), account('plan')];
   const members = [member('key', 0), member('over', 0), member('plan', 1)];
   const tiers = selectionOrder(pool('priority', 'prefer_plan', members, { preferSubscription: true }), trio, [], NOW);
@@ -260,7 +260,7 @@ test('pace places the floor group and a winding-down member last', () => {
       ['fresh', null, 1],
       ['key', 'floor', 2],
     ],
-    'an Anthropic-key member reads its worst reported window against the floor',
+    'an API-key member reads its worst reported window against the floor',
   );
 });
 

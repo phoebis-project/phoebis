@@ -161,7 +161,7 @@ test('the burn fold keeps the groups that burn the most tokens and sums the rest
 
 test('under the account grouping the rest folds into one other per unit, so no dollars hide behind a window share', () => {
   // Seven accounts burn the most; the three smallest are a priced subscription, a tier-unknown one and an
-  // Anthropic key.
+  // API key.
   const kept = Array.from({ length: 7 }, (_, i) => point(0, `u${i}`, { cachedTokens: 1_000 * (i + 2), fiveHourShare: 0.001, unit: 'window_share' }));
   const answered = [
     ...kept,
@@ -175,7 +175,7 @@ test('under the account grouping the rest folds into one other per unit, so no d
   assert.deepEqual(rest.map((l) => [l.label, l.unit, l.other]), [['Other (plan)', 'window_share', true], ['Other (tier unknown)', 'unknown', true], ['Other (dollars)', 'usd', true]]);
   assert.equal(new Set(lines.map((l) => l.key)).size, lines.length, 'each line keeps a key of its own');
   assert.deepEqual([rows[0].cached[7], rows[0].cached[8], rows[0].cached[9]], [120, 90, 60], 'each rest carries its own unit\'s accounts');
-  assert.deepEqual([rows[0].usd[7], rows[0].usd[8], rows[0].usd[9]], [0, 0, 0.6], 'the dollar side keeps the Anthropic-key account\'s dollars');
+  assert.deepEqual([rows[0].usd[7], rows[0].usd[8], rows[0].usd[9]], [0, 0, 0.6], 'the dollar side keeps the API-key account\'s dollars');
   assert.deepEqual([rows[0].fiveHour[7], rows[0].sevenDay[7]], [null, null], 'a folded rest draws no share');
   const oneUnit = d.foldBurn([...kept, point(0, 'small-key', { cachedTokens: 60, unit: 'usd', usd: 0.6 }), point(0, 'tiny-key', { cachedTokens: 30, unit: 'usd', usd: 0.3 })], 'account', 60, sized);
   assert.deepEqual(oneUnit.lines.slice(7).map((l) => l.label), ['Other (dollars)'], 'a rest of one unit folds into that unit alone');

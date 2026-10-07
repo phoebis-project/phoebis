@@ -210,7 +210,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
 }
 
 #[tokio::test]
-async fn an_anthropic_key_the_upstream_refused_reads_as_an_account_to_reauthorize() {
+async fn an_api_key_the_upstream_refused_reads_as_an_account_to_reauthorize() {
     let parts = common::admin_parts_full().await;
     let app = &parts.app;
     let cookie = login(app, "admin-secret").await;

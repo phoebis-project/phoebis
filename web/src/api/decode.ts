@@ -366,7 +366,7 @@ export function decodePool(v: unknown): Pool {
       budgetUntil: isoOrNull(m.budget_until),
       // A row from before the router reported eligibility reads as not servable rather than as servable.
       eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable',
-      // The route answers null for an account it cannot find, which is no Anthropic-key account either.
+      // The route answers null for an account it cannot find, which is no API-key account either.
       kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth',
       priority: num(m.priority),
       spends: list(m.spends).map(rec).map((s) => ({ period: BUDGET_PERIOD_VALUES.find((x) => x === str(s.period)) ?? 'month', periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),

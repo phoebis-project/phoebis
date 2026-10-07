@@ -1,4 +1,4 @@
-//! A store with an OAuth account, an Anthropic-key account, a pool holding both and a key on it, the router over
+//! A store with an OAuth account, an API-key account, a pool holding both and a key on it, the router over
 //! them, a ledger over an in-memory file, and a clock the test moves; the reader spawns on the rig's bus.
 #![allow(dead_code)]
 use std::sync::atomic::{AtomicI64, Ordering};

@@ -135,7 +135,7 @@ export function AccountsPage() {
           setAddOpen(false);
           accounts.reload();
           if (kind === 'oauth') setPairing({ accountId: created.id, label: created.label, repair: false });
-          else notify('Anthropic key added');
+          else notify('API key added');
         }}
       />
       <PairingDialog
@@ -474,7 +474,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                     { label: 'Billing type', value: account.subscription?.billingType ?? '-' },
                   ]
                 : [
-                    { label: 'Type', value: 'Anthropic key' },
+                    { label: 'Type', value: 'API key' },
                     { label: 'Windows', value: 'None reported; billed per token' },
                   ]
             }
@@ -734,14 +734,14 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
       open={open}
       onClose={onClose}
       title="Add account"
-      subtitle="Subscription logins share your Claude.ai quota. Anthropic keys bill per token against a Console workspace."
+      subtitle="Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" disabled={busy || !id.trim() || !label.trim() || (kind === 'api_key' && !secret)} onClick={() => void create()}>
-            {kind === 'oauth' ? 'Start pairing' : 'Add Anthropic key'}
+            {kind === 'oauth' ? 'Start pairing' : 'Add API key'}
           </Button>
         </>
       }
@@ -754,7 +754,7 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
           onChange={setKind}
           options={[
             { value: 'oauth', label: 'OAuth login' },
-            { value: 'api_key', label: 'Anthropic key' },
+            { value: 'api_key', label: 'API key' },
           ]}
         />
       </div>
@@ -767,7 +767,7 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
         </Field>
       </div>
       {kind === 'api_key' && (
-        <Field label="Anthropic key">
+        <Field label="API key">
           <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk-ant-…" className="mono" />
         </Field>
       )}

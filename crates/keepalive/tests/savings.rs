@@ -1400,7 +1400,7 @@ async fn a_request_past_the_first_entry_and_inside_the_second_that_reads_nothing
 }
 
 /// A migrated probe settles at its own cost in the unit its serving attempt was funded in: dollars on an
-/// Anthropic-key pool, where the day's dollar cap and the agent's dollar net move by its price, and the 5-hour share
+/// API-key pool, where the day's dollar cap and the agent's dollar net move by its price, and the 5-hour share
 /// on a subscription pool, where the account's share cap and the agent's share move by its share.
 #[tokio::test]
 async fn a_migrated_probe_settles_at_its_cost_under_dollar_and_under_plan_funding() {

@@ -103,7 +103,7 @@ export interface Account {
   status: AccountStatus;
   subscription: Subscription | null;
   /** The poll's standing and its last snapshot's error and instant, as the usage route answers them; null for an
-   * Anthropic-key account, which the poll never reads. */
+   * API-key account, which the poll never reads. */
   usage: QuotaSnapshot | null;
   /** The 5-hour and 7-day windows; the Fable window is `fableWindow`. */
   windows: RateLimitWindow[];
@@ -866,7 +866,7 @@ export interface BurnPoint {
   /** Cache-read tokens. */
   cachedTokens: number;
   /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
-   *  for an Anthropic-key account, one whose tier is unknown, a bucket with no row the table prices (an idle hour among
+   *  for an API-key account, one whose tier is unknown, a bucket with no row the table prices (an idle hour among
    *  them) or one holding a row the table cannot price, and under every other grouping. */
   fiveHourShare: number | null;
   group: string;
@@ -876,10 +876,10 @@ export interface BurnPoint {
   tokens: number;
   /** Uncached input tokens. */
   uncachedTokens: number;
-  /** What the account spends in: a subscription's window share, even while no tier prices it, or an Anthropic key's
+  /** What the account spends in: a subscription's window share, even while no tier prices it, or an API key's
    *  dollars; null under every other grouping, and for an account the registry no longer holds. */
   unit: BurnUnit | null;
-  /** An Anthropic-key account's estimated cost. */
+  /** An API-key account's estimated cost. */
   usd: number;
 }
 
