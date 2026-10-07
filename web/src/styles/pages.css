@@ -2060,9 +2060,9 @@
   background: var(--series-3);
 }
 
-/* A tint of the muted tone, so it reads apart from the skipped segment beside it. */
+/* The muted tone mixed toward the ink, so it reads apart from the skipped segment beside it. */
 .probe-bar__seg--held {
-  background: color-mix(in srgb, var(--series-muted) 50%, var(--surface));
+  background: color-mix(in srgb, var(--series-muted) 60%, var(--ink));
 }
 
 .probe-bar__seg--skipped {
