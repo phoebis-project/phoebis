@@ -2635,34 +2635,48 @@ async function requestDrawerCompact(theme) {
   for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
 }
 
+const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';
+
+/** Opens `row` beneath itself and answers whether a card with its walk arrived. */
+async function openDecision(row) {
+  await row.locator('td.routing-log__kind').click();
+  await advance(LOAD_MS);
+  try {
+    await page.waitForSelector('.routing-log__panel .decision-card__walk', { timeout: 15_000 });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
- * The routing log's decision card, opened from the first decision row once the log's shot is taken: at 1280 by 800 and
- * 1440 by 900 the walk and the candidate table (958 px, then 1118 px) sit inside the card with nothing to scroll
- * sideways, and every verdict badge of the walk takes the kind badge's box. A renewal walks no rung, so the Prefix
- * cell's two chips are read on the first rung placement the page lists. The router's seed places no request by a rung,
- * so there that check stands down.
+ * The site's Routing log shot shows a decision card open, so the first decision row (in the mock's story the renewal
+ * at its newest instant) opens before the shot. A second click shuts a row, so `decisionCard` measures this card after
+ * the shot rather than opening it again.
  */
-async function decisionCard(theme) {
+async function firstDecisionOpen(theme) {
   const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
-  const decisions = page.locator('.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])');
-  const open = async (row) => {
-    await row.locator('td.routing-log__kind').click();
-    await advance(LOAD_MS);
-    try {
-      await page.waitForSelector('.routing-log__panel .decision-card__walk', { timeout: 15_000 });
-      return true;
-    } catch {
-      return false;
-    }
-  };
-  if ((await decisions.count()) === 0) {
+  const first = page.locator(DECISION_ROWS).first();
+  if ((await first.count()) === 0) {
     say('no decision row to open');
     return;
   }
-  if (!(await open(decisions.first()))) {
-    say('the first decision row opened to no card');
-    return;
-  }
+  if (!(await openDecision(first))) say('the first decision row opened to no card');
+  await atRest();
+  await settle();
+}
+
+/**
+ * The routing log's decision card the log's shot holds open: at 1280 by 800 and 1440 by 900 the walk and the candidate
+ * table (958 px, then 1118 px) sit inside the card with nothing to scroll sideways, and every verdict badge of the walk
+ * takes the kind badge's box. A renewal walks no rung, so the Prefix cell's two chips are read on the first rung
+ * placement the page lists. The router's seed places no request by a rung, so there that check stands down.
+ */
+async function decisionCard(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const decisions = page.locator(DECISION_ROWS);
+  // `firstDecisionOpen` has named the missing card already.
+  if ((await page.locator('.routing-log__panel .decision-card__walk').count()) === 0) return;
   const read = () =>
     page.evaluate(() => {
       const box = (el) => {
@@ -2713,7 +2727,7 @@ async function decisionCard(theme) {
     if (mock) say('the story lists no rung placement whose Prefix cell to read');
     return;
   }
-  if (!(await open(rung))) {
+  if (!(await openDecision(rung))) {
     say('the first rung placement opened to no card');
     return;
   }
@@ -3587,6 +3601,7 @@ try {
       if (view.path === '/routing-log') {
         await routingLogColumns(theme);
         await diagnosticsNav(theme, view.path);
+        await firstDecisionOpen(theme);
       }
       if (view.path === '/quota') {
         await quotaChips(theme);

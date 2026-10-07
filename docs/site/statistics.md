@@ -505,6 +505,11 @@ the dashboard's pool exhausted item open the pool's exhausted decisions from the
 log action on an account's Requests card shows the account's rows over the last hour, and the Models view's link opens
 the model rejected and model permitted rows of the last 24 hours.
 
+![The Routing log view: the merged stream with the renewal's decision card
+open](assets/routing-log-light.png#only-light)
+![The Routing log view: the merged stream with the renewal's decision card
+open](assets/routing-log-dark.png#only-dark)
+
 ### Analytics
 
 A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every chart
