@@ -4895,6 +4895,46 @@ async fn two_replays_asked_under_a_held_batch_both_answer_held_past_the_bound_an
     up.shutdown().await;
 }
 
+/// A caller that goes away before its deadline never takes the claim, as the route's future does when its client
+/// closes the connection. The message it sent still carries the deadline, so the writer that comes back after it
+/// refuses the replay unrun, and the replay after it lands the row.
+#[tokio::test]
+async fn a_replay_whose_caller_went_away_before_its_deadline_never_runs_after_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_landable(&h, "parked").await;
+    hold_a_batch(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let replay = replay_on_a_task(&h, now);
+    stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
+    replay.abort();
+    assert!(replay.await.unwrap_err().is_cancelled());
+    step(&h, BOUND + Duration::from_secs(1));
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 7).then_some(())
+    })
+    .await;
+    free_the_writer(&h).await;
+    // The control channel is read in order, so the abandoned message reaches the writer ahead of this one: a landed
+    // row here means the first never ran.
+    assert_eq!(
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
+    up.shutdown().await;
+}
+
 /// The claim decides who owns a replay, never the clock: a replay the writer took before the deadline answers its
 /// rows to a caller still waiting past it. The test holds the reader connection from before the claim until after the
 /// deadline, so the writer has landed the row and waits on the count it answers with while the bound runs out.

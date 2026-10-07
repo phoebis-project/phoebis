@@ -121,8 +121,10 @@ enum Control {
     /// `deadline` is the caller's bound on the ledger's clock, and `claimed` is who owns the replay: the writer
     /// takes it (`compare_exchange(false, true)`) at its turn before it runs `land_parked`, the caller takes it at
     /// the deadline instead, and whoever loses the exchange stands down. A message the caller claimed is dropped
-    /// unanswered with a `debug` line naming the deadline, so a caller that gave up never has its replay run behind
-    /// its back; a message the writer claimed answers its real result however long the landing takes.
+    /// unanswered with a `debug` line naming the deadline. A message the writer claims at or past its deadline is
+    /// answered `WriterHeld` unrun, which covers a caller that went away before its deadline and so never took the
+    /// claim. A caller that gave up never has its replay run behind its back, and a message the writer claimed before
+    /// the deadline answers its real result however long the landing takes.
     ReplayParked {
         now: i64,
         deadline: i64,
@@ -552,6 +554,10 @@ async fn writer(
                     .is_err()
                 {
                     tracing::debug!(deadline, "a replay whose caller gave up at its deadline is dropped unrun");
+                    continue;
+                }
+                if clock() >= deadline {
+                    let _ = reply.send(Err(LedgerError::WriterHeld));
                     continue;
                 }
                 let replayed = match land_parked(&db, &pricing, &stats, &metrics, now).await {

@@ -365,15 +365,18 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
     ok: slot() === 'the ledger writer is held, try again' && toasts === 0 && parked() && button()?.disabled === false,
     missing: [`slot ${JSON.stringify(slot())}`, `toasts ${toasts}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
   });
+  // The answer is held until the check releases it, so the button is read while the replay runs, whatever the timing.
+  const answer = deferNextCall('replayParked');
   button()?.click();
-  // Inside the mock's 250 ms answer, so the button reads as the replay runs.
-  await dash.settle(50);
-  const running = button()?.disabled;
+  await dash.settle(100);
+  const running = [answer.calls.length, button()?.disabled];
+  answer.release();
+  answer.restore();
   await dash.settle(700);
   results.push({
     name: '/ a replay reads its counts in the slot, and the read after it takes the parked badge and the button off the line',
-    ok: running === true && slot() === 'Landed 1, 0 still parked' && !parked() && button() === undefined,
-    missing: [`disabled while it runs ${running}`, `slot ${JSON.stringify(slot())}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+    ok: running[0] === 1 && running[1] === true && slot() === 'Landed 1, 0 still parked' && !parked() && button() === undefined,
+    missing: [`calls ${running[0]}, disabled while it runs ${running[1]}`, `slot ${JSON.stringify(slot())}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
   });
   // The replay landed the story's record for good, and the checks below read it on the codex card, so the story takes
   // it back.
