@@ -764,14 +764,10 @@ fn each_first_block_member<'a>(
 /// bytes, as `find_cch` reads every line, so this count never falls below the raw walk's.
 fn reads_as_a_stamp(token: &[u8]) -> bool {
     const PREFIX: &str = "x-anthropic-billing-header:";
-    let decoded = serde_json::from_slice::<String>(token).or_else(|_| {
-        let mut lone = Vec::new();
-        lone_surrogate_escapes(token, 0, &mut lone);
-        let mut mapped = token.to_vec();
-        for at in lone {
-            mapped[at + 2..at + 6].copy_from_slice(b"FFFD");
-        }
-        serde_json::from_slice::<String>(&mapped)
+    let decoded = serde_json::from_slice::<String>(token).or_else(|refused| {
+        lone_surrogates_mapped(token).map_or(Err(refused), |mapped| {
+            serde_json::from_slice::<String>(&mapped)
+        })
     });
     match decoded {
         Ok(line) => line.starts_with(PREFIX) && line.contains("cch="),
@@ -1505,6 +1501,10 @@ mod tests {
         );
 
         let escaped_colon = body(r"x-anthropic-billing-header\u003a v=1 \udc00 cch=01234;");
+        assert!(
+            serde_json::from_slice::<serde_json::Value>(&escaped_colon).is_err(),
+            "a strict decoder refuses the line"
+        );
         assert!(find_cch(&escaped_colon).is_none());
         assert_eq!(decoded_stamp_count(&escaped_colon), 1);
 

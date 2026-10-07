@@ -349,13 +349,16 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
             delay_between: Duration::from_millis(600),
         },
     );
-    let h = harness(
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
             failover: account_cap(1, 1),
             ..PoolSpec::default()
         },
+        bus,
     )
     .await;
     let on_a = h
@@ -400,7 +403,22 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
         1,
         "a's stream is still open"
     );
-    drop((on_a, on_b, third));
+    let third_id = outcome(&third).request_id;
+    drain(third).await;
+    let complete = completion_of(&mut sub, &third_id).await;
+    let held: serde_json::Value = serde_json::from_str(
+        complete
+            .held
+            .as_deref()
+            .expect("the completion names the hold"),
+    )
+    .unwrap();
+    assert_eq!(
+        held["waited_on"],
+        serde_json::json!(["a"]),
+        "the request waited on a alone, and b's slot freed inside the bound took it with no hold of its own"
+    );
+    drop((on_a, on_b));
     up.release();
     up.shutdown().await;
 }
@@ -536,7 +554,7 @@ async fn a_request_whose_one_bound_ran_out_answers_at_cap_naming_its_one_wait_on
             resp.headers()["x-phoebis-error-code"].to_str().unwrap()
         ),
         (429, "accounts_at_cap"),
-        "every account was held for and ran out"
+        "a's hold ran the bound out and b was passed over"
     );
     assert_eq!(posts(&up), 2, "nothing was dialled for the held request");
     let held = outcome(&resp)
@@ -619,21 +637,14 @@ async fn three_accounts_at_cap_hold_a_request_one_bound_and_not_three() {
         ["a", "b", "c"],
         "each account holds one stream at its cap"
     );
-    // Wall time: the hold reads tokio's clock and the fake upstream answers over a real socket, which a paused
-    // clock would run past.
-    let started = Instant::now();
-    let resp = tokio::time::timeout(
-        Duration::from_secs(10),
-        h.app.clone().oneshot(request_for(KEY, MODEL, "s4")),
-    )
-    .await
-    .expect("the bound ends the hold")
-    .unwrap();
-    let waited = started.elapsed();
-    assert!(
-        waited >= Duration::from_millis(1_900) && waited < Duration::from_secs(4),
-        "one two-second bound for the request, not one per account: {waited:?}"
-    );
+    tokio::time::pause();
+    let resp = h
+        .app
+        .clone()
+        .oneshot(request_for(KEY, MODEL, "s4"))
+        .await
+        .unwrap();
+    tokio::time::resume();
     assert_eq!(
         (
             resp.status().as_u16(),
@@ -653,7 +664,7 @@ async fn three_accounts_at_cap_hold_a_request_one_bound_and_not_three() {
     );
     assert!(
         (1_900..3_000).contains(&held.held_ms),
-        "the first wait ran the two-second bound out and the later accounts added none: {}",
+        "one two-second bound for the request, not one per account: {}",
         held.held_ms
     );
     let complete = completion_of(&mut sub, &outcome(&resp).request_id).await;
@@ -666,81 +677,6 @@ async fn three_accounts_at_cap_hold_a_request_one_bound_and_not_three() {
         "the completion names the hold the request ran"
     );
     drop(open);
-    up.release();
-    up.shutdown().await;
-}
-
-#[tokio::test]
-async fn a_slot_that_frees_on_the_second_account_inside_the_bound_lands_the_request_there() {
-    let up = FakeUpstream::start(vec![]).await;
-    up.add_credential_rule(A, "/v1/messages", held_stream());
-    // b's stream ends on its own inside the bound, but a's never does.
-    up.add_credential_rule(
-        B,
-        "/v1/messages",
-        Respond::Sse {
-            status: 200,
-            headers: vec![],
-            events: vec![message_start(), message_stop()],
-            delay_between: Duration::from_millis(500),
-        },
-    );
-    let h = harness(
-        &up,
-        &[oauth("a", A, 0), oauth("b", B, 1)],
-        PoolSpec {
-            failover: account_cap(1, 2),
-            ..PoolSpec::default()
-        },
-    )
-    .await;
-    let on_a = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s1"))
-        .await
-        .unwrap();
-    let on_b = h
-        .app
-        .clone()
-        .oneshot(request_for(KEY, MODEL, "s2"))
-        .await
-        .unwrap();
-    assert_eq!(
-        (
-            outcome(&on_a).account_id.as_str(),
-            outcome(&on_b).account_id.as_str()
-        ),
-        ("a", "b"),
-        "each account holds one stream at its cap"
-    );
-    let started = Instant::now();
-    let third = tokio::time::timeout(
-        Duration::from_secs(10),
-        h.app.clone().oneshot(request_for(KEY, MODEL, "s3")),
-    )
-    .await
-    .expect("the bound ends the hold")
-    .unwrap();
-    let waited = started.elapsed();
-    assert!(
-        waited < Duration::from_secs(4),
-        "the request landed by its one two-second bound: {waited:?}"
-    );
-    assert_eq!(
-        (third.status().as_u16(), outcome(&third).account_id.as_str()),
-        (200, "b"),
-        "the slot b freed inside the bound takes the request once a's hold runs out"
-    );
-    assert_eq!(credentials_seen(&up), [A, B, B]);
-    assert_eq!(
-        outcome(&third)
-            .held
-            .expect("the outcome names the hold it waited through")
-            .waited_on,
-        ["a"]
-    );
-    drop((on_a, on_b, third));
     up.release();
     up.shutdown().await;
 }
