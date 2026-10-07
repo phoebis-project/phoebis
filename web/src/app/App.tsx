@@ -9,6 +9,7 @@ import { ModelsPage } from '@/pages/ModelsPage';
 import { ObservePage } from '@/pages/ObservePage';
 import { QuotaPage } from '@/pages/QuotaPage';
 import { RequestsPage } from '@/pages/RequestsPage';
+import { RoutingLogPage } from '@/pages/RoutingLogPage';
 import { SessionsPage } from '@/pages/SessionsPage';
 import { SettingsPage } from '@/pages/SettingsPage';
 import { SessionProvider } from './session';
@@ -43,6 +44,7 @@ export const routes = [
       { path: 'quota', element: <QuotaPage /> },
       { path: 'requests', element: <RequestsPage /> },
       { path: 'requests/:requestId', element: <RequestsPage /> },
+      { path: 'routing-log', element: <RoutingLogPage /> },
       { path: 'sessions', element: <SessionsPage /> },
       { path: 'settings', element: <SettingsPage /> },
     ],

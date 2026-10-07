@@ -16,6 +16,7 @@ import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, 
 import { accountPatchOf, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
+import { aroundSubject, logHref } from '@/lib/routingLog';
 import { joinTrend } from '@/lib/trend';
 
 type SortKey = 'name' | 'reset' | 'status' | 'usage';
@@ -633,7 +634,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
               }
             />
           </Card>
-          <Card title="Requests">
+          <Card title="Requests" actions={<Link to={logHref({ accounts: [account.id], ...aroundSubject(null, now) })}>Routing log</Link>}>
             <div className="req-totals">
               <div>
                 <span className="stat__label">Last 24h</span>

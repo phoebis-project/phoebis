@@ -1,3 +1,4 @@
+import { readFileSync } from 'node:fs';
 import { JSDOM } from 'jsdom';
 
 const dom = new JSDOM('<!doctype html><html><head></head><body></body></html>', { url: 'http://127.0.0.1/', pretendToBeVisual: true });
@@ -50,8 +51,8 @@ process.on('unhandledRejection', (e) => problems.push(`[unhandledRejection] ${e?
 // while intervals, relative labels, and the scroll guards keep seeing time pass. The zone is pinned to UTC by
 // the smoke script for the same reason. Every date needle a check below compares against derives from
 // CLOCK_ORIGIN through the same formatter the page uses, never from a literal or the wall clock; the formatter
-// is exercised in UTC only. A date the story fixes outright, such as the pricing table's effective date, is a
-// literal on both sides and reads the same at any clock.
+// is exercised in UTC only. A date the fixtures fix outright, such as a cost file's effective date, is read from the
+// fixture through the same formatter and reads the same at any clock.
 const CLOCK_ORIGIN = Date.UTC(2026, 8, 16, 14, 30);
 const started = performance.now();
 const WallClock = Date;
@@ -65,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, emitLive, Expert, failCalls, failNextCall, Field, fmtPct, fmtWindows, GroupedDialog, GroupLink, Input, MOCK_VERSION, mount, mountNode, PageLink, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shortModel, stallLive, SwitchedNumber, tick } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -103,6 +104,18 @@ async function emailLines(name, rows) {
   results.push({ name, ok: rows.length > 0 && wrong.length === 0, missing: wrong.map(([id, line]) => `${id}: ${JSON.stringify(line)}`) });
 }
 const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
+/** The request drawer's sections, in the order it draws them. */
+const DRAWER_SECTIONS = ['Outcome', 'Usage', 'Request', 'Request shape', 'Client hints', 'Captured bodies'];
+/** A row of the request drawer by its label, wherever its section is. */
+const drawerRowOf = (page, label) => [...page.container.querySelectorAll('.drawer .kv__row')].find((row) => row.querySelector('dt')?.textContent?.trim() === label);
+/** A drawer row's chips: the label, whether the chip is mono, its hover and the value after the label. */
+const drawerChips = (row) =>
+  [...(row?.querySelectorAll('dd .chip') ?? [])].map((chip) => ({
+    label: chip.querySelector('.chip__label')?.textContent?.trim() ?? null,
+    mono: chip.classList.contains('mono'),
+    title: chip.getAttribute('title'),
+    value: [...chip.childNodes].filter((n) => !(n.nodeType === 1 && n.classList.contains('chip__label'))).map((n) => n.textContent).join('').trim(),
+  }));
 /** A wait as the TTFB column reads a duration, spelled out here so the checks hold the console's formatter to it. */
 const waitText = (ms) => (ms >= 1000 ? `${(ms / 1000).toFixed(ms >= 10_000 ? 0 : 1)} s` : `${Math.round(ms)} ms`);
 /** A live row's cell under the header that reads `header` in the mount's live table, so a check names its column. */
@@ -133,14 +146,21 @@ async function showColumn(m, label) {
 }
 /** The state each live status dot's class stands for, as its title names it. */
 const DOT_TITLES = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
+/**
+ * A link into the routing log read as its path and its query values, so a check compares the filters and the range
+ * whatever order the address writes them in.
+ */
+const logTarget = (href) => {
+  const url = new URL(href ?? '', 'http://console.test');
+  return { path: url.pathname, ...Object.fromEntries(url.searchParams) };
+};
+/** An instant as the routing log's address writes it. */
+const isoAt = (ms) => new Date(ms).toISOString();
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
 const laptopRow = requests.find((r) => r.keyId === 'laptop' && r.status === 200) ?? requests.find((r) => r.keyId === 'laptop');
 const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.length > 1) ?? requests.find((r) => r.keyId === 'desktop');
-// More than one attempt, since a single-attempt 429 also ends rate-limited with a cooldown and never failed
-// over; and at least one attempt that reported quota windows, which is what the window slots below read.
-const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.some((a) => a.outcome === 'rate_limited' && a.cooldownSet) && r.attempts.some((a) => a.windows.length > 0));
 {
   const ciProbes = requests.filter((r) => r.keyId === 'ci' && r.kind === 'probe').length;
   results.push({ name: 'fixture: a key that opts out of cache warming has no probe rows', ok: ciProbes === 0 && requests.some((r) => r.kind === 'probe'), missing: [`ci ${ciProbes}`, `router-wide ${requests.filter((r) => r.kind === 'probe').length}`] });
@@ -253,10 +273,18 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   };
   results.push({ name: '/ the attention line runs on one schedule, registered as the dashboard mounts', ok: ticks.length === 1, missing: [`intervals at ${ATTENTION_REFRESH_MS} ms: ${ticks.length}`] });
   // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits.
-  const members = (title) => title.split('\n').slice(0, -1).map((l) => l.replace(/^(backoff_since|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
-  const read = badges().map((b) => [b.text, b.tone, b.href, members(b.title)]);
+  // The age and the routing log's line close a title, so neither is a member.
+  const members = (title) =>
+    title
+      .split('\n')
+      .filter((l) => !l.startsWith('started ') && !l.startsWith('Opens the Routing log'))
+      .map((l) => l.replace(/^(backoff_since|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
+  // The exhausted pool's badge opens the routing log on a range that ends now, which its own check reads; here the
+  // address's path stands for it.
+  const target = (href) => href?.split('?')[0] ?? null;
+  const read = badges().map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
   const want = [
-    ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
+    ['Pool exhausted: codex', 'badge--critical', '/routing-log', ['key: ci', 'pool: codex']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
     ['State writer degraded: routing', 'badge--serious', null, ['component: routing']],
     ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['account: legacy', 'label: legacy']],
@@ -265,9 +293,9 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
     ['Priced record parked: codex', 'badge--serious', '/pools#codex', ['accounts: ["research"]', 'count: 1', 'pool: codex']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
   ];
-  const ages = badges().map((b) => b.title.split('\n').pop());
+  const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: '/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed and titled with its detail and age',
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's the routing log, and titled with its detail and age",
     ok:
       lead() === '8 need attention' &&
       JSON.stringify(read) === JSON.stringify(want) &&
@@ -302,13 +330,13 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   const keyless = { detail: { client_version: '2.1.272', trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], since: new Date(Date.now() - 2 * 60_000).toISOString(), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } };
   api.getAttention = async () => [exhausted, keyless];
   await tick();
-  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, b.href])), line()?.querySelectorAll('a').length];
+  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, target(b.href)])), line()?.querySelectorAll('a').length];
   api.getAttention = getAttention;
   await tick();
   const lost = quiet();
   results.push({
     name: '/ with the dashboard open, a refresh tick draws the items the route gains, an item without a link as a badge that opens nothing, and the next one the quiet state once they clear',
-    ok: gained[0] === '2 need attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/pools#all'], ['Client drift: 2.1.272', 'badge--serious', null]]) && gained[2] === 1 && lost,
+    ok: gained[0] === '2 need attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/routing-log'], ['Client drift: 2.1.272', 'badge--serious', null]]) && gained[2] === 1 && lost,
     missing: [...gained.map(String), `quiet after the clear: ${lost}`],
   });
   api.getAttention = () => Promise.reject(new Error('the store is unavailable'));
@@ -337,6 +365,29 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
   results.push({ name: '/ the story back, the next tick draws its eight items again', ok: lead() === '8 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
 }
+{
+  // The exhausted pool's item opens the routing log on the pool's exhausted decisions from the moment the condition
+  // began to now, read on the frozen clock so the range is the one the page computed.
+  const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const badge = [...page.container.querySelectorAll('.attention-line .badge')].find((b) => b.textContent?.trim() === 'Pool exhausted: codex');
+  const href = badge?.getAttribute('href') ?? null;
+  const last = (badge?.getAttribute('title') ?? '').split('\n').pop();
+  badge?.click();
+  await page.settle(300);
+  const landed = page.location();
+  results.push({
+    name: '/ the Pool exhausted item opens the log and its title ends with the sentence',
+    ok:
+      exhausted !== undefined &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'codex', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
+      exhausted.since.startsWith('2026-09-14') &&
+      last === `Opens the Routing log: pool codex, exhausted, since Sep 14 ${exhausted.since.slice(11, 16)}` &&
+      `${landed.pathname}${landed.search}` === href,
+    missing: [href ?? 'no badge', last ?? '', JSON.stringify(landed)],
+  });
+  page.unmount();
+}
 
 let m = await mount('/');
 expect('/ dashboard', m.text(), ['Requests, 24h', 'Tokens, 24h', 'Estimated cost, 24h', 'Error rate, 24h', '5h remaining', '7d remaining', 'remaining', 'primary', 'nightly', 'Cooling down', 'Overage active', 'Needs re-auth', 'Recent requests', 'Sticky pins and cache-warming agents', 'active pins', 'Fable', 'n/a']);
@@ -351,11 +402,11 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   // sessions route answers 17 rows, so a hero counting rows or a note counting every row's account reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
   results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '12' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
-  // The expectations come from the figures the page draws, over the accounts route and the decoded cost table's tiers,
-  // which the tier match reads in camelCase.
-  const tiers = decodeSettings(SETTINGS_WIRE).planTables.cost.tiers;
+  // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
+  // the tier match reads in camelCase.
+  const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
   const listed = await api.listAccounts();
-  const figures = { '5h': ringFigures(listed, '5h', tiers, Date.now()), '7d': ringFigures(listed, '7d', tiers, Date.now()) };
+  const figures = { '5h': ringFigures(listed, '5h', costs, Date.now()), '7d': ringFigures(listed, '7d', costs, Date.now()) };
   const ringCard = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
   const rings = { '5h': ringCard('5h remaining'), '7d': ringCard('7d remaining') };
   const labels = [...m.container.querySelectorAll('.donut__label')].map((l) => l.textContent);
@@ -368,23 +419,23 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     missing: [JSON.stringify(labels), `5-hour center ${center || 'absent'} against ${fmtPct(f5.left / f5.capacity)}`],
   });
   const lineOf = (id) => rings[id]?.querySelector('.remaining__line')?.textContent ?? '';
-  const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} Max 20x windows left`;
+  const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} ${f.anchor} windows left`;
   results.push({
     name: '/ the line under each ring reads the weighed figures',
-    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 3 && JSON.stringify(f7.rows.map((r) => r.id)) === JSON.stringify(['primary']),
+    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 3 && JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'secondary']),
     missing: [`5-hour ${JSON.stringify(lineOf('5h'))} against ${JSON.stringify(lineFrom(f5))}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7))}`, `rows ${f5.rows.map((r) => r.id)} and ${f7.rows.map((r) => r.id)}`],
   });
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
   const onRing = (id) => [...(rings[id]?.querySelectorAll('.remaining__list a, .remaining__left-out li') ?? [])].map((e) => (e.textContent ?? '').split(':')[0]);
   const strays = ['5h', '7d'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare').map((n) => `${n} on the ${id} ring`));
   results.push({
-    name: '/ the 7-day ring names the unpriced accounts and the 5-hour ring names none',
-    ok: JSON.stringify(named('7d').sort()) === JSON.stringify(['nightly: Max 5x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured']) && lineOf('5h') !== '' && named('5h').length === 0 && strays.length === 0,
+    name: '/ every listed tier is sized on both windows, so neither ring names an account',
+    ok: lineOf('5h') !== '' && lineOf('7d') !== '' && named('7d').length === 0 && named('5h').length === 0 && strays.length === 0,
     missing: [`7-day ${JSON.stringify(named('7d'))}`, `5-hour ${JSON.stringify(named('5h'))}`, ...strays],
   });
   const titled = (id) => {
     const f = figures[id];
-    const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} Max 20x windows, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
+    const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} ${f.anchor} windows, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
     const legend = [...(rings[id]?.querySelectorAll('.remaining__list li') ?? [])];
     // The grey remainder is the spent arc, which carries its own title.
     const slices = [...(rings[id]?.querySelectorAll('svg.donut circle > title') ?? [])].map((t) => t.textContent ?? '').filter((t) => !t.startsWith('Spent: '));
@@ -707,8 +758,17 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   // endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
   results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
+  // The story's nightly raised its spend cap at 11:30:12, so its extra usage carries no reason; a provider's reason is
+  // drawn when the account answers one.
   const nightly = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
-  results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: nightly?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [nightly?.textContent?.slice(0, 160) ?? 'no nightly card'] });
+  results.push({ name: '/quota draws no extra usage reason for an account whose provider gave none', ok: nightly !== undefined && nightly.querySelector('.callout') === null, missing: [nightly?.querySelector('.callout')?.textContent ?? 'no nightly card'] });
+  const { listAccounts } = api;
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'nightly' ? { ...a, extraUsage: { ...a.extraUsage, disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider' } } : a));
+  const declined = await mount('/quota');
+  const card = [...declined.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
+  results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: card?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [card?.textContent?.slice(0, 160) ?? 'no nightly card'] });
+  declined.unmount();
+  api.listAccounts = listAccounts;
 }
 {
   const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
@@ -1265,7 +1325,8 @@ expect('/accounts/secondary', m.text(), [
   });
 }
 await m.navigate('/accounts/nightly');
-expect('/accounts/nightly', m.text(), ['in use', 'Payment method declined', 'Overage since 3h']);
+// Overage started with nightly's head at 11:35:39, so the label reads 2h 54m or 2h 55m while the clock runs.
+expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
 {
   // The funding flag is an Anthropic key's state, so this OAuth account in overage reads ready and offers no clear.
   const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
@@ -1669,6 +1730,27 @@ m.unmount();
   await page.settle(200);
   page.unmount();
 }
+{
+  // The Requests card counts the account's traffic, so its action opens the routing log on the account for the last
+  // hour, read on the frozen clock so the range is the one the page computed.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Requests');
+  const actions = [...(card?.querySelectorAll('.card__actions a') ?? [])];
+  const href = actions[0]?.getAttribute('href') ?? null;
+  actions[0]?.click();
+  await page.settle(300);
+  const landed = page.location();
+  results.push({
+    name: "/accounts/<id> the Requests card's action opens the log on the account for the last hour",
+    ok:
+      actions.length === 1 &&
+      actions[0].textContent?.trim() === 'Routing log' &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', accounts: 'primary', from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) }) &&
+      `${landed.pathname}${landed.search}` === href,
+    missing: [`${actions.length} actions`, href ?? 'no link', JSON.stringify(landed)],
+  });
+  page.unmount();
+}
 await readsAgain('/accounts', 'listAccounts');
 
 // Picks an Analytics tab on the given mount and lets its section's reads land; a check reads its counts afterwards.
@@ -1724,7 +1806,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({
     name: '/pools the strip badges the features a pool has on and opens the dialog on their groups',
     ok:
-      JSON.stringify(strip('all')) === JSON.stringify([['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
+      JSON.stringify(strip('all')) === JSON.stringify([['load shedding', '/pools?edit=all&group=shedding', 'Opens the pool dialog on Load shedding'], ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
       JSON.stringify(strip('codex')) === JSON.stringify([['load shedding', '/pools?edit=codex&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
       JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode']]),
     missing: [...strip('all'), ...strip('codex'), ...strip('work')].map((b) => b.join(' | ')),
@@ -1771,15 +1853,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [`held ${held.calls.length}`, ...waiting, ...landed].map((x) => JSON.stringify(x)),
     });
   }
+  // The exhausted row opens the routing log on a range that ends now, which its own check reads; here the address's
+  // path stands for it.
   const attentionRows = (name) =>
-    [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href') ?? null]);
+    [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href')?.split('?')[0] ?? null]);
   // The story's items: codex exhausted and holding a parked record; the laptop key's client drift, the Overflow
   // workspace out of funding and secondary's poll backoff in all; nothing on work, whose one member and one key carry
   // no item; and the routing state writer on no card, since it belongs to no pool.
   results.push({
-    name: "/pools each card draws the dashboard's items that belong to it, the pool's own row unlinked, and a card with none draws no list",
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion, and a card with none draws no list",
     ok:
-      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null], ['Priced record parked', 'codex', null]]) &&
+      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', '/routing-log'], ['Priced record parked', 'codex', null]]) &&
       JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'Overflow workspace', '/accounts/overflow'], ['Usage poll backing off', 'secondary', '/accounts/secondary']]) &&
       card('work')?.querySelector('.attention') === null,
     missing: ['codex', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
@@ -1846,12 +1930,82 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [...spend('codex', 'Research workspace'), ...research.badges.map((b) => b.join(' | ')), research.why],
   });
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
+  // The story's pool all moved two sessions by the spent rule, two by a failover and one by its fast lane cooling.
+  const allTitle = [
+    'Rule moves in the last hour',
+    'window spent 2',
+    'Failovers left out of the count',
+    'failed over 2',
+    'fast lane cooling 1',
+    "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
+  ].join('\n');
   results.push({
-    name: '/pools six tiles per card, the sixth the count of moves in the last hour split by reason in its title',
-    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '3', 'window spent 2, overage 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
+    name: '/pools six tiles per card, the sixth the count of rule moves in the last hour with the reasons and the failovers left out in its title',
+    ok:
+      tiles('all').length === 6 &&
+      JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '2', allTitle]) &&
+      JSON.stringify(tiles('codex')[5]?.slice(0, 2)) === JSON.stringify(['Moves in the last hour', '0']) &&
+      tiles('codex')[5]?.[2]?.split('\n')[0] === 'No rule moved a session in the last hour',
     missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
   });
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
+}
+{
+  // The pool card's links into the routing log, read on the frozen clock so each range is the one the page computed.
+  const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
+  const page = await mount('/pools', { now: CLOCK_ORIGIN });
+  const card = (name) => [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
+  const figure = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
+  const lastHour = (pool) => ({ path: '/routing-log', kinds: 'moved', pools: pool, from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) });
+  const read = ['all', 'codex'].map((name) => [figure(name)?.textContent?.trim() ?? null, logTarget(figure(name)?.getAttribute('href'))]);
+  results.push({
+    name: "/pools the sixth tile's figure opens the log on the pool and the moved kind for the last hour",
+    ok: JSON.stringify(read) === JSON.stringify([['2', lastHour('all')], ['0', lastHour('codex')]]),
+    missing: read.map((r) => JSON.stringify(r)),
+  });
+  const rows = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])];
+  const row = (name, label) => rows(name).find((li) => li.querySelector('.badge')?.textContent?.trim() === label);
+  const exhaustedRow = row('codex', 'Pool exhausted');
+  const link = exhaustedRow?.querySelector('a');
+  const others = [...rows('codex'), ...rows('all')].filter((li) => li !== exhaustedRow).map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.querySelector('a')?.getAttribute('href') ?? null]);
+  const last = (exhaustedRow?.getAttribute('title') ?? '').split('\n').pop();
+  results.push({
+    name: "/pools the card's pool exhausted row opens the log since the condition began and its other rows keep their targets",
+    ok:
+      exhausted !== undefined &&
+      link?.textContent?.trim() === 'codex' &&
+      JSON.stringify(logTarget(link.getAttribute('href'))) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'codex', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
+      exhausted.since.startsWith('2026-09-14') &&
+      last === `Opens the Routing log: pool codex, exhausted, since Sep 14 ${exhausted.since.slice(11, 16)}` &&
+      JSON.stringify(others) === JSON.stringify([['Priced record parked', null], ['Client drift', '/keys#laptop'], ['Funding required', '/accounts/overflow'], ['Usage poll backing off', '/accounts/secondary']]),
+    missing: [link?.getAttribute('href') ?? 'no link', last ?? '', JSON.stringify(others)],
+  });
+  page.unmount();
+  {
+    // The route answers `unknown` for a move that named no reason, and a later router may add one: neither is a rule
+    // move or a failover, so the title lists it apart from both.
+    const { listPools } = api;
+    api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, movesPerHour: { cooldown: 1, mark: 1, spent: 1, unknown: 2 } } : p));
+    const odd = await mount('/pools', { now: CLOCK_ORIGIN });
+    api.listPools = listPools;
+    const tile = [...odd.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all')?.querySelector('.pool__stats > div:nth-child(6) dd');
+    const want = [
+      'Rule moves in the last hour',
+      'window spent 1',
+      'Failovers left out of the count',
+      'failed over 1',
+      'account marked 1',
+      'Other moves left out of the count',
+      'unknown 2',
+      "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
+    ].join('\n');
+    results.push({
+      name: '/pools the moves tile lists a reason outside the rule moves and the failovers apart from both',
+      ok: tile?.textContent?.trim() === '1' && tile.getAttribute('title') === want,
+      missing: [tile?.textContent?.trim() ?? 'no tile', tile?.getAttribute('title') ?? 'no title'],
+    });
+    odd.unmount();
+  }
 }
 {
   // The rows mounted on their own over every kind, in the route's order, which is the ranking: the tones do not group
@@ -1882,9 +2036,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     li.querySelector('.attention__detail')?.textContent,
     li.getAttribute('title'),
   ]);
-  const row = (label, tone, subject, href, detail, age) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})`];
+  const row = (label, tone, subject, href, detail, age, log) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})${log ? `\n${log}` : ''}`];
+  const exhaustedSince = at(1);
   const want = [
-    row('Pool exhausted', 'badge--critical', 'codex', null, 'no member could take a request from key ci', '1h 0m ago'),
+    row('Pool exhausted', 'badge--critical', 'codex', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'codex', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h 0m ago', `Opens the Routing log: pool codex, exhausted, since ${exhaustedSince.slice(11, 16)}`),
     row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
     row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
     row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried; budgeted members are held back until a batch lands', '1h 0m ago'),
@@ -1895,7 +2050,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h 0m ago'),
   ];
   results.push({
-    name: "the attention rows keep the route's order, link a subject through the item's link, name the pool's own row, a keyless drift and a router component alone, and read each detail as one sentence titled with its age",
+    name: "the attention rows keep the route's order, link a subject through the item's link and the pool's exhaustion to the routing log, name the pool's other own row, a keyless drift and a router component alone, and read each detail as one sentence titled with its age",
     ok: JSON.stringify(rows) === JSON.stringify(want),
     missing: rows.map((r) => r.join(' | ')),
   });
@@ -1991,12 +2146,21 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
 }
 {
+  // The story's pool `all` sheds at 90 % ahead of pace; the dialog checks below drive the shedding controls from a
+  // pool that sheds nothing, the store's default, so the margin is cleared through the route and the page read again.
+  const all = (await api.listPools()).find((p) => p.id === 'all');
+  results.push({ name: "fixture: the story's pool all sheds at 90 % ahead of pace", ok: all?.shedAheadOfPace === 0.9, missing: [String(all?.shedAheadOfPace)] });
+  await api.updatePool('all', { ...all, members: all.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), shedAheadOfPace: null });
+  m.unmount();
+  m = await mount('/pools');
+}
+{
   const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all');
   edit?.click();
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -2290,7 +2454,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
     // At the mock's clock nightly's 5-hour window leads its pace by about 0.71 and secondary's 7-day window by about
     // 0.61, both over the typed 50 %; primary leads by under 0.1 and is the cool destination.
-    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the table cannot price stay.']);
+    expect("/pools the shedding preview replays a round over the hot members' pins", card('Load shedding')?.querySelector('.shed-preview')?.textContent ?? '', ['Would move', 'warm', '% of the burn in window share', 'across 2 accounts', '2 pins the cost model cannot price stay.']);
   }
   migrateSwitch?.click();
   await m.settle(120);
@@ -3235,7 +3399,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // A round marks the triggering pool's pins alone: with laptop moved into work, work's one primary pin (the busy
   // laptop session) is its slice's last unmarked pin, so its preview sheds nothing, whatever desktop holds there. The
-  // mock's cost table prices none of the pin's Sonnet 5 cells either, so the 0 holds from both causes.
+  // mock's cost model has no weight for the pin's Sonnet 5 either, so the 0 holds from both causes.
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   const moveLaptop = (poolId) =>
     api.updateKey('laptop', {
@@ -3269,7 +3433,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     name: "/pools the shedding preview counts the pool's own pins alone on an account shared with another pool",
     // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
     // count that it ran over laptop's one pin alone.
-    ok: /^Would (move|mark) 0 sessions, 0 warm, 0% of the burn in window share\b.* 1 pin the table cannot price stays\.$/.test(line),
+    ok: /^Would (move|mark) 0 sessions, 0 warm, 0% of the burn in window share\b.* 1 pin the cost model cannot price stays\.$/.test(line),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -3507,8 +3671,8 @@ m.unmount();
   const landed = line();
   api.getSettings = getSettings;
   results.push({
-    name: '/pools the preview says the cost table is loading while the settings read is held',
-    ok: loading === 'The cost table is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
+    name: '/pools the preview says the cost model is loading while the settings read is held',
+    ok: loading === 'The cost model is loading; window-share pins are counted once it is read.' && !loading.includes('Would move') && /^(Would (move|mark)|No member is ahead of pace by the margin)/.test(landed),
     missing: [loading, landed],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -3530,8 +3694,8 @@ m.unmount();
   outage.recover();
   outage.restore();
   results.push({
-    name: '/pools the preview says the cost table did not load after a failed settings read',
-    ok: line === 'The cost table did not load, so window-share pins cannot be counted.' && !line.includes('Would move'),
+    name: '/pools the preview says the cost model did not load after a failed settings read',
+    ok: line === 'The cost model did not load, so window-share pins cannot be counted.' && !line.includes('Would move'),
     missing: [line],
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
@@ -4225,6 +4389,15 @@ localStorage.removeItem('phoebis.expertView');
   await k.settle(200);
   k.unmount();
   localStorage.removeItem('phoebis.expertView');
+}
+
+{
+  // The dialog checks drove the shedding controls from a pool that sheds nothing; the story's margin comes back, so
+  // every later view reads pool `all` as the routing log's records do.
+  const all = (await api.listPools()).find((p) => p.id === 'all');
+  await api.updatePool('all', { ...all, members: all.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), shedAheadOfPace: 0.9 });
+  const restored = (await api.listPools()).find((p) => p.id === 'all');
+  results.push({ name: "fixture: pool all sheds at 90 % again once the pool dialog checks are done", ok: restored?.shedAheadOfPace === 0.9, missing: [String(restored?.shedAheadOfPace)] });
 }
 
 // As on the pools, the key dialog checks below read the expert fields too.
@@ -4966,7 +5139,7 @@ m = await mount('/models');
   results.push({ name: '/models sits in the nav after Keys and titles the page', ok: nav.indexOf('Models') === nav.indexOf('Keys') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
   // The keys checks leave a key of their own at the head of the list, so the first key is read, not assumed.
   const first = (await api.listKeys())[0];
-  expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'Recent rejections', 'Recent permits', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
+  expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'View rejections and permits in the routing log', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
   const firstRules = first ? await answeredRules(first.id) : [];
   results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
   const select = m.container.querySelector('select[aria-label="Key"]');
@@ -5040,27 +5213,46 @@ m = await mount('/models');
       missing: [String(disabledWhileBusy), String(reenabledAfter)],
     });
   }
-  const recent = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
-  const recentRow = (title) => recent(title)?.querySelector('tbody tr');
-  const hrefs = (el) => [...(el?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'));
-  const rejection = state.rejections[0];
-  const permit = state.permits[0];
-  results.push({ name: 'fixture: the newest rejection and permit name the request whose two names differ', ok: story !== undefined && rejection?.requestId === story.id && permit?.requestId === story.id && permit.rejectedBy.includes(rejection.accountId), missing: [story?.id ?? 'no story', rejection?.requestId ?? 'no rejection', permit?.requestId ?? 'no permit'] });
-  if (rejection && permit) {
-    const rejected = recentRow('Recent rejections');
-    const permitted = recentRow('Recent permits');
-    results.push({
-      name: '/models the recent rows link the request and the accounts and name both spellings',
-      ok:
-        JSON.stringify(hrefs(rejected)) === JSON.stringify([`/requests/${rejection.requestId}`, `/accounts/${rejection.accountId}`]) &&
-        JSON.stringify(hrefs(permitted)) === JSON.stringify([`/requests/${permit.requestId}`, `/accounts/${permit.accountId}`, ...permit.rejectedBy.map((id) => `/accounts/${id}`)]) &&
-        (rejected?.textContent ?? '').includes(`${rejection.model}sent as ${rejection.wireModel}`) &&
-        (permitted?.textContent ?? '').includes(`${permit.model}sent as ${permit.wireModel}`),
-      missing: [rejected?.textContent ?? 'no rejection row', JSON.stringify(hrefs(rejected)), permitted?.textContent ?? 'no permit row', JSON.stringify(hrefs(permitted))],
-    });
-  }
 }
 m.unmount();
+{
+  // The rejections and permits are read in the routing log, so one link below the cooling-down blocks opens it on the
+  // two model kinds over the last 24 hours, read on the frozen clock so the range is the one the page computed.
+  const page = await mount('/models', { now: CLOCK_ORIGIN });
+  const links = [...page.container.querySelectorAll('a')].filter((a) => a.textContent?.trim() === 'View rejections and permits in the routing log');
+  const link = links[0];
+  const cards = [...page.container.querySelectorAll('.card')];
+  const href = link?.getAttribute('href') ?? null;
+  link?.click();
+  await page.settle(300);
+  const landed = page.location();
+  results.push({
+    name: '/models the link opens the log on the two model kinds over the last 24 hours',
+    ok:
+      links.length === 1 &&
+      link.classList.contains('btn') &&
+      link.classList.contains('btn--secondary') &&
+      cards.length > 1 &&
+      cards.every((c) => c.compareDocumentPosition(link) & window.Node.DOCUMENT_POSITION_FOLLOWING) &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'model_rejected,model_permitted', from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), to: isoAt(CLOCK_ORIGIN) }) &&
+      `${landed.pathname}${landed.search}` === href,
+    missing: [`${links.length} links`, href ?? 'no link', JSON.stringify(landed)],
+  });
+  page.unmount();
+  {
+    // The link reads none of the cooldowns, so the error state that takes their place leaves it standing.
+    failNextCall('getModelsState', '/admin/models/state', 'ledger locked');
+    const failed = await mount('/models', { now: CLOCK_ORIGIN });
+    const error = failed.text().includes('Could not load the model cooldowns');
+    const kept = [...failed.container.querySelectorAll('a')].find((a) => a.textContent?.trim() === 'View rejections and permits in the routing log');
+    results.push({
+      name: '/models a failed cooldowns read keeps the link to the routing log',
+      ok: error && kept !== undefined && kept.getAttribute('href') === href,
+      missing: [`error ${error}`, kept?.getAttribute('href') ?? 'no link', href ?? 'no href'],
+    });
+    failed.unmount();
+  }
+}
 
 m = await mount('/requests');
 expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'fable-5-1', 'desktop', 'laptop', 'shown']);
@@ -5215,16 +5407,19 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   await m.settle(700);
   speed?.querySelector('.mselect__trigger')?.click();
   await m.settle(150);
-  // Each row opens its drawer in turn, so the check reads the serving attempt's own line rather than the story's rule;
-  // a request refused before any attempt shows none and files under the speed its shape asked for.
+  // Each row opens its drawer in turn, so the check reads the serving attempt's Answer row rather than the story's
+  // rule. A request refused before any attempt draws no Answer row and files under the speed its shape asked for.
   const servedAs = [];
   for (const tr of [...m.container.querySelectorAll('.requests__table tbody tr')]) {
     tr.click();
     await m.settle(300);
-    const lines = [...m.container.querySelectorAll('.drawer .attempt .attempt__response')];
-    const asked = [...m.container.querySelectorAll('.drawer .kv__row')].find((row) => row.querySelector('dt')?.textContent?.trim() === 'Speed, service tier')?.querySelector('dd')?.textContent?.trim() ?? '';
-    const attempted = m.container.querySelectorAll('.drawer .attempt').length > 0;
-    servedAs.push([...(lines.at(-1)?.children ?? [])].map((span) => span.textContent?.trim()).includes('fast') ? 'fast' : !attempted && asked.startsWith('fast,') ? 'fast' : (lines.at(-1)?.textContent ?? `no response line, asked ${asked}`));
+    const answer = drawerRowOf(m, 'Answer')?.querySelector('dd');
+    const asked = drawerRowOf(m, 'Speed, service tier')?.querySelector('dd')?.textContent?.trim() ?? '';
+    // The speed chip names itself on its title, since a bare word could be read as the service tier.
+    const fast = [...(answer?.querySelectorAll('.chip') ?? [])].find((chip) => chip.textContent?.trim() === 'fast');
+    // The row's own trail says whether an attempt was made, so a drawer that drew no Answer row for one fails.
+    const attempted = tr.querySelector('.trail') !== null;
+    servedAs.push(fast ? (fast.getAttribute('title') === "The answer's speed" ? 'fast' : `fast titled ${fast.getAttribute('title')}`) : !attempted && asked.startsWith('fast,') ? 'fast' : (answer?.textContent ?? `no Answer row, asked ${asked}`));
   }
   const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
   results.push({ name: speedCheck, ok: servedAs.length > 0 && servedAs.length === fastDay && servedAs.every((s) => s === 'fast'), missing: [`${servedAs.length} rows against ${fastDay}`, ...new Set(servedAs)] });
@@ -5325,7 +5520,11 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   const rowsBefore = m.container.querySelectorAll('tbody tr').length;
   results.push({ name: '/requests has rows', ok: rowsBefore >= 10, missing: [String(rowsBefore)] });
   const trails = [...m.container.querySelectorAll('tbody .trail')];
-  results.push({ name: '/requests every row carries an attempt trail', ok: trails.length === rowsBefore, missing: [String(trails.length), String(rowsBefore)] });
+  // A request answered before any account took it, an exhaustion or a refusal, has no attempt to draw: its row is one
+  // of the requests with none.
+  const bare = [...m.container.querySelectorAll('tbody tr')].filter((tr) => !tr.querySelector('.trail')).map((tr) => tr.querySelector('td .sub.mono')?.textContent ?? '');
+  const unattempted = bare.filter((id) => requests.some((r) => r.attempts.length === 0 && `${r.id.slice(0, 12)}…` === id));
+  results.push({ name: '/requests every row that reached an account carries an attempt trail', ok: trails.length + bare.length === rowsBefore && bare.length > 0 && unattempted.length === bare.length, missing: [String(trails.length), String(rowsBefore), ...bare] });
   const singles = trails.filter((t) => t.querySelectorAll('.trail__step').length === 1).length;
   results.push({ name: '/requests a single attempt is one badge', ok: singles >= 1, missing: [String(singles)] });
   const multi = trails.filter((t) => t.querySelectorAll('.trail__step').length > 1);
@@ -5409,16 +5608,30 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
   results.push({ name: 'fixture has a three-attempt request', ok: three.length >= 1, missing: [String(three.length)] });
 }
 await m.navigate(`/requests/${laptopRow.id}`);
-expect('/requests/:laptop drawer', m.text(), ['Summary', 'Session', 'Agent', 'Attempts', 'Succeeded', 'Usage', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Captured bodies', 'Request', 'Response', 'cache_control', 'ephemeral_5m_input_tokens']);
 {
-  // The two ids sit right under the served attempt's head, the request id first, as the drawer draws them.
+  // The titles are read as titles, since the Outcome row and the bodies' Request block would carry two of the words.
+  const titles = [...m.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? '');
+  const needles = ['Session', 'Agent', 'succeeded', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain', 'Server tool calls', 'Estimated cost', 'Response', 'cache_control', 'ephemeral_5m_input_tokens'];
+  const missing = [...DRAWER_SECTIONS.filter((t) => !titles.includes(t)).map((t) => `section ${t}`), ...needles.filter((n) => !m.text().includes(n))];
+  results.push({ name: '/requests/:laptop drawer', ok: missing.length === 0, missing });
+}
+{
+  // The two ids sit in the Request section's row for the served attempt, the request id first, each a mono chip.
   const served = laptopRow.attempts[laptopRow.attempts.length - 1];
-  const head = [...m.container.querySelectorAll('.attempt')].at(-1)?.querySelector('.attempt__head');
-  const lines = [head?.nextElementSibling, head?.nextElementSibling?.nextElementSibling].map((e) => (e?.classList.contains('attempt__id') ? e.textContent : 'no id line'));
+  const row = drawerRowOf(m, `Attempt ${served.index + 1}`);
+  const section = row?.closest('section')?.querySelector('.section-title')?.textContent?.trim() ?? 'no section';
+  const chips = drawerChips(row);
   results.push({
     name: '/requests/:laptop drawer names the upstream request id and message id under the served attempt',
-    ok: /^req_/.test(served.upstreamRequestId ?? '') && /^msg_/.test(served.upstreamMessageId ?? '') && lines[0] === `request ${served.upstreamRequestId}` && lines[1] === `message ${served.upstreamMessageId}`,
-    missing: lines,
+    ok:
+      /^req_/.test(served.upstreamRequestId ?? '') &&
+      /^msg_/.test(served.upstreamMessageId ?? '') &&
+      section === 'Request' &&
+      JSON.stringify(chips) === JSON.stringify([
+        { label: null, mono: true, title: "The upstream's request id", value: served.upstreamRequestId },
+        { label: null, mono: true, title: "The upstream's message id", value: served.upstreamMessageId },
+      ]),
+    missing: [section, JSON.stringify(chips)],
   });
   await m.navigate('/requests');
   await m.settle(300);
@@ -5566,24 +5779,6 @@ await m.navigate(`/requests/${laptopRow.id}`);
 }
 await m.navigate(`/requests/${desktopRow.id}`);
 expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
-if (failoverRow) {
-  await m.navigate(`/requests/${failoverRow.id}`);
-  {
-    // Read from the drawer's badge, since the list's trail titles carry the same words.
-    const missing = ['Rate limited', 'used', 'resets'].filter((n) => !m.text().includes(n));
-    const cooldown = m.container.querySelector('.drawer .attempt__cooldown .badge')?.textContent ?? '';
-    results.push({ name: '/requests/:failover drawer', ok: missing.length === 0 && cooldown === 'cooldown set', missing: [...missing, cooldown ? `badge ${JSON.stringify(cooldown)}` : 'no cooldown badge in the drawer'] });
-  }
-  const slots = [...m.container.querySelectorAll('.attempt__windows')].map((u) => [...u.querySelectorAll('li')].map((li) => li.children[0]?.textContent).join(','));
-  // An Anthropic-key account reports no quota windows at all, so its attempt carries the cache row alone.
-  results.push({
-    name: '/requests attempts read all three windows then the cache row, in a fixed order',
-    ok: slots.length > 0 && slots.some((s) => s === '5h,7d,Fable,Cache') && slots.every((s) => s === '5h,7d,Fable,Cache' || s === 'Cache'),
-    missing: [...new Set(slots)],
-  });
-} else {
-  results.push({ name: '/requests a failover row whose attempts reported quota windows', ok: false, missing: ['fixture'] });
-}
 {
   const row = (label) => [...(m.container.querySelector('.drawer')?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === label)?.querySelector('dd');
   const server = requests.find((r) => r.autoMode === 'server');
@@ -5613,18 +5808,6 @@ if (failoverRow) {
     const summary = [...m.container.querySelectorAll('.kv__row')].map((row) => `${row.querySelector('dt')?.textContent}: ${row.querySelector('dd')?.textContent}`);
     const model = summary.indexOf(`Model: ${story.model}`);
     results.push({ name: '/requests/:story drawer shows the client\'s spelling, then the canonical id', ok: model >= 0 && summary[model + 1] === `Canonical model: ${story.canonicalModel}`, missing: summary.slice(0, 10) });
-    expect('/requests/:story drawer names the account that rejected the model and the one that served it', m.text(), ['Canonical model', `Model rejected by ${rejected.accountId}: ${story.model}`, `Model permitted by ${permitted.accountId} after ${rejected.accountId}`]);
-    const lines = [...m.container.querySelectorAll('.attempt__migration')].filter((p) => p.textContent?.startsWith('Model '));
-    const hrefs = lines.map((p) => [...p.querySelectorAll('a')].map((a) => a.getAttribute('href')).join(' '));
-    results.push({ name: '/requests/:story drawer links each account the model events name', ok: JSON.stringify(hrefs) === JSON.stringify([`/accounts/${rejected.accountId}`, `/accounts/${permitted.accountId} /accounts/${rejected.accountId}`]), missing: hrefs });
-    // The route lists the session's events by time, so another request's rejection in the same window arrives
-    // with this one's; only the request id the event carries keeps it off this drawer.
-    requestEvents.set(story.id, own.map((e) => (e.kind.startsWith('model_') ? { ...e, detail: { ...e.detail, source_request_id: 'req_elsewhere' } } : e)));
-    await m.navigate(`/requests/${desktopRow.id === story.id ? laptopRow.id : desktopRow.id}`);
-    await m.navigate(`/requests/${story.id}`);
-    await m.settle(400);
-    results.push({ name: "/requests another request's model events are not drawn", ok: !m.text().includes('Model rejected by') && !m.text().includes('Model permitted by'), missing: m.text().includes('Model rejected by') ? ["another request's rejection is drawn on this one"] : [] });
-    requestEvents.set(story.id, own);
   }
   const sameNames = requests.find((r) => r.kind === 'inference' && r.model === r.canonicalModel);
   if (sameNames) {
@@ -5633,279 +5816,64 @@ if (failoverRow) {
   }
 }
 {
-  const spentId = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.detail?.reason === 'spent'))?.[0];
-  results.push({ name: 'fixture: a request moved for a spent window exists', ok: spentId !== undefined, missing: [] });
-  if (spentId) {
-    await m.navigate(`/requests/${spentId}`);
-    expect('/requests/:spent drawer names the move and its reason', m.text(), ['Session moved from', 'window spent']);
-    // Moving to a request whose events fail to load must not leave the previous request's move on screen. The
-    // unmoved row is on the same pin, so only the request the events were read for can filter the stale one out.
-    const spentRow = requests.find((r) => r.id === spentId);
-    const unmoved = requests.find((r) => r.id !== spentId && !requestEvents.has(r.id) && r.keyId === spentRow.keyId && r.sessionId === spentRow.sessionId && r.canonicalModel === spentRow.canonicalModel);
-    results.push({ name: 'fixture: an unmoved request on the same pin as the moved one', ok: unmoved !== undefined, missing: [] });
-    if (unmoved) {
-      failNextCall('getRequest', `/admin/requests/${unmoved.id}`, 'the ledger is unavailable');
-      await m.navigate(`/requests/${unmoved.id}`);
-      await m.settle(400);
-      results.push({ name: '/requests a failed events load never draws the move of the request before it', ok: !m.text().includes('Session moved'), missing: m.text().includes('Session moved') ? ['the previous move is still drawn'] : [] });
-    }
-    // The route lists the session's events by time, so a move that belongs to another key's pin can arrive
-    // with this request's own events; only the key, session, and model match keeps it off the screen.
-    const own = requestEvents.get(spentId);
-    requestEvents.set(spentId, own.map((e) => ({ ...e, keyId: `${e.keyId}-elsewhere` })));
-    await m.navigate(`/requests/${spentId}`);
-    await m.settle(400);
-    results.push({ name: "/requests a move under another pin's key is not drawn", ok: !m.text().includes('Session moved'), missing: m.text().includes('Session moved') ? ["another pin's move is drawn on this request"] : [] });
-    requestEvents.set(spentId, own);
-  }
-}
-{
-  const releasedId = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.kind === 'pin_expired'))?.[0];
-  results.push({ name: 'fixture: a request whose pin was released exists', ok: releasedId !== undefined, missing: [] });
-  if (releasedId) {
-    await m.navigate(`/requests/${releasedId}`);
-    expect('/requests/:released drawer names the release and every reason', m.text(), ['Session released from', 'account cooled, window spent']);
-  }
-  // No story row releases a pin off a fast lane, so one row carries the two reasons while this check reads it.
-  const fastReleased = requests.find((r) => r.routingSessionId !== null && r.kind !== 'probe' && r.status === 200 && !requestEvents.has(r.id));
-  results.push({ name: 'fixture: a request to plant a fast-lane release on', ok: fastReleased !== undefined, missing: [] });
-  if (fastReleased) {
-    requestEvents.set(fastReleased.id, [{ accountId: fastReleased.accountId, at: fastReleased.at, detail: { agent_id: fastReleased.agentId, reasons: ['fast_credits', 'fast_rate_limit'] }, keyId: fastReleased.keyId, kind: 'pin_expired', model: fastReleased.canonicalModel, sessionId: fastReleased.routingSessionId }]);
-    await m.navigate(`/requests/${fastReleased.id}`);
-    await m.settle(300);
-    expect('/requests/:released drawer words both fast-lane reasons', m.text(), ['Session released from', 'usage credits unavailable for fast mode, fast lane rate limited']);
-    requestEvents.delete(fastReleased.id);
-  }
-  for (const [reason, label] of [['client_error', 'client error'], ['subscription_ended', 'subscription ended']]) {
-    const id = [...requestEvents.entries()].find(([, events]) => events.some((e) => e.kind === 'pin_expired' && e.detail?.reasons?.includes(reason)))?.[0];
-    results.push({ name: `fixture: a request whose pin was released for ${reason}`, ok: id !== undefined, missing: [] });
-    if (id) {
-      await m.navigate(`/requests/${id}`);
-      await m.settle(300);
-      expect(`/requests/:released drawer words ${reason}`, m.text(), ['Session released from', label]);
-    }
-  }
-}
-{
-  // Every attempt carries its trace; the drawer draws one block per attempt, with the placement, the members passed
-  // over as badges, and the cache read against the request's input.
-  const traceOf = (el) => ({ head: el.querySelector('.selection-trace__row')?.textContent ?? '', skipped: [...el.querySelectorAll('.selection-trace__row .badge')].map((b) => b.textContent?.trim()) });
+  // The shed story's request sends a request class, which the Request section draws as a badge beside the client.
   const shed = requests.find((r) => r.attempts.some((a) => a.selection?.moved === 'shed'));
   results.push({ name: 'fixture: a request whose session was shed onto its account', ok: shed !== undefined, missing: [] });
   if (shed) {
     await m.navigate(`/requests/${shed.id}`);
     await m.settle(300);
-    const attempt = shed.attempts.find((a) => a.selection?.moved === 'shed');
-    const blocks = [...m.container.querySelectorAll('.drawer .attempt')].map((li) => li.querySelector('.selection-trace'));
-    const drawn = blocks[attempt.index] ? traceOf(blocks[attempt.index]) : { head: '', skipped: [] };
-    const tier = attempt.selection.tier;
-    results.push({
-      name: '/requests drawer draws a moved attempt\'s trace: the strategy, the tier, the move and each member passed over',
-      ok:
-        blocks.length === shed.attempts.length &&
-        blocks.every((b) => b !== null) &&
-        drawn.head.startsWith('Selection') &&
-        drawn.head.includes(`group ${tier[0]}, priority ${tier[1]}`) &&
-        drawn.head.includes('moved: shed') &&
-        JSON.stringify(drawn.skipped) === JSON.stringify(attempt.selection.skipped.map((s) => `${s.accountId}: ${s.obstacle}`)),
-      missing: [shed.id, drawn.head, ...drawn.skipped],
-    });
-    const read = attempt.selection.cacheRead;
-    results.push({ name: '/requests drawer reads the answering attempt\'s cache read as a hit or a miss against its input', ok: read !== null && drawn.head.includes(`${read > 0 ? 'hit' : 'miss'}, `) && drawn.head.includes('input tokens read from cache'), missing: [String(read), drawn.head] });
     const client = [...m.container.querySelectorAll('.drawer .kv__row')].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Client')?.querySelector('dd');
     results.push({ name: '/requests drawer shows the request class as a badge beside the client', ok: shed.requestClass !== null && client?.querySelector('.badge')?.textContent === shed.requestClass && client?.firstChild?.textContent === shed.client, missing: [client?.textContent ?? 'no client row', String(shed.requestClass)] });
   }
-  const renewed = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.renewed);
-  results.push({ name: 'fixture: a request that renewed its pin', ok: renewed !== undefined, missing: [] });
-  if (renewed) {
-    await m.navigate(`/requests/${renewed.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    results.push({ name: '/requests drawer reads a renewed pin as continued, with no tier and nothing passed over', ok: drawn.head.includes('continued, pin renewed') && !drawn.head.includes('group ') && drawn.skipped.length === 0, missing: [drawn.head, ...drawn.skipped] });
-    expect('/requests drawer needles for the trace', m.text(), ['Selection', 'renewed']);
-  }
-  const fresh = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection && !r.attempts[0].selection.renewed && r.attempts[0].selection.moved === null && r.attempts[0].selection.placement === null && r.attempts[0].selection.skipped.length > 0);
-  results.push({ name: 'fixture: a request placed afresh past other members', ok: fresh !== undefined, missing: [] });
-  if (fresh) {
-    await m.navigate(`/requests/${fresh.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    results.push({ name: '/requests drawer reads a fresh placement', ok: drawn.head.includes('fresh placement') && drawn.skipped.length === fresh.attempts[0].selection.skipped.length, missing: [drawn.head, ...drawn.skipped] });
-    // No story trace passes a member over for its credits, so this one carries such a member while the check reads it.
-    const selection = fresh.attempts[0].selection;
-    const skipped = selection.skipped;
-    selection.skipped = [...skipped, { accountId: 'credits-probe', obstacle: 'credits' }];
-    await m.navigate('/requests');
-    await m.navigate(`/requests/${fresh.id}`);
-    await m.settle(300);
-    const credits = [...m.container.querySelectorAll('.drawer .selection-trace .badge')].find((b) => b.textContent?.trim() === 'credits-probe: credits');
-    results.push({ name: '/requests drawer hints why a member was passed over for its credits', ok: credits?.getAttribute('title') === 'its usage credits unavailable for fast mode', missing: [credits ? String(credits.getAttribute('title')) : 'no credits badge'] });
-    selection.skipped = skipped;
-  }
-  // A placement by a warm prefix reads its rung and depth, and the cache read against the prefix it was promised.
-  const placedBy = (verdict) =>
-    requests.find((r) => {
-      const s = r.attempts.length === 1 ? r.attempts[0].selection : null;
-      return s?.placement?.rung === 'content' && s.cacheRead !== null && (s.cacheRead >= s.placement.prefixTokens) === verdict;
-    });
-  for (const [verdict, word] of [[true, 'hit'], [false, 'miss']]) {
-    const placed = placedBy(verdict);
-    results.push({ name: `fixture: a request placed by its messages whose cache read is a ${word}`, ok: placed !== undefined, missing: [] });
-    if (!placed) continue;
-    await m.navigate(`/requests/${placed.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    const depth = placed.attempts[0].selection.placement.depth;
-    results.push({
-      name: `/requests drawer reads a placement by its messages as a ${word} against the prefix it was promised`,
-      ok: drawn.head.includes(`placed by its messages, depth ${depth}`) && new RegExp(`${word}, [0-9.]+[KM]? of [0-9.]+[KM]? promised tokens read`).test(drawn.head) && !drawn.head.includes('group ') && !drawn.head.includes('fresh placement'),
-      missing: [placed.id, drawn.head],
-    });
-  }
-  const held = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.cohort);
-  results.push({ name: 'fixture: a subagent placed after a hold on its cohort', ok: held !== undefined, missing: [] });
-  if (held) {
-    await m.navigate(`/requests/${held.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    const { cohort, heldMs } = held.attempts[0].selection.cohortHold;
-    const wait = waitText(heldMs);
-    results.push({ name: '/requests drawer names the account a hold waited on and how long it waited', ok: drawn.head.includes(`held ${wait} on ${cohort} before placing`), missing: [wait, drawn.head] });
-  }
-  // The lines a trace draws more rarely: a placement beside a move, a placement with the main conversation, which
-  // promises no size and so keeps the plain cache line, and a hold on the strategy's choice, which names no cohort.
-  const movedPlaced = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.moved && r.attempts[0].selection.placement);
-  const withMain = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.placement?.rung === 'with_main' && r.attempts[0].selection.cacheRead !== null && r.attempts[0].selection.cohortHold === null);
-  const strategyHold = requests.find((r) => r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.cohort === null && r.attempts[0].selection.placement === null);
-  results.push({ name: 'fixture: a placement beside a move, one with the main conversation, and a hold with no cohort', ok: movedPlaced !== undefined && withMain !== undefined && strategyHold !== undefined, missing: [String(movedPlaced?.id), String(withMain?.id), String(strategyHold?.id)] });
-  if (movedPlaced) {
-    await m.navigate(`/requests/${movedPlaced.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    const { moved, placement } = movedPlaced.attempts[0].selection;
-    results.push({ name: '/requests drawer reads a placement beside the move that led to it', ok: moved === 'spent' && drawn.head.includes('moved: window spent') && drawn.head.includes(`placed by its static prefix, depth ${placement.depth}`), missing: [movedPlaced.id, drawn.head] });
-  }
-  if (withMain) {
-    await m.navigate(`/requests/${withMain.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    results.push({
-      name: '/requests drawer reads a placement with the main conversation against the input, since it promised no size',
-      ok: drawn.head.includes('placed with the main conversation') && drawn.head.includes('input tokens read from cache') && !drawn.head.includes('promised tokens') && !drawn.head.includes('before placing'),
-      missing: [withMain.id, drawn.head],
-    });
-  }
-  if (strategyHold) {
-    await m.navigate(`/requests/${strategyHold.id}`);
-    await m.settle(300);
-    const drawn = traceOf(m.container.querySelector('.drawer .selection-trace'));
-    const waited = strategyHold.attempts[0].selection.cohortHold.waitedOn;
-    results.push({ name: '/requests drawer names the last account a hold with no cohort waited on and the wait', ok: drawn.head.includes('fresh placement') && drawn.head.includes(`held 1.3 s on ${waited[waited.length - 1]} before placing`), missing: [strategyHold.id, drawn.head] });
-  }
-  // An attempt placed after every hold names them in its trace, so the drawer draws no line of the row's own.
-  const servedAfterHold = requests.find((r) => r.held !== null && r.attempts.length === 1 && r.attempts[0].selection?.cohortHold?.heldMs === r.held.heldMs);
-  results.push({ name: 'fixture: a request served after its hold', ok: servedAfterHold !== undefined, missing: [] });
-  if (servedAfterHold) {
-    await m.navigate(`/requests/${servedAfterHold.id}`);
-    await m.settle(300);
-    results.push({
-      name: "/requests drawer of a request served after its hold names the hold in the attempt's trace alone",
-      ok: m.container.querySelector('.drawer .attempt__hold') === null && (m.container.querySelector('.drawer .selection-trace')?.textContent ?? '').includes('before placing'),
-      missing: [servedAfterHold.id, m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line'],
-    });
-  }
-  // An attempt that failed over before the request waited out its bound predates the hold, so its trace names none
-  // of it and the drawer reads the row's own beside the attempt.
-  const heldAfter = requests.find((r) => r.held !== null && r.attempts.length > 0 && r.attempts.every((a) => a.selection?.cohortHold?.heldMs !== r.held.heldMs));
-  results.push({ name: 'fixture: a request held after an attempt that failed over, answered without a second dispatch', ok: heldAfter !== undefined && heldAfter.errorCode === 'accounts_at_cap', missing: [String(heldAfter?.id)] });
-  if (heldAfter) {
-    await m.navigate(`/requests/${heldAfter.id}`);
-    await m.settle(300);
-    const line = m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line';
-    const on = heldAfter.held.cohort ?? heldAfter.held.waitedOn.at(-1);
-    const { heldMs } = heldAfter.held;
-    const wait = waitText(heldMs);
-    results.push({
-      name: '/requests drawer of a request held after an attempt names the hold its attempt never followed under Attempts',
-      ok: line === `held ${wait} on ${on}` && m.container.querySelectorAll('.drawer .attempt').length === heldAfter.attempts.length,
-      missing: [heldAfter.id, line],
-    });
-  }
-  // With nothing dispatched, no attempt's trace can name the hold, so the drawer reads the row's own.
-  const unplaced = requests.find((r) => r.held !== null && r.attempts.length === 0);
-  results.push({ name: 'fixture: a request held with nothing dispatched', ok: unplaced !== undefined, missing: [] });
-  if (unplaced) {
-    await m.navigate(`/requests/${unplaced.id}`);
-    await m.settle(300);
-    const line = m.container.querySelector('.drawer .attempt__hold')?.textContent?.trim() ?? 'no hold line';
-    const on = unplaced.held.cohort ?? unplaced.held.waitedOn.at(-1);
-    const wait = waitText(unplaced.held.heldMs);
-    results.push({
-      name: '/requests drawer of a request held with nothing dispatched names the hold and its wait under Attempts',
-      ok: line === `held ${wait} on ${on}` && m.container.querySelectorAll('.drawer .attempt').length === 0 && m.container.querySelectorAll('.drawer .selection-trace').length === 0,
-      missing: [unplaced.id, line],
-    });
-  }
 }
 {
-  const fableAttempt = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.id === '7d_fable')));
-  results.push({ name: 'fixture reports a Fable window on some attempts', ok: Boolean(fableAttempt), missing: [] });
-  const noFable = requests.find((r) => r.attempts.some((a) => a.windows.length > 0 && !a.windows.some((w) => w.id === '7d_fable')));
-  results.push({ name: 'fixture also has attempts with no Fable headers', ok: Boolean(noFable), missing: [] });
-  if (fableAttempt) {
-    await m.navigate(`/requests/${fableAttempt.id}`);
-    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
-    results.push({ name: '/requests Fable row reads a utilization and a reset', ok: rows.some((r) => /^Fable \d+% used resets /.test(r)), missing: rows.slice(0, 3) });
-  }
-  const unsampled = requests.find((r) => r.attempts.some((a) => a.windows.some((w) => w.utilization === null && w.resetsAt !== null)));
-  results.push({ name: 'fixture has a window reported with a reset and no utilization', ok: Boolean(unsampled), missing: [] });
-  if (unsampled) {
-    await m.navigate(`/requests/${unsampled.id}`);
-    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
-    results.push({ name: '/requests a window with no utilization reads not reported rather than 0% used', ok: rows.some((r) => /^(5h|7d|Fable) utilization not reported resets /.test(r)) && !rows.some((r) => /^(5h|7d|Fable) 0% used/.test(r)), missing: rows.slice(0, 4) });
-  }
-  if (noFable) {
-    await m.navigate(`/requests/${noFable.id}`);
-    const rows = [...m.container.querySelectorAll('.attempt__windows li')].map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' '));
-    results.push({ name: '/requests Fable row reads n/a without Fable headers', ok: rows.some((r) => r === 'Fable n/a not reported'), missing: rows.slice(0, 3) });
-  }
-}
-{
-  const cacheRows = () => [...m.container.querySelectorAll('.attempt__windows li')].filter((li) => li.children[0]?.textContent?.trim() === 'Cache').map((li) => [...li.children].map((c) => c.textContent?.trim()).join(' ').trim());
+  // The Outcome's Cache row reads the serving attempt, the last one, so each story row is picked by that attempt.
+  const cacheRows = () => {
+    const dd = drawerRowOf(m, 'Cache')?.querySelector('dd');
+    return dd ? [`Cache ${dd.textContent?.trim() ?? ''}`] : [];
+  };
+  const reasonInk = () => drawerRowOf(m, 'Cache')?.querySelector('dd')?.firstElementChild?.className ?? 'no Cache row';
+  const serving = (r) => r.attempts.at(-1) ?? null;
   {
     const failed = requests.filter((r) => r.attempts.some((a) => a.upstreamStatus !== 200 && a.cacheMissReason !== null));
     results.push({ name: 'fixture diagnoses nothing on an attempt that drew no response', ok: failed.length === 0, missing: failed.slice(0, 3).map((r) => r.id) });
   }
-  const changedRow = requests.find((r) => r.attempts.some((a) => a.cacheMissReason?.endsWith('_changed')));
+  const changedRow = requests.find((r) => serving(r)?.cacheMissReason?.endsWith('_changed'));
   results.push({ name: 'fixture diagnoses a cache divergence', ok: Boolean(changedRow), missing: [] });
   if (changedRow) {
     await m.navigate(`/requests/${changedRow.id}`);
     const rows = cacheRows();
-    results.push({ name: '/requests cache row names the divergence and where it fell, with no token count', ok: rows.some((r) => /^Cache (Model changed|System prompt changed|Tools changed|History edited) diverged at (model|system|tools|messages)$/.test(r)), missing: rows });
+    results.push({ name: '/requests cache row names the divergence and where it fell, with no token count', ok: rows.some((r) => /^Cache (Model changed|System prompt changed|Tools changed|History edited), diverged at (model|system|tools|messages)$/.test(r)), missing: rows });
   }
   const noneRow = requests.find((r) => r.attempts.length === 1 && r.attempts[0].cacheMissReason === 'none' && r.usage.cacheRead > 0);
   results.push({ name: 'fixture has an attempt that found no divergence', ok: Boolean(noneRow), missing: [] });
   if (noneRow) {
     await m.navigate(`/requests/${noneRow.id}`);
     const rows = cacheRows();
-    results.push({ name: '/requests cache row reads read and write tokens when nothing diverged', ok: rows.some((r) => /^Cache No divergence [\d.,]+[KMB]? read, [\d.,]+[KMB]? written$/.test(r)), missing: rows });
+    results.push({ name: '/requests cache row reads read and write tokens when nothing diverged', ok: rows.some((r) => /^Cache No divergence, [\d.,]+[KMB]? read, [\d.,]+[KMB]? written$/.test(r)), missing: rows });
   }
-  const notAsked = requests.find((r) => r.attempts.some((a) => a.cacheMissReason === 'not_requested'));
+  const notAsked = requests.find((r) => serving(r)?.cacheMissReason === 'not_requested');
   results.push({ name: 'fixture has an attempt the client asked no diagnostics for', ok: Boolean(notAsked), missing: [] });
   if (notAsked) {
     await m.navigate(`/requests/${notAsked.id}`);
     const rows = cacheRows();
     results.push({ name: '/requests cache row reads Not requested, muted, with no detail', ok: rows.includes('Cache Not requested'), missing: rows });
-    const muted = [...m.container.querySelectorAll('.attempt__windows li')].filter((li) => li.children[0]?.textContent?.trim() === 'Cache' && li.children[1]?.className === 'muted').length;
-    results.push({ name: '/requests Not requested is muted', ok: muted >= 1, missing: [String(muted)] });
+    results.push({ name: '/requests Not requested is muted', ok: reasonInk() === 'muted', missing: [reasonInk()] });
   }
-  const failedOver = requests.find((r) => r.attempts.some((a) => a.cacheMissReason === 'previous_message_not_found'));
+  const failedOver = requests.find((r) => serving(r)?.cacheMissReason === 'previous_message_not_found');
   results.push({ name: 'fixture diagnoses a failover as previous message not found', ok: Boolean(failedOver), missing: [] });
   if (failedOver) {
     await m.navigate(`/requests/${failedOver.id}`);
     const rows = cacheRows();
     results.push({ name: '/requests cache row names the failover reason', ok: rows.includes('Cache Previous message not found'), missing: rows });
-    results.push({ name: '/requests an attempt with no response reads n/a', ok: rows.includes('Cache n/a no response to read'), missing: rows });
+  }
+  // A request whose last attempt failed has no answer to read diagnostics from.
+  const unanswered = requests.find((r) => r.attempts.length > 0 && serving(r).cacheMissReason === null);
+  if (!unanswered) results.push({ name: '/requests an attempt with no response reads n/a', ok: false, missing: ['fixture'] });
+  else {
+    await m.navigate(`/requests/${unanswered.id}`);
+    const rows = cacheRows();
+    results.push({ name: '/requests an attempt with no response reads n/a', ok: rows.includes('Cache n/a, no response to read') && reasonInk() === 'muted', missing: [...rows, reasonInk()] });
   }
   // The route passes any reason name through, so one that names a member every object inherits must read as
   // itself rather than reach the member. The mock serves the row by reference, so the name is put back after.
@@ -5920,7 +5888,187 @@ if (failoverRow) {
     results.push({ name: '/requests cache row reads a reason named __proto__ under its own name', ok: rows.includes('Cache __proto__') && thrown.length === 0, missing: [...rows, ...thrown.map((p) => p.slice(0, 120))] });
   }
 }
+{
+  // The drawer draws its six sections and nothing of the attempts, however many the request made. Each attempt's
+  // routing is read in the routing log.
+  const several = requests.find((r) => r.attempts.length >= 3);
+  const none = requests.find((r) => r.attempts.length === 0);
+  const read = [];
+  for (const r of [several, none, laptopRow].filter(Boolean)) {
+    await m.navigate(`/requests/${r.id}`);
+    await m.settle(300);
+    read.push({
+      attempts: m.container.querySelectorAll('.drawer .attempt, .drawer .selection-trace').length,
+      id: r.id,
+      titles: [...m.container.querySelectorAll('.drawer .section-title')].map((h) => h.textContent?.trim() ?? ''),
+    });
+  }
+  results.push({
+    name: '/requests the drawer draws Outcome, Usage, Request, Request shape, Client hints and Captured bodies in that order and no Attempts',
+    ok: several !== undefined && none !== undefined && read.length === 3 && read.every((d) => JSON.stringify(d.titles) === JSON.stringify(DRAWER_SECTIONS) && d.attempts === 0),
+    missing: read.map((d) => JSON.stringify(d)),
+  });
+
+  // An attempt that carries no upstream id has no row. The mock serves the row by reference, so the ids are put back.
+  const target = requests.find((r) => r.attempts.length >= 3 && r.attempts.at(-1).upstreamMessageId !== null);
+  if (!target) results.push({ name: '/requests the Request section lists one Upstream ids row per attempt that carries one', ok: false, missing: ['fixture'] });
+  else {
+    const blank = target.attempts[1];
+    const kept = { message: blank.upstreamMessageId, request: blank.upstreamRequestId };
+    blank.upstreamMessageId = null;
+    blank.upstreamRequestId = null;
+    await m.navigate(`/requests/${laptopRow.id === target.id ? desktopRow.id : laptopRow.id}`);
+    await m.navigate(`/requests/${target.id}`);
+    await m.settle(300);
+    const section = [...m.container.querySelectorAll('.drawer section')].find((s) => s.querySelector('.section-title')?.textContent?.trim() === 'Request');
+    const labels = [...(section?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
+    const rows = labels.filter((l) => /^Attempt \d+$/.test(l)).map((l) => ({ chips: drawerChips(drawerRowOf(m, l)), label: l }));
+    blank.upstreamMessageId = kept.message;
+    blank.upstreamRequestId = kept.request;
+    const expected = target.attempts
+      .filter((a) => a.index !== blank.index)
+      .map((a) => ({
+        chips: [
+          ...(a.upstreamRequestId === null ? [] : [{ label: null, mono: true, title: "The upstream's request id", value: a.upstreamRequestId }]),
+          ...(a.upstreamMessageId === null ? [] : [{ label: null, mono: true, title: "The upstream's message id", value: a.upstreamMessageId }]),
+        ],
+        label: `Attempt ${a.index + 1}`,
+      }));
+    results.push({
+      name: '/requests the Request section lists one Upstream ids row per attempt that carries one',
+      ok: JSON.stringify(rows) === JSON.stringify(expected) && labels.indexOf(expected[0]?.label) === labels.indexOf('Kind') + 1,
+      missing: [JSON.stringify(labels), JSON.stringify(rows)],
+    });
+  }
+}
 m.unmount();
+
+// The two links into the routing log open it on the request a quarter hour either side of it, its end at most now,
+// read on the frozen clock so the range is the one the page computed.
+{
+  const QUARTER = 15 * 60_000;
+  const byId = new Map(requests.map((r) => [r.id, r]));
+  const expectedOf = (r) => ({
+    from: new Date(Date.parse(r.at) - QUARTER).toISOString(),
+    path: '/routing-log',
+    request: r.id,
+    to: new Date(Math.min(Date.parse(r.at) + (r.durationMs ?? 0) + QUARTER, CLOCK_ORIGIN)).toISOString(),
+  });
+  const readHref = (href) => {
+    const url = new URL(href ?? '', 'http://console.test');
+    return { from: url.searchParams.get('from'), path: url.pathname, request: url.searchParams.get('request'), to: url.searchParams.get('to') };
+  };
+  const page = await mount('/requests', { now: CLOCK_ORIGIN });
+  const linksOf = (tr) => [...(tr.lastElementChild?.querySelectorAll('a') ?? [])].map((a) => ({ href: a.getAttribute('href') ?? '', text: a.textContent?.trim() ?? '' }));
+  const rows = [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
+    const links = linksOf(tr);
+    const id = decodeURIComponent(links.find((l) => l.text === 'Details')?.href.split('?')[0].split('/').pop() ?? '');
+    return { id, links };
+  });
+  const wrong = rows.filter(({ id, links }) => {
+    const r = byId.get(id);
+    return !r || JSON.stringify(links.map((l) => l.text)) !== JSON.stringify(['Routing', 'Details']) || JSON.stringify(readHref(links[0].href)) !== JSON.stringify(expectedOf(r));
+  });
+  const capped = rows.filter(({ id }) => byId.has(id) && expectedOf(byId.get(id)).to === new Date(CLOCK_ORIGIN).toISOString()).length;
+
+  // The head's link, on the newest row and on the oldest the page lists: the first ends at now, the second does not.
+  const heads = [];
+  for (const row of [rows[0], rows.at(-1)].filter(Boolean)) {
+    await page.navigate(`/requests/${row.id}`);
+    await page.settle(300);
+    const head = page.container.querySelector('.drawer__head');
+    const link = [...(head?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Routing log');
+    const title = head?.querySelector('.drawer__title');
+    const close = head?.querySelector('button[aria-label="Close details"]');
+    const between = Boolean(link && title && close && title.compareDocumentPosition(link) & window.Node.DOCUMENT_POSITION_FOLLOWING && link.compareDocumentPosition(close) & window.Node.DOCUMENT_POSITION_FOLLOWING);
+    heads.push({ between, button: Boolean(link?.classList.contains('btn--secondary') && link.classList.contains('btn--sm')), href: link?.getAttribute('href') ?? null, id: row.id, row: row.links[0]?.href ?? null });
+  }
+  results.push({
+    name: "/requests the drawer's head links Routing log on the request with a quarter hour either side",
+    ok:
+      heads.length === 2 &&
+      heads.every((h) => h.between && h.button && JSON.stringify(readHref(h.href)) === JSON.stringify(expectedOf(byId.get(h.id)))) &&
+      readHref(heads[0].href).to === new Date(CLOCK_ORIGIN).toISOString() &&
+      readHref(heads[1].href).to !== new Date(CLOCK_ORIGIN).toISOString(),
+    missing: heads.map((h) => JSON.stringify({ ...h, expected: byId.has(h.id) ? expectedOf(byId.get(h.id)) : null, read: readHref(h.href) })),
+  });
+
+  // Routing goes straight to the log: the row's click would open the drawer, the link's never reaches it.
+  await page.navigate('/requests');
+  await page.settle(300);
+  const first = page.container.querySelector('.requests__table tbody tr');
+  const routing = [...(first?.lastElementChild?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Routing');
+  const href = routing?.getAttribute('href') ?? '';
+  routing?.click();
+  await page.settle(300);
+  const landed = page.location();
+  results.push({
+    name: '/requests each row links Routing beside Details to the same URL',
+    ok:
+      rows.length > 0 &&
+      wrong.length === 0 &&
+      capped > 0 &&
+      capped < rows.length &&
+      heads.every((h) => h.row === h.href) &&
+      landed.pathname === '/routing-log' &&
+      `${landed.pathname}${landed.search}` === href,
+    missing: [`${rows.length} rows, ${capped} ending at now`, ...wrong.slice(0, 3).map((w) => JSON.stringify(w)), ...heads.map((h) => `${h.row} against ${h.href}`), JSON.stringify(landed)],
+  });
+  page.unmount();
+}
+
+// A key pressed on a link inside a row is the link's, so Enter on Routing opens the log alone, never the drawer first.
+{
+  const page = await mount('/requests', { now: CLOCK_ORIGIN });
+  const routing = [...(page.container.querySelector('.requests__table tbody tr')?.lastElementChild?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Routing');
+  routing?.focus();
+  routing?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+  await page.settle(300);
+  const after = page.location();
+  const drawer = page.container.querySelector('.drawer') !== null;
+  results.push({ name: "/requests Enter on a row's Routing link leaves the drawer shut", ok: routing !== undefined && after.pathname === '/requests' && !drawer, missing: [JSON.stringify(after), `drawer ${drawer}`] });
+  page.unmount();
+}
+
+// The open drawer narrows the table to the columns that leave it room, and the chosen set returns when it closes.
+{
+  const COMPACT = ['Time', 'Model', 'Status', 'Attempts', ''];
+  const page = await mount('/requests', { now: CLOCK_ORIGIN });
+  const heads = () => [...page.container.querySelectorAll('.requests__table thead th')].map((th) => th.textContent?.trim() ?? '');
+  const cells = () => [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => tr.children.length);
+  const colsButton = () => [...page.container.querySelectorAll('.filters__cols button')].find((b) => b.textContent?.trim().startsWith('Columns'));
+  const turn = async (label) => {
+    colsButton()?.click();
+    await page.settle(100);
+    [...page.container.querySelectorAll('.cols-popover label')].find((l) => l.textContent?.trim() === label)?.querySelector('input[type="checkbox"]')?.click();
+    await page.settle(100);
+    colsButton()?.click();
+    await page.settle(100);
+  };
+  await turn('Pool');
+  const chosen = heads();
+  page.container.querySelector('.requests__table tbody tr')?.click();
+  await page.settle(300);
+  const open = { cells: [...new Set(cells())], columns: colsButton()?.textContent?.trim(), drawer: page.container.querySelector('.drawer') !== null, heads: heads() };
+  page.container.querySelector('button[aria-label="Close details"]')?.click();
+  await page.settle(300);
+  const closed = { drawer: page.container.querySelector('.drawer') !== null, heads: heads() };
+  await turn('Pool');
+  results.push({
+    name: '/requests the table shows Time, Model, Status and Attempts while the drawer is open and the chosen set after it closes',
+    ok:
+      chosen.includes('Pool') &&
+      chosen.length === 12 &&
+      open.drawer &&
+      JSON.stringify(open.heads) === JSON.stringify(COMPACT) &&
+      JSON.stringify(open.cells) === JSON.stringify([COMPACT.length]) &&
+      open.columns === 'Columns (11)' &&
+      !closed.drawer &&
+      JSON.stringify(closed.heads) === JSON.stringify(chosen),
+    missing: [JSON.stringify(chosen), JSON.stringify(open), JSON.stringify(closed)],
+  });
+  page.unmount();
+}
 
 // The search commits as the pattern fields do: once typing pauses, or at once on Enter. The clock stands still, so only
 // a tick fires the pause's timer and a commit without one can only come from the key.
@@ -5997,10 +6145,16 @@ m.unmount();
   // The drawer is a route of its own, so a row, its Details link, Close and Escape each carry the address's filters.
   const drawerCheck = '/requests opening and closing the drawer keeps the filters in the address';
   const kept = await mount('/requests?keys=laptop');
-  const state = () => ({ drawer: kept.container.querySelector('.drawer') !== null, keys: column(kept, 'Key'), trigger: trigger(kept, 'Keys') });
+  // The open drawer takes the Key column out of the table, so each row's key is read off the request its id names.
+  const keysOf = (page) =>
+    [...page.container.querySelectorAll('.requests__table tbody tr')].map((tr) => {
+      const shown = tr.querySelector('.sub.mono')?.textContent?.replace(/…$/, '') ?? '';
+      return requests.find((r) => shown !== '' && r.id.startsWith(shown))?.keyId ?? '';
+    });
+  const state = () => ({ drawer: kept.container.querySelector('.drawer') !== null, keys: keysOf(kept), trigger: trigger(kept, 'Keys') });
   const held = (s) => s.trigger === 'Keys (1)' && s.keys.length > 0 && s.keys.every((k) => k === 'laptop');
   const before = state();
-  const details = kept.container.querySelector('.requests__table tbody tr a')?.getAttribute('href') ?? 'no Details link';
+  const details = [...(kept.container.querySelector('.requests__table tbody tr')?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Details')?.getAttribute('href') ?? 'no Details link';
   kept.container.querySelector('.requests__table tbody tr')?.click();
   await kept.settle();
   const clicked = state();
@@ -6278,6 +6432,1148 @@ m.unmount();
     results.push({ name: rowCheck, ok: summary === 'Status' && JSON.stringify(options) === JSON.stringify(common), missing: [String(summary), ...options] });
   }
   held.unmount();
+}
+
+// The routing log on the pinned clock. Every figure a check names is read from the mock's own answer to the query the
+// page sent, so the story's counts are the route's rules over the story rather than a number kept here.
+{
+  const HOUR = 3_600_000;
+  const MINUTE = 60_000;
+  const iso = (ms) => new Date(ms).toISOString();
+  const clockText = (at) => new Date(at).toLocaleTimeString('en-US', { hour: '2-digit', hourCycle: 'h23', minute: '2-digit', second: '2-digit' });
+  const LABELS = ['5h', '7d', 'Fable', 'answer', 'attempt', 'capture', 'cause', 'client', 'depth', 'epoch', 'field', 'fields', 'gap', 'held', 'idle', 'in flight', 'key', 'lasted', 'models', 'next', 'over', 'pick', 'pins', 'prefix', 'rank', 'resets', 'retry', 'spent', 'state', 'to', 'turn', 'until', 'was'];
+  const trs = (page) => [...page.container.querySelectorAll('.routing-log__table tbody tr')].filter((tr) => !tr.querySelector('.skeleton, .empty'));
+  const cell = (tr, name) => tr?.querySelector(`td.routing-log__${name}`) ?? null;
+  const scope = (page) => page.container.querySelector('.routing-log__scope');
+  const kindsFilter = (page) => [...page.container.querySelectorAll('.filters .mselect')].find((d) => d.querySelector('.mselect__trigger')?.textContent?.trim().startsWith('Kinds'));
+  const params = (href) => Object.fromEntries([...new URL(href ?? '/', 'http://phoebis.test').searchParams].sort(([a], [b]) => a.localeCompare(b)));
+
+  const spy = countCalls('listRoutingLog');
+  m = await mount('/routing-log', { now: CLOCK_ORIGIN });
+  spy.restore();
+  const sent = spy.calls[0]?.[0] ?? {};
+  const hour = await api.listRoutingLog({ ...sent, limit: 200 });
+  const hidden = await api.listRoutingLog({ from: sent.from, kinds: ['probe', 'warm_prefix_expired'], limit: 200, to: sent.to });
+  {
+    const drawn = trs(m);
+    const expected = hour.rows.slice(0, 25);
+    const times = drawn.map((tr) => cell(tr, 'time')?.firstChild?.textContent ?? '');
+    const ids = drawn.map((tr) => cell(tr, 'time')?.querySelector('a')?.textContent ?? null);
+    const hiddenIds = hidden.rows.filter((r) => r.type === 'decision').map((r) => r.requestId);
+    const badges = drawn.map((tr) => cell(tr, 'kind')?.querySelector('.badge')?.textContent ?? '');
+    results.push({
+      name: '/routing-log lists the default hour, 25 rows, newest first, with the two hidden kinds absent',
+      ok:
+        sent.from === iso(CLOCK_ORIGIN - HOUR) && sent.to === iso(CLOCK_ORIGIN) && sent.kinds === undefined && sent.limit === 25 && sent.cursor === undefined &&
+        hour.rows.length === 44 && hour.nextCursor === null && drawn.length === 25 &&
+        JSON.stringify(times) === JSON.stringify(expected.map((r) => clockText(r.at))) &&
+        JSON.stringify(ids) === JSON.stringify(expected.map((r) => (r.type === 'decision' ? r.requestId : null))) &&
+        hidden.rows.length === 2 && hidden.rows.some((r) => r.type === 'decision' && r.probe) && hidden.rows.some((r) => r.type === 'event' && r.kind === 'warm_prefix_expired') &&
+        !ids.some((id) => hiddenIds.includes(id)) && !badges.includes('warm prefix expired'),
+      missing: [JSON.stringify(sent), `${hour.rows.length} rows in the hour, ${drawn.length} drawn`, `hidden ${hidden.rows.map((r) => r.kind).join(',')}`, times.join(' ')],
+    });
+  }
+  {
+    const filter = kindsFilter(m);
+    const trigger = filter?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+    filter?.querySelector('.mselect__trigger')?.click();
+    await m.settle(100);
+    const entries = [...(filter?.querySelectorAll('.mselect__group, .mselect__option') ?? [])].map((e) => (e.classList.contains('mselect__group') ? `# ${e.textContent?.trim()}` : `${e.getAttribute('aria-selected') === 'true' ? '+' : '-'} ${e.textContent?.trim()}`));
+    filter?.querySelector('.mselect__trigger')?.click();
+    await m.settle(100);
+    const events = entries.indexOf('# Events');
+    const probes = await api.listRoutingLog({ from: sent.from, kinds: ['probe'], limit: 25, to: sent.to });
+    const only = await mount(`/routing-log?kinds=probe`, { now: CLOCK_ORIGIN });
+    const listed = trs(only).map((tr) => cell(tr, 'time')?.querySelector('a')?.textContent ?? null);
+    const onlyTrigger = kindsFilter(only)?.querySelector('.mselect__trigger')?.textContent?.trim() ?? '';
+    only.unmount();
+    results.push({
+      name: '/routing-log the Kinds trigger reads 2 hidden and kinds=probe lists the probe alone',
+      ok:
+        trigger === 'Kinds (2 hidden)' && entries[0] === '# Decisions' && events > 0 && entries[events - 1] === '- Probe decisions (hidden by default)' && entries[entries.length - 1] === '- Warm prefix expired (hidden by default)' &&
+        entries.filter((e) => e.startsWith('-')).length === 2 && entries.filter((e) => e.startsWith('+')).length === 34 &&
+        probes.rows.length === 1 && probes.rows[0].probe && JSON.stringify(listed) === JSON.stringify([probes.rows[0].requestId]) && onlyTrigger === 'Kinds (1)',
+      missing: [trigger, ...entries.slice(0, 3), `${probes.rows.length} probes, listed ${listed.join(',')}`, onlyTrigger],
+    });
+  }
+  {
+    // The day's rows too, so the cell is read on every kind the story holds and not on the last hour's alone.
+    const day = await mount(`/routing-log?from=${iso(CLOCK_ORIGIN - 24 * HOUR)}&to=${iso(CLOCK_ORIGIN)}&kinds=${['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed', 'probe', 'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'fast_credits_changed', 'ledger_gap', 'overage_ended', 'overage_started', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset'].join(',')}`, { now: CLOCK_ORIGIN });
+    const wrong = [];
+    let pairs = 0;
+    for (const page of [m, day]) {
+      for (const tr of trs(page)) {
+        const fact = cell(tr, 'fact');
+        const time = (cell(tr, 'time')?.firstChild?.textContent ?? '').slice(0, 5);
+        const drawn = [...(fact?.querySelectorAll('.fact__pair') ?? [])];
+        if (drawn.length === 0) {
+          if (fact?.textContent?.trim() !== '-' || fact.querySelector('.muted') === null) wrong.push(`${time}: ${fact?.textContent}`);
+          continue;
+        }
+        if (drawn.length > 2 || fact.querySelectorAll('.fact').length !== 1) wrong.push(`${time}: ${drawn.length} pairs`);
+        for (const p of drawn) {
+          pairs += 1;
+          const label = p.children[0];
+          const value = p.children[1];
+          const ok = p.children.length === 2 && label.classList.contains('fact__label') && LABELS.includes(label.textContent ?? '') && value.classList.contains('fact__value') && value.classList.contains('mono') && (value.textContent ?? '') !== '' && value.textContent !== time;
+          if (!ok) wrong.push(`${time}: ${p.textContent}`);
+        }
+      }
+    }
+    day.unmount();
+    results.push({ name: '/routing-log every Fact cell is a label from the table in its slot and a mono value, one pair or two and never a third, no value the Time column gives', ok: pairs > 40 && wrong.length === 0, missing: [`${pairs} pairs`, ...wrong.slice(0, 8)] });
+  }
+  {
+    // The refresh rows carry the router's detail, so the cell reads the new token's expiry or the failure's class.
+    const kinds = ['refresh_failed', 'refresh_succeeded', 'refresh_uncertain'];
+    const page = await mount(`/routing-log?kinds=${kinds.join(',')}&from=${iso(CLOCK_ORIGIN - 24 * HOUR)}&to=${iso(CLOCK_ORIGIN)}`, { now: CLOCK_ORIGIN });
+    const drawn = Object.fromEntries(
+      trs(page).map((tr) => [cell(tr, 'kind')?.querySelector('.badge')?.textContent ?? '', [...(cell(tr, 'fact')?.querySelectorAll('.fact__pair') ?? [])].map((p) => `${p.children[0]?.textContent} ${p.children[1]?.textContent}`)]),
+    );
+    page.unmount();
+    const want = { 'refresh failed': ['cause transport'], 'refresh succeeded': ['until 20:52'], 'refresh uncertain': ['cause refresh_response_lost'] };
+    const sorted = (o) => JSON.stringify(Object.entries(o).sort(([a], [b]) => a.localeCompare(b)));
+    results.push({ name: "/routing-log a refresh row's Fact reads the new token's expiry or the failure's class", ok: sorted(drawn) === sorted(want), missing: [JSON.stringify(drawn)] });
+  }
+  {
+    // A link in reads the request a quarter hour either side of its first decision.
+    const id = 'req_1d9c3e55-0b2';
+    const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 2 * HOUR), limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows.filter((r) => r.type === 'decision');
+    const at = Math.min(...own.map((r) => Date.parse(r.at)));
+    const from = at - 15 * MINUTE;
+    const to = Math.min(at + 15 * MINUTE, CLOCK_ORIGIN);
+    const page = await mount(`/routing-log?request=${id}&from=${iso(from)}&to=${iso(to)}`, { now: CLOCK_ORIGIN });
+    const counted = await api.listRoutingLog({ from: iso(from), limit: 25, request: id, to: iso(to) });
+    const line = scope(page);
+    const head = line?.querySelector('span')?.textContent ?? '';
+    const widen = Object.fromEntries([...(line?.querySelectorAll('.routing-log__widen a') ?? [])].map((a) => [a.textContent?.trim(), params(a.getAttribute('href'))]));
+    const newest = own.find((r) => r.accountId !== null);
+    const minute = Math.floor(at / MINUTE) * MINUTE;
+    const expected = {
+      'this session': { from: iso(at - HOUR), session: own[0].sessionId, to: iso(Math.min(at + HOUR, CLOCK_ORIGIN)) },
+      'this account': { accounts: newest.accountId, from: iso(at - 15 * MINUTE), to: iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN)) },
+      'this minute': { from: iso(minute), to: iso(minute + MINUTE - 1) },
+    };
+    const plural = (n, one) => `${n} ${one}${n === 1 ? '' : 's'}`;
+    results.push({
+      name: "/routing-log a request filter draws the scope line with the three widenings' URLs",
+      ok:
+        own.length === 2 && counted.counts !== null && head === `Request ${id}: ${plural(counted.counts.decisions, 'decision')}, ${plural(counted.counts.events, 'event')}` &&
+        line?.querySelector('a')?.getAttribute('href') === `/requests/${id}` && JSON.stringify(widen) === JSON.stringify(expected) && (line?.textContent ?? '').includes('Widen to') &&
+        [...(line?.querySelectorAll('button') ?? [])].some((b) => b.textContent?.trim() === 'Clear'),
+      missing: [head, JSON.stringify(widen), JSON.stringify(expected)],
+    });
+    page.unmount();
+  }
+  {
+    const page = await mount('/routing-log?accounts=secondary', { now: CLOCK_ORIGIN });
+    const answer = await api.listRoutingLog({ accountIds: ['secondary'], from: iso(CLOCK_ORIGIN - HOUR), limit: 25, to: iso(CLOCK_ORIGIN) });
+    const line = scope(page);
+    const said = line?.querySelector('span')?.textContent ?? '';
+    const n = trs(page).length;
+    const expected = `Narrowed to account secondary, 13:30 to 14:30: ${n} row${n === 1 ? '' : 's'}${answer.nextCursor ? ', more' : ''}`;
+    results.push({
+      name: '/routing-log a narrowing draws the scope line without widenings',
+      ok: n > 0 && n === answer.rows.length && said === expected && line?.querySelector('.routing-log__widen') === null && line?.querySelector('a')?.getAttribute('href') === '/accounts/secondary',
+      missing: [said, expected],
+    });
+    page.unmount();
+  }
+  {
+    // Mounted two seconds before the hour's newest row, so the first poll's range is the first to reach it.
+    const top = hour.rows[0];
+    const t = Date.parse(top.at);
+    const page = await mount('/routing-log', { now: t - 2_000 });
+    const firstBefore = cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '';
+    const toggle = () => page.container.querySelector('.routing-log__follow button[role="switch"]');
+    const label = () => page.container.querySelector('.routing-log__follow .secondary')?.textContent ?? '';
+    toggle()?.click();
+    await page.settle(100);
+    const polls = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle();
+    const first = trs(page)[0];
+    const call = polls.calls[0]?.[0] ?? {};
+    const landed = { calls: polls.calls.length, cursor: call.cursor, isNew: first?.classList.contains('is-new') ?? false, time: cell(first, 'time')?.firstChild?.textContent ?? '', to: call.to };
+    tick(5_000);
+    await page.settle();
+    const after = { calls: polls.calls.length, isNew: page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length };
+    polls.restore();
+    results.push({
+      name: '/routing-log Follow polls every 5 s with the range\'s end at now and lands a new row in the accent tint',
+      ok:
+        firstBefore !== clockText(top.at) && label() === 'polling every 5 s, the range ends now' &&
+        landed.calls === 1 && landed.cursor === undefined && landed.to === iso(t + 3_000) && landed.isNew && landed.time === clockText(top.at) &&
+        after.calls === 2 && after.isNew === 0,
+      missing: [firstBefore, label(), JSON.stringify(landed), JSON.stringify(after)],
+    });
+    [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'Next page')?.click();
+    await page.settle();
+    results.push({ name: '/routing-log paging to an older page turns Follow off', ok: toggle()?.getAttribute('aria-checked') === 'false' && label() === 'Follow' && trs(page).length > 0, missing: [String(toggle()?.getAttribute('aria-checked')), label()] });
+    page.unmount();
+  }
+  const followToggle = (page) => page.container.querySelector('.routing-log__follow button[role="switch"]');
+  const tinted = (page) => page.container.querySelectorAll('.routing-log__table tbody tr.is-new').length;
+  const pagerButton = (page, label) => [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === label);
+  {
+    // The poll lands the hour's newest row in the tint, then the reader pages away before the next poll clears it.
+    const t = Date.parse(hour.rows[0].at);
+    const page = await mount('/routing-log', { now: t - 2_000 });
+    followToggle(page)?.click();
+    await page.settle(100);
+    tick(5_000);
+    await page.settle();
+    const landed = tinted(page);
+    pagerButton(page, 'Next page')?.click();
+    await page.settle();
+    pagerButton(page, 'First page')?.click();
+    await page.settle();
+    const back = { first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', tinted: tinted(page) };
+    results.push({
+      name: '/routing-log paging back from an older page draws no row in the accent tint',
+      ok: landed === 1 && back.first === clockText(hour.rows[0].at) && back.tinted === 0,
+      missing: [`${landed} tinted after the poll`, JSON.stringify(back)],
+    });
+    page.unmount();
+  }
+  {
+    // The poll is in flight when the reader turns Follow off, and its answer lands after.
+    const t = Date.parse(hour.rows[0].at);
+    const page = await mount('/routing-log', { now: t - 2_000 });
+    followToggle(page)?.click();
+    await page.settle(100);
+    const held = deferNextCall('listRoutingLog');
+    tick(5_000);
+    await page.settle(100);
+    followToggle(page)?.click();
+    await page.settle(100);
+    held.release();
+    await page.settle();
+    const after = { calls: held.calls.length, first: cell(trs(page)[0], 'time')?.firstChild?.textContent ?? '', tinted: tinted(page) };
+    held.restore();
+    results.push({
+      name: '/routing-log a poll that answers after Follow is turned off lands nothing',
+      ok: after.calls === 1 && after.first !== clockText(hour.rows[0].at) && after.tinted === 0,
+      missing: [JSON.stringify(after)],
+    });
+    page.unmount();
+  }
+  {
+    // The new filter's list is held, so the poll that fires under it answers before the list does.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    followToggle(page)?.click();
+    await page.settle(100);
+    const held = deferNextCall('listRoutingLog');
+    await page.navigate('/routing-log?accounts=secondary');
+    tick(5_000);
+    await page.settle();
+    held.release();
+    await page.settle();
+    const [list, poll] = held.calls.map((c) => c[0]);
+    held.restore();
+    const key = (at, requestId) => `${clockText(at)} ${requestId ?? '-'}`;
+    const answered = new Set([...(await api.listRoutingLog(list)).rows, ...(poll ? (await api.listRoutingLog(poll)).rows : [])].map((r) => key(r.at, r.type === 'decision' ? r.requestId : null)));
+    const drawn = trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
+    const strays = drawn.filter((k) => !answered.has(k));
+    results.push({
+      name: "/routing-log a filter change while following never carries the old filter's rows",
+      ok: list?.accountIds?.join() === 'secondary' && poll?.accountIds?.join() === 'secondary' && drawn.length > 0 && strays.length === 0 && followToggle(page)?.getAttribute('aria-checked') === 'true',
+      missing: [`${drawn.length} drawn, ${strays.length} from the old filter`, ...strays.slice(0, 4)],
+    });
+    page.unmount();
+  }
+  // Every row the route holds between `from` and `to`, newest first, read page by page.
+  const everyRow = async (from, to) => {
+    const all = [];
+    let cursor;
+    do {
+      const page = await api.listRoutingLog({ cursor, from: iso(from), limit: 200, to: iso(to) });
+      all.push(...page.rows);
+      cursor = page.nextCursor ?? undefined;
+    } while (cursor !== undefined);
+    return all;
+  };
+  {
+    // The key's revocation names the key in its row: the link opens the Keys page on that key's row, focused.
+    const page = await mount('/routing-log?kinds=registry_changed', { now: CLOCK_ORIGIN });
+    const link = trs(page)
+      .flatMap((tr) => [...tr.querySelectorAll('a')])
+      .find((a) => a.getAttribute('href')?.startsWith('/keys'));
+    const href = link?.getAttribute('href') ?? null;
+    link?.click();
+    await page.settle(600);
+    const at = page.location();
+    const focused = document.activeElement;
+    results.push({
+      name: "/routing-log a row's key link opens the Keys page focused on that key",
+      ok: href === '/keys#ci' && at.pathname === '/keys' && at.hash === '#ci' && focused?.tagName === 'TR' && focused.id === 'ci',
+      missing: [String(href), JSON.stringify(at), `${focused?.tagName} ${focused?.id}`],
+    });
+    page.unmount();
+  }
+  const rowKey = (r) => `${clockText(r.at)} ${r.type === 'decision' ? r.requestId : '-'}`;
+  const drawnKeys = (page) => trs(page).map((tr) => `${cell(tr, 'time')?.firstChild?.textContent ?? ''} ${cell(tr, 'time')?.querySelector('a')?.textContent ?? '-'}`);
+  {
+    // The list ends an hour back, so the first poll, whose range ends now, finds the whole last hour arrived: more
+    // rows than one page holds.
+    const from = CLOCK_ORIGIN - 2 * HOUR;
+    const page = await mount(`/routing-log?from=${iso(from)}&to=${iso(CLOCK_ORIGIN - HOUR)}`, { now: CLOCK_ORIGIN });
+    const listed = trs(page).length;
+    followToggle(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle(1_000);
+    polls.restore();
+    const sent = polls.calls.map((c) => c[0]);
+    const all = await everyRow(from, CLOCK_ORIGIN + 5_000);
+    const arrived = all.filter((r) => Date.parse(r.at) > CLOCK_ORIGIN - HOUR).length;
+    const expected = all.slice(0, arrived + listed).map(rowKey);
+    const drawn = drawnKeys(page);
+    results.push({
+      name: '/routing-log Follow reads every page that arrived between two polls, each row once and in order',
+      ok:
+        listed > 0 && arrived > 25 && sent.length === 2 && sent[0].cursor === undefined && typeof sent[1].cursor === 'string' && sent.every((q) => q.to === iso(CLOCK_ORIGIN + 5_000)) &&
+        JSON.stringify(drawn) === JSON.stringify(expected) && page.container.querySelector('.routing-log__overrun') === null,
+      missing: [`${listed} listed, ${arrived} arrived, ${drawn.length} drawn of ${expected.length}`, JSON.stringify(sent.map((q) => [q.cursor, q.to]))],
+    });
+    page.unmount();
+  }
+  {
+    // A day back, the poll finds more arrived than its eight pages read: it draws the newest of them, says so above the
+    // list, and Next reads on from the last row it read.
+    const from = CLOCK_ORIGIN - 24 * HOUR;
+    const page = await mount(`/routing-log?from=${iso(from)}&to=${iso(from + HOUR)}`, { now: CLOCK_ORIGIN });
+    const listed = trs(page).length;
+    followToggle(page)?.click();
+    await page.settle(100);
+    const polls = countCalls('listRoutingLog');
+    tick(5_000);
+    await page.settle(2_000);
+    polls.restore();
+    const all = await everyRow(from, CLOCK_ORIGIN + 5_000);
+    const line = page.container.querySelector('.routing-log__overrun')?.textContent ?? null;
+    const drawn = drawnKeys(page);
+    pagerButton(page, 'Next page')?.click();
+    await page.settle();
+    const next = drawnKeys(page);
+    results.push({
+      name: '/routing-log Follow past its eight pages says more rows arrived and Next reads the rows it left',
+      ok:
+        polls.calls.length === 8 && line === 'More rows arrived than Follow could fetch. Reload to read them.' && all.length > 200 + listed + 25 &&
+        JSON.stringify(drawn.slice(0, 200)) === JSON.stringify(all.slice(0, 200).map(rowKey)) && drawn.length === 200 + listed &&
+        JSON.stringify(next) === JSON.stringify(all.slice(200, 225).map(rowKey)),
+      missing: [`${polls.calls.length} reads, line ${line}`, `${drawn.length} drawn`, `next ${next.slice(0, 2).join(' | ')}`, `gap ${all.slice(200, 202).map(rowKey).join(' | ')}`],
+    });
+    page.unmount();
+  }
+  {
+    // A failure's notice dwells 6 s and the poll runs every 5 s, so a streak that reported every poll would show its
+    // notice again at the third.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
+    followToggle(page)?.click();
+    await page.settle(100);
+    const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
+    const seen = [];
+    for (let i = 0; i < 3; i += 1) {
+      tick(5_000);
+      await page.settle();
+      seen.push(toasts());
+    }
+    outage.restore();
+    page.unmount();
+    const notice = '/admin/routing-log failed: ledger locked';
+    results.push({
+      name: '/routing-log a failing Follow poll toasts once',
+      ok: JSON.stringify(seen) === JSON.stringify([[notice], [notice], []]),
+      missing: [JSON.stringify(seen)],
+    });
+  }
+  {
+    // The streak's notice is still on screen, inside its 6-second dwell, when the next poll answers.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
+    followToggle(page)?.click();
+    await page.settle(100);
+    const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
+    tick(5_000);
+    await page.settle();
+    const raised = toasts();
+    outage.recover();
+    tick(5_000);
+    await page.settle();
+    const recovered = toasts();
+    outage.restore();
+    page.unmount();
+    results.push({
+      name: "/routing-log the Follow poll that recovers takes its streak's notice down",
+      ok: JSON.stringify(raised) === JSON.stringify(['/admin/routing-log failed: ledger locked']) && recovered.length === 0,
+      missing: [JSON.stringify(raised), JSON.stringify(recovered)],
+    });
+  }
+  {
+    // Follow turned off inside a failing streak and on again while the route still fails: the new run toasts once.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
+    followToggle(page)?.click();
+    await page.settle(100);
+    const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
+    tick(5_000);
+    await page.settle();
+    const first = toasts();
+    followToggle(page)?.click();
+    await page.settle(100);
+    // Past the notice's 6-second dwell, so a toast after it is the new run's.
+    tick(7_000);
+    await page.settle();
+    const quiet = toasts();
+    followToggle(page)?.click();
+    await page.settle(100);
+    tick(5_000);
+    await page.settle();
+    const again = toasts();
+    outage.restore();
+    page.unmount();
+    const notice = '/admin/routing-log failed: ledger locked';
+    results.push({
+      name: '/routing-log each Follow run toasts its failing streak once',
+      ok: JSON.stringify([first, quiet, again]) === JSON.stringify([[notice], [], [notice]]),
+      missing: [JSON.stringify([first, quiet, again])],
+    });
+  }
+  {
+    const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys#[^?#]+$/, model: /^\/models\?model=[^&]+$/, pool: /^\/pools#[^?#]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?session=[^&]+$/ };
+    const wrong = [];
+    const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
+    const all = (td, kinds) => hrefs(td).every((h) => kinds.some((k) => ROUTE[k].test(h)));
+    for (const tr of trs(m)) {
+      const time = cell(tr, 'time')?.firstChild?.textContent ?? '';
+      const say = (what) => wrong.push(`${time}: ${what}`);
+      if (!all(cell(tr, 'time'), ['request'])) say(`time ${hrefs(cell(tr, 'time'))}`);
+      const session = cell(tr, 'session')?.querySelector('a');
+      if (session && params(session.getAttribute('href')).session !== session.getAttribute('title')) say(`session ${session.getAttribute('href')}`);
+      if (!session && cell(tr, 'session')?.querySelector('.muted')?.textContent !== '-') say('session drawn as text');
+      if (!all(cell(tr, 'account'), ['account', 'pool', 'key', 'model'])) say(`account ${hrefs(cell(tr, 'account'))}`);
+      const named = [...(cell(tr, 'account')?.querySelectorAll('.routing-log__cut:not(.routing-log__model-under) > :not(.muted)') ?? [])].filter((e) => e.tagName !== 'A');
+      if (named.length) say(`account names ${named.map((e) => e.textContent).join(',')} outside a link`);
+      if (!all(cell(tr, 'model'), ['model'])) say(`model ${hrefs(cell(tr, 'model'))}`);
+      if (!all(cell(tr, 'fact'), ['account', 'key', 'pool', 'model'])) say(`fact ${hrefs(cell(tr, 'fact'))}`);
+      if (!all(cell(tr, 'link'), ['request'])) say(`details ${hrefs(cell(tr, 'link'))}`);
+    }
+    const links = [...m.container.querySelectorAll('.routing-log__table tbody a')].map((a) => a.getAttribute('href') ?? '');
+    // The hour's first page names the revoked key in a refusal's Fact.
+    const factLinks = [...m.container.querySelectorAll('.routing-log__fact .fact__value a')].map((a) => a.getAttribute('href'));
+    results.push({
+      name: '/routing-log every entity in a row is a link with the route of its kind',
+      ok: wrong.length === 0 && links.length > 50 && links.every((h) => Object.values(ROUTE).some((r) => r.test(h))) && factLinks.length > 0,
+      missing: [`${links.length} links`, ...wrong.slice(0, 8), ...factLinks.slice(0, 3)],
+    });
+  }
+  {
+    const page = await mount('/routing-log?session=zzzzzzzz', { now: CLOCK_ORIGIN });
+    const t = page.text();
+    results.push({ name: '/routing-log the empty state names the range', ok: trs(page).length === 0 && t.includes('No decisions or events in this range.') && t.includes('Widen the range or clear a filter.'), missing: [t.slice(0, 200)] });
+    page.unmount();
+  }
+  {
+    // A link from a newer router can carry a kind this build does not know: the route refuses it, and the page says so.
+    const page = await mount('/routing-log?kinds=budget_refilled', { now: CLOCK_ORIGIN });
+    const t = page.text();
+    const drawn = page.container.querySelectorAll('.routing-log__table tbody tr[data-row]').length;
+    results.push({
+      name: "/routing-log a kind the route refuses shows the route's refusal where the rows would be",
+      ok: drawn === 0 && t.includes('Could not load the routing log') && t.includes('unknown kind budget_refilled') && page.location().search === '?kinds=budget_refilled',
+      missing: [`${drawn} rows`, page.location().search, t.slice(0, 300)],
+    });
+    page.unmount();
+  }
+  {
+    // Read while the view is open with the expert view off, then on the Dashboard with it off and on.
+    const group = m.container.querySelector('nav.nav > .nav__group');
+    const open = {
+      active: group?.querySelector('a.nav__link.is-active')?.getAttribute('href') ?? null,
+      heading: group?.querySelector('.nav__heading')?.textContent ?? null,
+      links: [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim()).slice(-2),
+      title: [document.title, m.container.querySelector('.topbar__title')?.textContent],
+    };
+    const expert = localStorage.getItem('phoebis.expertView');
+    localStorage.removeItem('phoebis.expertView');
+    const off = await mount('/');
+    const dashboard = { heading: off.container.querySelector('.nav__heading') !== null, link: off.container.querySelector('a[href="/routing-log"]') !== null };
+    off.unmount();
+    localStorage.setItem('phoebis.expertView', 'on');
+    const on = await mount('/');
+    const expertOn = { active: on.container.querySelector('a[href="/routing-log"]')?.classList.contains('is-active') ?? null, heading: on.container.querySelector('nav.nav > .nav__group .nav__heading')?.textContent ?? null };
+    on.unmount();
+    if (expert === null) localStorage.removeItem('phoebis.expertView');
+    else localStorage.setItem('phoebis.expertView', expert);
+    results.push({
+      name: '/routing-log sits under the Diagnostics heading, active while open, and the heading is absent on the Dashboard with the expert view off',
+      ok:
+        open.heading === 'Diagnostics' && open.active === '/routing-log' && JSON.stringify(open.links) === JSON.stringify(['Settings', 'Routing log']) && JSON.stringify(open.title) === JSON.stringify(['Routing log - Phoebis Router', 'Routing log']) &&
+        !dashboard.heading && !dashboard.link && expertOn.heading === 'Diagnostics' && expertOn.active === false,
+      missing: [JSON.stringify(open), JSON.stringify(dashboard), JSON.stringify(expertOn)],
+    });
+  }
+  // The open rows: a decision row opens to the card its record draws, an event row to its detail. Each card check
+  // opens the story's own row and reads what the card drew against the record the route answers.
+  const DAY = 24 * HOUR;
+  /** A token count as the card reads one, spelled out here so the checks hold the console's formatter to it. */
+  const fmtCompact = (n) => (Math.abs(n) < 1000 ? new Intl.NumberFormat('en-US').format(Math.round(n)) : new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(n));
+  const rowOf = (page, id) => page.container.querySelector(`.routing-log__table tbody tr[data-row="${id}"]`);
+  /** Opens a row as a reader does, by a click on its Kind cell, and answers the panel beneath it once it has landed. */
+  const openRow = async (page, id) => {
+    rowOf(page, id)?.querySelector('td.routing-log__kind')?.click();
+    await page.settle(350);
+    const next = rowOf(page, id)?.nextElementSibling;
+    return next?.classList.contains('routing-log__panel') ? next : null;
+  };
+  /** A chip as `label value`: the label's text, then the value's. */
+  const chipWords = (el) => {
+    const label = el.querySelector('.chip__label')?.textContent ?? '';
+    const all = el.textContent ?? '';
+    return label ? `${label} ${all.slice(label.length)}` : all;
+  };
+  const walkOf = (card) =>
+    [...(card?.querySelectorAll('.decision-card__walk > li') ?? [])].map((li) => ({
+      chips: [...li.querySelectorAll('.chips > .chip')].map(chipWords),
+      li,
+      n: li.querySelector('.decision-card__n')?.textContent ?? '',
+      step: li.querySelector('.decision-card__step')?.textContent ?? '',
+      verdict: li.querySelector('.decision-card__verdict-cell')?.textContent ?? '',
+    }));
+  const kvRows = (dl) => [...(dl?.querySelectorAll('.kv__row') ?? [])].map((r) => ({ dd: r.querySelector('dd'), label: r.querySelector('dt')?.textContent ?? '' }));
+  const ddWords = (dd) => {
+    const chips = [...(dd?.querySelectorAll('.chip') ?? [])];
+    return chips.length ? chips.map(chipWords) : [dd?.textContent ?? ''];
+  };
+  const outcomeOf = (card) => Object.fromEntries(kvRows(card?.querySelector('.decision-card__outcome')).map((r) => [r.label, ddWords(r.dd)]));
+  const sentenceOf = (card) => [...(card?.querySelectorAll('.decision-card__sentence > span') ?? [])].map((s) => (s.querySelector('a') ? `[${s.textContent}]` : s.textContent)).join(' ');
+  const verdictChipsOf = (card) => [...(card?.querySelectorAll('.decision-card__verdict > .chips > .chip') ?? [])].map(chipWords);
+  const candidateRows = (card) => [...(card?.querySelectorAll('.decision-card__candidates tbody tr') ?? [])];
+  /** The story's own decision: its row's page, a quarter hour either side of the request, its record and its card. */
+  const story = async (id, seq = 1, kinds = '') => {
+    const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: kinds ? kinds.split(',') : undefined, limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows;
+    const at = Math.min(...own.filter((r) => r.type === 'decision').map((r) => Date.parse(r.at)));
+    const page = await mount(`/routing-log?${kinds ? `kinds=${kinds}&` : ''}request=${id}&from=${iso(at - 15 * MINUTE)}&to=${iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN))}`, { now: CLOCK_ORIGIN });
+    const panel = await openRow(page, `${id}/${seq}`);
+    return { card: panel?.querySelector('.decision-card') ?? null, page, panel, record: await api.getDecision(id, seq), row: own.find((r) => r.type === 'decision' && r.seq === seq) };
+  };
+  // Every card and detail the checks below open is scanned for a joined value once it is drawn.
+  const scanned = [];
+  const scan = (where, root) => {
+    if (root) scanned.push({ root: root.cloneNode(true), where });
+  };
+
+  {
+    const { card, page, panel, record } = await story('req_f8085653-422');
+    scan('renewal', card);
+    const lines = walkOf(card);
+    const moves = lines.filter((l) => ['Spent', 'Overage', 'Return to plan', 'Drain', 'Shed'].includes(l.step));
+    const pin = lines.find((l) => l.step === 'Pin');
+    const row = rowOf(page, 'req_f8085653-422/1');
+    results.push({
+      name: "/routing-log the renewal's card reads no rule fired, five move lines and idle",
+      ok:
+        row?.classList.contains('is-open') && row.getAttribute('aria-expanded') === 'true' && panel?.querySelector('td')?.getAttribute('colspan') === '9' &&
+        card?.querySelector('.decision-card__verdict > .badge')?.textContent === 'renewed' && sentenceOf(card) === `Renewed on [${record.outcome.accountId}]` &&
+        verdictChipsOf(card).includes('no rule fired') && verdictChipsOf(card).includes('pin warm') &&
+        moves.length === 5 && moves.every((l) => l.verdict === 'no' && l.chips.length > 0) && lines.some((l) => l.step === 'Renew' && l.verdict === 'renewed') &&
+        pin?.chips.some((c) => c.startsWith('idle ')) && JSON.stringify(lines.map((l) => l.n)) === JSON.stringify(lines.map((_, i) => String(i + 1))),
+      missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...lines.map((l) => `${l.n} ${l.step} ${l.verdict}: ${l.chips.join(' / ')}`)],
+    });
+    // The re-made drawer check: a renewal reads as the pin continued, renewed in place on the account it was on.
+    const out = outcomeOf(card);
+    results.push({
+      name: '/routing-log a card reads a renewed pin as continued',
+      ok: lines.at(-1)?.step === 'Renew' && lines.at(-1)?.chips.includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !lines.some((l) => l.step === 'Pick'),
+      missing: [JSON.stringify(out['Pin written']), lines.at(-1)?.chips.join(' / ') ?? 'no line'],
+    });
+    results.push({
+      name: "/routing-log a card reads the answering attempt's cache read as a hit or a miss against its input",
+      ok: record.outcome.completion?.hit === true && JSON.stringify(out['Cache read']) === JSON.stringify(['hit', `read ${fmtCompact(record.outcome.completion.cacheReadTokens)} of ${fmtCompact(record.outcome.completion.cacheReadTokens + record.outcome.completion.inputTokens)} input`, 'tier 1h']),
+      missing: [JSON.stringify(out['Cache read'])],
+    });
+    {
+      // The three folds are closed until the reader opens them.
+      const folds = [...(card?.querySelectorAll('details.decision-card__fold') ?? [])];
+      const closed = folds.map((f) => f.open);
+      for (const f of folds) f.open = true;
+      await page.settle(50);
+      const labels = (f) => kvRows(f?.querySelector('.kv')).map((r) => r.label);
+      const settings = kvRows(folds[2]?.querySelector('.kv.decision-card__settings'));
+      const twenty = ['Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Select below', 'Shed above', 'Move when spent', 'Overage grace', 'Wind-down', 'Shed share', 'Burn window', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place', 'Pace floor'];
+      const request = Object.fromEntries(kvRows(folds[0]?.querySelector('.kv')).map((r) => [r.label, r.dd]));
+      results.push({
+        name: '/routing-log the three folds open to Request facts, Pin and warmth and the twenty settings in order',
+        ok:
+          JSON.stringify(folds.map((f) => f.querySelector('summary')?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
+          JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
+          request.Key?.querySelector('a')?.getAttribute('href') === `/keys#${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools#${record.request.poolId}` &&
+          JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
+          JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
+          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twenty) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
+        missing: [JSON.stringify(closed), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
+      });
+      scan('renewal, folds open', card);
+    }
+    {
+      // A widening replaces the request filter with the account's quarter hour around the row.
+      const foot = card?.querySelector('.decision-card__foot');
+      const at = Date.parse(record.request.at);
+      [...(foot?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent === 'this account')?.click();
+      await page.settle(300);
+      const went = params(`/x${page.location().search}`);
+      results.push({
+        name: "/routing-log the card's widening opens the log on the row's account a quarter hour either side, every row shut",
+        ok: JSON.stringify(went) === JSON.stringify({ accounts: record.outcome.accountId, from: iso(at - 15 * MINUTE), to: iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN)) }) && page.container.querySelectorAll('.routing-log__panel').length === 0,
+        missing: [JSON.stringify(went)],
+      });
+    }
+    page.unmount();
+  }
+  {
+    // The static placement's chosen member carries a deeper static entry the TTL refused beside the one the rung took.
+    const { card, page, record } = await story('req_b2bed817-a58');
+    scan('static placement', card);
+    const lines = walkOf(card);
+    const rungs = lines.filter((l) => l.step.startsWith('Rung: '));
+    const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
+    const refused = record.candidates.find((c) => c.accountId !== chosen.accountId && c.prefix.static?.refusedBy);
+    const staticLine = rungs.find((l) => l.step === 'Rung: static');
+    const hash = staticLine?.li.querySelector('.decision-card__hash');
+    const warm = staticLine?.li.querySelector('.decision-card__warm');
+    const until = (e) => `warm until ${new Date(Date.parse(e.writtenAt) + e.ttlMs).toISOString().slice(11, 16)}`;
+    const prefixCell = (id) => candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === id)?.querySelector('.decision-card__prefix');
+    const mine = prefixCell(chosen.accountId);
+    const theirs = prefixCell(refused?.accountId);
+    results.push({
+      name: "/routing-log the static placement's card reads the three rung lines, the hash chip of eight characters with the full hash in its title, the warm-until chip and the candidate table's Prefix cells",
+      ok:
+        JSON.stringify(rungs.map((l) => `${l.step} ${l.verdict}`)) === JSON.stringify(['Rung: content none', 'Rung: with main none', 'Rung: static match']) &&
+        chosen.prefix.static.hash !== chosen.prefix.staticMatch.hash && chosen.prefix.static.depth > chosen.prefix.staticMatch.depth &&
+        hash?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && hash?.getAttribute('title') === chosen.prefix.staticMatch.hash && hash.getAttribute('title').length === 64 && warm?.textContent === until(chosen.prefix.staticMatch) &&
+        mine?.querySelector('.decision-card__hash')?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && mine?.querySelector('.decision-card__warm')?.textContent === until(chosen.prefix.staticMatch) &&
+        refused !== undefined && theirs?.querySelector('.decision-card__hash')?.textContent === refused.prefix.static.hash.slice(0, 8) && (theirs?.querySelector('.decision-card__hash')?.getAttribute('title') ?? '').includes(refused.prefix.static.refusedBy) &&
+        !(card?.textContent ?? '').includes(chosen.prefix.static.hash.slice(0, 8)),
+      missing: [...rungs.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), `${hash?.textContent} ${hash?.getAttribute('title')}`, warm?.textContent ?? 'no warm-until', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
+    });
+    // Copy as JSON hands the route's answer to the clipboard as it arrived, every field the card does not draw
+    // included: here the whole hash of the entry the rung took, which the card cuts to eight characters.
+    let copied = null;
+    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (t) => ((copied = t), Promise.resolve()) } });
+    const foot = card?.querySelector('.decision-card__foot');
+    [...(foot?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Copy as JSON')?.click();
+    await page.settle(50);
+    Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: undefined });
+    const widen = [...(foot?.querySelectorAll('button.link-btn') ?? [])].map((b) => b.textContent);
+    results.push({
+      name: '/routing-log the foot reads Record v1 and Copy as JSON copies the record whole with the full hash',
+      ok:
+        foot?.querySelector('.decision-card__record')?.textContent === 'Record v1' && JSON.stringify(widen) === JSON.stringify(['this session', 'this account', 'this minute']) && copied !== null &&
+        copied === JSON.stringify(record.raw, null, 2) && copied.includes(`"${chosen.prefix.staticMatch.hash}"`) && chosen.prefix.staticMatch.hash.length === 64,
+      missing: [foot?.textContent ?? 'no foot', String(copied).slice(0, 80)],
+    });
+    page.unmount();
+  }
+  {
+    const { card, page, record } = await story('req_da52d141-a5a');
+    scan('spent move', card);
+    const lines = walkOf(card);
+    const steps = lines.map((l) => `${l.step} ${l.verdict}`);
+    const cool = lines.find((l) => l.step === 'Cool reading');
+    const rules = lines.find((l) => l.step === 'Rules after spent');
+    const landed = lines.find((l) => l.step === 'Rung: static');
+    results.push({
+      name: "/routing-log the spent move's card reads the cool reading, the cap filter and where it landed",
+      ok:
+        sentenceOf(card) === `Moved [${record.outcome.fromAccountId}] to [${record.outcome.accountId}]` && verdictChipsOf(card).includes('spent rule') &&
+        steps.includes('Spent fired') && JSON.stringify(rules?.chips) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && rules?.verdict === 'not run' &&
+        cool?.verdict === 'preferred' && cool.chips.includes(`${record.outcome.accountId} cool yes`) && steps.includes('Cap filter passed') &&
+        landed?.verdict === 'match' && landed.chips.includes(`on ${record.outcome.accountId}`) && steps.indexOf('Spent fired') < steps.indexOf('Cool reading preferred'),
+      missing: [sentenceOf(card), ...lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`)],
+    });
+    // The re-made drawer check: the move and the rung that placed it read on one card.
+    results.push({
+      name: '/routing-log a card reads a placement beside the move that led to it',
+      ok: record.outcome.rule === 'spent' && record.outcome.rung?.rung === 'static' && verdictChipsOf(card).includes('spent rule') && landed?.verdict === 'match' && outcomeOf(card)['Pin written']?.[0] === `moved on ${record.outcome.accountId}`,
+      missing: [verdictChipsOf(card).join(' / '), JSON.stringify(outcomeOf(card)['Pin written'])],
+    });
+    page.unmount();
+  }
+  {
+    // The shed move ran no round of its own: the round at 11:00 marked its pin, which its card reads twice.
+    const { card, page, record } = await story('req_868264bc-611');
+    scan('shed move', card);
+    const shed = walkOf(card).find((l) => l.step === 'Shed');
+    const pinFold = card?.querySelectorAll('details.decision-card__fold')[1];
+    const mark = kvRows(pinFold?.querySelector('.kv')).find((r) => r.label === 'Shed mark');
+    page.unmount();
+    const round = await story('req_1eaa9bc1-a18');
+    scan('shedding round', round.card);
+    const ran = walkOf(round.card).find((l) => l.step === 'Shed');
+    const marks = [...(ran?.li.querySelectorAll('.chip') ?? [])].filter((c) => c.querySelector('.chip__label')?.textContent === 'mark');
+    const sessions = (round.record.outcome.shedMarks ?? []).map((m) => m.sessionId);
+    results.push({
+      name: "/routing-log the shed move's card reads the round and its marks",
+      ok:
+        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && shed.chips.includes('round within dwell') && shed.chips.includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
+        ran?.verdict === 'no' && ran.chips.includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
+        JSON.stringify(marks.map((c) => params(c.querySelector('a')?.getAttribute('href')).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
+      missing: [shed?.chips.join(' / ') ?? 'no shed line', JSON.stringify(ddWords(mark?.dd)), ran?.chips.join(' / ') ?? 'no round line'],
+    });
+    round.page.unmount();
+  }
+  {
+    const { card, page, record } = await story('req_69e30548-32e', 1);
+    scan('hold', card);
+    const hold = walkOf(card).find((l) => l.step === 'Hold');
+    const out = outcomeOf(card);
+    const bound = record.outcome.hold?.boundMs;
+    results.push({
+      name: "/routing-log the hold's card reads its place and bound",
+      ok: sentenceOf(card) === `Held on [${record.outcome.hold.accountId}]` && hold?.verdict === 'held' && hold.chips.includes('place cohort') && hold.chips.includes(`on ${record.outcome.hold.accountId}`) && bound === 60_000 && hold.chips.includes('bound 1 min') && JSON.stringify(out.Hold) === JSON.stringify([`on ${record.outcome.hold.accountId}`, 'cohort', 'bound 1 min']),
+      missing: [sentenceOf(card), hold?.chips.join(' / ') ?? 'no hold line', JSON.stringify(out.Hold)],
+    });
+    // The held-on member is at its cap, which its chip says beneath the badge.
+    const heldOn = candidateRows(card).find((tr) => tr.classList.contains('is-chosen'));
+    results.push({
+      name: "/routing-log a held card tints the held-on member and reads it at its cap",
+      ok: heldOn?.querySelector('.decision-card__judged .badge')?.textContent === 'held on' && heldOn.querySelector('.decision-card__why')?.textContent === 'at its cap',
+      missing: [heldOn?.textContent ?? 'no tinted row'],
+    });
+    const after = await openRow(page, 'req_69e30548-32e/2');
+    const placed = after?.querySelector('.decision-card');
+    scan('placement after the hold', placed);
+    const { cohort, heldMs } = (await api.getDecision('req_69e30548-32e', 2)).outcome.cohortHold;
+    results.push({
+      name: '/routing-log a card names the account a hold waited on and how long it waited',
+      ok: JSON.stringify(outcomeOf(placed).Hold) === JSON.stringify([`on ${cohort}`, 'cohort', `freed after ${waitText(heldMs)}`]),
+      missing: [JSON.stringify(outcomeOf(placed).Hold)],
+    });
+    page.unmount();
+  }
+  {
+    // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
+    const { card, page, record } = await story('req_e8b7eb13-060', 1);
+    scan('strategy hold', card);
+    const hold = walkOf(card).find((l) => l.step === 'Hold');
+    results.push({
+      name: "/routing-log a held card reads the hold's place on the strategy's pick",
+      ok: record.outcome.hold?.cohort === null && hold?.chips.includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
+      missing: [hold?.chips.join(' / ') ?? 'no hold line', JSON.stringify(outcomeOf(card).Hold)],
+    });
+    const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
+    scan('placement after a strategy hold', after);
+    const { heldMs, waitedOn } = (await api.getDecision('req_e8b7eb13-060', 2)).outcome.cohortHold;
+    results.push({
+      name: '/routing-log a card names the last account a hold with no cohort waited on and the wait',
+      ok: JSON.stringify(outcomeOf(after).Hold) === JSON.stringify([`on ${waitedOn.at(-1)}`, 'strategy pick', `freed after ${waitText(heldMs)}`]),
+      missing: [JSON.stringify(outcomeOf(after).Hold)],
+    });
+    page.unmount();
+  }
+  {
+    // A request held until its bound ran out answers without a dispatch: the exhaustion after the hold reads why.
+    const [id, seq] = ['req_77634945-72b', 2];
+    const { card, page, record } = await story(id, seq);
+    scan('exhaustion after a hold', card);
+    results.push({
+      name: "/routing-log a hold whose bound ran out reads the exhaustion after it with nothing dispatched",
+      ok: record.outcome.kind === 'exhausted' && record.request.holds.length > 0 && record.outcome.completion === null && outcomeOf(card).Answer?.[0] === `status ${record.outcome.exhaustion.kind === 'untimed' ? 503 : 429}` && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
+      missing: [JSON.stringify(outcomeOf(card))],
+    });
+    page.unmount();
+  }
+  {
+    const { card, page, record } = await story('req_51d0e2b8-7a0');
+    scan('exhaustion', card);
+    const line = walkOf(card).find((l) => l.step === 'Exhausted');
+    const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
+    const drawn = [...(line?.li.querySelectorAll('.chip') ?? [])].filter((c) => c.getAttribute('title')).map((c) => c.textContent);
+    results.push({
+      name: "/routing-log the exhaustion's card reads the obstacles in order",
+      ok:
+        sentenceOf(card) === `Exhausted in [${record.request.poolId}]` && card?.querySelector('.decision-card__sentence a')?.getAttribute('href') === `/pools#${record.request.poolId}` && line?.verdict === 'exhausted' &&
+        weighed.length > 0 && JSON.stringify(drawn.map((t) => t.replace(/^obstacle/, ''))) === JSON.stringify(weighed.map((w) => String(w).split(':').pop().replace(/_/g, ' '))) &&
+        JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['status 429', 'window overage', 'retry after 00:00']),
+      missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
+    });
+    page.unmount();
+  }
+  {
+    const { card, page, record } = await story('req_e0a4c6f2-118');
+    scan('refusal', card);
+    const lines = walkOf(card);
+    const folds = [...(card?.querySelectorAll('details.decision-card__fold') ?? [])];
+    for (const f of folds) f.open = true;
+    await page.settle(50);
+    const pin = kvRows(folds[1]?.querySelector('.kv'));
+    scan('refusal, folds open', card);
+    results.push({
+      name: "/routing-log the refusal's card reads two lines and Pin not looked up",
+      ok:
+        record.pinReason === 'not_looked_up' && sentenceOf(card) === 'Refused before selection' &&
+        JSON.stringify(lines.map((l) => [l.step, l.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) && JSON.stringify(lines[1]?.chips) === JSON.stringify(['moves', 'rungs', 'partitions']) &&
+        JSON.stringify(pin.map((r) => [r.label, r.dd?.textContent])) === JSON.stringify([['Pin', 'not looked up']]) &&
+        candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${lines[0]?.chips[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
+      missing: [...lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
+    });
+    page.unmount();
+  }
+  {
+    // A probe's decision keeps its kind, so it opens to the same card, its probe line among the steps.
+    const { card, page } = await story('req_c41d0311-200', 1, 'probe');
+    scan('probe', card);
+    const steps = walkOf(card).map((l) => l.step);
+    results.push({
+      name: "/routing-log the probe's card is the decision card",
+      ok: card !== null && steps.includes('Probe') && steps.includes('Pin') && candidateRows(card).length > 0 && card.querySelector('.decision-card__foot') !== null,
+      missing: [steps.join(', ')],
+    });
+    page.unmount();
+  }
+  {
+    const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
+    scan('failover attempt', card);
+    results.push({
+      name: "/routing-log a failover attempt's card reads attempt n of m",
+      ok: row.attempt === 2 && row.attemptCount === 2 && sentenceOf(card) === `Attempt 2 of 2: placed on [${record.outcome.accountId}]`,
+      missing: [sentenceOf(card)],
+    });
+    page.unmount();
+  }
+  {
+    // A fresh placement by the strategy: no pin found, the partitions and the pick, and a pin created.
+    const { card, page, record } = await story('req_ef099b34-453');
+    scan('fresh placement', card);
+    const lines = walkOf(card);
+    results.push({
+      name: '/routing-log a card reads a fresh placement',
+      ok: sentenceOf(card) === `Placed on [${record.outcome.accountId}]` && lines[0]?.chips.includes('found none') && lines.some((l) => l.step === 'Pick' && l.verdict === 'chosen') && outcomeOf(card)['Pin written']?.[0] === `created on ${record.outcome.accountId}`,
+      missing: lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`),
+    });
+    page.unmount();
+  }
+  {
+    // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
+    const { card, page, record } = await story('req_4b0e9d17-c31', 2);
+    scan('fast failover', card);
+    const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
+    const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
+    results.push({
+      name: '/routing-log a card hints why a member was passed over for its credits',
+      ok: out !== undefined && chip?.textContent?.startsWith('credits') && chip.getAttribute('title') === 'its usage credits unavailable for fast mode',
+      missing: [String(out?.accountId), chip ? `${chip.textContent} (${chip.getAttribute('title')})` : 'no credits chip'],
+    });
+    page.unmount();
+  }
+  {
+    // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
+    const { card, page, record } = await story('req_52f62e67-839');
+    scan('with main placement', card);
+    const line = walkOf(card).find((l) => l.step === 'Rung: with main');
+    const read = outcomeOf(card)['Cache read'] ?? [];
+    results.push({
+      name: '/routing-log a card reads a placement with the main conversation against the input, since it promised no size',
+      ok: record.outcome.rung?.rung === 'with_main' && line?.verdict === 'match' && line.li.querySelector('.decision-card__hash') === null && read.some((c) => c.startsWith('read ') && c.endsWith(' input')) && !read.some((c) => c.includes('promised')),
+      missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(read)],
+    });
+    page.unmount();
+  }
+  {
+    // The candidate table's windows: three lines a window on a subscription member, one merged reading on a key, and a
+    // window the member never reported reads so rather than as 0%.
+    const { card, page, record } = await story('req_f8085653-422');
+    const rows = candidateRows(card);
+    const cells = (tr) => [...(tr?.children ?? [])].map((td) => [...td.childNodes].map((n) => n.textContent).filter(Boolean));
+    const fable = record.candidates.find((c) => c.kind === 'oauth' && c.windows.seven_day_fable);
+    const noFable = record.candidates.find((c) => c.kind === 'oauth' && !c.windows.seven_day_fable);
+    const key = record.candidates.find((c) => c.kind === 'api_key');
+    const rowOfMember = (id) => rows.find((tr) => tr.querySelector('td a')?.textContent === id);
+    const fableCells = fable ? cells(rowOfMember(fable.accountId)) : [];
+    const noFableCells = noFable ? cells(rowOfMember(noFable.accountId)) : [];
+    const keyRow = key ? rowOfMember(key.accountId) : null;
+    const headers = [...(card?.querySelectorAll('.decision-card__candidates thead th') ?? [])].map((th) => th.textContent);
+    results.push({
+      name: '/routing-log the candidate table reads all three windows on a subscription member and one merged reading on a key',
+      ok:
+        JSON.stringify(headers) === JSON.stringify(['Account', 'Tier', '5h', '7d', 'Fable', 'In flight', 'Pace', 'Prefix', 'Verdict']) && fableCells.slice(2, 5).every((c) => c.length === 3) &&
+        /^\d+%$/.test(fableCells[2]?.[0] ?? '') && /^(head|poll|predicted|stored) /.test(fableCells[2]?.[2] ?? '') && keyRow?.children[2]?.getAttribute('colspan') === '3' && /^worst bucket \d+%$/.test(keyRow?.children[2]?.textContent ?? ''),
+      missing: [headers.join(','), JSON.stringify(fableCells), keyRow?.textContent ?? 'no key member'],
+    });
+    results.push({ name: "/routing-log the candidate table's Fable cell reads a utilization and a reset", ok: /^\d+%$/.test(fableCells[4]?.[0] ?? '') && (fableCells[4]?.[1] ?? '') !== '', missing: [JSON.stringify(fableCells[4])] });
+    results.push({ name: "/routing-log the candidate table's Fable cell reads not reported without a Fable window", ok: noFable !== undefined && JSON.stringify(noFableCells[4]) === JSON.stringify(['not reported']), missing: [JSON.stringify(noFableCells[4])] });
+    page.unmount();
+    // No story member lacks a 5-hour reading, so the route's answer drops one while the check reads it.
+    const original = api.getDecision;
+    api.getDecision = async (id, seq) => {
+      const r = await original.call(api, id, seq);
+      if (!r) return r;
+      const [first, ...rest] = r.candidates;
+      const { five_hour: _, ...windows } = first.windows;
+      return { ...r, candidates: [{ ...first, windows }, ...rest] };
+    };
+    const dropped = await story('req_f8085653-422');
+    api.getDecision = original;
+    const first = candidateRows(dropped.card)[0];
+    results.push({
+      name: '/routing-log a window with no reading reads not reported rather than 0%',
+      ok: first?.children[2]?.textContent === 'not reported' && !/^0%/.test(first?.children[2]?.textContent ?? ''),
+      missing: [first?.children[2]?.textContent ?? 'no row'],
+    });
+    dropped.page.unmount();
+  }
+  {
+    // The answer has not ended, so the attempt has no usage and wrote no cache-map entry yet.
+    const original = api.getDecision;
+    api.getDecision = async (id, seq) => {
+      const r = await original.call(api, id, seq);
+      return r && { ...r, outcome: { ...r.outcome, completion: { ...r.outcome.completion, cacheMapWritten: null, cacheReadTokens: null, completedAt: null, hit: null, inputTokens: null, status: null } } };
+    };
+    const { card, page } = await story('req_f8085653-422');
+    api.getDecision = original;
+    const out = outcomeOf(card);
+    results.push({
+      name: '/routing-log the cache-map row reads pending before the answer ends',
+      ok: JSON.stringify(out['Cache-map entries']) === JSON.stringify(['pending']) && JSON.stringify(out['Cache read']) === JSON.stringify(['pending']) && verdictChipsOf(card).includes('cache pending') && !(card?.textContent ?? '').includes('tier 1h'),
+      missing: [JSON.stringify(out), verdictChipsOf(card).join(' / ')],
+    });
+    page.unmount();
+  }
+  {
+    // The outcome rows across the story's cards: the renewal's pin, map and read, the hold, and an exhaustion's answer.
+    const renewal = await story('req_f8085653-422');
+    const out = outcomeOf(renewal.card);
+    const entries = renewal.record.outcome.completion.cacheMapWritten;
+    renewal.page.unmount();
+    const held = await story('req_69e30548-32e', 1);
+    const hold = outcomeOf(held.card).Hold;
+    held.page.unmount();
+    const exhausted = await story('req_51d0e2b8-7a0');
+    const answer = outcomeOf(exhausted.card).Answer;
+    exhausted.page.unmount();
+    results.push({
+      name: '/routing-log the outcome reads the pin written, the cache-map entries, the cache read with tier 1h, the hold and the answer',
+      ok:
+        JSON.stringify(Object.keys(out)) === JSON.stringify(['Pin written', 'Cache-map entries', 'Cache read', 'Spend']) && out['Pin written']?.[0] === `renewed on ${renewal.record.outcome.accountId}` &&
+        JSON.stringify(out['Cache-map entries']) === JSON.stringify([`on ${entries[0].accountId}`, ...entries.map((e) => `${e.tier} depth ${e.depth}`), `prefix ${fmtCompact(Math.max(...entries.map((e) => e.prefixTokens)))}`]) &&
+        out['Cache read']?.at(-1) === 'tier 1h' && hold?.[1] === 'cohort' && answer?.[0] === 'status 429',
+      missing: [JSON.stringify(out), JSON.stringify(hold), JSON.stringify(answer)],
+    });
+  }
+  {
+    // A record the retention took answers 404, which the route's client reads as null.
+    const original = api.getDecision;
+    api.getDecision = () => Promise.resolve(null);
+    const { page, panel } = await story('req_f8085653-422');
+    api.getDecision = original;
+    results.push({
+      name: "/routing-log a record the retention took reads its sentence in the card's place",
+      ok: (panel?.textContent ?? '') === 'The record left with the retention' && panel?.querySelector('.decision-card__walk') === null,
+      missing: [panel?.textContent ?? 'no panel'],
+    });
+    page.unmount();
+  }
+  {
+    // No story refusal names a key or pool the registry has since dropped, so the route's answer drops its settings
+    // while the check reads it.
+    const original = api.getDecision;
+    api.getDecision = async (id, seq) => {
+      const r = await original.call(api, id, seq);
+      return r && { ...r, settings: null };
+    };
+    const { card, page } = await story('req_e0a4c6f2-118');
+    api.getDecision = original;
+    const fold = card?.querySelectorAll('details.decision-card__fold')[2];
+    results.push({
+      name: "/routing-log a refusal under a key or pool the registry no longer holds reads so in the settings fold",
+      ok: fold?.querySelector('summary')?.textContent === 'Settings in force' && fold.querySelector('.kv') === null && (fold.textContent ?? '').endsWith('The key and its pool had left the registry'),
+      missing: [fold?.textContent ?? 'no fold'],
+    });
+    page.unmount();
+  }
+  {
+    // Each event kind opens to its pairs: When to the second in UTC, then the account and the pool as links, then the
+    // kind's own. The wind-down is dated at the instant it fires, five days past the pinned clock, so no range up to
+    // the clock lists it: its page is mounted on a clock a minute past the event, its `to` a minute past the event.
+    const OWN = {
+      account_state_changed: ['From', 'To', 'Cause', 'Detail', 'Effect'],
+      budget_period_ended: ['Previous period', 'Spent', 'Period start'],
+      budget_reached: ['Budget', 'Spent', 'Period ends', 'Effect', 'Crossed by'],
+      catalog_changed: ['Added', 'Models'],
+      cooldown_cleared: ['Scope', 'Cleared'],
+      cooldown_set: ['Scope', 'Reason', 'Window', 'Until', 'Set by'],
+      fast_credits_changed: ['Before', 'After', 'Cause', 'Effect'],
+      ledger_gap: ['Reason', 'Meaning', 'Effect', 'Request'],
+      model_permitted: ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request'],
+      model_rejected: ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request'],
+      overage_ended: ['Since', 'Lasted'],
+      overage_started: ['Effect'],
+      pin_created: ['Key', 'Session', 'Agent', 'Model', 'Epoch'],
+      pin_expired: ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by'],
+      pin_migrated: ['From', 'To', 'Reason', 'Moved by', 'Key', 'Session', 'Agent', 'Model'],
+      pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
+      poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
+      poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
+      reauth_required: ['Routing'],
+      refresh_failed: ['Error'],
+      refresh_succeeded: ['Access token', 'Refresh token'],
+      refresh_uncertain: ['Error'],
+      registry_changed: ['Change', 'shed ahead of pace', 'Actor', 'Reading it'],
+      router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
+      shedding_round: ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
+      warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
+      wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
+      window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
+      window_spent: ['Window', 'Reading', 'Read from', 'Resets', 'Effect', 'Request'],
+    };
+    const EVENT_KINDS = [
+      'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'model_permitted', 'model_rejected',
+      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'refresh_failed',
+      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
+    ];
+    const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+    const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
+    // The pairs the event carries the facts for: the state's effect, the gap's meaning, a registry edit's reading, the
+    // spent window's effect and the backoff's span.
+    const VALUES = {
+      account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
+      ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
+      poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
+      registry_changed: (e) => ({ 'Reading it': [`decisions before ${hhmm(Date.parse(e.at))} carry shed ahead of pace none`] }),
+      window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request'] }),
+    };
+    const modelLinks = {};
+    for (const kind of EVENT_KINDS) {
+      // The story's newest registry change revokes a key and names no field, so the pool edit stands for the kind.
+      const listed = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 7 * DAY), kinds: [kind], limit: 25, to: iso(CLOCK_ORIGIN + 7 * DAY) })).rows;
+      const e = listed.find((r) => Object.keys(r.detail.diff ?? {}).length > 0) ?? listed[0];
+      if (!e) {
+        results.push({ name: `/routing-log the ${kind} detail reads its pairs`, ok: false, missing: ['no event of the kind in the story'] });
+        continue;
+      }
+      const at = Date.parse(e.at);
+      const page = await mount(`/routing-log?kinds=${kind}&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: Math.max(CLOCK_ORIGIN, at + MINUTE) });
+      const panel = await openRow(page, `event/${e.id}`);
+      const detail = panel?.querySelector('.event-detail');
+      scan(kind, detail);
+      const pairs = kvRows(detail?.querySelector(':scope > .kv'));
+      const href = (label) => pairs.find((p) => p.label === label)?.dd?.querySelector('a')?.getAttribute('href') ?? null;
+      const head = [['When', utc(at)], ...(e.accountId ? [['Account', e.accountId]] : []), ...(e.poolId ? [['Pool', e.poolId]] : [])];
+      if (kind.startsWith('model_')) modelLinks[kind] = { event: e, links: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))])) };
+      results.push({
+        name: `/routing-log the ${kind} detail reads its pairs`,
+        ok:
+          JSON.stringify(pairs.slice(0, head.length).map((p) => [p.label, p.dd?.textContent])) === JSON.stringify(head) &&
+          (e.accountId === null || href('Account') === `/accounts/${e.accountId}`) && (e.poolId === null || href('Pool') === `/pools#${e.poolId}`) &&
+          JSON.stringify(pairs.slice(head.length).map((p) => p.label)) === JSON.stringify(OWN[kind]) && (e.requestId === null) === (detail?.querySelector('.event-detail__foot') === null) &&
+          Object.entries(VALUES[kind]?.(e) ?? {}).every(([label, want]) => JSON.stringify(ddWords(pairs.find((p) => p.label === label)?.dd)) === JSON.stringify(want)),
+        missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
+      });
+      page.unmount();
+    }
+    // The re-made drawer check: the account that refused the model and the one that served it, and both of its names.
+    const rejected = modelLinks.model_rejected;
+    const permitted = modelLinks.model_permitted;
+    const model = (id) => `/models?model=${id}`;
+    results.push({
+      name: '/routing-log the model rejected and permitted details link each account and model they name',
+      ok:
+        rejected !== undefined && permitted !== undefined &&
+        JSON.stringify(permitted.links['Rejected by']) === JSON.stringify(permitted.event.detail.rejected_by.map((id) => `/accounts/${id}`)) &&
+        JSON.stringify(rejected.links['Model sent']) === JSON.stringify([model(rejected.event.detail.wire_model)]) && JSON.stringify(rejected.links['Model resolved']) === JSON.stringify([model(rejected.event.model)]) &&
+        JSON.stringify(permitted.links['Model sent']) === JSON.stringify([model(permitted.event.detail.wire_model)]) && JSON.stringify(rejected.links.Request) === JSON.stringify([`/requests/${rejected.event.requestId}`]),
+      missing: [JSON.stringify(rejected?.links), JSON.stringify(permitted?.links)],
+    });
+  }
+  {
+    // Source request opens the log on the event's request alone, a quarter hour either side of the event.
+    const [e] = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - HOUR), kinds: ['cooldown_set'], limit: 25, to: iso(CLOCK_ORIGIN - 20 * MINUTE) })).rows.filter((r) => r.requestId !== null);
+    const at = Date.parse(e.at);
+    const page = await mount(`/routing-log?kinds=cooldown_set&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+    const panel = await openRow(page, `event/${e.id}`);
+    const links = Object.fromEntries([...(panel?.querySelectorAll('.event-detail__foot a') ?? [])].map((a) => [a.textContent, a.getAttribute('href')]));
+    const source = new URL(links['Source request'] ?? '/', 'http://phoebis.test');
+    const query = new URLSearchParams(source.search);
+    results.push({
+      name: '/routing-log an event that names a request links Source request to the log on that request',
+      ok: source.pathname === '/routing-log' && query.get('request') === e.requestId && query.get('from') === iso(at - 15 * MINUTE) && query.get('to') === iso(at + 15 * MINUTE) && links.Details === `/requests/${e.requestId}`,
+      missing: [JSON.stringify(links)],
+    });
+    // A link inside an open row follows it rather than shutting the row.
+    rowOf(page, `event/${e.id}`)?.querySelector('td.routing-log__link a')?.click();
+    await page.settle(300);
+    const followed = page.location().pathname;
+    page.unmount();
+    results.push({ name: '/routing-log a link inside a row follows the link rather than opening the row', ok: followed === `/requests/${e.requestId}`, missing: [followed] });
+  }
+  {
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const first = trs(page)[0];
+    const id = first?.getAttribute('data-row');
+    await openRow(page, id);
+    const opened = page.container.querySelectorAll('.routing-log__panel').length;
+    rowOf(page, id)?.querySelector('td.routing-log__fact')?.click();
+    await page.settle(100);
+    const shut = page.container.querySelectorAll('.routing-log__panel').length;
+    await openRow(page, id);
+    [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'Next page')?.click();
+    await page.settle(300);
+    const paged = page.container.querySelectorAll('.routing-log__panel').length;
+    const chevrons = trs(page).filter((tr) => tr.classList.contains('routing-log__row')).every((tr) => tr.firstElementChild?.classList.contains('routing-log__chevron'));
+    // Back on the page the row was opened on, it is shut too: the open rows went with the page they were opened on.
+    const pager = (label) => [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === label);
+    pager('First page')?.click();
+    await page.settle(300);
+    const back = page.container.querySelectorAll('.routing-log__panel').length;
+    pager('Next page')?.click();
+    await page.settle(300);
+    results.push({
+      name: '/routing-log a click anywhere but a link opens the row and shuts it again, and another page starts with every row shut',
+      ok: opened === 1 && shut === 0 && paged === 0 && back === 0 && chevrons && first?.querySelector('td.routing-log__chevron svg') !== null,
+      missing: [`opened ${opened}, shut ${shut}, after paging ${paged}, back on the first page ${back}, chevrons ${chevrons}`],
+    });
+    // Every decision and every event of the default hour opens, the second page's rows and then the first's, and the
+    // cards and details join the scan.
+    const openAll = async () => {
+      const rows = trs(page).filter((tr) => tr.classList.contains('routing-log__row'));
+      for (const tr of rows) tr.querySelector('td.routing-log__kind')?.click();
+      await page.settle(800);
+      const panels = [...page.container.querySelectorAll('.routing-log__panel')];
+      for (const p of panels) scan('the hour', p.querySelector('.decision-card, .event-detail'));
+      return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-card__walk, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
+    };
+    const second = await openAll();
+    [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
+    await page.settle(300);
+    const firstPage = await openAll();
+    results.push({
+      name: '/routing-log every row of a page opens to its card or its detail',
+      ok: [second, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + firstPage.rows === hour.rows.length,
+      missing: [JSON.stringify({ firstPage, second }), `${hour.rows.length} rows in the hour`],
+    });
+    page.unmount();
+  }
+  {
+    // A value joined by a comma or a semicolon is two values in one place. A digit group's comma (`12,345`) joins
+    // nothing, and the user agent is the one value that carries its own commas as the client sent them.
+    const JOINED = /(?<!\d),|,(?!\d)|;/;
+    const wrong = [];
+    let read = 0;
+    for (const { root, where } of scanned) {
+      const nodes = [...root.querySelectorAll('.chip, .kv dd, td, .decision-card__sentence')];
+      for (const n of nodes) {
+        if (n.closest('.kv__row')?.querySelector('dt')?.textContent === 'User agent') continue;
+        read += 1;
+        const text = n.textContent ?? '';
+        if (JOINED.test(text)) wrong.push(`${where}: ${text.slice(0, 80)}`);
+      }
+    }
+    results.push({ name: '/routing-log no chip, value or cell joins values with a comma or a semicolon, the user agent excepted', ok: scanned.length > 40 && read > 1000 && wrong.length === 0, missing: [`${scanned.length} panels, ${read} read`, ...wrong.slice(0, 8)] });
+  }
+  m.unmount();
 }
 
 // A read that fails for new filters draws the error state alone, none of the sections and none of the rows the filters
@@ -6733,7 +8029,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics the migration rewrites card sits beside Failovers', ok: failovers !== undefined && failovers.nextElementSibling === card('Migration rewrites'), missing: [failovers?.nextElementSibling?.querySelector('.card__title')?.textContent ?? 'no sibling'] });
   const moves = await api.getAnalyticsRewrites({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() });
   const moveLegend = legendOf('Migration rewrites').slice(2);
-  results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Rate limited') && moveLegend.includes('Shed'), missing: moveLegend });
+  results.push({ name: '/analytics the rewrites legend names each move reason the range holds', ok: Object.keys(moves.moves).length > 1 && moveLegend.length === Object.keys(moves.moves).length && moveLegend.includes('Failed over') && moveLegend.includes('Shed'), missing: moveLegend });
 
   await tab(m, 'Burn');
   const planned = legendOf('Plan per hour');
@@ -6741,15 +8037,15 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
   {
-    // `secondary` serves the story's Sonnet 5 traffic alone, whose cells the cost table leaves null, and every 7-day
-    // cell is null, so its 5-hour window and every account's 7-day window price nothing in the range.
+    // `secondary` serves the story's Sonnet 5 traffic, which the cost model has no weight for, so its two windows
+    // price nothing in the range while every other account's 5-hour and 7-day windows carry a figure.
     const valueOf = (li) => li.querySelector('.legend__value')?.textContent?.trim() ?? '';
     const labelOf = (li) => [...li.childNodes].filter((n) => n.nodeType === 3).map((n) => n.textContent?.trim()).join('');
     const fiveHour = planItems.filter((li) => labelOf(li).endsWith('(5-hour)'));
     const sevenDay = planItems.filter((li) => labelOf(li).endsWith('(7-day)'));
     const unlisted = planItems.filter((li) => labelOf(li) === 'model unlisted');
     results.push({
-      name: "/analytics plan per hour draws each priced account's 5-hour share, a dash for the unmeasured 7-day window, and one model unlisted entry",
+      name: "/analytics plan per hour draws each priced account's 5-hour and 7-day shares, a dash for the unpriced account's windows, and one model unlisted entry",
       ok:
         windows.every((w) => planned.includes(w)) &&
         !planned.some((t) => t.startsWith('overflow')) &&
@@ -6758,26 +8054,32 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         fiveHour.length === 3 &&
         fiveHour.every((li) => (labelOf(li).startsWith('secondary ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
         sevenDay.length === 3 &&
-        sevenDay.every((li) => valueOf(li) === '-') &&
+        sevenDay.every((li) => (labelOf(li).startsWith('secondary ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
         unlisted.length === 1 &&
         valueOf(unlisted[0]) === '5-hour, 7-day' &&
-        unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost table has no row for, on a cell it leaves unmeasured, or under a tier factor it leaves unmeasured, prices no share on that window and draws no point',
+        unlisted[0].getAttribute('title') === 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point',
       missing: planItems.map((li) => `${labelOf(li)}=${valueOf(li)}`),
     });
     // The legend's per-hour mean still ends in `%` over a single gap, so the buckets themselves are read: the
-    // unmeasured model belongs to `secondary` alone, and no story row carries it onto a priced account.
+    // unweighted model runs on `secondary`, and only the story's sessions that moved off it carry it to a priced
+    // account.
     const gaps = [];
+    const sonnet5 = requests.filter((r) => r.model === 'claude-sonnet-5' && r.usage.input + r.usage.cacheRead + r.usage.cacheWrite5m + r.usage.cacheWrite1h + r.usage.output > 0);
+    let carried = 0;
     for (const days of [1, 7]) {
       const burn = await api.getAnalyticsBurn({ from: new Date(Date.now() - days * 86_400_000).toISOString(), to: new Date().toISOString() }, 'account');
-      gaps.push(...burn.points.filter((p) => ['primary', 'nightly'].includes(p.group) && p.tokens > 0 && p.fiveHourShare === null).map((p) => `${days}d ${p.group} ${p.at}`));
+      const ranSonnet5 = (p) => sonnet5.some((r) => r.accountId === p.group && Date.parse(r.at) >= Date.parse(p.at) && Date.parse(r.at) < Date.parse(p.at) + burn.bucketSeconds * 1_000);
+      const unpriced = burn.points.filter((p) => ['primary', 'nightly'].includes(p.group) && p.tokens > 0 && (p.fiveHourShare === null || p.sevenDayShare === null));
+      carried += unpriced.filter(ranSonnet5).length;
+      gaps.push(...unpriced.filter((p) => !ranSonnet5(p)).map((p) => `${days}d ${p.group} ${p.at}`));
     }
-    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour share', ok: gaps.length === 0, missing: gaps });
+    results.push({ name: '/analytics every bucket with tokens of a priced account carries its 5-hour and 7-day shares unless Sonnet 5 ran on it', ok: gaps.length === 0 && carried > 0, missing: gaps });
   }
   const spend = legendOf('Spend per minute');
   const spendDashed = dashedOf([...(card('Spend per minute')?.querySelectorAll('.legend li') ?? [])]);
   // A subscription account spends dollars only on its fast-mode answers, which the story's desktop key sends on Opus.
   const burned = await api.getAnalyticsBurn({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), to: new Date().toISOString() }, 'account');
-  const fastSpenders = ['primary', 'secondary', 'nightly'].filter((id) => burned.points.some((p) => p.group === id && p.usd > 0));
+  const fastSpenders = ['nightly', 'primary', 'secondary'].filter((id) => burned.points.some((p) => p.group === id && p.usd > 0));
   results.push({
     name: "/analytics spend per minute charts dollars alone, a subscription account's fast-mode dollars among them, and plan per hour a subscription account's two window shares",
     ok:
@@ -6824,11 +8126,11 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
   {
     // jsdom lays nothing out, so the plan chart's container reads a browser's size here and the chart draws its
-    // lines, dots and tooltip. `primary` is a Max 20x account the cost table sizes: its middle hour priced, and the
-    // hours either side carried traffic on a cell the table leaves unmeasured, so the 5-hour series reads
-    // [null, 0.05, null] and the 7-day one is null throughout.
+    // lines, dots and tooltip. `primary` is a Max 20x account the cost model sizes: its middle hour priced, and the
+    // hours either side carried traffic on a model the cost model has no weight for, so the 5-hour series reads
+    // [null, 0.05, null] and the 7-day one [null, 0.005, null].
     const hours = [11, 12, 13].map((h) => Date.UTC(2026, 8, 16, h));
-    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: h === 1 ? 0.05 : null, group: 'primary', sevenDayShare: null, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 })) });
+    api.getAnalyticsBurn = async () => ({ bucketSeconds: 3_600, points: hours.map((at, h) => ({ at: new Date(at).toISOString(), cachedTokens: 0, fiveHourShare: h === 1 ? 0.05 : null, group: 'primary', sevenDayShare: h === 1 ? 0.005 : null, tokens: 1_000, uncachedTokens: 1_000, unit: 'window_share', usd: 0 })) });
     const measure = window.HTMLElement.prototype.getBoundingClientRect;
     window.HTMLElement.prototype.getBoundingClientRect = function () {
       return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
@@ -6839,8 +8141,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const dots = [...(plan?.querySelectorAll('.recharts-line-dots .recharts-line-dot') ?? [])];
     const curves = [...(plan?.querySelectorAll('.recharts-line-curve') ?? [])].map((c) => c.getAttribute('d')).filter((d) => d !== null);
     results.push({
-      name: '/analytics plan per hour marks a priced hour between two unpriced ones with a dot and leaves the gaps unconnected',
-      ok: dots.length === 1 && curves.length > 0 && curves.every((d) => !/[CLHV]/i.test(d.slice(1))),
+      name: '/analytics plan per hour marks a priced hour between two unpriced ones with a dot on each window and leaves the gaps unconnected',
+      ok: dots.length === 2 && curves.length > 0 && curves.every((d) => !/[CLHV]/i.test(d.slice(1))),
       missing: [`${dots.length} dots`, ...curves],
     });
     // The first hour's every share is null: the tooltip still names it, with a dash and the unpriced hint per window.
@@ -6858,7 +8160,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       ok:
         tip?.querySelector('.chart-tip__title')?.textContent === when &&
         JSON.stringify(tipRows.map((r) => [r.label, r.value])) === JSON.stringify([['primary (5-hour)', '-'], ['primary (7-day)', '-']]) &&
-        tipRows.every((r) => r.hint === 'A bucket whose traffic ran on a model the cost table has no row for, on a cell it leaves unmeasured, or under a tier factor it leaves unmeasured, prices no share on that window and draws no point'),
+        tipRows.every((r) => r.hint === 'A bucket whose traffic ran on a model the cost model has no weight for, or on a tier it has no capacity for on that window, prices no share there and draws no point'),
       missing: [tip?.querySelector('.chart-tip__title')?.textContent ?? 'no tooltip', when, JSON.stringify(tipRows)],
     });
     window.HTMLElement.prototype.getBoundingClientRect = measure;
@@ -6868,7 +8170,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   }
 
   {
-    // A subscription account whose tier the cost table does not size draws no plan line: beside a priced account the
+    // A subscription account whose tier the cost model does not size draws no plan line: beside a priced account the
     // legend names it as tier unknown, and with no priced account the chart's empty state names it. `tierless` is a
     // group no account of the story sizes, as a subscription account with no tier on file reads.
     const sizedId = (await api.listAccounts()).find((a) => a.subscription?.rateLimitTier === 'default_claude_max_20x')?.id;
@@ -6889,17 +8191,17 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await burnGroup('key');
     await burnGroup('account');
     results.push({
-      name: '/analytics plan per hour names a subscription account the cost table does not size as tier unknown',
+      name: '/analytics plan per hour names a subscription account the cost model does not size as tier unknown',
       ok:
         sizedId !== undefined &&
         tierless.length === 1 &&
         valueOf(tierless[0]) === 'tier unknown' &&
-        tierless[0].getAttribute('title') === 'No tier on file, or one the cost table does not size, so no share of its windows is priced',
+        tierless[0].getAttribute('title') === 'No tier on file, or one the cost model does not size, so no share of its windows is priced',
       missing: [`sized ${sizedId}`, ...items.map((li) => `${labelOf(li)}=${valueOf(li)}`)],
     });
     results.push({
       name: '/analytics plan per hour with no sized subscription account names the unsized ones in its empty state',
-      ok: emptied === 'No subscription account in range has a tier the cost table sizes: tierless.',
+      ok: emptied === 'No subscription account in range has a tier the cost model sizes: tierless.',
       missing: [emptied],
     });
   }
@@ -7832,6 +9134,68 @@ m.unmount();
   results.push({ name: '/sessions Try again on the accounts notice reads the accounts again', ok: button !== undefined && button !== null && notices().length === 0 && page.container.querySelectorAll('td[title^="Subscription account"]').length > 0, missing: notices().map((n) => n.textContent ?? '') });
   page.unmount();
 }
+{
+  // A row's session is its own key, so every row's menu offers the routing log, which opens on the session an
+  // hour either side of its last request with the end at most now, or on the last hour for a row with none. Read on
+  // the frozen clock so each range is the one the page computed.
+  const HOUR = 3_600_000;
+  const listed = await api.listSessions();
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const rows = () => [...page.container.querySelectorAll('tbody tr.srow')];
+  const sessionOf = (tr) => {
+    const id = sessionCell(page, tr, 'Session')?.getAttribute('title');
+    const key = sessionCell(page, tr, 'Key');
+    const historical = key?.querySelector('.sub') !== null;
+    return listed.find((s) => s.sessionId === id && s.keyId === key?.firstChild?.textContent && s.historical === historical);
+  };
+  const expected = (s) => {
+    const last = s.lastRequestAt === null ? null : Date.parse(s.lastRequestAt);
+    const range = last === null ? { from: CLOCK_ORIGIN - HOUR, to: CLOCK_ORIGIN } : { from: last - HOUR, to: Math.min(last + HOUR, CLOCK_ORIGIN) };
+    return { path: '/routing-log', session: s.sessionId, from: isoAt(range.from), to: isoAt(range.to) };
+  };
+  const entryOf = async (tr) => {
+    tr?.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    return [...(tr?.querySelectorAll('.menu__list button') ?? [])].find((b) => b.textContent?.trim() === 'View in routing log');
+  };
+  const offered = [];
+  for (const tr of rows()) {
+    const entry = await entryOf(tr);
+    offered.push({ enabled: entry !== undefined && !entry.disabled, session: sessionOf(tr)?.sessionId ?? null });
+    tr.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+  }
+  // One row whose last request ends the range at now, one whose hour after its last request ended before now, and one
+  // with no request at all.
+  const cases = [
+    (s) => s.lastRequestAt !== null && Date.parse(s.lastRequestAt) > CLOCK_ORIGIN - HOUR,
+    (s) => s.lastRequestAt !== null && Date.parse(s.lastRequestAt) < CLOCK_ORIGIN - HOUR,
+    (s) => s.lastRequestAt === null,
+  ];
+  const followed = [];
+  for (const wanted of cases) {
+    const tr = rows().find((r) => {
+      const s = sessionOf(r);
+      return s !== undefined && wanted(s);
+    });
+    const session = tr ? sessionOf(tr) : undefined;
+    (await entryOf(tr))?.click();
+    await page.settle(300);
+    const landed = page.location();
+    followed.push({ got: logTarget(`${landed.pathname}${landed.search}`), want: session ? expected(session) : null });
+    await page.navigate('/sessions');
+    await page.settle(300);
+  }
+  results.push({
+    name: '/sessions the row menu offers View in routing log whenever the row has a session, with its href',
+    ok:
+      offered.length > 0 &&
+      offered.every((o) => o.enabled && o.session !== null) &&
+      followed.every((f) => f.want !== null && JSON.stringify(f.got) === JSON.stringify(f.want)),
+    missing: [`${offered.filter((o) => !o.enabled || o.session === null).length} of ${offered.length} rows without the entry or a session`, ...followed.map((f) => JSON.stringify(f))],
+  });
+  page.unmount();
+}
 
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
@@ -8074,16 +9438,35 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   {
     const items = await openMenu(barren);
     results.push({
-      name: '/sessions the overflow menu carries the same three entries',
-      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in observe|Release',
+      name: '/sessions the overflow menu carries the same four entries',
+      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in observe|View in routing log|Release',
       missing: items.map((b) => b.textContent?.trim() ?? ''),
     });
-    const jumps = items.filter((b) => b.textContent?.trim().startsWith('View in'));
-    results.push({ name: '/sessions disables both jumps without ledgered requests', ok: jumps.length === 2 && jumps.every((b) => b.disabled && (b.getAttribute('title') ?? '').includes('no ledgered requests')), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
-    await openMenu(barren);
+    // The routing log reads the session's decisions, which need no ledgered request, so only the two jumps
+    // into the ledger's views wait on one.
+    const jumps = items.filter((b) => ['View in analytics', 'View in observe'].includes(b.textContent?.trim() ?? ''));
+    const log = items.find((b) => b.textContent?.trim() === 'View in routing log');
+    const session = sessionCell(m, barren, 'Session')?.getAttribute('title') ?? '';
+    const enabled = log !== undefined && !log.disabled;
+    log?.click();
+    await m.settle(300);
+    const landed = m.location();
+    results.push({
+      name: "/sessions disables the analytics and observe jumps without ledgered requests and opens the routing log on the row's session",
+      ok:
+        jumps.length === 2 &&
+        jumps.every((b) => b.disabled && (b.getAttribute('title') ?? '').includes('no ledgered requests')) &&
+        enabled &&
+        session !== '' &&
+        landed.pathname === '/routing-log' &&
+        new URLSearchParams(landed.search).get('session') === session,
+      missing: [...jumps.map((b) => `${b.textContent} disabled=${b.disabled}`), `log enabled=${enabled}`, JSON.stringify(landed)],
+    });
+    await m.navigate('/sessions');
+    await m.settle(300);
   }
   {
-    const jumps = (await openMenu(busyRow())).filter((b) => b.textContent?.trim().startsWith('View in'));
+    const jumps = (await openMenu(busyRow())).filter((b) => ['View in analytics', 'View in observe'].includes(b.textContent?.trim() ?? ''));
     results.push({ name: '/sessions enables both jumps with ledgered requests', ok: jumps.length === 2 && jumps.every((b) => !b.disabled), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
     await openMenu(busyRow());
   }
@@ -8138,7 +9521,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     await openMenu(gone);
     results.push({
       name: '/sessions only the live holder can be released',
-      ok: liveItems.includes('Release') && goneItems.length === 2 && !goneItems.includes('Release'),
+      ok: liveItems.includes('Release') && goneItems.length === 3 && !goneItems.includes('Release'),
       missing: [`live ${liveItems.join('|')}`, `gone ${goneItems.join('|')}`],
     });
     gone?.click();
@@ -8228,12 +9611,17 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool codex keeps no caches warm', 'key ci opts out']);
   {
     const nets = [...m.container.querySelectorAll('.agents__row .agents__net')].map((cell) => [...cell.children].map((part) => part.textContent?.trim()).join(' | '));
+    // The story's probe replays a 20k-token Fable 5.1 prefix out of band, on a Sunday evening in Los Angeles; an
+    // agent that probed once is down one probe's share, and one held for overage up three.
+    const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
+    const probe = shareOf(costs, 'five_hour', anchorTier(costs), 'claude-fable-5-1', { cacheRead: 20_000, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 }, Date.UTC(2026, 8, 13, 20, 0));
     results.push({
       name: "/sessions an agent's net reads in the unit it settled in, and one that crossed a funding change carries both",
-      ok: nets.includes('-0.003% of the 5-hour window') && nets.includes('0.009% of the 5-hour window | -$0.01') && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
+      ok: probe !== null && nets.includes(`${fmtShare(-probe)} of the 5-hour window`) && nets.includes(`${fmtShare(3 * probe)} of the 5-hour window | -$0.01`) && nets.includes('0') && nets.every((n) => n === '0' || /of the 5-hour window|\$/.test(n)),
       missing: [...new Set(nets)],
     });
-    // The story's Opus 5 and Sonnet 5 cells are null, so a probe on either settles in dollars on a subscription too.
+    // The cost model has no weight for the story's Opus 5 and Sonnet 5, so a probe on either settles in dollars on a
+    // subscription too.
     const agentRows = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => ({
       account: row.children[2]?.textContent?.trim(),
       model: row.children[1]?.textContent?.trim(),
@@ -8241,7 +9629,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     }));
     const unlisted = agentRows.filter((r) => ['primary', 'nightly'].includes(r.account) && ['claude-opus-5', 'claude-sonnet-5'].includes(r.model));
     results.push({
-      name: '/sessions an agent on a subscription account whose model the cost table cannot price settles its probes in dollars',
+      name: '/sessions an agent on a subscription account whose model the cost model cannot price settles its probes in dollars',
       ok: unlisted.length > 0 && unlisted.every((r) => !r.net.includes('of the 5-hour window')) && unlisted.some((r) => r.net.startsWith('-$')),
       missing: unlisted.map((r) => `${r.account} ${r.model}: ${r.net}`),
     });
@@ -8251,130 +9639,6 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   collapseAll?.click();
   await m.settle(200);
   results.push({ name: '/sessions Collapse all closes every row', ok: m.container.querySelectorAll('.srow__detail').length === 0, missing: [] });
-
-  // Cost reference.
-  const costLink = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Cost reference');
-  costLink?.click();
-  await m.settle(400);
-  const costDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/sessions cost reference dialog', costDlg?.textContent ?? '', [
-    'Cost reference',
-    'API list prices. A subscription account on plan quota spends the window share columns instead of money.',
-    'Model',
-    'Uncached input',
-    'Cache write 5m',
-    'Cache write 1h',
-    'Cache read',
-    'Output',
-    'Turns to pay off, 5m',
-    'Turns to pay off, 1h',
-    'Hold warm 1h, 5m + probes',
-    'Hold warm 1h, 1h + probe',
-    '1h pays off after',
-    '5-hour window',
-    '7-day window',
-    '5m write',
-    '1h write',
-    'Window share',
-    'number of later turns that must read the prefix before writing it into the cache was cheaper than sending it uncached each turn',
-    'A 5-minute entry needs a probe about every 4 minutes to survive an idle hour, 15 in all; a 1-hour entry needs one.',
-    'cost of keeping one prefix token warm across one idle hour (one write plus the probe reads), as a multiple of sending that token once as uncached input; 2.75x means holding it warm costs 2.75 times sending it cold once',
-    'per prefix token',
-    'On Fable 5.1, where a cache read costs 0.025x, a 5-minute entry kept warm by probes stays cheaper than a 1-hour entry for any idle span; a session with cache warming on may set CLAUDE_CODE_PROMPT_CACHE_TTL=5m on the client.',
-    'Without warming, the 1-hour entry wins after a 5-minute pause.',
-    'claude-fable-5-1',
-    'claude-fable-5',
-    'claude-opus-5-5',
-    'claude-opus-4-8',
-    'claude-opus-4-7',
-    'claude-sonnet-4-6',
-    'claude-sonnet-4-5',
-    'claude-haiku-4-5-20251001',
-  ]);
-  {
-    const terms = [...(costDlg?.querySelectorAll('.cost-ref__notes dt') ?? [])].map((dt) => dt.textContent?.trim() ?? '');
-    results.push({
-      name: '/sessions cost reference footnote is a definition list of six terms',
-      ok: JSON.stringify(terms) === JSON.stringify(['Per prefix token', 'Turns to pay off', 'Hold warm', 'Payoff', 'Fable 5.1', 'Window share']),
-      missing: terms,
-    });
-  }
-  const priceTable = costDlg?.querySelector('.cost-ref__prices');
-  const shareTable = costDlg?.querySelector('.cost-ref__shares');
-  const rowOf = (table, model) => [...(table?.querySelectorAll('tbody tr') ?? [])].find((row) => row.children[0]?.textContent?.trim() === model);
-  const priceRow = (model) => [...(rowOf(priceTable, model)?.children ?? [])].map((td) => td.textContent?.trim());
-  const modelsOf = (table) => [...(table?.querySelectorAll('tbody tr:not(.cost-ref__fast)') ?? [])].map((row) => row.children[0]?.textContent?.trim() ?? '');
-  const models = modelsOf(priceTable);
-  results.push({ name: '/sessions cost reference lists Anthropic models only', ok: models.length === 10 && models.every((n) => n.startsWith('claude-')), missing: models });
-  const shareModels = [
-    'claude-fable-5',
-    'claude-fable-5-1',
-    'claude-haiku-4-5-20251001',
-    'claude-opus-4-7',
-    'claude-opus-4-8',
-    'claude-opus-5',
-    'claude-opus-5-5',
-    'claude-sonnet-4-5',
-    'claude-sonnet-4-6',
-    'claude-sonnet-5',
-    'claude-sonnet-5-5',
-  ];
-  results.push({
-    name: '/sessions cost reference keeps the dollar table to its eleven columns and lists every model either table names below it in the window share table, sorted by id',
-    ok: models.length === 10 && [...(priceTable?.querySelectorAll('tbody tr') ?? [])].every((row) => row.children.length === 11) && JSON.stringify(modelsOf(shareTable)) === JSON.stringify(shareModels),
-    missing: modelsOf(shareTable),
-  });
-  results.push({ name: '/sessions cost reference groups a class newest first', ok: models.slice(2, 6).join(',') === 'claude-opus-5-5,claude-opus-5,claude-opus-4-8,claude-opus-4-7', missing: models });
-  {
-    // The fast-mode row sits right under the model it prices, and only a model with fast cells has one.
-    const fastUnder = (model) => {
-      const next = rowOf(priceTable, model)?.nextElementSibling;
-      return next?.classList.contains('cost-ref__fast') ? [...next.children].map((td) => td.textContent?.trim()) : null;
-    };
-    const opus = fastUnder('claude-opus-5-5');
-    results.push({
-      name: '/sessions cost reference lists Opus 5.5 with a fast-mode row at its fast cells',
-      ok: opus !== null && opus[0] === 'fast mode' && opus[1] === '$8.00' && opus[5] === '$40.00' && fastUnder('claude-sonnet-5') === null && shareTable?.querySelector('.cost-ref__fast') === null,
-      missing: opus ?? ['no fast-mode row under claude-opus-5-5'],
-    });
-  }
-  const fable = priceRow('claude-fable-5-1');
-  results.push({ name: '/sessions cost reference turns to pay off on cheap-read Fable', ok: fable[6] === '0.3' && fable[7] === '1.0', missing: fable });
-  const sonnet = priceRow('claude-sonnet-5');
-  results.push({ name: '/sessions cost reference turns to pay off on a standard model', ok: sonnet[6] === '0.3' && sonnet[7] === '1.1', missing: sonnet });
-  results.push({ name: '/sessions cost reference prices holding a prefix warm for an idle hour', ok: sonnet[8] === '2.75x' && sonnet[9] === '2.1x' && sonnet[10] === '30 min', missing: sonnet });
-  results.push({ name: '/sessions cost reference says a 1h entry never pays off on Fable 5.1', ok: fable[10] === 'never within 1h', missing: fable });
-  const haiku = priceRow('claude-haiku-4-5-20251001');
-  results.push({ name: '/sessions cost reference prices Haiku 4.5 from the shipped table', ok: haiku[1] === '$1.00' && haiku[2] === '$1.25' && haiku[3] === '$2.00' && haiku[4] === '$0.10' && haiku[5] === '$5.00', missing: haiku });
-  // Input, cache read, 5m write, 1h write and output on the 5-hour window, then the same five on the 7-day one.
-  const plan = (model) => [...(rowOf(shareTable, model)?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
-  const dashes = Array(10).fill('-');
-  results.push({
-    name: '/sessions cost reference prices every measured token type as a share of the 5-hour window and dashes the unmeasured 7-day cells',
-    ok:
-      JSON.stringify(plan('claude-opus-5-5')) === JSON.stringify(['1.46%', '0.0365%', '1.83%', '1.82%', '7.28%', '-', '-', '-', '-', '-']) &&
-      JSON.stringify(plan('claude-fable-5-1')) === JSON.stringify(['6.65%', '0.168%', '8.33%', '8.4%', '32.9%', '-', '-', '-', '-', '-']),
-    missing: [JSON.stringify(plan('claude-opus-5-5')), JSON.stringify(plan('claude-fable-5-1'))],
-  });
-  results.push({ name: '/sessions cost reference finds the undated cells for a dated model', ok: JSON.stringify(plan('claude-haiku-4-5-20251001')) === JSON.stringify(['0.659%', '0.0167%', '0.824%', '0.823%', '3.29%', '-', '-', '-', '-', '-']), missing: plan('claude-haiku-4-5-20251001') });
-  results.push({ name: '/sessions cost reference dashes a listed model whose cells are unmeasured', ok: JSON.stringify(plan('claude-opus-5')) === JSON.stringify(dashes), missing: plan('claude-opus-5') });
-  {
-    const groups = [...(shareTable?.querySelectorAll('thead tr:first-child th') ?? [])].slice(1).map((th) => [th.textContent?.trim(), th.getAttribute('title')]);
-    results.push({
-      name: "/sessions cost reference titles each window group with that window's tier factors on Max 20x",
-      ok:
-        JSON.stringify(groups) ===
-        JSON.stringify([
-          ['5-hour window', 'Share of a Max 20x window per million tokens; a Max 5x account spends 4 times as much of its own, a Pro account spends 20 times as much of its own'],
-          ['7-day window', "Share of a Max 20x window per million tokens; a Max 5x account's factor is not measured on this window, a Pro account's factor is not measured on this window"],
-        ]),
-      missing: groups.map((g) => g.join(': ')),
-    });
-  }
-  results.push({ name: '/sessions cost reference leaves a model with no cells blank on both windows', ok: plan('claude-opus-4-8').every((c) => c === '-') && plan('claude-opus-4-8').length === 10, missing: plan('claude-opus-4-8') });
-  const close = [...(costDlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close');
-  close?.click();
-  await m.settle(200);
 
   const sessionId = cell(busyRow(), 'Session')?.getAttribute('title') ?? '';
   const jump = async (label) => (await openMenu(busyRow())).find((b) => b.textContent?.trim() === label);
@@ -8488,6 +9752,588 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
 }
 m.unmount();
 
+// The cost reference, opened from each of its six entry points on the tab each names. Every figure it draws is read
+// against the decoded settings the mock answers, the files the fixtures captured, through lib/costs.ts and the page's
+// own formatting, never against a literal.
+{
+  const wired = decodeSettings(SETTINGS_WIRE);
+  const costs = wired.subscriptionCosts;
+  const prices = wired.apiPrices.models;
+  const anchor = anchorTier(costs);
+  const tiers = Object.keys(costs.capacity);
+  // A Sunday evening in Los Angeles, outside the peak band, and the pinned clock, inside it.
+  const OUT = Date.UTC(2026, 8, 13, 20, 0);
+  const TYPES = ['input', 'cacheRead', 'cacheWrite5m', 'cacheWrite1h', 'output'];
+  const WINDOWS = ['five_hour', 'seven_day'];
+  const usage = (type, tokens) => ({ cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0, [type]: tokens });
+  const figure = (n) => String(Number(n.toPrecision(3)));
+  const usd = (n) => `$${n.toFixed(4).replace(/(\.\d\d[1-9]?)0+$/, '$1')}`;
+  const pad = (n) => String(n).padStart(2, '0');
+  const utcClock = (t) => `${pad(new Date(t).getUTCHours())}:${pad(new Date(t).getUTCMinutes())}`;
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const tabsOf = (dlg) => [...(dlg?.querySelectorAll('[role="tab"]') ?? [])];
+  const selectedOf = (dlg) => tabsOf(dlg).find((t) => t.getAttribute('aria-selected') === 'true')?.textContent?.trim() ?? 'none';
+  const shownPanel = (dlg) => dlg?.querySelector('.cost-ref__panel:not([hidden])');
+  const pressedIn = (root, label) => [...(root?.querySelectorAll(`[aria-label="${label}"] button`) ?? [])].filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent?.trim());
+  const linkIn = (root) => [...(root?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cost reference');
+  // The dialog lives under the body, wherever its link sits.
+  const topDialog = () => [...document.querySelectorAll('dialog[open]')].pop();
+  const closeCost = async (page, dlg) => {
+    [...(dlg?.querySelector('.dialog__foot')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Close')?.click();
+    await page.settle(200);
+    return dlg?.hasAttribute('open') === false;
+  };
+
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  linkIn(page.container.querySelector('.page-head'))?.click();
+  await page.settle(400);
+  const dlg = topDialog();
+  results.push({
+    name: "/sessions the head's Cost reference opens the dialog on Plan rates, between Tiers and peak band and API prices",
+    ok:
+      dlg?.querySelector('.dialog__title')?.textContent === 'Cost reference' &&
+      dlg?.querySelector('.dialog__subtitle')?.textContent === 'What a million tokens costs: in dollars at list price, and as a share of a subscription window.' &&
+      JSON.stringify(tabsOf(dlg).map((t) => t.textContent?.trim())) === JSON.stringify(['Tiers and peak band', 'Plan rates', 'API prices']) &&
+      selectedOf(dlg) === 'Plan rates' &&
+      dlg?.classList.contains('dialog--costs') === true,
+    missing: [selectedOf(dlg), ...tabsOf(dlg).map((t) => t.textContent?.trim() ?? '')],
+  });
+
+  // Plan rates.
+  const rates = () => shownPanel(dlg);
+  const pressed = (label) => pressedIn(rates(), label);
+  const spinner = () => rates()?.querySelector('input[aria-label="Tokens, in millions"]');
+  const caption = () => rates()?.querySelector('.cost-ref__caption b')?.textContent ?? '';
+  const bodyRows = () => [...(rates()?.querySelectorAll('tbody tr') ?? [])];
+  const mainRows = () => bodyRows().filter((r) => !r.classList.contains('cost-ref__sub') && !r.classList.contains('is-divider'));
+  const rowOf = (model) => mainRows().find((r) => r.children[0]?.textContent?.trim() === model);
+  const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
+  // Family by family whatever order the files keep, which the shipped files keep too.
+  const weighted = familyOrder(Object.keys(SETTINGS_WIRE.subscription_costs.content.model_weight).filter((model) => costs.modelWeight[model] !== null));
+  const unweighted = familyOrder(prices.map((p) => p.model).filter((model) => weightOf(costs, model, 'five_hour') === null));
+  const fiveHourWeight = (model) => weightOf(costs, model, 'five_hour');
+  const lightest = weighted.reduce((low, model) => (low === null || fiveHourWeight(model) < fiveHourWeight(low) ? model : low), null);
+  const expected = (model, tier, tokens, at) => WINDOWS.flatMap((w) => TYPES.map((t) => fmtShare(shareOf(costs, w, tier, model, usage(t, tokens), at))));
+  const wrongCells = (tier, tokens, at) => weighted.filter((model) => JSON.stringify(cellsOf(rowOf(model))) !== JSON.stringify(expected(model, tier, tokens, at))).map((model) => `${model}: ${JSON.stringify(cellsOf(rowOf(model)))} against ${JSON.stringify(expected(model, tier, tokens, at))}`);
+  {
+    const divider = bodyRows().findIndex((r) => r.classList.contains('is-divider'));
+    const names = (rows) => rows.filter((r) => !r.classList.contains('cost-ref__sub')).map((r) => r.children[0]?.textContent?.trim());
+    const above = names(bodyRows().slice(0, divider));
+    const below = names(bodyRows().slice(divider + 1));
+    results.push({
+      name: "/sessions plan rates open on the anchor tier outside the band at one million tokens, the weighted models family by family and the unweighted ones under the divider in the same order",
+      ok:
+        JSON.stringify(pressed('Tier')) === JSON.stringify([planLabel(anchor)]) &&
+        JSON.stringify(pressed('Peak band')) === JSON.stringify(['Outside']) &&
+        spinner()?.value === '1' &&
+        spinner()?.getAttribute('min') === '0.1' &&
+        spinner()?.getAttribute('step') === '0.1' &&
+        JSON.stringify(pressed('Token count')) === JSON.stringify(['1M']) &&
+        JSON.stringify(above) === JSON.stringify(weighted) &&
+        JSON.stringify(below) === JSON.stringify(unweighted) &&
+        bodyRows()[divider]?.textContent === 'Not weighed by the subscription cost model: a share on any window reads a dash, and the analytics list the traffic under model unlisted' &&
+        caption() === `Share of a ${planLabel(anchor)} window per 1M tokens` &&
+        (rates()?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'A shaded cell is more than one full window.',
+      missing: [JSON.stringify(pressed('Tier')), JSON.stringify(pressed('Peak band')), spinner()?.value ?? 'no spinner', JSON.stringify(pressed('Token count')), JSON.stringify(above), JSON.stringify(below), caption()],
+    });
+  }
+  results.push({ name: '/sessions plan rates price every 5-hour and 7-day cell of a weighted model by the share rule for a million tokens of its type', ok: weighted.length > 0 && wrongCells(anchor, 1_000_000, OUT).length === 0, missing: wrongCells(anchor, 1_000_000, OUT) });
+  {
+    const fable = rowOf('claude-fable-5-1');
+    const week = fable?.nextElementSibling;
+    const weekCells = [...(week?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
+    const want = [...TYPES.map(() => ''), ...TYPES.map((t) => fmtShare(shareOf(costs, 'seven_day_fable', anchor, 'claude-fable-5-1', usage(t, 1_000_000), OUT)))];
+    results.push({
+      name: '/sessions plan rates carry a Fable week row under Fable 5.1, priced on its week alone',
+      ok: week?.classList.contains('cost-ref__sub') === true && week.children[0]?.textContent === 'Fable week' && JSON.stringify(weekCells) === JSON.stringify(want),
+      missing: [week?.children[0]?.textContent ?? 'no sub-row', JSON.stringify(weekCells), JSON.stringify(want)],
+    });
+  }
+  {
+    const opus5 = rowOf('claude-opus-5');
+    const heads = [...(rates()?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    const multiples = weighted.map((model) => rowOf(model)?.children[1]?.textContent?.trim());
+    const want = weighted.map((model) => `${figure(fiveHourWeight(model) / fiveHourWeight(lightest))}x`);
+    results.push({
+      name: "/sessions plan rates dash every cell of a model the cost model does not weigh, and weigh each other model against the lightest on the 5-hour window",
+      ok: cellsOf(opus5).length === 10 && cellsOf(opus5).every((c) => c === '-') && opus5?.children[1]?.textContent === 'not weighed' && heads[1] === 'Weight, 5-hour window' && JSON.stringify(multiples) === JSON.stringify(want),
+      missing: [JSON.stringify(cellsOf(opus5)), heads[1] ?? 'no weight head', JSON.stringify(multiples), JSON.stringify(want)],
+    });
+  }
+  {
+    // A model and its sub-rows share one stripe, and the stripes restart under the divider.
+    const stripes = (rows) => {
+      const wrong = [];
+      let n = -1;
+      for (const r of rows) {
+        if (r.classList.contains('is-divider')) {
+          n = -1;
+          continue;
+        }
+        if (!r.classList.contains('cost-ref__sub')) n += 1;
+        if (r.classList.contains('is-alt') !== (n % 2 === 1)) wrong.push(r.children[0]?.textContent?.trim() ?? '');
+      }
+      return wrong;
+    };
+    const wrong = stripes(bodyRows());
+    results.push({ name: '/sessions plan rates shade every second model with its sub-rows and restart under the divider', ok: wrong.length === 0 && bodyRows().some((r) => r.classList.contains('is-alt')), missing: wrong });
+  }
+  // A missing field fails the checks below rather than the run.
+  const type = (input, text) => {
+    if (!input) return;
+    setter.call(input, text);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  };
+  type(spinner(), '2.5');
+  await page.settle(200);
+  results.push({
+    name: '/sessions plan rates rescale every cell to the spinner and say so in the caption',
+    ok: caption() === `Share of a ${planLabel(anchor)} window per 2.5M tokens` && pressed('Token count').length === 0 && wrongCells(anchor, 2_500_000, OUT).length === 0,
+    missing: [caption(), JSON.stringify(pressed('Token count')), ...wrongCells(anchor, 2_500_000, OUT)],
+  });
+  [...(rates()?.querySelectorAll('[aria-label="Token count"] button') ?? [])].find((b) => b.textContent?.trim() === '10M')?.click();
+  await page.settle(200);
+  results.push({
+    name: '/sessions plan rates light the quick pick that matches the spinner',
+    ok: JSON.stringify(pressed('Token count')) === JSON.stringify(['10M']) && spinner()?.value === '10' && wrongCells(anchor, 10_000_000, OUT).length === 0,
+    missing: [JSON.stringify(pressed('Token count')), spinner()?.value ?? 'no spinner'],
+  });
+  [...(rates()?.querySelectorAll('[aria-label="Peak band"] button') ?? [])].find((b) => b.textContent?.trim() === 'Inside')?.click();
+  await page.settle(200);
+  {
+    const factor = bandFactor(costs, 'five_hour', CLOCK_ORIGIN);
+    const scaled = weighted.filter((model) => {
+      const cells = cellsOf(rowOf(model));
+      const five = TYPES.map((t) => fmtShare(shareOf(costs, 'five_hour', anchor, model, usage(t, 10_000_000), OUT) * factor));
+      return JSON.stringify(cells.slice(0, 5)) !== JSON.stringify(five);
+    });
+    const full = rates()?.querySelectorAll('td.is-full').length ?? 0;
+    // The Fable week's cells count too, priced on the model week its sub-row draws.
+    const windowsOf = (model) => [...WINDOWS, ...(rowOf(model)?.nextElementSibling?.classList.contains('cost-ref__sub') ? ['seven_day_fable'] : [])];
+    const over = weighted.flatMap((model) => windowsOf(model).flatMap((w) => TYPES.map((t) => shareOf(costs, w, anchor, model, usage(t, 10_000_000), CLOCK_ORIGIN)))).filter((s) => s >= 1).length;
+    results.push({
+      name: '/sessions plan rates inside the band weigh the 5-hour cells by the band factor, name the band in the caption, and tint every cell past a full window',
+      ok: factor > 1 && scaled.length === 0 && wrongCells(anchor, 10_000_000, CLOCK_ORIGIN).length === 0 && caption() === `Share of a ${planLabel(anchor)} window per 10M tokens, a request completing inside the peak band` && full === over && over > 0,
+      missing: [...scaled, caption(), `${full} tinted against ${over}`],
+    });
+  }
+  const pro = tiers.find((tier) => planLabel(tier) === 'Pro');
+  [...(rates()?.querySelectorAll('[aria-label="Tier"] button') ?? [])].find((b) => b.textContent?.trim() === 'Pro')?.click();
+  await page.settle(200);
+  results.push({
+    name: "/sessions plan rates on another tier price its own window's capacity",
+    ok: pro !== undefined && caption().startsWith('Share of a Pro window') && wrongCells(pro, 10_000_000, CLOCK_ORIGIN).length === 0,
+    missing: [caption(), ...wrongCells(pro ?? 'none', 10_000_000, CLOCK_ORIGIN)],
+  });
+
+  // API prices.
+  tabsOf(dlg).find((t) => t.textContent?.trim() === 'API prices')?.click();
+  await page.settle(200);
+  {
+    const panel = shownPanel(dlg);
+    const rows = [...(panel?.querySelectorAll('tbody tr') ?? [])];
+    const main = rows.filter((r) => !r.classList.contains('cost-ref__sub'));
+    const listed = main.map((r) => r.children[0]?.textContent?.trim());
+    const cells = (row) => [...(row?.children ?? [])].slice(1).map((td) => td.textContent?.trim());
+    const priced = (p) => [p.inputPerM, p.cacheReadPerM, p.cacheWrite5mPerM, p.cacheWrite1hPerM, p.outputPerM].map(usd);
+    const wrong = prices.filter((p) => JSON.stringify(cells(main.find((r) => r.children[0]?.textContent?.trim() === p.model))) !== JSON.stringify(priced(p))).map((p) => p.model);
+    const opus = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5');
+    const fast = opus?.nextElementSibling;
+    const opusFast = prices.find((p) => p.model === 'claude-opus-5-5')?.fast;
+    const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => r.previousElementSibling?.children[0]?.textContent?.trim());
+    const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(r.classList.contains('cost-ref__sub') ? r.previousElementSibling : r) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
+    results.push({
+      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells",
+      ok:
+        JSON.stringify(listed) === JSON.stringify(familyOrder(Object.keys(SETTINGS_WIRE.api_prices.content.models))) &&
+        wrong.length === 0 &&
+        fast?.classList.contains('cost-ref__sub') === true &&
+        fast.children[0]?.textContent === 'fast mode' &&
+        opusFast !== null &&
+        JSON.stringify(cells(fast)) === JSON.stringify(priced(opusFast)) &&
+        JSON.stringify(subs) === JSON.stringify(familyOrder(prices.filter((p) => p.fast !== null).map((p) => p.model))) &&
+        stripes.length === 0 &&
+        (panel?.querySelector('.cost-ref__caption b')?.textContent ?? '') === 'USD per million tokens at list price' &&
+        (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An Anthropic-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
+      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(subs), ...stripes],
+    });
+  }
+
+  // Tiers and peak band.
+  tabsOf(dlg).find((t) => t.textContent?.trim() === 'Tiers and peak band')?.click();
+  await page.settle(200);
+  {
+    const panel = shownPanel(dlg);
+    const card = (title) => [...(panel?.querySelectorAll('.card') ?? [])].find((c) => c.querySelector('.card__title')?.textContent === title);
+    const tierCard = card('Windows by tier');
+    const rows = [...(tierCard?.querySelectorAll('tbody tr') ?? [])];
+    const heads = [...(tierCard?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim());
+    // A bar's label is its multiple; the week's figure leads its cell, the share each window takes after it.
+    const vals = (col) => rows.map((r) => (col === 3 ? r.children[col]?.querySelector('.cost-ref__val')?.firstChild?.textContent?.trim() : r.children[col]?.querySelector('.cost-ref__val')?.textContent?.trim()));
+    const segs = () => rows.map((r) => r.children[3]?.querySelectorAll('.cost-ref__segs span').length);
+    const smallest = tiers.find((tier) => windowMultiple(costs, tier, 'five_hour') === 1);
+    const wantMultiples = (w) => tiers.map((tier) => `${figure(windowMultiple(costs, tier, w))}x`);
+    const wantWeeks = (inside) => tiers.map((tier) => figure(fullWindowsAWeek(costs, tier, inside)));
+    const stripes = rows.filter((r, n) => r.classList.contains('is-alt') !== (n % 2 === 1)).length;
+    const before = { five: vals(1), seven: vals(2), weeks: vals(3), segs: segs() };
+    results.push({
+      name: "/sessions Windows by tier names each tier with its key, sizes both windows against the smallest tier's, and counts the full 5-hour windows a week outside the band",
+      ok:
+        JSON.stringify(rows.map((r) => r.querySelector('.cost-ref__tier-name')?.textContent)) === JSON.stringify(tiers.map(planLabel)) &&
+        JSON.stringify(rows.map((r) => r.querySelector('.cost-ref__tier-key')?.textContent)) === JSON.stringify(tiers) &&
+        JSON.stringify(heads) === JSON.stringify(['Tier', '5-hour window', '7-day window', 'Full 5-hour windows a week']) &&
+        tierCard?.querySelector('.card__subtitle')?.textContent === `How much each tier's windows hold, against ${planLabel(smallest)}` &&
+        JSON.stringify(before.five) === JSON.stringify(wantMultiples('five_hour')) &&
+        JSON.stringify(before.seven) === JSON.stringify(wantMultiples('seven_day')) &&
+        JSON.stringify(before.weeks) === JSON.stringify(wantWeeks(false)) &&
+        JSON.stringify(before.segs) === JSON.stringify(tiers.map((tier) => Math.round(fullWindowsAWeek(costs, tier, false)))) &&
+        stripes === 0 &&
+        tierCard?.querySelector('[aria-label="Tier"]') === null &&
+        JSON.stringify([...(tierCard?.children ?? [])].filter((el) => !el.matches('[data-descriptions]')).map((el) => el.tagName)) === JSON.stringify(['HEADER', 'TABLE']) &&
+        JSON.stringify(pressedIn(tierCard, 'Peak band')) === JSON.stringify(['Outside']),
+      missing: [JSON.stringify(before), JSON.stringify(heads), tierCard?.querySelector('.card__subtitle')?.textContent ?? 'no subtitle'],
+    });
+    [...(tierCard?.querySelectorAll('[aria-label="Peak band"] button') ?? [])].find((b) => b.textContent?.trim() === 'Inside')?.click();
+    await page.settle(200);
+    results.push({
+      name: '/sessions the band switch counts the full 5-hour windows a week inside the band and keeps the multiples',
+      ok: JSON.stringify(vals(3)) === JSON.stringify(wantWeeks(true)) && JSON.stringify(segs()) === JSON.stringify(tiers.map((tier) => Math.round(fullWindowsAWeek(costs, tier, true)))) && JSON.stringify(vals(1)) === JSON.stringify(before.five),
+      missing: [JSON.stringify(vals(3)), JSON.stringify(wantWeeks(true))],
+    });
+
+    // The band at the pinned clock in UTC, read through inBand: the week's days, the runs on each, and the next flip.
+    const band = card('Peak band');
+    const tracks = [...(band?.querySelectorAll('.cost-ref__band-track') ?? [])];
+    const days = [...(band?.querySelectorAll('.cost-ref__band-day') ?? [])];
+    const DAY = 86_400_000;
+    const monday = CLOCK_ORIGIN - (CLOCK_ORIGIN % DAY) - ((new Date(CLOCK_ORIGIN).getUTCDay() + 6) % 7) * DAY;
+    const quarters = (from) => Array.from({ length: 96 }, (_, i) => from + i * 900_000);
+    const banded = Array.from({ length: 7 }, (_, d) => quarters(monday + d * DAY).some((t) => inBand(costs, t)));
+    const label = (t) => {
+      const part = (o) => new Date(t).toLocaleDateString('en-US', { ...o, timeZone: 'UTC' });
+      return `${part({ weekday: 'short' })} ${part({ day: 'numeric' })} ${part({ month: 'short' })}`;
+    };
+    const today = days.findIndex((d) => d.classList.contains('is-today'));
+    const start = quarters(monday).find((t) => inBand(costs, t));
+    const end = quarters(monday).find((t) => t > start && !inBand(costs, t));
+    const { fromHour, toHour, zone } = costs.peak;
+    const city = zone.split('/').pop().replace(/_/g, ' ');
+    const wantCaption = `Mon to Fri, ${utcClock(start)} to ${utcClock(end)} here (UTC). In ${city}: Mon to Fri, ${pad(fromHour)}:00 to ${pad(toHour)}:00.`;
+    let flip = CLOCK_ORIGIN + 900_000;
+    while (inBand(costs, flip) === inBand(costs, CLOCK_ORIGIN)) flip += 900_000;
+    const left = Math.round((flip - CLOCK_ORIGIN) / 60_000);
+    const wantNow = `Inside the peak band now, until ${utcClock(flip)} (${Math.floor(left / 60)} h ${pad(left % 60)} min)`;
+    const factor = SETTINGS_WIRE.subscription_costs.content.peak.capacity_factor;
+    const factorText = (f) => (f === 1 ? `no band, holds ${Math.round(f * 100)}%` : `holds ${Math.round(f * 100)}%, a share costs ${figure(1 / f)}x`);
+    const factors = [...(band?.querySelectorAll('.cost-ref__factor .cost-ref__val') ?? [])].map((v) => v.textContent);
+    results.push({
+      name: "/sessions the peak band draws this week's seven days in the browser's zone, a run on each banded day, now on today's track, the caption, the now line and each window's factor",
+      ok:
+        tracks.length === 7 &&
+        JSON.stringify(days.map((d) => d.textContent)) === JSON.stringify(Array.from({ length: 7 }, (_, d) => label(monday + d * DAY))) &&
+        JSON.stringify(tracks.map((t) => t.querySelectorAll('.cost-ref__band-run').length)) === JSON.stringify(banded.map((b) => (b ? 1 : 0))) &&
+        banded.filter(Boolean).length === 5 &&
+        days[today]?.textContent === label(CLOCK_ORIGIN) &&
+        tracks.findIndex((t) => t.querySelector('.cost-ref__band-now') !== null) === today &&
+        band?.querySelector('.cost-ref__band-lead')?.textContent === wantCaption &&
+        inBand(costs, CLOCK_ORIGIN) &&
+        band?.querySelector('.cost-ref__band-text .cost-ref__now')?.textContent === wantNow &&
+        JSON.stringify(factors) === JSON.stringify([factorText(factor.five_hour), factorText(factor.seven_day)]),
+      missing: [JSON.stringify(days.map((d) => d.textContent)), JSON.stringify(tracks.map((t) => t.querySelectorAll('.cost-ref__band-run').length)), band?.querySelector('.cost-ref__band-lead')?.textContent ?? 'no caption', wantCaption, band?.querySelector('.cost-ref__band-text .cost-ref__now')?.textContent ?? 'no now line', wantNow, JSON.stringify(factors)],
+    });
+    // UTC keeps its clock, and Los Angeles leaves summer time on 1 November and returns on 14 March, 19 weeks on: the
+    // band reads an hour later here, at UTC-8, from Monday 2 November to Friday 12 March.
+    const change = nextLocalChange(costs, CLOCK_ORIGIN, 'UTC');
+    const wantChange =
+      change === null
+        ? null
+        : change.lasting
+          ? `From ${change.from} the band runs ${change.text} here, once ${change.moved ? `${city} changes its clocks` : 'your clocks change'}.`
+          : `${change.from} to ${change.to}: ${change.text} here, while the two zones change their clocks on different dates.`;
+    const changeLine = band?.querySelector('.cost-ref__band-text .cost-ref__note')?.textContent ?? 'no change line';
+    const byHand = `Mon 2 Nov to Fri 12 Mar: ${pad(fromHour + 8)}:00 to ${pad(toHour + 8)}:00 here, while the two zones change their clocks on different dates.`;
+    results.push({
+      name: "/sessions the peak band names the next change of its local hours, a stretch from the cost model's zone leaving summer time to its return",
+      ok: zone === 'America/Los_Angeles' && costs.peak.weekdays && change !== null && !change.lasting && change.moved && changeLine === wantChange && changeLine === byHand,
+      missing: [changeLine, String(wantChange), byHand],
+    });
+  }
+  {
+    const chips = [...(dlg?.querySelectorAll('.dialog__foot .chip') ?? [])].map((c) => [c.textContent, c.getAttribute('title')]);
+    const titleOf = (source, key, path) => (source === 'shipped' ? `The table this release ships. A copy at ${key}${path === null ? '' : ` (${path})`} would replace it at the next start.` : `Read from ${path}, set by ${key}.`);
+    const want = [
+      [`API prices, effective ${effectiveLabel(wired.apiPrices.effective)}, ${wired.apiPrices.source}`, titleOf(wired.apiPrices.source, 'stats.api_prices_path', wired.storage.apiPricesPath)],
+      [`Subscription cost model, effective ${effectiveLabel(costs.effective)}, ${costs.source}`, titleOf(costs.source, 'stats.subscription_costs_path', wired.storage.subscriptionCostsPath)],
+    ];
+    results.push({ name: "/sessions the cost reference's footer names each table's date and source, its key and path in the title", ok: JSON.stringify(chips) === JSON.stringify(want), missing: chips.map((c) => c.join(' | ')) });
+    // Every sentence the dialog draws, its titles among them, joins no two clauses with a semicolon.
+    const said = [dlg?.textContent ?? '', ...[...(dlg?.querySelectorAll('[title]') ?? [])].map((el) => el.getAttribute('title') ?? '')].filter((t) => t.includes(';'));
+    results.push({ name: '/sessions no sentence of the cost reference, its titles among them, carries a semicolon', ok: said.length === 0, missing: said.map((t) => t.slice(0, 160)) });
+  }
+  results.push({ name: '/sessions Close closes the cost reference', ok: await closeCost(page, dlg), missing: [] });
+  page.unmount();
+
+  // The other five entry points, each on the tab it names.
+  const opened = async (page, link) => {
+    link?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const tab = dlg?.classList.contains('dialog--costs') ? selectedOf(dlg) : 'no cost reference';
+    await closeCost(page, dlg);
+    return tab;
+  };
+  localStorage.setItem('phoebis.expertView', 'on');
+  const pools = await mount('/pools');
+  [...pools.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await pools.settle(300);
+  const poolDlg = pools.container.querySelector('dialog[open]');
+  // Each field by the hint it carries, the link inside the hint or, for Write cost, under the field's label.
+  const near = (groupLabel, words) => {
+    const hint = [...(group(poolDlg, groupLabel)?.querySelectorAll('.field__hint') ?? [])].find((h) => (h.textContent ?? '').includes(words));
+    return linkIn(hint) ?? linkIn(hint?.closest('.field'));
+  };
+  const fromPools = [
+    ['Warm sessions', await opened(pools, near('Load shedding', 'A warm session rewrites its cache where it lands'))],
+    ['Write cost', await opened(pools, near('Cache TTL', 'Plan writes apply while an account spends plan quota'))],
+    ['Daily probe cost cap', await opened(pools, near('Keepalive', 'Plan-funded probes do not count here.'))],
+  ];
+  pools.unmount();
+  localStorage.removeItem('phoebis.expertView');
+  results.push({
+    name: "/pools the pool dialog's Warm sessions hint opens the cost reference on Plan rates, its Write cost and probe cost cap hints on API prices",
+    ok: JSON.stringify(fromPools.map(([, tab]) => tab)) === JSON.stringify(['Plan rates', 'API prices', 'API prices']),
+    missing: fromPools.map((p) => p.join(': ')),
+  });
+  const dash = await mount('/');
+  const ring = [...dash.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === '5h remaining');
+  const ringSubtitle = ring?.querySelector('.card__subtitle')?.textContent ?? '';
+  const fromDash = await opened(dash, linkIn(ring?.querySelector('.card__subtitle')));
+  dash.unmount();
+  results.push({ name: "/ the 5-hour ring's subtitle opens the cost reference on Tiers and peak band", ok: ringSubtitle === 'Subscription accounts, 5-hour window, weighed by tier Cost reference' && fromDash === 'Tiers and peak band', missing: [ringSubtitle, fromDash] });
+
+  // The plan chart shades the band's own hours over the instants it spans, one area per run of bandRuns, on the 7-day
+  // range's six-hour buckets and on a custom range's daily ones. jsdom lays nothing out, so the chart reads a browser's
+  // size here.
+  const measure = window.HTMLElement.prototype.getBoundingClientRect;
+  window.HTMLElement.prototype.getBoundingClientRect = function () {
+    return this.classList.contains('recharts-responsive-container') ? { bottom: 220, height: 220, left: 0, right: 600, top: 0, width: 600, x: 0, y: 0 } : measure.call(this);
+  };
+  let answer = null;
+  const read = api.getAnalyticsBurn.bind(api);
+  api.getAnalyticsBurn = async (...args) => (answer = await read(...args));
+  const analytics = await mount('/analytics#burn', { now: CLOCK_ORIGIN });
+  const plan = () => [...analytics.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Plan per hour');
+  const fromAnalytics = await opened(analytics, linkIn(plan()?.querySelector('.card__subtitle')));
+  const shaded = () => {
+    const ats = [...new Set((answer?.points ?? []).map((p) => Date.parse(p.at)))].sort((a, b) => a - b);
+    return { areas: plan()?.querySelectorAll('.recharts-reference-area').length ?? 0, bucket: answer?.bucketSeconds, runs: ats.length < 2 ? 0 : bandRuns(costs, ats[0], ats[ats.length - 1]).length };
+  };
+  [...analytics.container.querySelectorAll('.segmented[aria-label="Range"] button')].find((b) => b.textContent?.trim() === '7d')?.click();
+  await analytics.settle(800);
+  const week = shaded();
+  [...analytics.container.querySelectorAll('.segmented[aria-label="Range"] button')].find((b) => b.textContent?.trim() === 'Custom')?.click();
+  await analytics.settle(100);
+  type(analytics.container.querySelector('input[aria-label="From"]'), new Date(CLOCK_ORIGIN - 45 * 86_400_000).toISOString().slice(0, 16));
+  await analytics.settle(800);
+  const custom = shaded();
+  analytics.unmount();
+  delete api.getAnalyticsBurn;
+  window.HTMLElement.prototype.getBoundingClientRect = measure;
+  results.push({ name: "/analytics the plan chart's note opens the cost reference on Tiers and peak band", ok: fromAnalytics === 'Tiers and peak band', missing: [fromAnalytics] });
+  results.push({
+    name: "/analytics the plan chart shades one area per run of the peak band over the instants it spans, on six-hour and on daily buckets",
+    ok: week.bucket === 21_600 && week.runs > 0 && week.areas === week.runs && custom.bucket === 86_400 && custom.runs > 0 && custom.areas === custom.runs,
+    missing: [JSON.stringify(week), JSON.stringify(custom)],
+  });
+
+  // A cost model answer with a member of the wrong type prices nothing: About's row and the reference's two cost model
+  // tabs say so in place of their figures, and the API prices stay.
+  {
+    const { getSettings } = api;
+    const content = structuredClone(SETTINGS_WIRE.subscription_costs.content);
+    content.type_multiplier.input = 'bad';
+    const unreadable = decodeSettings({ ...SETTINGS_WIRE, subscription_costs: { ...SETTINGS_WIRE.subscription_costs, content } }).subscriptionCosts;
+    let path = null;
+    api.getSettings = async (...args) => {
+      const settings = await getSettings.apply(api, args);
+      path = settings.storage.subscriptionCostsPath;
+      return { ...settings, subscriptionCosts: unreadable };
+    };
+    const SAID = "The cost model's answer could not be read.";
+    const settings = await mount('/settings');
+    const about = [...settings.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+    const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'Subscription costs path');
+    const rowText = row?.querySelector('dd')?.textContent?.trim() ?? 'no row';
+    settings.unmount();
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const panelOf = async (tab) => {
+      tabsOf(dlg).find((t) => t.textContent?.trim() === tab)?.click();
+      await page.settle(200);
+      const panel = shownPanel(dlg);
+      return { error: panel?.querySelector('.empty--error .empty__title')?.textContent ?? 'none', tables: panel?.querySelectorAll('table').length ?? 0, tracks: panel?.querySelectorAll('.cost-ref__band-track').length ?? 0 };
+    };
+    const drawn = { apiPrices: await panelOf('API prices'), planRates: await panelOf('Plan rates'), tiers: await panelOf('Tiers and peak band') };
+    const chips = [...(dlg?.querySelectorAll('.dialog__foot .chip') ?? [])].map((c) => c.textContent ?? '');
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: "/settings and /sessions a cost model answer the console cannot read says so on About's row beside the configured path and on the reference's two cost model tabs, which draw no figure",
+      ok:
+        unreadable.problem === SAID &&
+        path !== null &&
+        rowText === `${path}. ${SAID}` &&
+        drawn.planRates.error === SAID &&
+        drawn.planRates.tables === 0 &&
+        drawn.tiers.error === SAID &&
+        drawn.tiers.tables === 0 &&
+        drawn.tiers.tracks === 0 &&
+        drawn.apiPrices.error === 'none' &&
+        drawn.apiPrices.tables === 1 &&
+        chips.length === 1 &&
+        chips[0].startsWith('API prices, effective '),
+      missing: [rowText, JSON.stringify(drawn), JSON.stringify(chips)],
+    });
+  }
+
+  // On the test tables, Fable 5.1 with a null shared weight and a weight of 10 on the Fable week alone, and Opus 5 with
+  // a weight of 3 on the 7-day window alone: each lists above the divider and prices the window it is weighed on.
+  {
+    const { getSettings } = api;
+    const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
+    const content = structuredClone(tables.subscription_costs.content);
+    content.model_weight['claude-fable-5-1'] = null;
+    content.overrides['claude-fable-5-1'] = { weight_by_window: { seven_day_fable: 10 } };
+    content.overrides['claude-opus-5'] = { weight_by_window: { seven_day: 3 } };
+    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: { ...tables.subscription_costs, content } });
+    api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), apiPrices: wired.apiPrices, subscriptionCosts: wired.subscriptionCosts });
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
+    const divider = rows.findIndex((r) => r.classList.contains('is-divider'));
+    const above = (row) => row !== undefined && rows.indexOf(row) < (divider === -1 ? rows.length : divider);
+    const rowOf = (model) => rows.find((r) => !r.classList.contains('cost-ref__sub') && r.children[0]?.textContent?.trim() === model);
+    const cellsOf = (row) => [...(row?.children ?? [])].slice(2).map((td) => td.textContent?.trim());
+    const weightIn = (row) => ({ text: row?.children[1]?.textContent?.trim(), title: row?.children[1]?.querySelector('[title]')?.getAttribute('title') });
+    const fable = rowOf('claude-fable-5-1');
+    const week = fable?.nextElementSibling;
+    const opus5 = rowOf('claude-opus-5');
+    const dashes = (n) => Array.from({ length: n }, () => '-');
+    // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10, on
+    // the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the Fable week, Opus 5's 3 x m x 1e6 / 1000.
+    const drawn = {
+      fable: { above: above(fable), cells: cellsOf(fable), weight: weightIn(fable) },
+      opus5: { above: above(opus5), cells: cellsOf(opus5), sub: opus5?.nextElementSibling?.classList.contains('cost-ref__sub') ?? false, weight: weightIn(opus5) },
+      week: { cells: cellsOf(week), label: week?.classList.contains('cost-ref__sub') ? week.children[0]?.textContent : 'no sub-row' },
+    };
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: '/sessions plan rates list a model weighed by window alone above the divider, price the window it is weighed on, and read its weight cell by window',
+      ok:
+        drawn.fable.above &&
+        JSON.stringify(drawn.fable.cells) === JSON.stringify(dashes(10)) &&
+        drawn.fable.weight.text === 'by window' &&
+        drawn.fable.weight.title === 'claude-fable-5-1 carries no shared weight, only a weight per window: 10 on the Fable week' &&
+        drawn.week.label === 'Fable week' &&
+        JSON.stringify(drawn.week.cells) === JSON.stringify([...Array(5).fill(''), fmtShare(20_000), fmtShare(2_000), fmtShare(40_000), fmtShare(40_000), fmtShare(200_000)]) &&
+        drawn.opus5.above &&
+        !drawn.opus5.sub &&
+        JSON.stringify(drawn.opus5.cells) === JSON.stringify([...dashes(5), fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
+        drawn.opus5.weight.text === 'by window' &&
+        drawn.opus5.weight.title === 'claude-opus-5 carries no shared weight, only a weight per window: 3 on the 7-day window',
+      missing: [JSON.stringify(drawn)],
+    });
+  }
+
+  // The band on the test tables, Los Angeles weekdays 5 to 11, seen from UTC.
+  {
+    const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
+    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: tables.subscription_costs });
+    const tested = wired.subscriptionCosts;
+    // From Wednesday 6 January 2027, 13:00 to 19:00 at UTC-8: Los Angeles enters summer time on 14 March, so from
+    // Monday 15 March the band reads 12:00 to 18:00, and back on 8 November, 34 weeks on.
+    const lasting = await mountNode(React.createElement(PeakBand, { costs: tested, now: Date.parse('2027-01-06T12:00:00Z') }));
+    const note = lasting.container.querySelector('.cost-ref__note')?.textContent ?? 'no change line';
+    lasting.unmount();
+    results.push({ name: "/sessions the peak band names a change of its local hours that lasts past 26 weeks once the cost model's zone changes its clocks", ok: note === 'From Mon 15 Mar the band runs 12:00 to 18:00 here, once Los Angeles changes its clocks.', missing: [note] });
+
+    // Saturday 19 September 2026 at 05:00 in Los Angeles, a day the weekday band is off: the card draws the week of
+    // Monday 21 September, which does not hold now; on the pinned Wednesday it draws the week that does.
+    const weekOf = async (at) => {
+      const shown = await mountNode(React.createElement(PeakBand, { costs: tested, now: at }));
+      const read = { first: shown.container.querySelector('.cost-ref__band-day')?.textContent ?? 'no day', marks: shown.container.querySelectorAll('.cost-ref__band-now').length, subtitle: shown.container.querySelector('.card__subtitle')?.textContent ?? 'no subtitle' };
+      shown.unmount();
+      return read;
+    };
+    const weekend = await weekOf(Date.parse('2026-09-19T12:00:00Z'));
+    const weekday = await weekOf(CLOCK_ORIGIN);
+    results.push({
+      name: '/sessions the peak band names the week it draws: next week, unmarked, on a day the band is off, and this week with now marked on a band day',
+      ok:
+        weekend.subtitle === 'Next week. A request completing inside the band spends more of its 5-hour window.' &&
+        weekend.first === 'Mon 21 Sep' &&
+        weekend.marks === 0 &&
+        weekday.subtitle === 'This week. A request completing inside the band spends more of its 5-hour window.' &&
+        weekday.first === 'Mon 14 Sep' &&
+        weekday.marks === 1,
+      missing: [JSON.stringify(weekend), JSON.stringify(weekday)],
+    });
+
+    // A zone this browser cannot read: the card gives the band's hours in that zone and says it cannot read it, and Plan
+    // rates leaves the state to the viewer, Inside first. One Opus 5.5 input token on the Max 20x 5-hour window is 2 /
+    // 100 / 0.5 inside the band and 2 / 100 outside, a million of them 40,000 and 20,000 windows.
+    const unzoned = { ...tested, peak: { ...tested.peak, zone: 'Not/AZone' } };
+    const card = await mountNode(React.createElement(PeakBand, { costs: unzoned, now: CLOCK_ORIGIN }));
+    const drawnCard = {
+      factors: card.container.querySelectorAll('.cost-ref__factor .cost-ref__val').length,
+      lead: card.container.querySelector('.cost-ref__band-lead')?.textContent ?? 'no caption',
+      notes: card.container.querySelectorAll('.cost-ref__note').length,
+      now: card.container.querySelector('.cost-ref__now')?.textContent ?? 'no now line',
+      swatches: card.container.querySelectorAll('.cost-ref__swatch').length,
+      tracks: card.container.querySelectorAll('.cost-ref__band-track').length,
+    };
+    card.unmount();
+    results.push({
+      name: '/sessions the peak band with a zone this browser cannot read gives its hours in that zone, says so, and draws no grid, swatch or change',
+      ok:
+        drawnCard.lead === 'Mon to Fri, 05:00 to 11:00 in AZone (Not/AZone), the zone the cost model names.' &&
+        drawnCard.now === 'This browser cannot read the zone Not/AZone.' &&
+        drawnCard.tracks === 0 &&
+        drawnCard.swatches === 0 &&
+        drawnCard.notes === 0 &&
+        drawnCard.factors === 2,
+      missing: [JSON.stringify(drawnCard)],
+    });
+    const rates = await mountNode(React.createElement(PlanRates, { costs: unzoned, now: CLOCK_ORIGIN, prices: wired.apiPrices.models }));
+    const band = () => [...rates.container.querySelectorAll('[aria-label="Peak band"] button')];
+    const opusInput = () => [...rates.container.querySelectorAll('tbody tr')].find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5')?.children[2]?.textContent?.trim() ?? 'no cell';
+    const read = () => ({ cell: opusInput(), disabled: band().filter((b) => b.disabled).length, now: rates.container.querySelector('.cost-ref__now')?.textContent ?? 'no now line', pressed: band().filter((b) => b.getAttribute('aria-pressed') === 'true').map((b) => b.textContent?.trim()) });
+    const first = read();
+    band().find((b) => b.textContent?.trim() === 'Outside')?.click();
+    await rates.settle(200);
+    const outside = read();
+    rates.unmount();
+    results.push({
+      name: '/sessions plan rates with a zone this browser cannot read keep both band states, Inside first, and price each cell on the state picked',
+      ok:
+        JSON.stringify(first.pressed) === JSON.stringify(['Inside']) &&
+        first.disabled === 0 &&
+        first.now === 'This browser cannot read the zone Not/AZone, so pick the band state yourself.' &&
+        first.cell === fmtShare(40_000) &&
+        JSON.stringify(outside.pressed) === JSON.stringify(['Outside']) &&
+        outside.cell === fmtShare(20_000),
+      missing: [JSON.stringify(first), JSON.stringify(outside)],
+    });
+  }
+}
+
 
 // A failed settings read draws About's error state with Try again rather than a skeleton for ever; the client block
 // needs no read, so it keeps its placeholder URL and only the listener hint waits for the answer.
@@ -8508,29 +10354,8 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
     missing: rows,
-  });
-  failed.unmount();
-}
-{
-  failNextCall('getSettings', '/admin/settings', 'the configuration store is unavailable');
-  const failed = await mount('/settings');
-  const pricing = () => [...failed.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
-  const error = pricing()?.querySelector('.empty--error');
-  const retry = [...(error?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Try again');
-  results.push({
-    name: "/settings a failed read draws Pricing's error state with Try again",
-    ok: error?.querySelector('.empty__title')?.textContent === 'Could not load the price table' && (error?.textContent ?? '').includes('the configuration store is unavailable') && retry !== undefined,
-    missing: [pricing()?.textContent?.slice(0, 160) ?? 'no Pricing card'],
-  });
-  retry?.click();
-  await failed.settle(400);
-  const models = [...(pricing()?.querySelectorAll('tbody tr') ?? [])].map((tr) => tr.children[0]?.textContent?.trim());
-  results.push({
-    name: "/settings Pricing's Try again reads the price table",
-    ok: models.includes('claude-fable-5-1') && pricing()?.querySelector('.empty--error') === null,
-    missing: models,
   });
   failed.unmount();
 }
@@ -8556,7 +10381,7 @@ m.unmount();
     ['/requests', (c, t) => t.includes('No requests match'), 'No requests match'],
     ['/analytics', (c, t) => t.includes('No traffic in this range.'), 'No traffic in this range.'],
     ['/sessions', (c, t) => t.includes('No live sessions'), 'No live sessions'],
-    ['/settings', (c, t) => t.includes('Pricing'), 'Pricing'],
+    ['/settings', (c, t) => t.includes('API prices path'), 'API prices path'],
   ];
   for (const [path, drawn, needle] of views) {
     const before = problems.length;
@@ -8605,34 +10430,38 @@ m.unmount();
   // The settings answer feeds the shell's version line as well as the page, so a decoder that threw on the date would
   // blank both.
   const { getSettings } = api;
-  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, pricing: { ...SETTINGS_WIRE.pricing, effective: 'v3' } }));
+  api.getSettings = () => Promise.resolve(decodeSettings({ ...SETTINGS_WIRE, api_prices: { ...SETTINGS_WIRE.api_prices, content: { ...SETTINGS_WIRE.api_prices.content, effective: 'v3' } } }));
   const page = await mount('/settings');
   const sidebar = page.container.querySelector('.sidebar')?.textContent ?? '';
-  const pricing = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
-  const subtitle = pricing?.querySelector('.card__subtitle')?.textContent ?? '';
-  results.push({ name: '/settings a free-text pricing date still draws the sidebar version', ok: sidebar.includes(MOCK_VERSION) && subtitle.startsWith('Effective v3,'), missing: [sidebar.slice(0, 120), subtitle || 'no Pricing subtitle'] });
+  const about = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
+  const row = [...(about?.querySelectorAll('.kv__row') ?? [])].find((r) => r.querySelector('dt')?.textContent?.trim() === 'API prices path')?.querySelector('dd')?.textContent?.trim() ?? '';
+  results.push({ name: "/settings a free-text price file date shows as sent on its About row and still draws the sidebar version", ok: sidebar.includes(MOCK_VERSION) && row === `${SETTINGS_WIRE.storage.api_prices_path}, effective v3`, missing: [sidebar.slice(0, 120), row || 'no API prices path row'] });
   api.getSettings = getSettings;
   page.unmount();
 }
 
 m = await mount('/settings');
-expect('/settings', m.text(), ['Downstream client configuration', 'Pricing', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'claude-fable-5-1', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'Pricing path', 'Storage path', "prints this router's"]);
+expect('/settings', m.text(), ['Downstream client configuration', 'Appearance', 'About', 'Theme', 'Time format', 'Admin secret', 'ANTHROPIC_BASE_URL=https://router.example.com', 'CLAUDE_CODE_OAUTH_TOKEN=<key>', '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1', 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1', 'DISABLE_TELEMETRY=1', 'CLAUDE_CODE_SKIP_FAST_MODE_ORG_CHECK=1', 'Inference is served on 127.0.0.1:8080', 'Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', "prints this router's"]);
 results.push({ name: '/settings has no statusline mention', ok: !/statusline/i.test(m.text()), missing: [] });
 results.push({ name: '/settings has no retention save button', ok: ![...m.container.querySelectorAll('button')].some((b) => b.textContent?.trim() === 'Save retention'), missing: [] });
 {
   const titles = [...m.container.querySelectorAll('.settings > .card .card__title')].map((t) => t.textContent?.trim());
-  results.push({ name: '/settings the cards run client block, Pricing, Appearance, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Pricing', 'Appearance', 'About']), missing: titles });
+  results.push({ name: '/settings the cards run client block, Appearance, About', ok: JSON.stringify(titles) === JSON.stringify(['Downstream client configuration', 'Appearance', 'About']) && m.container.querySelector('.price-table') === null, missing: titles });
   const subtitle = m.container.querySelector('.settings > .card')?.querySelector('.card__subtitle')?.textContent;
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  // The mock stores 268435456 retained bytes, which is 256 MiB.
-  results.push({ name: '/settings About lists the version, the profile, the metrics listener, the three paths, the three keepalive limits and the admin secret, then the installation sentence', ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', 'Pricing path=./pricing.yaml', 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  // The mock stores 268435456 retained bytes, which is 256 MiB. Each cost file's row carries its table's date, read
+  // from the captured envelope through the page's own label.
+  const wired = decodeSettings(SETTINGS_WIRE);
+  const priceRow = `API prices path=./api_prices.yaml, effective ${effectiveLabel(wired.apiPrices.effective)}`;
+  const costRow = `Subscription costs path=./subscription_costs.yaml, effective ${effectiveLabel(wired.subscriptionCosts.effective)}`;
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates, the three keepalive limits and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
   const restart = 'Set in the configuration file; a change takes a restart.';
   results.push({
     name: '/settings each path and keepalive line names its key in the configuration file, each keepalive line the restart, and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'Pricing path=Set by stats.pricing_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', `Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', `Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
@@ -8647,42 +10476,6 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   });
 }
 {
-  expect('/settings pricing meta', m.text(), ['Effective Sep 30, 2026', 'source: shipped']);
-  const priceRow = (model) => {
-    const row = [...m.container.querySelectorAll('tbody tr')].find((tr) => tr.children[0]?.textContent?.trim() === model);
-    return row ? [...row.children].slice(1).map((td) => td.textContent?.trim()) : null;
-  };
-  const shipped = {
-    'claude-fable-5-1': ['$10.00', '$0.25', '$12.50', '$20.00', '$50.00'],
-    'claude-opus-5': ['$5.00', '$0.50', '$6.25', '$10.00', '$25.00'],
-    'claude-sonnet-5': ['$2.00', '$0.20', '$2.50', '$4.00', '$10.00'],
-    'claude-haiku-4-5-20251001': ['$1.00', '$0.10', '$1.25', '$2.00', '$5.00'],
-  };
-  const heads = [...m.container.querySelectorAll('thead th')].map((th) => th.textContent?.trim());
-  for (const [model, want] of Object.entries(shipped)) {
-    const got = priceRow(model);
-    results.push({ name: `/settings price row ${model}`, ok: got !== null && want.every((v) => got.includes(v)), missing: got ?? ['row missing', ...heads] });
-  }
-  const shippedModels = [...m.container.querySelectorAll('tbody tr')].map((row) => row.children[0]?.textContent?.trim() ?? '').filter((n) => n.includes('-'));
-  results.push({ name: '/settings price table is the shipped Anthropic table', ok: shippedModels.length === 10 && shippedModels.every((n) => n.startsWith('claude-')), missing: shippedModels });
-  {
-    const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pricing');
-    const rows = card?.querySelectorAll('.price-table tbody tr:not(.price-table__fast)').length ?? 0;
-    const edits = card?.querySelectorAll('.price-cell__btn, input, .save-bar').length ?? 0;
-    const buttons = [...(card?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() || b.getAttribute('aria-label'));
-    results.push({
-      name: '/settings the Pricing card is read-only: the rows, no editable cell, no Add model and no button',
-      ok: card !== undefined && rows === 10 && edits === 0 && buttons.length === 0,
-      missing: [`rows ${rows}`, `editable parts ${edits}`, ...buttons],
-    });
-    const opus = [...(card?.querySelectorAll('.price-table tbody tr') ?? [])].find((tr) => tr.children[0]?.textContent?.trim() === 'claude-opus-5-5');
-    const fast = opus?.nextElementSibling?.classList.contains('price-table__fast') ? [...opus.nextElementSibling.children].map((td) => td.textContent?.trim()) : null;
-    results.push({
-      name: '/settings the fast-mode row sits under Opus 5.5',
-      ok: fast !== null && fast[0] === 'fast mode' && fast[1] === '$8.00' && fast[5] === '$40.00',
-      missing: fast ?? ['no fast-mode row under claude-opus-5-5'],
-    });
-  }
   results.push({
     name: '/settings no longer carries the other upstream prices section',
     ok: !m.text().includes('Other upstream prices') && !/gpt-\d/.test(m.text()) && m.container.querySelectorAll('.price-extra').length === 0,
@@ -9356,13 +11149,13 @@ m.unmount();
 }
 
 {
-  // Without the Max 20x row in the cost table no account of the story is sized for the 7-day window, so that ring
-  // weighs nobody; the 5-hour ring still weighs Pro and Max 5x and names primary alone.
+  // With no tier's 7-day capacity in the cost model no account of the story is sized for that window, so that ring
+  // weighs nobody and names all three; the 5-hour ring still weighs all three and names none.
   const { getSettings } = api;
   api.getSettings = async () => {
     const settings = await getSettings.call(api);
-    const { default_claude_max_20x: _dropped, ...tiers } = settings.planTables.cost.tiers;
-    return { ...settings, planTables: { ...settings.planTables, cost: { ...settings.planTables.cost, tiers } } };
+    const capacity = Object.fromEntries(Object.entries(settings.subscriptionCosts.capacity).map(([tier, row]) => [tier, { ...row, sevenDay: null }]));
+    return { ...settings, subscriptionCosts: { ...settings.subscriptionCosts, capacity } };
   };
   const page = await mount('/', { now: CLOCK_ORIGIN });
   api.getSettings = getSettings;
@@ -9382,9 +11175,9 @@ m.unmount();
       !drawn.week.ring &&
       drawn.week.sentence === "No listed account's tier is sized for the 7-day window." &&
       drawn.week.listAfter &&
-      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: tier default_claude_max_20x is not in the cost table', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured']) &&
+      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: Max 20x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured']) &&
       drawn.fiveHour.ring &&
-      JSON.stringify(drawn.fiveHour.names) === JSON.stringify(['primary: tier default_claude_max_20x is not in the cost table']),
+      drawn.fiveHour.names.length === 0,
     missing: [JSON.stringify(drawn)],
   });
 }

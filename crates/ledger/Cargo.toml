@@ -16,6 +16,7 @@ test-support = []
 [dependencies]
 axum = { workspace = true }
 bytes = { workspace = true }
+indexmap = { workspace = true }
 jiff = { workspace = true }
 phoebis-bus = { path = "../bus" }
 phoebis-oauth = { path = "../oauth" }
@@ -30,6 +31,7 @@ serde_norway = { workspace = true }
 thiserror = { workspace = true }
 tokio = { workspace = true }
 tracing = { workspace = true }
+zstd = { workspace = true }
 
 [dev-dependencies]
 fake-upstream = { path = "../../tests/fake_upstream" }
@@ -38,6 +40,8 @@ phoebis-cch = { path = "../cch" }
 # An integration test builds the library without `cfg(test)`, so the seam it reaches needs the feature on.
 phoebis-ledger = { path = ".", features = ["debug-hooks", "test-support"] }
 phoebis-profile = { path = "../profile" }
+# The routing loop's test seams, `RouterHandle::emit` among them, kept off the dependency above as the store's are.
+phoebis-routing = { path = "../routing", features = ["debug-hooks"] }
 # The test builders of the registry's rows, kept off the dependency above so a release build carries none.
 phoebis-store = { path = "../store", features = ["test-support"] }
 rand = { workspace = true }

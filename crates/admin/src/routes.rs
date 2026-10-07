@@ -28,7 +28,8 @@ use phoebis_routing::{
     SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
+    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember,
+    StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -116,6 +117,11 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/requests", get(requests::list))
         .route("/admin/requests/{id}", get(requests::show))
         .route("/admin/requests/{id}/bodies", get(requests::bodies))
+        .route(
+            "/admin/requests/{id}/decisions/{seq}",
+            get(crate::routing_log::record),
+        )
+        .route("/admin/routing-log", get(crate::routing_log::list))
         .route("/admin/session", get(whoami).post(login).delete(logout))
         .route("/admin/sessions", get(sessions::list))
         .route(
@@ -508,7 +514,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    match state.store.bump_lifecycle(&id) {
+    match state.store.bump_lifecycle(&id, StateCause::Operator) {
         Ok(_) => {}
         Err(StoreError::AccountNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "account not found")
@@ -521,7 +527,10 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An Anthropic-key slot
     // has no pairing to run, so it rests where a slot that never had a key rests.
     if row.kind == AccountKind::ApiKey {
-        if let Err(error) = state.store.set_state(&id, AccountState::Unpaired) {
+        if let Err(error) = state
+            .store
+            .set_state(&id, AccountState::Unpaired, StateCause::Operator)
+        {
             return store_failure(error);
         }
     }
@@ -945,7 +954,10 @@ async fn pairing_confirm(
     ) {
         tracing::warn!(account = %row.id, %error, "the profile could not be stored after pairing");
     }
-    if let Err(error) = state.store.set_state(&row.id, AccountState::Ready) {
+    if let Err(error) = state
+        .store
+        .set_state(&row.id, AccountState::Ready, StateCause::Paired)
+    {
         return unstored(&state, error);
     }
     state.usage.invalidate(&row.id);
@@ -1000,6 +1012,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         .into_iter()
         .map(|(kind, n)| (kind.to_string(), serde_json::Value::from(n)))
         .collect::<serde_json::Map<String, serde_json::Value>>();
+    let prices = state.pricing.current();
     Json(json!({
         "version": env!("CARGO_PKG_VERSION"),
         "profile": state.profile.name,
@@ -1011,6 +1024,7 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         "ledger": {
             "schema_version": state.ledger.db().schema_version().await.ok(),
             "written": load(&stats.written), "dropped": load(&stats.dropped), "write_failures": load(&stats.write_failures),
+            "cache_map_orphans": load(&stats.cache_map_orphans), "mirror_lagged": load(&stats.mirror_lagged),
             "gaps": load(&stats.gaps), "last_gap_at": stats.last_gap_at.load(std::sync::atomic::Ordering::Relaxed),
             "channel_depth": phoebis_ledger::CHANNEL_DEPTH,
             "queued": state.ledger.queued(), "behind": state.ledger.behind(),
@@ -1019,11 +1033,24 @@ async fn system(State(state): State<Arc<AdminState>>) -> Response {
         },
         "router": {
             "command_depth": phoebis_routing::COMMANDS, "queued": state.router.queued(), "dropped_reports": dropped,
+            "dropped_refusals": state.router.dropped_refusals(),
             "writer": { "depth": writer.depth, "deferred": writer.deferred, "degraded": writer.degraded, "failed_batches": writer.failed_batches },
         },
         "bus": state.bus.stats().iter().map(|(name, s)| json!({ "subscriber": name, "dropped": load(&s.dropped), "panics": load(&s.panics) })).collect::<Vec<_>>(),
         "live": { "clients": state.live.clients(), "in_flight": state.live.in_flight() },
         "pricing_unknown_models": state.pricing.unknown_models(),
+        "pricing": {
+            "api_prices": {
+                "path": state.settings.api_prices_path,
+                "source": prices.source,
+                "effective": prices.effective,
+            },
+            "subscription_costs": {
+                "path": state.settings.subscription_costs_path,
+                "source": state.tables.source,
+                "effective": state.tables.costs.effective,
+            },
+        },
         "gaps": gaps.iter().map(crate::requests::event_json).collect::<Vec<_>>(),
         "keepalive": {
             "agents": keepalive_stats.agents,

@@ -1,13 +1,14 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelEvent, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReleaseReason, Placement, PlacementRow, PlanBand, PlanModelCells, PlanTables, Pool, PoolCacheTtl, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
-  RuleCooldown, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, TtlRules, WarmSessions, WindowId,
+  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
+  ModelsState, Overview, PairingSession, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RecordCandidate, RecordOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
+  RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
 import { CACHE_TTL_DEFAULTS, METERED_TTL_DEFAULTS, PLAN_TTL_DEFAULTS, POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type AccountPatch, type KeyInput, type PoolInput } from './client';
 import { WASTED_PROBE_REASONS, emptyCacheMissReasons, emptyWastedProbeReasons } from '@/lib/cache';
 import { emptyCounts } from '@/lib/counts';
+import { fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { isFastScope } from '@/lib/quota';
 import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey } from '@/lib/windows';
@@ -103,17 +104,10 @@ export function decodeKeyModels(v: unknown): KeyModels {
   };
 }
 
-export function decodeModelEvent(v: unknown): ModelEvent {
-  const e = rec(v);
-  return { accountId: str(e.account_id), at: isoOr(e.at, epoch), keyId: strOrNull(e.key_id), model: str(e.model), rejectedBy: strings(e.rejected_by), requestId: strOrNull(e.request_id), sessionId: strOrNull(e.session_id), upstreamRequestId: strOrNull(e.upstream_request_id), wireModel: str(e.wire_model) };
-}
-
 export function decodeModelsState(v: unknown): ModelsState {
   const s = rec(v);
   return {
     cooldowns: list(s.cooldowns).map(rec).map((g) => ({ model: str(g.model), rows: list(g.rows).map(decodeRuleCooldown) })),
-    permits: list(s.permits).map(decodeModelEvent),
-    rejections: list(s.rejections).map(decodeModelEvent),
   };
 }
 
@@ -189,11 +183,12 @@ export function planName(sub: Subscription | null): string | null {
   return sub.rateLimitTier ? planLabel(sub.rateLimitTier) : null;
 }
 
-/** `default_claude_max_5x` reads as "Max 5x"; anything else is shown as sent. */
+/** `default_claude_max_5x` reads as "Max 5x" and `default_claude_ai`, the tier the profile reports for Pro, as "Pro";
+ *  anything else is shown as sent. */
 export function planLabel(tier: string): string {
-  const m = /^(?:default_)?claude_(max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
+  const m = /^(?:default_)?claude_(ai|max|pro|team|enterprise)(?:_(\d+)x)?$/.exec(tier);
   if (!m) return tier;
-  const name = m[1][0].toUpperCase() + m[1].slice(1);
+  const name = m[1] === 'ai' ? 'Pro' : m[1][0].toUpperCase() + m[1].slice(1);
   return m[2] ? `${name} ${m[2]}x` : name;
 }
 
@@ -409,10 +404,10 @@ export const PIN_RELEASE_REASON_VALUES = [
 ] as const satisfies readonly PinReleaseReason[];
 /**
  * The obstacles the router names for a candidate it passed over: the eligibility checks (`attempted`, `budget`,
- * `cooldown`, `credits`, `operator`, `overage`, `subscription_ended`) and the partitions (`above_ceiling`, `at_cap`,
- * `floor`, `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
+ * `budget_unknown`, `cooldown`, `credits`, `operator`, `overage`, `subscription_ended`) and the partitions
+ * (`above_ceiling`, `at_cap`, `floor`, `ranked`, `spent`, `winding_down`). The trace keeps any other name as sent.
  */
-export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'budget', 'cooldown', 'credits', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
+export const SKIP_OBSTACLE_VALUES = ['above_ceiling', 'at_cap', 'attempted', 'budget', 'budget_unknown', 'cooldown', 'credits', 'floor', 'operator', 'overage', 'ranked', 'spent', 'subscription_ended', 'winding_down'] as const;
 export const PLACEMENT_RUNG_VALUES = ['content', 'static', 'with_main'] as const satisfies readonly Placement['rung'][];
 const tierOf = (v: unknown): SelectionTrace['tier'] => {
   const t = list(v);
@@ -455,6 +450,154 @@ export const decodeRequestPage = (v: unknown): RequestPage => ({ nextCursor: str
 // The four counts are the route's own; nothing here measures the request or the response it passes through.
 export const decodeBodies = (v: unknown): CapturedBodies => { const b = rec(v); return { request: b.request, requestBytesSeen: num(b.request_bytes_seen), requestBytesStored: num(b.request_bytes_stored), requestId: str(b.request_id), requestTruncated: bool(b.request_truncated), response: b.response, responseBytesSeen: num(b.response_bytes_seen), responseBytesStored: num(b.response_bytes_stored), responseTruncated: bool(b.response_truncated) }; };
 export const decodeRequestEvent = (v: unknown): RequestEvent => ({ accountId: strOrNull(rec(v).account_id), at: isoOr(rec(v).at, epoch), detail: rec(v).detail === null || rec(v).detail === undefined ? null : rec(rec(v).detail), keyId: strOrNull(rec(v).key_id), kind: str(rec(v).kind), model: strOrNull(rec(v).model), sessionId: strOrNull(rec(v).session_id) });
+
+export const DECISION_KIND_VALUES = ['exhausted', 'held', 'moved', 'placed', 'refused', 'renewed'] as const satisfies readonly DecisionKind[];
+export const PIN_REASON_VALUES = ['not_looked_up', 'pinning_off'] as const satisfies readonly PinReason[];
+const BY_KIND_VALUES = ['exhaustion', 'hold', 'none', 'refusal', 'rule', 'rung', 'strategy'] as const satisfies readonly DecisionBy['kind'][];
+const FACT_UNIT_VALUES = ['count', 'ms', 'percent', 'percent_per_hour', 'text', 'time', 'tokens', 'usd'] as const satisfies readonly FactUnit[];
+const FACT_ENTITY_VALUES = ['account', 'key', 'model', 'pool'] as const satisfies readonly FactEntity['kind'][];
+const decisionKindOf = (v: unknown): DecisionKind | undefined => DECISION_KIND_VALUES.find((k) => k === str(v));
+const orNull = <T,>(v: unknown, read: (r: Rec) => T): T | null => (v === null || typeof v !== 'object' ? null : read(rec(v)));
+const scoreOf = (v: unknown): Score | null => orNull(v, (s) => ({ accountId: str(s.account_id), score: num(s.score), unit: str(s.unit) }));
+const holdOf = (v: unknown) => orNull(v, (h) => ({ accountId: str(h.account_id), boundMs: num(h.bound_ms), cohort: strOrNull(h.cohort) }));
+const exhaustionOf = (v: unknown) => orNull(v, (x) => ({ deadline: isoOrNull(x.deadline), kind: str(x.kind), obstacle: strOrNull(x.obstacle), reason: strOrNull(x.reason), window: strOrNull(x.window) }));
+const refusalOf = (v: unknown) => orNull(v, (x) => ({ kind: str(x.kind), reason: str(x.reason) }));
+/** A value the console cannot draw as a number or a word drops its pair rather than drawing a guess. */
+const factOf = (v: unknown): SummaryFact[] => {
+  const f = rec(v);
+  if (typeof f.value !== 'number' && typeof f.value !== 'string') return [];
+  const entity = orNull(f.entity, (e) => {
+    const kind = FACT_ENTITY_VALUES.find((k) => k === str(e.kind));
+    return kind === undefined ? null : { id: str(e.id), kind };
+  });
+  return [{ entity, key: str(f.key), unit: FACT_UNIT_VALUES.find((u) => u === str(f.unit)) ?? null, value: f.value }];
+};
+
+export function decodeDecisionSummary(v: unknown): DecisionSummary {
+  const r = rec(v);
+  const by = rec(r.by);
+  return {
+    type: 'decision',
+    accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), at: isoOr(r.at, epoch), attempt: num(r.attempt, 1), attemptCount: numOrNull(r.attempt_count),
+    by: { kind: BY_KIND_VALUES.find((k) => k === str(by.kind)) ?? 'none', tier: tierOf(by.tier), value: str(by.value) },
+    cache: orNull(r.cache, (c) => ({ hit: bool(c.hit), inputTokens: num(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), readTokens: num(c.read_tokens) })),
+    exhaustion: exhaustionOf(r.exhaustion), fact: list(r.fact).flatMap(factOf), fast: bool(r.fast), fromAccountId: strOrNull(r.from_account_id), hold: holdOf(r.hold), keyId: strOrNull(r.key_id),
+    kind: decisionKindOf(r.kind) ?? 'placed', model: strOrNull(r.model), poolId: strOrNull(r.pool_id), probe: bool(r.probe), refusal: refusalOf(r.refusal), requestId: str(r.request_id), rule: strOrNull(r.rule), rung: placementOf(r.rung),
+    runnerUp: scoreOf(r.runner_up), score: scoreOf(r.score), seq: num(r.seq, 1), sessionId: strOrNull(r.session_id), skipped: num(r.skipped), status: numOrNull(r.status), strategy: str(r.strategy), tier: tierOf(r.tier),
+    warmth: orNull(r.warmth, (w) => ({ cause: str(w.cause), verdict: str(w.verdict) })),
+  };
+}
+
+export function decodeRoutingEvent(v: unknown): RoutingEvent {
+  const e = rec(v);
+  return {
+    type: 'event',
+    accountId: strOrNull(e.account_id), actor: strOrNull(e.actor), agentId: strOrNull(e.agent_id), at: isoOr(e.at, epoch), detail: rec(e.detail), id: num(e.id), keyId: strOrNull(e.key_id), kind: str(e.kind),
+    model: strOrNull(e.model), poolId: strOrNull(e.pool_id), requestId: strOrNull(e.request_id), sessionId: strOrNull(e.session_id),
+  };
+}
+
+/**
+ * A row's `type` picks its decoder. A row of another type, or one missing the identity its link and its cursor are
+ * built from (a decision's request id, seq and kind, an event's id and kind), is dropped rather than drawn as a row
+ * that leads nowhere.
+ */
+const routingLogRowOf = (v: unknown): RoutingLogRow[] => {
+  const r = rec(v);
+  if (r.type === 'decision') return typeof r.request_id === 'string' && numOrNull(r.seq) !== null && decisionKindOf(r.kind) !== undefined ? [decodeDecisionSummary(r)] : [];
+  if (r.type === 'event') return numOrNull(r.id) !== null && typeof r.kind === 'string' ? [decodeRoutingEvent(r)] : [];
+  return [];
+};
+
+export function decodeRoutingLogPage(v: unknown): RoutingLogPage {
+  const p = rec(v);
+  return { counts: orNull(p.counts, (c) => ({ decisions: num(c.decisions), events: num(c.events) })), nextCursor: strOrNull(p.next_cursor), rows: list(p.rows).flatMap(routingLogRowOf) };
+}
+
+const prefixEntryOf = (v: unknown): PrefixEntry | null =>
+  orNull(v, (e) => ({ depth: num(e.depth), hash: str(e.hash), live: bool(e.live), prefixTokens: num(e.prefix_tokens), refusedBy: strOrNull(e.refused_by), ttlMs: num(e.ttl_ms), writtenAt: isoOr(e.written_at, epoch) }));
+const tierOrZero = (v: unknown): [number, number, number] => tierOf(v) ?? [0, 0, 0];
+
+function decodeRecordCandidate(v: unknown): RecordCandidate {
+  const c = rec(v);
+  const prefix = rec(c.prefix);
+  return {
+    accountId: str(c.account_id), allowanceKnown: bool(c.allowance_known),
+    budget: list(c.budget).map(rec).map((b) => ({ budgetUsd: num(b.budget_usd), observedAt: isoOrNull(b.observed_at), period: str(b.period), periodEnd: isoOrNull(b.period_end), periodStart: isoOrNull(b.period_start), spentUsd: numOrNull(b.spent_usd) })),
+    cooldowns: list(c.cooldowns).map(rec).map((x) => ({ blocking: bool(x.blocking), reason: str(x.reason), scope: str(x.scope), until: isoOr(x.until, epoch), window: str(x.window) })),
+    credits: orNull(c.credits, (x) => ({ blocked: strOrNull(x.blocked), disabledReason: strOrNull(x.disabled_reason), enabled: bool(x.enabled), observedAt: isoOr(x.observed_at, epoch), utilization: numOrNull(x.utilization) })),
+    enabled: bool(c.enabled), inFlight: num(c.in_flight), inFlightCap: num(c.in_flight_cap), inOverage: bool(c.in_overage), incarnation: num(c.incarnation), kind: str(c.kind) === 'api_key' ? 'api_key' : 'oauth',
+    obstacle: orNull(c.obstacle, (o) => ({ name: str(o.name), reason: strOrNull(o.reason), until: isoOrNull(o.until), window: strOrNull(o.window) })),
+    overage: orNull(c.overage, (o) => ({ observedAt: isoOr(o.observed_at, epoch), reset: isoOrNull(o.reset), since: isoOr(o.since, epoch), source: str(o.source) })),
+    pace: orNull(c.pace, (p) => ({ deadline: isoOrNull(p.deadline), end: isoOrNull(p.end), hours: numOrNull(p.hours), remaining: num(p.remaining), reset: isoOrNull(p.reset), score: num(p.score) })),
+    partition: strOrNull(c.partition), planTier: strOrNull(c.plan_tier),
+    prefix: { content: prefixEntryOf(prefix.content), contentMatch: prefixEntryOf(prefix.content_match), static: prefixEntryOf(prefix.static), staticMatch: prefixEntryOf(prefix.static_match), withMain: bool(prefix.with_main) },
+    priority: num(c.priority), rank: numOrNull(c.rank), score: numOrNull(c.score), state: str(c.state),
+    term: orNull(c.term, (t) => ({ cancelled: bool(t.cancelled), ended: bool(t.ended), endsAt: isoOrNull(t.ends_at), since: isoOrNull(t.since), trialEndsAt: isoOrNull(t.trial_ends_at), windingDown: bool(t.winding_down) })),
+    tier: tierOrZero(c.tier), verdict: str(c.verdict),
+    windows: Object.fromEntries(
+      Object.entries(rec(c.windows)).map(([name, w]) => {
+        const x = rec(w);
+        return [name, { ageMs: num(x.age_ms), ahead: numOrNull(x.ahead), observedAt: isoOr(x.observed_at, epoch), reset: isoOrNull(x.reset), source: str(x.source), utilization: num(x.utilization) }];
+      }),
+    ),
+  };
+}
+
+function decodeRecordOutcome(v: unknown): RecordOutcome {
+  const o = rec(v);
+  return {
+    accountId: strOrNull(o.account_id), cohortHold: cohortHoldOf(o.cohort_hold),
+    completion: orNull(o.completion, (c) => ({
+      cacheMapWritten: Array.isArray(c.cache_map_written) ? c.cache_map_written.map(rec).map((m) => ({ accountId: str(m.account_id), depth: num(m.depth), prefixTokens: num(m.prefix_tokens), tier: str(m.tier), ttlMs: num(m.ttl_ms) })) : null,
+      cacheReadTokens: numOrNull(c.cache_read_tokens), completedAt: isoOrNull(c.completed_at), freed: bool(c.freed), heldMs: numOrNull(c.held_ms), hit: typeof c.hit === 'boolean' ? c.hit : null, inputTokens: numOrNull(c.input_tokens), promisedTokens: numOrNull(c.promised_tokens), status: numOrNull(c.status),
+    })),
+    exhaustion: exhaustionOf(o.exhaustion), fromAccountId: strOrNull(o.from_account_id), hold: holdOf(o.hold), inOverage: bool(o.in_overage), kind: decisionKindOf(o.kind) ?? 'placed',
+    pinEvents: list(o.pin_events).map(rec).map((e) => ({ kind: str(e.kind), reason: strOrNull(e.reason) })),
+    pinWritten: orNull(o.pin_written, (p) => ({ action: str(p.action), epoch: num(p.epoch), hashesStamped: bool(p.hashes_stamped), lane: str(p.lane), refreshStamped: bool(p.refresh_stamped) })),
+    refusal: refusalOf(o.refusal), rule: strOrNull(o.rule), rung: placementOf(o.rung),
+    shedMarks: Array.isArray(o.shed_marks) ? o.shed_marks.map(rec).map((m) => ({ agentId: str(m.agent_id), keyId: str(m.key_id), model: str(m.model), sessionId: str(m.session_id) })) : null,
+    strategy: str(o.strategy), tier: tierOf(o.tier), upstreamModel: strOrNull(o.upstream_model),
+  };
+}
+
+export function decodeDecisionRecord(v: unknown): DecisionRecord {
+  const r = rec(v);
+  const q = rec(r.request);
+  const lane = rec(q.lane);
+  const flags = rec(q.flags);
+  const chain = rec(q.chain);
+  const s = r.settings;
+  return {
+    candidates: list(r.candidates).map(decodeRecordCandidate),
+    outcome: decodeRecordOutcome(r.outcome),
+    pin: orNull(r.pin, (p) => ({
+      accountId: strOrNull(p.account_id), createdAt: isoOrNull(p.created_at), epoch: numOrNull(p.epoch), found: str(p.found, 'none'), idleMs: numOrNull(p.idle_ms), incarnation: numOrNull(p.incarnation), lane: strOrNull(p.lane), lastRefreshAt: isoOrNull(p.last_refresh_at), lastUsedAt: isoOrNull(p.last_used_at),
+      marked: bool(p.marked), refreshAgeMs: numOrNull(p.refresh_age_ms), released: strings(p.released), shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
+    })),
+    // A word this build does not know reads as none, as a poll outcome does. The raw answer still carries it.
+    pinReason: PIN_REASON_VALUES.find((x) => x === r.pin_reason) ?? null,
+    raw: v,
+    request: {
+      agentId: str(q.agent_id), at: isoOr(q.at, epoch), attempt: num(q.attempt, 1), attempted: strings(q.attempted), canonicalModel: str(q.canonical_model),
+      chain: { boundaries: num(chain.boundaries), staticBoundaries: num(chain.static_boundaries), staticHash: bool(chain.static_hash) }, clientClass: str(q.client_class),
+      flags: { contextCompacted: bool(flags.context_compacted), count: bool(flags.count), fast: bool(flags.fast), marker: bool(flags.marker), portable: bool(flags.portable), probe: bool(flags.probe) },
+      holds: list(q.holds).map(rec).map((h) => ({ accountId: str(h.account_id), attempt: num(h.attempt, 1), cohort: strOrNull(h.cohort), heldMs: num(h.held_ms) })),
+      keyGeneration: num(q.key_generation), keyId: str(q.key_id), lane: { effort: str(lane.effort), speed: str(lane.speed), thinking: str(lane.thinking) }, parentAgentId: strOrNull(q.parent_agent_id), poolId: str(q.pool_id),
+      registryRevision: num(q.registry_revision), requestClass: strOrNull(q.request_class), requestId: str(q.request_id), seq: num(q.seq, 1),
+    },
+    requestId: str(r.request_id),
+    seq: num(r.seq, 1),
+    settings: orNull(s, (x) => ({
+      affinityMode: str(x.affinity_mode), affinityTtlSeconds: num(x.affinity_ttl_seconds), burnWindowSeconds: num(x.burn_window_seconds), inFlightCap: num(x.in_flight_cap), migrateBand: num(x.migrate_band),
+      migrateWhenSpent: bool(x.migrate_when_spent), minSharedPrefixTokens: num(x.min_shared_prefix_tokens), overageMoveGraceMinutes: num(x.overage_move_grace_minutes), overagePolicy: str(x.overage_policy), paceFloor: num(x.pace_floor),
+      poolUpdatedAt: isoOr(x.pool_updated_at, epoch), preferSubscription: bool(x.prefer_subscription), retryInPlaceSeconds: num(x.retry_in_place_seconds), selectBelowUtilization: numOrNull(x.select_below_utilization), sessionPlacement: str(x.session_placement),
+      shedAheadOfPace: numOrNull(x.shed_ahead_of_pace), shedShare: num(x.shed_share), sourceDwellSeconds: num(x.source_dwell_seconds), strategy: str(x.strategy), subagentPlacement: str(x.subagent_placement), warmSessions: str(x.warm_sessions), windDownMinutes: num(x.wind_down_minutes),
+    })),
+    version: num(r.version),
+    walk: list(r.walk).map(rec).map((w) => ({ facts: list(w.facts).map(rec).map((f) => ({ accountId: strOrNull(f.account_id), key: str(f.key), unit: strOrNull(f.unit), value: f.value ?? null })), step: str(w.step), verdict: str(w.verdict) })),
+  };
+}
 
 const record = <K extends string>(keys: readonly K[], v: unknown, empty: () => Record<K, number>): Record<K, number> => {
   const out = empty();
@@ -575,29 +718,114 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
 
 export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
 
-const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read_per_m), cacheWrite1hPerM: num(m.cache_write_1h_per_m), cacheWrite5mPerM: num(m.cache_write_5m_per_m), inputPerM: num(m.input_per_m), outputPerM: num(m.output_per_m) });
-const price = (m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model: str(m.model) });
-// The pricing file's effective date is free text: one that is not a date is kept as sent rather than throwing, which
-// would fail the whole settings answer and every page that reads it. Only text opening with an ISO date counts, since
-// `Date.parse` reads some free text as a date ("version 3" as March 2001).
-export const decodePricing = (v: unknown): Settings['pricing'] => {
-  const effective = str(rec(v).effective, '');
+const priceCells = (m: Rec): FastPrice => ({ cacheReadPerM: num(m.cache_read), cacheWrite1hPerM: num(m.cache_write_1h), cacheWrite5mPerM: num(m.cache_write_5m), inputPerM: num(m.input), outputPerM: num(m.output) });
+const price = (model: string, m: Rec): ModelPrice => ({ ...priceCells(m), fast: m.fast && typeof m.fast === 'object' ? priceCells(rec(m.fast)) : null, model });
+/**
+ * The instant a table's free-text `effective` date parses to, or null. A text that is not a date is kept as sent rather
+ * than throwing, which would fail the whole settings answer and every page that reads it. Only text opening with an
+ * ISO date counts, since `Date.parse` reads some free text as a date ("version 3" as March 2001).
+ */
+export const effectiveDateOf = (effective: string): string | null => {
   const parsed = /^\d{4}-\d{2}-\d{2}/.test(effective) ? Date.parse(effective) : Number.NaN;
-  return { effective, effectiveDate: Number.isNaN(parsed) ? null : new Date(parsed).toISOString(), models: list(rec(v).models).map(rec).map(price), source: str(rec(v).source) };
+  return Number.isNaN(parsed) ? null : new Date(parsed).toISOString();
+};
+/**
+ * A table's date as the router sent it, free text as sent. A date-only `effective` reads in UTC, the zone it parses
+ * in: it is midnight UTC, which the browser's own zone would show as the day before west of UTC. A date with a time
+ * names an instant, which reads in the browser's zone through `fmtDate` like every other instant.
+ */
+export const effectiveLabel = (effective: string): string => {
+  const at = effectiveDateOf(effective);
+  if (at === null) return effective;
+  return /^\d{4}-\d{2}-\d{2}$/.test(effective) ? new Date(at).toLocaleDateString('en-US', { day: '2-digit', month: 'short', timeZone: 'UTC', year: 'numeric' }) : fmtDate(at);
+};
+/** The `api_prices` envelope: its rows keyed by model in the file's order, the date from the file it carries. */
+export const decodePricing = (envelope: unknown): Settings['apiPrices'] => {
+  const content = rec(rec(envelope).content);
+  const effective = str(content.effective, '');
+  return { effective, effectiveDate: effectiveDateOf(effective), models: Object.entries(rec(content.models)).map(([model, row]) => price(model, rec(row))), source: str(rec(envelope).source) };
 };
 
-const planModelCells = (v: unknown): PlanModelCells => {
-  const m = rec(v);
-  return { cacheRead: numOrNull(m.cache_read), cacheWrite1h: numOrNull(m.cache_write_1h), cacheWrite5m: numOrNull(m.cache_write_5m), input: numOrNull(m.input), output: numOrNull(m.output) };
+const TYPE_KEYS: [keyof TypeMultiplier, string][] = [['cacheRead', 'cache_read'], ['cacheWrite1h', 'cache_write_1h'], ['cacheWrite5m', 'cache_write_5m'], ['input', 'input'], ['output', 'output']];
+/** What the console says in place of a cost model it cannot read, which then prices nothing. */
+const COSTS_UNREADABLE = "The cost model's answer could not be read.";
+/** The empty model: it sizes no tier and weighs no model. */
+const emptyCosts = (): SubscriptionCosts => ({
+  capacity: {},
+  effective: '',
+  modelWeight: {},
+  modelWindows: {},
+  overrides: {},
+  peak: { capacityFactor: { fiveHour: 1, sevenDay: 1 }, fromHour: 0, toHour: 0, weekdays: false, zone: '' },
+  typeMultiplier: { cacheRead: 0, cacheWrite1h: 0, cacheWrite5m: 0, input: 0, output: 0 },
+  unit: { definedBy: { band: '', tier: '', window: '' }, unitsPerWindow: 0 },
+});
+// A fallback on a mistyped member would price a share the router never charges, so the cost model is read strictly.
+// The throw never leaves `readCosts`: a throw out of the settings answer would fail every page that reads it, so the
+// answer carries the empty model and a problem instead.
+class Malformed extends Error {}
+const must = <T>(ok: boolean, v: T): T => {
+  if (!ok) throw new Malformed();
+  return v;
 };
-const planBand = (v: unknown): PlanBand => {
-  const b = rec(v);
-  return { factor: num(b.factor, 1), fromHour: num(b.from_hour), toHour: num(b.to_hour), weekdays: bool(b.weekdays), windows: list(b.windows).map((w) => str(w)), zone: str(b.zone) };
+const isMap = (v: unknown): v is Rec => v !== null && typeof v === 'object' && !Array.isArray(v);
+const map = (v: unknown): Rec => must(isMap(v), v as Rec);
+const finite = (v: unknown): number => must(typeof v === 'number' && Number.isFinite(v), v as number);
+const finiteOrNull = (v: unknown): number | null => (v === null ? null : finite(v));
+const text = (v: unknown): string => must(typeof v === 'string', v as string);
+const flag = (v: unknown): boolean => must(typeof v === 'boolean', v as boolean);
+const byKey = <T>(v: unknown, of: (row: unknown) => T): Record<string, T> => Object.fromEntries(Object.entries(map(v)).map(([key, row]) => [key, of(row)]));
+// Absent and null both leave an override's member out, as the file's optional members read.
+const absent = (v: unknown): boolean => v === undefined || v === null;
+// An override names only what it changes, so a member it leaves out stays out rather than reading as zero.
+const override = (v: unknown): SubscriptionCosts['overrides'][string] => {
+  const o = map(v);
+  const named = absent(o.type_multiplier) ? null : map(o.type_multiplier);
+  const typeMultiplier: Partial<TypeMultiplier> | null = named === null ? null : Object.fromEntries(TYPE_KEYS.filter(([, wire]) => !absent(named[wire])).map(([key, wire]) => [key, finite(named[wire])]));
+  return { ...(typeMultiplier === null ? {} : { typeMultiplier }), ...(absent(o.weight_by_window) ? {} : { weightByWindow: byKey(o.weight_by_window, finite) }) };
 };
-const byKey = <T>(v: unknown, of: (row: unknown) => T): Record<string, T> => Object.fromEntries(Object.entries(rec(v)).map(([key, row]) => [key, of(row)]));
-const decodePlanTables = (v: unknown): PlanTables => {
-  const cost = rec(rec(v).cost);
-  return { cost: { bands: list(cost.bands).map(planBand), effective: str(cost.effective), tiers: byKey(cost.tiers, (t) => ({ fiveHour: numOrNull(rec(t).five_hour), sevenDay: numOrNull(rec(t).seven_day) })), windows: byKey(cost.windows, (models) => byKey(models, planModelCells)) } };
+/**
+ * Every member the model requires is present and of its type: a capacity and a weight may be null, an override's
+ * multiplier block and each multiplier in it absent or null, its `weight_by_window` block absent or null but never a
+ * null weight inside it, and nothing else.
+ */
+const strictCosts = (content: unknown): SubscriptionCosts => {
+  const c = map(content);
+  const unit = map(c.unit);
+  const definedBy = map(unit.defined_by);
+  const peak = map(c.peak);
+  const factor = map(peak.capacity_factor);
+  const multiplier = map(c.type_multiplier);
+  return {
+    capacity: byKey(c.capacity, (t) => ({ fiveHour: finiteOrNull(map(t).five_hour), sevenDay: finiteOrNull(map(t).seven_day) })),
+    effective: text(c.effective),
+    modelWeight: byKey(c.model_weight, finiteOrNull),
+    modelWindows: byKey(c.model_windows, (w) => ({ capacityFactor: finite(map(w).capacity_factor), of: text(map(w).of) })),
+    overrides: byKey(c.overrides, override),
+    peak: { capacityFactor: { fiveHour: finite(factor.five_hour), sevenDay: finite(factor.seven_day) }, fromHour: finite(peak.from_hour), toHour: finite(peak.to_hour), weekdays: flag(peak.weekdays), zone: text(peak.zone) },
+    typeMultiplier: { cacheRead: finite(multiplier.cache_read), cacheWrite1h: finite(multiplier.cache_write_1h), cacheWrite5m: finite(multiplier.cache_write_5m), input: finite(multiplier.input), output: finite(multiplier.output) },
+    unit: { definedBy: { band: text(definedBy.band), tier: text(definedBy.tier), window: text(definedBy.window) }, unitsPerWindow: finite(unit.units_per_window) },
+  };
+};
+/** The model, or null when a member is missing or of the wrong type. */
+const readCosts = (content: unknown): SubscriptionCosts | null => {
+  try {
+    return strictCosts(content);
+  } catch (e) {
+    if (e instanceof Malformed) return null;
+    throw e;
+  }
+};
+/** The subscription cost model from the envelope's `content`; a content that is absent or cannot be read is the empty model. */
+export const decodeSubscriptionCosts = (content: unknown): SubscriptionCosts => (content === undefined ? emptyCosts() : (readCosts(content) ?? emptyCosts()));
+/**
+ * The settings answer's `subscription_costs` envelope. An answer without it reads as the empty model with no problem;
+ * one whose envelope cannot be read reads as the empty model with the problem the cost views show.
+ */
+const decodeCostsEnvelope = (envelope: unknown): Settings['subscriptionCosts'] => {
+  if (envelope === undefined) return { ...emptyCosts(), problem: null, source: '' };
+  const costs = isMap(envelope) && typeof envelope.source === 'string' ? readCosts(envelope.content) : null;
+  return costs === null ? { ...emptyCosts(), problem: COSTS_UNREADABLE, source: str(rec(envelope).source) } : { ...costs, problem: null, source: str(rec(envelope).source) };
 };
 
 export function decodeSettings(v: unknown): Settings {
@@ -608,13 +836,13 @@ export function decodeSettings(v: unknown): Settings {
   return {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
+    apiPrices: decodePricing(s.api_prices),
     keepalive: { maxAgents: num(k.max_agents), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions) },
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy) },
-    planTables: decodePlanTables(s.plan_tables),
-    pricing: decodePricing(s.pricing),
     retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },
-    storage: { ledgerPath: str(store.ledger_path), path: str(store.path), pricingPath: strOrNull(store.pricing_path) },
+    storage: { apiPricesPath: strOrNull(store.api_prices_path), ledgerPath: str(store.ledger_path), path: str(store.path), subscriptionCostsPath: strOrNull(store.subscription_costs_path) },
+    subscriptionCosts: decodeCostsEnvelope(s.subscription_costs),
     usage: { cacheTtlSeconds: num(rec(s.usage).cache_ttl_seconds) },
   };
 }

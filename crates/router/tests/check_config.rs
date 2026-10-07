@@ -10,7 +10,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, StorageKey, Store,
+};
 
 const HEX_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -154,6 +156,7 @@ fn registry_from_before_the_canary(registry: &Path, key: &StorageKey) {
             incarnation: 1,
             revision: 1,
             state: AccountState::Unpaired,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -219,8 +222,17 @@ fn the_summary_names_the_routing_keys() {
     );
     let stdout = String::from_utf8_lossy(&out.stdout);
     let lines: Vec<&str> = stdout.lines().collect();
+    // Neither default path has a file under the test's working directory, so both tables are the shipped ones. The
+    // price line compares with the table it loads; the cost model's counts are proven over hand-counted tables
+    // below, so its line here is held to its shape.
+    let prices = phoebis_ledger::PriceTable::shipped();
+    let api_prices = format!(
+        "api prices: built in (effective {}, {} models); ./api_prices.yaml not found",
+        prices.effective,
+        prices.models.len()
+    );
     assert_eq!(
-        lines.get(4..10),
+        lines.get(4..9),
         Some(
             &[
                 "proxy: body budget 536870912 bytes, body read 60s, key body reads 128, max request 33554432 bytes, \
@@ -228,6 +240,26 @@ fn the_summary_names_the_routing_keys() {
                 "profile claude-code-2.1.269-linux-x64",
                 "routing: cooldown_fallback 60s, model_rejection 3600s, catalog refresh 21600s, startup fetch 30s",
                 "ledger at ./data/ledger.sqlite",
+                api_prices.as_str(),
+            ][..]
+        ),
+        "{stdout}"
+    );
+    let count = |n: &str| n.parse::<usize>().is_ok_and(|n| n > 0);
+    let shaped = lines
+        .get(9)
+        .and_then(|line| line.strip_prefix("subscription costs: built in (effective "))
+        .and_then(|rest| rest.strip_suffix(" tiers); ./subscription_costs.yaml not found"))
+        .and_then(|rest| rest.split_once(", "))
+        .and_then(|(effective, counts)| Some((effective, counts.split_once(" models, ")?)))
+        .is_some_and(|(effective, (models, tiers))| {
+            !effective.is_empty() && count(models) && count(tiers)
+        });
+    assert!(shaped, "the subscription costs line: {stdout}");
+    assert_eq!(
+        lines.get(10..12),
+        Some(
+            &[
                 "retention 90 days, rollups 400 days",
                 "keepalive: 128 sessions, 1024 agents, 256 MiB retained",
             ][..]
@@ -236,12 +268,96 @@ fn the_summary_names_the_routing_keys() {
     );
 }
 
+const COUNTED_PRICES: &str = "\
+effective: 2026-02-01
+models:
+  claude-opus-5-5: {input: 10, cache_write_5m: 12.5, cache_write_1h: 20, cache_read: 1, output: 50}
+  claude-haiku-4-5: {input: 1, cache_write_5m: 1.25, cache_write_1h: 2, cache_read: 0.1, output: 5}
+";
+
+const COUNTED_COSTS: &str = "\
+effective: 2026-03-01
+unit:
+  defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
+  units_per_window: 100
+capacity:
+  default_claude_ai:         {five_hour: 5, seven_day: 50}
+  default_claude_enterprise: {five_hour: null, seven_day: null}
+  default_claude_max_20x:    {five_hour: 100, seven_day: 1000}
+  default_claude_team:       {five_hour: 10, seven_day: null}
+peak:
+  zone: America/Los_Angeles
+  weekdays: true
+  from_hour: 5
+  to_hour: 11
+  capacity_factor: {five_hour: 0.5, seven_day: 1}
+type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+model_weight:
+  claude-opus-5-5: 2
+  claude-opus-5: null
+  claude-sonnet-5-5: 1
+  claude-sonnet-5: null
+  claude-haiku-4-5: 0.5
+model_windows: {}
+overrides:
+  claude-sonnet-5: {weight_by_window: {seven_day: 1}}
+  claude-haiku-4-5: {weight_by_window: {seven_day: 1}}
+";
+
+/// Two tables written for this count: two price rows dated 2026-02-01, and a cost model dated 2026-03-01 that weighs
+/// Opus 5.5, Sonnet 5.5 and Haiku 4.5, leaves Opus 5 and Sonnet 5 at null, and weighs Sonnet 5 and Haiku 4.5 on the
+/// week through overrides; its four tiers are Pro and Max 20x sized on both windows, Team on the 5-hour window alone
+/// and Enterprise on neither. Counted by hand: four models (Opus 5 left out, Sonnet 5 in through its override, Haiku
+/// 4.5 once) and three tiers (Enterprise left out).
+#[test]
+fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_each_tier_sized_on_a_window(
+) {
+    let dir = tempfile::tempdir().unwrap();
+    let prices = dir.path().join("api_prices.yaml");
+    let costs = dir.path().join("subscription_costs.yaml");
+    std::fs::write(&prices, COUNTED_PRICES).unwrap();
+    std::fs::write(&costs, COUNTED_COSTS).unwrap();
+    let config = config_file(
+        dir.path(),
+        "counted",
+        &format!(
+            "stats:\n  api_prices_path: {}\n  subscription_costs_path: {}\n",
+            prices.display(),
+            costs.display()
+        ),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert!(out.status.success(), "{}", printed(&out));
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    let lines: Vec<&str> = stdout.lines().collect();
+    let api_prices = format!(
+        "api prices: {} (file, effective 2026-02-01, 2 models)",
+        prices.display()
+    );
+    let subscription_costs = format!(
+        "subscription costs: {} (file, effective 2026-03-01, 4 models, 3 tiers)",
+        costs.display()
+    );
+    assert_eq!(
+        lines.get(7..10),
+        Some(
+            &[
+                "ledger at ./data/ledger.sqlite",
+                api_prices.as_str(),
+                subscription_costs.as_str(),
+            ][..]
+        ),
+        "{}",
+        printed(&out)
+    );
+}
+
 /// The start refuses a price file whose cell an estimate cannot use, so the check refuses it too, naming the file, the
 /// model and the cell.
 #[test]
 fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the_cell() {
     let dir = tempfile::tempdir().unwrap();
-    let prices = dir.path().join("pricing.yaml");
+    let prices = dir.path().join("api_prices.yaml");
     std::fs::write(
         &prices,
         "effective: 2026-10-04\nmodels:\n  m: {input: -1, cache_write_5m: 1, cache_write_1h: 1, cache_read: 1, \
@@ -251,7 +367,7 @@ fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the
     let config = config_file(
         dir.path(),
         "negative-price",
-        &format!("stats:\n  pricing_path: {}\n", prices.display()),
+        &format!("stats:\n  api_prices_path: {}\n", prices.display()),
     );
     let out = check_config(&mut phoebis(), &config);
     assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
@@ -264,6 +380,45 @@ fn a_price_file_with_a_negative_cell_fails_check_config_naming_the_model_and_the
     );
     assert!(
         stderr.contains("pricing table: model m, cell input must be a finite non-negative number"),
+        "{}",
+        printed(&out)
+    );
+}
+
+/// The start refuses a cost model that breaks a rule of the file, so the check refuses it too, naming the file and
+/// the key.
+#[test]
+fn a_cost_model_with_a_capacity_at_zero_fails_check_config_naming_the_key() {
+    let dir = tempfile::tempdir().unwrap();
+    let costs = dir.path().join("costs.yaml");
+    let text =
+        phoebis_ledger::test_tables::SUBSCRIPTION_COSTS.replace("five_hour: 100,", "five_hour: 0,");
+    assert_ne!(text, phoebis_ledger::test_tables::SUBSCRIPTION_COSTS);
+    std::fs::write(&costs, text).unwrap();
+    let config = config_file(
+        dir.path(),
+        "zero-capacity",
+        &format!("stats:\n  subscription_costs_path: {}\n", costs.display()),
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some(
+            format!(
+                "Error: loading the subscription cost model from {}",
+                costs.display()
+            )
+            .as_str()
+        ),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr
+            .lines()
+            .any(|line| line.contains("plan table: capacity.default_claude_max_20x.five_hour")),
         "{}",
         printed(&out)
     );
@@ -307,6 +462,32 @@ fn a_removed_key_fails_check_config_as_invalid_yaml() {
             printed(&out)
         );
     }
+}
+
+/// The price file's key carries the file's name, and nothing has been released, so the retired name is unknown
+/// rather than read as an alias.
+#[test]
+fn a_configuration_naming_pricing_path_is_refused_as_invalid_yaml() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(
+        dir.path(),
+        "retired-key",
+        "stats:\n  pricing_path: ./x.yaml\n",
+    );
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    let stderr = String::from_utf8_lossy(&out.stderr);
+    assert_eq!(
+        stderr.lines().next(),
+        Some("Error: the configuration is not valid YAML"),
+        "{}",
+        printed(&out)
+    );
+    assert!(
+        stderr.contains("unknown field `pricing_path`"),
+        "{}",
+        printed(&out)
+    );
 }
 
 #[test]

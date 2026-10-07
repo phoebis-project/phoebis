@@ -789,6 +789,7 @@ async fn a_request_answers_its_hold_with_its_wait_and_held_filters_the_list() {
             account_id: "business".into(),
             cohort: None,
             held_ms: 1_250,
+            attempt: 1,
         },
     ]))
     .unwrap();

@@ -1382,6 +1382,7 @@ mod tests {
         "bodies",
         "cooldown_segments",
         "cooldown_spans",
+        "decisions",
         "events",
         "extra_usage_samples",
         "kept_warm_marks",
@@ -1479,7 +1480,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();
@@ -1536,7 +1537,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         let columns: Vec<String> = db
             .read_blocking(|c| {
                 let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -1631,7 +1632,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         db.write(|c| {
             let tx = c.transaction()?;
             fold_event(&tx, &cooldown_set_event(0, 60_000))?;
@@ -2542,7 +2543,7 @@ mod tests {
             tx.commit().unwrap();
         }
         let db = crate::LedgerDb::open(&path).unwrap();
-        assert_eq!(db.read_blocking(read_version).unwrap(), 28);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
         let rows = db
             .read_blocking(|c| read_rollups(c, 0, i64::MAX, &RollupSelect::default()))
             .unwrap();

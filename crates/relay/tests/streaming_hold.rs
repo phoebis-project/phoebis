@@ -476,7 +476,9 @@ async fn a_disconnect_during_a_stalled_pre_commit_read_closes_the_upstream_conne
         "the hold is waiting on the stalled stream"
     );
     assert_eq!(up.open_connections(), 1);
-    h.store.bump_lifecycle("a").unwrap();
+    h.store
+        .bump_lifecycle("a", phoebis_store::StateCause::Operator)
+        .unwrap();
     h.router.reload().await.unwrap();
     let resp = tokio::time::timeout(Duration::from_secs(2), pending)
         .await

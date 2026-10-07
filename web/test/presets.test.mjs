@@ -59,7 +59,7 @@ const pool = (over = {}) => ({
   warmSessions: 'when_needed',
   ...over,
 });
-/** Every account the cost table sizes, so each subscription member's pins enter the round. */
+/** Every account the cost model sizes, so each subscription member's pins enter the round. */
 const SIZED = new Set(['cool', 'hot', 'near', 'second']);
 const preview = (sessions, over) => d.shedPreview(pool(over), [hot, cool], sessions, NOW, SIZED);
 const four = [pin('warm-4', 4, true), pin('cold-3', 3, false), pin('warm-2', 2, true), pin('warm-1', 1, true)];
@@ -126,11 +126,11 @@ test('the preview orders cold pins first, stops at the share, and never marks th
   assert.deepEqual([decayed.sessions, decayed.burnShare.toFixed(3)], [1, (5 / (10 / Math.E + 5 + 1)).toFixed(3)], 'the order and the share read each burn decayed to now');
 });
 
-test('a pin the table cannot price stays in the order unmarked and counts for the last-pin rule', () => {
+test('a pin the cost model cannot price stays in the order unmarked and counts for the last-pin rule', () => {
   const unlisted = four.map((p) => (p.sessionId === 'warm-1' ? { ...p, burn: null } : p));
   const round = replay([hot, cool], unlisted);
   assert.deepEqual([round.sessions, round.warm, round.unpriced], [2, 1, 1], 'cold 3 then warm 4, as with every pin priced');
-  assert.ok(d.shedPreviewLine(round, true).endsWith(' 1 pin the table cannot price stays.'), d.shedPreviewLine(round, true));
+  assert.ok(d.shedPreviewLine(round, true).endsWith(' 1 pin the cost model cannot price stays.'), d.shedPreviewLine(round, true));
   const pair = replay([hot, cool], [pin('priced', 1, false), pin('unlisted', null, false)]);
   assert.deepEqual([pair.sessions, pair.unpriced], [1, 1], 'without the unpriced pin the priced one would be the last unmarked');
   assert.deepEqual(
@@ -147,9 +147,9 @@ test('a pin the table cannot price stays in the order unmarked and counts for th
   );
 });
 
-test("the pins of an account whose tier the table does not size stay out of the preview, unlike a pin it cannot price", () => {
-  // The route reads no burn for any pin of such an account, while the round prices them on the reference tier and
-  // sheds them; the preview cannot replay that order, so it leaves them out rather than call them unpriced.
+test("the pins of an account whose tier the cost model does not size stay out of the preview, unlike a pin it cannot price", () => {
+  // The route reads no burn for any pin of such an account, while the round prices them on the anchor tier's rates
+  // and sheds them; the preview cannot replay that order, so it leaves them out rather than call them unpriced.
   const team = account('team', 0.95);
   const pins = [pin('team-a', null, false, { accountId: 'team' }), pin('team-b', null, false, { accountId: 'team' })];
   const round = d.shedPreview(pool({ members: [member('team'), member('cool')] }), [team, cool], pins, NOW, new Set(['cool']));
@@ -224,10 +224,10 @@ test('with no member under the band the preview marks sessions it cannot move', 
   assert.equal(d.shedPreviewLine(replay([cool], []), true), 'No member is ahead of pace by the margin.');
 });
 
-test('while the cost table is loading or did not load the preview names the table and counts nothing', () => {
+test('while the cost model is loading or did not load the preview names the model and counts nothing', () => {
   const round = replay([hot, cool], four);
-  assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost table is loading; window-share pins are counted once it is read.');
-  assert.equal(d.shedPreviewLine(round, true, 'missing'), 'The cost table did not load, so window-share pins cannot be counted.');
-  assert.equal(d.shedPreviewLine(round, true, 'ready'), 'Would move 2 sessions, 1 warm, 70% of the burn in window share.', 'a read table counts as before');
-  assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while shed ahead of pace is off.', 'with shed ahead of pace off no round runs, table or not');
+  assert.equal(d.shedPreviewLine(round, true, 'loading'), 'The cost model is loading; window-share pins are counted once it is read.');
+  assert.equal(d.shedPreviewLine(round, true, 'missing'), 'The cost model did not load, so window-share pins cannot be counted.');
+  assert.equal(d.shedPreviewLine(round, true, 'ready'), 'Would move 2 sessions, 1 warm, 70% of the burn in window share.', 'a read model counts as before');
+  assert.equal(d.shedPreviewLine(round, false, 'loading'), 'No round runs while shed ahead of pace is off.', 'with shed ahead of pace off no round runs, model or not');
 });

@@ -686,3 +686,61 @@ async fn a_batch_waits_for_a_slice_of_a_long_purge_pass_rather_than_the_whole_pa
     assert_eq!((purged.requests, purged.attempts), (OLD, OLD));
     assert!(db.request("landed").await.unwrap().is_some());
 }
+
+#[tokio::test]
+async fn the_retention_purges_decisions_under_the_request_cutoff_and_keeps_them_at_zero() {
+    let day = 86_400_000;
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open_in_memory().unwrap());
+    db.write(|c| {
+        for (seq, at) in [(1, day), (2, 2 * day + day / 2), (3, 3 * day)] {
+            c.execute(
+                "INSERT INTO decisions (request_id, seq, attempt, at, kind, summary, record) \
+                 VALUES ('r1', ?1, 1, ?2, 'placed', '{}', x'')",
+                rusqlite::params![seq, at],
+            )?;
+        }
+        Ok(())
+    })
+    .unwrap();
+    let seqs = || {
+        db.read_blocking(|c| {
+            let mut stmt = c.prepare("SELECT seq FROM decisions ORDER BY seq")?;
+            let seqs = stmt
+                .query_map([], |r| r.get::<_, u32>(0))?
+                .collect::<rusqlite::Result<Vec<_>>>()?;
+            Ok(seqs)
+        })
+        .unwrap()
+    };
+    let forever = LedgerConfig {
+        retention_days: 0,
+        ..LedgerConfig::default()
+    };
+    let purged = run_retention(db.clone(), forever, 400 * day, Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        (purged.decisions, seqs()),
+        (0, vec![1, 2, 3]),
+        "zero keeps every decision"
+    );
+    let one_day = LedgerConfig {
+        retention_days: 1,
+        ..LedgerConfig::default()
+    };
+    let purged = run_retention(db.clone(), one_day, 3 * day, Vec::new())
+        .await
+        .unwrap();
+    assert_eq!(
+        purged,
+        Purged {
+            decisions: 1,
+            ..Purged::default()
+        }
+    );
+    assert_eq!(
+        seqs(),
+        [2, 3],
+        "the decision older than a day leaves and the two younger stay"
+    );
+}

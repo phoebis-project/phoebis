@@ -11,15 +11,15 @@ use phoebis_bus::{
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
-use phoebis_routing::MODEL_REJECTED_REASON;
+use phoebis_routing::{LoadCounts, MODEL_REJECTED_REASON};
 use phoebis_transport::response::ResponseHead as WireHead;
 use serde_json::json;
 
 use crate::bodies::MAX_CAPTURED_BODY;
 use crate::quota::samples_from_unified;
 use crate::record::{
-    AttemptRecord, BodyRecord, EventRecord, ExtraUsageSampleRecord, KeepaliveDelta,
-    QuotaSampleRecord, RequestRecord,
+    AttemptRecord, BodyRecord, CacheMapWrite, DecisionRow, EventRecord, ExtraUsageSampleRecord,
+    KeepaliveDelta, QuotaSampleRecord, RequestRecord,
 };
 
 /// A completion is never dropped, so an entry silent this long belongs to a stream the relay itself ended at
@@ -49,6 +49,14 @@ pub enum Record {
     Samples {
         quota: Vec<QuotaSampleRecord>,
         extra: Option<ExtraUsageSampleRecord>,
+    },
+    Decision(Box<DecisionRow>),
+    CacheMap(CacheMapWrite),
+    /// The start row: the writer fills `down_since` from the newest row it holds when it lands this.
+    RouterStarted {
+        version: String,
+        counts: LoadCounts,
+        at: i64,
     },
 }
 
@@ -252,6 +260,7 @@ impl Assembler {
                             })
                             .to_string(),
                         ),
+                        request_id: Some(source_request_id),
                         ..Default::default()
                     }));
                 }
@@ -343,6 +352,7 @@ pub(crate) fn gap(request_id: &str, reason: &str, at: i64) -> Record {
         at,
         kind: "ledger_gap".into(),
         detail: Some(json!({ "request_id": request_id, "reason": reason }).to_string()),
+        request_id: Some(request_id.into()),
         ..Default::default()
     })
 }
@@ -527,6 +537,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
                     })
                     .to_string(),
                 ),
+                request_id: Some(observed.request_id.clone()),
                 ..Default::default()
             }));
         }
@@ -1354,7 +1365,10 @@ mod tests {
         let Record::Event(gap) = &records[0] else {
             panic!()
         };
-        assert_eq!(gap.kind, "ledger_gap");
+        assert_eq!(
+            (gap.kind.as_str(), gap.request_id.as_deref()),
+            ("ledger_gap", Some("r9"))
+        );
         let detail: serde_json::Value =
             serde_json::from_str(gap.detail.as_deref().unwrap()).unwrap();
         assert_eq!(
@@ -1688,6 +1702,11 @@ mod tests {
                 1_060
             )
         );
+        assert_eq!(
+            event.request_id.as_deref(),
+            Some("r1"),
+            "the router's request id has its own column"
+        );
         let detail: serde_json::Value =
             serde_json::from_str(event.detail.as_deref().unwrap()).unwrap();
         assert_eq!(
@@ -1730,6 +1749,7 @@ mod tests {
                 1_500
             )
         );
+        assert_eq!(permit.request_id.as_deref(), Some("r1"));
         let detail: serde_json::Value =
             serde_json::from_str(permit.detail.as_deref().unwrap()).unwrap();
         assert_eq!(detail["attempt"].as_u64(), Some(2));

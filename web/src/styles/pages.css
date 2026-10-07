@@ -1598,6 +1598,13 @@
   grid-template-columns: minmax(0, 1fr) 440px;
 }
 
+/* The compact set needs 568 px beside the drawer, which a 440 px drawer does not leave at 1280 by 800. */
+@media (max-width: 1359px) {
+  .requests.has-drawer {
+    grid-template-columns: minmax(0, 1fr) 400px;
+  }
+}
+
 /* The ten default columns fit a 990px card at 1280px only with the cells 8px apart and the Client
    text cut at a bound, whole on the cell's title. */
 .requests__table th,
@@ -1662,6 +1669,410 @@
   flex-wrap: wrap;
   gap: 4px;
   align-items: center;
+}
+
+/* At 1280 by 800 the default set leaves the links' column room for one word at the table's 13 px, so the two links
+   take the sub line's 11.5 px and stack there, sharing a line wherever the table has the room. */
+.requests__links {
+  display: inline-flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 0 10px;
+  font-size: 11.5px;
+}
+
+/* The routing log. The columns are fixed, so a long value is cut behind an ellipsis rather than widening the table: the
+   chevron and the seven columns fill the 990 px card at 1280 by 800 and the eight the 1150 px card at 1440 by 900. */
+.routing-log__table {
+  table-layout: fixed;
+}
+
+.routing-log__table th,
+.routing-log__table td {
+  padding: 10px 6px;
+  line-height: 20px;
+}
+
+.routing-log__table th:first-child,
+.routing-log__table td:first-child {
+  padding-left: 12px;
+}
+
+.routing-log__table th:last-child,
+.routing-log__table td:last-child {
+  padding-right: 12px;
+}
+
+/* The chevron takes its width from the Time column, so the two together keep the time's 128 px. */
+.routing-log__table .routing-log__chevron {
+  width: 24px;
+  padding-right: 0;
+  color: var(--ink-2);
+}
+
+.routing-log__chevron svg {
+  display: block;
+  margin-top: 3px;
+  transition: transform 120ms ease;
+}
+
+.routing-log__row.is-open .routing-log__chevron svg {
+  transform: rotate(90deg);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .routing-log__chevron svg {
+    transition: none;
+  }
+}
+
+.routing-log__time {
+  width: 104px;
+}
+
+.routing-log__kind {
+  width: 146px;
+}
+
+.routing-log__session {
+  width: 104px;
+}
+
+.routing-log__account {
+  width: 246px;
+}
+
+.routing-log__model {
+  width: 150px;
+}
+
+.routing-log__by {
+  width: 152px;
+}
+
+.routing-log__fact {
+  width: 150px;
+}
+
+.routing-log__link {
+  width: 64px;
+}
+
+/* Model leaves first under 1420 px, its value moving beneath the account, and Account takes the width it gave up. */
+@media (max-width: 1419.98px) {
+  .routing-log__table .routing-log__model {
+    display: none;
+  }
+}
+
+@media (min-width: 1420px) {
+  .routing-log__table .routing-log__account {
+    width: 256px;
+  }
+
+  .routing-log__model-under {
+    display: none;
+  }
+}
+
+/* The stripes count the log's rows alone, so an open row's panel beneath it moves no stripe. */
+.routing-log__table tbody tr.is-striped td {
+  background: var(--surface-2);
+}
+
+.routing-log__row {
+  cursor: pointer;
+}
+
+/* The open row and the card or detail beneath it share one tint, apart from the stripes. */
+.routing-log__table tbody tr.is-open td,
+.routing-log__table tbody .routing-log__panel > td {
+  background: var(--surface-3);
+  border-bottom-color: transparent;
+}
+
+.routing-log__table tbody .routing-log__panel > td {
+  padding: 0;
+  cursor: default;
+}
+
+/* A row the last poll brought in reads in the accent tint until the next one. */
+.routing-log__table tbody tr.is-new td {
+  background: var(--accent-soft);
+}
+
+.routing-log__table .sub {
+  line-height: 16px;
+}
+
+.routing-log__cut {
+  display: block;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* An event's badge is drawn in its outline, so it reads apart from a decision's filled one at a glance. The ring sits
+   inside the box, so both badges take one height. */
+.routing-log__outline {
+  background: transparent;
+  box-shadow: inset 0 0 0 1px currentColor;
+}
+
+/* The By chip never sets a row's height. */
+.routing-log__chip {
+  display: inline-block;
+  max-width: 100%;
+  height: 20px;
+  padding: 0 8px;
+  overflow: hidden;
+  line-height: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: top;
+}
+
+.fact__pair {
+  display: flex;
+  gap: 6px;
+  line-height: 18px;
+}
+
+/* The label's slot is fixed, so every value of the column starts at one edge. */
+.fact__label {
+  flex: none;
+  width: 56px;
+  color: var(--ink-2);
+}
+
+.fact__value {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.routing-log__id {
+  width: 132px;
+}
+
+/* The decision card spans the open row's tint, so its candidate table is the log's card less 16 px either side. The
+   event detail is a bordered panel on the same tint. Chips in both are one line high. */
+.decision-card,
+.event-detail {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  font-size: 13px;
+  line-height: 20px;
+  white-space: normal;
+}
+
+.decision-card {
+  padding: 6px 16px 16px;
+}
+
+.event-detail {
+  gap: 8px;
+  margin: 0 12px 14px;
+  padding: 12px 16px;
+  background: var(--surface);
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius);
+}
+
+.decision-card .chips,
+.event-detail .chips {
+  gap: 4px;
+  min-height: 0;
+}
+
+.decision-card .chip,
+.event-detail .chip {
+  padding: 0 7px;
+  font-size: 12px;
+  line-height: 18px;
+}
+
+.decision-card__verdict {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 8px;
+  align-items: center;
+}
+
+.decision-card__sentence {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 4px;
+  margin-right: 4px;
+  font-size: 15px;
+  font-weight: 600;
+}
+
+.decision-card__title {
+  margin: 0 0 6px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--ink-2);
+}
+
+/* The walk: the number, the step, its verdict and the facts, one line a step. */
+.decision-card__walk {
+  display: grid;
+  grid-template-columns: 22px 150px 96px minmax(0, 1fr);
+  gap: 5px 10px;
+  align-items: start;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.decision-card__walk li {
+  display: contents;
+}
+
+.decision-card__n {
+  color: var(--ink-2);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.decision-card__step {
+  font-weight: 500;
+}
+
+.decision-card__verdict-cell {
+  justify-self: start;
+}
+
+.decision-card .chip.decision-card__hash {
+  font-size: 11.5px;
+}
+
+/* Packed cells so the nine columns fit the card at both viewports with nothing to scroll sideways. */
+.decision-card__candidates {
+  font-size: 12.5px;
+}
+
+.decision-card__candidates th {
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.decision-card__candidates th,
+.decision-card__candidates td {
+  padding: 6px;
+  vertical-align: top;
+}
+
+.decision-card__candidates th:first-child,
+.decision-card__candidates td:first-child {
+  padding-left: 10px;
+}
+
+.decision-card__candidates tbody tr:nth-child(even) td {
+  background: var(--surface-2);
+}
+
+.decision-card__candidates tbody tr.is-chosen td {
+  background: var(--accent-soft);
+}
+
+.decision-card__candidates .sub {
+  display: block;
+  font-size: 11.5px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.decision-card__window,
+.decision-card__candidates td.num {
+  white-space: nowrap;
+}
+
+/* The prefix cell stacks the hash over its warmth, one value a line, as the window cells do. */
+.decision-card__prefix .chip {
+  display: flex;
+  width: max-content;
+  margin-bottom: 2px;
+}
+
+.decision-card__why {
+  display: block;
+  margin-top: 3px;
+}
+
+.decision-card__folds {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.decision-card__fold summary {
+  color: var(--ink-2);
+  cursor: pointer;
+}
+
+.decision-card__fold .kv,
+.decision-card__fold > p {
+  margin: 8px 0 4px 16px;
+  font-size: 12.5px;
+}
+
+/* The settings in force: one setting a row, laid in two pairs of columns so twenty fields stay short. */
+.decision-card__fold .kv.decision-card__settings {
+  grid-template-columns: max-content minmax(0, 1fr) max-content minmax(0, 1fr);
+}
+
+.decision-card__foot,
+.event-detail__foot {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  padding-top: 10px;
+  border-top: 1px solid var(--hairline);
+}
+
+.decision-card__foot .link-btn {
+  padding: 0;
+}
+
+.decision-card__record {
+  margin-left: auto;
+}
+
+.event-detail__pins {
+  width: auto;
+  font-size: 12.5px;
+}
+
+.event-detail__pins th,
+.event-detail__pins td {
+  padding: 5px 12px 5px 0;
+}
+
+.routing-log__scope {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: center;
+  padding: 10px 14px;
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-radius: var(--radius);
+}
+
+.routing-log__widen {
+  display: inline-flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  align-items: baseline;
+}
+
+.routing-log__clear {
+  margin-left: auto;
 }
 
 .filters {
@@ -1791,6 +2202,29 @@
   overflow-wrap: anywhere;
 }
 
+.drawer__actions {
+  display: flex;
+  flex: none;
+  gap: 8px;
+  align-items: center;
+}
+
+/* A button that opens the routing log is a link, so its hover keeps the button's look rather than an underline. */
+.drawer__actions a.btn:hover,
+.models__log a.btn:hover {
+  text-decoration: none;
+}
+
+/* The drawer's chips take the status badge's height and type, so the Outcome's values read as one line of pills. An
+   upstream id is one unbroken token, which would otherwise scroll the drawer sideways. */
+.drawer .chip {
+  max-width: 100%;
+  padding: 1px 7px;
+  font-size: 12px;
+  line-height: 18px;
+  overflow-wrap: anywhere;
+}
+
 .drawer__body {
   display: flex;
   flex-direction: column;
@@ -1858,11 +2292,6 @@
   border-radius: 50%;
 }
 
-/* An upstream id is one unbroken token; without this a long one would scroll the drawer sideways. */
-.attempt__id {
-  overflow-wrap: anywhere;
-}
-
 .attempt__windows {
   display: flex;
   flex-direction: column;
@@ -1883,38 +2312,11 @@
   text-align: right;
 }
 
-.attempt__response {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 10px;
-  margin-top: 4px;
-}
-
 .attempt__cooldown {
   display: flex;
   gap: 8px;
   align-items: center;
   font-size: 12.5px;
-}
-
-.attempt__hold,
-.attempt__migration {
-  font-size: 12.5px;
-  margin: 6px 0 0;
-}
-
-.selection-trace {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  font-size: 12.5px;
-}
-
-.selection-trace__row {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 6px 10px;
-  align-items: center;
 }
 
 .usage-table td {
@@ -2504,28 +2906,371 @@
 .cost-ref {
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
 }
 
-.cost-ref .table-wrap {
-  margin-top: 4px;
+/* The body takes the frame's fixed height, so the footer stays at its foot whichever tab is shown. */
+.dialog--costs .dialog__body {
+  flex: 1 1 auto;
+  padding-top: 0;
+}
+
+/* The tab strip stays under the dialog's head while a tab scrolls, its hairline across the dialog's width. */
+.cost-ref__tabs {
+  position: sticky;
+  top: 0;
+  z-index: 2;
+  margin: 0 -22px;
+  padding: 0 22px;
+  background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+}
+
+.cost-ref__tabs .tabs {
+  border-bottom: 0;
+}
+
+.cost-ref__panel {
+  display: flex;
+  flex-direction: column;
+  gap: 16px;
+}
+
+.cost-ref__panel[hidden] {
+  display: none;
+}
+
+.dialog--costs .dialog__foot {
+  align-items: center;
+}
+
+/* A link that closes a card's subtitle reads in the sentence's flow and takes no padding of its own, so the Dashboard's
+   5-hour ring keeps its subtitle on one line at 1280 px, level with the 7-day ring beside it. */
+.card__subtitle .link-btn {
+  padding: 0;
+}
+
+.cost-ref__prov {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin-right: auto;
+}
+
+.cost-ref__controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px 22px;
+  align-items: center;
+}
+
+.cost-ref__control,
+.cost-ref__tokens,
+.cost-ref__tokens label {
+  display: inline-flex;
+  gap: 8px;
+  align-items: center;
+  font-size: 13px;
+  color: var(--ink-2);
+}
+
+.cost-ref__tokens .input {
+  width: 76px;
+  padding: 4px 4px 4px 8px;
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Chromium shows a number field's arrows only on hover. The arrows are the control here, so they stay in view. */
+.cost-ref__tokens .input::-webkit-inner-spin-button {
+  opacity: 1;
+}
+
+.cost-ref__now {
+  display: inline-flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+/* The band's color at a third of its strength with a solid edge, wherever the band is drawn. */
+.cost-ref__swatch,
+.cost-ref__band-run,
+.cost-ref__factor-bar--band {
+  background: color-mix(in srgb, var(--series-7) 34%, transparent);
+  border: 1px solid var(--series-7);
+}
+
+.cost-ref__swatch {
+  flex: none;
+  width: 10px;
+  height: 10px;
+  border-radius: 2px;
+}
+
+.cost-ref__caption {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 14px;
+  align-items: baseline;
+  justify-content: space-between;
+}
+
+.cost-ref__caption b {
+  font-size: 13.5px;
+}
+
+.cost-ref__caption .muted {
+  font-size: 12px;
+}
+
+.cost-ref__note {
+  margin-top: 8px;
+  font-size: 12.5px;
+  color: var(--ink-2);
+}
+
+.cost-ref__unsized {
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+/* Windows by tier */
+.cost-ref__tiers {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.cost-ref__tiers th {
+  padding: 0 10px 6px 8px;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--ink-2);
+  text-align: left;
+  white-space: nowrap;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.cost-ref__tiers td {
+  padding: 7px 10px 7px 8px;
+  vertical-align: middle;
+  border-bottom: 1px solid var(--hairline);
+}
+
+.cost-ref__tiers tr:last-child td {
+  border-bottom: 0;
+}
+
+.cost-ref__tier-name {
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+.cost-ref__tier-key {
+  display: block;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--ink-2);
+}
+
+.cost-ref__barcell {
+  display: grid;
+  grid-template-columns: 150px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.cost-ref__track {
+  position: relative;
+  height: 8px;
+}
+
+.cost-ref__bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  min-width: 4px;
+  background: var(--series-1);
+  border-radius: 0 4px 4px 0;
+}
+
+/* Inside the band a 5-hour window holds part of its capacity: the whole window is the light bar, what it holds the
+   solid one over it. */
+.cost-ref__bar--light {
+  background: color-mix(in srgb, var(--series-1) 30%, transparent);
+}
+
+.cost-ref__val {
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+
+.cost-ref__val small {
+  font-size: 11.5px;
+  color: var(--ink-2);
+}
+
+.cost-ref__segs {
+  display: flex;
+  gap: 2px;
+  width: 150px;
+  height: 8px;
+}
+
+.cost-ref__segs span {
+  flex: 1 1 0;
+  background: var(--series-1);
+  border-radius: 2px;
+}
+
+/* Peak band */
+.cost-ref__band-side {
+  display: grid;
+  grid-template-columns: minmax(0, 1.55fr) minmax(0, 1fr);
+  gap: 24px;
+  align-items: start;
+}
+
+.cost-ref__band-lead {
+  margin-bottom: 10px;
+  font-size: 13px;
+}
+
+.cost-ref__band {
+  display: grid;
+  grid-template-columns: 84px minmax(0, 1fr);
+  row-gap: 4px;
+  font-size: 12px;
+}
+
+.cost-ref__band-day {
+  align-self: center;
+  color: var(--ink-2);
+  white-space: nowrap;
+}
+
+.cost-ref__band-day.is-today {
+  font-weight: 600;
+  color: var(--ink);
+}
+
+/* A hairline every three hours: eight steps across the day. */
+.cost-ref__band-track {
+  position: relative;
+  height: 17px;
+  background: var(--surface-2);
+  background-image: repeating-linear-gradient(to right, transparent 0, transparent calc(100% / 8 - 1px), var(--hairline) calc(100% / 8 - 1px), var(--hairline) calc(100% / 8));
+  border-radius: 3px;
+}
+
+.cost-ref__band-run {
+  position: absolute;
+  top: 2px;
+  bottom: 2px;
+  border-radius: 4px;
+}
+
+.cost-ref__band-now {
+  position: absolute;
+  top: -3px;
+  bottom: -3px;
+  width: 2px;
+  margin-left: -1px;
+  background: var(--ink);
+  border-radius: 1px;
+}
+
+.cost-ref__band-now::after {
+  position: absolute;
+  top: 50%;
+  left: 6px;
+  padding: 0 4px;
+  font-size: 10.5px;
+  font-weight: 600;
+  line-height: 1.4;
+  color: var(--ink);
+  content: 'now';
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 3px;
+  transform: translateY(-50%);
+}
+
+.cost-ref__band-now.is-late::after {
+  right: 6px;
+  left: auto;
+}
+
+.cost-ref__band-axis {
+  position: relative;
+  height: 16px;
+  font-size: 11px;
+  font-variant-numeric: tabular-nums;
+  color: var(--ink-2);
+}
+
+.cost-ref__band-axis span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.cost-ref__band-axis span:first-child {
+  transform: none;
+}
+
+.cost-ref__band-axis span:last-child {
+  transform: translateX(-100%);
+}
+
+.cost-ref__factor {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 6px 10px;
+  align-items: center;
+  margin-top: 12px;
+  font-size: 12.5px;
+}
+
+.cost-ref__factor .cost-ref__val {
+  grid-column: 2;
+  margin-top: -4px;
+}
+
+.cost-ref__factor-bar {
+  position: absolute;
+  inset: 0 auto 0 0;
+  background: var(--series-1);
+  border-radius: 0 4px 4px 0;
+}
+
+@container (max-width: 760px) {
+  .cost-ref__band-side {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+
+/* Rate tables */
+.cost-ref__wrap {
   border: 1px solid var(--hairline);
   border-radius: var(--radius-sm);
 }
 
-/* Two tables of eleven columns inside one dialog: headings wrap, numeric cells give back the padding. */
 .cost-ref__table th {
-  padding: 8px 6px;
+  padding: 7px 8px;
   vertical-align: bottom;
-  white-space: normal;
 }
 
 .cost-ref__table td {
-  padding: 8px 6px;
+  padding: 7px 8px;
   white-space: nowrap;
 }
 
-.cost-ref__table thead tr:first-child th:first-child,
+.cost-ref__table th:first-child,
 .cost-ref__table td:first-child {
   padding-left: 12px;
 }
@@ -2539,40 +3284,62 @@
   border-left: 1px solid var(--hairline);
 }
 
-/* The share table's ten cells are narrower than the price table's, so its Model column is held to its content, as the
-   price table's is, and the two tables' model names line up. */
-.cost-ref__shares thead tr:first-child th:first-child,
-.cost-ref__shares td:first-child {
-  width: 1%;
-}
-
-.cost-ref__notes {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  margin: 4px 0 0;
-}
-
-.cost-ref__notes-row {
-  padding-top: 8px;
-  border-top: 1px solid var(--hairline);
-}
-
-.cost-ref__notes-row:first-child {
-  padding-top: 0;
-  border-top: 0;
-}
-
-.cost-ref__notes dt {
-  margin-bottom: 2px;
+/* A group header may wrap, so it never widens the table past its frame. */
+.cost-ref__table th.cost-ref__grp {
   font-weight: 600;
+  color: var(--ink);
+  text-align: center;
+  white-space: normal;
 }
 
-.cost-ref__notes dd {
-  margin: 0;
-  font-size: 13px;
-  line-height: 1.55;
+.cost-ref__table tr.cost-ref__sub td {
+  padding-top: 3px;
+  padding-bottom: 7px;
+  font-size: 12.5px;
+}
+
+.cost-ref__table tr.cost-ref__sub td:first-child {
+  padding-left: 28px;
   color: var(--ink-2);
+}
+
+.cost-ref__table tr.has-sub td {
+  border-bottom: 0;
+}
+
+.cost-ref__weight {
+  display: grid;
+  grid-template-columns: 64px auto;
+  gap: 8px;
+  align-items: center;
+}
+
+.cost-ref__weight .cost-ref__track {
+  height: 6px;
+}
+
+/* Every second model on --surface-2 over --surface, a model's sub-rows on its shade. The divider is one step
+   heavier, so it never reads as a stripe. A cell past a full window takes the warning tint in place of its stripe. */
+.cost-ref__tiers tr.is-alt td,
+.cost-ref__table tr.is-alt td {
+  background: var(--surface-2);
+}
+
+.cost-ref__table tr.is-divider td {
+  padding-top: 10px;
+  padding-bottom: 4px;
+  font-size: 12px;
+  color: var(--ink-2);
+  white-space: normal;
+  background: var(--surface-3);
+}
+
+.cost-ref__table tr td.is-full {
+  background: color-mix(in srgb, var(--warning-soft) 70%, transparent);
+}
+
+.cost-ref__panel {
+  container-type: inline-size;
 }
 
 /* Analytics */

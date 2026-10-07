@@ -47,7 +47,7 @@ pub enum AccountState {
 }
 
 impl AccountState {
-    pub(crate) fn as_str(self) -> &'static str {
+    pub fn as_str(self) -> &'static str {
         match self {
             AccountState::Unpaired => "unpaired",
             AccountState::Ready => "ready",
@@ -77,6 +77,62 @@ impl ToSql for AccountState {
     }
 }
 
+/// Who moved an account's state, stored beside it in the same statement and read by the routing log's transition
+/// row. The list is closed: a stored word outside it fails the read, as an unknown state does.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum StateCause {
+    /// The upstream refused the credential: a 401, or a 403 `authentication_error`, on an `api_key` account, or a
+    /// 401 on the replay with a freshly refreshed token.
+    AuthFailed,
+    /// The account's deletion. The row goes with it, so the word reaches the log alone.
+    Deleted,
+    /// The upstream named an `api_key` account's credit balance.
+    FundingRefused,
+    /// The admin routes, and whatever reaches them.
+    Operator,
+    /// A pairing's confirm.
+    Paired,
+    /// The token refresh's definitive failure, the oauth manager's own write.
+    RefreshFailed,
+    /// The migration's default on a row from before the column. No writer stores it.
+    Unrecorded,
+}
+
+impl StateCause {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            StateCause::AuthFailed => "auth_failed",
+            StateCause::Deleted => "deleted",
+            StateCause::FundingRefused => "funding_refused",
+            StateCause::Operator => "operator",
+            StateCause::Paired => "paired",
+            StateCause::RefreshFailed => "refresh_failed",
+            StateCause::Unrecorded => "unrecorded",
+        }
+    }
+}
+
+impl FromSql for StateCause {
+    fn column_result(value: ValueRef<'_>) -> FromSqlResult<Self> {
+        match value.as_str()? {
+            "auth_failed" => Ok(StateCause::AuthFailed),
+            "deleted" => Ok(StateCause::Deleted),
+            "funding_refused" => Ok(StateCause::FundingRefused),
+            "operator" => Ok(StateCause::Operator),
+            "paired" => Ok(StateCause::Paired),
+            "refresh_failed" => Ok(StateCause::RefreshFailed),
+            "unrecorded" => Ok(StateCause::Unrecorded),
+            _ => Err(FromSqlError::InvalidType),
+        }
+    }
+}
+
+impl ToSql for StateCause {
+    fn to_sql(&self) -> rusqlite::Result<ToSqlOutput<'_>> {
+        Ok(self.as_str().into())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct Identity {
     pub account_uuid: String,
@@ -101,6 +157,8 @@ pub struct AccountRow {
     /// endpoint and the credential it is about to pair are still the ones it looked at.
     pub revision: u64,
     pub state: AccountState,
+    /// Who moved `state` to what it reads, written by the statement that wrote it.
+    pub state_cause: StateCause,
 }
 
 /// The low bits of an edit token, which carry the revision; the incarnation takes the bits above them.
@@ -155,6 +213,7 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
         lifecycle_generation: row.get::<_, i64>("lifecycle_generation")? as u64,
         revision: row.get::<_, i64>("revision")? as u64,
         state: row.get("state")?,
+        state_cause: row.get("state_cause")?,
     })
 }
 
@@ -162,8 +221,8 @@ fn row_to_account(row: &Row<'_>) -> rusqlite::Result<AccountRow> {
 /// inside its own transaction instead of through the store's connection lock.
 pub(crate) fn all_accounts(conn: &rusqlite::Connection) -> Result<Vec<AccountRow>, StoreError> {
     let mut stmt = conn.prepare(
-        "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state \
-         FROM accounts ORDER BY id",
+        "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, \
+         state_cause FROM accounts ORDER BY id",
     )?;
     let rows = stmt.query_map([], row_to_account)?;
     rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -181,8 +240,8 @@ impl Store {
         self.count_credential_read();
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.query_row(
-            "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state \
-             FROM accounts WHERE id = ?1",
+            "SELECT id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, \
+             state_cause FROM accounts WHERE id = ?1",
             params![id],
             row_to_account,
         )
@@ -200,8 +259,8 @@ impl Store {
             .transpose()?;
         let now = jiff::Timestamp::now().as_millisecond();
         tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?9, ?9)",
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, 1, ?8, ?10, ?9, ?9)",
             params![
                 row.id,
                 row.kind,
@@ -212,6 +271,7 @@ impl Store {
                 row.lifecycle_generation as i64,
                 row.state,
                 now,
+                row.state_cause,
             ],
         )?;
         tx.commit()?;
@@ -297,11 +357,17 @@ impl Store {
         }
     }
 
-    pub fn set_state(&self, id: &str, state: AccountState) -> Result<(), StoreError> {
+    pub fn set_state(
+        &self,
+        id: &str,
+        state: AccountState,
+        cause: StateCause,
+    ) -> Result<(), StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         conn.execute(
-            "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
-            params![id, state, jiff::Timestamp::now().as_millisecond()],
+            "UPDATE accounts SET state = ?2, state_cause = ?4, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1",
+            params![id, state, jiff::Timestamp::now().as_millisecond(), cause],
         )?;
         Ok(())
     }
@@ -311,23 +377,26 @@ impl Store {
     /// generation and a re-pair without one moves the credential generation, so both have to match or the
     /// verdict is about credentials that no longer exist and would only lock out what replaced them. A slot
     /// deleted and created again under the same id reads both generations at 1 again, so the incarnation has
-    /// to match as well. Reports whether the row moved.
+    /// to match as well. Answers the row's revision after the write and the state it held before it when the fences
+    /// let the write through, a repeated verdict included, or `None` when they refused it.
     ///
-    /// One statement, because two would leave a window between the check and the update exactly as wide as
-    /// the one this exists to close.
+    /// One statement for the fenced write, because two would leave a window between the check and the update
+    /// exactly as wide as the one this exists to close.
     pub fn set_state_if_generations(
         &self,
         id: &str,
         state: AccountState,
+        cause: StateCause,
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
-    ) -> Result<bool, StoreError> {
+    ) -> Result<Option<(u64, AccountState)>, StoreError> {
         self.routing_commit(|conn| {
             set_state_if_generations_on(
                 conn,
                 id,
                 state,
+                cause,
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
@@ -337,14 +406,15 @@ impl Store {
 
     /// Disconnects the account: the new lifecycle generation invalidates any refresh in flight for the
     /// old one, and both credential kinds are deleted so a disconnected slot cannot keep spending money.
-    pub fn bump_lifecycle(&self, id: &str) -> Result<u64, StoreError> {
+    /// `cause` is who disconnected the slot. The statement writes `disconnected` and the word together.
+    pub fn bump_lifecycle(&self, id: &str, cause: StateCause) -> Result<u64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = jiff::Timestamp::now().as_millisecond();
         let updated = tx.execute(
             "UPDATE accounts SET lifecycle_generation = lifecycle_generation + 1, state = ?2, \
-             revision = revision + 1, updated_at = ?3 WHERE id = ?1",
-            params![id, AccountState::Disconnected, now],
+             state_cause = ?4, revision = revision + 1, updated_at = ?3 WHERE id = ?1",
+            params![id, AccountState::Disconnected, now, cause],
         )?;
         if updated == 0 {
             return Err(StoreError::AccountNotFound(id.to_string()));
@@ -553,29 +623,48 @@ pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<
     Ok(buried.unwrap_or(0) as u64 + 1)
 }
 
+/// The state before the write is read on the same connection first: every caller holds the connection's lock or
+/// its transaction across both statements, so no other write lands between them, and the routing loop tells a
+/// transition from a repeated verdict by it.
 pub(crate) fn set_state_if_generations_on(
     conn: &rusqlite::Connection,
     id: &str,
     state: AccountState,
+    cause: StateCause,
     incarnation: u64,
     lifecycle_generation: u64,
     credential_generation: u64,
-) -> Result<bool, StoreError> {
-    let updated = conn.execute(
-        "UPDATE accounts SET state = ?2, revision = revision + 1, updated_at = ?3 \
-         WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
-         AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
-              OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5))",
-        params![
-            id,
-            state,
-            jiff::Timestamp::now().as_millisecond(),
-            lifecycle_generation as i64,
-            credential_generation as i64,
-            incarnation as i64
-        ],
-    )?;
-    Ok(updated > 0)
+) -> Result<Option<(u64, AccountState)>, StoreError> {
+    let Some(before) = conn
+        .query_row(
+            "SELECT state FROM accounts WHERE id = ?1",
+            params![id],
+            |row| row.get::<_, AccountState>(0),
+        )
+        .optional()?
+    else {
+        return Ok(None);
+    };
+    let revision: Option<i64> = conn
+        .query_row(
+            "UPDATE accounts SET state = ?2, state_cause = ?7, revision = revision + 1, updated_at = ?3 \
+             WHERE id = ?1 AND lifecycle_generation = ?4 AND incarnation = ?6 \
+             AND (EXISTS (SELECT 1 FROM credentials WHERE account_id = ?1 AND generation = ?5) \
+                  OR EXISTS (SELECT 1 FROM api_key_secrets WHERE account_id = ?1 AND generation = ?5)) \
+             RETURNING revision",
+            params![
+                id,
+                state,
+                jiff::Timestamp::now().as_millisecond(),
+                lifecycle_generation as i64,
+                credential_generation as i64,
+                incarnation as i64,
+                cause
+            ],
+            |row| row.get(0),
+        )
+        .optional()?;
+    Ok(revision.map(|revision| (revision as u64, before)))
 }
 
 /// The revision bump for a write that changes a dispatch input without touching the account row itself.

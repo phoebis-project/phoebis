@@ -8,7 +8,7 @@ use serde::{Deserialize, Serialize};
 use std::sync::atomic::Ordering;
 
 use crate::credentials::store_api_key_secret;
-use crate::{AccountRow, AccountState, Secret, Store, StoreError, LOCK_POISONED};
+use crate::{AccountRow, AccountState, Secret, StateCause, Store, StoreError, LOCK_POISONED};
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub enum Strategy {
@@ -586,8 +586,8 @@ pub struct AccountUpdate<'a> {
     pub lifecycle_generation: u64,
     pub label: &'a str,
     pub secret: Option<&'a Secret>,
-    /// The staged state; `None` leaves it.
-    pub state: Option<AccountState>,
+    /// The staged state with who moves it. `None` leaves both the state and its word.
+    pub state: Option<(AccountState, StateCause)>,
     pub at: i64,
     pub actor: &'a str,
     /// The staged `enabled` flag; `None` leaves it.
@@ -1193,8 +1193,8 @@ impl Store {
             .map(serde_json::to_string)
             .transpose()?;
         tx.execute(
-            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?8, ?8)",
+            "INSERT INTO accounts (id, kind, label, enabled, identity_json, incarnation, lifecycle_generation, revision, state, state_cause, created_at, updated_at) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?9, ?6, 1, ?7, ?10, ?8, ?8)",
             params![
                 row.id,
                 row.kind,
@@ -1205,6 +1205,7 @@ impl Store {
                 row.state,
                 at,
                 crate::accounts::next_incarnation(&tx, &row.id)? as i64,
+                row.state_cause,
             ],
         )?;
         if let Some(secret) = secret {
@@ -1234,9 +1235,11 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let cancelled = u.cancellation.map(|(cancelled, _)| cancelled);
         let ends_at = u.cancellation.and_then(|(_, ends_at)| ends_at);
+        let (state, cause) = u.state.unzip();
         // The end goes with the flag, as `set_cancelled` writes them: dropped the moment the flag is off.
         let updated = tx.execute(
-            "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), enabled = COALESCE(?7, enabled), \
+            "UPDATE accounts SET label = ?2, state = COALESCE(?3, state), \
+             state_cause = COALESCE(?11, state_cause), enabled = COALESCE(?7, enabled), \
              cancelled = COALESCE(?8, cancelled), \
              subscription_ends_at = CASE WHEN ?8 IS NULL THEN subscription_ends_at WHEN ?8 THEN ?9 ELSE NULL END, \
              revision = revision + 1, updated_at = ?4 \
@@ -1244,7 +1247,7 @@ impl Store {
             params![
                 u.id,
                 u.label,
-                u.state,
+                state,
                 u.at,
                 u.lifecycle_generation as i64,
                 u.expected_revision as i64,
@@ -1252,6 +1255,7 @@ impl Store {
                 cancelled,
                 ends_at,
                 u.incarnation as i64,
+                cause,
             ],
         )?;
         if updated == 0 {
@@ -1278,7 +1282,7 @@ impl Store {
             &serde_json::json!({
                 "label": u.label,
                 "secret": u.secret.is_some(),
-                "state": u.state.map(AccountState::as_str),
+                "state": state.map(AccountState::as_str),
                 "enabled": u.enabled,
                 "cancelled": cancelled,
                 "subscription_ends_at": ends_at,

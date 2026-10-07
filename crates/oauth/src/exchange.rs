@@ -215,8 +215,8 @@ pub fn parse_profile(body: &[u8]) -> Result<ProfileResponse, OauthError> {
     };
     let account_uuid = field("account", "uuid")
         .ok_or_else(|| OauthError::Malformed("profile has no account.uuid".into()))?;
-    let email = field("account", "email_address")
-        .ok_or_else(|| OauthError::Malformed("profile has no account.email_address".into()))?;
+    let email = field("account", "email")
+        .ok_or_else(|| OauthError::Malformed("profile has no account.email".into()))?;
     let organization_uuid = field("organization", "uuid");
     let millis = |key: &str| -> Option<i64> {
         field("organization", key)
@@ -293,15 +293,32 @@ mod tests {
     }
 
     #[test]
+    fn the_email_is_read_from_account_email_as_the_client_validates_it() {
+        let measured =
+            br#"{"account":{"uuid":"a","email":"a@example.invalid"},"organization":{"uuid":"o"}}"#;
+        let parsed = parse_profile(measured).unwrap();
+        assert_eq!(parsed.email, "a@example.invalid");
+        assert_eq!(parsed.organization_uuid.as_deref(), Some("o"));
+
+        let token_shape = br#"{"account":{"uuid":"a","email_address":"a@example.invalid"}}"#;
+        match parse_profile(token_shape) {
+            Err(OauthError::Malformed(detail)) => {
+                assert_eq!(detail, "profile has no account.email")
+            }
+            other => panic!("expected a malformed profile, got {other:?}"),
+        }
+    }
+
+    #[test]
     fn the_plan_the_start_and_the_trial_end_are_read_when_present_and_none_when_absent() {
-        let max_with_dates = br#"{"account":{"uuid":"a","email_address":"a@example.invalid","has_claude_max":true,"has_claude_pro":true},"organization":{"rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#;
+        let max_with_dates = br#"{"account":{"uuid":"a","email":"a@example.invalid","has_claude_max":true,"has_claude_pro":true},"organization":{"rate_limit_tier":"default_claude_max_5x","subscription_created_at":"2026-03-14T10:00:00Z","claude_code_trial_ends_at":"2026-10-02T00:00:00+00:00"}}"#;
         let parsed = parse_profile(max_with_dates).unwrap().subscription;
         assert_eq!(parsed.plan.as_deref(), Some("max"));
         assert_eq!(parsed.tier.as_deref(), Some("default_claude_max_5x"));
         assert_eq!(parsed.since, Some(1_773_482_400_000));
         assert_eq!(parsed.trial_ends_at, Some(1_790_899_200_000));
 
-        let pro_only = br#"{"account":{"uuid":"a","email_address":"a@example.invalid","has_claude_pro":true},"organization":{}}"#;
+        let pro_only = br#"{"account":{"uuid":"a","email":"a@example.invalid","has_claude_pro":true},"organization":{}}"#;
         assert_eq!(
             parse_profile(pro_only)
                 .unwrap()
@@ -311,7 +328,7 @@ mod tests {
             Some("pro")
         );
 
-        let unparseable_date = br#"{"account":{"uuid":"a","email_address":"a@example.invalid"},"organization":{"subscription_created_at":"soon"}}"#;
+        let unparseable_date = br#"{"account":{"uuid":"a","email":"a@example.invalid"},"organization":{"subscription_created_at":"soon"}}"#;
         let parsed = parse_profile(unparseable_date).unwrap();
         assert_eq!(parsed.subscription.since, None);
         assert_eq!(
@@ -330,7 +347,7 @@ mod tests {
             (None, None, None)
         );
 
-        let synthetic = br#"{"account":{"uuid":"a","email_address":"a@example.invalid"}}"#;
+        let synthetic = br#"{"account":{"uuid":"a","email":"a@example.invalid"}}"#;
         assert_eq!(
             parse_profile(synthetic).unwrap().subscription,
             SubscriptionRow::default()

@@ -51,6 +51,14 @@ fn record_at(id: &str, at: i64, model: &str, session: &str, key_generation: i64)
     }
 }
 
+/// A JSON object's keys as the body orders them; comparing two `Value`s ignores the order.
+fn keys_in_order(object: &serde_json::Value) -> Vec<&str> {
+    object
+        .as_object()
+        .map(|members| members.keys().map(String::as_str).collect())
+        .unwrap_or_default()
+}
+
 #[tokio::test]
 async fn settings_and_system_show_effective_values_ledger_health_and_gaps_without_secrets() {
     let parts = common::admin_parts_full().await;
@@ -76,16 +84,24 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let expected: Vec<(String, Vec<String>)> = [
         ("about", &["profile", "version"][..]),
         ("access", &["admin_configured"]),
+        ("api_prices", &["content", "effective", "source"]),
         (
             "keepalive",
             &["max_agents", "max_retained_bytes", "max_sessions"],
         ),
         ("listeners", &["metrics", "proxy"]),
-        ("plan_tables", &["cost"]),
-        ("pricing", &["effective", "models", "source", "version"]),
         ("retention", &["body_capture_max_hours"]),
         ("sessions", &["expire_after_seconds"]),
-        ("storage", &["ledger_path", "path", "pricing_path"]),
+        (
+            "storage",
+            &[
+                "api_prices_path",
+                "ledger_path",
+                "path",
+                "subscription_costs_path",
+            ],
+        ),
+        ("subscription_costs", &["content", "effective", "source"]),
         ("usage", &["cache_ttl_seconds"]),
     ]
     .iter()
@@ -120,32 +136,68 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             Some(60)
         )
     );
-    assert_eq!(settings["pricing"]["version"], "2026-10-01");
-    assert_eq!(settings["pricing"]["source"], "shipped");
-    let tables = &settings["plan_tables"];
-    let cost = &tables["cost"];
-    assert_eq!(cost["effective"], "2026-10-01");
+    let shipped = phoebis_ledger::PriceTable::shipped();
+    let prices = &settings["api_prices"];
     assert_eq!(
-        cost["tiers"]["default_claude_pro"]["five_hour"].as_f64(),
-        Some(0.05)
-    );
-    assert!(cost["tiers"]["default_claude_pro"]["seven_day"].is_null());
-    assert_eq!(
-        cost["windows"]["five_hour"]["claude-opus-5-5"]["input"].as_f64(),
-        Some(0.01461)
-    );
-    assert!(cost["windows"]["five_hour"]["claude-opus-5"]["input"].is_null());
-    assert!(cost["windows"]["seven_day"]["claude-opus-5-5"]["input"].is_null());
-    assert_eq!(cost["bands"][0]["factor"].as_f64(), Some(1.435));
-    assert_eq!(
+        (&prices["source"], &prices["effective"]),
         (
-            cost.get("tier"),
-            cost.get("version"),
-            cost["bands"][0].get("measured"),
-            tables.get("tiers")
-        ),
-        (None, None, None, None),
-        "the one table answers its v2 shape alone: {tables}"
+            &serde_json::json!("shipped"),
+            &serde_json::json!(shipped.effective)
+        )
+    );
+    assert_eq!(
+        prices["content"],
+        serde_json::json!({"effective": shipped.effective, "models": shipped.models}),
+        "the echo answers the price table the harness loaded, key for key"
+    );
+    assert_eq!(
+        keys_in_order(&prices["content"]["models"]),
+        shipped
+            .models
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "in the file's order"
+    );
+    let loaded = phoebis_ledger::PlanTables::shipped();
+    let costs = &settings["subscription_costs"];
+    assert_eq!(
+        (&costs["source"], &costs["effective"]),
+        (
+            &serde_json::json!(loaded.source),
+            &serde_json::json!(loaded.costs.effective)
+        )
+    );
+    assert_eq!(
+        costs["content"],
+        serde_json::to_value(&loaded.costs).unwrap(),
+        "the echo answers the cost model the harness loaded, key for key"
+    );
+    assert_eq!(
+        keys_in_order(&costs["content"]["model_weight"]),
+        loaded
+            .costs
+            .model_weight
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        "in the file's order"
+    );
+    assert_eq!(
+        (settings.get("pricing"), settings.get("plan_tables")),
+        (None, None),
+        "each table answers under its file's name alone"
+    );
+    let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
+    assert_eq!(
+        pricing,
+        phoebis_admin::table_envelopes(&shipped, &loaded),
+        "the price route answers both envelopes the settings echo carries"
+    );
+    assert!(
+        pricing["api_prices"].get("path").is_none()
+            && pricing["subscription_costs"].get("path").is_none(),
+        "the paths are the settings echo's and the system document's: {pricing}"
     );
     let text = settings.to_string();
     assert!(
@@ -164,12 +216,31 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
     let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
     assert_eq!(
         (
+            &system["pricing"]["api_prices"],
+            &system["pricing"]["subscription_costs"]
+        ),
+        (
+            &serde_json::json!({"path": null, "source": "shipped", "effective": shipped.effective}),
+            &serde_json::json!({"path": null, "source": "shipped", "effective": loaded.costs.effective})
+        ),
+        "the harness configures neither path, so both tables are the shipped ones: {system}"
+    );
+    assert_eq!(
+        (
             system["ledger"]["schema_version"].as_u64(),
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(28), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that spells every quota window by the endpoint's key"
+        (Some(29), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that adds the decisions table"
+    );
+    assert_eq!(
+        (
+            system["ledger"]["cache_map_orphans"].as_u64(),
+            system["ledger"]["mirror_lagged"].as_u64()
+        ),
+        (Some(0), Some(0)),
+        "a ledger that stored every decision has no orphaned cache map, and a mirror that kept up missed nothing: {system}"
     );
     assert_eq!(
         (
@@ -479,43 +550,75 @@ async fn the_price_routes_answer_the_fast_cells_beside_the_standard_ones() {
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
     let pricing = json(get(&parts.app, "/admin/pricing", Some(&cookie)).await).await;
     let costs = json(get(&parts.app, "/admin/sessions/costs", Some(&cookie)).await).await;
+    // Picked by what they carry, so the test survives a price update that moves fast mode to another model.
+    let shipped = phoebis_ledger::PriceTable::shipped();
+    let (fast_model, fast_row) = shipped
+        .models
+        .iter()
+        .find(|(_, row)| row.fast.is_some())
+        .expect("a shipped row serves fast mode");
+    let (plain_model, plain_row) = shipped
+        .models
+        .iter()
+        .find(|(_, row)| row.fast.is_none())
+        .expect("a shipped row serves no fast mode");
+    let fast = fast_row.fast.as_ref().unwrap();
     for (route, models) in [
-        ("settings", &settings["pricing"]["models"]),
-        ("pricing", &pricing["models"]),
-        ("sessions/costs", &costs["models"]),
+        ("settings", &settings["api_prices"]["content"]["models"]),
+        ("pricing", &pricing["api_prices"]["content"]["models"]),
     ] {
-        let row = |model: &str| {
-            models
-                .as_array()
-                .unwrap()
-                .iter()
-                .find(|m| m["model"] == model)
-                .cloned()
-                .unwrap_or_else(|| panic!("{route} lists {model}: {models}"))
-        };
-        let opus = row("claude-opus-5-5");
         assert_eq!(
-            (&opus["input_per_m"], &opus["output_per_m"]),
-            (&serde_json::json!(4.0), &serde_json::json!(20.0)),
-            "{route}: the standard cells stay where they were"
+            models[fast_model],
+            serde_json::to_value(fast_row).unwrap(),
+            "{route}: a model that serves fast mode answers its standard and its five fast cells under the file's names"
         );
         assert_eq!(
-            opus["fast"],
-            serde_json::json!({
-                "input_per_m": 8.0,
-                "cache_write_5m_per_m": 10.0,
-                "cache_write_1h_per_m": 16.0,
-                "cache_read_per_m": 0.4,
-                "output_per_m": 40.0,
-            }),
-            "{route}: a model that serves fast mode answers its five fast cells"
+            models[plain_model],
+            serde_json::to_value(plain_row).unwrap(),
+            "{route}: a model without them answers its standard cells alone"
         );
-        assert_eq!(
-            row("claude-sonnet-5").get("fast"),
-            Some(&serde_json::Value::Null),
-            "{route}: a model without them answers null"
+        assert!(
+            models[plain_model].get("fast").is_none(),
+            "{route}: as its file row carries no fast member: {models}"
         );
     }
+    let row = |model: &str| {
+        costs["models"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|m| m["model"] == model)
+            .cloned()
+            .unwrap_or_else(|| panic!("sessions/costs lists {model}: {costs}"))
+    };
+    let fast_model_costs = row(fast_model);
+    assert_eq!(
+        (
+            &fast_model_costs["input_per_m"],
+            &fast_model_costs["output_per_m"]
+        ),
+        (
+            &serde_json::json!(fast_row.standard.input),
+            &serde_json::json!(fast_row.standard.output)
+        ),
+        "sessions/costs: the standard cells keep their per-million names"
+    );
+    assert_eq!(
+        fast_model_costs["fast"],
+        serde_json::json!({
+            "input_per_m": fast.input,
+            "cache_write_5m_per_m": fast.cache_write_5m,
+            "cache_write_1h_per_m": fast.cache_write_1h,
+            "cache_read_per_m": fast.cache_read,
+            "output_per_m": fast.output,
+        }),
+        "sessions/costs: a model that serves fast mode answers its five fast cells"
+    );
+    assert_eq!(
+        row(plain_model).get("fast"),
+        Some(&serde_json::Value::Null),
+        "sessions/costs: a model without them answers null"
+    );
 }
 
 #[tokio::test]
@@ -1030,7 +1133,7 @@ fn set_max_20x(store: &phoebis_store::Store) {
     store
         .set_profile(
             "business",
-            r#"{"account":{"uuid":"u","email_address":"business@example.invalid"},"organization":{}}"#,
+            r#"{"account":{"uuid":"u","email":"business@example.invalid"},"organization":{}}"#,
             &phoebis_store::SubscriptionRow {
                 plan: Some("max".into()),
                 tier: Some("default_claude_max_20x".into()),
@@ -1092,14 +1195,29 @@ async fn the_burn_route_answers_each_subscription_points_share_of_both_windows()
     let point = business(&burn);
     let tables = phoebis_ledger::PlanTables::shipped();
     let hour = point["at"].as_i64().unwrap();
-    let band = tables.cost.band_factor(phoebis_routing::FIVE_HOUR, hour);
+    let share = |window: &str| {
+        tables
+            .share_at(
+                window,
+                "default_claude_max_20x",
+                "claude-opus-5-5",
+                phoebis_routing::PinUsage {
+                    input: 1_000_000,
+                    ..phoebis_routing::PinUsage::default()
+                },
+                hour,
+            )
+            .unwrap()
+    };
+    let five_hour = share(phoebis_routing::FIVE_HOUR);
     assert!(
-        (point["five_hour_share"].as_f64().unwrap() - 0.01461 * band).abs() < 1e-9,
-        "a million Opus 5.5 input tokens read the table's 5-hour share on Max 20x: {point}"
+        (point["five_hour_share"].as_f64().unwrap() - five_hour).abs() < 1e-9,
+        "a million Opus 5.5 input tokens read the model's 5-hour share on Max 20x: {point} against {five_hour}"
     );
+    let seven_day = share(phoebis_routing::SEVEN_DAY);
     assert!(
-        null_field(&point, "seven_day_share"),
-        "every 7-day cell is unmeasured, so the 7-day share reads null: {point}"
+        (point["seven_day_share"].as_f64().unwrap() - seven_day).abs() < 1e-9,
+        "and its 7-day share: {point} against {seven_day}"
     );
     assert_eq!(
         (&point["unit"], &point["usd"]),
@@ -1245,9 +1363,14 @@ async fn a_fast_answer_moves_a_subscription_groups_dollars_and_no_share() {
         .find(|p| p["group"] == "business" && p["uncached_tokens"].as_u64().unwrap_or(0) > 0)
         .cloned()
         .unwrap();
+    // A million tokens at the fast cell's price per million read that price in dollars.
+    let fast_input = phoebis_ledger::PriceTable::shipped()
+        .price_at("claude-opus-5", phoebis_ledger::Speed::Fast)
+        .unwrap()
+        .input;
     assert!(
-        (point["usd"].as_f64().unwrap() - 10.0).abs() < 1e-9,
-        "a million Opus 5 input tokens served fast read the $10 fast cell in dollars: {point}"
+        (point["usd"].as_f64().unwrap() - fast_input).abs() < 1e-9,
+        "a million Opus 5 input tokens served fast read the fast cell in dollars: {point}"
     );
     assert_eq!(
         (
@@ -1608,11 +1731,24 @@ async fn the_session_series_sizes_its_buckets_like_the_account_series_on_long_ra
         .iter()
         .rfind(|p| p["group"] == "business")
         .unwrap();
+    let seven_day = phoebis_ledger::PlanTables::shipped()
+        .share_at(
+            phoebis_routing::SEVEN_DAY,
+            "default_claude_max_20x",
+            "claude-sonnet-5-5",
+            phoebis_routing::PinUsage {
+                input: 500,
+                output: 50,
+                ..phoebis_routing::PinUsage::default()
+            },
+            phoebis_ledger::hour_of(now) * 1_000,
+        )
+        .unwrap();
     assert!(
         account_trailing["five_hour_share"].as_f64().unwrap_or(0.0) > 0.0
-            && account_trailing["seven_day_share"].is_null(),
-        "the account series prices the same attempt's 5-hour share in its trailing bucket, and every 7-day cell \
-         is unmeasured: {account_trailing}"
+            && (account_trailing["seven_day_share"].as_f64().unwrap() - seven_day).abs() < 1e-9,
+        "the account series prices the same attempt's share of both windows in its trailing bucket: \
+         {account_trailing} against {seven_day}"
     );
 }
 
@@ -1667,6 +1803,9 @@ async fn the_rewrites_route_answers_the_series_and_the_moves_by_reason() {
             serde_json::json!({ "from_account": "direct", "epoch": 2, "reason": "shed" })
                 .to_string(),
         ),
+        pool_id: None,
+        agent_id: None,
+        request_id: None,
     }));
     fake_upstream::wait_for_async(Duration::from_secs(5), || async {
         parts.db.request("r-rewrite").await.unwrap()
@@ -1728,6 +1867,9 @@ async fn a_pool_row_answers_moves_per_hour_by_reason() {
             model: Some("claude-sonnet-5".into()),
             actor: None,
             detail: Some(serde_json::json!({ "reason": reason }).to_string()),
+            pool_id: None,
+            agent_id: None,
+            request_id: None,
         })
     };
     let event = |account: &str, reason: &str| event_at(account, reason, now - 100);
@@ -2107,4 +2249,540 @@ async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
         Some(2),
         "desktop's own rows still answer under the filter"
     );
+}
+
+/// A pool of the one API-key member and the key that reaches it, so a selection through the harness's router places
+/// on `direct` without a pairing.
+async fn routed(parts: &common::Full, cookie: &str) {
+    post(
+        &parts.app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#,
+        Some(cookie),
+    )
+    .await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(cookie),
+    )
+    .await;
+}
+
+/// One selection through the harness's router as the relay asks for it, at `at`: no session, so no pin and no pin
+/// event beside the decision.
+async fn decide(parts: &common::Full, request_id: &str, seq: u32, attempt: u32, at: i64) {
+    let snapshot = parts.router.snapshot();
+    let key = snapshot
+        .key("desktop")
+        .expect("the key is in the snapshot")
+        .clone();
+    let candidates = phoebis_routing::resolve(
+        &snapshot,
+        &key,
+        "claude-sonnet-5",
+        "claude-sonnet-5",
+    )
+    .expect("the pool allows the model");
+    let answer = parts
+        .router
+        .select(phoebis_routing::SelectRequest {
+            request_id: request_id.into(),
+            attempt,
+            seq,
+            key_id: "desktop".into(),
+            key_generation: common::generation(&parts.store, "desktop"),
+            agent_id: "main".into(),
+            session_id: None,
+            canonical_model: "claude-sonnet-5".into(),
+            folded_model: "claude-sonnet-5".into(),
+            candidates,
+            portable: true,
+            attempted: Vec::new(),
+            now: at,
+            fallback_ms: 60_000,
+            revision: snapshot.revision,
+            probe: false,
+            count: false,
+            request_class: None,
+            context_compacted: false,
+            static_hash: None,
+            boundaries: std::sync::Arc::from([]),
+            client: phoebis_routing::ClientClass::ClaudeCode,
+            static_boundaries: std::sync::Arc::from([]),
+            marker: false,
+            parent_agent_id: None,
+            holds: Vec::new(),
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+            fast: false,
+        })
+        .await
+        .unwrap();
+    assert!(
+        matches!(answer.result, phoebis_routing::SelectResult::Selected(_)),
+        "the pool's member answers a selection"
+    );
+}
+
+fn routing_event(at: i64, kind: &str) -> Record {
+    Record::Event(EventRecord {
+        at,
+        kind: kind.into(),
+        account_id: Some("direct".into()),
+        detail: Some(r#"{"scope":"account"}"#.into()),
+        ..Default::default()
+    })
+}
+
+/// A request whose attempts answered on `direct`: each `(status, cache read)`, usage only where a read is named.
+fn answered(id: &str, at: i64, attempts: &[(u16, Option<u64>)]) -> Record {
+    Record::Request {
+        request: RequestRecord {
+            id: id.into(),
+            received_at: at,
+            finished_at: Some(at + 5_000),
+            key_id: Some("desktop".into()),
+            pool_id: Some("main".into()),
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            status: attempts.last().map(|(status, _)| *status),
+            outcome: "succeeded".into(),
+            attempts: attempts.len() as u32,
+            ..Default::default()
+        },
+        attempts: attempts
+            .iter()
+            .zip(1..)
+            .map(|((status, read), n)| AttemptRecord {
+                request_id: id.into(),
+                attempt: n,
+                account_id: "direct".into(),
+                account_kind: "api_key".into(),
+                started_at: at,
+                finished_at: Some(at + i64::from(n) * 1_000),
+                upstream_status: Some(*status),
+                outcome: if *status == 200 {
+                    "succeeded"
+                } else {
+                    "rate_limited"
+                }
+                .into(),
+                input_tokens: read.map(|_| 2_000),
+                output_tokens: read.map(|_| 100),
+                cache_read_tokens: *read,
+                ..Default::default()
+            })
+            .collect(),
+        bodies: None,
+    }
+}
+
+const DECISION_ROW_KEYS: &[&str] = &[
+    "type",
+    "request_id",
+    "seq",
+    "attempt",
+    "attempt_count",
+    "at",
+    "kind",
+    "probe",
+    "key_id",
+    "pool_id",
+    "session_id",
+    "agent_id",
+    "model",
+    "account_id",
+    "from_account_id",
+    "by",
+    "fact",
+    "rule",
+    "strategy",
+    "tier",
+    "rung",
+    "score",
+    "runner_up",
+    "skipped",
+    "warmth",
+    "hold",
+    "exhaustion",
+    "refusal",
+    "fast",
+    "cache",
+    "status",
+];
+
+const EVENT_ROW_KEYS: &[&str] = &[
+    "type",
+    "id",
+    "at",
+    "kind",
+    "account_id",
+    "key_id",
+    "pool_id",
+    "session_id",
+    "agent_id",
+    "model",
+    "request_id",
+    "actor",
+    "detail",
+];
+
+fn keys_of(row: &serde_json::Value) -> Vec<&str> {
+    row.as_object()
+        .expect("a row is an object")
+        .keys()
+        .map(String::as_str)
+        .collect()
+}
+
+#[tokio::test]
+async fn the_routing_log_answers_the_merged_page_with_the_api_page_s_field_names() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now + 1_000).await;
+    decide(&parts, "r2", 1, 1, now + 3_000).await;
+    parts
+        .ledger
+        .record(routing_event(now + 2_000, "cooldown_set"));
+    parts
+        .ledger
+        .record(routing_event(now + 3_000, "cooldown_cleared"));
+    // `from` as an RFC 3339 instant, `to` as Unix milliseconds: the route reads both.
+    let page = wait_json(
+        &parts.app,
+        "/admin/routing-log?from=1970-01-01T00:16:40Z&to=1010000",
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
+    )
+    .await;
+    let rows = page["rows"].as_array().unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|row| (row["type"].as_str().unwrap(), row["at"].as_i64().unwrap()))
+            .collect::<Vec<_>>(),
+        [
+            ("decision", now + 3_000),
+            ("event", now + 3_000),
+            ("event", now + 2_000),
+            ("decision", now + 1_000)
+        ],
+        "newest first, a decision before an event at one instant"
+    );
+    for row in rows {
+        let expected = if row["type"] == "decision" {
+            DECISION_ROW_KEYS
+        } else {
+            EVENT_ROW_KEYS
+        };
+        assert_eq!(keys_of(row), expected, "{row}");
+    }
+    assert_eq!(
+        (rows[0]["request_id"].as_str(), rows[0]["kind"].as_str()),
+        (Some("r2"), Some("placed"))
+    );
+    assert_eq!(rows[0]["account_id"], "direct");
+    assert_eq!(rows[1]["detail"], serde_json::json!({ "scope": "account" }));
+    assert!(page["next_cursor"].is_null());
+    assert!(
+        page.get("counts").is_none(),
+        "counts are answered under a request filter alone"
+    );
+}
+
+#[tokio::test]
+async fn the_routing_log_pages_through_its_cursor() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now + 1_000).await;
+    decide(&parts, "r2", 1, 1, now + 4_000).await;
+    parts
+        .ledger
+        .record(routing_event(now + 2_000, "cooldown_set"));
+    parts
+        .ledger
+        .record(routing_event(now + 3_000, "cooldown_cleared"));
+    let range = format!("from={now}&to={}", now + 10_000);
+    wait_json(
+        &parts.app,
+        &format!("/admin/routing-log?{range}"),
+        &cookie,
+        |v| v["rows"].as_array().is_some_and(|rows| rows.len() == 4),
+    )
+    .await;
+    let first = json(
+        get(
+            &parts.app,
+            &format!("/admin/routing-log?{range}&limit=2"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let ats = |page: &serde_json::Value| {
+        page["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|row| row["at"].as_i64().unwrap())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ats(&first), [now + 4_000, now + 3_000]);
+    let cursor = first["next_cursor"]
+        .as_str()
+        .expect("two rows lie past the first page");
+    let second = json(
+        get(
+            &parts.app,
+            &format!("/admin/routing-log?{range}&limit=2&cursor={cursor}"),
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(ats(&second), [now + 2_000, now + 1_000]);
+    assert!(
+        second["next_cursor"].is_null(),
+        "the last page names no cursor"
+    );
+}
+
+#[tokio::test]
+async fn the_routing_log_refuses_an_unknown_kind_a_bad_time_a_bad_cursor_and_a_limit_out_of_range()
+{
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for (query, error) in [
+        ("kinds=placed,bogus", "unknown kind bogus"),
+        ("from=yesterday", "from is not a time"),
+        ("to=2026-13-40T00:00:00Z", "to is not a time"),
+        ("cursor=abc", "cursor is <at>:<rank>:<id>"),
+        ("cursor=100:2:r1/1", "cursor is <at>:<rank>:<id>"),
+        ("limit=0", "limit is 1 to 200"),
+        ("limit=201", "limit is 1 to 200"),
+        ("limit=many", "limit is 1 to 200"),
+    ] {
+        let refused = get(
+            &parts.app,
+            &format!("/admin/routing-log?{query}"),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 400, "{query}");
+        assert_eq!(json(refused).await["error"], error, "{query}");
+    }
+    for query in ["limit=1", "limit=200", "kinds=probe,warm_prefix_expired"] {
+        assert_eq!(
+            get(
+                &parts.app,
+                &format!("/admin/routing-log?{query}"),
+                Some(&cookie)
+            )
+            .await
+            .status(),
+            200,
+            "{query}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn the_routing_log_refuses_a_filter_outside_its_keys() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let refused = get(&parts.app, "/admin/routing-log?statuses=429", Some(&cookie)).await;
+    assert_eq!(refused.status(), 400);
+    assert_eq!(
+        json(refused).await["error"],
+        "unknown filter statuses",
+        "a filter the route does not read is refused rather than ignored"
+    );
+}
+
+#[tokio::test]
+async fn a_missing_record_answers_404() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let missing = get(
+        &parts.app,
+        "/admin/requests/r-none/decisions/1",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(missing.status(), 404);
+    assert_eq!(
+        json(missing).await["error"],
+        "no decision 1 for request r-none"
+    );
+}
+
+#[tokio::test]
+async fn a_decision_seq_that_is_no_sequence_number_answers_400() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for seq in ["first", "-1", "1.5"] {
+        let path = format!("/admin/requests/r-none/decisions/{seq}");
+        let refused = get(&parts.app, &path, Some(&cookie)).await;
+        assert_eq!(refused.status(), 400, "{path}");
+        assert_eq!(
+            json(refused).await["error"],
+            "seq is the decision's sequence number",
+            "{path}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_decision_record_answers_record_v1_with_its_completion() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now).await;
+    parts
+        .ledger
+        .record(answered("r1", now, &[(200, Some(700))]));
+    let record = wait_json(&parts.app, "/admin/requests/r1/decisions/1", &cookie, |v| {
+        v["outcome"]["completion"]["status"] == 200
+    })
+    .await;
+    assert_eq!(
+        keys_of(&record),
+        [
+            "request_id",
+            "seq",
+            "version",
+            "request",
+            "pin",
+            "pin_reason",
+            "settings",
+            "candidates",
+            "walk",
+            "outcome"
+        ]
+    );
+    assert_eq!(
+        (&record["request_id"], &record["seq"], &record["version"]),
+        (
+            &serde_json::json!("r1"),
+            &serde_json::json!(1),
+            &serde_json::json!(1)
+        )
+    );
+    assert_eq!(record["outcome"]["kind"], "placed");
+    assert_eq!(
+        record["outcome"]["completion"],
+        serde_json::json!({
+            "status": 200,
+            "cache_read_tokens": 700,
+            "input_tokens": 2_000,
+            "promised_tokens": null,
+            "hit": true,
+            "held_ms": null,
+            "freed": false,
+            "cache_map_written": null,
+            "completed_at": now + 1_000,
+        })
+    );
+}
+
+#[tokio::test]
+async fn the_routing_log_s_decision_row_and_record_read_the_answering_attempt_after_a_retry_in_place(
+) {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    routed(&parts, &cookie).await;
+    let now = common::NOW;
+    decide(&parts, "r1", 1, 1, now).await;
+    // The same decision's account answered a 429 and, retried in place, a 200.
+    parts
+        .ledger
+        .record(answered("r1", now, &[(429, None), (200, Some(900))]));
+    let page = wait_json(
+        &parts.app,
+        &format!("/admin/routing-log?from={now}&to={now}&request=r1"),
+        &cookie,
+        |v| v["rows"][0]["status"] == 200,
+    )
+    .await;
+    let row = &page["rows"][0];
+    assert_eq!(
+        (&row["attempt"], &row["attempt_count"], &row["status"]),
+        (
+            &serde_json::json!(1),
+            &serde_json::json!(2),
+            &serde_json::json!(200)
+        ),
+        "the row keeps its own attempt and reads the attempt that answered"
+    );
+    assert_eq!(
+        row["cache"],
+        serde_json::json!({ "hit": true, "read_tokens": 900, "promised_tokens": null, "input_tokens": 2_000 })
+    );
+    assert_eq!(
+        page["counts"],
+        serde_json::json!({ "decisions": 1, "events": 0 })
+    );
+    let record = json(get(&parts.app, "/admin/requests/r1/decisions/1", Some(&cookie)).await).await;
+    let completion = &record["outcome"]["completion"];
+    assert_eq!(
+        (
+            &completion["status"],
+            &completion["cache_read_tokens"],
+            &completion["completed_at"]
+        ),
+        (
+            &serde_json::json!(200),
+            &serde_json::json!(900),
+            &serde_json::json!(now + 2_000)
+        )
+    );
+}
+
+#[tokio::test]
+async fn the_request_s_events_carry_their_three_columns() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let now = common::NOW;
+    parts
+        .ledger
+        .record(record("r1", now, "claude-sonnet-5", "s1"));
+    parts.ledger.record(Record::Event(EventRecord {
+        at: now + 100,
+        kind: "window_spent".into(),
+        account_id: Some("business".into()),
+        pool_id: Some("main".into()),
+        agent_id: Some("main".into()),
+        request_id: Some("r1".into()),
+        session_id: Some("s1".into()),
+        detail: Some(r#"{"window":"five_hour","source_request_id":"r1"}"#.into()),
+        ..Default::default()
+    }));
+    let shown = wait_json(&parts.app, "/admin/requests/r1", &cookie, |v| {
+        v["events"].as_array().is_some_and(|e| !e.is_empty())
+    })
+    .await;
+    let event = &shown["events"][0];
+    assert_eq!(
+        (&event["pool_id"], &event["agent_id"], &event["request_id"]),
+        (
+            &serde_json::json!("main"),
+            &serde_json::json!("main"),
+            &serde_json::json!("r1")
+        )
+    );
+}
+
+#[tokio::test]
+async fn the_system_page_counts_the_refusals_the_router_s_mailbox_refused() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let system = json(get(&parts.app, "/admin/system", Some(&cookie)).await).await;
+    assert_eq!(system["router"]["dropped_refusals"], 0);
 }

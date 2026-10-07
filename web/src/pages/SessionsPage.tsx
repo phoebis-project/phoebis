@@ -12,6 +12,7 @@ import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
+import { aroundSubject, logHref } from '@/lib/routingLog';
 
 const SESSION_COLUMNS = [
   { id: 'key', label: 'Key' },
@@ -240,7 +241,7 @@ export function SessionsPage() {
             cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
           </p>
         </div>
-        <CostReferenceLink />
+        <CostReferenceLink tab="plan-rates" />
       </div>
 
       <div className="stat-grid stat-grid--fit">
@@ -464,6 +465,8 @@ function SessionRows({
             items={[
               { label: 'View in analytics', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/analytics?session=${encodeURIComponent(trafficSession)}&key=${encodeURIComponent(`${session.keyId}@${session.keyGeneration}`)}`) },
               { label: 'View in observe', disabled: !hasTraffic, title: hasTraffic ? undefined : NO_TRAFFIC_HINT, onClick: () => onOpen(`/observe?session=${encodeURIComponent(trafficSession)}`) },
+              // The routing log reads the decisions, which exist once a pin does, so it needs no ledgered request.
+              { label: 'View in routing log', disabled: !session.sessionId, onClick: () => onOpen(logHref({ session: session.sessionId, ...aroundSubject(session.lastRequestAt ? Date.parse(session.lastRequestAt) : null, now) })) },
               ...(!session.historical ? [{ label: 'Release', onClick: onRelease }] : []),
             ]}
           />

@@ -275,6 +275,10 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// on `expires_at` read the whole table for every slice; and a priced record the writer could not land keeps its
 /// raw facts, the error that refused it, its pool and account and when it was parked and last tried, so the next
 /// start can try it again rather than lose the money it carries.
+///
+/// Version 29: every routing decision is its own row beside the attempt rows, one compressed record per decision keyed
+/// by the request and the decision's place in it. The events gain the pool, the agent and the request as columns
+/// with their indexes, so a merged list filters both tables by the same keys without reading `detail`.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (
         2,
@@ -833,5 +837,38 @@ CREATE TABLE parked_records (
     WHEN 'seven_day_overage_included' THEN '7d_oi' ELSE 'fable' END);
 UPDATE quota_samples SET window = CASE window WHEN '5h' THEN 'five_hour' WHEN '7d' THEN 'seven_day'
   WHEN '7d_oi' THEN 'seven_day_overage_included' WHEN 'fable' THEN 'seven_day_fable' ELSE window END;",
+    ),
+    (
+        29,
+        "CREATE TABLE decisions (
+  request_id TEXT NOT NULL,
+  seq INTEGER NOT NULL,
+  attempt INTEGER NOT NULL,
+  at INTEGER NOT NULL,
+  kind TEXT NOT NULL,
+  probe INTEGER NOT NULL DEFAULT 0,
+  key_id TEXT,
+  pool_id TEXT,
+  account_id TEXT,
+  from_account_id TEXT,
+  session_id TEXT,
+  agent_id TEXT,
+  model TEXT,
+  summary TEXT NOT NULL,
+  record BLOB NOT NULL,
+  cache_map TEXT,
+  PRIMARY KEY (request_id, seq)
+);
+CREATE INDEX decisions_at ON decisions (at);
+CREATE INDEX decisions_account ON decisions (account_id, at);
+CREATE INDEX decisions_pool ON decisions (pool_id, at);
+CREATE INDEX decisions_session ON decisions (session_id, at);
+CREATE INDEX decisions_key ON decisions (key_id, at);
+ALTER TABLE events ADD COLUMN pool_id TEXT;
+ALTER TABLE events ADD COLUMN agent_id TEXT;
+ALTER TABLE events ADD COLUMN request_id TEXT;
+CREATE INDEX events_account ON events (account_id, at);
+CREATE INDEX events_session ON events (session_id, at);
+CREATE INDEX events_request ON events (request_id);",
     ),
 ];

@@ -75,6 +75,15 @@ export const IconSessions = (p: Props) => (
     <path d="M3 12h13" />
   </svg>
 );
+export const IconRoute = (p: Props) => (
+  <svg {...base(p)}>
+    <circle cx="6" cy="19" r="2" />
+    <circle cx="18" cy="5" r="2" />
+    <circle cx="18" cy="17" r="2" />
+    <path d="M6 17V10a5 5 0 0 1 5-5h5" />
+    <path d="M6 12a5 5 0 0 0 5 5h5" />
+  </svg>
+);
 export const IconActivity = (p: Props) => (
   <svg {...base(p)}>
     <path d="M3 12h4l3-8 4 16 3-8h4" />

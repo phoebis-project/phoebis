@@ -563,17 +563,14 @@ struct Fill {
 
 fn fills(plan: &Plan) -> Vec<Fill> {
     let path = |path: &Path| scalar(&path.to_string_lossy());
-    let (key_file, pricing) = if plan.container {
-        (
-            PathBuf::from(CONTAINER_KEY_FILE),
-            plan.data_dir.join("pricing.yaml"),
-        )
+    let (key_file, tables) = if plan.container {
+        (PathBuf::from(CONTAINER_KEY_FILE), plan.data_dir.clone())
     } else {
-        // The service recipe installs the price table beside the bootstrap file, since the loader's relative default
+        // The service recipe installs the price table beside the bootstrap file, since the loader's relative defaults
         // would resolve against whatever directory starts the process.
         (
             plan.key_file.clone(),
-            parent_of(&plan.config_path).join("pricing.yaml"),
+            parent_of(&plan.config_path).to_path_buf(),
         )
     };
     let mut fills = vec![
@@ -582,10 +579,19 @@ fn fills(plan: &Plan) -> Vec<Fill> {
         listen_fill("proxy", &plan.proxy),
         value_fill(
             "stats",
+            "api_prices_path",
+            path(&tables.join("api_prices.yaml")),
+        ),
+        value_fill(
+            "stats",
             "ledger_path",
             path(&plan.data_dir.join("ledger.sqlite")),
         ),
-        value_fill("stats", "pricing_path", path(&pricing)),
+        value_fill(
+            "stats",
+            "subscription_costs_path",
+            path(&tables.join("subscription_costs.yaml")),
+        ),
         value_fill("storage", "encryption_key_file", path(&key_file)),
         value_fill(
             "storage",
@@ -1535,21 +1541,30 @@ mod tests {
                 plan.data_dir.join("ledger.sqlite"),
                 "{name}"
             );
-            let (key_file, pricing, metrics) = if plan.container {
+            let (key_file, tables, metrics) = if plan.container {
                 (
                     PathBuf::from("/run/secrets/router-storage-key"),
-                    PathBuf::from("/var/lib/phoebis/pricing.yaml"),
+                    PathBuf::from("/var/lib/phoebis"),
                     "0.0.0.0:9464",
                 )
             } else {
                 (
                     plan.key_file.clone(),
-                    dir.path().join(name).join("pricing.yaml"),
+                    dir.path().join(name),
                     "127.0.0.1:9464",
                 )
             };
             assert_eq!(loaded.storage.encryption_key_file, key_file, "{name}");
-            assert_eq!(loaded.stats.pricing_path, Some(pricing), "{name}");
+            assert_eq!(
+                loaded.stats.api_prices_path,
+                Some(tables.join("api_prices.yaml")),
+                "{name}"
+            );
+            assert_eq!(
+                loaded.stats.subscription_costs_path,
+                Some(tables.join("subscription_costs.yaml")),
+                "{name}"
+            );
             assert_eq!(
                 loaded.stats.metrics_listen,
                 metrics.parse::<SocketAddr>().unwrap(),

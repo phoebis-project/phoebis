@@ -103,7 +103,7 @@ export interface ShedPreview {
   sessions: number;
   /** The unit every replayed member's burn is in; null when none has a pin or two members differ. */
   unit: BurnUnit | null;
-  /** Pins whose burn the table cannot price, left in the order unmarked. */
+  /** Pins whose burn the cost model cannot price, left in the order unmarked. */
   unpriced: number;
   warm: number;
 }
@@ -116,7 +116,7 @@ export interface ShedPreview {
  * first by burn, then warm ones by burn over their last input size, bounded by the warm-sessions mode. A member's
  * pins share one unit, so its round needs no conversion; members in different units cannot be summed, so their shares
  * are averaged instead. A member without `eligible` counts as eligible, as a member of a pool not saved yet does.
- * `sized` names the accounts whose tier the cost table sizes.
+ * `sized` names the accounts whose tier the cost model sizes.
  */
 export function shedPreview(
   pool: Pick<Pool, 'burnWindowSeconds' | 'shedAheadOfPace' | 'shedShare' | 'warmSessions'> & { members: { accountId: string; eligible?: MemberEligibility }[] },
@@ -150,9 +150,9 @@ export function shedPreview(
   const windowMs = pool.burnWindowSeconds * 1_000;
   const rounds = hot.map((account) => {
     const pins = sessions
-      // The route reads no burn for a window-share pin of an account whose tier the table does not size, while the
-      // round prices it on the reference tier and sheds it; the preview cannot replay that order, so it leaves those
-      // pins out rather than count them as pins the table cannot price.
+      // The route reads no burn for a window-share pin of an account whose tier the cost model does not size, while
+      // the round prices it on the anchor tier's rates and sheds it; the preview cannot replay that order, so it
+      // leaves those pins out rather than count them as pins the cost model cannot price.
       .filter((s) => s.pinned && s.accountId === account.id && (s.burnUnit !== 'window_share' || sized.has(account.id)))
       // The router walks an account's pins in key, session and model order, which settles ties in the sorts below.
       .sort((a, b) => cmp(a.keyId, b.keyId) || cmp(a.sessionId, b.sessionId) || cmp(a.model ?? '', b.model ?? ''))
@@ -206,13 +206,13 @@ export function shedPreview(
 }
 
 /**
- * The shedding card's dry run in one sentence, naming the unit its share was taken in. Until the cost table is read no
+ * The shedding card's dry run in one sentence, naming the unit its share was taken in. Until the cost model is read no
  * window-share pin enters the round, so a count then would read short; `table` says whether it has been read.
  */
 export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, table: 'loading' | 'missing' | 'ready' = 'ready'): string {
   if (!shedAheadOn) return 'No round runs while shed ahead of pace is off.';
-  if (table === 'loading') return 'The cost table is loading; window-share pins are counted once it is read.';
-  if (table === 'missing') return 'The cost table did not load, so window-share pins cannot be counted.';
+  if (table === 'loading') return 'The cost model is loading; window-share pins are counted once it is read.';
+  if (table === 'missing') return 'The cost model did not load, so window-share pins cannot be counted.';
   if (preview.members === 0) return 'No member is ahead of pace by the margin.';
   const of = preview.averaged
     ? "of each account's burn on average"
@@ -224,6 +224,6 @@ export function shedPreviewLine(preview: ShedPreview, shedAheadOn: boolean, tabl
   const across = preview.members > 1 ? `, across ${preview.members} accounts` : '';
   const what = `${preview.sessions} ${preview.sessions === 1 ? 'session' : 'sessions'}, ${preview.warm} warm, ${fmtPct(preview.burnShare)} ${of}${across}`;
   const n = preview.unpriced;
-  const unpriced = n > 0 ? ` ${n} pin${n === 1 ? '' : 's'} the table cannot price stay${n === 1 ? 's' : ''}.` : '';
+  const unpriced = n > 0 ? ` ${n} pin${n === 1 ? '' : 's'} the cost model cannot price stay${n === 1 ? 's' : ''}.` : '';
   return `${preview.cool ? `Would move ${what}.` : `Would mark ${what}, but no member reads under the band to take them.`}${unpriced}`;
 }

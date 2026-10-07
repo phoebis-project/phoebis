@@ -26,7 +26,7 @@ use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, ApiKeyRow, Failover,
     Identity, MemberWrite, ModelRule, NewBundle, OveragePolicy, PoolRow, RulesMode, Secret,
-    StorageKey, Store, StoreError, Strategy,
+    StateCause, StorageKey, Store, StoreError, Strategy,
 };
 use phoebis_transport::request::parse_head;
 use tower::ServiceExt;
@@ -103,6 +103,7 @@ pub fn test_account_row(account: &TestAccount) -> AccountRow {
         incarnation: 1,
         revision: 1,
         state: AccountState::Ready,
+        state_cause: StateCause::Operator,
     }
 }
 
@@ -665,6 +666,7 @@ async fn build(
                     incarnation: 1,
                     revision: 1,
                     state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
                 })
                 .unwrap();
             match account.kind {

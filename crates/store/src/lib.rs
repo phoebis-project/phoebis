@@ -29,7 +29,7 @@ use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub use accounts::{
-    AccountKind, AccountRow, AccountState, Identity, SubscriptionRow, INFERENCE_HOST,
+    AccountKind, AccountRow, AccountState, Identity, StateCause, SubscriptionRow, INFERENCE_HOST,
 };
 pub use backup::{snapshot, BackupError, Snapshot, RETRY_PAUSE};
 pub use budgets::{BudgetRow, BudgetScope};
@@ -46,7 +46,7 @@ pub use registry::{
 };
 pub use routing::{
     AffinityChain, AffinityRow, CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow,
-    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, WindowRow,
+    RekeyWrite, ResolutionRow, RoutingLoad, RoutingTx, ShedPin, ShedRoundRow, WindowRow,
 };
 pub use schema::SCHEMA_VERSION;
 
@@ -1090,6 +1090,7 @@ mod tests {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Unpaired,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         store
@@ -1185,6 +1186,7 @@ mod tests {
             incarnation: 1,
             revision: 1,
             state: AccountState::Unpaired,
+            state_cause: StateCause::Operator,
         }
     }
 

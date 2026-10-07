@@ -206,17 +206,19 @@ fn init_writes_the_three_artifacts_at_their_modes_and_prints_the_secret_once() {
     };
     let checked = check(&config);
     assert_eq!(checked.status.code(), Some(0), "{}", printed(&checked));
-    // The required keys alone and the two database paths: whatever this file prints from the fifth line on is the
-    // binary's own defaults, so the written file spells no value that differs from them.
+    // The required keys alone, the two database paths and the two table files: whatever this file prints from the
+    // fifth line on is the binary's own defaults, so the written file spells no value that differs from them.
     let minimal = dir.path().join("minimal.yaml");
     std::fs::write(
         &minimal,
         format!(
             "admin:\n  listen: 127.0.0.1:8081\n  secret_env: PHOEBIS_ADMIN_SECRET\n\
              proxy:\n  listen: 127.0.0.1:8317\n\
-             stats:\n  ledger_path: {}\n\
+             stats:\n  api_prices_path: {}\n  ledger_path: {}\n  subscription_costs_path: {}\n\
              storage:\n  encryption_key_file: {}\n  path: {}\n",
+            dir.path().join("api_prices.yaml").display(),
             data.join("ledger.sqlite").display(),
+            dir.path().join("subscription_costs.yaml").display(),
             key.display(),
             data.join("router.sqlite").display()
         ),
@@ -1129,7 +1131,8 @@ fn the_container_shape_writes_the_compose_directory() {
         "  encryption_key_file: /run/secrets/router-storage-key\n",
         "  path: /var/lib/phoebis/router.sqlite\n",
         "  ledger_path: /var/lib/phoebis/ledger.sqlite\n",
-        "  pricing_path: /var/lib/phoebis/pricing.yaml\n",
+        "  api_prices_path: /var/lib/phoebis/api_prices.yaml\n",
+        "  subscription_costs_path: /var/lib/phoebis/subscription_costs.yaml\n",
         "  listen: 0.0.0.0:8317\n",
         "  listen: 0.0.0.0:8081\n",
         "  metrics_listen: 0.0.0.0:9464\n",
@@ -1157,8 +1160,12 @@ fn the_container_shape_writes_the_compose_directory() {
         Path::new("/var/lib/phoebis/ledger.sqlite")
     );
     assert_eq!(
-        loaded.stats.pricing_path.as_deref(),
-        Some(Path::new("/var/lib/phoebis/pricing.yaml"))
+        loaded.stats.api_prices_path.as_deref(),
+        Some(Path::new("/var/lib/phoebis/api_prices.yaml"))
+    );
+    assert_eq!(
+        loaded.stats.subscription_costs_path.as_deref(),
+        Some(Path::new("/var/lib/phoebis/subscription_costs.yaml"))
     );
     assert_eq!(loaded.proxy.listen, "0.0.0.0:8317".parse().unwrap());
     assert_eq!(loaded.admin.listen, "0.0.0.0:8081".parse().unwrap());

@@ -1,0 +1,423 @@
+{
+  "route": "GET /admin/requests/r-static/decisions/1",
+  "body": {
+    "request_id": "r-static",
+    "seq": 1,
+    "version": 1,
+    "request": {
+      "request_id": "r-static",
+      "attempt": 1,
+      "seq": 1,
+      "at": 1000000,
+      "key_id": "desktop",
+      "key_generation": 1791268384992,
+      "pool_id": "main",
+      "routing_session_id": "s-static",
+      "agent_id": "main",
+      "parent_agent_id": null,
+      "client_class": "claude_code",
+      "request_class": null,
+      "canonical_model": "claude-sonnet-5",
+      "lane": {
+        "speed": "standard",
+        "thinking": "none",
+        "effort": "-"
+      },
+      "flags": {
+        "fast": false,
+        "count": false,
+        "probe": false,
+        "portable": false,
+        "marker": true,
+        "context_compacted": false
+      },
+      "chain": {
+        "static_boundaries": 1,
+        "boundaries": 0,
+        "static_hash": false
+      },
+      "attempted": [],
+      "holds": [],
+      "registry_revision": 66
+    },
+    "pin": {
+      "found": "none",
+      "account_id": null,
+      "epoch": null,
+      "incarnation": null,
+      "created_at": null,
+      "last_used_at": null,
+      "last_refresh_at": null,
+      "idle_ms": null,
+      "refresh_age_ms": null,
+      "lane": null,
+      "shed": null,
+      "marked": false,
+      "warmth": null,
+      "warmth_cause": null,
+      "released": []
+    },
+    "pin_reason": null,
+    "settings": {
+      "strategy": "pace",
+      "prefer_subscription": true,
+      "overage_policy": "prefer_plan",
+      "affinity_ttl_seconds": 600,
+      "affinity_mode": "always",
+      "session_placement": "by_warm_prefix",
+      "min_shared_prefix_tokens": 20000,
+      "subagent_placement": "by_cohort",
+      "select_below_utilization": null,
+      "shed_ahead_of_pace": null,
+      "migrate_when_spent": true,
+      "overage_move_grace_minutes": 30,
+      "wind_down_minutes": 30,
+      "shed_share": 0.5,
+      "burn_window_seconds": 600,
+      "source_dwell_seconds": 900,
+      "warm_sessions": "when_needed",
+      "in_flight_cap": 16,
+      "retry_in_place_seconds": 60,
+      "pace_floor": 0.05,
+      "migrate_band": 0.05,
+      "pool_updated_at": 1791268385223
+    },
+    "candidates": [
+      {
+        "account_id": "business",
+        "incarnation": 1,
+        "kind": "oauth",
+        "plan_tier": "default_claude_max_20x",
+        "enabled": true,
+        "state": "ready",
+        "priority": 0,
+        "tier": [
+          0,
+          0,
+          0
+        ],
+        "in_overage": false,
+        "overage": null,
+        "in_flight": 0,
+        "in_flight_cap": 16,
+        "windows": {
+          "fast_input": {
+            "utilization": 0.42,
+            "reset": 1030000,
+            "source": "head",
+            "observed_at": 995000,
+            "age_ms": 5000,
+            "ahead": null
+          },
+          "fast_output": {
+            "utilization": 0.08,
+            "reset": 1030000,
+            "source": "head",
+            "observed_at": 995000,
+            "age_ms": 5000,
+            "ahead": null
+          }
+        },
+        "allowance_known": false,
+        "pace": {
+          "remaining": 1.0,
+          "reset": null,
+          "end": null,
+          "deadline": null,
+          "hours": 168.0,
+          "score": 0.005952380952380952
+        },
+        "budget": [
+          {
+            "period": "month",
+            "budget_usd": 30.0,
+            "spent_usd": 0.0,
+            "period_start": 0,
+            "period_end": 2678400000,
+            "observed_at": 1000000
+          }
+        ],
+        "cooldowns": [
+          {
+            "scope": "model:claude-haiku-4-5-20251001",
+            "reason": "model_rejected",
+            "window": "model_rejection",
+            "until": 2800000,
+            "blocking": false
+          }
+        ],
+        "credits": null,
+        "term": {
+          "since": 1773482400000,
+          "trial_ends_at": null,
+          "cancelled": false,
+          "ends_at": null,
+          "winding_down": false,
+          "ended": false
+        },
+        "prefix": {
+          "content": null,
+          "content_match": null,
+          "static": {
+            "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+            "depth": 1,
+            "prefix_tokens": 31200,
+            "written_at": 1000000,
+            "ttl_ms": 3600000,
+            "live": true,
+            "refused_by": null
+          },
+          "static_match": {
+            "hash": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+            "depth": 1,
+            "prefix_tokens": 31200,
+            "written_at": 1000000,
+            "ttl_ms": 3600000,
+            "live": true,
+            "refused_by": null
+          },
+          "with_main": false
+        },
+        "obstacle": null,
+        "partition": null,
+        "rank": null,
+        "score": null,
+        "verdict": "chosen"
+      },
+      {
+        "account_id": "direct",
+        "incarnation": 1,
+        "kind": "api_key",
+        "plan_tier": null,
+        "enabled": true,
+        "state": "ready",
+        "priority": 1,
+        "tier": [
+          2,
+          1,
+          0
+        ],
+        "in_overage": false,
+        "overage": null,
+        "in_flight": 0,
+        "in_flight_cap": 16,
+        "windows": {},
+        "allowance_known": true,
+        "pace": {
+          "remaining": 1.0,
+          "reset": null,
+          "end": null,
+          "deadline": null,
+          "hours": null,
+          "score": 1.0
+        },
+        "budget": [
+          {
+            "period": "month",
+            "budget_usd": 50.0,
+            "spent_usd": 0.0036,
+            "period_start": 0,
+            "period_end": 2678400000,
+            "observed_at": 1000000
+          }
+        ],
+        "cooldowns": [],
+        "credits": null,
+        "term": {
+          "since": null,
+          "trial_ends_at": null,
+          "cancelled": false,
+          "ends_at": null,
+          "winding_down": false,
+          "ended": false
+        },
+        "prefix": {
+          "content": null,
+          "content_match": null,
+          "static": null,
+          "static_match": null,
+          "with_main": false
+        },
+        "obstacle": null,
+        "partition": null,
+        "rank": null,
+        "score": null,
+        "verdict": "not_needed"
+      }
+    ],
+    "walk": [
+      {
+        "step": "pin",
+        "verdict": "none",
+        "facts": [
+          {
+            "key": "found",
+            "value": "none",
+            "account_id": null,
+            "unit": null
+          }
+        ]
+      },
+      {
+        "step": "eligible",
+        "verdict": "match",
+        "facts": [
+          {
+            "key": "standing",
+            "value": "eligible",
+            "account_id": "business",
+            "unit": null
+          },
+          {
+            "key": "standing",
+            "value": "eligible",
+            "account_id": "direct",
+            "unit": null
+          }
+        ]
+      },
+      {
+        "step": "partitions",
+        "verdict": "match",
+        "facts": [
+          {
+            "key": "spent",
+            "value": "off",
+            "account_id": null,
+            "unit": null
+          },
+          {
+            "key": "at_cap",
+            "value": 0,
+            "account_id": null,
+            "unit": null
+          },
+          {
+            "key": "above_ceiling",
+            "value": "off",
+            "account_id": null,
+            "unit": null
+          },
+          {
+            "key": "winding_down",
+            "value": 0,
+            "account_id": null,
+            "unit": null
+          },
+          {
+            "key": "floor",
+            "value": 0,
+            "account_id": null,
+            "unit": null
+          }
+        ]
+      },
+      {
+        "step": "rung:content",
+        "verdict": "none",
+        "facts": [
+          {
+            "key": "reason",
+            "value": "no_entry",
+            "account_id": null,
+            "unit": null
+          }
+        ]
+      },
+      {
+        "step": "rung:with_main",
+        "verdict": "none",
+        "facts": [
+          {
+            "key": "reason",
+            "value": "class",
+            "account_id": null,
+            "unit": null
+          }
+        ]
+      },
+      {
+        "step": "rung:static",
+        "verdict": "match",
+        "facts": [
+          {
+            "key": "depth",
+            "value": 1,
+            "account_id": null,
+            "unit": "count"
+          },
+          {
+            "key": "prefix_tokens",
+            "value": 31200,
+            "account_id": null,
+            "unit": "tokens"
+          },
+          {
+            "key": "account_id",
+            "value": "business",
+            "account_id": "business",
+            "unit": null
+          },
+          {
+            "key": "hash",
+            "value": "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f",
+            "account_id": null,
+            "unit": null
+          }
+        ]
+      }
+    ],
+    "outcome": {
+      "kind": "placed",
+      "account_id": "business",
+      "from_account_id": null,
+      "upstream_model": "claude-sonnet-5",
+      "tier": null,
+      "strategy": "pace",
+      "rule": null,
+      "rung": {
+        "rung": "static",
+        "depth": 1,
+        "prefix_tokens": 31200
+      },
+      "in_overage": false,
+      "pin_written": {
+        "action": "created",
+        "epoch": 3,
+        "lane": "claude-sonnet-5|standard|none|-",
+        "refresh_stamped": true,
+        "hashes_stamped": false
+      },
+      "pin_events": [
+        {
+          "kind": "pin_created",
+          "reason": null
+        }
+      ],
+      "hold": null,
+      "exhaustion": null,
+      "refusal": null,
+      "cohort_hold": null,
+      "shed_marks": null,
+      "completion": {
+        "status": 200,
+        "cache_read_tokens": 500,
+        "input_tokens": 1000,
+        "promised_tokens": 31200,
+        "hit": true,
+        "held_ms": null,
+        "freed": false,
+        "cache_map_written": [
+          {
+            "tier": "message",
+            "depth": 1,
+            "prefix_tokens": 31200,
+            "ttl_ms": 300000,
+            "account_id": "business"
+          }
+        ],
+        "completed_at": 999400
+      }
+    }
+  }
+}

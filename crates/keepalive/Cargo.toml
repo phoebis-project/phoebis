@@ -36,6 +36,8 @@ boring = { workspace = true }
 fake-upstream = { path = "../../tests/fake_upstream" }
 # An integration test builds the library without `cfg(test)`, so the counter it reads needs the feature on.
 phoebis-keepalive = { path = ".", features = ["debug-hooks"] }
+# The test tables, kept off the dependency above so a release build carries none.
+phoebis-ledger = { path = "../ledger", features = ["test-support"] }
 phoebis-profile = { path = "../profile" }
 # The test builders of the registry's rows, kept off the dependency above so a release build carries none.
 phoebis-store = { path = "../store", features = ["test-support"] }

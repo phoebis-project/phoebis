@@ -19,6 +19,15 @@ const admin = async () => {
   await api.login('admin');
   return api;
 };
+/**
+ * A summary fact's value is a number or a word by design and a walk fact's any value the engine read, so both sides
+ * read as one kind there; a member's windows are keyed by window name, data rather than schema, so the comparison
+ * holds each entry to the fixture's first.
+ */
+const factValue = (f) => ({ ...f, value: typeof f.value === 'number' || typeof f.value === 'string' ? 'number or string' : f.value });
+/** The merged page split by row type, so each of the two shapes meets the fixture's own rows of that type. */
+const byType = (page) => ({ decisions: page.rows.filter((r) => r.type === 'decision').map((r) => ({ ...r, fact: r.fact.map(factValue) })), events: page.rows.filter((r) => r.type === 'event') });
+const recordShape = (r) => r && { ...r, candidates: r.candidates.map((c) => ({ ...c, windows: Object.values(c.windows) })), walk: r.walk.map((w) => ({ ...w, facts: w.facts.map((f) => ({ ...f, value: 'any' })) })) };
 
 /**
  * One row per fixture: how the decoder reads it, and how the mock answers the same route. A list route
@@ -43,6 +52,8 @@ const SYNC = {
   analytics_series: { decode: (b) => b.points.filter((p) => p.groups.length).map(d.decodeAnalyticsPoint), mock: async (api) => (await api.getAnalyticsSeries(query)).filter((p) => p.groups.length) },
   attention: { decode: (b) => b.items.map(d.decodeAttention), mock: (api) => api.getAttention() },
   dashboard: { decode: (b) => d.decodeDashboard(b), mock: (api) => api.getOverview() },
+  // The story's static placement, whose `raw` is the record the mock answers where the fixture's is the route's body.
+  decision: { decode: (b) => recordShape(d.decodeDecisionRecord(b)), mock: async (api) => recordShape(await api.getDecision('req_b2bed817-a58', 1)), opaque: (path) => path === '.settings' || path === '.raw' },
   keepalive_overview: { decode: (b) => d.decodeKeepaliveOverview(b), mock: (api) => api.getKeepaliveOverview() },
   keepalive_recipes: { decode: (b) => b.recipes.map(d.decodeRecipe), mock: (api) => api.listKeepaliveRecipes() },
   key_created: { decode: (b) => ({ key: d.decodeKey(b), secret: b.secret }), mock: (api) => api.createKey({ bodyCaptureHours: null, enabled: true, expiresInDays: null, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'sync', notes: null, poolId: 'all' }) },
@@ -57,12 +68,13 @@ const SYNC = {
   // them through raw), the same class of value OPAQUE covers for `.detail`.
   request_bodies: { decode: (b) => d.decodeBodies(b), mock: async (api) => { const page = await api.listRequests(); return api.getCapturedBodies(page.requests.find((r) => r.capturedBodies).id); }, opaque: (path) => path === '.request' || path === '.response' },
   requests: { decode: (b) => d.decodeRequestPage(b), mock: (api) => api.listRequests() },
+  routing_log: { decode: (b) => byType(d.decodeRoutingLogPage(b)), mock: async (api) => byType(await api.listRoutingLog()) },
   session: { expect: (b) => Object.fromEntries(Object.keys(b).map((k) => [camel(k), 'any'])), mock: async (api) => { await api.login('admin'); return api.getSession(); } },
   sessions: { decode: (b) => b.sessions.map(d.decodeSession), mock: (api) => api.listSessions() },
   settings: { decode: (b) => d.decodeSettings(b), mock: (api) => api.getSettings() },
 };
 /** Fixtures no decoder and no `Api` method reads: captured for their route's shape, or read by a test of their own. */
-const UNCONSUMED = ['bound_refusals', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system'];
+const UNCONSUMED = ['bound_refusals', 'live_past', 'pool_traffic', 'pricing', 'sessions_costs', 'system', 'test_tables'];
 
 test('the generated fixtures module is a fresh render', () => {
   const committed = readFileSync(new URL('../src/mock/generated/fixtures.ts', import.meta.url), 'utf8');

@@ -9,8 +9,8 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{FuturesUnordered, StreamExt};
 use phoebis_profile::Profile;
 use phoebis_store::{
-    AccountRow, AccountState, AttemptOutcome, CredentialBundle, NewBundle, Secret, Store,
-    StoreError,
+    AccountRow, AccountState, AttemptOutcome, CredentialBundle, NewBundle, Secret, StateCause,
+    Store, StoreError,
 };
 use phoebis_transport::control::ControlClient;
 use phoebis_transport::response::ResponseHead;
@@ -438,9 +438,11 @@ impl CredentialManager {
                 )?;
                 continue;
             }
-            self.inner
-                .store
-                .set_state(&attempt.account_id, AccountState::ReauthRequired)?;
+            self.inner.store.set_state(
+                &attempt.account_id,
+                AccountState::ReauthRequired,
+                StateCause::RefreshFailed,
+            )?;
             self.inner.store.resolve_refresh_attempt(
                 attempt.id,
                 incarnation,
@@ -1078,11 +1080,12 @@ impl Inner {
             .set_state_if_generations(
                 &account.id,
                 AccountState::ReauthRequired,
+                StateCause::RefreshFailed,
                 account.incarnation,
                 account.lifecycle_generation,
                 credential_generation,
             )
-            .unwrap_or(false);
+            .is_ok_and(|landed| landed.is_some());
         if !landed {
             return;
         }
@@ -1161,6 +1164,27 @@ fn error_code(body: &[u8]) -> Option<String> {
     }
 }
 
+/// The class of the text a refresh attempt row stores, for the ledger's refresh rows: the token endpoint's error code
+/// where a rejection named one, else the status it answered, else the words before the colon of a failure that
+/// carries its error after one (`transport`), else the text's own words. The rejection is read first, so a code that
+/// holds a colon stays whole. The texts are the ones `refresh` and `recover_on_start` store, each pinned by a case.
+pub fn refresh_cause(text: &str) -> String {
+    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join("_");
+    if let Some(rest) = text.strip_prefix("refresh rejected with status ") {
+        return match rest
+            .strip_suffix(')')
+            .and_then(|rest| rest.split_once(" ("))
+        {
+            Some((_, code)) => code.to_string(),
+            None => rest.to_string(),
+        };
+    }
+    match text.split_once(':') {
+        Some((lead, _)) => words(lead),
+        None => words(text),
+    }
+}
+
 /// `Retry-After` as a delay in milliseconds, in both of the forms the header takes, clamped to `max_ms`. The
 /// ceiling belongs to the caller because what an overlong wait costs differs: a refresh races a token's own
 /// expiry, a usage fetch races nothing. The HTTP-date form names an instant rather than a delay, so it is read
@@ -1188,6 +1212,39 @@ mod tests {
     use phoebis_store::{AccountKind, Identity, StorageKey};
     use phoebis_transport::control::{ResolveFuture, Resolver};
     use phoebis_transport::{connector_builder, Plane};
+
+    /// One case per text an attempt row stores, so a reworded text that would move its class fails here.
+    #[test]
+    fn every_text_a_refresh_attempt_stores_reads_as_its_class() {
+        for (text, class) in [
+            ("superseded", "superseded"),
+            ("quarantined at start", "quarantined_at_start"),
+            ("no refresh token", "no_refresh_token"),
+            ("transport: connection refused (os error 111)", "transport"),
+            ("refresh response lost: timed out", "refresh_response_lost"),
+            (
+                "refresh rejected with status 400 (invalid_grant)",
+                "invalid_grant",
+            ),
+            (
+                "refresh rejected with status 400 (scope:denied)",
+                "scope:denied",
+            ),
+            ("refresh rejected with status 503", "503"),
+            (
+                "refresh response could not be read",
+                "refresh_response_could_not_be_read",
+            ),
+            ("identity mismatch", "identity_mismatch"),
+            ("stale lifecycle", "stale_lifecycle"),
+            (
+                "commit failed after a rotated response: database is locked",
+                "commit_failed_after_a_rotated_response",
+            ),
+        ] {
+            assert_eq!(refresh_cause(text), class, "{text}");
+        }
+    }
 
     /// A manager for account `a` over an in-memory store, a fixed clock, and a fake token endpoint that
     /// answers every refresh with the measured fixture.
@@ -1224,6 +1281,7 @@ mod tests {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         let clock: Clock = Arc::new(move || now);

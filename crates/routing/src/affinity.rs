@@ -23,6 +23,19 @@ pub struct AffinityEntry {
     /// The cache lane of the last report that wrote the entry: the placement reads an entry of another lane as
     /// no warm prefix, while the conversation climb reads across lanes.
     pub lane: String,
+    /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it, or 0 for an
+    /// entry restored from a row stored before the registry kept it.
+    pub depth: u32,
+}
+
+/// An entry the purge removed, with why: `ttl` for one past its key's idle TTL or whose key no pool serves,
+/// `incarnation` for one whose account is gone or held under another incarnation.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PurgedEntry {
+    pub model: String,
+    pub hash: String,
+    pub entry: AffinityEntry,
+    pub cause: &'static str,
 }
 
 impl AffinityEntry {
@@ -30,6 +43,25 @@ impl AffinityEntry {
     pub fn live(&self, now: i64) -> bool {
         self.ttl_ms > 0 && now - self.written_at <= self.ttl_ms
     }
+}
+
+/// One boundary the rung walk visited, deepest first: the gate's verdict beside the entry, so a record names each
+/// member's deepest entry whether or not the rung took it.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Visited<'a> {
+    pub depth: u32,
+    pub hash: &'a str,
+    pub entry: &'a AffinityEntry,
+    /// `None` for an entry the gate accepted, else the gate's name.
+    pub refused_by: Option<&'static str>,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RungWalk<'a> {
+    /// The index into `visited` of the deepest accepted entry, what `deepest` answers, or `None` when every entry
+    /// was refused or no boundary has one.
+    pub matched: Option<usize>,
+    pub visited: Vec<Visited<'a>>,
 }
 
 /// What a completed inference or probe answer reports: its conversation's links always, and the cache facts
@@ -70,6 +102,11 @@ pub struct AffinityReport {
     /// The TTL every `cache_control` marker of the dispatched body carries, when they all carry one; `None` for a
     /// body without a marker or with markers at both TTLs.
     pub uniform_ttl_ms: Option<i64>,
+    /// The request whose answer this is, the decision that selected the account (`seq`) and the wire attempt that
+    /// completed (`attempt`), so the rows it writes reach the selecting decision's row whichever pass answered.
+    pub request_id: String,
+    pub seq: u32,
+    pub attempt: u32,
 }
 
 pub struct ConversationQuery<'a> {
@@ -110,6 +147,7 @@ fn row_of(model: &str, hash: &str, entry: &AffinityEntry) -> AffinityRow {
         key_generation: entry.key_generation,
         root: entry.root.clone(),
         lane: entry.lane.clone(),
+        depth: entry.depth,
     }
 }
 
@@ -143,6 +181,7 @@ impl AffinityMap {
                     key_generation: row.key_generation,
                     root: row.root,
                     lane: row.lane,
+                    depth: row.depth,
                 },
             );
         }
@@ -188,6 +227,34 @@ impl AffinityMap {
             })
     }
 
+    /// Every boundary with an entry for the model, from the last boundary to the first, each judged by `gate`
+    /// (`None` accepts, `Some(name)` refuses). Every entry is judged, not only those down to the match, so the
+    /// record reads a member's standing at a depth the rung never reached.
+    pub fn walk<'a>(
+        &'a self,
+        canonical_model: &str,
+        boundaries: &'a [String],
+        gate: impl Fn(&'a AffinityEntry) -> Option<&'static str>,
+    ) -> RungWalk<'a> {
+        let mut walk = RungWalk::default();
+        for (index, boundary) in boundaries.iter().enumerate().rev() {
+            let Some(entry) = self.entry(canonical_model, boundary) else {
+                continue;
+            };
+            let refused_by = gate(entry);
+            if refused_by.is_none() && walk.matched.is_none() {
+                walk.matched = Some(walk.visited.len());
+            }
+            walk.visited.push(Visited {
+                depth: index as u32 + 1,
+                hash: boundary,
+                entry,
+                refused_by,
+            });
+        }
+        walk
+    }
+
     /// Upserts the report's boundaries; answers the rows to persist (new or moved).
     pub fn record(&mut self, report: &AffinityReport) -> Vec<AffinityRow> {
         let canonical_model = self.canonical(&report.canonical_model).to_string();
@@ -224,11 +291,12 @@ impl AffinityMap {
         let message_ttl = message_ttl_ms.unwrap_or(0);
         let mut rows = Vec::new();
 
-        for boundary in report.message_boundaries.iter() {
+        for (index, boundary) in report.message_boundaries.iter().enumerate() {
             if let Some(row) = self.upsert(
                 &canonical_model,
                 boundary,
                 AffinityChain::Message,
+                ordinal(index),
                 report,
                 &root,
                 message_confirmed,
@@ -247,6 +315,7 @@ impl AffinityMap {
                     &canonical_model,
                     boundary,
                     AffinityChain::Static,
+                    ordinal(index),
                     report,
                     &root,
                     static_confirmed,
@@ -261,31 +330,42 @@ impl AffinityMap {
     }
 
     /// Entries past `ttl_of(key_id)` (an idle TTL in ms; `None` is unserved), or whose account is gone or under
-    /// another incarnation, leave; answers their keys.
+    /// another incarnation, leave. Answers each with its cause, the account's before the TTL's, since a replaced
+    /// holder's entry would have left whatever its age.
     pub fn purge(
         &mut self,
         now: i64,
         ttl_of: impl Fn(&str) -> Option<i64>,
         incarnation_of: impl Fn(&str) -> Option<u64>,
-    ) -> Vec<(String, String)> {
+    ) -> Vec<PurgedEntry> {
         let mut gone = Vec::new();
         for (model, hashes) in &mut self.entries {
             hashes.retain(|hash, entry| {
+                let replaced = incarnation_of(&entry.account_id) != Some(entry.incarnation);
                 let expired = match ttl_of(&entry.key_id) {
                     None => true,
                     Some(ttl) => now - entry.written_at > ttl,
                 };
-                let leaves =
-                    expired || incarnation_of(&entry.account_id) != Some(entry.incarnation);
-                if leaves {
-                    gone.push((model.clone(), hash.clone()));
-                }
-                !leaves
+                let cause = if replaced {
+                    "incarnation"
+                } else if expired {
+                    "ttl"
+                } else {
+                    return true;
+                };
+                gone.push(PurgedEntry {
+                    model: model.clone(),
+                    hash: hash.clone(),
+                    entry: entry.clone(),
+                    cause,
+                });
+                false
             });
         }
         self.entries.retain(|_, hashes| !hashes.is_empty());
-        for key in &gone {
-            self.dirty.remove(key);
+        for purged in &gone {
+            self.dirty
+                .remove(&(purged.model.clone(), purged.hash.clone()));
         }
         gone
     }
@@ -313,12 +393,15 @@ impl AffinityMap {
     /// dirty; any other case (new, or held by another key) replaces it and yields a row. `confirmed` decides
     /// the warmth: when false a refreshed entry on the report's lane keeps its warm deadline, its `ttl_ms`
     /// shrinking to the lifetime it has left, and one refreshed from another lane or a new one carries no warmth.
+    /// `depth` is the boundary's place in the report's chain, which a refresh in place leaves as it was: a
+    /// boundary's hash covers everything before it, so its place in the chain never changes.
     #[allow(clippy::too_many_arguments)]
     fn upsert(
         &mut self,
         model: &str,
         hash: &str,
         chain: AffinityChain,
+        depth: u32,
         report: &AffinityReport,
         root: &str,
         confirmed: bool,
@@ -377,6 +460,7 @@ impl AffinityMap {
             key_generation: report.key_generation,
             root: inherited_root.unwrap_or_else(|| root.to_string()),
             lane: report.lane.clone(),
+            depth,
         };
         let row = row_of(model, hash, &entry);
         let key: EntryKey = (model.to_string(), hash.to_string());
@@ -384,6 +468,11 @@ impl AffinityMap {
         self.entries.entry(key.0).or_default().insert(key.1, entry);
         Some(row)
     }
+}
+
+/// A chain index as the boundary's place counted from 1.
+fn ordinal(index: usize) -> u32 {
+    u32::try_from(index + 1).unwrap_or(u32::MAX)
 }
 
 impl ConversationLookup for AffinityMap {
@@ -427,6 +516,9 @@ mod tests {
             cache_write_5m_tokens: None,
             cache_write_1h_tokens: None,
             uniform_ttl_ms: None,
+            request_id: "r-1".into(),
+            seq: 1,
+            attempt: 1,
         }
     }
 
@@ -549,6 +641,47 @@ mod tests {
     }
 
     #[test]
+    fn the_walk_judges_every_entry_and_matches_the_deepest_accepted() {
+        let mut map = AffinityMap::default();
+        for (boundary, account) in [("b1", "a1"), ("b2", "a1"), ("b3", "a2")] {
+            map.record(&AffinityReport {
+                message_boundaries: Arc::from([boundary.to_string()]),
+                ..report("k", account, 1_000)
+            });
+        }
+        let boundaries: Vec<String> = ["b1", "b2", "b3"].iter().map(|s| s.to_string()).collect();
+        let gate = |e: &AffinityEntry| (e.account_id == "a2").then_some("expired");
+        let walk = map.walk("m", &boundaries, gate);
+        assert_eq!(
+            walk.visited
+                .iter()
+                .map(|v| (v.depth, v.hash, v.entry.account_id.as_str(), v.refused_by))
+                .collect::<Vec<_>>(),
+            vec![
+                (3, "b3", "a2", Some("expired")),
+                (2, "b2", "a1", None),
+                (1, "b1", "a1", None),
+            ],
+            "every entry is judged, deepest first, past the match as well"
+        );
+        assert_eq!(walk.matched, Some(1));
+        assert_eq!(
+            map.deepest("m", &boundaries, |e| gate(e).is_none())
+                .map(|(depth, _)| depth),
+            Some(walk.visited[1].depth),
+            "the match is the entry `deepest` answers under the same gate"
+        );
+    }
+
+    #[test]
+    fn the_walk_of_a_chain_with_no_entry_is_empty() {
+        let mut map = AffinityMap::default();
+        map.record(&report("k", "a1", 1_000));
+        let boundaries: Vec<String> = ["x1", "x2"].iter().map(|s| s.to_string()).collect();
+        assert_eq!(map.walk("m", &boundaries, |_| None), RungWalk::default());
+    }
+
+    #[test]
     fn the_lookup_steps_over_an_entry_under_another_incarnation() {
         let mut map = AffinityMap::default();
         // b1 is still owned by a1's recorded incarnation; b2's account moved on to incarnation 2 since.
@@ -639,6 +772,7 @@ mod tests {
             key_generation: 0,
             root: "b1".into(),
             lane: crate::lane_key("m", "standard", "none", "-"),
+            depth: 1,
         };
         assert!(!entry.live(1_000));
         let warm = AffinityEntry {
@@ -836,5 +970,25 @@ mod tests {
             "the static size is an estimate that can run past the real prefix, so a read short of it proves no static \
              write: the static boundaries keep five minutes and the message boundary records the hour"
         );
+    }
+
+    #[test]
+    fn a_restored_entry_keeps_the_depth_its_row_names() {
+        let map = AffinityMap::from_rows(vec![AffinityRow {
+            model: "m".into(),
+            hash: "b3".into(),
+            chain: AffinityChain::Message,
+            account_id: "a".into(),
+            incarnation: 1,
+            written_at: 1_000,
+            ttl_ms: 300_000,
+            prefix_tokens: 500,
+            key_id: "k".into(),
+            key_generation: 0,
+            root: "b1".into(),
+            lane: crate::lane_key("m", "standard", "none", "-"),
+            depth: 3,
+        }]);
+        assert_eq!(map.entry("m", "b3").map(|e| e.depth), Some(3));
     }
 }

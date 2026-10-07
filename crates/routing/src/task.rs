@@ -2,30 +2,39 @@
 //! registry snapshot on request, folds the readings and the usage the relay and the poll report, and writes state
 //! through a single writer so the store sees every change in the order the loop made it.
 
-use std::collections::{btree_map, BTreeMap, HashMap};
+use std::collections::{btree_map, BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
 use std::sync::{Arc, Mutex, RwLock};
 use std::time::Duration;
 
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
-    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RegistryLoad, RekeyWrite, RoutingTx, Store,
-    StoreError,
+    AccountState, CooldownRow, PinBurn, PinKey, PinRow, RegistryLoad, RekeyWrite, RoutingLoad,
+    RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
 use tokio_util::sync::CancellationToken;
 
 use crate::affinity::{
-    AffinityMap, AffinityReport, ConversationLookup, ConversationMatch, ConversationQuery,
+    AffinityChain, AffinityMap, AffinityReport, AffinityRow, ConversationLookup, ConversationMatch,
+    ConversationQuery, PurgedEntry,
 };
-use crate::select::{release_reasons, select, MigrateReason, Refusal, SelectRequest, SelectResult};
+use crate::record::{
+    CacheMapEntry, DecisionRecord, DecisionSummary, PinEventFacts, RefusalFacts, RefusedRequest,
+    ShedRoundFacts,
+};
+use crate::select::{
+    decide, release_reasons, seconds_ms, Decided, MigrateReason, Refusal, SelectRequest,
+    SelectResult,
+};
 use crate::state::{
-    burn_folded, is_plan_window, AccountTicket, CreditsState, EvidenceSource, InFlight,
+    burn_folded, is_plan_window, mark_holds, AccountTicket, CreditsState, EvidenceSource, InFlight,
     MemberSpend, OverageEvidence, PinRef, PinUsage, RateTable, RoutingState, SharePricer,
-    StateWrite, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+    StateWrite, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    SEVEN_DAY_FABLE,
 };
-use crate::{resolve, window_for, KeyRefusal, Presented, RegistrySnapshot};
+use crate::{resolve, term, window_for, KeyRefusal, Presented, RegistrySnapshot};
 
 /// The router loop's command queue size, which `/admin/system` reports. A report that finds the queue full waits for a
 /// slot; one the closed queue refuses at shutdown is dropped and counted under its kind.
@@ -57,6 +66,11 @@ const EVENTS: usize = 1_024;
 /// How long after an invalidation the next pin for the same triple counts as a migration rather than a new
 /// session. A failover re-selects within one request, well inside this.
 const MIGRATION_WINDOW_MS: i64 = 60_000;
+
+/// How far apart two readings' resets may lie and still name one reset: a head names its resets in whole seconds and
+/// the poll in milliseconds, so the two sources disagree about one reset by under a second, while a window's next
+/// reset lands hours after the last.
+const RESET_SLACK_MS: i64 = 60_000;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum RouterEvent {
@@ -124,6 +138,109 @@ pub enum RouterEvent {
         account_id: String,
         at: i64,
     },
+    /// One decision as the engine made it. The ledger stores the summary as the list row and the record as the
+    /// frame. Boxed so the enum stays the size of its other variants on the broadcast.
+    Decision {
+        summary: Box<DecisionSummary>,
+        record: Box<DecisionRecord>,
+        at: i64,
+    },
+    /// The cache-map rows a completed answer wrote, for the `cache_map` column of the decision that selected it:
+    /// `seq` names that decision, `attempt` the wire attempt that completed (the decision's own, or a later pass of
+    /// a retry in place, the refresh ladder or the strip retry).
+    CacheMapWritten {
+        request_id: String,
+        seq: u32,
+        attempt: u32,
+        entries: Vec<CacheMapEntry>,
+        at: i64,
+    },
+    /// A shedding round that ran on `account_id` for a request of `pool_id`: the reading that fired it as the lead
+    /// over pace, the round's unit, its pins in the round's order and the marks it made.
+    SheddingRound {
+        account_id: String,
+        pool_id: String,
+        request_id: String,
+        key_id: String,
+        session_id: String,
+        agent_id: String,
+        model: String,
+        round: ShedRoundFacts,
+        at: i64,
+    },
+    /// `blocked()` answered differently before and after a credits reading landed.
+    FastCreditsChanged {
+        account_id: String,
+        before: Option<CreditsState>,
+        after: CreditsState,
+        blocked_before: Option<String>,
+        blocked_after: Option<String>,
+        at: i64,
+    },
+    /// A plan window's stored reading moved to 1.0 or above from under it.
+    WindowSpent {
+        account_id: String,
+        window: String,
+        utilization: f64,
+        reset: Option<i64>,
+        source: WindowSource,
+        source_request_id: Option<String>,
+        at: i64,
+    },
+    /// A window's reset passed: a sample named a later reset, or none once it was read past the stored one
+    /// (`observed` `sample`), or the purge tick found the clock past a stored reset with no newer sample (`clock`),
+    /// once per account, window and reset.
+    WindowReset {
+        account_id: String,
+        window: String,
+        utilization_before: f64,
+        reset_at: i64,
+        next_reset: Option<i64>,
+        observed: &'static str,
+        /// Announced by the first purge after the start, over a reading the router restored: the previous run may
+        /// have announced it already, which the ledger decides from its own newest row.
+        restored: bool,
+        at: i64,
+    },
+    /// The entries the purge removed for one root on one account, with the largest among them. `deepest.depth` is
+    /// the ordinal the entry was written at, never the count removed.
+    WarmPrefixExpired {
+        account_id: String,
+        key_id: String,
+        root: String,
+        model: String,
+        lane: String,
+        entries: u32,
+        deepest: CacheMapEntry,
+        cause: &'static str,
+        at: i64,
+    },
+    /// A pool member entered its wind-down window at a tick.
+    WindDownStarted {
+        account_id: String,
+        pool_id: String,
+        ends_at: i64,
+        wind_down_minutes: u32,
+        end_source: &'static str,
+        /// Announced by the first purge after the start, which finds every member already inside its window: the
+        /// previous run may have announced it already, which the ledger decides from its own newest row.
+        restored: bool,
+        at: i64,
+    },
+    /// The writer reported an `AccountState` row its write moved to another state: the state written, the row's
+    /// identity after the write (its incarnation and the revision the write bumped, `AccountRow.revision`), and the
+    /// cause the fenced write stored with the state, the word the mirror's tick reads off the row. The mirror
+    /// reconciles on the identity, so a transition it observed through the registry already, or a newer one, drops
+    /// this event.
+    AccountStateChanged {
+        account_id: String,
+        to: AccountState,
+        incarnation: u64,
+        revision: u64,
+        cause: StateCause,
+        detail: Option<String>,
+        at: i64,
+    },
 }
 
 #[derive(Clone, Debug)]
@@ -131,10 +248,14 @@ pub struct RouterConfig {
     /// The meter's peak band at a renewal's instant: a pin's banded copy folds its tokens times it, the plain
     /// copy does not.
     pub band: BandWeight,
+    /// Whether the loop's first purge waits for `RouterHandle::release_purge`. The purge tick fires at once, before
+    /// the spawner can subscribe to the broadcast, and the first purge after a start announces the downtime's clock
+    /// resets and wind-downs. The router's start holds it until the ledger subscribed and holds the start row.
+    pub hold_first_purge: bool,
     pub purge_interval: Duration,
-    /// The dollar table and the cost table's 5-hour share table the shedding round prices each pin's burn
-    /// through when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by. The
-    /// task holds them because neither this crate nor the relay can see the ledger's tables.
+    /// The dollar table and the subscription cost model's 5-hour share table the shedding round prices each pin's
+    /// burn through when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by.
+    /// The task holds them because neither this crate nor the relay can see the ledger's tables.
     pub rates: BurnRates,
     /// The share of an account's windows a completed request consumed; the default prices nothing.
     pub share: SharePricer,
@@ -145,6 +266,7 @@ impl Default for RouterConfig {
     fn default() -> Self {
         RouterConfig {
             band: BandWeight::default(),
+            hold_first_purge: false,
             purge_interval: Duration::from_secs(60),
             rates: BurnRates::default(),
             share: SharePricer::default(),
@@ -153,8 +275,8 @@ impl Default for RouterConfig {
     }
 }
 
-/// The two tables a reader prices a pin's burn through, dollars per token and the cost table's 5-hour share on
-/// its reference tier per token, and the fast cells a fast renewal is weighed by. All three default to
+/// The two tables a reader prices a pin's burn through, dollars per token and the subscription cost model's 5-hour
+/// share on its anchor tier per token, and the fast cells a fast renewal is weighed by. All three default to
 /// `RateTable::unit`, so a burn read through the default is a token count and a fast renewal folds unweighed.
 #[derive(Clone, Debug, PartialEq)]
 pub struct BurnRates {
@@ -240,6 +362,11 @@ pub enum Report {
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
+        /// Who moved the state, named at the relay's mark site. The fenced write stores it with the state and the
+        /// event a moved row emits carries it.
+        cause: StateCause,
+        /// The upstream error's message where the verdict read one.
+        detail: Option<String>,
     },
     /// The ledger's standing: `degraded` from a failed batch until one lands and the spend is read again. A replacing
     /// reading.
@@ -299,6 +426,8 @@ pub enum Report {
         account_id: String,
         sample: UtilizationSample,
         incarnation: u64,
+        /// The request whose response head carried the reading, or `None` for the usage poll's.
+        source_request_id: Option<String>,
     },
     /// A finished inference or probe answer's typed tokens on the account that served it, pinned or not: what the
     /// prediction adds to the account's last reading until the next one lands.
@@ -435,6 +564,7 @@ impl Report {
                 account_id,
                 sample,
                 incarnation,
+                ..
             } => Some(CoalesceKey::Sample {
                 account_id: account_id.clone(),
                 incarnation: *incarnation,
@@ -547,6 +677,12 @@ enum Command {
     PinsByPool {
         reply: oneshot::Sender<Vec<(String, u64)>>,
     },
+    /// A request the relay refused before asking for a selection. The loop records it as the request's decision.
+    RecordRefusal {
+        request: RefusedRequest,
+        refusal: RefusalFacts,
+    },
+    ReleasePurge,
     ReleaseSession {
         key_id: String,
         session_id: String,
@@ -578,6 +714,10 @@ enum Command {
     },
     Samples {
         reply: oneshot::Sender<Vec<(String, UtilizationSample)>>,
+    },
+    /// The account-state rows a writer wake moved, sent ahead of the reload the move asks for.
+    StateMoved {
+        rows: Vec<MovedState>,
     },
     Select {
         request: SelectRequest,
@@ -628,14 +768,63 @@ struct WriterShared {
     failed_batches: AtomicU64,
 }
 
+/// What the routing task loaded from the registry at start, for the ledger's `router_started` row.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct LoadCounts {
+    pub pins: usize,
+    /// Accounts with a reading, whatever the number of windows each carries.
+    pub windows: usize,
+    pub affinity_entries: usize,
+    /// Marked rows whose round lies within their pool's dwell at start, each on a pin the load carries under the
+    /// row's epoch.
+    pub shed_marks: usize,
+    /// Rows whose round lies past their pool's dwell at start, which the purge drops once no pool's dwell reads them.
+    pub shed_rounds_stale: usize,
+}
+
+impl LoadCounts {
+    fn of(load: &RoutingLoad, snapshot: &RegistrySnapshot, now: i64) -> LoadCounts {
+        // A row of a pool the registry no longer holds has no dwell left to be read within.
+        let within_dwell = |row: &ShedRoundRow| {
+            snapshot.pool(&row.pool_id).is_some_and(|pool| {
+                now - row.round_at < seconds_ms(pool.shedding.source_dwell_seconds)
+            })
+        };
+        let holds = mark_holds(load);
+        LoadCounts {
+            pins: load.pins.len(),
+            windows: load
+                .windows
+                .iter()
+                .map(|row| row.account_id.as_str())
+                .collect::<HashSet<_>>()
+                .len(),
+            affinity_entries: load.affinity.len(),
+            shed_marks: load
+                .shed_rounds
+                .iter()
+                .filter(|row| within_dwell(row) && holds(row))
+                .count(),
+            shed_rounds_stale: load
+                .shed_rounds
+                .iter()
+                .filter(|row| !within_dwell(row))
+                .count(),
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct RouterHandle {
     affinity: Arc<RwLock<AffinityMap>>,
     /// The reports the closed queue refused, one counter per kind at its position in `Report::KINDS`; the
     /// process's alone, zero at start.
     dropped: Arc<[AtomicU64; Report::KINDS.len()]>,
+    /// The refusal records a full or closed mailbox refused, counted for this process alone from zero at start.
+    dropped_refusals: Arc<AtomicU64>,
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
+    load_counts: LoadCounts,
     /// The replacing readings the loop has not drained yet, shared with the task.
     pending: Pending,
     reports: Arc<ReportSequence>,
@@ -665,6 +854,15 @@ impl RouterHandle {
         self.affinity.clone()
     }
 
+    pub fn load_counts(&self) -> LoadCounts {
+        self.load_counts
+    }
+
+    /// Lets the first purge run, under `RouterConfig::hold_first_purge`. A stopped task takes nothing.
+    pub async fn release_purge(&self) {
+        let _ = self.tx.send(Command::ReleasePurge).await;
+    }
+
     /// What changed in the routing state, as it changes. A receiver that falls behind loses the oldest
     /// events and is told so; the task never waits on a receiver.
     pub fn subscribe_events(&self) -> broadcast::Receiver<RouterEvent> {
@@ -673,6 +871,32 @@ impl RouterHandle {
 
     pub async fn select(&self, request: SelectRequest) -> Result<SelectAnswer, RouterGone> {
         self.ask(|reply| Command::Select { request, reply }).await
+    }
+
+    /// A request the relay refused before asking for a selection, recorded as the request's one decision: sends
+    /// `Command::RecordRefusal { request, refusal }` through `try_send` and never waits for mailbox room, so the
+    /// 400 toward the client is not delayed by a full router queue. A full or closed mailbox drops the record,
+    /// counted in `dropped_refusals` beside a warn. The loop's arm builds `DecisionRecord::refused` on its snapshot
+    /// and emits the `Decision`.
+    pub fn record_refusal(&self, request: RefusedRequest, refusal: RefusalFacts) {
+        let request_id = request.request_id.clone();
+        if self
+            .tx
+            .try_send(Command::RecordRefusal { request, refusal })
+            .is_err()
+        {
+            self.dropped_refusals.fetch_add(1, Ordering::Relaxed);
+            tracing::warn!(
+                request = %request_id,
+                "the router's mailbox could not take a refusal's record, which is dropped"
+            );
+        }
+    }
+
+    /// The refusal records a full or closed mailbox refused, beside `dropped_reports`. It counts this process's
+    /// alone, from zero at start.
+    pub fn dropped_refusals(&self) -> u64 {
+        self.dropped_refusals.load(Ordering::Relaxed)
     }
 
     /// Waits for a mailbox slot: a report is a fact about the past that must land. The relay's end-of-answer
@@ -964,7 +1188,7 @@ impl RouterHandle {
 }
 
 /// Compiled only under the `debug-hooks` feature, which a dependent's dev-dependency turns on, so a release build
-/// carries no way to stall the task's reports.
+/// carries no way to stall the task's reports or to put an event of its own on the task's broadcast.
 #[cfg(any(test, feature = "debug-hooks"))]
 impl RouterHandle {
     /// Answers once the task parks every affinity report it receives, unapplied and with the watermark behind
@@ -991,6 +1215,12 @@ impl RouterHandle {
         LoopPark {
             release: Some(release),
         }
+    }
+
+    /// Puts `event` on the broadcast as the loop puts its own, so a test can order what a subscriber receives
+    /// against a store write the loop never made.
+    pub fn emit(&self, event: RouterEvent) {
+        let _ = self.events.send(event);
     }
 }
 
@@ -1065,6 +1295,10 @@ struct Task {
     invalidated: HashMap<PinKey, (String, &'static str, i64)>,
     /// The reloads the running load answers: those that were waiting when it started.
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
+    /// The first purge waits while set. `Command::ReleasePurge` clears it.
+    purge_held: bool,
+    /// Whether a purge ran since the start: the first one announces the restored state again.
+    purged: bool,
     /// Whether a registry load runs; at most one does.
     loading: bool,
     /// The affinity reports a test's hold keeps unapplied, in queue order; `None` while no hold is on.
@@ -1075,6 +1309,9 @@ struct Task {
     /// the running load's read.
     reload_waiters: Vec<oneshot::Sender<Result<(), String>>>,
     reports: Arc<ReportSequence>,
+    /// The reset last announced per account and window, by a sample or by the clock, so one passing reset is
+    /// announced once whichever saw it first.
+    reset_announced: HashMap<(String, String), i64>,
     revision: u64,
     snapshot: Arc<RwLock<Arc<RegistrySnapshot>>>,
     state: RoutingState,
@@ -1082,6 +1319,9 @@ struct Task {
     /// The rotation each slot's last touch was stamped under, beside its timestamp: a touch under a different
     /// rotation is a first sight of that presentation, not a repeat the grace period should swallow.
     touched_at: HashMap<(String, Presented), (i64, Option<i64>)>,
+    /// The pool members inside their wind-down at the last purge, by pool and account: a member's start is the
+    /// tick that first finds it there.
+    winding: HashSet<(String, String)>,
     writer: mpsc::Sender<Vec<StateWrite>>,
     /// Resolves once the writer has landed everything it was sent and exited; `shutdown` waits on it.
     writer_done: Option<oneshot::Receiver<()>>,
@@ -1102,7 +1342,13 @@ pub fn spawn(
         now,
         1,
     ))));
-    let mut state = RoutingState::from_load(store.load_routing()?);
+    let load = store.load_routing()?;
+    let load_counts = LoadCounts::of(
+        &load,
+        &snapshot.read().expect("snapshot lock poisoned"),
+        now,
+    );
+    let mut state = RoutingState::from_load(load);
     // One table, shared by the handle (the relay's synchronous permits and tickets) and the state (the
     // selector's cap partition), so a count is exact wherever it is read.
     let in_flight = InFlight::default();
@@ -1123,8 +1369,10 @@ pub fn spawn(
     let handle = RouterHandle {
         affinity,
         dropped: Arc::default(),
+        dropped_refusals: Arc::default(),
         events: events.clone(),
         in_flight,
+        load_counts,
         pending: pending.clone(),
         reports: reports.clone(),
         snapshot: snapshot.clone(),
@@ -1154,10 +1402,15 @@ pub fn spawn(
                 writer.figures.depth.fetch_sub(1, Ordering::Relaxed);
                 batch.extend(more);
             }
-            // An account-state mark that moved the row changes what the snapshot has to say, so the loop is
-            // asked for a reload once the write is on disk rather than before.
-            if writer.wake(batch).await {
+            // An account-state mark that landed changes what the snapshot has to say, so the loop is asked for a
+            // reload once the write is on disk rather than before. The rows whose state it moved go first, so their
+            // events leave ahead of the snapshot that shows them.
+            let marks = writer.wake(batch).await;
+            if marks.landed {
                 if let Some(tx) = writer_tx.upgrade() {
+                    if !marks.moved.is_empty() {
+                        let _ = tx.send(Command::StateMoved { rows: marks.moved }).await;
+                    }
                     let (reply, _rx) = oneshot::channel();
                     let _ = tx.send(Command::Reload { reply }).await;
                 }
@@ -1166,6 +1419,7 @@ pub fn spawn(
         writer.retry().await;
         let _ = done_tx.send(());
     });
+    let purge_held = config.hold_first_purge;
     let mut task = Task {
         cancel: HashMap::new(),
         clock,
@@ -1178,14 +1432,18 @@ pub fn spawn(
         loading: false,
         #[cfg(any(test, feature = "debug-hooks"))]
         parked: None,
+        purge_held,
+        purged: false,
         pending,
         reload_waiters: Vec::new(),
         reports,
+        reset_announced: HashMap::new(),
         revision: 1,
         snapshot,
         state,
         store,
         touched_at: HashMap::new(),
+        winding: HashSet::new(),
         writer,
         writer_done: Some(done_rx),
         writer_status,
@@ -1214,6 +1472,11 @@ pub fn spawn(
                                     task.resolve(&spelling, &dated_id, at);
                                     let _ = reply.send(());
                                 }
+                                // The mailbox took it, so it is emitted rather than lost uncounted.
+                                Command::RecordRefusal { request, refusal } => {
+                                    task.record_refusal(&request, &refusal);
+                                }
+                                Command::StateMoved { rows } => task.state_moved(rows),
                                 _ => {}
                             }
                         }
@@ -1240,7 +1503,7 @@ pub fn spawn(
                         break;
                     }
                 },
-                _ = purge.tick() => task.purge(),
+                _ = purge.tick(), if !task.purge_held => task.purge(),
                 // A slot the writer frees takes the backlog at the top of the next turn, so a store that recovers
                 // clears `degraded` without waiting on a command or the purge tick.
                 _ = task.writer_room(), if task.has_deferred() => {}
@@ -1257,13 +1520,72 @@ pub fn spawn(
 /// one it met, and `remainder` those writes in order, rekeys among them; `rekey` is the refused rekey the writer tries
 /// once more.
 struct Landed {
-    moved: bool,
+    marks: Marks,
     refused: Option<StoreError>,
     skipped: usize,
     stopped: Option<StoreError>,
     left: usize,
     rekey: Option<Box<RekeyWrite>>,
     remainder: Vec<StateWrite>,
+}
+
+/// An account-state row a writer wake moved, for the loop's `AccountStateChanged`: the state written, the row's
+/// identity after the write and the cause the write stored.
+struct MovedState {
+    account_id: String,
+    state: AccountState,
+    incarnation: u64,
+    revision: u64,
+    cause: StateCause,
+    detail: Option<String>,
+}
+
+/// What a wake's account-state writes did: whether any passed its fences, which the snapshot is rebuilt from even
+/// when the state was already the one written, and the rows whose state moved, which alone are transitions.
+#[derive(Default)]
+struct Marks {
+    landed: bool,
+    moved: Vec<MovedState>,
+}
+
+impl Marks {
+    fn absorb(&mut self, other: Marks) {
+        self.landed |= other.landed;
+        self.moved.extend(other.moved);
+    }
+
+    /// One state write's marks from the store's answer: the row's revision after it and the state before it, `None`
+    /// when the fences refused it.
+    fn of(write: &StateWrite, answer: Option<(u64, AccountState)>) -> Marks {
+        let (
+            StateWrite::AccountState {
+                account_id,
+                state,
+                incarnation,
+                cause,
+                detail,
+                ..
+            },
+            Some((revision, before)),
+        ) = (write, answer)
+        else {
+            return Marks::default();
+        };
+        Marks {
+            landed: true,
+            moved: (before != *state)
+                .then(|| MovedState {
+                    account_id: account_id.clone(),
+                    state: *state,
+                    incarnation: *incarnation,
+                    revision,
+                    cause: *cause,
+                    detail: detail.clone(),
+                })
+                .into_iter()
+                .collect(),
+        }
+    }
 }
 
 /// The writer task's own state between wakes.
@@ -1281,31 +1603,31 @@ struct Writer {
 }
 
 impl Writer {
-    /// Lands what an earlier wake left to try again, then `batch`; answers whether an account-state mark moved its
-    /// row.
-    async fn wake(&mut self, batch: Vec<StateWrite>) -> bool {
-        let retried = self.retry().await;
-        self.land(batch, false).await || retried
+    /// Lands what an earlier wake left to try again, then `batch`, and answers what their account-state marks did.
+    async fn wake(&mut self, batch: Vec<StateWrite>) -> Marks {
+        let mut marks = self.retry().await;
+        marks.absorb(self.land(batch, false).await);
+        marks
     }
 
     /// The refused rekey's one more try, then the unapplied remainder's.
-    async fn retry(&mut self) -> bool {
+    async fn retry(&mut self) -> Marks {
         if let Some(rekey) = self.rekey.take() {
             retry_rekey(&self.store, rekey).await;
         }
         match self.remainder.take() {
             Some(remainder) => self.land(remainder, true).await,
-            None => false,
+            None => Marks::default(),
         }
     }
 
     /// `retried` is whether `batch` is an earlier wake's remainder, which a second failure drops.
-    async fn land(&mut self, batch: Vec<StateWrite>, retried: bool) -> bool {
+    async fn land(&mut self, batch: Vec<StateWrite>, retried: bool) -> Marks {
         let store = self.store.clone();
         let size = batch.len();
         match tokio::task::spawn_blocking(move || land(&store, batch)).await {
             Ok(Landed {
-                moved,
+                marks,
                 refused,
                 skipped,
                 stopped,
@@ -1356,11 +1678,11 @@ impl Writer {
                         );
                     }
                 }
-                moved
+                marks
             }
             Err(error) => {
                 tracing::error!(%error, batch = size, "a routing state write panicked, its batch is lost");
-                false
+                Marks::default()
             }
         }
     }
@@ -1385,8 +1707,8 @@ async fn retry_rekey(store: &Arc<Store>, rekey: Box<RekeyWrite>) {
 fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
     let size = batch.len();
     match store.write_routing(|tx| apply_in(tx, &batch)) {
-        Ok(moved) => Landed {
-            moved,
+        Ok(marks) => Landed {
+            marks,
             refused: None,
             skipped: 0,
             stopped: None,
@@ -1412,7 +1734,7 @@ fn land(store: &Store, batch: Vec<StateWrite>) -> Landed {
 
 fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
     let size = batch.len();
-    let mut moved = false;
+    let mut marks = Marks::default();
     let mut refused = None;
     let mut skipped = 0;
     let mut stopped = None;
@@ -1422,8 +1744,8 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
     let mut writes = batch.into_iter().enumerate();
     while let Some((index, write)) = writes.next() {
         match apply_one(store, &write) {
-            Ok(mark_moved) => {
-                moved |= mark_moved;
+            Ok(write_marks) => {
+                marks.absorb(write_marks);
                 // The rekey's upsert carries no generation check, so retrying a refused one after a later rekey
                 // of its spelling landed would put the older mapping back and restore the rows the later one moved.
                 if let StateWrite::Rekey(landed) = &write {
@@ -1459,7 +1781,7 @@ fn replay(store: &Store, batch: Vec<StateWrite>) -> Landed {
         }
     }
     Landed {
-        moved,
+        marks,
         refused,
         skipped,
         stopped,
@@ -1478,10 +1800,10 @@ fn refuse_rekey(refused_rekeys: &mut Vec<RekeyWrite>, rekey: RekeyWrite) {
     refused_rekeys.push(rekey);
 }
 
-/// Reports whether any account-state mark in the batch actually moved its row, which is the one write here
-/// that the registry snapshot has to be rebuilt from.
-fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreError> {
-    let mut moved = false;
+/// Reports what the batch's account-state marks did, the one write here that the registry snapshot has to be
+/// rebuilt from.
+fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, StoreError> {
+    let mut marks = Marks::default();
     for write in batch {
         match write {
             StateWrite::AccountState {
@@ -1490,14 +1812,18 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreE
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
+                cause,
+                ..
             } => {
-                moved |= tx.set_state_if_generations(
+                let answer = tx.set_state_if_generations(
                     account_id,
                     *state,
+                    *cause,
                     *incarnation,
                     *lifecycle_generation,
                     *credential_generation,
                 )?;
+                marks.absorb(Marks::of(write, answer));
             }
             StateWrite::DeleteAffinity(keys) => {
                 tx.delete_affinity(keys)?;
@@ -1508,10 +1834,20 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreE
             StateWrite::DeletePin(key) => {
                 tx.delete_pin(key)?;
             }
+            StateWrite::PurgeShedRounds { before } => {
+                tx.purge_shed_rounds_before(*before)?;
+            }
             StateWrite::PurgeStaleWindows => {
                 tx.purge_stale_windows()?;
             }
             StateWrite::Rekey(rekey) => tx.rekey_resolution(rekey)?,
+            StateWrite::ShedRound {
+                pool_id,
+                account_id,
+                incarnation,
+                round_at,
+                pins,
+            } => tx.replace_shed_round(pool_id, account_id, *incarnation, *round_at, pins)?,
             StateWrite::UpsertAffinity(rows) => tx.upsert_affinity(rows)?,
             StateWrite::UpsertCooldown(row) => tx.upsert_cooldown(row)?,
             StateWrite::UpsertCredits(row) => {
@@ -1526,12 +1862,12 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<bool, StoreE
             }
         }
     }
-    Ok(moved)
+    Ok(marks)
 }
 
-/// One write through the store's own method for it, its own commit; answers whether an account-state mark moved
-/// its row.
-fn apply_one(store: &Store, write: &StateWrite) -> Result<bool, StoreError> {
+/// One write through the store's own method for it, its own commit. Answers what an account-state mark did.
+fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
+    let none = Marks::default;
     match write {
         StateWrite::AccountState {
             account_id,
@@ -1539,26 +1875,43 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<bool, StoreError> {
             incarnation,
             lifecycle_generation,
             credential_generation,
-        } => store.set_state_if_generations(
-            account_id,
-            *state,
-            *incarnation,
-            *lifecycle_generation,
-            *credential_generation,
-        ),
-        StateWrite::DeleteAffinity(keys) => store.delete_affinity(keys).map(|_| false),
+            cause,
+            ..
+        } => store
+            .set_state_if_generations(
+                account_id,
+                *state,
+                *cause,
+                *incarnation,
+                *lifecycle_generation,
+                *credential_generation,
+            )
+            .map(|answer| Marks::of(write, answer)),
+        StateWrite::DeleteAffinity(keys) => store.delete_affinity(keys).map(|_| none()),
         StateWrite::DeleteCooldown(account_id, scope) => {
-            store.delete_cooldown(account_id, scope).map(|_| false)
+            store.delete_cooldown(account_id, scope).map(|_| none())
         }
-        StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| false),
-        StateWrite::PurgeStaleWindows => store.purge_stale_windows().map(|_| false),
-        StateWrite::Rekey(rekey) => store.rekey_resolution(rekey).map(|()| false),
-        StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| false),
-        StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| false),
-        StateWrite::UpsertCredits(row) => store.upsert_credits(row).map(|_| false),
-        StateWrite::UpsertOverage(row) => store.upsert_overage(row).map(|_| false),
-        StateWrite::UpsertPin(row) => store.upsert_pin(row).map(|()| false),
-        StateWrite::UpsertWindow(row) => store.upsert_window(row).map(|_| false),
+        StateWrite::DeletePin(key) => store.delete_pin(key).map(|_| none()),
+        StateWrite::PurgeShedRounds { before } => {
+            store.purge_shed_rounds_before(*before).map(|_| none())
+        }
+        StateWrite::PurgeStaleWindows => store.purge_stale_windows().map(|_| none()),
+        StateWrite::Rekey(rekey) => store.rekey_resolution(rekey).map(|()| none()),
+        StateWrite::ShedRound {
+            pool_id,
+            account_id,
+            incarnation,
+            round_at,
+            pins,
+        } => store
+            .replace_shed_round(pool_id, account_id, *incarnation, *round_at, pins)
+            .map(|()| none()),
+        StateWrite::UpsertAffinity(rows) => store.upsert_affinity(rows).map(|()| none()),
+        StateWrite::UpsertCooldown(row) => store.upsert_cooldown(row).map(|()| none()),
+        StateWrite::UpsertCredits(row) => store.upsert_credits(row).map(|_| none()),
+        StateWrite::UpsertOverage(row) => store.upsert_overage(row).map(|_| none()),
+        StateWrite::UpsertPin(row) => store.upsert_pin(row).map(|()| none()),
+        StateWrite::UpsertWindow(row) => store.upsert_window(row).map(|_| none()),
     }
 }
 
@@ -1577,10 +1930,120 @@ fn take_final(pending: &Pending) -> BTreeMap<CoalesceKey, Report> {
     std::mem::take(&mut pending.readings)
 }
 
+/// The rows a completed answer wrote, for the decision that selected it. `record` answers its rows in chain order,
+/// so one pass over each chain finds every row's depth.
+fn cache_map_written(report: &AffinityReport, rows: &[AffinityRow]) -> RouterEvent {
+    let mut message = report.message_boundaries.iter().enumerate();
+    let mut static_ = report.static_boundaries.iter().enumerate();
+    let entries = rows
+        .iter()
+        .map(|row| {
+            let chain = match row.chain {
+                AffinityChain::Message => &mut message,
+                AffinityChain::Static => &mut static_,
+            };
+            let depth = chain
+                .find(|(_, hash)| **hash == row.hash)
+                .map_or(0, |(index, _)| u32::try_from(index + 1).unwrap_or(u32::MAX));
+            CacheMapEntry {
+                tier: row.chain.as_str(),
+                depth,
+                prefix_tokens: row.prefix_tokens,
+                ttl_ms: row.ttl_ms,
+                account_id: row.account_id.clone(),
+            }
+        })
+        .collect();
+    RouterEvent::CacheMapWritten {
+        request_id: report.request_id.clone(),
+        seq: report.seq,
+        attempt: report.attempt,
+        entries,
+        at: report.now,
+    }
+}
+
+/// A pin event as the decision names it: a move with its reason, an expiry with the first reason the task read
+/// against the pin.
+fn pin_event_facts(event: &RouterEvent) -> Option<PinEventFacts> {
+    let (kind, reason) = match event {
+        RouterEvent::PinCreated { .. } => ("pin_created", None),
+        RouterEvent::PinMigrated { reason, .. } => ("pin_migrated", Some(reason.clone())),
+        RouterEvent::PinExpired { reasons, .. } => {
+            ("pin_expired", reasons.first().map(|r| r.to_string()))
+        }
+        _ => return None,
+    };
+    Some(PinEventFacts { kind, reason })
+}
+
 impl Task {
     /// A send with no receiver is an error and means nothing: the loop must never depend on anyone listening.
     fn emit(&self, event: RouterEvent) {
         let _ = self.events.send(event);
+    }
+
+    /// The decision of a request the relay refused before asking for a selection, built on the current snapshot.
+    fn record_refusal(&self, request: &RefusedRequest, refusal: &RefusalFacts) {
+        let snapshot = self
+            .snapshot
+            .read()
+            .expect("snapshot lock poisoned")
+            .clone();
+        let (record, summary) = DecisionRecord::refused(request, &snapshot, refusal);
+        self.emit(RouterEvent::Decision {
+            summary: Box::new(summary),
+            record: Box::new(record),
+            at: request.at,
+        });
+    }
+
+    /// One transition per account-state row the writer moved, with the cause the write stored.
+    fn state_moved(&self, rows: Vec<MovedState>) {
+        let at = (self.clock)();
+        for row in rows {
+            self.emit(RouterEvent::AccountStateChanged {
+                account_id: row.account_id,
+                to: row.state,
+                incarnation: row.incarnation,
+                revision: row.revision,
+                cause: row.cause,
+                detail: row.detail,
+                at,
+            });
+        }
+    }
+
+    /// Answers a request the current registry refuses before the engine runs, its decision emitted first.
+    fn refuse(
+        &self,
+        request: &SelectRequest,
+        snapshot: &RegistrySnapshot,
+        refusal: Refusal,
+        reply: oneshot::Sender<SelectAnswer>,
+    ) {
+        let reason = match &refusal {
+            Refusal::Key(refusal) => refusal.to_string(),
+            Refusal::Resolve(refusal) => refusal.to_string(),
+        };
+        let (record, summary) = DecisionRecord::refused(
+            &RefusedRequest::from(request),
+            snapshot,
+            &RefusalFacts {
+                kind: "key",
+                reason,
+            },
+        );
+        self.emit(RouterEvent::Decision {
+            summary: Box::new(summary),
+            record: Box::new(record),
+            at: request.now,
+        });
+        let _ = reply.send(SelectAnswer {
+            result: SelectResult::Refused(refusal),
+            cancel: CancellationToken::new(),
+            ticket: None,
+        });
     }
 
     /// Dropping the sender ends the writer's loop; waiting on `writer_done` is what makes an acknowledged pin or
@@ -1640,22 +2103,19 @@ impl Task {
                     let key = match snapshot.authenticate_id(&request.key_id, now) {
                         Ok(key) => key,
                         Err(refusal) => {
-                            let _ = reply.send(SelectAnswer {
-                                result: SelectResult::Refused(Refusal::Key(refusal)),
-                                cancel: CancellationToken::new(),
-                                ticket: None,
-                            });
+                            self.refuse(&request, &snapshot, Refusal::Key(refusal), reply);
                             return;
                         }
                     };
                     // The id is reusable, so the lifetime is the identity: a key created again under the id
                     // since admission is another key, and the request is refused as a refused id is.
                     if key.created_at != request.key_generation {
-                        let _ = reply.send(SelectAnswer {
-                            result: SelectResult::Refused(Refusal::Key(KeyRefusal::Replaced)),
-                            cancel: CancellationToken::new(),
-                            ticket: None,
-                        });
+                        self.refuse(
+                            &request,
+                            &snapshot,
+                            Refusal::Key(KeyRefusal::Replaced),
+                            reply,
+                        );
                         return;
                     }
                     match resolve(
@@ -1666,11 +2126,7 @@ impl Task {
                     ) {
                         Ok(candidates) => request.candidates = candidates,
                         Err(refusal) => {
-                            let _ = reply.send(SelectAnswer {
-                                result: SelectResult::Refused(Refusal::Resolve(refusal)),
-                                cancel: CancellationToken::new(),
-                                ticket: None,
-                            });
+                            self.refuse(&request, &snapshot, Refusal::Resolve(refusal), reply);
                             return;
                         }
                     }
@@ -1690,9 +2146,20 @@ impl Task {
                     .as_ref()
                     .map(|old| release_reasons(&self.state, &snapshot, old, &request))
                     .unwrap_or_default();
-                let (mut result, writes) =
-                    select(&mut self.state, &snapshot, &request, &mut rand::rng());
+                let Decided {
+                    mut result,
+                    writes,
+                    mut record,
+                    mut summary,
+                    shed_round,
+                } = decide(&mut self.state, &snapshot, &request, &mut rand::rng());
                 self.write(writes);
+                if let Some(pin) = record.pin.as_mut() {
+                    pin.released = released.clone();
+                }
+                // Collected rather than emitted, so the decision naming them goes out first and the ledger lands
+                // its row and its pin events in one tick.
+                let mut pin_events = Vec::new();
                 if let Some(key) = &pin_key {
                     let (k, s, ag, m) = (&key.key_id, &key.session_id, &key.agent_id, &key.model);
                     let after = self.state.pin(key).cloned();
@@ -1711,7 +2178,12 @@ impl Task {
                                     if let SelectResult::Selected(selection) = &mut result {
                                         selection.trace.moved = Some(reason);
                                     }
-                                    self.emit(RouterEvent::PinMigrated {
+                                    record.outcome.rule = Some(reason);
+                                    // The invalidation removed the pin `finish` reads a move's source from, so the
+                                    // entry it left behind names the account the request left.
+                                    record.outcome.from_account_id = Some(from.clone());
+                                    summary.rule = Some(reason);
+                                    pin_events.push(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
                                         agent_id: ag.clone(),
@@ -1723,7 +2195,7 @@ impl Task {
                                         at: now,
                                     });
                                 }
-                                None => self.emit(RouterEvent::PinCreated {
+                                None => pin_events.push(RouterEvent::PinCreated {
                                     key_id: k.clone(),
                                     session_id: s.clone(),
                                     agent_id: ag.clone(),
@@ -1741,7 +2213,7 @@ impl Task {
                                     .map(MigrateReason::as_str)
                                     .unwrap_or("expired");
                                 if reason == "expired" {
-                                    self.emit(RouterEvent::PinExpired {
+                                    pin_events.push(RouterEvent::PinExpired {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
                                         agent_id: ag.clone(),
@@ -1750,7 +2222,7 @@ impl Task {
                                         reasons: released.clone(),
                                         at: now,
                                     });
-                                    self.emit(RouterEvent::PinCreated {
+                                    pin_events.push(RouterEvent::PinCreated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
                                         agent_id: ag.clone(),
@@ -1760,7 +2232,7 @@ impl Task {
                                         at: now,
                                     });
                                 } else {
-                                    self.emit(RouterEvent::PinMigrated {
+                                    pin_events.push(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
                                         session_id: s.clone(),
                                         agent_id: ag.clone(),
@@ -1774,7 +2246,7 @@ impl Task {
                                 }
                             }
                         }
-                        (Some(old), None) => self.emit(RouterEvent::PinExpired {
+                        (Some(old), None) => pin_events.push(RouterEvent::PinExpired {
                             key_id: k.clone(),
                             session_id: s.clone(),
                             agent_id: ag.clone(),
@@ -1785,6 +2257,26 @@ impl Task {
                         }),
                         _ => {}
                     }
+                }
+                record.outcome.pin_events = pin_events.iter().filter_map(pin_event_facts).collect();
+                let round = shed_round.map(|round| RouterEvent::SheddingRound {
+                    account_id: round.account_id,
+                    pool_id: record.request.pool_id.clone(),
+                    request_id: request.request_id.clone(),
+                    key_id: round.pin.key_id,
+                    session_id: round.pin.session_id,
+                    agent_id: round.pin.agent_id,
+                    model: round.pin.model,
+                    round: round.facts,
+                    at: request.now,
+                });
+                self.emit(RouterEvent::Decision {
+                    summary: Box::new(summary),
+                    record: Box::new(record),
+                    at: request.now,
+                });
+                for event in pin_events.into_iter().chain(round) {
+                    self.emit(event);
                 }
                 let (cancel, ticket) = match &result {
                     // Charged here, in the one place selections are serialized, so the count the next selection
@@ -1810,8 +2302,10 @@ impl Task {
                 });
             }
             Command::Report(report, seq) => self.numbered_report(report, seq),
+            Command::RecordRefusal { request, refusal } => self.record_refusal(&request, &refusal),
             // The top of this turn drained the map already.
             Command::Coalesced => {}
+            Command::StateMoved { rows } => self.state_moved(rows),
             #[cfg(any(test, feature = "debug-hooks"))]
             Command::HoldReports { reply } => {
                 self.parked.get_or_insert_with(Vec::new);
@@ -1837,6 +2331,8 @@ impl Task {
                 self.resolve(&spelling, &dated_id, at);
                 let _ = reply.send(());
             }
+            // The purge tick held since the start is still due, so the loop's next turn runs the first purge.
+            Command::ReleasePurge => self.purge_held = false,
             Command::Canonicals { models, reply } => {
                 let _ = reply.send(
                     models
@@ -2043,7 +2539,10 @@ impl Task {
     fn report(&mut self, report: Report) {
         match report {
             Report::Affinity(mut report) => {
+                // The account's next holder passes the report over, so it writes no row and its decision's cache map
+                // reads empty, as an answer's that wrote none does.
                 if self.moved_past(&report.account_id, report.incarnation) {
+                    self.emit(cache_map_written(&report, &[]));
                     return;
                 }
                 // The map files the entry under the resolved model, so its lane names that model too: an answer
@@ -2055,6 +2554,7 @@ impl Task {
                     .write()
                     .expect("affinity lock poisoned")
                     .record(&report);
+                self.emit(cache_map_written(&report, &rows));
                 if !rows.is_empty() {
                     self.write(vec![StateWrite::UpsertAffinity(rows)]);
                 }
@@ -2155,10 +2655,28 @@ impl Task {
                 let observed_at = state.observed_at;
                 let room = state.blocked().is_none();
                 let row = RoutingState::credits_row(&account_id, &state);
+                // Read before the fold replaces it, and the holder's own: another holder's state is no edge.
+                let before = self.state.credits_of(&account_id, incarnation).cloned();
+                let after = state.clone();
                 if !self.state.record_credits(&account_id, state) {
                     return;
                 }
                 self.write(vec![StateWrite::UpsertCredits(row)]);
+                let blocked_before = before
+                    .as_ref()
+                    .and_then(CreditsState::blocked)
+                    .map(String::from);
+                let blocked_after = after.blocked().map(String::from);
+                if blocked_before != blocked_after {
+                    self.emit(RouterEvent::FastCreditsChanged {
+                        account_id: account_id.clone(),
+                        before,
+                        after,
+                        blocked_before,
+                        blocked_after,
+                        at: (self.clock)(),
+                    });
+                }
                 if !room {
                     return;
                 }
@@ -2391,10 +2909,22 @@ impl Task {
                 account_id,
                 sample,
                 incarnation,
+                source_request_id,
             } => {
                 if self.moved_past(&account_id, incarnation) {
                     return;
                 }
+                // The edges compare each plan window's stored reading with the one that replaces it, so the stored
+                // ones are read before the fold.
+                let stored: HashMap<&str, WindowReading> = sample
+                    .windows
+                    .keys()
+                    .filter(|window| is_plan_window(window))
+                    .filter_map(|window| {
+                        let reading = self.state.sample(&account_id)?.reading(window)?;
+                        Some((window.as_str(), reading))
+                    })
+                    .collect();
                 // A cooled account sends no requests, so a window the upstream reset ahead of the deadline it
                 // announced reaches the router here and nowhere else. Only a sample newer than the stored one
                 // answers for the account now: a head and a poll can cross, and the older one's reading is one
@@ -2408,6 +2938,19 @@ impl Task {
                     // An api_key bucket refills within a minute, so only the plan windows are worth a restart.
                     let windows: Vec<String> =
                         moved.into_iter().filter(|w| is_plan_window(w)).collect();
+                    for window in &windows {
+                        let Some(reading) = sample.reading(window) else {
+                            continue;
+                        };
+                        self.window_edges(
+                            &account_id,
+                            window,
+                            stored.get(window.as_str()).copied(),
+                            reading,
+                            source_request_id.as_deref(),
+                            now,
+                        );
+                    }
                     let rows = self.state.window_rows(&account_id, &windows, incarnation);
                     self.write(rows.into_iter().map(StateWrite::UpsertWindow).collect());
                 }
@@ -2466,6 +3009,8 @@ impl Task {
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
+                cause,
+                detail,
             } => {
                 // The relay decided; the store is the source the snapshot is rebuilt from, so the write comes
                 // first and the reload follows once it has landed. The write is fenced by the incarnation and
@@ -2479,6 +3024,8 @@ impl Task {
                     incarnation,
                     lifecycle_generation,
                     credential_generation,
+                    cause,
+                    detail,
                 }]);
             }
         }
@@ -2721,6 +3268,10 @@ impl Task {
                 });
             }
         }
+        let restored = !std::mem::replace(&mut self.purged, true);
+        self.clock_resets(now, restored);
+        self.wind_downs(&snapshot, now, restored);
+        self.expiries(&purged.affinity_entries, now);
         let mut writes: Vec<StateWrite> = purged
             .cooldowns
             .into_iter()
@@ -2746,10 +3297,202 @@ impl Task {
         if !refreshed.is_empty() {
             writes.push(StateWrite::UpsertAffinity(refreshed));
         }
+        // One cut over every pool, the longest dwell's: a faster pool's round stays on disk while a slower pool that
+        // holds the account can still read the account's stamp from it after a restart. With no pool, nothing reads
+        // a round.
+        let longest_dwell_ms = snapshot
+            .pools()
+            .map(|pool| seconds_ms(pool.shedding.source_dwell_seconds))
+            .max()
+            .unwrap_or(0);
+        writes.push(StateWrite::PurgeShedRounds {
+            before: now - longest_dwell_ms,
+        });
         // The fenced upsert keeps a previous holder's window rows off disk; this sweep is the backstop, so none that
         // got there anyway outlives a tick.
         writes.push(StateWrite::PurgeStaleWindows);
         self.write(writes);
+    }
+
+    /// The edges a plan window's new reading crosses against the stored one: its reset passing, which a later
+    /// reset names, or no reset on a reading taken past it, then the window spent, which a reading at 1.0 or above
+    /// names over one under it.
+    fn window_edges(
+        &mut self,
+        account_id: &str,
+        window: &str,
+        stored: Option<WindowReading>,
+        reading: WindowReading,
+        source_request_id: Option<&str>,
+        now: i64,
+    ) {
+        let passed = stored.and_then(|stored| {
+            let reset_at = stored.reset?;
+            let next_reset = match reading.reset {
+                Some(next) => {
+                    (next > reset_at.saturating_add(RESET_SLACK_MS)).then_some(Some(next))
+                }
+                // The reading replaces the stored one whole, so the clock walk would never see this reset: it is
+                // announced here or nowhere.
+                None => (reset_at <= reading.observed_at).then_some(None),
+            }?;
+            Some((stored.utilization, reset_at, next_reset))
+        });
+        if let Some((utilization_before, reset_at, next_reset)) = passed {
+            if self.announce_reset(account_id, window, reset_at) {
+                self.emit(RouterEvent::WindowReset {
+                    account_id: account_id.to_string(),
+                    window: window.to_string(),
+                    utilization_before,
+                    reset_at,
+                    next_reset,
+                    observed: "sample",
+                    restored: false,
+                    at: now,
+                });
+            }
+        }
+        if stored.is_none_or(|stored| stored.utilization < 1.0) && reading.utilization >= 1.0 {
+            self.emit(RouterEvent::WindowSpent {
+                account_id: account_id.to_string(),
+                window: window.to_string(),
+                utilization: reading.utilization,
+                reset: reading.reset,
+                source: reading.source,
+                source_request_id: source_request_id.map(String::from),
+                at: now,
+            });
+        }
+    }
+
+    /// Whether `reset_at` is a reset not yet announced for the account and window, recording it when it is: the
+    /// sample edge and the clock walk both ask, so one passing reset is announced once whichever sees it first.
+    fn announce_reset(&mut self, account_id: &str, window: &str, reset_at: i64) -> bool {
+        let key = (account_id.to_string(), window.to_string());
+        if self
+            .reset_announced
+            .get(&key)
+            .is_some_and(|announced| announced.abs_diff(reset_at) <= RESET_SLACK_MS.unsigned_abs())
+        {
+            return false;
+        }
+        self.reset_announced.insert(key, reset_at);
+        true
+    }
+
+    /// Every stored plan reading whose reset the clock has passed with no newer sample, announced once.
+    fn clock_resets(&mut self, now: i64, restored: bool) {
+        let passed: Vec<(String, String, WindowReading)> = self
+            .state
+            .samples()
+            .into_iter()
+            .flat_map(|(account_id, sample)| {
+                sample
+                    .windows
+                    .into_iter()
+                    .filter(|(window, reading)| {
+                        is_plan_window(window) && reading.reset.is_some_and(|reset| reset <= now)
+                    })
+                    .map(move |(window, reading)| (account_id.clone(), window, reading))
+            })
+            .collect();
+        for (account_id, window, reading) in passed {
+            let Some(reset_at) = reading.reset else {
+                continue;
+            };
+            if self.announce_reset(&account_id, &window, reset_at) {
+                self.emit(RouterEvent::WindowReset {
+                    account_id,
+                    window,
+                    utilization_before: reading.utilization,
+                    reset_at,
+                    next_reset: None,
+                    observed: "clock",
+                    restored,
+                    at: now,
+                });
+            }
+        }
+        // An account whose readings left takes what was announced for it along.
+        self.reset_announced
+            .retain(|(account_id, _), _| self.state.sample(account_id).is_some());
+    }
+
+    /// Every pool member inside its wind-down now that was not at the last tick, announced once while it stays.
+    fn wind_downs(&mut self, snapshot: &RegistrySnapshot, now: i64, restored: bool) {
+        let mut winding = HashSet::new();
+        for pool in snapshot.pools() {
+            let minutes = pool.failover.wind_down_minutes;
+            for member in snapshot.members(&pool.id) {
+                let Some(term) = snapshot.term(&member.account_id) else {
+                    continue;
+                };
+                // A cancelled term past its end still reads as winding down. Its account has ended, which is no start.
+                let Some(ends_at) = term::end_of(term, now)
+                    .filter(|_| term::winding_down(term, now, minutes) && !term::ended(term, now))
+                else {
+                    continue;
+                };
+                let key = (pool.id.clone(), member.account_id.clone());
+                if !self.winding.contains(&key) {
+                    self.emit(RouterEvent::WindDownStarted {
+                        account_id: member.account_id.clone(),
+                        pool_id: pool.id.clone(),
+                        ends_at,
+                        wind_down_minutes: minutes,
+                        end_source: if term.cancelled { "cancelled" } else { "trial" },
+                        restored,
+                        at: now,
+                    });
+                }
+                winding.insert(key);
+            }
+        }
+        self.winding = winding;
+    }
+
+    /// One expiry per root and account from the entries the purge removed: how many left, the largest of them, and
+    /// `incarnation` when any left with its account rather than its age.
+    fn expiries(&self, purged: &[PurgedEntry], now: i64) {
+        let mut groups: BTreeMap<(&str, &str), Vec<&PurgedEntry>> = BTreeMap::new();
+        for purged in purged {
+            groups
+                .entry((&purged.entry.root, &purged.entry.account_id))
+                .or_default()
+                .push(purged);
+        }
+        for ((root, account_id), entries) in groups {
+            // A chain's message entries all carry the size of the report that wrote them, so the deeper of two
+            // equal ones stands for the root.
+            let Some(deepest) = entries
+                .iter()
+                .max_by_key(|purged| (purged.entry.prefix_tokens, purged.entry.depth))
+            else {
+                continue;
+            };
+            let cause = if entries.iter().any(|purged| purged.cause == "incarnation") {
+                "incarnation"
+            } else {
+                "ttl"
+            };
+            self.emit(RouterEvent::WarmPrefixExpired {
+                account_id: account_id.to_string(),
+                key_id: deepest.entry.key_id.clone(),
+                root: root.to_string(),
+                model: deepest.model.clone(),
+                lane: deepest.entry.lane.clone(),
+                entries: u32::try_from(entries.len()).unwrap_or(u32::MAX),
+                deepest: CacheMapEntry {
+                    tier: deepest.entry.chain.as_str(),
+                    depth: deepest.entry.depth,
+                    prefix_tokens: deepest.entry.prefix_tokens,
+                    ttl_ms: deepest.entry.ttl_ms,
+                    account_id: account_id.to_string(),
+                },
+                cause,
+                at: now,
+            });
+        }
     }
 
     fn write(&self, writes: Vec<StateWrite>) {
@@ -2853,7 +3596,13 @@ enum DeferredKey {
     Credits(String),
     Overage(String),
     Pin(PinKey),
+    PurgeShedRounds,
     PurgeStaleWindows,
+    /// A pool's round on an account: a later round replaces the held one, as the store's write does.
+    ShedRound {
+        pool_id: String,
+        account_id: String,
+    },
     Window {
         account_id: String,
         window: String,
@@ -2862,9 +3611,10 @@ enum DeferredKey {
 
 /// Writes the channel had no room for, the last write per row: a pin's last upsert or delete, a window's last
 /// upsert, a cooldown's last upsert or delete per scope, an overage, credits or account state per account, an
-/// affinity row's last upsert or delete per key, one stale-window sweep, and every rekey in order. A rekey closes the
-/// rows before it into a segment of their own, so a pin's write dated after a resolution never lands ahead of the
-/// rekey that moved its rows.
+/// affinity row's last upsert or delete per key, a pool's last round per account, one round purge, one stale-window
+/// sweep, and every rekey in order. A rekey closes the rows before it into a segment of their own, so a pin's write
+/// dated after a resolution never lands ahead of the rekey that moved its rows. A round may land on either side of
+/// the pin writes held beside it: a mark is read back only for the pin and the epoch its row names.
 #[derive(Default)]
 struct Deferred {
     /// Oldest first: each closed segment's rows and the rekey that closed it.
@@ -2928,6 +3678,8 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
             incarnation,
             lifecycle_generation,
             credential_generation,
+            cause,
+            detail,
         } => one(
             DeferredKey::AccountState {
                 account_id: account_id.clone(),
@@ -2941,6 +3693,8 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
+                cause,
+                detail,
             },
         ),
         StateWrite::DeleteAffinity(keys) => Ok(keys
@@ -2962,11 +3716,34 @@ fn rows_of(write: StateWrite) -> Result<Vec<(DeferredKey, StateWrite)>, Box<Reke
         StateWrite::DeletePin(key) => {
             one(DeferredKey::Pin(key.clone()), StateWrite::DeletePin(key))
         }
+        StateWrite::PurgeShedRounds { before } => one(
+            DeferredKey::PurgeShedRounds,
+            StateWrite::PurgeShedRounds { before },
+        ),
         StateWrite::PurgeStaleWindows => one(
             DeferredKey::PurgeStaleWindows,
             StateWrite::PurgeStaleWindows,
         ),
         StateWrite::Rekey(rekey) => Err(Box::new(rekey)),
+        StateWrite::ShedRound {
+            pool_id,
+            account_id,
+            incarnation,
+            round_at,
+            pins,
+        } => one(
+            DeferredKey::ShedRound {
+                pool_id: pool_id.clone(),
+                account_id: account_id.clone(),
+            },
+            StateWrite::ShedRound {
+                pool_id,
+                account_id,
+                incarnation,
+                round_at,
+                pins,
+            },
+        ),
         StateWrite::UpsertAffinity(rows) => Ok(rows
             .into_iter()
             .map(|row| {
@@ -3057,6 +3834,7 @@ pub fn sample_from_usage(
                     utilization: utilization / 100.0,
                     reset: window.resets_at,
                     observed_at: snapshot.fetched_at,
+                    source: WindowSource::Poll,
                 },
             );
         }
@@ -3095,7 +3873,7 @@ mod tests {
     use std::path::{Path, PathBuf};
     use std::sync::mpsc;
 
-    use phoebis_store::{AccountKind, AccountRow, ResolutionRow, StorageKey};
+    use phoebis_store::{AccountKind, AccountRow, ResolutionRow, StorageKey, WindowRow};
 
     use super::*;
 
@@ -3133,8 +3911,10 @@ mod tests {
         RouterHandle {
             affinity: Arc::default(),
             dropped: Arc::default(),
+            dropped_refusals: Arc::default(),
             events: broadcast::channel(1).0,
             in_flight: InFlight::default(),
+            load_counts: LoadCounts::default(),
             pending: Pending::default(),
             reports: Arc::default(),
             snapshot: Arc::new(RwLock::new(Arc::new(RegistrySnapshot::from_load(
@@ -3241,6 +4021,7 @@ mod tests {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         let linked = scratch.path().join("holder").join("router.sqlite");
@@ -3357,5 +4138,50 @@ mod tests {
         assert!(landed.stopped.expect("the busy store").is_database_wide());
         assert!(landed.refused.is_none());
         assert!(store.load_routing().unwrap().cooldowns.is_empty());
+    }
+
+    #[tokio::test]
+    async fn the_handle_counts_the_windows_by_account_as_the_load_carried_them() {
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        for id in ["a", "b"] {
+            store
+                .insert_account(&AccountRow {
+                    id: id.into(),
+                    kind: AccountKind::Oauth,
+                    label: id.into(),
+                    enabled: true,
+                    identity: None,
+                    lifecycle_generation: 1,
+                    incarnation: 1,
+                    revision: 1,
+                    state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
+                })
+                .unwrap();
+        }
+        // Two windows of `a` and none of `b`: one account with a reading.
+        for window in [FIVE_HOUR, SEVEN_DAY] {
+            assert!(store
+                .upsert_window(&WindowRow {
+                    account_id: "a".into(),
+                    incarnation: 1,
+                    observed_at: 500,
+                    reset: Some(10_000),
+                    utilization: 0.5,
+                    window: window.into(),
+                })
+                .unwrap());
+        }
+        let handle = spawn(store, Arc::new(|| 1_000), RouterConfig::default()).unwrap();
+        assert_eq!(
+            handle.load_counts(),
+            LoadCounts {
+                pins: 0,
+                windows: 1,
+                affinity_entries: 0,
+                shed_marks: 0,
+                shed_rounds_stale: 0,
+            }
+        );
     }
 }

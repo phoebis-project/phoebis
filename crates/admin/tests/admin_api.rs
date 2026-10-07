@@ -1143,7 +1143,11 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
     let disconnected = json(get(&h.app, path, Some(&cookie)).await).await;
     assert_eq!(answer(&disconnected), no_credential, "{disconnected}");
     h.store
-        .set_state("business", phoebis_store::AccountState::Unpaired)
+        .set_state(
+            "business",
+            phoebis_store::AccountState::Unpaired,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     let unpaired = json(get(&h.app, path, Some(&cookie)).await).await;
     assert_eq!(answer(&unpaired), no_credential, "{unpaired}");
@@ -1222,7 +1226,9 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
 #[tokio::test]
 async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
-    use phoebis_routing::{Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY};
+    use phoebis_routing::{
+        Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+    };
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
     let cookie = login(&h.app, "admin-secret").await;
     let path = "/admin/accounts/business/usage";
@@ -1237,6 +1243,7 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
                         utilization: 0.25,
                         reset: Some(NOW + 3_600_000),
                         observed_at: NOW - 120_000,
+                        source: WindowSource::Stored,
                     },
                 )
                 .with(
@@ -1245,9 +1252,11 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
                         utilization: 0.5,
                         reset: Some(NOW + 86_400_000),
                         observed_at: NOW - 60_000,
+                        source: WindowSource::Stored,
                     },
                 ),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     let held = wait_json(&h.app, path, &cookie, |v| v["error"].is_null()).await;
@@ -1291,7 +1300,8 @@ async fn an_account_whose_snapshot_holds_no_windows_answers_the_windows_the_rout
 async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_router_holds() {
     use common::{get, json, login, wait_json, NOW};
     use phoebis_routing::{
-        Report, UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+        Report, UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY,
+        SEVEN_DAY_FABLE,
     };
     const HOUR: i64 = 3_600_000;
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
@@ -1301,6 +1311,7 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
         utilization,
         reset,
         observed_at: read_at,
+        source: WindowSource::Stored,
     };
     h.router
         .report(Report::Sample {
@@ -1310,6 +1321,7 @@ async fn an_account_the_ledger_holds_no_sample_of_today_lists_the_windows_the_ro
                 .with(SEVEN_DAY, reading(0.5, Some(NOW + 72 * HOUR)))
                 .with(SEVEN_DAY_FABLE, reading(0.2, Some(NOW + 72 * HOUR))),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     wait_json(&h.app, "/admin/accounts/business/usage", &cookie, |v| {
@@ -2090,7 +2102,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     // One hundred input tokens a second plain and 145 banded: the share reads the banded copy, dollars the
-    // plain one. The subscription pin burns Opus 5.5, which the cost table measures; the api_key pin Opus 5.
+    // plain one. The subscription pin burns Opus 5.5, which the cost model weighs; the api_key pin Opus 5.
     let parts = sessions_harness_with(|generation| {
         vec![
             phoebis_store::PinRow {
@@ -2104,9 +2116,26 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
     let row = |sessions: &serde_json::Value, session: &str| session_row(sessions, session);
-    // Opus 5.5: 0.01461 of the Max 20x 5-hour window per million input tokens; Opus 5: $5 per million.
-    let share_per_hour = 145.0 * 0.01461 / 1_000_000.0 * 3_600.0;
-    let usd_per_hour = 100.0 * 5.0 / 1_000_000.0 * 3_600.0;
+    // The banded copy priced at the fixed clock, which the peak band never covers, so the shipped model's plain
+    // Opus 5.5 share on Max 20x; the plain copy at the shipped Opus 5 input price.
+    let share_per_hour = phoebis_ledger::PlanTables::shipped()
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_max_20x",
+            "claude-opus-5-5",
+            phoebis_routing::PinUsage {
+                input: 145,
+                ..phoebis_routing::PinUsage::default()
+            },
+            now,
+        )
+        .unwrap()
+        * 3_600.0;
+    let opus_5_input = phoebis_ledger::PriceTable::shipped()
+        .price("claude-opus-5")
+        .unwrap()
+        .input;
+    let usd_per_hour = 100.0 * opus_5_input / 1_000_000.0 * 3_600.0;
     let (burn, unit) = burn_of(&sessions, "s1");
     assert!(
         close(burn, share_per_hour) && unit.as_deref() == Some("window_share"),
@@ -2237,7 +2266,22 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
         })
         .await;
     let window = 600.0;
-    let on_max_20x = 0.01461 * 3_600.0 / window;
+    let tables = phoebis_ledger::PlanTables::shipped();
+    let million = phoebis_routing::PinUsage {
+        input: 1_000_000,
+        ..phoebis_routing::PinUsage::default()
+    };
+    let on_max_20x = tables
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_max_20x",
+            "claude-opus-5-5",
+            million,
+            now,
+        )
+        .unwrap()
+        * 3_600.0
+        / window;
     let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         session_row(v, "s1")["burn"]
             .as_f64()
@@ -2251,14 +2295,25 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
          against {on_max_20x}",
         (burn, unit)
     );
-    name_the_tier(&parts.store, "business", "default_claude_pro");
+    name_the_tier(&parts.store, "business", "default_claude_ai");
     let on_pro = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
         !close(session_row(v, "s1")["burn"].as_f64(), on_max_20x)
     })
     .await;
+    let pro = tables
+        .share_at(
+            phoebis_routing::FIVE_HOUR,
+            "default_claude_ai",
+            "claude-opus-5-5",
+            million,
+            now,
+        )
+        .unwrap()
+        * 3_600.0
+        / window;
     assert!(
-        close(burn_of(&on_pro, "s1").0, on_max_20x / 0.05),
-        "the same tokens read on Pro are that share over Pro's 5-hour factor: {:?}",
+        close(burn_of(&on_pro, "s1").0, pro),
+        "the same tokens read on Pro are their share of Pro's own 5-hour window: {:?} against {pro}",
         burn_of(&on_pro, "s1")
     );
     name_the_tier(&parts.store, "business", "default_claude_team");
@@ -2269,14 +2324,14 @@ async fn a_pinned_sessions_burn_reads_its_share_rate_on_the_account_it_sits_on()
     assert_eq!(
         burn_of(&on_team, "s1"),
         (None, Some("window_share".into())),
-        "a tier the cost table lacks sizes no window, so the figure is null rather than a guess"
+        "a tier the cost model does not size sizes no window, so the figure is null rather than a guess"
     );
 }
 
 #[tokio::test]
-async fn a_pin_on_a_model_with_an_unmeasured_cell_reads_no_burn() {
-    // The pin burns Sonnet 5, whose every cell is null: the share is unpriced, and the same pin in overage prices
-    // in dollars, since the price table lists the model.
+async fn a_pin_on_a_model_without_a_weight_reads_no_burn() {
+    // The pin burns Sonnet 5, which the shipped cost model has no weight for: the share is unpriced, and the same pin
+    // in overage prices in dollars, since the price table lists the model.
     use common::{get, json, login, wait_json};
     let now = common::NOW;
     let parts = sessions_harness_with(|generation| {
@@ -2291,7 +2346,7 @@ async fn a_pin_on_a_model_with_an_unmeasured_cell_reads_no_burn() {
     assert_eq!(
         burn_of(&sessions, "s1"),
         (None, Some("window_share".into())),
-        "a null cell under the burn prices no share"
+        "a model the cost model has no weight for prices no share"
     );
     parts
         .router
@@ -2588,6 +2643,9 @@ async fn a_request_groups_under_its_own_session_with_that_sessions_pin_and_relea
         detail: Some(
             r#"{"agent_id":"main","epoch":2,"from_account":"direct","reason":"cooldown"}"#.into(),
         ),
+        pool_id: None,
+        agent_id: Some("main".into()),
+        request_id: None,
     }));
 
     let sessions = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {

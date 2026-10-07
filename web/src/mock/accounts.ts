@@ -67,7 +67,7 @@ export const ACCOUNTS: Account[] = ([
       {
         reason: 'model_rejected',
         scope: 'model:claude-haiku-4-5-20251001',
-        setAt: ago(6 * MINUTE),
+        setAt: ago(5 * MINUTE + 50_000),
         until: ahead(54 * MINUTE),
         windowId: null,
       },
@@ -96,22 +96,23 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_pro', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
     requests: { last24h: 0, last7d: 0, lifetime: 1_140 },
     cooldowns: [
       {
         reason: 'rate_limited (5h window exhausted)',
         scope: 'account',
-        setAt: ago(28 * MINUTE),
+        setAt: ago(20 * MINUTE + 29_000),
         until: ahead(1 * HOUR + 12 * MINUTE),
         windowId: '5h',
       },
-      // A second scope, one model, so the account's cooling-down block has an account row and a model row.
+      // A second scope, one model, so the account's cooling-down block has an account row and a model row. Set
+      // before the account cooled, when a request could still reach it.
       {
         reason: 'model_rejected',
         scope: 'model:claude-opus-5',
-        setAt: ago(22 * MINUTE),
-        until: ahead(38 * MINUTE),
+        setAt: ago(34 * MINUTE),
+        until: ahead(26 * MINUTE),
         windowId: null,
       },
     ],
@@ -127,9 +128,11 @@ export const ACCOUNTS: Account[] = ([
     pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
-    extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
+    extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
-    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(3 * HOUR) },
+    // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
+    // the day's requests are drawn. The raise stands in until then.
+    overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(2 * HOUR + 59 * MINUTE + 48_000) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),
       lastError: null,
@@ -198,7 +201,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_pro', since: null, trialEndsAt: null, endsAt: null, derivedEndsAt: null },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: null, trialEndsAt: null, endsAt: null, derivedEndsAt: null },
     requests: { last24h: 0, last7d: 0, lifetime: 3_960 },
     cooldowns: [],
   },

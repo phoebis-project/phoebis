@@ -126,6 +126,23 @@ pub struct ResolvedAttempt {
     pub resolved_at: i64,
     pub outcome: String,
     pub detail: Option<String>,
+    pub lifecycle_generation: u64,
+    pub credential_generation: u64,
+}
+
+impl ResolvedAttempt {
+    /// The credential generation a committed attempt's commit wrote: a pairing's row records the generation it
+    /// wrote, a refresh's the one it was opened against, which its commit moved one past. `None` for an attempt that
+    /// committed nothing.
+    pub fn committed_generation(&self) -> Option<u64> {
+        (self.outcome == "committed").then(|| {
+            if self.detail.as_deref() == Some("pairing") {
+                self.credential_generation
+            } else {
+                self.credential_generation + 1
+            }
+        })
+    }
 }
 
 #[derive(Debug, Clone)]
@@ -602,7 +619,8 @@ impl Store {
     ) -> Result<Vec<ResolvedAttempt>, StoreError> {
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare(
-            "SELECT id, account_id, started_at, resolved_at, outcome, detail FROM refresh_attempts \
+            "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \
+             credential_generation FROM refresh_attempts \
              WHERE (resolved_at > ?1 OR (resolved_at = ?1 AND id > ?2)) AND outcome IS NOT NULL \
              ORDER BY resolved_at, id LIMIT ?3",
         )?;
@@ -614,6 +632,8 @@ impl Store {
                 resolved_at: r.get(3)?,
                 outcome: r.get(4)?,
                 detail: r.get(5)?,
+                lifecycle_generation: r.get::<_, i64>(6)? as u64,
+                credential_generation: r.get::<_, i64>(7)? as u64,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()
@@ -829,7 +849,8 @@ impl Store {
         }
         let conn = self.conn.lock().expect(LOCK_POISONED);
         let mut stmt = conn.prepare(
-            "SELECT id, account_id, started_at, resolved_at, outcome, detail FROM refresh_attempts \
+            "SELECT id, account_id, started_at, resolved_at, outcome, detail, lifecycle_generation, \
+             credential_generation FROM refresh_attempts \
              WHERE account_id = ?1 AND incarnation = ?2 AND outcome IS NOT NULL \
              ORDER BY resolved_at DESC, id DESC LIMIT ?3",
         )?;
@@ -841,6 +862,8 @@ impl Store {
                 resolved_at: r.get(3)?,
                 outcome: r.get(4)?,
                 detail: r.get(5)?,
+                lifecycle_generation: r.get::<_, i64>(6)? as u64,
+                credential_generation: r.get::<_, i64>(7)? as u64,
             })
         })?;
         rows.collect::<rusqlite::Result<Vec<_>>>()

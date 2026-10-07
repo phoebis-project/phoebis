@@ -3,7 +3,9 @@
 
 use std::str::FromStr;
 
-use phoebis_routing::{UtilizationSample, WindowReading, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE};
+use phoebis_routing::{
+    UtilizationSample, WindowReading, WindowSource, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+};
 pub use phoebis_routing::{FAST_INPUT, FAST_OUTPUT};
 use phoebis_store::AccountKind;
 use phoebis_transport::response::ResponseHead;
@@ -206,6 +208,7 @@ pub fn head_sample(
                             utilization,
                             reset: unified.five_hour_reset,
                             observed_at,
+                            source: WindowSource::Head,
                         },
                     );
                 }
@@ -216,6 +219,7 @@ pub fn head_sample(
                             utilization,
                             reset: unified.seven_day_reset,
                             observed_at,
+                            source: WindowSource::Head,
                         },
                     );
                 }
@@ -229,6 +233,7 @@ pub fn head_sample(
                             utilization,
                             reset: unified.seven_day_oi_reset,
                             observed_at,
+                            source: WindowSource::Head,
                         },
                     );
                 }
@@ -268,6 +273,7 @@ fn bucket_reading(bucket: Bucket, observed_at: i64) -> WindowReading {
         utilization: (1.0 - (bucket.remaining as f64 / bucket.limit as f64)).clamp(0.0, 1.0),
         reset: bucket.reset,
         observed_at,
+        source: WindowSource::Head,
     }
 }
 

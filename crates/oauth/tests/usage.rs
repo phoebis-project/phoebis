@@ -52,7 +52,7 @@ mod service {
         fixtures::{control_response, ControlFixture},
     };
     use phoebis_store::{
-        AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store,
+        AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, StorageKey, Store,
     };
     use phoebis_transport::{
         connector_builder,
@@ -82,6 +82,7 @@ mod service {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         store
@@ -180,6 +181,7 @@ mod service {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         store
@@ -1087,7 +1089,7 @@ mod service {
             (usage_requests(&up) == 2).then_some(())
         })
         .await;
-        let generation = store.bump_lifecycle("a").unwrap();
+        let generation = store.bump_lifecycle("a", StateCause::Operator).unwrap();
         service.invalidate("a");
         store
             .commit_credentials(
@@ -1106,7 +1108,9 @@ mod service {
                 },
             )
             .unwrap();
-        store.set_state("a", AccountState::Ready).unwrap();
+        store
+            .set_state("a", AccountState::Ready, StateCause::Operator)
+            .unwrap();
         assert!(service.profile("a").await.is_err(), "the hold is armed");
         up.release();
         let answer = fetching.await.unwrap().unwrap();
@@ -1161,6 +1165,7 @@ mod service {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         let replacement = store.account("a").unwrap().unwrap();
@@ -1238,6 +1243,7 @@ mod service {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         assert!(

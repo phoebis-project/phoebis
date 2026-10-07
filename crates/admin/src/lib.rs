@@ -18,6 +18,7 @@ mod pricing;
 mod readiness;
 mod requests;
 mod routes;
+mod routing_log;
 mod rules;
 mod session;
 mod sessions;
@@ -40,6 +41,7 @@ use phoebis_routing::RouterHandle;
 use phoebis_store::{NewBundle, Store};
 use phoebis_transport::control::ControlClient;
 
+pub use pricing::table_envelopes;
 pub use readiness::{Readiness, ReadinessSource};
 pub use routes::router;
 pub use session::{AdminSecrets, LoginError, Sessions};
@@ -76,8 +78,8 @@ pub struct AdminState {
     pub live: LiveFeed,
     pub metrics: Arc<Metrics>,
     pub pricing: Arc<Pricing>,
-    /// The shipped cost table and tier factors, the one copy the router's burn rates and the keepalive read too,
-    /// so the settings echo and a session's burn price through what the rest of the process prices through.
+    /// The subscription cost model in force, the one copy the router's burn rates and the keepalive read too, so the
+    /// settings echo and a session's burn price through what the rest of the process prices through.
     pub tables: Arc<phoebis_ledger::PlanTables>,
     pub settings: Arc<SettingsView>,
     pub keepalive: Arc<Engine>,
@@ -92,6 +94,7 @@ pub struct AdminState {
 /// at where a credential lives.
 #[derive(Clone, Debug, serde::Serialize)]
 pub struct SettingsView {
+    pub api_prices_path: Option<String>,
     pub body_capture_max_hours: u32,
     /// Not answered by the settings route: the pool and session routes read it to tell whether a cooldown the
     /// upstream gave no length for still stands.
@@ -99,11 +102,11 @@ pub struct SettingsView {
     pub keepalive: KeepaliveLimits,
     pub ledger_path: String,
     pub metrics_listen: String,
-    pub pricing_path: Option<String>,
     pub profile: String,
     pub proxy_listen: String,
     pub session_expire_after_seconds: u64,
     pub storage_path: String,
+    pub subscription_costs_path: Option<String>,
     pub usage_cache_ttl_seconds: u64,
 }
 

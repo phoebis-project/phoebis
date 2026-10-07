@@ -71,6 +71,9 @@ async fn next_trace(h: &Harness, session: &str) -> SelectionTrace {
     let answer = h
         .router
         .select(SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: key.id.clone(),
             key_generation: key.created_at,
             agent_id: "main".into(),
@@ -451,7 +454,13 @@ async fn a_401_on_an_account_disconnected_meanwhile_leaves_the_pin_to_its_state(
     })
     .await;
     // The router has not reloaded, so the answer still reaches the refresh, which finds the account disconnected.
-    h.store.set_state("a", AccountState::Disconnected).unwrap();
+    h.store
+        .set_state(
+            "a",
+            AccountState::Disconnected,
+            phoebis_store::StateCause::Operator,
+        )
+        .unwrap();
     up.release();
     let resp = inflight.await.unwrap();
     assert_eq!(resp.status().as_u16(), 503, "the router's own answer");

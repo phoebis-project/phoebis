@@ -14,7 +14,7 @@ use phoebis_ledger::{
     RequestRecord,
 };
 use phoebis_routing::{lane_key, ClientClass};
-use phoebis_store::{AccountState, Identity, NewBundle, Secret, SubscriptionRow};
+use phoebis_store::{AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow};
 use serde_json::{json as j, Value};
 
 fn dir() -> PathBuf {
@@ -346,7 +346,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .unwrap();
     parts
         .store
-        .set_state("business", AccountState::Ready)
+        .set_state("business", AccountState::Ready, StateCause::Paired)
         .unwrap();
     // Far from expiry, so reading usage never triggers a refresh of its own against the fake. Both tokens are
     // bound rather than written inline, so the no-secret guard reads the exact values this seed plants.
@@ -372,7 +372,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .unwrap();
     parts.store.set_profile(
         "business",
-        r#"{"account":{"uuid":"u","email_address":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_20x","subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
+        r#"{"account":{"uuid":"u","email":"business@example.invalid","display_name":"Biz","has_extra_usage_enabled":true,"has_claude_max":true},"organization":{"uuid":"o","name":"Biz Org","organization_type":"claude_max","billing_type":"stripe_subscription","rate_limit_tier":"default_claude_max_20x","subscription_created_at":"2026-03-14T10:00:00Z"}}"#,
         &SubscriptionRow {
             plan: Some("max".into()),
             tier: Some("default_claude_max_20x".into()),
@@ -410,6 +410,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
     let selected = parts
         .router
         .select(phoebis_routing::SelectRequest {
+            request_id: "r-1".into(),
+            attempt: 1,
+            seq: 1,
             key_id: "desktop".into(),
             key_generation,
             agent_id: "main".into(),
@@ -472,12 +475,18 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 cache_write_5m_tokens: None,
                 cache_write_1h_tokens: None,
                 uniform_ttl_ms: None,
+                request_id: "r-0".into(),
+                seq: 1,
+                attempt: 1,
             },
         ))
         .await;
     let placed = parts
         .router
         .select(phoebis_routing::SelectRequest {
+            request_id: "r-2".into(),
+            attempt: 1,
+            seq: 2,
             key_id: "desktop".into(),
             key_generation,
             agent_id: "main".into(),
@@ -511,6 +520,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
                 account_id: "direct".into(),
                 cohort: Some("direct".into()),
                 held_ms: 1_250,
+                attempt: 1,
             }],
             lane: lane_key("claude-sonnet-5-5", "standard", "none", "-"),
             fast: false,
@@ -655,6 +665,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
             j!({ "agent_id": "main", "from_account": "direct", "epoch": 2, "reason": "spent" })
                 .to_string(),
         ),
+        pool_id: None,
+        agent_id: Some("main".into()),
+        request_id: None,
     }));
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 200,
@@ -665,6 +678,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-sonnet-5".into()),
         actor: None,
         detail: Some(j!({ "agent_id": "main", "reasons": ["cooldown", "spent"] }).to_string()),
+        pool_id: None,
+        agent_id: Some("main".into()),
+        request_id: None,
     }));
     // The pool's model_rules excludes claude-haiku-*, and the account this cools is one of its members, so the
     // key-models and models-state fixtures both carry it: the pool's rule with a live cooldown, and one group.
@@ -693,6 +709,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         utilization,
         reset: Some(now + 30_000),
         observed_at: now - 5_000,
+        source: phoebis_routing::WindowSource::Head,
     };
     parts
         .router
@@ -705,6 +722,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .with(phoebis_relay::FAST_INPUT, fast_reading(0.42))
             .with(phoebis_relay::FAST_OUTPUT, fast_reading(0.08)),
             incarnation: 1,
+            source_request_id: None,
         })
         .await;
     parts.ledger.record(Record::Event(EventRecord {
@@ -716,6 +734,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-haiku-4-5-20251001".into()),
         actor: None,
         detail: Some(j!({ "attempt": 1, "request_id": "req-rejected", "source_request_id": "r-failover", "wire_model": "claude-haiku-4-5" }).to_string()),
+        pool_id: None,
+        agent_id: None,
+        request_id: Some("r-failover".into()),
     }));
     parts.ledger.record(Record::Event(EventRecord {
         at: hour_ago + 350,
@@ -726,6 +747,9 @@ async fn every_route_is_captured_and_holds_its_shape() {
         model: Some("claude-haiku-4-5-20251001".into()),
         actor: None,
         detail: Some(j!({ "attempt": 2, "rejected_by": ["business"], "request_id": "req-permitted", "source_request_id": "r-failover", "wire_model": "claude-haiku-4-5" }).to_string()),
+        pool_id: None,
+        agent_id: None,
+        request_id: Some("r-failover".into()),
     }));
     parts.ledger.record(Record::Request {
         request: RequestRecord {
@@ -967,6 +991,34 @@ async fn every_route_is_captured_and_holds_its_shape() {
     common::park_unreadable(&parts.db, "main", "business", now);
     // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
     parts.usage.poll("business").await.unwrap();
+    // The affinity report above stands for an earlier request, `r-0`, whose decision the ledger never stored, so its
+    // cache map is the one orphan `system.json` counts. It is waited for, so every capture reads the same figure.
+    let stats = parts.ledger.stats();
+    fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+        (stats
+            .cache_map_orphans
+            .load(std::sync::atomic::Ordering::Relaxed)
+            == 1)
+            .then_some(())
+    })
+    .await;
+    // The ledger's mirror reads the accounts on its own tick, so the transition the pairing above made lands a tick
+    // later. It is waited for, so the `written` figure `system.json` holds counts it in every capture.
+    fake_upstream::wait_for(std::time::Duration::from_secs(15), || {
+        let transitions = parts
+            .db
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM events WHERE kind = 'account_state_changed' \
+                     AND json_extract(detail, '$.cause') = 'paired'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap();
+        (transitions > 0).then_some(())
+    })
+    .await;
     for (name, route) in [
         ("account", "/admin/accounts/business"),
         ("account_catalog", "/admin/accounts/business/catalog"),
@@ -1024,6 +1076,17 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // The web's arithmetic tests work their figures out by hand from the test tables' round numbers, so they read
+    // the two envelopes as the settings echo carries them, rendered from the same loader the Rust tests use.
+    hold(
+        &planted,
+        "test_tables",
+        "phoebis_ledger::test_tables",
+        phoebis_admin::table_envelopes(
+            &phoebis_ledger::test_tables::api_prices(),
+            &phoebis_ledger::test_tables::subscription_costs(),
+        ),
+    );
     let probes = bound_probes(app, &cookie).await;
     hold(
         &planted,
@@ -1172,4 +1235,676 @@ async fn every_route_is_captured_and_holds_its_shape() {
         "GET /admin/live",
         j!({ "snapshot": snapshot, "deltas": deltas }),
     );
+
+    // The routing log's hour, seeded after every other capture so its stories leave those files as they were.
+    drop(selected);
+    routing_stories(&parts, &cookie, key_generation).await;
+    let hour_start = jiff::Timestamp::from_millisecond(hour_ago).unwrap();
+    let hour_end = jiff::Timestamp::from_millisecond(now).unwrap();
+    let every_kind = phoebis_ledger::DECISION_KINDS
+        .iter()
+        .chain([&phoebis_ledger::PROBE_KIND])
+        .chain(phoebis_ledger::EVENT_KINDS)
+        .copied()
+        .collect::<Vec<_>>()
+        .join(",");
+    // Above the hour's row count, since the default page of 25 would cut it and the capture holds every shape.
+    let log_route =
+        format!("/admin/routing-log?from={hour_start}&to={hour_end}&kinds={every_kind}&limit=200");
+    let kinds_of = |log: &Value, row_type: &str| {
+        log["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|row| row["type"] == row_type)
+            .map(|row| row["kind"].as_str().unwrap().to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let named = |kinds: &[&str]| {
+        kinds
+            .iter()
+            .map(|k| k.to_string())
+            .collect::<std::collections::BTreeSet<_>>()
+    };
+    let log = wait_json(app, &log_route, &cookie, |log| {
+        kinds_of(log, "decision") == named(phoebis_ledger::DECISION_KINDS)
+            && kinds_of(log, "event") == named(phoebis_ledger::EVENT_KINDS)
+    })
+    .await;
+    assert!(
+        log["rows"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|row| row["type"] == "decision" && row["probe"] == true),
+        "the hour holds a probe's decision"
+    );
+    assert!(
+        log["next_cursor"].is_null(),
+        "the capture holds the hour whole"
+    );
+    let decision_route = "/admin/requests/r-static/decisions/1";
+    let decision = wait_json(app, decision_route, &cookie, |record| {
+        record["outcome"]["completion"]["status"] == 200
+            && record["outcome"]["completion"]["cache_map_written"].is_array()
+    })
+    .await;
+    assert_eq!(
+        decision["outcome"]["completion"]["hit"], true,
+        "the placement read its static prefix"
+    );
+    for block in ["candidates", "walk"] {
+        assert!(
+            decision[block].as_array().is_some_and(|b| !b.is_empty()),
+            "{block}"
+        );
+    }
+    for block in ["pin", "request", "settings"] {
+        assert!(decision[block].is_object(), "{block}");
+    }
+    let chosen = decision["candidates"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["verdict"] == "chosen")
+        .expect("one member is the chosen one");
+    let hash = chosen["prefix"]["static"]["hash"].as_str().unwrap_or("");
+    assert!(
+        hash.len() == 64
+            && hash
+                .chars()
+                .all(|c| c.is_ascii_digit() || ('a'..='f').contains(&c)),
+        "the static lookup names the boundary as the affinity map keys it: {hash}"
+    );
+    assert!(
+        chosen["prefix"]["static_match"]["ttl_ms"]
+            .as_i64()
+            .is_some_and(|ttl| ttl > 0),
+        "the static rung accepted a live entry: {}",
+        chosen["prefix"]
+    );
+    for (name, route, body) in [
+        ("decision", decision_route.to_string(), decision),
+        ("routing_log", log_route, log),
+    ] {
+        hold(&planted, name, &format!("GET {route}"), body);
+    }
+}
+
+/// A selection of the desktop key on `claude-sonnet-5` at the capture's instant, as the relay asks for its first
+/// wire attempt: no prefix chains and no holds, each story setting what it reads.
+fn asked(
+    parts: &common::Full,
+    key_generation: i64,
+    request_id: &str,
+    seq: u32,
+    session: Option<&str>,
+) -> phoebis_routing::SelectRequest {
+    let snapshot = parts.router.snapshot();
+    let key_row = snapshot
+        .key("desktop")
+        .expect("the desktop key is in the snapshot")
+        .clone();
+    phoebis_routing::SelectRequest {
+        request_id: request_id.into(),
+        attempt: 1,
+        seq,
+        key_id: "desktop".into(),
+        key_generation,
+        agent_id: "main".into(),
+        session_id: session.map(String::from),
+        canonical_model: "claude-sonnet-5".into(),
+        folded_model: "claude-sonnet-5".into(),
+        candidates: phoebis_routing::resolve(
+            &snapshot,
+            &key_row,
+            "claude-sonnet-5",
+            "claude-sonnet-5",
+        )
+        .expect("the pool's model rules allow claude-sonnet-5"),
+        portable: true,
+        attempted: Vec::new(),
+        now: common::NOW,
+        fallback_ms: 60_000,
+        revision: snapshot.revision,
+        probe: false,
+        count: false,
+        request_class: None,
+        context_compacted: false,
+        static_hash: None,
+        boundaries: Arc::from([]),
+        client: ClientClass::ClaudeCode,
+        static_boundaries: Arc::from([]),
+        marker: false,
+        parent_agent_id: None,
+        holds: Vec::new(),
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        fast: false,
+    }
+}
+
+/// The answer the request `request_id` would have reported: its static chain and one message boundary written on
+/// `business`, the cache map its decision `seq` then holds.
+fn warmed(
+    parts: &common::Full,
+    key_generation: i64,
+    request_id: &str,
+    root: &str,
+    static_hash: &str,
+) -> phoebis_routing::Report {
+    let now = common::NOW;
+    phoebis_routing::Report::Affinity(phoebis_routing::AffinityReport {
+        account_id: "business".into(),
+        incarnation: parts
+            .router
+            .snapshot()
+            .account("business")
+            .expect("the business account is in the snapshot")
+            .incarnation,
+        key_id: "desktop".into(),
+        key_generation,
+        canonical_model: "claude-sonnet-5".into(),
+        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+        root: Some(root.into()),
+        static_boundaries: Arc::from([static_hash.to_string()]),
+        message_boundaries: Arc::from([format!("m-{request_id}")]),
+        static_sizes: vec![31_200],
+        static_ttl_ms: Some(3_600_000),
+        message_ttl_ms: Some(300_000),
+        cache_touched: true,
+        prefix_tokens: 31_200,
+        now,
+        cache_write_5m_tokens: None,
+        cache_write_1h_tokens: None,
+        uniform_ttl_ms: None,
+        request_id: request_id.into(),
+        seq: 1,
+        attempt: 1,
+    })
+}
+
+/// One decision of each kind through the harness's router, at the capture's instant, and one event of each kind the
+/// ledger writes inside the hour before it: the router's own where a report or an admin action provokes it, the rest
+/// recorded as their writers build them.
+async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64) {
+    use phoebis_routing::{Report, RouterEvent, SelectRequest, SelectResult};
+    let app = &parts.app;
+    let now = common::NOW;
+    let hour_ago = now - 3_600_000;
+    let account_of = |answer: &phoebis_routing::SelectAnswer| match &answer.result {
+        SelectResult::Selected(selection) => selection.account.id.clone(),
+        other => panic!("a selection, not {other:?}"),
+    };
+    let patched = |body: &'static str| async move {
+        let response = patch(app, "/admin/pools/main", body, Some(cookie)).await;
+        assert_eq!(response.status(), 200, "{body}");
+    };
+
+    // Placed by the static prefix: a session warms the shared static chain on business, and a fresh session lands
+    // there by it. The pool places a main conversation by its warm prefix for this.
+    patched(r#"{"session_placement":"by_warm_prefix"}"#).await;
+    let static_hash = "9c1f6b0e4d2a8f73b5e1c0d9a7f3e2b14c6d8e0f2a4b6c8d0e1f3a5b7c9d1e3f";
+    let warm = parts
+        .router
+        .select(SelectRequest {
+            attempted: vec!["direct".into()],
+            ..asked(parts, key_generation, "r-warm", 1, Some("s-warm"))
+        })
+        .await
+        .unwrap();
+    assert_eq!(account_of(&warm), "business");
+    drop(warm);
+    parts
+        .router
+        .report(warmed(
+            parts,
+            key_generation,
+            "r-warm",
+            "s-warm",
+            static_hash,
+        ))
+        .await;
+    let by_prefix = parts
+        .router
+        .select(SelectRequest {
+            static_boundaries: Arc::from([static_hash.to_string()]),
+            portable: false,
+            marker: true,
+            ..asked(parts, key_generation, "r-static", 1, Some("s-static"))
+        })
+        .await
+        .unwrap();
+    match &by_prefix.result {
+        SelectResult::Selected(selection) => assert_eq!(
+            (
+                selection.account.id.as_str(),
+                selection.trace.placement.as_ref().map(|p| p.rung)
+            ),
+            ("business", Some("static"))
+        ),
+        other => panic!("the warm static prefix places the request, not {other:?}"),
+    }
+    drop(by_prefix);
+    parts
+        .router
+        .report(warmed(
+            parts,
+            key_generation,
+            "r-static",
+            "s-static",
+            static_hash,
+        ))
+        .await;
+    parts.ledger.record(Record::Request {
+        request: RequestRecord {
+            model: "claude-sonnet-5".into(),
+            canonical_model: "claude-sonnet-5".into(),
+            ..request(
+                key_generation,
+                "r-static",
+                now - 1_000,
+                "desktop",
+                "s-static",
+                200,
+                "succeeded",
+            )
+        },
+        attempts: vec![attempt(
+            "r-static",
+            1,
+            "business",
+            200,
+            "succeeded",
+            now - 1_000,
+        )],
+        bodies: None,
+    });
+
+    // Renewed, then held: with a cap of one the renewal's slot stays taken while a fresh session asks for the same
+    // account, and the placement after the wait takes it once freed.
+    patched(r#"{"in_flight_cap":1}"#).await;
+    let busy = parts
+        .router
+        .select(asked(parts, key_generation, "r-renew", 1, Some("s-warm")))
+        .await
+        .unwrap();
+    assert_eq!(account_of(&busy), "business");
+    let held = parts
+        .router
+        .select(SelectRequest {
+            attempted: vec!["direct".into()],
+            ..asked(parts, key_generation, "r-held", 1, Some("s-held"))
+        })
+        .await
+        .unwrap();
+    let hold = match held.result {
+        SelectResult::Held { hold, .. } => hold,
+        other => panic!("the account at its cap holds the request, not {other:?}"),
+    };
+    drop(busy);
+    let after_hold = parts
+        .router
+        .select(SelectRequest {
+            attempted: vec!["direct".into()],
+            holds: vec![phoebis_routing::HoldFacts {
+                held_ms: 800,
+                ..hold
+            }],
+            ..asked(parts, key_generation, "r-held", 2, Some("s-held"))
+        })
+        .await
+        .unwrap();
+    assert_eq!(account_of(&after_hold), "business");
+    drop(after_hold);
+    patched(r#"{"in_flight_cap":16}"#).await;
+
+    // A keepalive probe renews its pin.
+    let probe = parts
+        .router
+        .select(SelectRequest {
+            probe: true,
+            ..asked(parts, key_generation, "r-probe", 1, Some("s-warm"))
+        })
+        .await
+        .unwrap();
+    drop(probe);
+
+    // Moved: the pinned account's five-hour window is spent, so its session leaves for the sibling.
+    parts
+        .router
+        .report(Report::Sample {
+            account_id: "business".into(),
+            sample: phoebis_routing::UtilizationSample {
+                observed_at: now,
+                ..Default::default()
+            }
+            .with(
+                phoebis_routing::FIVE_HOUR,
+                phoebis_routing::WindowReading {
+                    utilization: 1.0,
+                    reset: Some(now + 3_600_000),
+                    observed_at: now,
+                    source: phoebis_routing::WindowSource::Head,
+                },
+            ),
+            incarnation: 1,
+            source_request_id: Some("r-probe".into()),
+        })
+        .await;
+    let moved = parts
+        .router
+        .select(asked(parts, key_generation, "r-move", 1, Some("s-warm")))
+        .await
+        .unwrap();
+    assert_eq!(account_of(&moved), "direct");
+    drop(moved);
+
+    // Overage entered and left, and a credits reading that stops fast mode. A pending reading of an account is
+    // replaced by a newer one, so each edge's row is waited for before the reading that ends it is sent.
+    for (in_use, at, kind) in [
+        (true, now - 60_000, "overage_started"),
+        (false, now, "overage_ended"),
+    ] {
+        parts
+            .router
+            .report(Report::Overage {
+                account_id: "business".into(),
+                evidence: phoebis_routing::OverageEvidence {
+                    in_use,
+                    since: in_use.then_some(at),
+                    reset: Some(now + 3_600_000),
+                    observed_at: at,
+                    source: phoebis_routing::EvidenceSource::Head,
+                    incarnation: 1,
+                },
+                incarnation: 1,
+            })
+            .await;
+        fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
+            let rows = parts
+                .db
+                .read_blocking(|c| {
+                    Ok(
+                        c.query_row("SELECT COUNT(*) FROM events WHERE kind = ?1", [kind], |r| {
+                            r.get::<_, i64>(0)
+                        })?,
+                    )
+                })
+                .unwrap();
+            (rows > 0).then_some(())
+        })
+        .await;
+    }
+    parts
+        .router
+        .report(Report::Credits {
+            account_id: "business".into(),
+            state: phoebis_routing::CreditsState {
+                enabled: false,
+                disabled_reason: Some("out_of_credits".into()),
+                utilization: Some(0.25),
+                observed_at: now,
+                incarnation: 1,
+            },
+            incarnation: 1,
+        })
+        .await;
+
+    // An operator clears a cooldown and releases a session.
+    let cleared = common::delete(
+        app,
+        "/admin/accounts/business/cooldowns/model:claude-haiku-4-5-20251001",
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(cleared.status(), 204);
+    let released = post(
+        app,
+        "/admin/sessions/desktop/s-static/release",
+        "",
+        Some(cookie),
+    )
+    .await;
+    assert_eq!(released.status(), 204);
+
+    // Exhausted: every member cooling.
+    for account_id in ["business", "direct"] {
+        parts
+            .router
+            .report(Report::Cooldown {
+                account_id: account_id.into(),
+                row: phoebis_store::CooldownRow {
+                    account_id: account_id.into(),
+                    scope: "account".into(),
+                    until: now + 600_000,
+                    set_at: now,
+                    reason: "rate_limited".into(),
+                    window: "five_hour".into(),
+                    source_request_id: Some("r-move".into()),
+                    incarnation: 1,
+                },
+                pin: None,
+                lifecycle_generation: 1,
+                credential_generation: 1,
+                incarnation: 1,
+            })
+            .await;
+    }
+    let exhausted = parts
+        .router
+        .select(asked(parts, key_generation, "r-exhausted", 1, None))
+        .await
+        .unwrap();
+    assert!(
+        matches!(exhausted.result, SelectResult::Exhausted(_)),
+        "every member cooling exhausts the pool, not {:?}",
+        exhausted.result
+    );
+
+    // Refused: a key revoked between its admission and its selection, which the router re-reads only for a request
+    // admitted under an older registry.
+    let refused = parts
+        .router
+        .select(SelectRequest {
+            key_id: "retired".into(),
+            revision: 0,
+            ..asked(parts, key_generation, "r-refused", 1, None)
+        })
+        .await
+        .unwrap();
+    assert!(matches!(refused.result, SelectResult::Refused(_)));
+
+    // The kinds no report or route of this harness writes, each as its writer builds it.
+    let at = |minute: i64| hour_ago + minute * 60_000;
+    parts.ledger.record(Record::RouterStarted {
+        version: "0.0.0-fixture".into(),
+        counts: phoebis_routing::LoadCounts {
+            pins: 3,
+            windows: 2,
+            affinity_entries: 5,
+            shed_marks: 2,
+            shed_rounds_stale: 1,
+        },
+        at: at(1),
+    });
+    let routed = [
+        RouterEvent::SheddingRound {
+            account_id: "business".into(),
+            pool_id: "main".into(),
+            request_id: "r-failover".into(),
+            key_id: "desktop".into(),
+            session_id: "s1".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            round: phoebis_routing::ShedRoundFacts {
+                window: "five_hour".into(),
+                utilization: 0.71,
+                elapsed_share: 0.5,
+                ahead: 0.21,
+                threshold: 0.15,
+                margin: 0.06,
+                unit: "window_share",
+                burn_window_seconds: 900,
+                shed_share: 0.5,
+                burn_sum: 0.12,
+                target: 0.06,
+                warm_sessions: "when_needed",
+                pins: vec![phoebis_routing::ShedPinFacts {
+                    key_id: "desktop".into(),
+                    session_id: "s0".into(),
+                    agent_id: "main".into(),
+                    model: "claude-sonnet-5".into(),
+                    cold: true,
+                    burn: Some(0.07),
+                    last_input_tokens: 48_100,
+                    per_rewrite: Some(0.004),
+                    marked: true,
+                    note: None,
+                }],
+                marks: vec![phoebis_routing::PinKeyFacts {
+                    key_id: "desktop".into(),
+                    session_id: "s0".into(),
+                    agent_id: "main".into(),
+                    model: "claude-sonnet-5".into(),
+                }],
+                dwell_seconds: 900,
+                dwell_until: at(2) + 900_000,
+            },
+            at: at(2),
+        },
+        RouterEvent::WarmPrefixExpired {
+            account_id: "direct".into(),
+            key_id: "desktop".into(),
+            root: "s0".into(),
+            model: "claude-sonnet-5".into(),
+            lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
+            entries: 3,
+            deepest: phoebis_routing::CacheMapEntry {
+                tier: "message",
+                depth: 3,
+                prefix_tokens: 52_000,
+                ttl_ms: 300_000,
+                account_id: "direct".into(),
+            },
+            cause: "ttl",
+            at: at(3),
+        },
+        RouterEvent::WindDownStarted {
+            account_id: "business".into(),
+            pool_id: "main".into(),
+            ends_at: now + 86_400_000,
+            wind_down_minutes: 1_440,
+            end_source: "cancelled",
+            restored: false,
+            at: at(4),
+        },
+        RouterEvent::WindowReset {
+            account_id: "business".into(),
+            window: "seven_day".into(),
+            utilization_before: 0.83,
+            reset_at: at(5),
+            next_reset: Some(at(5) + 7 * 86_400_000),
+            observed: "sample",
+            restored: false,
+            at: at(5),
+        },
+    ];
+    for event in &routed {
+        parts.ledger.record(Record::Event(
+            phoebis_ledger::event_of(event).expect("the router's event has a row"),
+        ));
+    }
+    parts.ledger.record(phoebis_ledger::poll_backoff(
+        &phoebis_oauth::BackoffEdge::Started {
+            account_id: "business".into(),
+            at: at(6),
+            endpoint: "usage",
+            reason: "429".into(),
+            attempts: 1,
+            next_attempt_at: at(6) + 60_000,
+            last_clean_at: Some(at(5)),
+        },
+    ));
+    parts.ledger.record(phoebis_ledger::poll_backoff(
+        &phoebis_oauth::BackoffEdge::Ended {
+            account_id: "business".into(),
+            at: at(8),
+            since: at(6),
+            attempts: 2,
+            resumed_at: at(8),
+        },
+    ));
+    parts.ledger.record(phoebis_ledger::catalog_changed(
+        &phoebis_relay::CatalogChange {
+            account_id: "business".into(),
+            added: vec!["claude-sonnet-5-5".into()],
+            removed: vec!["claude-sonnet-4-5".into()],
+            count: 12,
+            at: at(9),
+        },
+    ));
+    let written = |minute: i64, kind: &str| EventRecord {
+        at: at(minute),
+        kind: kind.into(),
+        account_id: Some("business".into()),
+        ..Default::default()
+    };
+    for event in [
+        EventRecord {
+            pool_id: Some("main".into()),
+            request_id: Some("r-failover".into()),
+            detail: Some(
+                j!({ "period": "month", "budget_usd": 30.0, "spent_usd": 30.4, "period_end": now + 86_400_000, "source_request_id": "r-failover" })
+                    .to_string(),
+            ),
+            ..written(10, "budget_reached")
+        },
+        EventRecord {
+            pool_id: Some("main".into()),
+            detail: Some(
+                j!({ "period": "day", "previous_spent_usd": 4.2, "period_start": at(11) }).to_string(),
+            ),
+            ..written(11, "budget_period_ended")
+        },
+        EventRecord {
+            account_id: None,
+            request_id: Some("r-gap".into()),
+            detail: Some(j!({ "request_id": "r-gap", "reason": "chunk_skipped" }).to_string()),
+            ..written(12, "ledger_gap")
+        },
+        written(13, "reauth_required"),
+        EventRecord {
+            detail: Some(
+                j!({ "until": now + 3_600_000, "access_expires_at": now + 3_600_000, "refresh_expires_at": null })
+                    .to_string(),
+            ),
+            ..written(14, "refresh_succeeded")
+        },
+        EventRecord {
+            detail: Some(
+                j!({ "cause": "invalid_grant", "error": "refresh rejected with status 400 (invalid_grant)" })
+                    .to_string(),
+            ),
+            ..written(15, "refresh_failed")
+        },
+        EventRecord {
+            detail: Some(
+                j!({ "cause": "refresh_response_lost", "error": "refresh response lost: the token endpoint did not answer" })
+                    .to_string(),
+            ),
+            ..written(16, "refresh_uncertain")
+        },
+        EventRecord {
+            account_id: None,
+            actor: Some("admin".into()),
+            pool_id: Some("main".into()),
+            detail: Some(
+                j!({ "kind": "pool_updated", "target": "main", "diff": { "in_flight_cap": { "from": 16, "to": 1 } } })
+                    .to_string(),
+            ),
+            ..written(17, "registry_changed")
+        },
+    ] {
+        parts.ledger.record(Record::Event(event));
+    }
 }

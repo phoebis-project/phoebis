@@ -20,7 +20,7 @@ import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { moveLabel, sizedAccounts } from '@/lib/analytics';
+import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, poolRefusals, type PoolGroup } from '@/lib/forms';
@@ -28,6 +28,7 @@ import { useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
+import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, kindOrdered, poolStatusSentence, selectionOrder } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
@@ -497,12 +498,27 @@ function PoolCard({
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
   const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
-  // The route counts the moves of the last hour by reason, so every figure is a whole number.
+  // The route counts the moves of the last hour by reason on the pool's member accounts, so every figure is a whole
+  // number. The figure sums the rule moves, a keepalive probe's move included, which the log lists as moved only with
+  // probe decisions chosen. The title names the failovers apart, which the log draws as a later attempt's placement,
+  // and any reason this build does not know apart from both.
   const moveCounts = Object.entries(pool.movesPerHour)
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a);
-  const movesTotal = moveCounts.reduce((s, [, count]) => s + count, 0);
-  const movesTitle = moveCounts.length === 0 ? 'No session moved in the last hour.' : moveCounts.map(([reason, count]) => `${moveLabel(reason)} ${fmtInt(count)}`).join(', ');
+  const among = (reasons: readonly string[]) => moveCounts.filter(([reason]) => reasons.includes(reason));
+  const ruleMoves = among(RULE_MOVE_REASONS);
+  const failovers = among(FAILOVER_MOVE_REASONS);
+  const known: readonly string[] = [...RULE_MOVE_REASONS, ...FAILOVER_MOVE_REASONS];
+  const others = moveCounts.filter(([reason]) => !known.includes(reason));
+  const movesTotal = ruleMoves.reduce((s, [, count]) => s + count, 0);
+  const moveLine = ([reason, count]: [string, number]) => `${moveLabel(reason)} ${fmtInt(count)}`;
+  const movesTitle = [
+    ruleMoves.length === 0 ? 'No rule moved a session in the last hour' : 'Rule moves in the last hour',
+    ...ruleMoves.map(moveLine),
+    ...(failovers.length === 0 ? [] : ['Failovers left out of the count', ...failovers.map(moveLine)]),
+    ...(others.length === 0 ? [] : ['Other moves left out of the count', ...others.map(moveLine)]),
+    `Opens the Routing log on pool ${pool.id} and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen`,
+  ].join('\n');
   return (
     <Card id={pool.id} tabIndex={-1} padded={false} className="pool">
       <header className="pool__head">
@@ -692,7 +708,7 @@ function PoolCard({
         <div>
           <dt>Moves in the last hour</dt>
           <dd className="num" title={movesTitle}>
-            {fmtInt(movesTotal)}
+            <Link to={logHref({ pools: [pool.id], kinds: ['moved'], ...aroundSubject(null, now) })}>{fmtInt(movesTotal)}</Link>
           </dd>
         </div>
       </dl>
@@ -1085,7 +1101,7 @@ export function PoolDialog({
   const readings = memberAccounts.map((a) => ({ fiveHour: windowOf(a, '5h')?.utilization ?? null, id: a.id, label: a.label, sevenDay: windowOf(a, '7d')?.utilization ?? null }));
   // The route's verdict per stored member, so a member in cooldown is no destination for a shed session.
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
-  const sized = useMemo(() => sizedAccounts(accounts, settings.data?.planTables.cost.tiers ?? {}), [accounts, settings.data]);
+  const sized = useMemo(() => (settings.data ? sizedAccounts(accounts, settings.data.subscriptionCosts, 'five_hour') : new Set<string>()), [accounts, settings.data]);
   const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now, sized);
   const setNetNegative = (value: boolean) => setForm((f) => ({ ...f, tuning: { ...f.tuning, stopWhenNetNegative: value } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
@@ -1671,7 +1687,7 @@ export function PoolDialog({
               plain
               hint={
                 <>
-                  A warm session rewrites its cache where it lands; the <CostReferenceLink /> shows what that write costs.
+                  A warm session rewrites its cache where it lands. The <CostReferenceLink tab="plan-rates" /> shows what that write costs.
                 </>
               }
             >
@@ -1838,7 +1854,7 @@ export function PoolDialog({
           hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an Anthropic-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
         >
           <div className="row">
-            <CostReferenceLink />
+            <CostReferenceLink tab="api-prices" />
           </div>
         </Field>
         <CacheTtlGrid
@@ -1936,7 +1952,7 @@ export function PoolDialog({
               input={{ min: 0, step: 0.5, value: form.capUsd, onChange: (e) => set('capUsd', Number(e.target.value)), 'aria-label': 'Daily probe cost cap in dollars', 'aria-invalid': invalid('Daily probe cost cap in dollars') }}
               hint={
                 <>
-                  Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost table cannot price. Plan-funded probes do not count here. The <CostReferenceLink /> prices a probe.
+                  Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here. The <CostReferenceLink tab="api-prices" /> prices a probe.
                 </>
               }
             />

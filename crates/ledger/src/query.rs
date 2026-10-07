@@ -436,7 +436,7 @@ pub fn request_events(
 ) -> Result<Vec<EventRecord>, LedgerError> {
     let to = request.finished_at.unwrap_or(i64::MAX);
     let marker = format!("%\"source_request_id\":\"{}\"%", request.id);
-    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE at >= ?1 AND at <= ?2 AND ((session_id IS NOT NULL AND session_id = ?3) OR detail LIKE ?4) ORDER BY at, rowid")?;
+    let mut stmt = conn.prepare("SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE at >= ?1 AND at <= ?2 AND ((session_id IS NOT NULL AND session_id = ?3) OR detail LIKE ?4) ORDER BY at, rowid")?;
     let rows = stmt.query_map(
         params![request.received_at, to, request.session_id, marker],
         |r| {
@@ -449,13 +449,16 @@ pub fn request_events(
                 model: r.get(5)?,
                 actor: r.get(6)?,
                 detail: r.get(7)?,
+                pool_id: r.get(8)?,
+                agent_id: r.get(9)?,
+                request_id: r.get(10)?,
             })
         },
     )?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-const RECENT_EVENTS_OF_KIND: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2";
+const RECENT_EVENTS_OF_KIND: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE kind = ?1 ORDER BY at DESC, rowid DESC LIMIT ?2";
 
 /// The newest `limit` events of one kind, newest first.
 pub fn recent_events_of_kind(
@@ -474,12 +477,15 @@ pub fn recent_events_of_kind(
             model: r.get(5)?,
             actor: r.get(6)?,
             detail: r.get(7)?,
+            pool_id: r.get(8)?,
+            agent_id: r.get(9)?,
+            request_id: r.get(10)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
 }
 
-const RECENT_GAPS: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT ?2";
+const RECENT_GAPS: &str = "SELECT at, kind, account_id, key_id, session_id, model, actor, detail, pool_id, agent_id, request_id FROM events WHERE kind = 'ledger_gap' AND at >= ?1 ORDER BY at DESC LIMIT ?2";
 
 /// The newest `limit` `ledger_gap` events at or after `since`, newest first: what the system page lists beside the
 /// writer's gap counter.
@@ -499,9 +505,660 @@ pub fn recent_gaps(
             model: r.get(5)?,
             actor: r.get(6)?,
             detail: r.get(7)?,
+            pool_id: r.get(8)?,
+            agent_id: r.get(9)?,
+            request_id: r.get(10)?,
         })
     })?;
     Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+/// Every event kind the ledger writes, alphabetical: the `kinds` key is validated against it and the decision
+/// kinds, and a 400 names a kind outside both.
+pub const EVENT_KINDS: &[&str] = &[
+    "account_state_changed",
+    "budget_period_ended",
+    "budget_reached",
+    "catalog_changed",
+    "cooldown_cleared",
+    "cooldown_set",
+    "fast_credits_changed",
+    "ledger_gap",
+    "model_permitted",
+    "model_rejected",
+    "overage_ended",
+    "overage_started",
+    "pin_created",
+    "pin_expired",
+    "pin_migrated",
+    "pin_released",
+    "poll_backoff_ended",
+    "poll_backoff_started",
+    "reauth_required",
+    "refresh_failed",
+    "refresh_succeeded",
+    "refresh_uncertain",
+    "registry_changed",
+    "router_started",
+    "shedding_round",
+    "warm_prefix_expired",
+    "wind_down_started",
+    "window_reset",
+    "window_spent",
+];
+
+pub const DECISION_KINDS: &[&str] = &["exhausted", "held", "moved", "placed", "refused", "renewed"];
+
+/// The pseudo-kind that names a probe's decision of any kind in `kinds`.
+pub const PROBE_KIND: &str = "probe";
+
+/// The one event kind the default set leaves out beside the probe decisions: the purge writes it per conversation
+/// root on every tick, so it would bury the decisions it follows unless asked for.
+const HIDDEN_EVENT_KIND: &str = "warm_prefix_expired";
+
+/// The decision kinds that sent the request upstream, and so have an attempt that answered for them: the same three
+/// as `COMPLETING_ATTEMPT` names.
+const DISPATCHING_KINDS: &[&str] = &["moved", "placed", "renewed"];
+
+#[derive(Clone, Debug, Default)]
+pub struct RoutingLogFilter {
+    pub from: i64,
+    pub to: i64,
+    pub request: Option<String>,
+    /// A routing session id or its prefix.
+    pub session: Option<String>,
+    pub keys: Vec<String>,
+    pub pools: Vec<String>,
+    pub accounts: Vec<String>,
+    pub models: Vec<String>,
+    /// `None` is the default set (every decision kind with `probe` 0, every event kind but `warm_prefix_expired`).
+    /// `Some` is exactly the kinds named, `probe` the pseudo-kind for a probe decision of any kind.
+    pub kinds: Option<Vec<String>>,
+}
+
+/// `<at>:<rank>:<id>`: rank 1 for a decision (`id` is `<request_id>/<seq>`), 0 for an event (`id` its rowid).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RoutingLogCursor {
+    pub at: i64,
+    pub rank: u8,
+    pub request_id: Option<String>,
+    pub seq: Option<u32>,
+    pub rowid: Option<i64>,
+}
+
+impl RoutingLogCursor {
+    /// The request id may hold a `/` or a `:` of its own, so the seq is read off the last `/`.
+    pub fn parse(s: &str) -> Option<RoutingLogCursor> {
+        let (at, rest) = s.split_once(':')?;
+        let (rank, id) = rest.split_once(':')?;
+        let at = at.parse::<i64>().ok()?;
+        match rank {
+            "1" => {
+                let (request_id, seq) = id.rsplit_once('/')?;
+                if request_id.is_empty() {
+                    return None;
+                }
+                Some(RoutingLogCursor {
+                    at,
+                    rank: 1,
+                    request_id: Some(request_id.to_string()),
+                    seq: Some(seq.parse().ok()?),
+                    rowid: None,
+                })
+            }
+            "0" => Some(RoutingLogCursor {
+                at,
+                rank: 0,
+                request_id: None,
+                seq: None,
+                rowid: Some(id.parse().ok()?),
+            }),
+            _ => None,
+        }
+    }
+
+    pub fn encode(&self) -> String {
+        match (&self.request_id, self.seq, self.rowid) {
+            (Some(request_id), Some(seq), _) => format!("{}:1:{request_id}/{seq}", self.at),
+            (_, _, rowid) => format!("{}:0:{}", self.at, rowid.unwrap_or_default()),
+        }
+    }
+
+    fn of(row: &RoutingLogRow) -> RoutingLogCursor {
+        match row {
+            RoutingLogRow::Decision(d) => RoutingLogCursor {
+                at: d.at,
+                rank: 1,
+                request_id: Some(d.request_id.clone()),
+                seq: Some(d.seq),
+                rowid: None,
+            },
+            RoutingLogRow::Event(e) => RoutingLogCursor {
+                at: e.at,
+                rank: 0,
+                request_id: None,
+                seq: None,
+                rowid: Some(e.id),
+            },
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum RoutingLogRow {
+    Decision(DecisionListRow),
+    Event(EventListRow),
+}
+
+/// The summary column parsed, with the joined facts of the completing attempt (the newest attempt row on the
+/// decision's account at or after the decision's `attempt` and before the request's next decision's, by `seq`).
+/// `attempt` stays the decision's own, `cache` is `None` until the completing attempt has usage, and a `held`,
+/// `exhausted` or `refused` decision joins no attempt (`status` and `cache` null).
+#[derive(Clone, Debug, PartialEq)]
+pub struct DecisionListRow {
+    pub request_id: String,
+    pub seq: u32,
+    pub attempt: u32,
+    pub attempt_count: Option<u32>,
+    pub at: i64,
+    pub kind: String,
+    pub probe: bool,
+    pub key_id: Option<String>,
+    pub pool_id: Option<String>,
+    pub session_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub model: Option<String>,
+    pub account_id: Option<String>,
+    pub from_account_id: Option<String>,
+    pub summary: Value,
+    pub cache: Option<CacheFacts>,
+    pub status: Option<u16>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize)]
+pub struct CacheFacts {
+    pub hit: bool,
+    pub read_tokens: u64,
+    pub promised_tokens: Option<u64>,
+    pub input_tokens: u64,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct EventListRow {
+    pub id: i64,
+    pub at: i64,
+    pub kind: String,
+    pub account_id: Option<String>,
+    pub key_id: Option<String>,
+    pub pool_id: Option<String>,
+    pub session_id: Option<String>,
+    pub agent_id: Option<String>,
+    pub model: Option<String>,
+    pub request_id: Option<String>,
+    pub actor: Option<String>,
+    pub detail: Value,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct RoutingLogPage {
+    pub rows: Vec<RoutingLogRow>,
+    pub next_cursor: Option<String>,
+    /// `(decisions, events)` under the whole filter, answered only under a `request` filter, the one bounded set.
+    pub counts: Option<(u64, u64)>,
+}
+
+/// The attempt a dispatching decision completed on: the newest attempt row on the decision's own account at or after
+/// its attempt and below the attempt of the request's next decision, so a retry in place, a refresh replay or a strip
+/// retry reads the pass that answered. A successor on the same attempt (a credential failure fails over before the
+/// wire counter advances) leaves the decision no attempt of its own, and the account match keeps a successor whose
+/// decision never reached the ledger from lending its answer.
+const COMPLETING_ATTEMPT: &str = "CASE WHEN d.kind IN ('placed', 'renewed', 'moved') THEN (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = d.request_id AND x.account_id = d.account_id AND x.attempt >= d.attempt AND x.attempt < COALESCE((SELECT MIN(n.attempt) FROM decisions n WHERE n.request_id = d.request_id AND n.seq > d.seq), 9223372036854775807)) END";
+
+/// The completing attempt's columns the log reads, every field `None` where none joined.
+struct Answered {
+    status: Option<u16>,
+    input_tokens: Option<u64>,
+    cache_read_tokens: Option<u64>,
+    cache_write_5m_tokens: Option<u64>,
+    cache_write_1h_tokens: Option<u64>,
+}
+
+impl Answered {
+    /// The five columns from `at` on, in the order both statements select them.
+    fn read(r: &rusqlite::Row<'_>, at: usize) -> rusqlite::Result<Answered> {
+        let tokens = |i: usize| -> rusqlite::Result<Option<u64>> {
+            Ok(r.get::<_, Option<i64>>(i)?.map(|n| n as u64))
+        };
+        Ok(Answered {
+            status: r.get::<_, Option<i64>>(at)?.map(|n| n as u16),
+            input_tokens: tokens(at + 1)?,
+            cache_read_tokens: tokens(at + 2)?,
+            cache_write_5m_tokens: tokens(at + 3)?,
+            cache_write_1h_tokens: tokens(at + 4)?,
+        })
+    }
+
+    /// `finish` writes usage onto the attempt that answered alone, so an attempt without any is not one to judge.
+    fn has_usage(&self) -> bool {
+        self.input_tokens.is_some()
+            || self.cache_read_tokens.is_some()
+            || self.cache_write_5m_tokens.is_some()
+            || self.cache_write_1h_tokens.is_some()
+    }
+
+    /// The hit by the rule `placements` counts: a `content` rung reads up to the entry's promise, and anything else
+    /// hits on a read at all, since a static entry's size is not on the usage.
+    fn cache(&self, summary: &Value) -> Option<CacheFacts> {
+        if !self.has_usage() {
+            return None;
+        }
+        let read = self.cache_read_tokens.unwrap_or(0);
+        let promised = summary["rung"]["prefix_tokens"].as_u64();
+        let hit = match summary["rung"]["rung"].as_str() {
+            Some("content") => read >= promised.unwrap_or(0),
+            _ => read > 0,
+        };
+        Some(CacheFacts {
+            hit,
+            read_tokens: read,
+            promised_tokens: promised,
+            input_tokens: self.input_tokens.unwrap_or(0),
+        })
+    }
+}
+
+/// One statement's clauses and their arguments, over alias `d` for the decisions or `e` for the events.
+struct LogStatement {
+    clauses: Vec<String>,
+    args: Vec<Box<dyn ToSql>>,
+}
+
+impl LogStatement {
+    fn new(alias: &str, filter: &RoutingLogFilter) -> LogStatement {
+        let mut args: Vec<Box<dyn ToSql>> = vec![Box::new(filter.from), Box::new(filter.to)];
+        let mut clauses = vec![format!("{alias}.at BETWEEN ?1 AND ?2")];
+        if let Some(request) = &filter.request {
+            args.push(Box::new(request.clone()));
+            clauses.push(format!("{alias}.request_id = ?{}", args.len()));
+        }
+        if let Some(session) = &filter.session {
+            args.push(Box::new(session.clone()));
+            let exact = args.len();
+            args.push(Box::new(format!("{}%", literal_like(session))));
+            clauses.push(format!(
+                "({alias}.session_id = ?{exact} OR {alias}.session_id LIKE ?{} ESCAPE '\\')",
+                exact + 1
+            ));
+        }
+        in_list(
+            &format!("{alias}.key_id"),
+            &filter.keys,
+            &mut args,
+            &mut clauses,
+        );
+        in_list(
+            &format!("{alias}.pool_id"),
+            &filter.pools,
+            &mut args,
+            &mut clauses,
+        );
+        in_list(
+            &format!("{alias}.model"),
+            &filter.models,
+            &mut args,
+            &mut clauses,
+        );
+        LogStatement { clauses, args }
+    }
+
+    fn sql(&self) -> String {
+        self.clauses.join(" AND ")
+    }
+
+    fn params(&self) -> impl Iterator<Item = &dyn ToSql> {
+        self.args.iter().map(|a| a.as_ref())
+    }
+}
+
+/// `None` when the kinds name no decision, so the statement is never run.
+fn decision_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
+    let mut statement = LogStatement::new("d", filter);
+    if !filter.accounts.is_empty() {
+        let mut marks = Vec::new();
+        for account in &filter.accounts {
+            statement.args.push(Box::new(account.clone()));
+            marks.push(format!("?{}", statement.args.len()));
+        }
+        let marks = marks.join(", ");
+        statement.clauses.push(format!(
+            "(d.account_id IN ({marks}) OR d.from_account_id IN ({marks}))"
+        ));
+    }
+    match &filter.kinds {
+        None => statement.clauses.push("d.probe = 0".into()),
+        Some(kinds) => {
+            let named: Vec<String> = kinds
+                .iter()
+                .filter(|k| DECISION_KINDS.contains(&k.as_str()))
+                .cloned()
+                .collect();
+            let probes = kinds.iter().any(|k| k == PROBE_KIND);
+            let mut of_kind = Vec::new();
+            in_list("d.kind", &named, &mut statement.args, &mut of_kind);
+            let clause = match (of_kind.pop(), probes) {
+                (None, false) => return None,
+                (None, true) => "d.probe = 1".to_string(),
+                (Some(kind), false) => format!("{kind} AND d.probe = 0"),
+                (Some(kind), true) => format!("(({kind} AND d.probe = 0) OR d.probe = 1)"),
+            };
+            statement.clauses.push(clause);
+        }
+    }
+    Some(statement)
+}
+
+/// `None` when the kinds name no event kind, so the statement is never run.
+fn event_statement(filter: &RoutingLogFilter) -> Option<LogStatement> {
+    let mut statement = LogStatement::new("e", filter);
+    in_list(
+        "e.account_id",
+        &filter.accounts,
+        &mut statement.args,
+        &mut statement.clauses,
+    );
+    match &filter.kinds {
+        None => statement
+            .clauses
+            .push(format!("e.kind != '{HIDDEN_EVENT_KIND}'")),
+        Some(kinds) => {
+            let named: Vec<String> = kinds
+                .iter()
+                .filter(|k| EVENT_KINDS.contains(&k.as_str()))
+                .cloned()
+                .collect();
+            if named.is_empty() {
+                return None;
+            }
+            in_list(
+                "e.kind",
+                &named,
+                &mut statement.args,
+                &mut statement.clauses,
+            );
+        }
+    }
+    Some(statement)
+}
+
+/// The page of decisions and events under `filter`, newest first, decisions before events at one `at`. Two
+/// statements rather than a `UNION ALL`, so each walks its own index, merged here by the same key the cursor names.
+pub fn list_routing_log(
+    conn: &Connection,
+    filter: &RoutingLogFilter,
+    cursor: Option<&RoutingLogCursor>,
+    limit: usize,
+) -> Result<RoutingLogPage, LedgerError> {
+    let decisions = decision_statement(filter);
+    let events = event_statement(filter);
+    let counts = match &filter.request {
+        Some(_) => Some((
+            count_of(conn, "decisions d", decisions.as_ref())?,
+            count_of(conn, "events e", events.as_ref())?,
+        )),
+        None => None,
+    };
+    let page = (limit + 1) as i64;
+    let mut decided = match decisions {
+        Some(statement) => decision_rows(conn, statement, cursor, page)?,
+        None => Vec::new(),
+    }
+    .into_iter()
+    .peekable();
+    let mut evented = match events {
+        Some(statement) => event_rows(conn, statement, cursor, page)?,
+        None => Vec::new(),
+    }
+    .into_iter()
+    .peekable();
+    // Both lists arrive in the page's order, so the merge takes a decision whenever it is at or after the next
+    // event: decisions rank before events at one `at`.
+    let mut rows = Vec::with_capacity(limit + 1);
+    while rows.len() <= limit {
+        let take_decision = match (decided.peek(), evented.peek()) {
+            (Some(d), Some(e)) => d.at >= e.at,
+            (Some(_), None) => true,
+            (None, Some(_)) => false,
+            (None, None) => break,
+        };
+        rows.push(if take_decision {
+            RoutingLogRow::Decision(decided.next().expect("peeked"))
+        } else {
+            RoutingLogRow::Event(evented.next().expect("peeked"))
+        });
+    }
+    // One row past the page says a next page exists, so a page of exactly `limit` rows offers no cursor that would
+    // only lead to an empty page.
+    let next_cursor = if rows.len() > limit {
+        limit
+            .checked_sub(1)
+            .and_then(|last| rows.get(last))
+            .map(|row| RoutingLogCursor::of(row).encode())
+    } else {
+        None
+    };
+    rows.truncate(limit);
+    Ok(RoutingLogPage {
+        rows,
+        next_cursor,
+        counts,
+    })
+}
+
+/// Up to `page` decisions past `cursor`, each with the facts of the attempt that completed it.
+fn decision_rows(
+    conn: &Connection,
+    mut statement: LogStatement,
+    cursor: Option<&RoutingLogCursor>,
+    page: i64,
+) -> Result<Vec<DecisionListRow>, LedgerError> {
+    if let Some(cursor) = cursor {
+        let n = statement.args.len() + 1;
+        statement.args.push(Box::new(cursor.at));
+        statement.args.push(Box::new(i64::from(cursor.rank)));
+        statement.args.push(Box::new(cursor.request_id.clone()));
+        statement.args.push(Box::new(cursor.seq));
+        statement.clauses.push(format!(
+            "(d.at < ?{n} OR (d.at = ?{n} AND ?{} = 1 AND (d.request_id < ?{} OR (d.request_id = ?{} AND d.seq < ?{}))))",
+            n + 1,
+            n + 2,
+            n + 2,
+            n + 3
+        ));
+    }
+    statement.args.push(Box::new(page));
+    let sql = format!(
+        "SELECT d.request_id, d.seq, d.attempt, d.at, d.kind, d.probe, d.key_id, d.pool_id, d.session_id, \
+         d.agent_id, d.model, d.account_id, d.from_account_id, d.summary, r.attempts, a.upstream_status, \
+         a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens \
+         FROM decisions d LEFT JOIN requests r ON r.id = d.request_id \
+         LEFT JOIN attempts a ON a.request_id = d.request_id AND a.attempt = ({COMPLETING_ATTEMPT}) \
+         WHERE {} ORDER BY d.at DESC, d.request_id DESC, d.seq DESC LIMIT ?{}",
+        statement.sql(),
+        statement.args.len()
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt
+        .query_map(params_from_iter(statement.params()), |r| {
+            Ok((
+                DecisionListRow {
+                    request_id: r.get(0)?,
+                    seq: r.get(1)?,
+                    attempt: r.get(2)?,
+                    attempt_count: r.get(14)?,
+                    at: r.get(3)?,
+                    kind: r.get(4)?,
+                    probe: r.get(5)?,
+                    key_id: r.get(6)?,
+                    pool_id: r.get(7)?,
+                    session_id: r.get(8)?,
+                    agent_id: r.get(9)?,
+                    model: r.get(10)?,
+                    account_id: r.get(11)?,
+                    from_account_id: r.get(12)?,
+                    summary: Value::Null,
+                    cache: None,
+                    status: None,
+                },
+                r.get::<_, String>(13)?,
+                Answered::read(r, 15)?,
+            ))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    rows.into_iter()
+        .map(|(row, summary, answered)| {
+            let summary: Value = serde_json::from_str(&summary)?;
+            Ok(DecisionListRow {
+                cache: answered.cache(&summary),
+                status: answered.status,
+                summary,
+                ..row
+            })
+        })
+        .collect()
+}
+
+/// Up to `page` events past `cursor`, each with its detail decoded.
+fn event_rows(
+    conn: &Connection,
+    mut statement: LogStatement,
+    cursor: Option<&RoutingLogCursor>,
+    page: i64,
+) -> Result<Vec<EventListRow>, LedgerError> {
+    if let Some(cursor) = cursor {
+        let n = statement.args.len() + 1;
+        statement.args.push(Box::new(cursor.at));
+        statement.args.push(Box::new(i64::from(cursor.rank)));
+        statement.args.push(Box::new(cursor.rowid));
+        statement.clauses.push(format!(
+            "(e.at < ?{n} OR (e.at = ?{n} AND (?{} = 1 OR e.rowid < ?{})))",
+            n + 1,
+            n + 2
+        ));
+    }
+    statement.args.push(Box::new(page));
+    let sql = format!(
+        "SELECT e.rowid, e.at, e.kind, e.account_id, e.key_id, e.pool_id, e.session_id, e.agent_id, e.model, \
+         e.request_id, e.actor, e.detail FROM events e WHERE {} ORDER BY e.at DESC, e.rowid DESC LIMIT ?{}",
+        statement.sql(),
+        statement.args.len()
+    );
+    let mut stmt = conn.prepare(&sql)?;
+    let rows = stmt.query_map(params_from_iter(statement.params()), |r| {
+        Ok(EventListRow {
+            id: r.get(0)?,
+            at: r.get(1)?,
+            kind: r.get(2)?,
+            account_id: r.get(3)?,
+            key_id: r.get(4)?,
+            pool_id: r.get(5)?,
+            session_id: r.get(6)?,
+            agent_id: r.get(7)?,
+            model: r.get(8)?,
+            request_id: r.get(9)?,
+            actor: r.get(10)?,
+            detail: r
+                .get::<_, Option<String>>(11)?
+                .and_then(|d| serde_json::from_str(&d).ok())
+                .unwrap_or(Value::Null),
+        })
+    })?;
+    Ok(rows.collect::<rusqlite::Result<Vec<_>>>()?)
+}
+
+fn count_of(
+    conn: &Connection,
+    table: &str,
+    statement: Option<&LogStatement>,
+) -> Result<u64, LedgerError> {
+    let Some(statement) = statement else {
+        return Ok(0);
+    };
+    let count: i64 = conn.query_row(
+        &format!("SELECT COUNT(*) FROM {table} WHERE {}", statement.sql()),
+        params_from_iter(statement.params()),
+        |r| r.get(0),
+    )?;
+    Ok(count as u64)
+}
+
+/// Record v1 decoded from its frame with `outcome.completion` merged in, or `None` when the row is absent.
+pub fn decision_record(
+    conn: &Connection,
+    request_id: &str,
+    seq: u32,
+) -> Result<Option<Value>, LedgerError> {
+    let row = conn
+        .query_row(
+            &format!(
+                "SELECT d.kind, d.account_id, d.summary, d.record, d.cache_map, r.held, a.upstream_status, \
+                 a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, a.finished_at \
+                 FROM decisions d LEFT JOIN requests r ON r.id = d.request_id \
+                 LEFT JOIN attempts a ON a.request_id = d.request_id AND a.attempt = ({COMPLETING_ATTEMPT}) \
+                 WHERE d.request_id = ?1 AND d.seq = ?2"
+            ),
+            params![request_id, seq],
+            |r| {
+                Ok((
+                    r.get::<_, String>(0)?,
+                    r.get::<_, Option<String>>(1)?,
+                    r.get::<_, String>(2)?,
+                    r.get::<_, Vec<u8>>(3)?,
+                    r.get::<_, Option<String>>(4)?,
+                    r.get::<_, Option<String>>(5)?,
+                    Answered::read(r, 6)?,
+                    r.get::<_, Option<i64>>(11)?,
+                ))
+            },
+        )
+        .optional()?;
+    let Some((kind, account_id, summary, frame, cache_map, held, answered, completed_at)) = row
+    else {
+        return Ok(None);
+    };
+    let mut record = crate::record::decode_record(&frame)?;
+    let completion = if DISPATCHING_KINDS.contains(&kind.as_str()) {
+        let summary: Value = serde_json::from_str(&summary)?;
+        let cache = answered.cache(&summary);
+        let held: Option<Value> = held.as_deref().and_then(|h| serde_json::from_str(h).ok());
+        // A wait that ran out puts its account among the attempted, so a dispatch to an account the request waited on
+        // is the one its freed slot took.
+        let freed = held.as_ref().is_some_and(|h| {
+            h["waited_on"]
+                .as_array()
+                .is_some_and(|waited| waited.iter().any(|w| w.as_str() == account_id.as_deref()))
+        });
+        serde_json::json!({
+            "status": answered.status,
+            "cache_read_tokens": cache.as_ref().map(|c| c.read_tokens),
+            "input_tokens": cache.as_ref().map(|c| c.input_tokens),
+            "promised_tokens": summary["rung"]["prefix_tokens"].as_u64(),
+            "hit": cache.as_ref().map(|c| c.hit),
+            "held_ms": held.as_ref().map_or(Value::Null, |h| h["held_ms"].clone()),
+            "freed": freed,
+            "cache_map_written": cache_map.as_deref().and_then(|m| serde_json::from_str::<Value>(m).ok()),
+            "completed_at": completed_at,
+        })
+    } else {
+        Value::Null
+    };
+    if let Some(outcome) = record.get_mut("outcome").and_then(Value::as_object_mut) {
+        outcome.insert("completion".into(), completion);
+    }
+    let mut answer = serde_json::Map::new();
+    answer.insert("request_id".into(), request_id.into());
+    answer.insert("seq".into(), seq.into());
+    answer.extend(record);
+    Ok(Some(Value::Object(answer)))
 }
 
 /// The `pin_migrated` events in `[from, to)` for the given accounts, counted by the move's `detail.reason`
@@ -1876,7 +2533,7 @@ struct UsageRow<'a> {
     fast: bool,
 }
 
-/// The shares of an oauth account's two windows (the 5-hour one banded at the row's own instant) when `tier`
+/// The shares of an oauth account's two windows (each banded at the row's own instant) when `tier`
 /// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
 /// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account adds
 /// its `estimated_usd` and a zero share where the tables size its tier: fast mode spends usage credits and draws no
@@ -1898,8 +2555,8 @@ fn price_usage(
     match kind {
         Some(AccountKind::Oauth) if row.fast => {
             point.usd += row.estimated_usd;
-            // Ahead of the model's cells: a fast row prices in dollars whatever standard cells the model carries, so
-            // the zero rests on the tier alone.
+            // Ahead of the model's weights: a fast row prices in dollars whatever the model weighs it at, so the zero
+            // rests on the tier alone.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
                 if tables.tier_factor(tier, FIVE_HOUR).is_some() && !point.five_hour_unpriced {
                     point.five_hour_share.get_or_insert(0.0);
@@ -1917,10 +2574,10 @@ fn price_usage(
                 write_1h: row.cache_write_1h_tokens,
                 output: row.output_tokens,
             };
-            // A failed request books a row with no token, and the table refuses a model it has no row for before it
-            // reads the usage: such a row would null a priced hour for a charge of nothing.
+            // A failed request books a row with no token, and the model refuses a model it has no weight for before
+            // it reads the usage: such a row would null a priced hour for a charge of nothing.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
-                match tables.five_hour_share_at(tier, row.canonical_model, usage, row.at) {
+                match tables.share_at(FIVE_HOUR, tier, row.canonical_model, usage, row.at) {
                     Some(share) if !point.five_hour_unpriced => {
                         *point.five_hour_share.get_or_insert(0.0) += share;
                     }
@@ -1930,7 +2587,7 @@ fn price_usage(
                         point.five_hour_share = None;
                     }
                 }
-                match tables.share(SEVEN_DAY, tier, row.canonical_model, usage) {
+                match tables.share_at(SEVEN_DAY, tier, row.canonical_model, usage, row.at) {
                     Some(share) if !point.seven_day_unpriced => {
                         *point.seven_day_share.get_or_insert(0.0) += share;
                     }

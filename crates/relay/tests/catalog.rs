@@ -12,7 +12,7 @@ use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_relay::{Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, NewBundle, RekeyWrite,
-    ResolutionRow, RulesMode, Secret, StorageKey, Store,
+    ResolutionRow, RulesMode, Secret, StateCause, StorageKey, Store,
 };
 use tower::ServiceExt;
 
@@ -1234,6 +1234,7 @@ async fn a_replacement_account_under_the_same_id_reads_its_own_catalog() {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     h.store.set_api_key_secret("a", &Secret::new("k2")).unwrap();
@@ -1307,6 +1308,7 @@ async fn a_gated_fill_whose_account_was_replaced_commits_nothing() {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     h.store.set_api_key_secret("a", &Secret::new("k2")).unwrap();
@@ -1909,4 +1911,55 @@ async fn a_cancelled_stream_with_a_message_start_naming_another_snapshot_trigger
     })
     .await;
     up.release();
+}
+
+#[tokio::test]
+async fn a_listing_that_changed_calls_the_hook_with_what_came_and_went() {
+    let up = FakeUpstream::start(vec![]).await;
+    let catalog_up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/models?limit=1000".into(),
+        respond: json_list(&["claude-opus-5", "claude-sonnet-4-5-20250929"]),
+    }])
+    .await;
+    // No account at the start, so no listing lands before the hook is set.
+    let h = harness_with_catalog(&up, catalog_up, &[], PoolSpec::default()).await;
+    let changes = Arc::new(std::sync::Mutex::new(Vec::new()));
+    h.catalog.set_on_change(Arc::new({
+        let changes = changes.clone();
+        move |change| changes.lock().unwrap().push(change)
+    }));
+    h.store
+        .insert_account(&test_account_row(&api_key("a", "sk-ant-api03-A", 0)))
+        .unwrap();
+    h.store
+        .set_api_key_secret("a", &Secret::new("sk-ant-api03-A"))
+        .unwrap();
+    let a = h.store.account("a").unwrap().unwrap();
+    assert_eq!(h.catalog.fetch(&a).await.models.len(), 2);
+    assert!(
+        changes.lock().unwrap().is_empty(),
+        "the first listing has none before it to differ from"
+    );
+
+    h.clock.store(NOW + 1_000, Ordering::SeqCst);
+    h.catalog_up.set_rule_after(
+        h.catalog_up.requests().len(),
+        "/v1/models?limit=1000",
+        json_list(&["claude-haiku-5", "claude-opus-5"]),
+    );
+    h.catalog.refresh(&a).await;
+    let expected = vec![phoebis_relay::CatalogChange {
+        account_id: "a".into(),
+        added: vec!["claude-haiku-5".into()],
+        removed: vec!["claude-sonnet-4-5-20250929".into()],
+        count: 2,
+        at: NOW + 1_000,
+    }];
+    assert_eq!(*changes.lock().unwrap(), expected);
+    h.catalog.refresh(&a).await;
+    assert_eq!(
+        *changes.lock().unwrap(),
+        expected,
+        "the same listing again changes nothing"
+    );
 }

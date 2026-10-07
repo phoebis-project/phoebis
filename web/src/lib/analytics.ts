@@ -1,10 +1,11 @@
 import type { Api } from '@/api/client';
-import type { Account, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, CostTable, PinMigrationReason, Placement, PlacementRow } from '@/api/types';
+import type { Account, AnalyticsQuery, BurnGroup, BurnPoint, BurnUnit, PinMigrationReason, Placement, PlacementRow, SubscriptionCosts } from '@/api/types';
+import { tierCapacity, tierRow, type CostWindow } from '@/lib/costs';
 import { fmtCompact, fmtInt, fmtPct } from '@/lib/format';
 
-/** Why a session's pin moved, as the request drawer, its selection trace and the rewrites legend word it. */
+/** Why a session's pin moved, as the pool card's moves tile, the rewrites legend and the routing log word it. */
 export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
-  cooldown: 'rate limited',
+  cooldown: 'failed over',
   drain: 'winding down',
   fast_lane: 'fast lane cooling',
   mark: 'account marked',
@@ -13,6 +14,13 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
   shed: 'shed',
   spent: 'window spent',
 };
+/**
+ * The pool's own balancing: what the pool card's move tile sums, the rule moves on the pool's member accounts in the
+ * last hour. A keepalive probe's move counts among them, and the routing log lists it only with probe decisions chosen.
+ */
+export const RULE_MOVE_REASONS: readonly PinMigrationReason[] = ['drain', 'overage', 'return_to_plan', 'shed', 'spent'];
+/** The moves an answer forced on a session, which the pool card's move tile names apart from its count. */
+export const FAILOVER_MOVE_REASONS: readonly PinMigrationReason[] = ['cooldown', 'fast_lane', 'mark'];
 /**
  * Whether a label map holds the name as its own key. The names are the router's data, and one could name a member
  * every object inherits.
@@ -34,8 +42,9 @@ export const MAX_BURN_LINES = 7;
 /** The key the folded rest carries, suffixed by its unit under the account grouping; no group is looked up by it. */
 export const OTHER_KEY = 'other';
 /**
- * The unit a burn line charts in. `unknown` is a subscription account the cost table does not size, its tier missing
- * or one the table has no factors for: it has no share to draw, and dollars only for what its fast-mode answers spent.
+ * The unit a burn line charts in. `unknown` is a subscription account the cost model does not size, its tier missing
+ * or one the model has no capacity row for: it has no share to draw, and dollars only for what its fast-mode answers
+ * spent.
  */
 export type BurnLineUnit = BurnUnit | 'unknown';
 const OTHER_LABEL: Record<BurnLineUnit, string> = { unknown: 'Other (tier unknown)', usd: 'Other (dollars)', window_share: 'Other (plan)' };
@@ -57,8 +66,8 @@ export interface BurnLine {
    */
   unit: BurnLineUnit;
   /**
-   * Per window, whether a bucket with tokens has no share on it: a model the table has no row for, or a cell it
-   * leaves unmeasured. False on a line that does not chart window share.
+   * Per window, whether a bucket with tokens has no share on it: a model the cost model has no weight for, or a tier it
+   * has no capacity for on that window. False on a line that does not chart window share.
    */
   unpriced: { fiveHour: boolean; sevenDay: boolean };
   usdPerMinute: number;
@@ -145,22 +154,15 @@ export async function readBurn(
 }
 
 /**
- * The cost table's factors for a stored tier, matched as the ledger matches it: as stored, then with the `default_`
- * prefix taken off or put on, since only one spelling has been seen on the wire. Undefined for a tier it does not size.
+ * The accounts whose stored tier the cost model sizes, matched as the ledger matches it: as stored, then with the
+ * `default_` prefix taken off or put on, since only one spelling has been seen on the wire. The plan chart reads a
+ * listed tier as sized and draws a window it has no capacity on as model unlisted. With `window`, a tier sizes an
+ * account only where it has a capacity on that window, as the shed preview needs for the 5-hour window: the sessions
+ * route reads no burn for a pin of a tier without one.
  */
-export function tierFactors(tiers: CostTable['tiers'], tier: string): CostTable['tiers'][string] | undefined {
-  const bare = tier.startsWith('default_') ? tier.slice('default_'.length) : null;
-  const key = [tier, bare, `default_${tier}`].find((k): k is string => k !== null && own(tiers, k));
-  return key === undefined ? undefined : tiers[key];
-}
-
-/**
- * The accounts whose stored tier the cost table sizes, matched as the ledger matches it: as stored, then with the
- * `default_` prefix taken off or put on. A tier the table lists with no 5-hour factor sizes nothing, since the route
- * prices no share of that window on it.
- */
-export function sizedAccounts(accounts: Account[], tiers: CostTable['tiers']): Set<string> {
-  return new Set(accounts.filter((a) => a.subscription !== null && (tierFactors(tiers, a.subscription.rateLimitTier)?.fiveHour ?? null) !== null).map((a) => a.id));
+export function sizedAccounts(accounts: Account[], costs: SubscriptionCosts, window?: CostWindow): Set<string> {
+  const sizes = (tier: string) => (window === undefined ? tierRow(costs, tier) !== undefined : tierCapacity(costs, tier, window) !== null);
+  return new Set(accounts.filter((a) => a.subscription !== null && sizes(a.subscription.rateLimitTier)).map((a) => a.id));
 }
 
 /** Each value weighed by its weight, so a bucket counts for the part of its width it covers. */
@@ -176,7 +178,7 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
  * every other grouping keeps the groups with the most tokens and sums the rest as other, whose shares stay empty
  * since shares of different windows do not add up. Under the account grouping the rest folds once per unit, since
  * a subscription account's window share and an Anthropic-key account's dollars chart on different axes. `sized` names
- * the accounts whose tier the cost table sizes, which chart in window share whatever their buckets priced.
+ * the accounts whose tier the cost model sizes, which chart in window share whatever their buckets priced.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when
  * absent. The route reads whole hours through the hour ceiling of the end, so a bucket covers its width up to the hour
@@ -195,7 +197,7 @@ export function foldBurn(
   const tokens = new Map<string, number>();
   for (const p of points) tokens.set(lineOf(p.group), (tokens.get(lineOf(p.group)) ?? 0) + p.cachedTokens + p.uncachedTokens);
   // The category comes from the tier on file rather than from whether a bucket priced, so an account whose range
-  // ran on unmeasured models alone still charts as a plan line and its unpriced windows show.
+  // ran on unweighted models alone still charts as a plan line and its unpriced windows show.
   const byAccount = groupBy === 'account';
   const subscribed = new Set(byAccount ? points.filter((p) => p.unit === 'window_share').map((p) => p.group) : []);
   const unitOf = (group: string): BurnLineUnit => (subscribed.has(group) ? (sized.has(group) ? 'window_share' : 'unknown') : 'usd');

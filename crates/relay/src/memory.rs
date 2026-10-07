@@ -877,7 +877,7 @@ mod tests {
     use std::sync::{Arc, Barrier};
     use std::time::Duration;
 
-    use phoebis_store::{AccountKind, AccountRow, AccountState};
+    use phoebis_store::{AccountKind, AccountRow, AccountState, StateCause};
 
     /// A store over a map, with the seams the flush and read tests need: a save that fails once, and a load
     /// or a save that waits on a barrier, each taken once.
@@ -969,6 +969,7 @@ mod tests {
             incarnation,
             revision,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         }
     }
 
