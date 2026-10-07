@@ -1,7 +1,8 @@
 //! `phoebis backup` copies both databases into a private directory with a manifest that names the key file, while the
 //! router's writes go on, and the copies open under the key. It refuses a destination that is not an empty directory
-//! and a database that does not exist, and a copy that fails leaves nothing behind. A lock on a source is waited out
-//! within the bound and fails the run past it, with nothing written.
+//! or that someone besides its owner could write into, and a database that does not exist, and a copy that fails
+//! leaves nothing behind. A lock on a source is waited out within the bound and fails the run past it, with nothing
+//! written.
 
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -377,6 +378,68 @@ fn a_ledger_path_that_names_a_directory_fails_the_second_copy_and_leaves_nothing
     assert!(!stderr.contains("wrote "), "{}", printed(&run));
     assert!(!target.exists(), "{}", printed(&run));
     assert!(!out.exists(), "the parent this run created");
+}
+
+/// The refusal `backup` prints for an existing destination someone besides its owner could write into.
+fn refused_line(target: &Path) -> String {
+    format!(
+        "{}: group or other can write it, or another user owns it. Nothing was written.",
+        target.display()
+    )
+}
+
+#[test]
+fn a_destination_group_or_other_can_write_is_refused_and_nothing_is_written() {
+    let dir = tempfile::tempdir().unwrap();
+    let (data, store, ledger_db) = first_start(dir.path());
+    drop((store, ledger_db));
+    let config = config_file(dir.path(), &data, &data.ledger);
+    for (name, wide) in [("group", 0o770), ("other", 0o707)] {
+        let target = dir.path().join(name);
+        std::fs::create_dir(&target).unwrap();
+        std::fs::set_permissions(&target, std::fs::Permissions::from_mode(wide)).unwrap();
+
+        let run = backup_to(&config, &target, &[]);
+
+        assert_eq!(run.status.code(), Some(1), "{name}: {}", printed(&run));
+        let stderr = String::from_utf8_lossy(&run.stderr);
+        assert!(
+            stderr.contains(&refused_line(&target)),
+            "{name}: {}",
+            printed(&run)
+        );
+        assert!(entries(&target).is_empty(), "{name}: {}", printed(&run));
+        assert_eq!(mode(&target), wide, "{name}");
+    }
+}
+
+#[test]
+#[ignore = "needs a second uid; the owner runs it"]
+fn a_destination_another_uid_owns_is_refused() {
+    let dir = tempfile::tempdir().unwrap();
+    let (data, store, ledger_db) = first_start(dir.path());
+    drop((store, ledger_db));
+    let config = config_file(dir.path(), &data, &data.ledger);
+    let target = dir.path().join("out");
+    std::fs::create_dir(&target).unwrap();
+    std::fs::set_permissions(&target, std::fs::Permissions::from_mode(0o700)).unwrap();
+    let entry = unsafe { libc::getpwnam(c"nobody".as_ptr()) };
+    assert!(!entry.is_null(), "this host has no user nobody");
+    let (uid, gid) = unsafe { ((*entry).pw_uid, (*entry).pw_gid) };
+    assert_ne!(
+        uid,
+        unsafe { libc::geteuid() },
+        "the destination must belong to another uid than the run's"
+    );
+    std::os::unix::fs::chown(&target, Some(uid), Some(gid))
+        .expect("handing the directory to nobody needs root");
+
+    let run = backup_to(&config, &target, &[]);
+
+    assert_eq!(run.status.code(), Some(1), "{}", printed(&run));
+    let stderr = String::from_utf8_lossy(&run.stderr);
+    assert!(stderr.contains(&refused_line(&target)), "{}", printed(&run));
+    assert!(entries(&target).is_empty(), "{}", printed(&run));
 }
 
 #[test]

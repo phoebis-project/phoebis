@@ -49,8 +49,10 @@ jobs:
             echo "Cargo.toml has no single workspace version"
             exit 1
           fi
-          amd64='{"platform":"linux/amd64","runner":"ubuntu-24.04","slug":"linux-amd64","target":"x86_64-unknown-linux-musl"}'
-          arm64='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","slug":"linux-arm64","target":"aarch64-unknown-linux-musl"}'
+          amd64='{"platform":"linux/amd64","runner":"ubuntu-24.04","slug":"linux-amd64",'
+          amd64+='"target":"x86_64-unknown-linux-musl"}'
+          arm64='{"platform":"linux/arm64","runner":"ubuntu-24.04-arm","slug":"linux-arm64",'
+          arm64+='"target":"aarch64-unknown-linux-musl"}'
           # ghcr.io accepts lower-case names only; GITHUB_REPOSITORY keeps the owner's spelling.
           registry_image="ghcr.io/${GITHUB_REPOSITORY,,}"
           echo "registry_image=$registry_image" >> "$GITHUB_OUTPUT"
@@ -188,7 +190,8 @@ jobs:
       - run: |
           chmod 0755 phoebis
           printed=$(./phoebis --version)
-          [ "$printed" = "phoebis $VERSION" ] || { echo "--version printed '$printed', not 'phoebis $VERSION'"; exit 1; }
+          [ "$printed" = "phoebis $VERSION" ] \
+            || { echo "--version printed '$printed', not 'phoebis $VERSION'"; exit 1; }
           linked=$(file ./phoebis)
           case "$linked" in
             *'statically linked'*|*'static-pie linked'*) ;;
@@ -197,6 +200,8 @@ jobs:
           if ldd ./phoebis 2>&1 | grep -qv 'not a dynamic executable\|statically linked'; then
             echo "ldd found a dynamic dependency"; ldd ./phoebis; exit 1
           fi
+          # The built bundle's page references /assets/index-<hash>.js, which the placeholder page never carries.
+          grep -q '/assets/index-' ./phoebis || { echo "the binary embeds no built console bundle"; exit 1; }
           tmp=$(mktemp -d)
           ./phoebis init --non-interactive --config "$tmp/config.yaml" > "$tmp/secret.env"
           ./phoebis check-config --config "$tmp/config.yaml"
@@ -286,9 +291,12 @@ jobs:
           asset=$(printf '%s' "$shell" | grep -o '/assets/[^"'"'"' ]*' | head -1)
           [ -n "$asset" ] || { echo "the console page references no /assets/ path"; exit 1; }
           curl -fsSo /dev/null "http://127.0.0.1:18081$asset" || { echo "console asset $asset was not served"; exit 1; }
-          # The container's environment carries the secret, so this smokes the bearer path, the five reads and the screen.
-          docker exec phoebis-smoke phoebis status > "$tmp/status.txt" || { cat "$tmp/status.txt"; echo "status exited non-zero"; exit 1; }
-          head -n 1 "$tmp/status.txt" | grep -q ', ready$' || { cat "$tmp/status.txt"; echo "status's first line does not end in ready"; exit 1; }
+          # The container's environment carries the secret, so this smokes the bearer path, the five reads and the
+          # screen.
+          docker exec phoebis-smoke phoebis status > "$tmp/status.txt" \
+            || { cat "$tmp/status.txt"; echo "status exited non-zero"; exit 1; }
+          head -n 1 "$tmp/status.txt" | grep -q ', ready$' \
+            || { cat "$tmp/status.txt"; echo "status's first line does not end in ready"; exit 1; }
           # The two copies and the manifest land on the volume; backup creates the missing parent.
           docker exec phoebis-smoke phoebis backup --to /var/lib/phoebis/backups/smoke
           # A second, short container with a certificate pair on the admin listener, generated here: the image must
@@ -311,7 +319,8 @@ jobs:
             [ "$status" = healthy ] && break
             sleep 1
           done
-          [ "$status" = healthy ] || { docker logs phoebis-smoke-tls; echo "the TLS container is '$status' after 30 s"; exit 1; }
+          [ "$status" = healthy ] \
+            || { docker logs phoebis-smoke-tls; echo "the TLS container is '$status' after 30 s"; exit 1; }
           tls_shell=$(curl --cacert "$tmp/admin.pem" -fsS https://127.0.0.1:18082/)
           case "$tls_shell" in
             *'<!-- phoebis-ui placeholder -->'*|'') echo "the TLS listener did not serve the console shell"; exit 1;;

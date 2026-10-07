@@ -41,9 +41,10 @@ docker compose cp phoebis:/var/lib/phoebis/backups/<name> .
 the router serves or while it is stopped; it takes no lock, opens no socket and needs no admin secret. It runs as the
 user that owns the databases (`phoebis` on the host, uid 65532 in the container, which `exec` already is), since the
 files and their `-shm` files are `0600`. The directory it writes holds `router.sqlite`, `ledger.sqlite` and
-`manifest.json`, each at `0600`, and nothing else. `backup` creates the directory and every missing parent at `0700`,
-or takes an existing empty directory and warns when its mode is wider, since the ledger copy holds the prompts and
-tool results its captured bodies contain, in plain text.
+`manifest.json`, each at `0600`, and nothing else. `backup` creates the directory and every missing parent at `0700`, or
+takes an existing empty directory that only its owner can write, and refuses one that group or other can write or that
+another user owns, since the ledger copy holds the prompts and tool results its captured bodies contain, in plain text.
+A mode wider than `0700` that gives group or other no write access is taken with a warning.
 
 `manifest.json` is written last, once both copies have answered `PRAGMA quick_check` with `ok` and every file and the
 directory are synced, so a directory that holds a manifest holds two complete copies. It carries `format` (1),
@@ -52,11 +53,13 @@ names, and nothing derived from the key), and under `registry` and `ledger` each
 `bytes` and `sha256`.
 
 `backup` exits 1 with nothing written when the file does not load, when `--to` names a file or a directory that is not
-empty, or when either database does not exist (`a backup carries both databases; {path} does not exist`). A copy that
-fails, such as one whose database another connection holds locked for ten seconds, removes every file and directory
-the run created and exits 1 with `backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest
-is written ([commands](installation.md#commands)). Where the binary is not at hand, `sqlite3`'s `.backup` produces the
-same snapshot, one database at a time.
+empty, when it names a directory that group or other can write or that another user owns
+(`{dir}: group or other can write it, or another user owns it. Nothing was written.`), or when either database does not
+exist (`a backup carries both databases; {path} does not exist`). A copy that fails, such as one whose database another
+connection holds locked for ten seconds, removes every file and directory the run created and exits 1 with
+`backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest is written
+([commands](installation.md#commands)). Where the binary is not at hand, `sqlite3`'s `.backup` produces the same
+snapshot, one database at a time.
 
 A backup taken before an upgrade needs both snapshots to succeed: the registry and the ledger migrate together,
 and a restore built from only one of them leaves the two databases at different points in the request history.
@@ -181,9 +184,9 @@ pools
   home  disabled  1 member, 0 keys, 0 pins, 0 requests/24h
     erin@example.com  ready  unavailable  5h -  7d -
   work  active    3 members, 2 keys, 2 pins, 41 requests/24h
-    alice@example.com  ready   eligible     5h 42%   7d 18%  resets 14:00
-    bob@example.com    ready   cooldown     5h 100%  7d 61%  until 15:30 rate_l…
-    carol@example.com  paused  unavailable  5h -     7d -
+    alice@example…  ready   eligible     5h 42%   7d 18%  resets 14:00
+    bob@example.c…  ready   cooldown     5h 100%  7d 61%  until 15:30 rate_limit
+    carol@example…  paused  unavailable  5h -     7d -
 
 accounts in no pool
   dave@example.com  unpaired
@@ -199,13 +202,13 @@ with each dead component (`ledger`, `router`, `store`); or `proxy down:` with th
 did not answer `200`, which wins over the other two. When the admin API could not be read, the header carries the
 binary's own version and `readiness unknown`, unless the proxy is down. The listeners follow with their schemes as the
 file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
-`proxy.tls.cert_file {path} expires in {n} days ({date})`, and a certificate the next start would refuse prints the
-start's line for it ([TLS on the listeners](installation.md#tls-on-the-listeners)); the running router keeps the pair it
-read at start. `ledger:` prints only when a figure needs a look, and names each one: records `queued` in the writer
-channel, `behind` while admission refuses, `degraded` after a failed batch, priced records `parked` in the ledger file,
-a batch `retrying`, and after `writer:` the state writer's `deferred` writes and its `degraded` flag.
-`attention:` lists every attention item as `<kind> <subject> since <HH:MM>`, or reads
-`none`.
+`proxy.tls.cert_file {path} expires in {n} days ({date})`, and a certificate file the loader refuses when the operator
+reads it prints the loader's line for it ([TLS on the listeners](installation.md#tls-on-the-listeners)). The running
+router keeps the pair it loaded until `phoebis tls reload`. `ledger:` prints only when a figure needs a look, and names
+each one: records `queued` in the writer channel, `behind` while admission refuses, `degraded` after a failed batch,
+priced records `parked` in the ledger file, a batch `retrying`, and after `writer:` the state writer's `deferred` writes
+and its `degraded` flag ([api](api.md#get-adminsystem)). `attention:` lists every attention item as
+`<kind> <subject> since <HH:MM>`, or reads `none`.
 
 Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24
 hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is
@@ -226,11 +229,12 @@ the local zone as `HH:MM`, with the date in front as `MM-DD` when it is not toda
 A read that fails prints one line in its section, such as `pools: the admin listener did not answer on <url>: <reason>`
 or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is down, the
 screen is the header with the binary's version and `proxy down: proxy does not answer on <addr>: <error>`, the
-listeners, and one such line per read. A label column is as wide as its widest label where the line has the room; a
-label cut there ends in `…`, and `--json` carries every label and id whole. A table line past 80 columns is cut and
-ends in `…`, and a line of text past 80 columns wraps. The pins and the accounts in no pool print 20 lines each and
-then `and N more`; `--all` prints every one. `--json` prints the same reads as one object for a script, each answer
-verbatim ([commands](installation.md#commands)).
+listeners, and one such line per read. A label column is as wide as its widest label where the line has the room. A
+member's reset or cooldown and a shedding pin's state through its age keep their width ahead of the labels, so a long
+label is cut before them. A cut label ends in `…`, and `--json` carries every label and id whole. A table line past 80
+columns is cut and ends in `…`, and a line of text past 80 columns wraps. The pins and the accounts in no pool print
+20 lines each and then `and N more`; `--all` prints every one. `--json` prints the same reads as one object for a
+script, each answer verbatim ([commands](installation.md#commands)).
 
 With `--url` and `--secret-env` standing in for the file, as for a router on another machine, `status` has no proxy
 listener to probe: it prints `proxy: not probed, no configuration file names the listener` under the listeners and
