@@ -63,3 +63,11 @@ test('the poll reading keeps one or two lines and moves the rest into the title'
   const none = d.pollReading(null, null, now);
   assert.deepEqual(none.lines.map((l) => l.text), ['not yet polled']);
 });
+
+test('a card the poll has not asked yet still names when its snapshot was read', () => {
+  const now = Date.UTC(2026, 8, 16, 14, 30);
+  const fetchedAt = new Date(now - 3 * 3_600_000).toISOString();
+  const reading = d.pollReading(null, fetchedAt, now);
+  assert.deepEqual(reading.lines, [{ text: 'not yet polled', tone: 'muted' }]);
+  assert.equal(reading.title, `checked ${d.fmtAbsolute(fetchedAt)}`);
+});

@@ -485,7 +485,8 @@
   white-space: nowrap;
 }
 
-/* Three window rows at 22px and their two 9px gaps, held when the card draws a note or an error in their place. */
+/* Three window rows of about 22.1px and their two 9px gaps, rounded up, held when the card draws a note or an error in
+   their place. */
 .qcard__body {
   display: flex;
   flex-direction: column;
@@ -547,7 +548,7 @@
   gap: 8px;
 }
 
-/* The error fills the windows' room, so its box ends where a neighbour's rows do. */
+/* The error fills the windows' room, so its box ends where a neighbor's rows do. */
 .qcard__error {
   display: flex;
   flex: 1;

@@ -464,9 +464,11 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
             while (start > span.startMs) start -= period;
             for (; start < span.endMs; start += period) {
               const end = start + period;
-              if (end < span.startMs) continue;
-              if (start >= endMs) continue;
               const stop = Math.min(end, endMs);
+              // The drawn end decides, so a window that spans the period's start draws nothing once the plan ended
+              // before that start.
+              if (stop < span.startMs) continue;
+              if (start >= endMs) continue;
               bars.push({ start, end, state: now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next', stop });
             }
             return (

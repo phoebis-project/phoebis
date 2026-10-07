@@ -902,6 +902,27 @@ m.unmount();
   });
   windows.unmount();
 }
+{
+  // A period paged past a cancelled account's end draws none of its windows, the one that opened before the end and
+  // spans the period's start among them. The story's end falls inside the current period, so the check moves it into
+  // the week that straddles the next period's start.
+  const { listAccounts } = api;
+  const endsAt = new Date(Date.now() + 8 * 86_400_000).toISOString();
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'secondary' ? { ...a, subscription: { ...a.subscription, endsAt } } : a));
+  const paged = await mount('/quota#quota-windows');
+  paged.container.querySelector('.timeline button[aria-label="Next period"]')?.click();
+  await paged.settle();
+  const laneOf = (label) => [...paged.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
+  const bars = (label) => laneOf(label)?.querySelectorAll('.lane__bar').length ?? -1;
+  const subtitle = paged.container.querySelector('.timeline .card__subtitle')?.textContent ?? 'no subtitle';
+  results.push({
+    name: "/quota a period paged past a cancelled account's end draws no window on its lane",
+    ok: !subtitle.includes('current') && bars('secondary') === 0 && laneOf('secondary')?.querySelector('.lane__end') === null && bars('primary') > 0,
+    missing: [subtitle, `secondary ${bars('secondary')} bars`, `primary ${bars('primary')} bars`],
+  });
+  api.listAccounts = listAccounts;
+  paged.unmount();
+}
 
 // The router holds the fast pair in memory until the next fast answer, and its buckets reset within minutes, so a
 // reading past its reset reads as refilled rather than as the share the last answer reported. The account page's

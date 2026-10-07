@@ -308,8 +308,8 @@ that fails after its 200 head keeps that status, so a finished request with an e
 
 The Quota view covers the subscription accounts alone, since an API-key account has no quota window. The header counts
 them and those needing attention, and a section bar under it shows one of two sections at a time: Accounts, where the
-view opens, and Quota windows. The address names the section shown (`#accounts` or `#quota-windows`), so a link or a
-reload lands on it.
+view opens, and Quota windows. A plain `/quota` shows the accounts, and a link or a reload with `#quota-windows` lands
+on the timeline.
 
 Accounts draws a card per account, in the default order or by soonest recovery. Every card has the same height and the
 same slots in the same order, so a card with more to say moves no rule against its neighbors: the header, one row per

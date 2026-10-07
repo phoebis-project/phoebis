@@ -87,7 +87,9 @@ export interface PollReading {
 }
 
 export function pollReading(poll: QuotaPoll | null, fetchedAt: string | null, now: number): PollReading {
-  if (poll === null) return { lines: [{ text: 'not yet polled', tone: 'muted' }], title: '' };
+  // After a start the poll has not asked yet while the snapshot still holds the last run's windows, so their age
+  // stays in the title.
+  if (poll === null) return { lines: [{ text: 'not yet polled', tone: 'muted' }], title: fetchedAt ? `checked ${fmtAbsolute(fetchedAt)}` : '' };
   const polled = `polled ${fmtRelative(poll.lastAttemptAt, now)}: `;
   const reason = poll.lastOutcome === 'failed' && poll.lastError ? poll.lastError : null;
   const lines: PollReading['lines'] = [reason === null ? { text: `${polled}${POLL_OUTCOME_LABEL[poll.lastOutcome]}`, tone: 'muted' } : { reason, text: `${polled}failed: `, tone: 'muted' }];
