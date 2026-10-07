@@ -17,7 +17,8 @@ use phoebis_ledger::{
 use phoebis_oauth::PollOutcome;
 use phoebis_routing::{EvidenceSource, FIVE_HOUR};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, Identity, NewBundle, Secret, StateCause, StorageKey,
+    Store,
 };
 use tokio::time::Instant;
 use tower::ServiceExt;
@@ -239,6 +240,7 @@ fn pair(store: &Store, id: &str, secret: &str) {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     let incarnation = store.account(id).unwrap().unwrap().incarnation;
@@ -394,7 +396,11 @@ async fn every_polled_account_is_read_once_per_interval_on_its_own_phase_and_rep
     // A pause leaves the account polled; an unpaired one holds no credential worth asking with.
     h.store.set_enabled("a", false).unwrap();
     h.store
-        .set_state("b", phoebis_store::AccountState::Unpaired)
+        .set_state(
+            "b",
+            phoebis_store::AccountState::Unpaired,
+            StateCause::Operator,
+        )
         .unwrap();
     h.router.reload().await.unwrap();
     let profiles = |up: &FakeUpstream| {
@@ -1280,11 +1286,10 @@ async fn a_rate_limited_poll_writes_the_backoff_s_start_and_the_clean_one_its_en
         (Some("usage"), Some(1), Some(started.2 + 120_000), clean_at),
         "the first 429 of a run, held for the ladder's first step, after the last clean read"
     );
-    assert!(
-        started.3["reason"]
-            .as_str()
-            .is_some_and(|r| r.contains("the usage endpoint rate-limited the account")),
-        "{}",
+    assert_eq!(
+        started.3["reason"].as_str(),
+        Some("429"),
+        "the reason is the status that opened the run, never the hold's sentence: {}",
         started.3
     );
     assert_eq!(
@@ -1321,9 +1326,15 @@ async fn a_profile_429_starts_the_backoff_and_the_next_clean_usage_poll_ends_it(
         (
             started.0.as_str(),
             started.3["endpoint"].as_str(),
+            started.3["reason"].as_str(),
             started.3["attempts"].as_u64()
         ),
-        ("poll_backoff_started", Some("profile"), Some(1)),
+        (
+            "poll_backoff_started",
+            Some("profile"),
+            Some("429"),
+            Some(1)
+        ),
         "the profile endpoint's 429 starts the run"
     );
     assert_eq!(usage_asked(&up, A), 0, "before any usage request");

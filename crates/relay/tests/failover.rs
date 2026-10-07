@@ -8,7 +8,7 @@ use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_oauth::AcquireError;
 use phoebis_routing::{DecisionRecord, DecisionSummary, RouterEvent};
-use phoebis_store::{AccountState, Failover};
+use phoebis_store::{AccountState, Failover, StateCause};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
 
@@ -412,7 +412,7 @@ async fn every_eligible_account_is_tried_once_and_then_the_exhaustion_answers() 
         ("c", AccountState::ReauthRequired),
         ("d", AccountState::FundingRequired),
     ] {
-        h.store.set_state(id, state).unwrap();
+        h.store.set_state(id, state, StateCause::Operator).unwrap();
     }
     h.router.reload().await.unwrap();
     let resp = h
@@ -433,7 +433,9 @@ async fn every_eligible_account_is_tried_once_and_then_the_exhaustion_answers() 
                 .get("anthropic-ratelimit-unified-status")
                 .is_none()
     );
-    h.store.set_state("d", AccountState::Ready).unwrap();
+    h.store
+        .set_state("d", AccountState::Ready, StateCause::Operator)
+        .unwrap();
     h.router.reload().await.unwrap();
     h.router
         .report(phoebis_routing::Report::Cooldown {
@@ -1086,7 +1088,7 @@ async fn an_api_key_401_marks_the_account_with_the_verdict_s_cause_and_the_upstr
             (
                 "k1",
                 AccountState::ReauthRequired,
-                "auth_failed",
+                StateCause::AuthFailed,
                 Some("invalid x-api-key")
             )
         ),
@@ -1135,6 +1137,143 @@ async fn a_credit_balance_400_marks_funding_required_and_fails_over() {
             .filter(|row| row.state == AccountState::FundingRequired)
     })
     .await;
+    up.shutdown().await;
+}
+
+/// The account's state and the word its writer stored with it, once the row reads `state`.
+async fn stored_with(h: &Harness, id: &str, state: AccountState) -> StateCause {
+    wait_for(Duration::from_secs(5), || {
+        h.store
+            .account(id)
+            .unwrap()
+            .filter(|row| row.state == state)
+            .map(|row| row.state_cause)
+    })
+    .await
+}
+
+#[tokio::test]
+async fn an_api_key_401_stores_auth_failed_with_its_mark() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule("sk-ant-api03-KEY1", "/v1/messages", invalid_key());
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    h.app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::ReauthRequired).await,
+        StateCause::AuthFailed
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_credit_balance_refusal_stores_funding_refused() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: json_200(),
+    }])
+    .await;
+    up.add_credential_rule(
+        "sk-ant-api03-KEY1",
+        "/v1/messages",
+        Respond::Json {
+            status: 400,
+            headers: vec![],
+            body: br#"{"type":"error","error":{"type":"invalid_request_error","message":"Your credit balance is too low to access the Anthropic API."}}"#.to_vec(),
+        },
+    );
+    let h = harness(
+        &up,
+        &[api_key("k1", "sk-ant-api03-KEY1", 0), oauth("b", B, 1)],
+        PoolSpec::default(),
+    )
+    .await;
+    h.app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_with(&h, "k1", AccountState::FundingRequired).await,
+        StateCause::FundingRefused
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_refused_replay_stores_auth_failed_and_the_ladder_s_mark_refresh_failed() {
+    // The replay on the freshly refreshed token is refused too: the relay's own mark.
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: token_answer(),
+        },
+    ])
+    .await;
+    let h = harness(&up, &[paired("a", A)], PoolSpec::default()).await;
+    h.app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    assert_eq!(
+        stored_with(&h, "a", AccountState::ReauthRequired).await,
+        StateCause::AuthFailed
+    );
+    up.shutdown().await;
+
+    // The refresh ends in `invalid_grant`: the manager's write names it, and the relay's re-report of that mark
+    // carries the same word, so the reload it leads to leaves the word as the manager stored it.
+    let up = FakeUpstream::start(vec![
+        Rule {
+            path_prefix: "/v1/messages".into(),
+            respond: expired(),
+        },
+        Rule {
+            path_prefix: "/v1/oauth/token".into(),
+            respond: Respond::Json {
+                status: 400,
+                headers: vec![],
+                body: br#"{"error":"invalid_grant","error_description":"revoked"}"#.to_vec(),
+            },
+        },
+    ])
+    .await;
+    let h = harness(&up, &[oauth("a", A, 0)], PoolSpec::default()).await;
+    h.app
+        .clone()
+        .oneshot(request_for(KEY, "claude-sonnet-4-5", "s1"))
+        .await
+        .unwrap();
+    wait_for(Duration::from_secs(5), || {
+        h.router
+            .snapshot()
+            .account("a")
+            .filter(|row| row.state == AccountState::ReauthRequired)
+            .map(|_| ())
+    })
+    .await;
+    let row = h.store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.state_cause),
+        (AccountState::ReauthRequired, StateCause::RefreshFailed)
+    );
     up.shutdown().await;
 }
 

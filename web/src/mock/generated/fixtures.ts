@@ -9029,7 +9029,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "detail": {
             "from": "unpaired",
             "to": "ready",
-            "cause": "registry",
+            "cause": "paired",
             "detail": null
           }
         },
@@ -9085,7 +9085,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "model": null,
           "request_id": null,
           "actor": null,
-          "detail": null
+          "detail": {
+            "cause": "refresh_response_lost",
+            "error": "refresh response lost: the token endpoint did not answer"
+          }
         },
         {
           "type": "event",
@@ -9100,7 +9103,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "model": null,
           "request_id": null,
           "actor": null,
-          "detail": null
+          "detail": {
+            "cause": "invalid_grant",
+            "error": "refresh rejected with status 400 (invalid_grant)"
+          }
         },
         {
           "type": "event",
@@ -9115,7 +9121,11 @@ export const FIXTURES: Record<string, Fixture> = {
           "model": null,
           "request_id": null,
           "actor": null,
-          "detail": null
+          "detail": {
+            "until": 4600000,
+            "access_expires_at": 4600000,
+            "refresh_expires_at": null
+          }
         },
         {
           "type": "event",
@@ -9393,7 +9403,7 @@ export const FIXTURES: Record<string, Fixture> = {
             "shedding_rounds_stale": 1,
             "windows_loaded": 2,
             "affinity_entries_loaded": 5,
-            "down_since": 1791272976317,
+            "down_since": 1791377774193,
             "holds_lost": true
           }
         },

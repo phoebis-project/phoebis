@@ -8,7 +8,7 @@ use std::sync::{Arc, Mutex, MutexGuard, RwLock};
 use phoebis_store::{
     AccountKind, AccountState, AffinityRow, BudgetPeriod, CooldownRow, CreditsRow, OverageRow,
     PinBurn, PinKey, PinRow, PoolMember, PoolRow, RekeyWrite, ResolutionRow, RoutingLoad, ShedPin,
-    ShedRoundRow, WindowRow,
+    ShedRoundRow, StateCause, WindowRow,
 };
 use tokio::sync::Notify;
 use tokio::time::Instant;
@@ -226,14 +226,15 @@ impl UtilizationSample {
 pub enum StateWrite {
     /// The relay's verdict on an account, fenced by the incarnation and the generations the attempt that
     /// formed it went out with. It travels with the rest of the routing writes so shutdown drains it like any
-    /// other. `cause` and `detail` ride to the event the loop emits when the write moves the row's state.
+    /// other. `cause` is stored with the state; it and `detail` ride to the event the loop emits when the write
+    /// moves the row's state.
     AccountState {
         account_id: String,
         state: AccountState,
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
-        cause: &'static str,
+        cause: StateCause,
         detail: Option<String>,
     },
     DeleteAffinity(Vec<(String, String)>),
@@ -2373,6 +2374,7 @@ mod tests {
                     incarnation: 1,
                     revision: 1,
                     state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
                 }],
                 ..Default::default()
             },

@@ -2138,6 +2138,7 @@ fn seed_oauth_account(db_path: &std::path::Path, key_path: &std::path::Path) {
                 incarnation: 1,
                 revision: 1,
                 state: phoebis_store::AccountState::Ready,
+                state_cause: phoebis_store::StateCause::Operator,
             })
             .unwrap();
         store
@@ -2671,6 +2672,7 @@ fn pair_oauth(store: &phoebis_store::Store, id: &str, token: &str, account_uuid:
             incarnation: 1,
             revision: 1,
             state: phoebis_store::AccountState::Ready,
+            state_cause: phoebis_store::StateCause::Operator,
         })
         .unwrap();
     // A re-paired id takes the next incarnation, which the credential write is fenced on.

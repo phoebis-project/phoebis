@@ -28,7 +28,8 @@ use phoebis_routing::{
     SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
+    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember,
+    StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -458,7 +459,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    match state.store.bump_lifecycle(&id) {
+    match state.store.bump_lifecycle(&id, StateCause::Operator) {
         Ok(_) => {}
         Err(StoreError::AccountNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "account not found")
@@ -471,7 +472,10 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An Anthropic-key slot
     // has no pairing to run, so it rests where a slot that never had a key rests.
     if row.kind == AccountKind::ApiKey {
-        if let Err(error) = state.store.set_state(&id, AccountState::Unpaired) {
+        if let Err(error) = state
+            .store
+            .set_state(&id, AccountState::Unpaired, StateCause::Operator)
+        {
             return store_failure(error);
         }
     }
@@ -895,7 +899,10 @@ async fn pairing_confirm(
     ) {
         tracing::warn!(account = %row.id, %error, "the profile could not be stored after pairing");
     }
-    if let Err(error) = state.store.set_state(&row.id, AccountState::Ready) {
+    if let Err(error) = state
+        .store
+        .set_state(&row.id, AccountState::Ready, StateCause::Paired)
+    {
         return unstored(&state, error);
     }
     state.usage.invalidate(&row.id);

@@ -1018,7 +1018,11 @@ async fn an_exhaustion_503_pauses_under_its_own_reason() {
     .await;
     r.observe("main").await;
     r.h.store
-        .set_state("a", AccountState::Disconnected)
+        .set_state(
+            "a",
+            AccountState::Disconnected,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.advance(270_000);
@@ -1280,7 +1284,11 @@ async fn a_probe_refused_by_a_full_pool_retries_after_the_header_rather_than_pau
     // holds it for the full probe deadline.
     r.up.push_credential_rule(B, "/v1/messages", held_stream());
     r.h.store
-        .set_state("a", AccountState::Disconnected)
+        .set_state(
+            "a",
+            AccountState::Disconnected,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     r.h.router.reload().await.unwrap();
 

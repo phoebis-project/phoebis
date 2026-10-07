@@ -16,7 +16,7 @@ use phoebis_routing::{
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
     MemberWrite, ModelRule, PinBurn, PinKey, PinRow, PoolRow, RoutingLoad, RulesMode, ShedPin,
-    Shedding, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
+    Shedding, StateCause, StorageKey, Store, Strategy, SubscriptionRow, WindowRow,
 };
 
 const HOUR: i64 = 3_600_000;
@@ -52,6 +52,7 @@ fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
     }
@@ -234,6 +235,7 @@ async fn a_selection_is_written_through_and_a_registry_write_shows_up_after_relo
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -408,6 +410,7 @@ async fn a_pool_with_no_member_at_admission_and_one_added_before_the_selection_s
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -572,7 +575,7 @@ async fn shutdown_lands_every_acknowledged_write_before_it_returns() {
             lifecycle_generation: 1,
             credential_generation: 1,
             incarnation: 1,
-            cause: "registry",
+            cause: StateCause::AuthFailed,
             detail: None,
         })
         .await;
@@ -739,7 +742,7 @@ async fn two_samples_of_one_key_replace_each_other_and_the_newest_observed_alone
 async fn a_stale_account_state_never_replaces_a_current_pending_one() {
     let store = seeded(&["a"]);
     // A reconnect: the lifecycle moves on and the credential generation starts again.
-    assert_eq!(store.bump_lifecycle("a").unwrap(), 2);
+    assert_eq!(store.bump_lifecycle("a", StateCause::Operator).unwrap(), 2);
     store
         .set_api_key_secret("a", &phoebis_store::Secret::new("k2"))
         .unwrap();
@@ -754,7 +757,7 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             incarnation: 1,
             lifecycle_generation: 2,
             credential_generation: credential,
-            cause: "registry",
+            cause: StateCause::AuthFailed,
             detail: None,
         })
         .await;
@@ -766,7 +769,7 @@ async fn a_stale_account_state_never_replaces_a_current_pending_one() {
             incarnation: 1,
             lifecycle_generation: 1,
             credential_generation: credential + 2,
-            cause: "registry",
+            cause: StateCause::FundingRefused,
             detail: None,
         })
         .await;
@@ -798,7 +801,7 @@ async fn every_report_kind_is_named_in_the_drop_counters_list_in_its_order() {
             incarnation: 1,
             lifecycle_generation: 1,
             credential_generation: 1,
-            cause: "registry",
+            cause: StateCause::AuthFailed,
             detail: None,
         },
         Report::Accounting { degraded: true },
@@ -879,7 +882,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             lifecycle_generation: 1,
             credential_generation: generation,
             incarnation: 1,
-            cause: "registry",
+            cause: StateCause::AuthFailed,
             detail: None,
         })
         .await;
@@ -895,7 +898,7 @@ async fn a_state_verdict_about_a_replaced_credential_changes_nothing() {
             lifecycle_generation: 1,
             credential_generation: generation + 1,
             incarnation: 1,
-            cause: "registry",
+            cause: StateCause::AuthFailed,
             detail: None,
         })
         .await;
@@ -1244,6 +1247,7 @@ fn restore_a(store: &Store) {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
 }
@@ -1645,7 +1649,9 @@ async fn disconnecting_an_account_cancels_its_in_flight_relays_and_a_pause_does_
     let SelectResult::Selected(other) = second.result else {
         panic!()
     };
-    store.bump_lifecycle(&other.account.id).unwrap();
+    store
+        .bump_lifecycle(&other.account.id, StateCause::Operator)
+        .unwrap();
     handle.reload().await.unwrap();
     assert!(
         second.cancel.is_cancelled(),
@@ -2030,6 +2036,7 @@ async fn an_account_recreated_under_a_used_id_inherits_none_of_its_routing_state
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -2068,6 +2075,7 @@ fn insert_account_a(store: &Store) {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -2146,7 +2154,7 @@ async fn a_delayed_verdict_from_the_previous_holder_leaves_the_new_one_alone() {
             lifecycle_generation: 1,
             credential_generation: 1,
             incarnation: 1,
-            cause: "registry",
+            cause: StateCause::FundingRefused,
             detail: None,
         })
         .await;
@@ -2650,6 +2658,7 @@ async fn a_usage_report_charges_each_window_the_pricer_prices_and_the_fable_week
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     with_tier(&store, "a");
@@ -2743,6 +2752,7 @@ async fn an_api_key_account_and_an_account_without_a_tier_are_charged_nothing() 
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     with_tier(&store, "a");
@@ -2809,6 +2819,7 @@ async fn a_windows_write_queued_for_a_deleted_holder_lands_nowhere_and_its_repla
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     assert_eq!(store.account("a").unwrap().unwrap().incarnation, 2);
@@ -5531,6 +5542,7 @@ async fn an_account_recreated_under_its_id_drops_its_affinity_entries_and_a_late
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store
@@ -6984,7 +6996,7 @@ async fn a_moved_account_state_emits_the_relay_s_cause() {
         incarnation: 1,
         lifecycle_generation: 1,
         credential_generation: 1,
-        cause: "auth_failed",
+        cause: StateCause::AuthFailed,
         detail: Some("invalid x-api-key".into()),
     };
     handle.report(verdict()).await;
@@ -7011,12 +7023,18 @@ async fn a_moved_account_state_emits_the_relay_s_cause() {
                 AccountState::ReauthRequired,
                 1,
                 before + 1,
-                "auth_failed",
+                StateCause::AuthFailed,
                 Some("invalid x-api-key")
             )
         ),
         other => panic!("the moved row's event, not {other:?}"),
     }
+    let row = store.account("a").unwrap().unwrap();
+    assert_eq!(
+        (row.state, row.state_cause),
+        (AccountState::ReauthRequired, StateCause::AuthFailed),
+        "the fenced write stored the word the event names"
+    );
     // The same verdict again lands under its fences and leaves the state where it was.
     handle.report(verdict()).await;
     wait_for(WRITTEN, || {

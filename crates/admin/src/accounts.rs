@@ -10,7 +10,9 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_relay::DiscoveryError;
-use phoebis_store::{AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StoreError};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, AccountUpdate, Secret, StateCause, StoreError,
+};
 use serde_json::{json, Value};
 
 use crate::routes::{
@@ -126,6 +128,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
             AccountKind::Oauth => AccountState::Unpaired,
             AccountKind::ApiKey => AccountState::Ready,
         },
+        state_cause: StateCause::Operator,
     };
     let secret = input.secret.map(|s| Secret::new(&s));
     // The key is verified before the row exists, so a refused creation leaves nothing behind.
@@ -281,7 +284,9 @@ pub(crate) async fn patch(
             lifecycle_generation: row.lifecycle_generation,
             label,
             secret: secret.as_ref(),
-            state: secret.as_ref().map(|_| AccountState::Ready),
+            state: secret
+                .as_ref()
+                .map(|_| (AccountState::Ready, StateCause::Operator)),
             at: (state.clock)(),
             actor: ACTOR,
             enabled: input.enabled,
@@ -412,7 +417,10 @@ pub(crate) async fn clear_funding(
             "the account is not waiting on funding",
         );
     }
-    if let Err(error) = state.store.set_state(&id, AccountState::Ready) {
+    if let Err(error) = state
+        .store
+        .set_state(&id, AccountState::Ready, StateCause::Operator)
+    {
         return store_failure(error);
     }
     if let Err(refusal) = reload_or_refuse(&state).await {

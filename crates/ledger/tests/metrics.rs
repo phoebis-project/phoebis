@@ -357,7 +357,9 @@ async fn a_scrape_reads_the_routers_drop_counters_at_gather() {
 
 #[tokio::test]
 async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_longer_wait() {
-    use phoebis_store::{AccountKind, AccountRow, AccountState, CooldownRow, StorageKey, Store};
+    use phoebis_store::{
+        AccountKind, AccountRow, AccountState, CooldownRow, StateCause, StorageKey, Store,
+    };
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     store
         .insert_account(&AccountRow {
@@ -370,6 +372,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     for (model, until) in [("vendor-x", 61_000), ("vendor-y", 121_000)] {
@@ -417,7 +420,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
 
 #[tokio::test]
 async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_flag() {
-    use phoebis_store::{AccountKind, AccountRow, AccountState, StorageKey, Store};
+    use phoebis_store::{AccountKind, AccountRow, AccountState, StateCause, StorageKey, Store};
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     for id in ["past", "ahead"] {
         store
@@ -431,6 +434,7 @@ async fn an_overage_observations_reset_decides_the_gauge_rather_than_the_raw_fla
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
     }

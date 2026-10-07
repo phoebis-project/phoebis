@@ -9,8 +9,8 @@ use futures::future::{BoxFuture, FutureExt, Shared};
 use futures::stream::{FuturesUnordered, StreamExt};
 use phoebis_profile::Profile;
 use phoebis_store::{
-    AccountRow, AccountState, AttemptOutcome, CredentialBundle, NewBundle, Secret, Store,
-    StoreError,
+    AccountRow, AccountState, AttemptOutcome, CredentialBundle, NewBundle, Secret, StateCause,
+    Store, StoreError,
 };
 use phoebis_transport::control::ControlClient;
 use phoebis_transport::response::ResponseHead;
@@ -438,9 +438,11 @@ impl CredentialManager {
                 )?;
                 continue;
             }
-            self.inner
-                .store
-                .set_state(&attempt.account_id, AccountState::ReauthRequired)?;
+            self.inner.store.set_state(
+                &attempt.account_id,
+                AccountState::ReauthRequired,
+                StateCause::RefreshFailed,
+            )?;
             self.inner.store.resolve_refresh_attempt(
                 attempt.id,
                 incarnation,
@@ -1078,6 +1080,7 @@ impl Inner {
             .set_state_if_generations(
                 &account.id,
                 AccountState::ReauthRequired,
+                StateCause::RefreshFailed,
                 account.incarnation,
                 account.lifecycle_generation,
                 credential_generation,
@@ -1224,6 +1227,7 @@ mod tests {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         let clock: Clock = Arc::new(move || now);

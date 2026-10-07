@@ -2,7 +2,7 @@ use phoebis_routing::lane_key;
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, BudgetRow, BudgetScope,
     CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow,
-    ShedPin, ShedRoundRow, StorageKey, Store, WindowRow,
+    ShedPin, ShedRoundRow, StateCause, StorageKey, Store, WindowRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -55,6 +55,7 @@ fn seed_accounts(store: &Store, ids: &[&str]) {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
     }

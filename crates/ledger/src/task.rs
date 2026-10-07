@@ -1615,6 +1615,7 @@ mod tests {
                 incarnation: 1,
                 revision: 1,
                 state: phoebis_store::AccountState::Ready,
+                state_cause: phoebis_store::StateCause::Operator,
             })
             .unwrap();
         store
@@ -1738,6 +1739,7 @@ mod tests {
                     incarnation: 1,
                     revision: 1,
                     state: phoebis_store::AccountState::Ready,
+                    state_cause: phoebis_store::StateCause::Operator,
                 })
                 .unwrap();
         }

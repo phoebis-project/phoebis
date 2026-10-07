@@ -28,8 +28,8 @@ use phoebis_profile::{
 use phoebis_relay::{CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret, StorageKey,
-    Store,
+    AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret, StateCause,
+    StorageKey, Store,
 };
 use phoebis_transport::{
     connector_builder,
@@ -700,6 +700,7 @@ async fn build_app(
                 } else {
                     AccountState::Unpaired
                 },
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         if paired {
@@ -736,6 +737,7 @@ async fn build_app(
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         store

@@ -781,7 +781,11 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
     let disconnected = json(get(&h.app, path, Some(&cookie)).await).await;
     assert_eq!(answer(&disconnected), no_credential, "{disconnected}");
     h.store
-        .set_state("business", phoebis_store::AccountState::Unpaired)
+        .set_state(
+            "business",
+            phoebis_store::AccountState::Unpaired,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     let unpaired = json(get(&h.app, path, Some(&cookie)).await).await;
     assert_eq!(answer(&unpaired), no_credential, "{unpaired}");

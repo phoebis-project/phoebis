@@ -2499,6 +2499,7 @@ mod tests {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: phoebis_store::StateCause::Operator,
         };
         let member = |account_id: &str| phoebis_store::PoolMember {
             pool_id: "main".into(),

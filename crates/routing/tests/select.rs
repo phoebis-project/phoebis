@@ -13,7 +13,7 @@ use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
     CooldownRow, Failover, OveragePolicy, PinBurn, PinKey, PinRow, PoolMember,
     PoolRow, RegistryLoad, RoutingLoad, RulesMode, SessionPlacement, ShedPin, ShedRoundRow,
-    Shedding, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
+    Shedding, StateCause, Strategy, SubagentPlacement, SubscriptionTerm, WarmSessions,
 };
 use rand::rngs::StdRng;
 use rand::SeedableRng;
@@ -154,6 +154,7 @@ fn load_of(pool: Pool, unavailable: &[(&str, bool, AccountState)]) -> RegistryLo
             incarnation: 1,
             revision: 1,
             state,
+            state_cause: StateCause::Operator,
         }
     };
     RegistryLoad {
@@ -4425,6 +4426,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         incarnation: 1,
         revision: 1,
         state: AccountState::Ready,
+        state_cause: StateCause::Operator,
     };
     let key = |id: &str, pool_id: &str| ApiKeyRow {
         id: id.into(),
@@ -4582,6 +4584,7 @@ fn shared_account(dwells: [u64; 2], d_in: Option<&str>) -> RegistrySnapshot {
         incarnation: 1,
         revision: 1,
         state: AccountState::Ready,
+        state_cause: StateCause::Operator,
     };
     let api_key = |id: &str, pool_id: &str| ApiKeyRow {
         id: id.into(),

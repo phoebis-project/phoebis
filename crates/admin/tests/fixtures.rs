@@ -14,7 +14,7 @@ use phoebis_ledger::{
     RequestRecord,
 };
 use phoebis_routing::{lane_key, ClientClass};
-use phoebis_store::{AccountState, Identity, NewBundle, Secret, SubscriptionRow};
+use phoebis_store::{AccountState, Identity, NewBundle, Secret, StateCause, SubscriptionRow};
 use serde_json::{json as j, Value};
 
 fn dir() -> PathBuf {
@@ -346,7 +346,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
         .unwrap();
     parts
         .store
-        .set_state("business", AccountState::Ready)
+        .set_state("business", AccountState::Ready, StateCause::Paired)
         .unwrap();
     // Far from expiry, so reading usage never triggers a refresh of its own against the fake. Both tokens are
     // bound rather than written inline, so the no-secret guard reads the exact values this seed plants.
@@ -1009,7 +1009,8 @@ async fn every_route_is_captured_and_holds_its_shape() {
             .db
             .read_blocking(|c| {
                 Ok(c.query_row(
-                    "SELECT COUNT(*) FROM events WHERE kind = 'account_state_changed'",
+                    "SELECT COUNT(*) FROM events WHERE kind = 'account_state_changed' \
+                     AND json_extract(detail, '$.cause') = 'paired'",
                     [],
                     |r| r.get::<_, i64>(0),
                 )?)
@@ -1859,13 +1860,25 @@ async fn routing_stories(parts: &common::Full, cookie: &str, key_generation: i64
             ..written(12, "ledger_gap")
         },
         written(13, "reauth_required"),
-        written(14, "refresh_succeeded"),
         EventRecord {
-            detail: Some("invalid_grant".into()),
+            detail: Some(
+                j!({ "until": now + 3_600_000, "access_expires_at": now + 3_600_000, "refresh_expires_at": null })
+                    .to_string(),
+            ),
+            ..written(14, "refresh_succeeded")
+        },
+        EventRecord {
+            detail: Some(
+                j!({ "cause": "invalid_grant", "error": "refresh rejected with status 400 (invalid_grant)" })
+                    .to_string(),
+            ),
             ..written(15, "refresh_failed")
         },
         EventRecord {
-            detail: Some("the token endpoint did not answer".into()),
+            detail: Some(
+                j!({ "cause": "refresh_response_lost", "error": "refresh response lost: the token endpoint did not answer" })
+                    .to_string(),
+            ),
             ..written(16, "refresh_uncertain")
         },
         EventRecord {

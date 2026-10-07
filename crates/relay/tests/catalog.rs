@@ -12,7 +12,7 @@ use phoebis_bus::{Bus, Delivery, Event};
 use phoebis_relay::{Warmth, ERROR_HOLD, MAX_BODY};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, NewBundle, RekeyWrite,
-    ResolutionRow, RulesMode, Secret, StorageKey, Store,
+    ResolutionRow, RulesMode, Secret, StateCause, StorageKey, Store,
 };
 use tower::ServiceExt;
 
@@ -1234,6 +1234,7 @@ async fn a_replacement_account_under_the_same_id_reads_its_own_catalog() {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     h.store.set_api_key_secret("a", &Secret::new("k2")).unwrap();
@@ -1307,6 +1308,7 @@ async fn a_gated_fill_whose_account_was_replaced_commits_nothing() {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     h.store.set_api_key_secret("a", &Secret::new("k2")).unwrap();

@@ -8,7 +8,7 @@ use fake_upstream::{FakeUpstream, Respond, Rule};
 use http_body_util::BodyExt;
 use phoebis_ledger::{event_of, recent_events_of_kind, EventRecord, LedgerConfig, LedgerDb};
 use phoebis_routing::RouterEvent;
-use phoebis_store::{AccountState, StorageKey, Store};
+use phoebis_store::{AccountState, StateCause, StorageKey, Store};
 use tower::ServiceExt;
 
 #[tokio::test]
@@ -219,7 +219,11 @@ async fn registry_changes_and_resolved_refreshes_are_mirrored_and_a_reauth_mark_
         )
         .unwrap();
     h.store
-        .set_state("a", phoebis_store::AccountState::ReauthRequired)
+        .set_state(
+            "a",
+            phoebis_store::AccountState::ReauthRequired,
+            StateCause::Operator,
+        )
         .unwrap();
     let kinds = wait_for_async(Duration::from_secs(5), || async {
         let rows = h.db.events(0, i64::MAX, 100).await.unwrap();
@@ -280,6 +284,114 @@ async fn an_uncertain_refresh_mirrors_as_refresh_uncertain() {
     assert!(
         kinds.contains(&"refresh_failed".to_string()),
         "a plain failure still mirrors as refresh_failed: {kinds:?}"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token_s_expiry() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(
+        &up,
+        &[oauth("a", A, 0), oauth("b", B, 1)],
+        (0, None),
+        polled_every_50_ms(),
+    )
+    .await;
+    let failed = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    h.store
+        .resolve_refresh_attempt(
+            failed,
+            1,
+            phoebis_store::AttemptOutcome::Failed(
+                "refresh rejected with status 400 (invalid_grant)".into(),
+            ),
+        )
+        .unwrap();
+    let uncertain = h.store.open_refresh_attempt("b", 1, 1, 1).unwrap();
+    h.store
+        .resolve_refresh_attempt(
+            uncertain,
+            1,
+            phoebis_store::AttemptOutcome::Uncertain(
+                "refresh response lost: connection reset".into(),
+            ),
+        )
+        .unwrap();
+    let committed = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    h.store
+        .commit_credentials(
+            "a",
+            1,
+            1,
+            Some(1),
+            Some(committed),
+            &phoebis_store::NewBundle {
+                access_token: phoebis_store::Secret::new("rotated"),
+                refresh_token: Some(phoebis_store::Secret::new("rotated-refresh")),
+                issued_at: NOW,
+                expires_at: NOW + 3_600_000,
+                refresh_expires_at: Some(NOW + 86_400_000),
+                scopes: "user:inference".into(),
+            },
+        )
+        .unwrap();
+    let details = wait_for_async(Duration::from_secs(5), || async {
+        let rows: Vec<(String, Option<String>, serde_json::Value)> =
+            h.db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.kind.starts_with("refresh_"))
+                .map(|e| {
+                    let detail = e
+                        .detail
+                        .as_deref()
+                        .and_then(|d| serde_json::from_str(d).ok())
+                        .unwrap_or(serde_json::Value::Null);
+                    (e.kind, e.account_id, detail)
+                })
+                .collect();
+        (rows.len() == 3).then_some(rows)
+    })
+    .await;
+    let of = |kind: &str| {
+        details
+            .iter()
+            .find(|(k, ..)| k == kind)
+            .map(|(_, account, detail)| (account.clone(), detail.clone()))
+            .unwrap()
+    };
+    assert_eq!(
+        of("refresh_failed"),
+        (
+            Some("a".to_string()),
+            serde_json::json!({
+                "cause": "invalid_grant",
+                "error": "refresh rejected with status 400 (invalid_grant)"
+            })
+        )
+    );
+    assert_eq!(
+        of("refresh_uncertain"),
+        (
+            Some("b".to_string()),
+            serde_json::json!({
+                "cause": "refresh_response_lost",
+                "error": "refresh response lost: connection reset"
+            })
+        )
+    );
+    assert_eq!(
+        of("refresh_succeeded"),
+        (
+            Some("a".to_string()),
+            serde_json::json!({
+                "until": NOW + 3_600_000,
+                "access_expires_at": NOW + 3_600_000,
+                "refresh_expires_at": NOW + 86_400_000
+            })
+        )
     );
     up.shutdown().await;
 }
@@ -457,14 +569,14 @@ async fn every_account_transition_writes_its_row_and_a_re_auth_keeps_its_own() {
     let up = FakeUpstream::start(vec![]).await;
     let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
     h.store
-        .set_state("a", AccountState::FundingRequired)
+        .set_state("a", AccountState::FundingRequired, StateCause::Operator)
         .unwrap();
     wait_for_async(Duration::from_secs(5), || async {
         (account_rows(&h).await.len() == 1).then_some(())
     })
     .await;
     h.store
-        .set_state("a", AccountState::ReauthRequired)
+        .set_state("a", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
     let rows = wait_for_async(Duration::from_secs(5), || async {
         let rows = account_rows(&h).await;
@@ -474,8 +586,8 @@ async fn every_account_transition_writes_its_row_and_a_re_auth_keeps_its_own() {
     assert_eq!(
         rows,
         [
-            transition("ready", "funding_required", "registry", None),
-            transition("funding_required", "reauth_required", "registry", None),
+            transition("ready", "funding_required", "operator", None),
+            transition("funding_required", "reauth_required", "operator", None),
             reauth(),
         ]
     );
@@ -494,7 +606,7 @@ async fn the_routing_loop_s_cause_lands_on_the_transition_it_names() {
         to: AccountState::ReauthRequired,
         incarnation: row.incarnation,
         revision: row.revision + 1,
-        cause: "auth_failed",
+        cause: StateCause::AuthFailed,
         detail: Some("invalid x-api-key".into()),
         at: NOW,
     });
@@ -517,7 +629,7 @@ async fn the_routing_loop_s_cause_lands_on_the_transition_it_names() {
     })
     .await;
     h.store
-        .set_state("a", AccountState::ReauthRequired)
+        .set_state("a", AccountState::ReauthRequired, StateCause::AuthFailed)
         .unwrap();
     assert_eq!(
         h.store.account("a").unwrap().unwrap().revision,
@@ -537,13 +649,13 @@ async fn a_newer_watch_observation_drops_a_delayed_older_transition() {
     let row = h.store.account("a").unwrap().unwrap();
     // Both writes land before the mirror runs again, so one tick reads the second.
     h.store
-        .set_state("a", AccountState::FundingRequired)
+        .set_state("a", AccountState::FundingRequired, StateCause::Operator)
         .unwrap();
     h.store
-        .set_state("a", AccountState::ReauthRequired)
+        .set_state("a", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
     let expected = [
-        transition("ready", "reauth_required", "registry", None),
+        transition("ready", "reauth_required", "operator", None),
         reauth(),
     ];
     wait_for_async(Duration::from_secs(5), || async {
@@ -554,12 +666,12 @@ async fn a_newer_watch_observation_drops_a_delayed_older_transition() {
         (
             AccountState::FundingRequired,
             row.revision + 1,
-            "upstream_error",
+            StateCause::FundingRefused,
         ),
         (
             AccountState::ReauthRequired,
             row.revision + 2,
-            "auth_failed",
+            StateCause::AuthFailed,
         ),
     ] {
         h.router.emit(RouterEvent::AccountStateChanged {
@@ -572,6 +684,132 @@ async fn a_newer_watch_observation_drops_a_delayed_older_transition() {
             at: NOW,
         });
     }
+    stays_for_async(Duration::from_millis(200), || async {
+        account_rows(&h).await == expected
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn the_tick_writes_the_word_the_writer_stored() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    let rows_after = |n: usize| {
+        let h = &h;
+        wait_for_async(Duration::from_secs(5), move || async move {
+            let rows = account_rows(h).await;
+            (rows.len() == n).then_some(rows)
+        })
+    };
+    h.store
+        .set_state("a", AccountState::FundingRequired, StateCause::Operator)
+        .unwrap();
+    rows_after(1).await;
+    h.store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    rows_after(2).await;
+    h.store
+        .set_state("a", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    assert_eq!(
+        rows_after(3).await,
+        [
+            transition("ready", "funding_required", "operator", None),
+            transition("funding_required", "disconnected", "operator", None),
+            transition("disconnected", "ready", "paired", None),
+        ]
+    );
+    up.shutdown().await;
+}
+
+/// The account `a` stored again under its id, past the tombstone, already marked for re-authentication.
+fn replaced_and_marked(store: &Store) {
+    store
+        .insert_account(&phoebis_store::AccountRow {
+            id: "a".into(),
+            kind: phoebis_store::AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::ReauthRequired,
+            state_cause: StateCause::RefreshFailed,
+        })
+        .unwrap();
+}
+
+#[tokio::test]
+async fn a_deleted_account_s_last_row_reads_deleted() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    h.store.delete_account("a", "test").unwrap();
+    let last = [transition("ready", "deleted", "deleted", None)];
+    wait_for_async(Duration::from_secs(5), || async {
+        (account_rows(&h).await == last).then_some(())
+    })
+    .await;
+    // The next tick finds no held account the rows lack: the row is written once.
+    stays_for_async(Duration::from_millis(200), || async {
+        account_rows(&h).await == last
+    })
+    .await;
+    replaced_and_marked(&h.store);
+    let expected = [last[0].clone(), reauth()];
+    wait_for_async(Duration::from_secs(5), || async {
+        (account_rows(&h).await == expected).then_some(())
+    })
+    .await;
+    stays_for_async(Duration::from_millis(200), || async {
+        account_rows(&h).await == expected
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_event_about_a_holder_the_tick_found_deleted_writes_nothing() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    let row = h.store.account("a").unwrap().unwrap();
+    h.store.delete_account("a", "test").unwrap();
+    let last = [transition("ready", "deleted", "deleted", None)];
+    wait_for_async(Duration::from_secs(5), || async {
+        (account_rows(&h).await == last).then_some(())
+    })
+    .await;
+    // A mark the routing loop landed before the deletion, whose event reaches the mirror after the tick that wrote
+    // the account's last row.
+    h.router.emit(RouterEvent::AccountStateChanged {
+        account_id: "a".into(),
+        to: AccountState::ReauthRequired,
+        incarnation: row.incarnation,
+        revision: row.revision + 1,
+        cause: StateCause::AuthFailed,
+        detail: None,
+        at: NOW,
+    });
+    stays_for_async(Duration::from_millis(200), || async {
+        account_rows(&h).await == last
+    })
+    .await;
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn an_account_replaced_under_its_id_between_two_ticks_writes_the_old_holder_s_last_row() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    h.store.delete_account("a", "test").unwrap();
+    replaced_and_marked(&h.store);
+    // Whether a tick reads the gap between the two writes or not, the held holder is gone and the new one is one the
+    // mirror never saw.
+    let expected = [transition("ready", "deleted", "deleted", None), reauth()];
+    wait_for_async(Duration::from_secs(5), || async {
+        (account_rows(&h).await == expected).then_some(())
+    })
+    .await;
     stays_for_async(Duration::from_millis(200), || async {
         account_rows(&h).await == expected
     })
@@ -705,6 +943,7 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     let down_since = NOW - 60_000;

@@ -31,7 +31,7 @@ use phoebis_routing::{
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
-    Secret, Store,
+    Secret, StateCause, Store,
 };
 use phoebis_transport::control::Resolver;
 use phoebis_transport::decode::{decoder, encoding, request_encoding, Decoder, Encoding};
@@ -784,7 +784,7 @@ fn attempt_outcome(verdict: &Verdict, status: u16, first_event: Option<&[u8]>) -
             AttemptOutcome::RateLimited
         }
         Verdict::FailOver {
-            mark: Some(AccountState::ReauthRequired),
+            mark: Some((AccountState::ReauthRequired, _)),
             ..
         } => AttemptOutcome::AuthFailed,
         Verdict::FailOver { .. } => AttemptOutcome::UpstreamError,
@@ -2598,7 +2598,7 @@ impl Relay {
             verdict,
             Verdict::Refresh
                 | Verdict::FailOver {
-                    mark: Some(AccountState::ReauthRequired),
+                    mark: Some((AccountState::ReauthRequired, _)),
                     ..
                 }
         );
@@ -2619,18 +2619,18 @@ impl Relay {
             ctx.account.lifecycle_generation,
             ctx.credential_generation,
         );
-        // A mark this head forms names the verdict as the attempt trail does and the upstream's own words for it.
-        let marked = |state: AccountState| {
-            (
-                state,
-                classified.as_str(),
-                decoded.as_deref().and_then(error_message),
-            )
+        // A mark this head forms carries the upstream's own words for it to the log's row.
+        let marked = |(state, cause): (AccountState, StateCause)| {
+            (state, cause, decoded.as_deref().and_then(error_message))
         };
 
         let (cooldown, mark, moves_pin) = match verdict {
             // A rejected replay is conclusive: the refreshed token was refused too.
-            Verdict::Refresh if ctx.replayed => (None, Some(AccountState::ReauthRequired), false),
+            Verdict::Refresh if ctx.replayed => (
+                None,
+                Some((AccountState::ReauthRequired, StateCause::AuthFailed)),
+                false,
+            ),
             Verdict::Refresh => {
                 // Nothing of the rejection goes back, so a body cut at the bound gives up its connection before
                 // the ladder's waits rather than hold the rest unread through them.
@@ -2663,9 +2663,11 @@ impl Relay {
                                 // re-authentication mark is the manager's store write alone, so it is reported:
                                 // the routing writer's fenced write and the reload after it take the snapshot's
                                 // row off `ready`, and until that reload the manager's cache refuses the marked
-                                // credential, so no leg dials the account in between.
-                                let mark = matches!(error, AcquireError::ReauthRequired)
-                                    .then_some(AccountState::ReauthRequired);
+                                // credential, so no leg dials the account in between. The word is the manager's,
+                                // so the re-report stores what its own write stored.
+                                let mark = matches!(error, AcquireError::ReauthRequired).then_some(
+                                    (AccountState::ReauthRequired, StateCause::RefreshFailed),
+                                );
                                 break (None, mark, !marked);
                             }
                             // One wait on the same account, bounded by the manager's own rule: a short refusal
@@ -2714,9 +2716,11 @@ impl Relay {
             }
             // An account marked for re-authentication keeps its pin, as a refresh's own mark does: the next
             // selection moves the session off it under the account's state.
-            Verdict::FailOver { cooldown, mark } => {
-                (cooldown, mark, mark != Some(AccountState::ReauthRequired))
-            }
+            Verdict::FailOver { cooldown, mark } => (
+                cooldown,
+                mark,
+                mark.map(|(state, _)| state) != Some(AccountState::ReauthRequired),
+            ),
             Verdict::Commit => {
                 // The key may have been evicted and its record saved while this request was upstream. The
                 // writes below would then build a fresh entry, with no prompt id and none of the session's
@@ -2815,14 +2819,12 @@ impl Relay {
                                     fast,
                                 },
                             );
-                            let cause =
-                                attempt_outcome(&verdict, head.status, Some(&data)).as_str();
                             if let Verdict::FailOver { cooldown, mark } = verdict {
                                 for report in failover_reports(
                                     &account_id,
                                     &canonical_model,
                                     cooldown,
-                                    mark.map(|state| (state, cause, None)),
+                                    mark.map(|(state, cause)| (state, cause, None)),
                                     pin,
                                     &request_id,
                                     generations,
@@ -2874,10 +2876,12 @@ impl Relay {
                 return Next::Respond(responded);
             }
         };
-        if mark == Some(AccountState::ReauthRequired) {
+        let marked_state = mark.map(|(state, _)| state);
+        if marked_state == Some(AccountState::ReauthRequired) {
             ctx.auth_marked = true;
         }
-        let retry_in_place = self.retry_in_place(&ctx, &head, cooldown.as_ref(), mark, arrived);
+        let retry_in_place =
+            self.retry_in_place(&ctx, &head, cooldown.as_ref(), marked_state, arrived);
         // A non-portable request keeps its pin: the answer goes back to the client on the account that holds
         // its state, and only the cooldown is recorded. So does one about to retry in place: the row is there
         // for the siblings, and the pin stays where the retry lands.
@@ -4130,9 +4134,9 @@ pub(crate) async fn report_failover(
     }
 }
 
-/// The state a verdict marks its account with, the verdict's name as the attempt trail spells it, and the upstream
-/// error's message where the verdict read one.
-pub(crate) type Mark = (AccountState, &'static str, Option<String>);
+/// The state a verdict marks its account with, who moved it as its mark site names it, and the upstream error's
+/// message where the verdict read one.
+pub(crate) type Mark = (AccountState, StateCause, Option<String>);
 
 /// What a failover verdict tells the router, in order: the cooldown, or without one the end of the pin, then the
 /// mark.

@@ -4,7 +4,7 @@ use rusqlite::types::{FromSql, FromSqlError, FromSqlResult, ToSql, ToSqlOutput, 
 use rusqlite::{params, Connection, Transaction, TransactionBehavior};
 
 use crate::accounts::set_state_if_generations_on;
-use crate::{AccountState, Store, StoreError, LOCK_POISONED};
+use crate::{AccountState, StateCause, Store, StoreError, LOCK_POISONED};
 
 /// The identity a pin is held under: one conversation of one agent under one key, per model.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -515,6 +515,7 @@ impl RoutingTx<'_> {
         &mut self,
         id: &str,
         state: AccountState,
+        cause: StateCause,
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
@@ -523,6 +524,7 @@ impl RoutingTx<'_> {
             self.tx,
             id,
             state,
+            cause,
             incarnation,
             lifecycle_generation,
             credential_generation,

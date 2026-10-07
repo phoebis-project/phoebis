@@ -8,7 +8,9 @@ use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
-use phoebis_store::{AccountKind, AccountRow, AccountState, NewBundle, Secret, StorageKey, Store};
+use phoebis_store::{
+    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, StorageKey, Store,
+};
 
 const HEX_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
 
@@ -85,6 +87,7 @@ fn registry_from_before_the_canary(registry: &Path, key: &StorageKey) {
             incarnation: 1,
             revision: 1,
             state: AccountState::Unpaired,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     store

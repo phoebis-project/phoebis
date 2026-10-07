@@ -80,6 +80,7 @@ pub enum BackoffEdge {
         account_id: String,
         at: i64,
         endpoint: &'static str,
+        /// The status or the error class that opened the run.
         reason: String,
         attempts: u32,
         next_attempt_at: i64,
@@ -316,7 +317,8 @@ impl CachedEntry {
             account_id: account_id.to_string(),
             at,
             endpoint,
-            reason: self.hold_message(),
+            // A run opens on a 429 alone, so the status is its reason; the hold's sentence is the snapshot's.
+            reason: "429".into(),
             attempts: self.rate_limited_in_a_row,
             next_attempt_at: self.not_before,
             last_clean_at: self.last_clean_at,

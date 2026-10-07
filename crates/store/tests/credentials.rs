@@ -1,6 +1,6 @@
 use phoebis_store::{
     crypto, AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret,
-    StorageKey, Store, StoreError,
+    StateCause, StorageKey, Store, StoreError,
 };
 
 fn account(id: &str) -> AccountRow {
@@ -14,6 +14,7 @@ fn account(id: &str) -> AccountRow {
         incarnation: 1,
         revision: 1,
         state: AccountState::Unpaired,
+        state_cause: StateCause::Operator,
     }
 }
 
@@ -98,7 +99,7 @@ fn disconnect_revokes_both_credential_kinds() {
         .set_api_key_secret("a", &Secret::new("sk-ant-api03-x"))
         .unwrap();
     store.open_refresh_attempt("a", 1, 1, g).unwrap();
-    let bumped = store.bump_lifecycle("a").unwrap();
+    let bumped = store.bump_lifecycle("a", StateCause::Operator).unwrap();
     assert!(store.credentials("a").unwrap().is_none());
     assert!(
         store.api_key_secret("a").unwrap().is_none(),
@@ -267,7 +268,7 @@ fn stale_generation_is_rejected() {
         store.commit_credentials("a", 1, 1, Some(g1), None, &bundle("at-3")),
         Err(StoreError::Stale)
     ));
-    let bumped = store.bump_lifecycle("a").unwrap();
+    let bumped = store.bump_lifecycle("a", StateCause::Operator).unwrap();
     assert!(matches!(
         store.commit_credentials("a", 1, 1, None, None, &bundle("at-4")),
         Err(StoreError::Disconnected)
@@ -382,7 +383,7 @@ fn an_identity_is_bound_once_and_survives_a_disconnect() {
     store
         .commit_credentials("a", 1, 1, None, None, &bundle("at-1"))
         .unwrap();
-    store.bump_lifecycle("a").unwrap();
+    store.bump_lifecycle("a", StateCause::Operator).unwrap();
     let after = store.account("a").unwrap().unwrap();
     assert!(store.credentials("a").unwrap().is_none());
     assert_eq!(after.identity.unwrap().account_uuid, "uuid-1");
@@ -506,6 +507,7 @@ fn resolved_refresh_attempts_are_listed_after_a_watermark() {
             incarnation: 1,
             revision: 1,
             state: AccountState::Ready,
+            state_cause: StateCause::Operator,
         })
         .unwrap();
     let first = store.open_refresh_attempt("a", 1, 1, 1).unwrap();

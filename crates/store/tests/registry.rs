@@ -1,8 +1,8 @@
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AccountUpdate, Affinity, AffinityChain, ApiKeyRow,
     CanaryRead, Failover, Identity, MemberWrite, MemoryKey, MemoryRecord,
-    MemoryStore, ModelRule, NewBundle, PinBurn, PoolRow, RulesMode, Secret, Shedding, StorageKey,
-    Store, StoreError, Strategy, SubscriptionRow,
+    MemoryStore, ModelRule, NewBundle, PinBurn, PoolRow, RulesMode, Secret, Shedding, StateCause,
+    StorageKey, Store, StoreError, Strategy, SubscriptionRow,
 };
 
 // Read by both the roll-back chains below and the standalone direct-open test further down.
@@ -181,6 +181,7 @@ fn account(id: &str, kind: AccountKind) -> AccountRow {
         incarnation: 1,
         revision: 1,
         state: AccountState::Ready,
+        state_cause: StateCause::Operator,
     }
 }
 
@@ -1970,7 +1971,14 @@ fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
     let before = store.account("a").unwrap().unwrap().revision;
     assert_eq!(
         store
-            .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 1)
+            .set_state_if_generations(
+                "a",
+                AccountState::ReauthRequired,
+                StateCause::AuthFailed,
+                1,
+                1,
+                1
+            )
             .unwrap(),
         None,
         "a verdict about the replaced key changes nothing"
@@ -1979,18 +1987,194 @@ fn an_api_key_secret_carries_a_generation_that_fences_state_verdicts() {
     assert_eq!((row.state, row.revision), (AccountState::Ready, before));
     assert_eq!(
         store
-            .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 2)
+            .set_state_if_generations(
+                "a",
+                AccountState::ReauthRequired,
+                StateCause::AuthFailed,
+                1,
+                1,
+                2
+            )
             .unwrap(),
         Some((before + 1, AccountState::Ready)),
         "the moved row's revision after the write and the state it held before"
     );
     assert_eq!(
         store
-            .set_state_if_generations("a", AccountState::ReauthRequired, 1, 1, 2)
+            .set_state_if_generations(
+                "a",
+                AccountState::ReauthRequired,
+                StateCause::AuthFailed,
+                1,
+                1,
+                2
+            )
             .unwrap(),
         Some((before + 2, AccountState::ReauthRequired)),
         "a repeated verdict lands under its fences and names the state it found unchanged"
     );
+}
+
+#[test]
+fn each_state_writer_stores_its_word_beside_the_state() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    let read = |id: &str| {
+        let row = store.account(id).unwrap().unwrap();
+        (row.state, row.state_cause)
+    };
+    store
+        .insert_account(&account("a", AccountKind::ApiKey))
+        .unwrap();
+    assert_eq!(read("a"), (AccountState::Ready, StateCause::Operator));
+    store.set_api_key_secret("a", &Secret::new("k1")).unwrap();
+    store
+        .set_state("a", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    assert_eq!(read("a"), (AccountState::Ready, StateCause::Paired));
+    assert_eq!(
+        store
+            .set_state_if_generations(
+                "a",
+                AccountState::ReauthRequired,
+                StateCause::AuthFailed,
+                1,
+                1,
+                2
+            )
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        read("a"),
+        (AccountState::Ready, StateCause::Paired),
+        "a write its fences refuse leaves the state and its word"
+    );
+    assert!(store
+        .set_state_if_generations(
+            "a",
+            AccountState::ReauthRequired,
+            StateCause::AuthFailed,
+            1,
+            1,
+            1
+        )
+        .unwrap()
+        .is_some());
+    assert_eq!(
+        read("a"),
+        (AccountState::ReauthRequired, StateCause::AuthFailed)
+    );
+    let row = store.account("a").unwrap().unwrap();
+    store
+        .commit_account_update(&AccountUpdate {
+            id: "a",
+            expected_revision: row.revision,
+            incarnation: row.incarnation,
+            lifecycle_generation: row.lifecycle_generation,
+            label: "a",
+            secret: None,
+            state: Some((AccountState::Ready, StateCause::Operator)),
+            at: 1,
+            actor: "admin",
+            enabled: None,
+            cancellation: None,
+        })
+        .unwrap();
+    assert_eq!(read("a"), (AccountState::Ready, StateCause::Operator));
+    store
+        .set_state("a", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    let revision = store.account("a").unwrap().unwrap().revision;
+    rename(&store, "a", revision, "renamed", "admin").unwrap();
+    assert_eq!(
+        read("a"),
+        (AccountState::Ready, StateCause::Paired),
+        "an edit that stages no state leaves the word a pairing stored"
+    );
+    store.bump_lifecycle("a", StateCause::Operator).unwrap();
+    assert_eq!(
+        read("a"),
+        (AccountState::Disconnected, StateCause::Operator)
+    );
+    store
+        .create_account(
+            &AccountRow {
+                state: AccountState::Unpaired,
+                state_cause: StateCause::Paired,
+                ..account("b", AccountKind::Oauth)
+            },
+            None,
+            1,
+            "admin",
+        )
+        .unwrap();
+    assert_eq!(
+        read("b"),
+        (AccountState::Unpaired, StateCause::Paired),
+        "the creation writes the row's own word"
+    );
+}
+
+#[test]
+fn set_enabled_leaves_the_state_cause() {
+    let store = Store::open_in_memory(&StorageKey::generate()).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    store
+        .set_state("a", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    for enabled in [false, true] {
+        store.set_enabled("a", enabled).unwrap();
+        let row = store.account("a").unwrap().unwrap();
+        assert_eq!(
+            (row.enabled, row.state, row.state_cause),
+            (enabled, AccountState::Ready, StateCause::Paired)
+        );
+    }
+}
+
+#[test]
+fn a_row_written_without_the_column_s_word_reads_unrecorded() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    drop(Store::open(&path, &key).unwrap());
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "INSERT INTO accounts (id, kind, label, enabled, state, created_at, updated_at) \
+         VALUES ('a', 'oauth', 'a', 1, 'ready', 1, 1)",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key).unwrap();
+    assert_eq!(
+        store.account("a").unwrap().unwrap().state_cause,
+        StateCause::Unrecorded,
+        "the migration's default is the word a row from before the column reads"
+    );
+}
+
+#[test]
+fn a_stored_word_outside_the_list_fails_the_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let key = StorageKey::generate();
+    let path = dir.path().join("router.sqlite");
+    let store = Store::open(&path, &key).unwrap();
+    store
+        .insert_account(&account("a", AccountKind::Oauth))
+        .unwrap();
+    drop(store);
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute(
+        "UPDATE accounts SET state_cause = 'nonsense' WHERE id = 'a'",
+        [],
+    )
+    .unwrap();
+    drop(conn);
+    let store = Store::open(&path, &key).unwrap();
+    assert!(store.account("a").is_err());
 }
 
 #[test]
@@ -2203,6 +2387,7 @@ fn a_state_verdict_from_a_previous_incarnation_changes_nothing() {
         .set_state_if_generations(
             "a",
             AccountState::FundingRequired,
+            StateCause::FundingRefused,
             incarnation,
             lifecycle,
             credential,
@@ -2213,7 +2398,14 @@ fn a_state_verdict_from_a_previous_incarnation_changes_nothing() {
     assert_eq!(row.state, AccountState::Ready);
     assert_eq!(
         store
-            .set_state_if_generations("a", AccountState::FundingRequired, 2, 1, 1)
+            .set_state_if_generations(
+                "a",
+                AccountState::FundingRequired,
+                StateCause::FundingRefused,
+                2,
+                1,
+                1
+            )
             .unwrap(),
         Some((row.revision + 1, AccountState::Ready)),
         "the holder the tombstone numbered 2 takes its own verdicts"
@@ -2239,7 +2431,7 @@ fn an_account_update_commits_its_secret_and_label_together_or_not_at_all() {
         lifecycle_generation: 1,
         label: "Renamed",
         secret: Some(&Secret::new("k2")),
-        state: Some(AccountState::Ready),
+        state: Some((AccountState::Ready, StateCause::Operator)),
         at: 5,
         actor: "admin",
         enabled: None,
@@ -2364,7 +2556,7 @@ fn an_account_update_read_from_a_deleted_account_is_stale_on_the_one_that_took_i
         lifecycle_generation: read.lifecycle_generation,
         label: "Stale",
         secret: Some(&Secret::new("k3")),
-        state: Some(AccountState::Ready),
+        state: Some((AccountState::Ready, StateCause::Operator)),
         at: 5,
         actor: "admin",
         enabled: Some(false),
@@ -2418,7 +2610,9 @@ fn every_write_that_changes_a_dispatch_input_moves_the_account_revision() {
     assert_eq!(revision(), 3, "an enable flip");
     store.set_api_key_secret("a", &Secret::new("k1")).unwrap();
     assert_eq!(revision(), 4, "a secret rotation");
-    store.set_state("a", AccountState::FundingRequired).unwrap();
+    store
+        .set_state("a", AccountState::FundingRequired, StateCause::Operator)
+        .unwrap();
     assert_eq!(revision(), 5, "a state change");
     assert_eq!(store.account_revision("nobody").unwrap(), None);
 }

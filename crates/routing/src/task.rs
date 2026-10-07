@@ -10,7 +10,7 @@ use std::time::Duration;
 use phoebis_oauth::{Clock, UsageSnapshot};
 use phoebis_store::{
     AccountState, CooldownRow, PinBurn, PinKey, PinRow, RegistryLoad, RekeyWrite, RoutingLoad,
-    RoutingTx, ShedRoundRow, Store, StoreError,
+    RoutingTx, ShedRoundRow, StateCause, Store, StoreError,
 };
 use tokio::sync::{broadcast, mpsc, oneshot, Notify};
 use tokio::time::Instant;
@@ -223,15 +223,15 @@ pub enum RouterEvent {
     },
     /// The writer reported an `AccountState` row its write moved to another state: the state written, the row's
     /// identity after the write (its incarnation and the revision the write bumped, `AccountRow.revision`), and the
-    /// relay's cause; `registry` is written by the ledger for a store-side transition this event never names. The
-    /// mirror reconciles on the identity, so a transition it observed through the registry already, or a newer one,
-    /// drops this event.
+    /// cause the fenced write stored with the state, the word the mirror's tick reads off the row. The mirror
+    /// reconciles on the identity, so a transition it observed through the registry already, or a newer one, drops
+    /// this event.
     AccountStateChanged {
         account_id: String,
         to: AccountState,
         incarnation: u64,
         revision: u64,
-        cause: &'static str,
+        cause: StateCause,
         detail: Option<String>,
         at: i64,
     },
@@ -356,9 +356,9 @@ pub enum Report {
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
-        /// The relay's verdict as its classification names it (`auth_failed`, `upstream_error`), for the event a
-        /// moved row emits.
-        cause: &'static str,
+        /// Who moved the state, named at the relay's mark site; the fenced write stores it with the state and the
+        /// event a moved row emits carries it.
+        cause: StateCause,
         /// The upstream error's message where the verdict read one.
         detail: Option<String>,
     },
@@ -1521,13 +1521,13 @@ struct Landed {
 }
 
 /// An account-state row a writer wake moved, for the loop's `AccountStateChanged`: the state written, the row's
-/// identity after the write and the verdict's cause.
+/// identity after the write and the cause the write stored.
 struct MovedState {
     account_id: String,
     state: AccountState,
     incarnation: u64,
     revision: u64,
-    cause: &'static str,
+    cause: StateCause,
     detail: Option<String>,
 }
 
@@ -1570,7 +1570,7 @@ impl Marks {
                     state: *state,
                     incarnation: *incarnation,
                     revision,
-                    cause,
+                    cause: *cause,
                     detail: detail.clone(),
                 })
                 .into_iter()
@@ -1803,11 +1803,13 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
                 incarnation,
                 lifecycle_generation,
                 credential_generation,
+                cause,
                 ..
             } => {
                 let answer = tx.set_state_if_generations(
                     account_id,
                     *state,
+                    *cause,
                     *incarnation,
                     *lifecycle_generation,
                     *credential_generation,
@@ -1864,11 +1866,13 @@ fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
             incarnation,
             lifecycle_generation,
             credential_generation,
+            cause,
             ..
         } => store
             .set_state_if_generations(
                 account_id,
                 *state,
+                *cause,
                 *incarnation,
                 *lifecycle_generation,
                 *credential_generation,
@@ -1985,7 +1989,7 @@ impl Task {
         });
     }
 
-    /// One transition per account-state row the writer moved, with the verdict's cause.
+    /// One transition per account-state row the writer moved, with the cause the write stored.
     fn state_moved(&self, rows: Vec<MovedState>) {
         let at = (self.clock)();
         for row in rows {
@@ -4001,6 +4005,7 @@ mod tests {
                 incarnation: 1,
                 revision: 1,
                 state: AccountState::Ready,
+                state_cause: StateCause::Operator,
             })
             .unwrap();
         let linked = scratch.path().join("holder").join("router.sqlite");
@@ -4134,6 +4139,7 @@ mod tests {
                     incarnation: 1,
                     revision: 1,
                     state: AccountState::Ready,
+                    state_cause: StateCause::Operator,
                 })
                 .unwrap();
         }

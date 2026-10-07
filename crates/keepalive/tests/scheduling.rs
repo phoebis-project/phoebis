@@ -13,7 +13,9 @@ use phoebis_routing::{
     lane_key, resolve, ClientClass, EvidenceSource, OverageEvidence, PinRef, Report, SelectRequest,
     SelectResult,
 };
-use phoebis_store::{AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy};
+use phoebis_store::{
+    AccountState, BudgetPeriod, CooldownRow, MemberWrite, OveragePolicy, StateCause,
+};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::Arc;
 
@@ -903,7 +905,7 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
     );
     r.h.store.set_enabled("a", true).unwrap();
     r.h.store
-        .set_state("a", AccountState::ReauthRequired)
+        .set_state("a", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
@@ -911,7 +913,9 @@ async fn a_paused_or_reauth_marked_account_serves_no_probe() {
         (r.status("main").probes, r.status("main").reason),
         (0, Reason::Reauth)
     );
-    r.h.store.set_state("a", AccountState::Ready).unwrap();
+    r.h.store
+        .set_state("a", AccountState::Ready, StateCause::Operator)
+        .unwrap();
     r.h.router.reload().await.unwrap();
     r.step().await;
     assert_eq!(r.status("main").probes, 1);

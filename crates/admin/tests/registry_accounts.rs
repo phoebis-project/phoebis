@@ -181,6 +181,121 @@ async fn patching_deleting_and_disconnecting_accounts() {
 }
 
 #[tokio::test]
+async fn the_admin_routes_store_operator_and_the_pairing_confirm_paired() {
+    use phoebis_store::{AccountState, StateCause};
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let read = |id: &str| {
+        let row = store.account(id).unwrap().unwrap();
+        (row.state, row.state_cause)
+    };
+    let created = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"console","kind":"api_key","label":"Console","secret":"sk-ant-api03-NEW"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    assert_eq!(read("console"), (AccountState::Ready, StateCause::Operator));
+
+    // Each route below starts from a word no admin route writes, so the word it leaves is its own.
+    store
+        .set_state("direct", AccountState::Unpaired, StateCause::Paired)
+        .unwrap();
+    let rekeyed = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"secret":"sk-ant-api03-AGAIN"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(rekeyed.status(), 200);
+    assert_eq!(read("direct"), (AccountState::Ready, StateCause::Operator));
+
+    store
+        .set_state("direct", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    for route in ["pause", "resume"] {
+        assert_eq!(
+            post(
+                &app,
+                &format!("/admin/accounts/direct/{route}"),
+                "",
+                Some(&cookie)
+            )
+            .await
+            .status(),
+            204
+        );
+        assert_eq!(
+            read("direct"),
+            (AccountState::Ready, StateCause::Paired),
+            "{route} moves the flag and leaves the word"
+        );
+    }
+
+    store
+        .set_state(
+            "direct",
+            AccountState::FundingRequired,
+            StateCause::FundingRefused,
+        )
+        .unwrap();
+    assert_eq!(
+        post(
+            &app,
+            "/admin/accounts/direct/clear-funding",
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        204
+    );
+    assert_eq!(read("direct"), (AccountState::Ready, StateCause::Operator));
+
+    store
+        .set_state("direct", AccountState::Ready, StateCause::Paired)
+        .unwrap();
+    assert_eq!(
+        delete(&app, "/admin/accounts/direct/credentials", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        read("direct"),
+        (AccountState::Unpaired, StateCause::Operator),
+        "an api_key slot rests unpaired after its disconnect, under the same word"
+    );
+
+    let id = common::exchanged_session_for(&app, &cookie, "business").await;
+    assert_eq!(
+        post(
+            &app,
+            &format!("/admin/oauth/sessions/{id}/confirm"),
+            "",
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    assert_eq!(read("business"), (AccountState::Ready, StateCause::Paired));
+    assert_eq!(
+        delete(&app, "/admin/accounts/business/credentials", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        read("business"),
+        (AccountState::Disconnected, StateCause::Operator)
+    );
+}
+
+#[tokio::test]
 async fn an_account_write_ignores_a_member_the_route_does_not_name() {
     let (app, _up, _store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
@@ -337,7 +452,9 @@ async fn a_disconnect_between_the_exchange_and_the_confirm_answers_a_conflict() 
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     let id = common::exchanged_session_for(&app, &cookie, "business").await;
-    store.bump_lifecycle("business").unwrap();
+    store
+        .bump_lifecycle("business", phoebis_store::StateCause::Operator)
+        .unwrap();
     let confirmed = post(
         &app,
         &format!("/admin/oauth/sessions/{id}/confirm"),
@@ -542,7 +659,11 @@ async fn cooldowns_and_funding_are_cleared_by_an_operator_and_shown_on_the_accou
         "not in funding_required"
     );
     store
-        .set_state("direct", phoebis_store::AccountState::FundingRequired)
+        .set_state(
+            "direct",
+            phoebis_store::AccountState::FundingRequired,
+            phoebis_store::StateCause::Operator,
+        )
         .unwrap();
     assert_eq!(
         post(
