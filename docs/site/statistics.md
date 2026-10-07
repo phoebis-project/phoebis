@@ -67,8 +67,8 @@ waits for the period to end or its budget to be raised, rather than for a price 
 traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
 
 A model an upstream rejected leaves two events in the log: `model_rejected` names the refusing account and the
-spelling the request carried, `model_permitted` the account that served the same request afterwards; the request
-drawer lists both.
+spelling the request carried, `model_permitted` the account that served the same request afterwards. The
+[routing log](#routing-log) lists both.
 
 Percentiles for every millisecond latency and for output tokens per second come from a fixed, log-spaced,
 64-bucket histogram. A range spanning several hours merges its hourly histograms bucket by bucket before reading

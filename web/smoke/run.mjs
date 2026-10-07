@@ -5260,10 +5260,11 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     await m.settle(300);
     const answer = drawerRowOf(m, 'Answer')?.querySelector('dd');
     const asked = drawerRowOf(m, 'Speed, service tier')?.querySelector('dd')?.textContent?.trim() ?? '';
-    const chips = [...(answer?.querySelectorAll('.chip') ?? [])].map((chip) => chip.textContent?.trim());
+    // The speed chip names itself on its title, since a bare word could be read as the service tier.
+    const fast = [...(answer?.querySelectorAll('.chip') ?? [])].find((chip) => chip.textContent?.trim() === 'fast');
     // The row's own trail says whether an attempt was made, so a drawer that drew no Answer row for one fails.
     const attempted = tr.querySelector('.trail') !== null;
-    servedAs.push(chips.includes('fast') ? 'fast' : !attempted && asked.startsWith('fast,') ? 'fast' : (answer?.textContent ?? `no Answer row, asked ${asked}`));
+    servedAs.push(fast ? (fast.getAttribute('title') === "The answer's speed" ? 'fast' : `fast titled ${fast.getAttribute('title')}`) : !attempted && asked.startsWith('fast,') ? 'fast' : (answer?.textContent ?? `no Answer row, asked ${asked}`));
   }
   const fastDay = (await api.listRequests({ from: new Date(Date.now() - 24 * 3_600_000).toISOString(), limit: 25, speeds: ['fast'], to: new Date().toISOString() })).requests.length;
   results.push({ name: speedCheck, ok: servedAs.length > 0 && servedAs.length === fastDay && servedAs.every((s) => s === 'fast'), missing: [`${servedAs.length} rows against ${fastDay}`, ...new Set(servedAs)] });
@@ -5858,6 +5859,19 @@ m.unmount();
       `${landed.pathname}${landed.search}` === href,
     missing: [`${rows.length} rows, ${capped} ending at now`, ...wrong.slice(0, 3).map((w) => JSON.stringify(w)), ...heads.map((h) => `${h.row} against ${h.href}`), JSON.stringify(landed)],
   });
+  page.unmount();
+}
+
+// A key pressed on a link inside a row is the link's, so Enter on Routing opens the log alone, never the drawer first.
+{
+  const page = await mount('/requests', { now: CLOCK_ORIGIN });
+  const routing = [...(page.container.querySelector('.requests__table tbody tr')?.lastElementChild?.querySelectorAll('a') ?? [])].find((a) => a.textContent?.trim() === 'Routing');
+  routing?.focus();
+  routing?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, key: 'Enter' }));
+  await page.settle(300);
+  const after = page.location();
+  const drawer = page.container.querySelector('.drawer') !== null;
+  results.push({ name: "/requests Enter on a row's Routing link leaves the drawer shut", ok: routing !== undefined && after.pathname === '/requests' && !drawer, missing: [JSON.stringify(after), `drawer ${drawer}`] });
   page.unmount();
 }
 

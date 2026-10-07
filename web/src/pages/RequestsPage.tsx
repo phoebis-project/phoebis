@@ -161,6 +161,12 @@ const heldOn = (h: CohortHold) => h.cohort ?? h.waitedOn[h.waitedOn.length - 1] 
 /** The badge rounds the wait, so its hover carries it whole with where it was placed. */
 const heldTitle = (h: CohortHold) => `waited ${fmtInt(h.heldMs)} ms on ${heldOn(h)}`;
 
+/**
+ * The router's ids run to 44 characters, which would wrap the drawer head to a second line beside its two actions at
+ * 400 px, so the head shows this many and its hover keeps the id whole.
+ */
+const HEAD_ID_CHARS = 24;
+
 /** The log on this request, a quarter hour either side of it. A row with no duration is read as a moment. */
 const routingLogHref = (r: RequestLog, now: number) => {
   const at = Date.parse(r.at);
@@ -355,7 +361,8 @@ export function RequestsPage() {
                         className={r.id === requestId ? 'is-selected' : ''}
                         onClick={() => navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                         tabIndex={0}
-                        onKeyDown={(e) => e.key === 'Enter' && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
+                        // A key pressed on a link in the row is the link's own, so Enter on Routing opens the log alone.
+                        onKeyDown={(e) => e.key === 'Enter' && e.target === e.currentTarget && navigate({ pathname: `/requests/${r.id}`, search: location.search })}
                       >
                         {shown.has('time') && (
                           <td className="num" title={fmtAbsolute(r.at)}>
@@ -481,7 +488,7 @@ export function RequestsPage() {
 }
 
 function RequestDrawer({ request, requestId, now, onClose }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string }) {
-  // The list's own row draws the drawer when the page holds it, and the request's own read answers one it does not.
+  // The drawer reads the request on every open, and draws the list's own row first when the page holds it.
   const detail = useAsync(() => api.getRequest(requestId), [requestId]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer
   // for this id is read.
@@ -504,7 +511,9 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
     <aside className="drawer" aria-label="Request details">
       <header className="drawer__head">
         <div>
-          <h2 className="drawer__title mono">{r?.id ?? requestId}</h2>
+          <h2 className="drawer__title mono" title={r?.id ?? requestId}>
+            {shortId(r?.id ?? requestId, HEAD_ID_CHARS)}
+          </h2>
           {r && (
             <p className="muted" title={fmtAbsolute(r.at)}>
               {fmtTime(r.at)}, {fmtRelative(r.at, now)}
@@ -693,7 +702,7 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
 function answerChips(response: AttemptResponse): Chip[] {
   const chips: Chip[] = [];
   if (response.stopReason) chips.push({ value: `stopped: ${response.stopReason}` });
-  if (response.speed) chips.push({ value: response.speed });
+  if (response.speed) chips.push({ title: "The answer's speed", value: response.speed });
   if (response.inferenceGeo) chips.push({ value: response.inferenceGeo });
   if (response.servedModel) chips.push({ mono: true, value: `served by ${response.servedModel}` });
   if (response.clearedInputTokens !== null && response.clearedInputTokens > 0) chips.push({ value: `${fmtInt(response.clearedInputTokens)} tokens cleared by context edits` });

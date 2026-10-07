@@ -2552,11 +2552,12 @@ async function fastLane(theme, path) {
 
 /**
  * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
- * the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll sideways at both, and
- * every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's type and height, and
- * the request class badge its box. A request that ended with no answer draws no chip, so then the chips are read on the
- * newest request that answered 200. The router's seeded answers name no stop reason, speed or region, so there the ids'
- * chips carry that measure. It runs after the list view's shot, so that shot stays the list alone.
+ * its head 70 px at both, the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
+ * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
+ * type and height, and the request class badge its box. A request that ended with no answer draws no chip, so then the
+ * chips are read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or
+ * region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list
+ * alone.
  */
 async function requestDrawerCompact(theme) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
@@ -2607,6 +2608,7 @@ async function requestDrawerCompact(theme) {
     const got = await read();
     measurements.push(`${theme} /requests drawer at ${width} by ${height} ${JSON.stringify(got)}`);
     if (got.drawer !== drawer) say(`${where} is ${got.drawer}px wide, not ${drawer}px`);
+    if (got.head !== 70) say(`${where}: the head is ${got.head}px tall, not 70px`);
     if (JSON.stringify(got.heads) !== JSON.stringify(['Time', 'Model', 'Status', 'Attempts', ''])) say(`${where}: the table draws the columns ${JSON.stringify(got.heads)}`);
     if (got.table === null) say(`${where} has no table to measure`);
     else if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
