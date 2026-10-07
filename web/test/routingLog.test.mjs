@@ -538,12 +538,19 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(verdict({ obstacle: operator, state: 'funding_required', verdict: 'out' }), ['out', 'needs funding', 'the account leaves every eligible set until funded']);
   assert.deepEqual(verdict({ obstacle: operator, state: 'reauth_required', verdict: 'out' }), ['out', 'needs re-auth', 'the account leaves every eligible set until it is paired again']);
   assert.deepEqual(verdict({ enabled: false, obstacle: operator, state: 'deleted', verdict: 'out' }), ['out', 'deleted', 'the account left the registry']);
+  // The exhausted line reads each operator obstacle as the member's own row does.
+  const held = record({
+    candidates: [candidate({ accountId: 'overflow', obstacle: operator, state: 'funding_required', verdict: 'out' }), candidate({ accountId: 'nightly', enabled: false, obstacle: operator, verdict: 'out' })],
+    outcome: { accountId: null, exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, kind: 'exhausted', upstreamModel: null },
+    walk: [wstep('exhausted', 'exhausted', [wfact('obstacles', ['overflow:operator', 'nightly:operator'])])],
+  });
+  assert.deepEqual(texts(d.walkLines(held)[0].chips), ['overflow needs funding', 'nightly held by hand']);
   assert.deepEqual(verdict({ budget: [{ budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1.1 }], obstacle: { name: 'budget', reason: 'day', until: iso(MIDNIGHT), window: null }, verdict: 'out' }), ['out', 'budget $1.10 of $5.00', 'at its spend budget for the period']);
   const daily = { budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1 };
   const monthly = { budgetUsd: 10, observedAt: iso(NOW), period: 'month', periodEnd: iso(Date.UTC(2026, 9, 1)), periodStart: iso(Date.UTC(2026, 8, 1)), spentUsd: 12 };
   const month = { name: 'budget', reason: 'month', until: iso(Date.UTC(2026, 9, 1)), window: null };
   assert.deepEqual(verdict({ budget: [daily, monthly], obstacle: month, verdict: 'out' }), ['out', 'budget $12.00 of $10.00', 'at its spend budget for the period']);
-  assert.deepEqual(verdict({ budget: [daily, monthly], obstacle: { ...month, reason: null }, verdict: 'out' }), ['out', 'budget $12.00 of $10.00', 'at its spend budget for the period'], 'a record that names no period reads the budget its spend reached');
+  assert.deepEqual(verdict({ budget: [daily, monthly], obstacle: { ...month, reason: null }, verdict: 'out' }), ['out', 'budget', 'at its spend budget for the period'], 'an obstacle that names no period draws no budget detail');
   assert.deepEqual(verdict({ obstacle: { name: 'spent', reason: null, until: until(15, 42), window: 'five_hour' }, verdict: 'out' }), ['out', '5h spent', 'its window spent']);
   assert.deepEqual(verdict({ obstacle: { name: 'credits', reason: 'org_spend_cap_reached', until: null, window: null }, verdict: 'out' }), ['out', 'credits spend cap reached', 'its usage credits unavailable for fast mode']);
   assert.deepEqual(verdict({ obstacle: { name: 'budget_unknown', reason: null, until: null, window: null }, verdict: 'out' }), ['out', 'budget unknown', 'its spend unknown while the ledger is degraded']);
@@ -599,7 +606,7 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
       outcome: { accountId: null, exhaustion: { deadline: iso(Date.UTC(2026, 9, 1)), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, kind: 'exhausted', upstreamModel: null },
     });
   assert.deepEqual(rows(reachedBy('month')).find(([label]) => label === 'Spend'), ['Spend', ['research $12.00 of $10.00']]);
-  assert.deepEqual(rows(reachedBy(null)).find(([label]) => label === 'Spend'), ['Spend', ['research $12.00 of $10.00']], 'a record that names no period reads the budget its spend reached');
+  assert.equal(rows(reachedBy(null)).find(([label]) => label === 'Spend'), undefined, 'an obstacle that names no period draws no budget detail');
 });
 
 /** One event per kind, its detail in the shape its writer stores, each naming an account and a pool. */

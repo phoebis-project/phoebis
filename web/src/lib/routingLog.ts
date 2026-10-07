@@ -910,13 +910,17 @@ function laneChips(lane: string): Chip[] {
   return [plain(speed, 'speed'), plain(thinking, 'thinking'), plain(effort === '-' ? 'none' : effort, 'effort')];
 }
 
-/** An exhausted line's obstacle, `account:name` as the engine weighs it, the account as the key. */
-function obstacleChip(text: string): Chip {
+/**
+ * An exhausted line's obstacle, `account:name` as the engine weighs it, the account as the key. An operator obstacle
+ * reads the member's own pause or state, as its candidate row does.
+ */
+function obstacleChip(text: string, record: DecisionRecord): Chip {
   const at = text.lastIndexOf(':');
   const name = at < 0 ? text : text.slice(at + 1);
   const id = at < 0 ? '' : text.slice(0, at);
-  const value = wordOf(OBSTACLE_WORD, name);
-  return id === '' ? { label: 'obstacle', title: hintOf(name), value } : { label: id, labelEntity: accountEntity(id), title: hintOf(name), value };
+  const member = name === 'operator' ? memberOf(record, id) : undefined;
+  const { title, value } = member ? operatorWords(member) : { title: hintOf(name), value: wordOf(OBSTACLE_WORD, name) };
+  return id === '' ? { label: 'obstacle', title, value } : { label: id, labelEntity: accountEntity(id), title, value };
 }
 
 /**
@@ -956,7 +960,7 @@ function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
       if (Array.isArray(v)) return v.map((m) => markChip(String(m)));
       break;
     case 'obstacles':
-      if (Array.isArray(v)) return v.map((o) => obstacleChip(String(o)));
+      if (Array.isArray(v)) return v.map((o) => obstacleChip(String(o), record));
       break;
     case 'tier': {
       const tier = tierOf(v);
@@ -1110,21 +1114,22 @@ function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number)
   return `${words(reason || 'cooldown')}${until}`;
 }
 
-/**
- * The budget a member's budget obstacle names by its period. A record that names none reads the budget whose spend
- * reached its amount.
- */
-const reachedBudget = (c: RecordCandidate) => c.budget.find((b) => b.period === c.obstacle?.reason) ?? c.budget.find((b) => b.spentUsd !== null && b.spentUsd >= b.budgetUsd);
+/** The budget a member's budget obstacle names by its period. */
+const reachedBudget = (c: RecordCandidate) => c.budget.find((b) => b.period === c.obstacle?.reason);
 
 /** A member's state other than ready, as the console's account views word it. */
 const MEMBER_STATE_WORD: Record<string, string> = { deleted: 'deleted', disconnected: 'disconnected', funding_required: 'needs funding', reauth_required: 'needs re-auth', unpaired: 'not paired' };
 
 /**
  * The engine's `operator` obstacle covers a pause and a state other than ready alike, so the member's own `enabled`
- * and `state` tell them apart. A deleted member reads disabled too, and its state says why.
+ * and `state` tell them apart, in the candidate table and the exhausted line alike. A deleted member reads disabled
+ * too, and its state says why.
  */
-const pausedByHand = (c: RecordCandidate) => !c.enabled && c.state !== 'deleted';
-const stateHint = (state: string) => (state === 'deleted' ? 'the account left the registry' : own(STATE_EFFECT, state) ? STATE_EFFECT[state] : undefined);
+function operatorWords(c: RecordCandidate): { title: string | undefined; value: string } {
+  if (!c.enabled && c.state !== 'deleted') return { title: hintOf('operator'), value: 'held by hand' };
+  const title = c.state === 'deleted' ? 'the account left the registry' : own(STATE_EFFECT, c.state) ? STATE_EFFECT[c.state] : hintOf('operator');
+  return { title, value: wordOf(MEMBER_STATE_WORD, c.state) };
+}
 
 function obstacleWords(c: RecordCandidate, now: number): string {
   const o = c.obstacle;
@@ -1139,7 +1144,7 @@ function obstacleWords(c: RecordCandidate, now: number): string {
     case 'credits':
       return `credits ${o.reason === null ? 'unavailable' : wordOf(CREDITS_WORD, o.reason)}`;
     case 'operator':
-      return pausedByHand(c) ? 'held by hand' : wordOf(MEMBER_STATE_WORD, c.state);
+      return operatorWords(c).value;
     case 'spent':
       return `${o.window !== null ? wordOf(WINDOW_WORD, o.window) : 'window'} spent`;
     default:
@@ -1148,7 +1153,7 @@ function obstacleWords(c: RecordCandidate, now: number): string {
 }
 
 function verdictChipOf(c: RecordCandidate, now: number): Chip | null {
-  if (c.obstacle !== null) return { title: c.obstacle.name === 'operator' && !pausedByHand(c) ? (stateHint(c.state) ?? hintOf('operator')) : hintOf(c.obstacle.name), value: obstacleWords(c, now) };
+  if (c.obstacle !== null) return c.obstacle.name === 'operator' ? operatorWords(c) : { title: hintOf(c.obstacle.name), value: obstacleWords(c, now) };
   if (c.partition !== null) return { title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) };
   if (c.verdict === 'destination') return plain('not placed');
   if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return plain('at its cap');
