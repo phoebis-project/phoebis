@@ -1317,7 +1317,8 @@ async fn a_read_waiting_on_the_registry_leaves_the_bus_arm_free() {
     assert!(!reading.is_finished() || reading.join().unwrap().is_ok());
 }
 
-const DAY: i64 = 86_400_000;
+const HOUR: i64 = 3_600_000;
+const DAY: i64 = 24 * HOUR;
 
 /// A listener's pair as the router serves it, loaded a day before `NOW` with no failed reload.
 fn pair(key: &str, not_after_ms: i64) -> PairFacts {
@@ -1409,6 +1410,58 @@ async fn a_loaded_pair_crosses_the_warning_threshold_and_its_end_as_the_clock_ad
         (true, Some(not_after - 30 * DAY), json!(-1)),
         "past its end the count goes negative without a reload"
     );
+}
+
+#[tokio::test]
+async fn a_leaf_thirty_days_and_twelve_hours_from_its_end_holds_no_expiring_item() {
+    let rig = rig().await;
+    let pairs = Arc::new(Pairs::default());
+    pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY + 12 * HOUR)]);
+    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs));
+    let conditions = read(&attention, NOW);
+    let clear = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
+    assert_eq!(
+        (clear.holds, clear.since, &clear.detail["days_left"]),
+        (false, None, &json!(30)),
+        "thirty whole days left and part of a day is still outside the thirty days"
+    );
+}
+
+#[tokio::test]
+async fn a_leaf_exactly_thirty_days_from_its_end_holds_the_expiring_item_since_the_read() {
+    let rig = rig().await;
+    let pairs = Arc::new(Pairs::default());
+    pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY)]);
+    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs.clone()));
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
+    assert_eq!((held.holds, held.since), (true, Some(NOW)));
+
+    // One pair installed once and read at twelve-hour steps across its onset: no read dates the item after itself.
+    let not_after = NOW + 61 * DAY;
+    pairs.set(vec![pair("proxy.tls", not_after)]);
+    for at in [
+        NOW + 30 * DAY + 12 * HOUR,
+        NOW + 31 * DAY,
+        NOW + 31 * DAY + 12 * HOUR,
+    ] {
+        let conditions = read(&attention, at);
+        let c = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
+        assert!(
+            c.since.is_none_or(|since| since <= at),
+            "at {at}: since {:?} is after the read",
+            c.since
+        );
+        assert_eq!(
+            (c.holds, c.since),
+            if at < not_after - 30 * DAY {
+                (false, None)
+            } else {
+                (true, Some(not_after - 30 * DAY))
+            },
+            "at {at}"
+        );
+    }
 }
 
 #[tokio::test]

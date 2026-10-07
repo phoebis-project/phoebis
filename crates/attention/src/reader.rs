@@ -19,7 +19,7 @@ use crate::{AttentionError, PairFacts};
 /// How long after a run's first 429 the poll backoff condition holds, so a single 429 or a short run never reads 1.
 pub const BACKOFF_ATTENTION_AFTER_MS: i64 = 30 * 60 * 1_000;
 
-/// A loaded leaf this many whole days or fewer from its `not_after` holds `certificate_expiring`: the router's
+/// A loaded leaf holds `certificate_expiring` from this many days before its `not_after`: the router's
 /// `EXPIRY_WARNING_DAYS`, which `check-config` and `status` warn under, carried here since this crate cannot name it.
 pub const CERTIFICATE_WARNING_DAYS: i64 = 30;
 
@@ -449,15 +449,17 @@ pub(crate) fn conditions(
                 "serving_since": pair.loaded_at,
             }),
         ));
-        // Counted from this read's clock rather than at the load, so a pair loaded with time to spare raises the
-        // condition when its day comes without a reload. Dated from `not_after`, so a restart keeps the date.
+        // Judged on this read's clock rather than at the load, so a pair loaded with time to spare raises the
+        // condition when its day comes without a reload. Dated from `not_after`, so a restart keeps the date, and held
+        // from that instant on rather than by the whole-day count, so a dated item never starts in the future.
+        let warning_from = pair.not_after_ms - CERTIFICATE_WARNING_DAYS * DAY_MS;
         let days_left = (pair.not_after_ms - now).div_euclid(DAY_MS);
-        let expiring = days_left <= CERTIFICATE_WARNING_DAYS;
+        let expiring = now >= warning_from;
         out.push(condition_for(
             Kind::CertificateExpiring,
             Subject::router(&pair.key),
             expiring,
-            expiring.then_some(pair.not_after_ms - CERTIFICATE_WARNING_DAYS * DAY_MS),
+            expiring.then_some(warning_from),
             json!({ "cert_file": cert_file, "days_left": days_left, "expires": pair.not_after_ms }),
         ));
     }
