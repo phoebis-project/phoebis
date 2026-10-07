@@ -1,13 +1,12 @@
-//! `phoebis init`: a first installation's storage key, environment file, certificate material and bootstrap file,
-//! written once. Each file is created with `create_new` at its mode, so no run replaces a key every stored credential
-//! is sealed under, and a run that fails part way removes what it wrote. `--tls self-signed` against an existing
-//! bootstrap file is the one run that replaces anything: the leaves it wrote, under the CA the clients already trust.
+//! `phoebis init`: a first installation's storage key, environment file and bootstrap file, written once. Each file is
+//! created with `create_new` at its mode, so no run replaces a key every stored credential is sealed under, and a run
+//! that fails part way removes what it wrote.
 
 use std::ffi::{CStr, CString};
-use std::fs::{DirBuilder, File, OpenOptions, Permissions};
+use std::fs::{DirBuilder, File};
 use std::io::{BufRead, Write};
 use std::net::{IpAddr, Ipv4Addr, SocketAddr};
-use std::os::unix::fs::{DirBuilderExt, MetadataExt, OpenOptionsExt, PermissionsExt};
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 
 use base64::Engine;
@@ -16,10 +15,6 @@ use phoebis_store::StorageKey;
 use rand::Rng;
 
 use crate::config::{ConfigError, ListenerTls};
-use crate::selfsigned::{
-    self, LeafModes, MaterialError, Placed, SanName, Unfinished, Validity, CA_CERT, CA_KEY,
-    CA_LIFETIME_DAYS, LEAF_CERT, LEAF_KEY, LEAF_LIFETIME_DAYS,
-};
 
 /// The text the bootstrap file is filled from, embedded since the binary runs where no checkout exists.
 const EXAMPLE: &str = include_str!("../../../deploy/config.example.yaml");
@@ -29,8 +24,6 @@ const CONTAINER_DATA_DIR: &str = "/var/lib/phoebis";
 const CONTAINER_KEY_FILE: &str = "/run/secrets/router-storage-key";
 const CONTAINER_METRICS_LISTEN: SocketAddr =
     SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 9464);
-/// Where a generated pair sits inside the container, which the written file names under `--container`.
-const CONTAINER_TLS_DIR: &str = "/etc/phoebis/tls";
 
 const DEFAULT_SECRET_ENV: &str = "PHOEBIS_ADMIN_SECRET";
 
@@ -65,19 +58,6 @@ const ADMIN: Side = Side {
     container: SocketAddr::new(IpAddr::V4(Ipv4Addr::UNSPECIFIED), 8081),
 };
 
-/// What a listener off loopback without a pair gets.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum)]
-pub enum TlsMode {
-    /// The pair flags name every network listener's pair; one they do not name is refused.
-    Files,
-    /// No `tls` line for a listener without a pair, on any address: the default.
-    #[value(name = "none")]
-    Plain,
-    /// A local CA and one leaf per listener that leaves loopback, under `tls/` beside the bootstrap file.
-    #[value(name = "self-signed")]
-    SelfSigned,
-}
-
 /// The flags of `phoebis init`; a value no flag gives takes its default, or is asked for on a terminal.
 #[derive(clap::Args, Debug)]
 pub struct InitArgs {
@@ -104,7 +84,7 @@ pub struct InitArgs {
     #[arg(long, value_name = "PATH")]
     pub key_file: Option<PathBuf>,
     /// Asks nothing, even on a terminal; a value a flag did not give takes its default, and a listener off loopback
-    /// without a pair gets what `--tls` says, plain HTTP without it.
+    /// without a pair serves plain HTTP.
     #[arg(long)]
     pub non_interactive: bool,
     /// The user that owns the key file and the data directory; needs root.
@@ -122,10 +102,6 @@ pub struct InitArgs {
     /// The environment variable that holds the admin secret, written as `admin.secret_env`.
     #[arg(long, value_name = "NAME", default_value = DEFAULT_SECRET_ENV, value_parser = env_name)]
     pub secret_env: String,
-    /// What a listener off loopback without a pair gets: `self-signed` generates one, `files` wants the pair flags,
-    /// `none` leaves plain HTTP. On a terminal the question is asked when the flag is absent.
-    #[arg(long, value_name = "self-signed|files|none")]
-    pub tls: Option<TlsMode>,
 }
 
 /// One listener as `init` will write it.
@@ -133,8 +109,6 @@ pub struct InitArgs {
 pub struct Listener {
     pub listen: SocketAddr,
     pub tls: Option<ListenerTls>,
-    /// `tls` names the pair `run` generates under the plan's `tls_dir`.
-    pub generated: bool,
 }
 
 /// Everything `init` is about to write, resolved from the flags, the prompts and the defaults, before a byte lands.
@@ -149,20 +123,6 @@ pub struct Plan {
     pub owner: Option<String>,
     pub proxy: Listener,
     pub secret_env: String,
-    /// `tls/` beside the bootstrap file on this host, where a generated pair lands; under `--container` the file
-    /// names `CONTAINER_TLS_DIR` instead and the operator mounts this directory there.
-    pub tls_dir: PathBuf,
-}
-
-/// `--tls self-signed` against an existing bootstrap file: the leaves of the pairs `init` wrote are written again
-/// under the CA in `tls_dir`, and nothing else is touched.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct Renewal {
-    pub config_path: PathBuf,
-    pub tls_dir: PathBuf,
-    /// Each public listener whose `tls` names the pair `init` writes under `tls_dir`, or the container's mount of it
-    /// under `CONTAINER_TLS_DIR`, with its address: the leaves to write.
-    pub listeners: Vec<(&'static str, SocketAddr)>,
 }
 
 #[derive(Debug, thiserror::Error)]
@@ -175,11 +135,6 @@ pub enum InitError {
     DatabaseExists { path: PathBuf },
     #[error("{path} already exists; init never overwrites an environment file")]
     EnvExists { path: PathBuf },
-    #[error("--tls files needs --{side}-cert and --{side}-key for {side} on {listen}")]
-    FilesNeedPair {
-        side: &'static str,
-        listen: SocketAddr,
-    },
     #[error("input ended before {asked} was answered")]
     InputEnded { asked: &'static str },
     #[error("{what}: {error}")]
@@ -188,30 +143,10 @@ pub enum InitError {
         "{path} already exists; init never replaces a key, since every stored credential is sealed under it"
     )]
     KeyExists { path: PathBuf },
-    #[error("{what}: {error}")]
-    Material { what: String, error: MaterialError },
     #[error("--owner names no user: {user}")]
     NoSuchUser { user: String },
-    #[error(
-        "{path} names no pair under {dir}; init --tls self-signed renews only the pairs it wrote"
-    )]
-    NothingToRenew { path: PathBuf, dir: PathBuf },
-    #[error(
-        "the {what} {path} overlaps {tls}, which --tls self-signed writes; name the {what} elsewhere"
-    )]
-    OverlapsTls {
-        what: &'static str,
-        path: PathBuf,
-        tls: PathBuf,
-    },
     #[error("--owner needs root")]
     OwnerNeedsRoot,
-    #[error("{path} already exists; init never overwrites a certificate pair")]
-    PairExists { path: PathBuf },
-    #[error(
-        "init --tls self-signed against an existing bootstrap file renews its leaves and takes no other flag"
-    )]
-    RenewalTakesNoFlag,
     /// A step after the first write failed, and what the run had written is removed again, newest first.
     #[error("{error}; {}", undone(.removed, .kept))]
     Undone {
@@ -219,8 +154,6 @@ pub enum InitError {
         removed: Vec<PathBuf>,
         kept: Vec<PathBuf>,
     },
-    #[error("the bootstrap file does not load: {error}")]
-    Unreadable { error: ConfigError },
     #[error("the written configuration does not load: {error}")]
     Written { error: ConfigError },
 }
@@ -241,8 +174,8 @@ fn undone(removed: &[PathBuf], kept: &[PathBuf]) -> String {
 }
 
 /// The prompts, over any reader and writer so a test feeds answers: the proxy address, the admin address, and for
-/// each that leaves loopback with no pair its TLS answer, unless `--tls` gave it. An empty answer takes the default, a
-/// bad one is asked again with the parse error, end of input refuses.
+/// each that leaves loopback with no pair its TLS answer. An empty answer takes the default, a bad one is asked again
+/// with the parse error, end of input refuses.
 pub fn ask(
     args: &InitArgs,
     defaults: &Plan,
@@ -261,34 +194,9 @@ pub fn ask(
     if args.admin_listen.is_none() {
         plan.admin.listen = ask_address(&ADMIN, defaults.admin.listen, input, output)?;
     }
-    if let Some(mode) = args.tls {
-        // The flag answers for an address typed here as for one a flag gave, so the plan is drawn again.
-        plan.proxy = listener(
-            &PROXY,
-            Some(plan.proxy.listen),
-            (&args.proxy_cert, &args.proxy_key),
-            false,
-            Some(mode),
-            &plan.tls_dir,
-        )?;
-        plan.admin = listener(
-            &ADMIN,
-            Some(plan.admin.listen),
-            (&args.admin_cert, &args.admin_key),
-            false,
-            Some(mode),
-            &plan.tls_dir,
-        )?;
-        return Ok(plan);
-    }
     for (side, listener) in [(&PROXY, &mut plan.proxy), (&ADMIN, &mut plan.admin)] {
         if leaves_loopback(listener) && listener.tls.is_none() {
-            if let Some((tls, generated)) =
-                ask_tls(side, listener.listen, &plan.tls_dir, input, output)?
-            {
-                listener.tls = Some(tls);
-                listener.generated = generated;
-            }
+            listener.tls = ask_tls(side, listener.listen, input, output)?;
         }
     }
     Ok(plan)
@@ -316,25 +224,23 @@ fn ask_address(
     }
 }
 
-/// One listener's TLS answer: `None` for plain HTTP, else the pair and whether `run` generates it.
+/// One listener's TLS answer off loopback: `files` and then the two paths, or `none` (the default) for plain HTTP.
 fn ask_tls(
     side: &Side,
     listen: SocketAddr,
-    tls_dir: &Path,
     input: &mut dyn BufRead,
     output: &mut dyn Write,
-) -> Result<Option<(ListenerTls, bool)>, InitError> {
+) -> Result<Option<ListenerTls>, InitError> {
     loop {
         prompt(
             output,
             &format!(
-                "{} on {listen} leaves loopback; tls: self-signed, files, or none for plain HTTP [none]: ",
+                "{} on {listen} leaves loopback; tls: files, or none for plain HTTP [none]: ",
                 side.name
             ),
         )?;
         match answer(input, output, side.asked_choice)?.as_str() {
             "" | "none" => return Ok(None),
-            "self-signed" => return Ok(Some((generated_pair(side.name, tls_dir), true))),
             "files" => {
                 let cert_file = ask_path(
                     &format!("{} certificate file, PEM, leaf first: ", side.name),
@@ -348,15 +254,12 @@ fn ask_tls(
                     input,
                     output,
                 )?;
-                return Ok(Some((
-                    ListenerTls {
-                        cert_file,
-                        key_file,
-                    },
-                    false,
-                )));
+                return Ok(Some(ListenerTls {
+                    cert_file,
+                    key_file,
+                }));
             }
-            _ => say(output, "answer self-signed, files or none")?,
+            _ => say(output, "answer files or none")?,
         }
     }
 }
@@ -405,17 +308,11 @@ fn answer(
     Ok(line.trim().to_string())
 }
 
-/// The flags and the defaults as a plan; a listener off loopback with no pair plans what `--tls` says, plain HTTP
-/// without it, until `ask`, on a terminal, offers it a choice.
+/// The flags and the defaults as a plan; a listener off loopback with no pair plans plain HTTP until `ask`, on a
+/// terminal, offers it a choice.
 pub fn plan(config_path: &Path, args: &InitArgs) -> Result<Plan, InitError> {
     let config_path = absolute(config_path)?;
     let dir = parent_of(&config_path).to_path_buf();
-    let tls_dir = dir.join("tls");
-    let tls_in_file = if args.container {
-        PathBuf::from(CONTAINER_TLS_DIR)
-    } else {
-        tls_dir.clone()
-    };
     let given = |flag: &Option<PathBuf>, default: PathBuf| match flag {
         Some(path) => absolute(path),
         None => Ok(default),
@@ -439,8 +336,6 @@ pub fn plan(config_path: &Path, args: &InitArgs) -> Result<Plan, InitError> {
             args.admin_listen,
             (&args.admin_cert, &args.admin_key),
             args.container,
-            args.tls,
-            &tls_in_file,
         )?,
         config_path,
         container: args.container,
@@ -453,24 +348,18 @@ pub fn plan(config_path: &Path, args: &InitArgs) -> Result<Plan, InitError> {
             args.proxy_listen,
             (&args.proxy_cert, &args.proxy_key),
             args.container,
-            args.tls,
-            &tls_in_file,
         )?,
         secret_env: args.secret_env.clone(),
-        tls_dir,
     };
     Ok(plan)
 }
 
-/// One listener from its flags: the pair flags' pair; else, off loopback, the pair `run` generates under
-/// `tls_in_file` for `self-signed` or the refusal for `files`; else no `tls` line.
+/// One listener from its flags: the pair flags' pair with both paths made absolute, else no `tls` line.
 fn listener(
     side: &Side,
     listen: Option<SocketAddr>,
     pair: (&Option<PathBuf>, &Option<PathBuf>),
     container: bool,
-    mode: Option<TlsMode>,
-    tls_in_file: &Path,
 ) -> Result<Listener, InitError> {
     let default = if container {
         side.container
@@ -478,41 +367,15 @@ fn listener(
         side.loopback
     };
     let listen = listen.unwrap_or(default);
-    let off_loopback = !listen.ip().is_loopback();
-    let (tls, generated) = match (pair, mode) {
-        ((Some(cert_file), Some(key_file)), _) => (
-            Some(ListenerTls {
-                cert_file: absolute(cert_file)?,
-                key_file: absolute(key_file)?,
-            }),
-            false,
-        ),
-        (_, Some(TlsMode::SelfSigned)) if off_loopback => {
-            (Some(generated_pair(side.name, tls_in_file)), true)
-        }
-        (_, Some(TlsMode::Files)) if off_loopback => {
-            return Err(InitError::FilesNeedPair {
-                side: side.name,
-                listen,
-            })
-        }
+    let tls = match pair {
+        (Some(cert_file), Some(key_file)) => Some(ListenerTls {
+            cert_file: absolute(cert_file)?,
+            key_file: absolute(key_file)?,
+        }),
         // The container network is plain HTTP by default; the host decides what it publishes.
-        _ => (None, false),
+        _ => None,
     };
-    Ok(Listener {
-        listen,
-        tls,
-        generated,
-    })
-}
-
-/// The names a generated pair is read through under `dir`, `<listener>/cert.pem` and `<listener>/key.pem`.
-fn generated_pair(name: &str, dir: &Path) -> ListenerTls {
-    let (cert_file, key_file) = selfsigned::leaf_files(dir, name);
-    ListenerTls {
-        cert_file,
-        key_file,
-    }
+    Ok(Listener { listen, tls })
 }
 
 fn leaves_loopback(listener: &Listener) -> bool {
@@ -774,51 +637,6 @@ fn refuse_existing(plan: &Plan) -> Result<(), InitError> {
             }
         }
     }
-    if generates(plan) {
-        refuse_tls(plan)?;
-    }
-    Ok(())
-}
-
-/// The refusals of a run that generates certificate material: a storage key or environment file on a path the
-/// material takes, a leaf's link that exists, and a CA under `tls_dir` that is there but is not one the run reuses.
-/// Each leaf's link and the CA's two files are published under names that must not exist, which covers whatever
-/// lands between this check and the write.
-fn refuse_tls(plan: &Plan) -> Result<(), InitError> {
-    let links: Vec<PathBuf> = generated(plan)
-        .map(|(name, _)| plan.tls_dir.join(name))
-        .collect();
-    let mut taken = vec![plan.tls_dir.join(CA_CERT), plan.tls_dir.join(CA_KEY)];
-    taken.extend(links.iter().cloned());
-    for (what, path) in [
-        ("storage key", Some(&plan.key_file)),
-        ("environment file", plan.env_file.as_ref()),
-    ] {
-        let Some(path) = path else {
-            continue;
-        };
-        // Another file may sit in `tls_dir`, but not on it, on a path the material takes, or under one.
-        let overlap = std::iter::once(&plan.tls_dir)
-            .chain(&taken)
-            .find(|tls| path == *tls || tls.starts_with(path))
-            .or_else(|| taken.iter().find(|tls| path.starts_with(tls)));
-        if let Some(tls) = overlap {
-            return Err(InitError::OverlapsTls {
-                what,
-                path: path.clone(),
-                tls: tls.clone(),
-            });
-        }
-    }
-    for link in links {
-        if exists(&link)? {
-            return Err(InitError::PairExists { path: link });
-        }
-    }
-    selfsigned::read_ca(&plan.tls_dir).map_err(|error| InitError::Material {
-        what: format!("reading the CA under {}", plan.tls_dir.display()),
-        error,
-    })?;
     Ok(())
 }
 
@@ -869,9 +687,6 @@ fn write(
             });
         }
     }
-    if generates(plan) {
-        generate(plan, written)?;
-    }
     write_file(
         &plan.config_path,
         0o644,
@@ -884,114 +699,6 @@ fn write(
         hand_over(plan, &key_file, uid, gid, written)?;
     }
     Ok(())
-}
-
-fn generates(plan: &Plan) -> bool {
-    plan.proxy.generated || plan.admin.generated
-}
-
-/// The listeners whose pair `run` generates, by name, in the order the file lists them.
-fn generated(plan: &Plan) -> impl Iterator<Item = (&'static str, &Listener)> {
-    [(PROXY.name, &plan.proxy), (ADMIN.name, &plan.admin)]
-        .into_iter()
-        .filter(|(_, listener)| listener.generated)
-}
-
-/// The CA under `tls_dir`, reused when a complete one is there so the clients keep their anchor, and a leaf per
-/// generated listener. A CA that is there but half, unparseable, mismatched or expired refuses rather than being
-/// replaced, since clients may trust it.
-fn generate(plan: &Plan, written: &mut Vec<Landed>) -> Result<(), InitError> {
-    let material = |error| InitError::Material {
-        what: format!(
-            "writing the certificate material under {}",
-            plan.tls_dir.display()
-        ),
-        error,
-    };
-    let existed = exists(&plan.tls_dir)?;
-    create_private_dir(&plan.tls_dir)
-        .map_err(io_error(format!("creating {}", plan.tls_dir.display())))?;
-    if !existed {
-        written.push(Landed {
-            dir: true,
-            path: plan.tls_dir.clone(),
-        });
-    }
-    if plan.container {
-        // The container's uid traverses the bind-mounted directory to the certificates; `ca.key` and each leaf key
-        // stay 0600 and the caller's, so the wider directory opens nothing secret.
-        set_mode(&plan.tls_dir, None, None, 0o755).map_err(io_error(format!(
-            "setting the mode of {}",
-            plan.tls_dir.display()
-        )))?;
-    }
-    let hostname = selfsigned::hostname();
-    let ca = match selfsigned::read_ca(&plan.tls_dir).map_err(material)? {
-        Some(ca) => ca,
-        None => {
-            let mut permitted: Vec<SanName> = generated(plan)
-                .flat_map(|(_, listener)| selfsigned::leaf_names(listener.listen))
-                .collect();
-            permitted.sort();
-            permitted.dedup();
-            let ca = selfsigned::write_ca(
-                &plan.tls_dir,
-                &hostname,
-                &permitted,
-                Validity::days_from_now(CA_LIFETIME_DAYS),
-            )
-            .map_err(material)?;
-            for name in [selfsigned::CA_CERT, selfsigned::CA_KEY] {
-                written.push(Landed {
-                    dir: false,
-                    path: plan.tls_dir.join(name),
-                });
-            }
-            ca
-        }
-    };
-    let leaves: Vec<(&str, Vec<SanName>)> = generated(plan)
-        .map(|(name, listener)| (name, selfsigned::leaf_names(listener.listen)))
-        .collect();
-    let modes = if plan.container {
-        LeafModes::Mounted
-    } else {
-        LeafModes::Private
-    };
-    let (pairs, stopped) = match selfsigned::write_leaves(
-        &plan.tls_dir,
-        &ca,
-        &hostname,
-        &leaves,
-        Validity::days_from_now(LEAF_LIFETIME_DAYS),
-        modes,
-    ) {
-        Ok(placed) => (placed, None),
-        Err(Unfinished { error, placed }) => (placed, Some(error)),
-    };
-    for leaf in pairs {
-        record_leaf(&leaf, written);
-    }
-    stopped.map_or(Ok(()), |error| Err(material(error)))
-}
-
-/// A live leaf as this run created it: its generation directory, the two files in it, then the link, so `undo`
-/// removes the link first and the directory last.
-fn record_leaf(leaf: &Placed, written: &mut Vec<Landed>) {
-    written.push(Landed {
-        dir: true,
-        path: leaf.generation.clone(),
-    });
-    for name in [LEAF_CERT, LEAF_KEY] {
-        written.push(Landed {
-            dir: false,
-            path: leaf.generation.join(name),
-        });
-    }
-    written.push(Landed {
-        dir: false,
-        path: leaf.link.clone(),
-    });
 }
 
 fn create_missing(dir: &Path, written: &mut Vec<Landed>) -> Result<(), InitError> {
@@ -1055,46 +762,7 @@ fn hand_over(
     for dir in owned_dirs(plan, written) {
         std::os::unix::fs::lchown(dir, Some(uid), Some(gid)).map_err(handed(dir))?;
     }
-    if generates(plan) {
-        hand_over_pair(plan, gid)?;
-    }
     Ok(())
-}
-
-/// A generated pair as the unit wants an operator's: the directory and each leaf's generation directory `0750` and
-/// each leaf's key `0640`, all root's with the owner's group, each leaf `0644`. The service reads its leaf and key
-/// through the group and never signs, so `ca.pem` and `ca.key` stay root's as written.
-fn hand_over_pair(plan: &Plan, gid: u32) -> Result<(), InitError> {
-    let set = |path: &Path, group: Option<u32>, mode: u32| {
-        set_mode(path, Some(0), group, mode)
-            .map_err(io_error(format!("handing {} to the owner", path.display())))
-    };
-    set(&plan.tls_dir, Some(gid), 0o750)?;
-    for (name, _) in generated(plan) {
-        // The generation by its own name: `set_mode` refuses a link as the last component.
-        let link = plan.tls_dir.join(name);
-        let generation = std::fs::read_link(&link)
-            .map(|target| plan.tls_dir.join(target))
-            .map_err(io_error(format!("reading {}", link.display())))?;
-        set(&generation, Some(gid), 0o750)?;
-        set(&generation.join(LEAF_CERT), None, 0o644)?;
-        set(&generation.join(LEAF_KEY), Some(gid), 0o640)?;
-    }
-    Ok(())
-}
-
-/// Changes `path`'s owner where one is given, then its mode, through a descriptor opened without following a link in
-/// the last component, so a link swapped in there cannot carry the change to another file. The parents are followed;
-/// the documented paths sit under root-owned directories.
-fn set_mode(path: &Path, uid: Option<u32>, gid: Option<u32>, mode: u32) -> std::io::Result<()> {
-    let file = OpenOptions::new()
-        .read(true)
-        .custom_flags(libc::O_NOFOLLOW)
-        .open(path)?;
-    if uid.is_some() || gid.is_some() {
-        std::os::unix::fs::fchown(&file, uid, gid)?;
-    }
-    file.set_permissions(Permissions::from_mode(mode))
 }
 
 /// The directories `--owner` receives: the data directory when this run created it, then every other directory this
@@ -1143,15 +811,6 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
         let Ok(metadata) = std::fs::symlink_metadata(&landed.path) else {
             continue;
         };
-        if metadata.file_type().is_symlink() {
-            let target = std::fs::read_link(&landed.path).unwrap_or_default();
-            text.push_str(&format!(
-                "linked {} to {}\n",
-                landed.path.display(),
-                target.display()
-            ));
-            continue;
-        }
         let (mode, owner) = (metadata.mode() & 0o777, user_name(metadata.uid()));
         let line = match landed.dir {
             true => format!(
@@ -1164,12 +823,6 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
             ),
         };
         text.push_str(&line);
-    }
-    if generates(plan) {
-        text.push_str(&format!(
-            "clients must trust {}; copy it to each client and set NODE_EXTRA_CA_CERTS to the copy\n",
-            plan.tls_dir.join(CA_CERT).display()
-        ));
     }
     match &plan.env_file {
         Some(env_file) => text.push_str(&format!(
@@ -1187,16 +840,6 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
         text.push_str(
             "remaining: own storage.key by uid 65532 at mode 0400; copy deploy/compose.yaml with the image tag set",
         );
-        if generates(plan) {
-            // The leaf keys by name: `ca.key` sits in the mounted directory too, and the container never signs.
-            let keys: Vec<String> = generated(plan)
-                .map(|(name, _)| format!("tls/{name}/{LEAF_KEY}"))
-                .collect();
-            text.push_str(&format!(
-                "; mount ./tls read-only at /etc/phoebis/tls and own {} by uid 65532 at mode 0400",
-                keys.join(" and ")
-            ));
-        }
         text.push('\n');
         text.push_str("next: docker compose run --rm phoebis check-config\n");
     } else {
@@ -1206,145 +849,6 @@ fn summary(plan: &Plan, written: &[Landed]) -> String {
         ));
     }
     text
-}
-
-/// `Some` when `--tls self-signed` meets an existing bootstrap file, read through `load_unresolved`; `None` when the
-/// file does not exist (a first run) or the flag is absent (the refusal of an existing file follows in `refuse`).
-/// Refuses any other flag beside `--config` and `--tls`, and a file that names no pair under `tls_dir` or, for the
-/// container shape (the storage key at `CONTAINER_KEY_FILE`), under the mount of it at `CONTAINER_TLS_DIR`.
-pub fn renewal(config_path: &Path, args: &InitArgs) -> Result<Option<Renewal>, InitError> {
-    if args.tls != Some(TlsMode::SelfSigned) {
-        return Ok(None);
-    }
-    let config_path = absolute(config_path)?;
-    if !exists(&config_path)? {
-        return Ok(None);
-    }
-    if !tls_alone(args) {
-        return Err(InitError::RenewalTakesNoFlag);
-    }
-    let config = crate::config::load_unresolved(&config_path)
-        .map_err(|error| InitError::Unreadable { error })?;
-    let tls_dir = parent_of(&config_path).join("tls");
-    // Both halves must be the ones `init` writes: a key an operator moved elsewhere would not match a new leaf. A
-    // container's file names the mount of `tls/`, whose files the renewal writes on the host; the storage key's
-    // secret path marks that file, so a host file naming an operator's pair at the mount's path is not taken for one.
-    let container = config.storage.encryption_key_file.as_path() == Path::new(CONTAINER_KEY_FILE);
-    let mounted = Path::new(CONTAINER_TLS_DIR);
-    let listeners: Vec<(&'static str, SocketAddr)> = [
-        (PROXY.name, config.proxy.listen, &config.proxy.tls),
-        (ADMIN.name, config.admin.listen, &config.admin.tls),
-    ]
-    .into_iter()
-    .filter(|(name, _, tls)| {
-        tls.as_ref().is_some_and(|tls| {
-            *tls == generated_pair(name, &tls_dir)
-                || (container && *tls == generated_pair(name, mounted))
-        })
-    })
-    .map(|(name, listen, _)| (name, listen))
-    .collect();
-    if listeners.is_empty() {
-        return Err(InitError::NothingToRenew {
-            path: config_path,
-            dir: tls_dir,
-        });
-    }
-    Ok(Some(Renewal {
-        config_path,
-        tls_dir,
-        listeners,
-    }))
-}
-
-/// Whether `args` carries nothing beside `--tls`, the one flag a renewal takes. The destructuring names every field,
-/// so a flag added later is a compile error here until the renewal decides about it.
-fn tls_alone(args: &InitArgs) -> bool {
-    let InitArgs {
-        admin_listen,
-        admin_cert,
-        admin_key,
-        container,
-        data_dir,
-        env_file,
-        key_file,
-        non_interactive,
-        owner,
-        proxy_listen,
-        proxy_cert,
-        proxy_key,
-        secret_env,
-        tls: _,
-    } = args;
-    admin_listen.is_none()
-        && admin_cert.is_none()
-        && admin_key.is_none()
-        && !container
-        && data_dir.is_none()
-        && env_file.is_none()
-        && key_file.is_none()
-        && !non_interactive
-        && owner.is_none()
-        && proxy_listen.is_none()
-        && proxy_cert.is_none()
-        && proxy_key.is_none()
-        && secret_env == DEFAULT_SECRET_ENV
-}
-
-/// Writes the renewal's leaves under the existing CA, each new generation keeping the owner and mode of the one it
-/// replaces, and prints one line per leaf and the stop-and-start line on `report`. The run holds the renewal lock under
-/// `tls_dir` throughout, so a second renewal refuses rather than writing beside it. Every leaf is staged and checked
-/// before any goes live, and a live certificate the CA did not sign is refused, so a refused renewal leaves every
-/// pair as it was.
-pub fn renew(renewal: &Renewal, report: &mut dyn Write) -> Result<(), InitError> {
-    let material = |error| InitError::Material {
-        what: format!("renewing the leaves under {}", renewal.tls_dir.display()),
-        error,
-    };
-    let ca = selfsigned::read_ca(&renewal.tls_dir)
-        .and_then(|ca| {
-            ca.ok_or_else(|| MaterialError::NoCa {
-                dir: renewal.tls_dir.clone(),
-            })
-        })
-        .map_err(material)?;
-    let _lock = selfsigned::lock_renewal(&renewal.tls_dir).map_err(material)?;
-    let leaves: Vec<(&str, Vec<SanName>)> = renewal
-        .listeners
-        .iter()
-        .map(|(name, listen)| (*name, selfsigned::leaf_names(*listen)))
-        .collect();
-    let (pairs, stopped) = match selfsigned::write_leaves(
-        &renewal.tls_dir,
-        &ca,
-        &selfsigned::hostname(),
-        &leaves,
-        Validity::days_from_now(LEAF_LIFETIME_DAYS),
-        LeafModes::KeepLive,
-    ) {
-        Ok(placed) => (placed, None),
-        Err(Unfinished { error, placed }) => (placed, Some(error)),
-    };
-    let ca_file = renewal.tls_dir.join(CA_CERT);
-    for (cert_file, key_file) in pairs.iter().map(Placed::files) {
-        writeln!(
-            report,
-            "wrote {} and {} under the CA {}",
-            cert_file.display(),
-            key_file.display(),
-            ca_file.display()
-        )
-        .map_err(io_error("writing the summary".to_string()))?;
-    }
-    if let Some(error) = stopped {
-        return Err(material(error));
-    }
-    writeln!(
-        report,
-        "next: stop and start the router, which reads the pair at start"
-    )
-    .and_then(|()| report.flush())
-    .map_err(io_error("writing the summary".to_string()))
 }
 
 fn admin_secret() -> String {
@@ -1454,8 +958,6 @@ mod tests {
                 "--admin-key",
                 "k.pem",
             ]),
-            args(&["--tls", "self-signed", "--proxy-listen", "0.0.0.0:8317"]),
-            args(&["--container", "--tls", "self-signed"]),
         ];
         for shape in &shapes {
             let plan = plan(&config, shape).unwrap();
@@ -1504,14 +1006,6 @@ mod tests {
                 ]),
             ),
             ("container", args(&["--container"])),
-            (
-                "self-signed",
-                args(&["--tls", "self-signed", "--proxy-listen", "0.0.0.0:8317"]),
-            ),
-            (
-                "container-self-signed",
-                args(&["--container", "--tls", "self-signed"]),
-            ),
         ];
         for (name, shape) in &shapes {
             let config = dir.path().join(name).join("config.yaml");
@@ -1567,25 +1061,6 @@ mod tests {
                 if cert_file.is_absolute() && key_file.is_absolute()),
             "{off:?}"
         );
-        let pair = |dir: &Path, name: &str| {
-            Some(ListenerTls {
-                cert_file: dir.join(name).join("cert.pem"),
-                key_file: dir.join(name).join("key.pem"),
-            })
-        };
-        let generated =
-            crate::config::load_unresolved(&dir.path().join("self-signed").join("config.yaml"))
-                .unwrap();
-        let tls = dir.path().join("self-signed").join("tls");
-        assert_eq!(generated.proxy.tls, pair(&tls, "proxy"));
-        assert_eq!(generated.admin.tls, None);
-        let container = crate::config::load_unresolved(
-            &dir.path().join("container-self-signed").join("config.yaml"),
-        )
-        .unwrap();
-        let inside = Path::new("/etc/phoebis/tls");
-        assert_eq!(container.proxy.tls, pair(inside, "proxy"));
-        assert_eq!(container.admin.tls, pair(inside, "admin"));
     }
 
     #[test]
@@ -1646,7 +1121,7 @@ mod tests {
     }
 
     #[test]
-    fn the_prompt_offers_self_signed_files_or_none_and_self_signed_plans_the_pair() {
+    fn the_prompt_offers_files_or_none() {
         let dir = tempfile::tempdir().unwrap();
         let flags = args(&[]);
         let defaults = plan(&dir.path().join("config.yaml"), &flags).unwrap();
@@ -1654,211 +1129,29 @@ mod tests {
         let asked = ask(
             &flags,
             &defaults,
-            &mut "0.0.0.0:8317\n0.0.0.0:8081\nbogus\nself-signed\nfiles\ncert.pem\nkey.pem\n"
-                .as_bytes(),
+            &mut "0.0.0.0:8317\n0.0.0.0:8081\nbogus\nfiles\ncert.pem\nkey.pem\nnone\n".as_bytes(),
             &mut output,
         )
         .unwrap();
-        let tls = dir.path().join("tls");
-        assert_eq!(
-            asked.proxy.tls,
-            Some(ListenerTls {
-                cert_file: tls.join("proxy").join("cert.pem"),
-                key_file: tls.join("proxy").join("key.pem"),
-            })
-        );
-        assert!(asked.proxy.generated, "{asked:?}");
         let here = std::env::current_dir().unwrap();
         assert_eq!(
-            asked.admin.tls,
+            asked.proxy.tls,
             Some(ListenerTls {
                 cert_file: here.join("cert.pem"),
                 key_file: here.join("key.pem"),
             })
         );
-        assert!(!asked.admin.generated, "{asked:?}");
-        let output = String::from_utf8(output).unwrap();
-        assert!(
-            output.contains("tls: self-signed, files, or none for plain HTTP [none]: "),
-            "{output}"
-        );
-        assert!(
-            output.contains("answer self-signed, files or none"),
-            "{output}"
-        );
-    }
-
-    #[test]
-    fn the_tls_flag_answers_the_question_so_ask_does_not_put_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.yaml");
-        let generated = Some(ListenerTls {
-            cert_file: dir.path().join("tls/proxy/cert.pem"),
-            key_file: dir.path().join("tls/proxy/key.pem"),
-        });
-        let flags = args(&["--tls", "self-signed", "--proxy-listen", "0.0.0.0:8317"]);
-        let defaults = plan(&config, &flags).unwrap();
-        let mut output = Vec::new();
-        let asked = ask(&flags, &defaults, &mut "\n".as_bytes(), &mut output).unwrap();
-        assert!(asked.proxy.generated, "{asked:?}");
-        assert_eq!(asked.proxy.tls, generated);
         assert_eq!(asked.admin.tls, None);
         let output = String::from_utf8(output).unwrap();
-        assert!(!output.contains("leaves loopback"), "{output}");
-
-        // An address the terminal answers takes the flag's answer, as a flagged one does.
-        let flags = args(&["--tls", "self-signed"]);
-        let defaults = plan(&config, &flags).unwrap();
-        let mut output = Vec::new();
-        let asked = ask(
-            &flags,
-            &defaults,
-            &mut "0.0.0.0:8317\n\n".as_bytes(),
-            &mut output,
-        )
-        .unwrap();
-        assert!(asked.proxy.generated, "{asked:?}");
-        assert_eq!(asked.proxy.tls, generated);
-        let output = String::from_utf8(output).unwrap();
-        assert!(!output.contains("leaves loopback"), "{output}");
-    }
-
-    #[test]
-    fn tls_files_without_a_pair_refuses_naming_the_side_and_the_address() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.yaml");
-        let error = plan(
-            &config,
-            &args(&["--tls", "files", "--proxy-listen", "0.0.0.0:8317"]),
-        )
-        .unwrap_err();
-        assert!(
-            matches!(error, InitError::FilesNeedPair { .. }),
-            "{error:?}"
-        );
-        assert_eq!(
-            error.to_string(),
-            "--tls files needs --proxy-cert and --proxy-key for proxy on 0.0.0.0:8317"
-        );
-        let planned = plan(
-            &config,
-            &args(&[
-                "--tls",
-                "files",
-                "--proxy-listen",
-                "0.0.0.0:8317",
-                "--proxy-cert",
-                "c.pem",
-                "--proxy-key",
-                "k.pem",
-            ]),
-        )
-        .unwrap();
-        let here = std::env::current_dir().unwrap();
-        assert_eq!(
-            planned.proxy,
-            Listener {
-                listen: "0.0.0.0:8317".parse().unwrap(),
-                tls: Some(ListenerTls {
-                    cert_file: here.join("c.pem"),
-                    key_file: here.join("k.pem"),
-                }),
-                generated: false,
-            }
-        );
-    }
-
-    #[test]
-    fn a_renewal_is_the_flag_against_an_existing_file_and_takes_no_other_flag() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.yaml");
-        let renew = args(&["--tls", "self-signed"]);
-        let generated = plan(
-            &config,
-            &args(&["--tls", "self-signed", "--proxy-listen", "0.0.0.0:8317"]),
-        )
-        .unwrap();
-        assert!(generated.proxy.generated, "{generated:?}");
-        // Before the file exists the flag asks for a first run.
-        assert_eq!(renewal(&config, &renew).unwrap(), None);
-        std::fs::write(&config, render(&generated)).unwrap();
-        assert_eq!(
-            renewal(&config, &renew).unwrap(),
-            Some(Renewal {
-                config_path: config.clone(),
-                tls_dir: dir.path().join("tls"),
-                listeners: vec![("proxy", "0.0.0.0:8317".parse().unwrap())],
-            })
-        );
-        let flagged = renewal(
-            &config,
-            &args(&["--tls", "self-signed", "--proxy-listen", "0.0.0.0:1"]),
-        );
-        assert!(
-            matches!(flagged, Err(InitError::RenewalTakesNoFlag)),
-            "{flagged:?}"
-        );
-        // Without the flag an existing file is `refuse`'s to refuse.
-        assert_eq!(renewal(&config, &args(&[])).unwrap(), None);
-
-        let plain_dir = dir.path().join("plain");
-        let plain = plain_dir.join("config.yaml");
-        std::fs::create_dir(&plain_dir).unwrap();
-        std::fs::write(&plain, render(&plan(&plain, &args(&[])).unwrap())).unwrap();
-        let error = renewal(&plain, &renew).unwrap_err();
-        assert!(
-            matches!(&error, InitError::NothingToRenew { path, dir }
-                if *path == plain && *dir == plain_dir.join("tls")),
-            "{error:?}"
-        );
-        assert_eq!(
-            error.to_string(),
-            format!(
-                "{} names no pair under {}; init --tls self-signed renews only the pairs it wrote",
-                plain.display(),
-                plain_dir.join("tls").display()
-            )
-        );
-    }
-
-    #[test]
-    fn a_container_file_renews_its_pairs_under_tls_beside_it() {
-        let dir = tempfile::tempdir().unwrap();
-        let config = dir.path().join("config.yaml");
-        let container = plan(&config, &args(&["--container", "--tls", "self-signed"])).unwrap();
-        std::fs::write(&config, render(&container)).unwrap();
-        // The file names the container's mount at /etc/phoebis/tls; the pairs behind it sit in tls/ beside the file.
-        assert_eq!(
-            renewal(&config, &args(&["--tls", "self-signed"])).unwrap(),
-            Some(Renewal {
-                config_path: config.clone(),
-                tls_dir: dir.path().join("tls"),
-                listeners: vec![
-                    ("proxy", "0.0.0.0:8317".parse().unwrap()),
-                    ("admin", "0.0.0.0:8081".parse().unwrap()),
-                ],
-            })
-        );
-
-        // A host file naming an operator's pair at the mount's path is no container's file, so it names no pair.
-        let host_dir = dir.path().join("host");
-        let host = host_dir.join("config.yaml");
-        std::fs::create_dir(&host_dir).unwrap();
-        let flags = args(&[
-            "--proxy-listen",
-            "0.0.0.0:8317",
-            "--proxy-cert",
-            "/etc/phoebis/tls/proxy/cert.pem",
-            "--proxy-key",
-            "/etc/phoebis/tls/proxy/key.pem",
-        ]);
-        std::fs::write(&host, render(&plan(&host, &flags).unwrap())).unwrap();
-        let error = renewal(&host, &args(&["--tls", "self-signed"])).unwrap_err();
-        assert!(
-            matches!(&error, InitError::NothingToRenew { path, dir }
-                if *path == host && *dir == host_dir.join("tls")),
-            "{error:?}"
-        );
+        for side in ["proxy on 0.0.0.0:8317", "admin on 0.0.0.0:8081"] {
+            assert!(
+                output.contains(&format!(
+                    "{side} leaves loopback; tls: files, or none for plain HTTP [none]: "
+                )),
+                "{output}"
+            );
+        }
+        assert!(output.contains("answer files or none\n"), "{output}");
     }
 
     #[test]
@@ -1908,7 +1201,6 @@ mod tests {
             Listener {
                 listen: "0.0.0.0:8081".parse().unwrap(),
                 tls: None,
-                generated: false,
             }
         );
         assert!(std::fs::read_dir(dir.path()).unwrap().next().is_none());
