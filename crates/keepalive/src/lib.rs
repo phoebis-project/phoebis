@@ -2,6 +2,7 @@
 //! prompt cache expires, through the relay's own failover loop, so a session that went idle reads warm when it
 //! comes back.
 
+mod breakeven;
 mod config;
 mod engine;
 mod events;
@@ -12,9 +13,10 @@ mod savings;
 mod usage;
 mod view;
 
+pub use breakeven::{break_even_ms, factors_for, resolve, Ceilings, Factors};
 pub use config::{
-    KeepaliveLimits, KeepalivePolicy, LimitsError, PolicyError, FIVE_MINUTES_MS, LEASE_MS,
-    LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
+    KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
+    LEASE_MS, LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
 };
 pub use engine::{
     guard, spawn_observer, AgentState, AgentStatus, Engine, EngineParts, EngineStats, Funding,

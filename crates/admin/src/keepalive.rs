@@ -1,12 +1,10 @@
 //! The keepalive views: every retained recipe, and the overview tiles the sessions page shows.
 
-use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use axum::extract::State;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_keepalive::KeepalivePolicy;
 use phoebis_ledger::{hour_of, read_rollups, RollupSelect};
 use serde_json::json;
 
@@ -51,20 +49,9 @@ pub(crate) async fn overview(State(state): State<Arc<AdminState>>) -> Response {
             }
         }
     }
-    let spent: BTreeMap<String, f64> = state.keepalive.spent_today();
-    let mut cost_today = Vec::new();
-    if let Ok(pools) = state.store.pools() {
-        for pool in pools {
-            let policy = KeepalivePolicy::from_json(&pool.keepalive_json);
-            if policy.enabled {
-                cost_today.push(json!({ "cap_usd": policy.probe_cost_cap_usd_per_day, "pool_id": pool.id, "usd": spent.get(&pool.id).copied().unwrap_or(0.0) }));
-            }
-        }
-    }
     Json(json!({
         "agents": state.keepalive.agent_counts(),
         "bus_gaps": state.keepalive.stats().bus_gaps,
-        "cost_today": cost_today,
         "expired_between_turns_24h": expired,
         "net_saved_7d_usd": net,
         "probes_24h": probes,

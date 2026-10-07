@@ -3,7 +3,7 @@
 //! time and the idle limits come from the pool's tuning.
 mod common;
 use common::*;
-use phoebis_keepalive::{Event, KeepalivePolicy, Reason, LEASE_MS};
+use phoebis_keepalive::{Event, KeepalivePolicy, KeepaliveTiming, Reason, LEASE_MS};
 use phoebis_ledger::{
     hour_of, member_spends, read_rollups, AttemptRecord, BudgetedMember, PriceTable, Record,
     RequestRecord, RollupSelect,
@@ -216,10 +216,10 @@ async fn a_hold_lifted_after_the_expiry_sends_no_probe() {
 async fn a_retry_re_armed_past_the_expiry_is_held_under_expired_and_sends_no_probe() {
     let mut r = armed(RigSpec {
         accounts: vec![api_key("a", A, 0)],
-        policy: KeepalivePolicy {
-            retry_seconds: 60,
-            retry_max_seconds: 60,
-            ..RigSpec::default().policy
+        timing: KeepaliveTiming {
+            retry_ms: 60_000,
+            retry_max_ms: 60_000,
+            ..RigSpec::default().timing
         },
         ..RigSpec::default()
     })
@@ -841,9 +841,9 @@ async fn a_budget_crossed_between_the_gate_and_the_selection_holds_the_probe_and
 #[tokio::test]
 async fn a_probe_refused_for_an_unknown_budget_retries_once_the_ledger_recovers() {
     let mut r = armed(RigSpec {
-        policy: KeepalivePolicy {
-            retry_seconds: 10,
-            ..RigSpec::default().policy
+        timing: KeepaliveTiming {
+            retry_ms: 10_000,
+            ..RigSpec::default().timing
         },
         ..RigSpec::default()
     })
@@ -1045,41 +1045,6 @@ async fn a_one_hour_recipe_holds_under_affinity_too_short_on_a_thirty_minute_pin
     r.advance(3_240_000 - 270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-}
-
-#[tokio::test]
-async fn turning_warm_subagents_off_drops_an_armed_subagent_recipe_at_the_gate() {
-    let mut r = armed(RigSpec::default()).await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub-1".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    r.observe("sub-1").await;
-    assert_eq!(r.status("sub-1").reason, Reason::Scheduled);
-    let mut pool = r.h.store.pool("main").unwrap().unwrap();
-    pool.keepalive_json = serde_json::to_string(&KeepalivePolicy {
-        warm_subagents: false,
-        ..RigSpec::default().policy
-    })
-    .unwrap();
-    r.h.store
-        .update_pool(&pool, pool.updated_at, "test")
-        .unwrap();
-    r.h.router.reload().await.unwrap();
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("sub-1").reason, r.status("sub-1").probes),
-        (Reason::SubagentsOff, 0),
-        "dropped at the gate, no paid probe"
-    );
-    assert_eq!(
-        r.status("main").probes,
-        1,
-        "the main agent's recipe is untouched"
-    );
 }
 
 #[tokio::test]
@@ -1363,51 +1328,35 @@ async fn a_pin_the_router_moved_on_the_agents_own_request_moves_the_next_probe()
 }
 
 #[tokio::test]
-async fn the_due_time_follows_the_pools_lead_and_jitter() {
+async fn the_due_time_follows_the_timings_lead_and_jitter() {
+    let timing = KeepaliveTiming {
+        lead_5m_ms: 90_000,
+        jitter_5m_ms: 10_000,
+        lead_1h_ms: 600_000,
+        jitter_1h_ms: 0,
+        ..KeepaliveTiming::default()
+    };
     let mut r = armed(RigSpec {
-        policy: KeepalivePolicy {
-            lead_seconds_5m: 60,
-            jitter_seconds_5m: 5,
-            ..RigSpec::default().policy
-        },
+        timing,
         ..RigSpec::default()
     })
     .await;
     let start = r.now();
     let due = r.status("main").next_probe_at.unwrap();
     assert!(
-        (start + 235_000..=start + 240_000).contains(&due),
-        "cache start plus 240 s less at most 5 s of jitter: {}",
+        (start + 200_000..=start + 210_000).contains(&due),
+        "cache start plus 210 s less at most 10 s of jitter: {}",
         due - start
     );
-    r.advance(234_000);
+    r.advance(199_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 0, "not yet due");
-    r.advance(6_000);
+    r.advance(11_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    // A tuning edit reaches the next due time on the next tick.
-    let mut pool = r.h.store.pool("main").unwrap().unwrap();
-    pool.keepalive_json = serde_json::to_string(&KeepalivePolicy {
-        lead_seconds_5m: 120,
-        jitter_seconds_5m: 0,
-        ..RigSpec::default().policy
-    })
-    .unwrap();
-    r.h.store
-        .update_pool(&pool, pool.updated_at, "test")
-        .unwrap();
-    r.h.router.reload().await.unwrap();
-    let probed_at = r.now();
-    r.step().await;
-    assert_eq!(r.status("main").next_probe_at, Some(probed_at + 180_000));
     // A one-hour entry takes the one-hour lead.
     let r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            lead_seconds_1h: 360,
-            jitter_seconds_1h: 0,
-            ..RigSpec::default().policy
-        },
+        timing,
         ..RigSpec::default()
     })
     .await;
@@ -1427,7 +1376,7 @@ async fn the_due_time_follows_the_pools_lead_and_jitter() {
     ));
     assert_eq!(
         r.status("main").next_probe_at,
-        Some(r.now() + 3_600_000 - 360_000)
+        Some(r.now() + 3_600_000 - 600_000)
     );
 }
 

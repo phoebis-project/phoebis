@@ -199,8 +199,8 @@ async function atRest() {
 }
 
 /**
- * The grouped dialog on a mock-only fixture that carries the pool dialog's seventeen groups under five parents: the
- * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 22 entries without
+ * The grouped dialog on a mock-only fixture that carries the pool dialog's sixteen groups under five parents: the
+ * frame keeps its fixed size, no rail row wraps, no label is cut short and the rail holds all 21 entries without
  * scrolling either way at the pass's viewport. The two longest labels are read chosen, refused, and both, since the
  * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
@@ -257,7 +257,7 @@ async function groupedDialogFixture(theme) {
     measurements.push(`${theme} /fixtures/grouped-dialog ${state} ${JSON.stringify(read)}`);
     const sayIn = (what) => say(`${state}: ${what}`);
     if (read.frame.width !== 1040 || read.frame.height !== 752) sayIn(`the frame measures ${read.frame.width} by ${read.frame.height}, not 1040 by 752`);
-    if (read.groups !== 17 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 17 under 5`);
+    if (read.groups !== 16 || read.parents !== 5) sayIn(`the rail draws ${read.groups} groups under ${read.parents} parents, not 16 under 5`);
     if (read.wrapped.length) sayIn(`${read.wrapped.join(', ')} wraps onto a second line`);
     if (read.truncated.length) sayIn(`${read.truncated.join(', ')} is cut short by its ellipsis`);
     if (read.rail.scrollHeight > read.rail.clientHeight) sayIn(`the rail scrolls: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
@@ -755,10 +755,10 @@ async function poolCachingControls(theme) {
   pair.capture = (await dialog.evaluate(read)).capture;
   await railEntry(dialog, 'Keepalive').click();
   await settle();
-  // The subagent switch is drawn whatever keepalive reads; keepalive is turned on so the switch is compared live.
+  // The parked ceiling's switch is drawn whatever keepalive reads, and keepalive is turned on so it is compared live.
   const keepalive = toggle('Keep prompt caches warm');
   if ((await keepalive.count()) === 1 && (await keepalive.getAttribute('aria-checked')) === 'false' && (await keepalive.isEnabled())) await keepalive.click();
-  if ((await toggle('Also warm subagent caches').count()) !== 1) say('no subagent warming toggle');
+  if ((await toggle('Max parked').count()) !== 1) say('no parked ceiling toggle');
   const names = { capture: 'capture switch', diagnostics: 'cache diagnostics switch', main: 'metered main', marker: 'marker toggle', planMain: 'plan main', policy: 'policy toggle' };
   for (const [key, name] of Object.entries(names)) if (pair[key]) measurements.push(`${theme} /pools ${name} ${JSON.stringify(pair[key])}`);
   const compare = (a, b, keys) => {
@@ -1002,7 +1002,7 @@ async function poolCardLayout(theme) {
 }
 
 /** The pool dialog's groups in rail order. */
-const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
+const POOL_GROUP_LABELS = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
 /** The groups whose every field is expert, which the rail leaves out while the mode is off. */
 const POOL_EXPERT_GROUPS = ['Auto mode', 'Placement', 'Load shedding', 'Failover', 'Cache diagnostics'];
 /**
@@ -1019,12 +1019,10 @@ const POOL_DEPENDENTS = {
     },
   ],
   Keepalive: [
-    { switch: 'Keep prompt caches warm', controls: ['button[role="switch"][aria-label="Also warm subagent caches"]', 'button[role="switch"][aria-label="Stop when probes cost more than they save"]', 'input[aria-label="Grace probes after the net turns negative"]', 'button[role="switch"][aria-label="Daily probe cost cap ($)"]', 'input[aria-label="Daily probe cost cap in dollars"]'] },
-    { switch: 'Stop when probes cost more than they save', controls: ['input[aria-label="Grace probes after the net turns negative"]'] },
-    { switch: 'Daily probe cost cap ($)', controls: ['input[aria-label="Daily probe cost cap in dollars"]'] },
+    { switch: 'Keep prompt caches warm', controls: ['input[type="number"]', 'button[role="switch"][aria-label="Max parked"]', 'button[role="switch"][aria-label="Scheduled horizon"]'] },
+    { switch: 'Max parked', controls: ['input[aria-label="Max parked (s)"]'] },
+    { switch: 'Scheduled horizon', controls: ['input[aria-label="Scheduled horizon (s)"]'] },
   ],
-  // The switch sits in another group, which is chosen to turn it off and back.
-  'Probe tuning': [{ switch: 'Keep prompt caches warm', in: 'Keepalive', controls: ['input[type="number"]'] }],
   'Utilization thresholds': [
     { switch: 'Shed ahead of pace', controls: ['input[aria-label="Shed ahead of pace (%)"]'] },
     { switch: 'Select below utilization', controls: ['input[aria-label="Select below utilization (%)"]'], expert: true },
@@ -1126,8 +1124,8 @@ const disabledIn = (dialog, label, selectors) =>
 
 /**
  * The pool dialog in the plain view, then in the expert view: the frame and every group's layout at the pass's
- * viewport, then the frame and the rail's strips at 720 px. The plain rail holds twelve groups under the five parents,
- * the five expert-only groups left out, and the expert rail all seventeen. Every group on the rail is chosen and read
+ * viewport, then the frame and the rail's strips at 720 px. The plain rail holds eleven groups under the five parents,
+ * the five expert-only groups left out, and the expert rail all sixteen. Every group on the rail is chosen and read
  * while it shows: its height against the body's window, every cell against the two columns, every label beside its
  * switch or above its control, every control and hint as wide as its field, every dependent drawn and disabled while
  * its switch is off or its preset is not Custom, the warnings at their ends of their groups, no clipped select, nothing
@@ -1195,15 +1193,16 @@ async function poolDialogWalk(theme, mode) {
     }
     if (group === 'Keepalive') {
       if (warning && !warning.closes) found.push('its warning does not close the group');
-      const cap = await dialog.evaluate((el) => {
+      const ceilings = await dialog.evaluate((el) => {
         const section = [...el.querySelectorAll('section.dialog-group')].find((s) => s.getAttribute('aria-label') === 'Keepalive');
         const near = (a, b) => Math.abs(a - b) <= 1;
-        const switched = section?.querySelector('button[role="switch"][aria-label="Daily probe cost cap ($)"]')?.closest('.switched');
         const cells = section?.querySelector('.cells');
         const column = cells ? (cells.getBoundingClientRect().width - parseFloat(getComputedStyle(cells).columnGap)) / 2 : 0;
-        return !switched || cells?.lastElementChild !== switched.parentElement || !near(switched.getBoundingClientRect().width, column) ? `the cost cap is not the last field, one ${column} px column wide` : null;
+        const [parked, horizon] = ['Max parked', 'Scheduled horizon'].map((label) => section?.querySelector(`button[role="switch"][aria-label="${label}"]`)?.closest('.switched'));
+        const shaped = parked && horizon && cells?.lastElementChild === horizon.parentElement && near(parked.getBoundingClientRect().top, horizon.getBoundingClientRect().top);
+        return !shaped || ![parked, horizon].every((s) => near(s.getBoundingClientRect().width, column)) ? `the two switched ceilings are not the last row, each one ${column} px column wide` : null;
       });
-      if (cap) found.push(cap);
+      if (ceilings) found.push(ceilings);
     }
     return { found, line };
   };
@@ -1949,27 +1948,6 @@ async function recentRowsOneLine(theme) {
     if (cell.lines > 1) failures.push(`${theme} /: the Model cell "${cell.text}" wraps onto ${cell.lines} lines`);
     // The cell drops the id's prefix and date, so the title holds the shown text inside the whole id.
     if (cell.cut && !cell.title.includes(cell.text)) failures.push(`${theme} /: the cut Model cell "${cell.text}" does not carry its whole id on the title (${JSON.stringify(cell.title)})`);
-  }
-}
-
-/** The pool id and the amount are the two ends of one row, and a narrow tile used to run them together. */
-async function costCapRows(theme) {
-  const rows = await page.evaluate(() =>
-    [...document.querySelectorAll('.cost-caps__head')].flatMap((head) => {
-      const [left, right] = [...head.children];
-      if (!left || !right) return [];
-      const a = left.getBoundingClientRect();
-      const b = right.getBoundingClientRect();
-      return [{ gap: b.left - a.right, text: `${left.textContent} ${right.textContent}` }];
-    }),
-  );
-  if (!rows.length) {
-    failures.push(`${theme} /sessions: the probe cost tile drew no row to measure`);
-    return;
-  }
-  measurements.push(`${theme} /sessions cost caps ${JSON.stringify(rows)}`);
-  for (const row of rows.filter((r) => r.gap < 6)) {
-    failures.push(`${theme} /sessions: "${row.text}" leaves ${row.gap.toFixed(1)}px between the pool and the amount`);
   }
 }
 
@@ -3601,7 +3579,6 @@ try {
       if (view.path === '/observe') await liveFeed(theme);
       if (view.path === '/sessions') {
         await sessionsLead(theme);
-        await costCapRows(theme);
         await costReference(theme);
         await sessionsTableFits(theme);
         await sessionRowMenu(theme);

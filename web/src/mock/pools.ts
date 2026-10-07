@@ -1,4 +1,4 @@
-import { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
+import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
 import type { ApiKey, BudgetPeriod, Pool, PoolMember } from '@/api/types';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
@@ -39,7 +39,7 @@ const POOL_ROWS: PoolSeed[] = [
     minSharedPrefixTokens: POOL_AFFINITY_DEFAULTS.minSharedPrefixTokens,
     sessionPlacement: 'by_warm_prefix',
     subagentPlacement: 'by_cohort',
-    keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: true, costCapUsdPerDay: 4, warmSubagents: true },
+    keepalive: { ...KEEPALIVE_DEFAULTS, enabled: true },
     autoModeServer: true,
     cacheDiagnostics: true,
     cacheTtl: {
@@ -109,7 +109,7 @@ const POOL_ROWS: PoolSeed[] = [
     windDownMinutes: 120,
     movesPerHour: {},
     affinityTtlSeconds: 0,
-    keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
+    keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
     autoModeServer: true,
     cacheDiagnostics: false,
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
@@ -135,7 +135,7 @@ const POOL_ROWS: PoolSeed[] = [
     selectBelowUtilization: null,
     affinityTtlSeconds: 3_600,
     movesPerHour: {},
-    keepalive: { ...KEEPALIVE_TUNING_DEFAULTS, enabled: false, costCapUsdPerDay: null },
+    keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
     // Off, so the pool card's badge and the key dialog's Inherit label each read both states in the story.
     autoModeServer: false,
     cacheDiagnostics: false,

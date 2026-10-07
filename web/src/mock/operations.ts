@@ -319,12 +319,8 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS_24H,
   // Router-wide, so every probe counted here belongs to a pool that keeps caches
   // warm; `codex` has warming off and contributes none. Hand-set at a busier
-  // scale than the logged rows, at the same cost per probe as `costToday`.
+  // scale than the logged rows.
   probes24h: { ok: 225, migrated: 18, skipped: 45, failed: 3 },
-  costToday: [
-    { poolId: 'all', usd: 2.61, capUsd: 4 },
-    { poolId: 'codex', usd: 0, capUsd: null },
-  ],
   netSaved7dUsd: 41.8,
 };
 

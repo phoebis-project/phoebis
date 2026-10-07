@@ -7,13 +7,6 @@
       "parked": 0
     },
     "bus_gaps": 0,
-    "cost_today": [
-      {
-        "cap_usd": 4.0,
-        "pool_id": "main",
-        "usd": 0.0
-      }
-    ],
     "expired_between_turns_24h": 0,
     "net_saved_7d_usd": 0.0,
     "probes_24h": {

@@ -51,8 +51,9 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
         LedgerBehind => ViewReason::LedgerBehind,
         NetNegative => ViewReason::NetNegative,
         Overage => ViewReason::Overage,
-        Paused | PoolDisabled | KeepaliveOff | OptedOut | KeyOptedOut | IneligibleCredential
-        | SubagentsOff => ViewReason::Paused,
+        Paused | PoolDisabled | KeepaliveOff | OptedOut | KeyOptedOut | IneligibleCredential => {
+            ViewReason::Paused
+        }
         ProbePoolExhausted => ViewReason::PoolExhausted,
         InvalidProbeUsage
         | MissingAccount

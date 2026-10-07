@@ -13,6 +13,37 @@ use std::sync::Mutex;
 /// variables to different values, so each holds this across its whole set-then-load sequence.
 static ENV: Mutex<()> = Mutex::new(());
 
+/// The binary reads the keepalive's debug timing once, at its start, so a test that waits for a probe a second
+/// after its request keeps the two variables set from before `app::run` until its admin answers. The two such
+/// tests may overlap, so the variables are unset only once the last of them has started.
+static PROBE_SOON: Mutex<usize> = Mutex::new(0);
+
+/// Puts the first probe of a five-minute entry one second after its request, for the binary started next.
+fn probe_soon_on() {
+    let mut starting = PROBE_SOON
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    if *starting == 0 {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::set_var("PHOEBIS_DEBUG_KEEPALIVE_LEAD_5M_SECONDS", "299");
+        std::env::set_var("PHOEBIS_DEBUG_KEEPALIVE_JITTER_5M_SECONDS", "0");
+    }
+    *starting += 1;
+}
+
+/// Called once the binary answers its admin login, which it does only after its start read the timing.
+fn probe_soon_off() {
+    let mut starting = PROBE_SOON
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner());
+    *starting -= 1;
+    if *starting == 0 {
+        let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+        std::env::remove_var("PHOEBIS_DEBUG_KEEPALIVE_LEAD_5M_SECONDS");
+        std::env::remove_var("PHOEBIS_DEBUG_KEEPALIVE_JITTER_5M_SECONDS");
+    }
+}
+
 /// How long a poll waits for the binary's asynchronous pipeline (the routing task, the ledger's writer, an
 /// admin read) to converge. Generous on purpose: the assertion behind it is "it converges", never "within
 /// five seconds", and the loaded workspace run is the case it has to survive.
@@ -3060,6 +3091,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     );
     let cfg_path = dir.path().join("config.yaml");
     std::fs::write(&cfg_path, yaml).unwrap();
+    probe_soon_on();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -3075,9 +3107,9 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         .unwrap();
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
+    probe_soon_off();
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
-    // A lead of 299 s on a five-minute entry puts the first probe one second after the request.
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0 } })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "priority", "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true } })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
         .post(admin("/keys"))
         .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))
@@ -3400,6 +3432,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
     );
     let cfg_path = dir.path().join("config.yaml");
     std::fs::write(&cfg_path, yaml).unwrap();
+    probe_soon_on();
     let config = {
         let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
         std::env::set_var("TEST_ADMIN_SECRET", "admin-secret-001");
@@ -3415,10 +3448,9 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .unwrap();
     let admin = |path: &str| format!("http://127.0.0.1:{admin_port}/admin{path}");
     logged_in(&client, &admin("/session")).await;
+    probe_soon_off();
     assert_eq!(client.post(admin("/accounts")).json(&serde_json::json!({ "id": "console", "kind": "api_key", "label": "Console", "secret": "sk-ant-api03-PLACEHOLDER" })).send().await.unwrap().status(), 201);
-    // A lead of 299 s on a five-minute entry puts the first probe one second after the request, which is what
-    // gives the pass a wasted probe to draw once the release below settles it.
-    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "pace", "affinity_ttl_seconds": 600, "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true, "lead_seconds_5m": 299, "jitter_seconds_5m": 0, "probe_cost_cap_usd_per_day": 4 }, "body_capture_hours": 24 })).send().await.unwrap().status(), 201);
+    assert_eq!(client.post(admin("/pools")).json(&serde_json::json!({ "id": "main", "label": "Main", "strategy": "pace", "affinity_ttl_seconds": 600, "members": [{ "account_id": "console", "priority": 0 }], "keepalive": { "enabled": true }, "body_capture_hours": 24 })).send().await.unwrap().status(), 201);
     let key: serde_json::Value = client
         .post(admin("/keys"))
         .json(&serde_json::json!({ "id": "desktop", "label": "Desktop", "pool_id": "main" }))

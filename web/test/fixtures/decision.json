@@ -10,7 +10,7 @@
       "seq": 1,
       "at": 1000000,
       "key_id": "desktop",
-      "key_generation": 1791268384992,
+      "key_generation": 1791413157235,
       "pool_id": "main",
       "routing_session_id": "s-static",
       "agent_id": "main",
@@ -38,7 +38,7 @@
       },
       "attempted": [],
       "holds": [],
-      "registry_revision": 66
+      "registry_revision": 38
     },
     "pin": {
       "found": "none",
@@ -80,7 +80,7 @@
       "retry_in_place_seconds": 60,
       "pace_floor": 0.05,
       "migrate_band": 0.05,
-      "pool_updated_at": 1791268385223
+      "pool_updated_at": 1791413157444
     },
     "candidates": [
       {

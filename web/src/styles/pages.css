@@ -2712,24 +2712,6 @@
   min-width: 140px;
 }
 
-.cost-caps {
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
-  padding: 0;
-  margin: 4px 0 0;
-  list-style: none;
-}
-
-.cost-caps__head {
-  display: flex;
-  justify-content: space-between;
-  /* The pool id and the amount are the two ends of one row: without this a narrow tile runs them together. */
-  gap: 10px;
-  margin-bottom: 4px;
-  font-size: 12.5px;
-}
-
 .stat__value.is-critical {
   color: var(--critical-ink);
 }

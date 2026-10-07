@@ -374,9 +374,10 @@ async fn a_migrated_probe_is_priced_and_the_next_request_counts_as_kept_warm() {
 
 #[tokio::test]
 async fn unanswered_probes_are_settled_as_wasted_when_the_recipe_stops() {
+    // The probes land at 270, 540 and 810 s and the window closes before the fourth at 1,080 s.
     let mut r = rig(RigSpec {
         policy: KeepalivePolicy {
-            max_idle_ticks: 3,
+            max_idle_seconds: 1_000,
             ..RigSpec::default().policy
         },
         ..RigSpec::default()
@@ -1447,120 +1448,6 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
     }
 }
 
-#[tokio::test]
-async fn a_negative_net_holds_after_the_grace_probes_and_a_real_request_regrants_them() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            net_negative_grace_probes: 2,
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    let body = priced_body();
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    // The first paid probe turns the net negative and grants the two grace probes; the second and third spend
-    // them; the fourth holds.
-    for (tick, expected) in [1, 2, 3, 3].into_iter().enumerate() {
-        r.advance(270_000);
-        r.step().await;
-        assert_eq!(r.status("main").probes, expected, "tick {tick}");
-    }
-    assert_eq!(
-        (r.status("main").reason, r.status("main").grace_left),
-        (Reason::NetNegative, 0)
-    );
-    assert!(r.status("main").net_usd < 0.0);
-    let rows = rollups(&r, |rows| probe_rows(rows).probes_skipped >= 1).await;
-    assert!(
-        probe_rows(&rows).probes_skipped >= 1,
-        "the withheld probe is ledgered as skipped"
-    );
-    let skipped = rows
-        .iter()
-        .find(|row| row.probes_skipped > 0)
-        .expect("the skipped row");
-    assert_eq!(
-        (skipped.account_id.as_str(), skipped.pool_id.as_str()),
-        ("a", "main"),
-        "a delta keys on the account the recipe held, never on an empty id"
-    );
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    assert_eq!(
-        r.status("main").grace_left,
-        2,
-        "granted again on a real request while the net stays negative"
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 4);
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            stop_when_net_negative: false,
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    for _ in 0..5 {
-        r.advance(270_000);
-        r.step().await;
-    }
-    assert_eq!(
-        r.status("main").probes,
-        5,
-        "with the rule off a negative net never holds"
-    );
-}
-
-#[tokio::test]
-async fn the_daily_cost_cap_pauses_probes_until_midnight() {
-    // The clock crosses a UTC midnight below, which the idle limit would read as an abandoned session; this
-    // case is about the cap alone, so the idle limit is off.
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            probe_cost_cap_usd_per_day: Some(0.0005),
-            max_idle_seconds: 0,
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    let body = priced_body();
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    // The cap lies above one probe's cost and below two probes' cost, so the second probe crosses it.
-    r.advance(270_000);
-    r.step().await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 2);
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (2, Reason::CapReached)
-    );
-    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
-    r.clock
-        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
-    // The entry the probes kept expired long before midnight, so a request re-arms the recipe for the day's
-    // next probe.
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 3, "the cap resets at UTC midnight");
-    let spent = r.engine.load_spent_today().await;
-    assert!(
-        (spent.get("main").copied().unwrap_or(0.0) - one_probe_usd()).abs() < 1e-9,
-        "the row after midnight: {spent:?}"
-    );
-}
-
 /// A plan-funded probe's would-be price is quota, never money: the dollar cap that bounds an api_key
 /// account's own spend must stay at zero for it, whatever the price table would have charged.
 #[tokio::test]
@@ -1584,37 +1471,17 @@ fn fast_read_back() -> Respond {
 }
 
 /// A fast-mode request draws usage credits and no plan window, so its probe settles in dollars whatever the
-/// upstream's funding: the share cap never sees it, and the dollar figure the pool's cap reads carries it.
+/// upstream's funding: the day's dollar figure carries it and the day's share figure never sees it.
 #[tokio::test]
-async fn the_share_cap_ignores_a_fast_probe_and_the_dollar_cap_counts_it() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            probe_cap_window_share_per_day: Some(0.0),
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &opus_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (0, Reason::CapReached),
-        "a zero share cap holds the standard recipe"
-    );
+async fn a_fast_probe_on_a_subscription_account_counts_in_the_days_dollars_and_not_its_share() {
+    let mut r = rig(subscription_spec()).await;
     let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &fast).await;
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", fast_read_back());
     r.advance(270_000);
     r.step().await;
-    assert_eq!(
-        r.status("main").probes,
-        1,
-        "the fast recipe probes past the share cap"
-    );
+    assert_eq!(r.status("main").probes, 1);
     // The probe read 2,000 tokens back at Opus 5.5's fast cache read.
     let cost = 2_000.0 * rig_cells(OPUS, phoebis_ledger::Speed::Fast).cache_read / 1_000_000.0;
     assert!(
@@ -1769,19 +1636,11 @@ fn same_budgets(a: &BTreeMap<String, f64>, b: &BTreeMap<String, f64>) -> bool {
             .all(|(k, v)| b.get(k).is_some_and(|w| (v - w).abs() < 1e-12))
 }
 
-/// A subscription account's probes served in overage settle in dollars, so the pool's dollar cap counts them
-/// live; a restart restores both budgets as they were settled, and the cap they reached refuses the first probe
-/// the restarted engine would send.
+/// A subscription account's probes served in overage settle in dollars, so the pool's day counts them live, and a
+/// restart restores both budgets as they were settled.
 #[tokio::test]
-async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budgets() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            probe_cost_cap_usd_per_day: Some(0.0005),
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
+async fn a_restart_after_overage_probes_keeps_both_budgets() {
+    let mut r = rig(subscription_spec()).await;
     r.enter_overage("o", r.now() + 10_000_000).await;
     settled(&r, |r| async move {
         r.h.router
@@ -1794,21 +1653,14 @@ async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budget
     let body = priced_body();
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    // The cap lies above one probe's dollars and below two probes' dollars, so the second crosses it.
-    for _ in 0..3 {
+    for _ in 0..2 {
         r.advance(270_000);
         r.step().await;
     }
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (2, Reason::CapReached)
-    );
+    assert_eq!(r.status("main").probes, 2);
     let spent = r.engine.spent_today();
     let share_spent = r.engine.share_spent_today();
-    assert!(
-        spent.get("main").copied().unwrap_or(0.0) >= 0.0005,
-        "{spent:?}"
-    );
+    assert!(spent.get("main").copied().unwrap_or(0.0) > 0.0, "{spent:?}");
     assert!(
         same_budgets(&share_spent, &BTreeMap::new()),
         "a probe served in overage never counts toward the plan side: {share_spent:?}"
@@ -1833,17 +1685,6 @@ async fn a_restart_after_overage_probes_reached_the_dollar_cap_keeps_both_budget
         same_budgets(&restarted.share_spent_today(), &share_spent),
         "and the plan-side one: {:?} vs {share_spent:?}",
         restarted.share_spent_today()
-    );
-    r.engine = restarted;
-    r.event(session_start("session")).unwrap();
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (0, Reason::CapReached),
-        "the cap the probes reached before the restart refuses the next one"
     );
 }
 
@@ -2124,65 +1965,17 @@ fn plan_pricing_sonnet() -> phoebis_ledger::PlanTables {
     tables
 }
 
-/// A model the dollar table prices but the cost model has no weight for settles a plan-funded probe in dollars, the
-/// same fall-back the settlement takes; the stop and the dollar cap must read that unit too, or nothing bounds it.
+/// A model the cost model lists with a `null` weight prices no share, so its probe settles in dollars and counts
+/// toward the day's dollars alone, as a model the cost model lacks does.
 #[tokio::test]
-async fn a_plan_funded_recipe_on_an_unlisted_model_stops_on_a_negative_dollar_net() {
-    let mut r = rig(RigSpec {
-        tables: plan_pricing_no_model(),
-        policy: KeepalivePolicy {
-            net_negative_grace_probes: 0,
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
-    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-4-5-20251001");
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    let status = r.status("main");
-    assert!(
-        status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
-        "the cost model has no weight for this model, so the probe settles in dollars whatever the funding: {status:?}"
-    );
-    assert!(
-        r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0,
-        "the dollar cap is the only one that bounds this probe: the plan-side cap counts the window share alone"
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        r.status("main").reason,
-        Reason::NetNegative,
-        "a negative dollar net stops the recipe even though the funding is plan: {:?}",
-        r.status("main")
-    );
-}
-
-/// A model the cost model lists with a `null` weight prices no share, so its probe settles in dollars, counts toward
-/// the dollar cap alone and leaves the window-share cap unapplied, as a model the cost model lacks does.
-#[tokio::test]
-async fn a_plan_funded_probe_on_a_model_with_a_null_weight_settles_in_dollars_and_never_reaches_the_share_cap(
-) {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            probe_cap_window_share_per_day: Some(0.0),
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
+async fn a_plan_funded_probe_on_a_model_with_a_null_weight_settles_in_dollars() {
+    let mut r = rig(subscription_spec()).await;
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body_on("claude-opus-5")).await;
     r.advance(270_000);
     r.step().await;
     let status = r.status("main");
-    assert_eq!(
-        status.probes, 1,
-        "a zero share cap holds nothing on a probe that never settles in share: {status:?}"
-    );
+    assert_eq!(status.probes, 1, "{status:?}");
     assert!(
         status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
         "{status:?}"
@@ -2194,29 +1987,16 @@ async fn a_plan_funded_probe_on_a_model_with_a_null_weight_settles_in_dollars_an
 }
 
 /// A model neither table prices (Sonnet 4.6: no cost row, no dollar row) settles a plan-funded probe in
-/// dollars at the price table's dearest cells, never at zero, so the dollar cap and the net both bound it while the
-/// share cap cannot.
+/// dollars at the price table's dearest cells, never at zero.
 #[tokio::test]
-async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_cells_against_the_dollar_cap(
-) {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            probe_cap_window_share_per_day: Some(0.0),
-            probe_cost_cap_usd_per_day: Some(0.0005),
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
+async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_cells_in_dollars() {
+    let mut r = rig(subscription_spec()).await;
     r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
     r.observe_with("main", &body_on("claude-sonnet-4-6")).await;
     r.advance(270_000);
     r.step().await;
     let status = r.status("main");
-    assert_eq!(
-        status.probes, 1,
-        "a zero share cap holds nothing on a probe that settles in dollars: {status:?}"
-    );
+    assert_eq!(status.probes, 1, "{status:?}");
     assert!(
         (status.net_usd + dearest_read_2000()).abs() < 1e-12 && status.net_five_hour_share == 0.0,
         "{status:?}"
@@ -2227,13 +2007,6 @@ async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_c
             && !r.engine.share_spent_today().contains_key("o"),
         "{:?}",
         r.engine.spent_today()
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (1, Reason::CapReached),
-        "the dollar cap holds the next probe"
     );
 }
 
@@ -2315,15 +2088,14 @@ async fn a_probe_that_lands_after_midnight_charges_the_new_day() {
     );
 }
 
-/// A key moved to another pool takes that pool's budget with it: the cap the gate reads and the delta the
-/// probe charges belong to the pool that serves the probe, not to the one the last real request selected.
+/// A key moved to another pool takes that pool's budget with it: the delta the probe charges belongs to the pool
+/// that serves the probe, not to the one the last real request selected.
 #[tokio::test]
-async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
+async fn a_key_moved_to_another_pool_is_charged_there() {
     let mut r = rig(RigSpec::default()).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
-    // Two probes at one probe's cost each under the key's own pool, past the cap the warm pool carries below.
     for _ in 0..2 {
         r.advance(270_000);
         r.step().await;
@@ -2334,11 +2106,7 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
         .insert_pool(
             &phoebis_store::PoolRow {
                 strategy: phoebis_store::Strategy::Priority,
-                keepalive_json: serde_json::to_string(&KeepalivePolicy {
-                    probe_cost_cap_usd_per_day: Some(0.0003),
-                    ..RigSpec::default().policy
-                })
-                .unwrap(),
+                keepalive_json: serde_json::to_string(&RigSpec::default().policy).unwrap(),
                 prefer_subscription: false,
                 created_at: NOW,
                 updated_at: NOW,
@@ -2365,13 +2133,11 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
         .update_api_key(&key, key.updated_at, "test")
         .unwrap();
     r.h.router.reload().await.unwrap();
-    // The warm pool has spent nothing of its own cap, so the recipe the moved key holds probes once more.
     r.advance(270_000);
     r.step().await;
     assert_eq!(
         (r.status("main").probes, r.status("main").reason),
-        (3, Reason::Scheduled),
-        "the destination pool's cap is not spent yet"
+        (3, Reason::Scheduled)
     );
     assert_eq!(
         r.engine.recipes().first().map(|v| v.pool_id.clone()),
@@ -2393,13 +2159,6 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
     assert!(rows
         .iter()
         .any(|row| row.pool_id == "warm" && row.probe_cost_usd > 0.0));
-    // And that one probe spends the destination pool's cap, which holds the next one without a request.
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (3, Reason::CapReached)
-    );
 }
 
 /// A probe the upstream served and charged for is on the recipe's own books before any branch that pauses
@@ -2527,17 +2286,10 @@ async fn a_request_that_failed_over_earns_no_credit_from_the_probes_account() {
 }
 
 /// A probe answer that reports only the aggregate cache-write field is charged for that write: the relay's
-/// own parser reads the field as five-minute writes, and the cap has to see the same charge.
+/// own parser reads the field as five-minute writes, and the probe's cost has to see the same charge.
 #[tokio::test]
-async fn an_aggregate_only_cache_write_reaches_the_cap() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            probe_cost_cap_usd_per_day: Some(0.0005),
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
+async fn an_aggregate_only_cache_write_is_charged_as_a_five_minute_write() {
+    let mut r = rig(RigSpec::default()).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;
@@ -2553,13 +2305,6 @@ async fn an_aggregate_only_cache_write_reaches_the_cap() {
     assert!(
         (probe.probe_cost_usd - expected).abs() < 1e-12,
         "{probe:?} against {expected}"
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (1, Reason::CapReached),
-        "one aggregate-only write spent the day's cap"
     );
 }
 
@@ -2671,126 +2416,6 @@ async fn a_subscription_accounts_net_is_in_five_hour_share_and_an_api_key_accoun
     assert_eq!(
         status.net_five_hour_share, 0.0,
         "an api_key account never touches the share balance"
-    );
-}
-
-/// A subscription agent's two balances move independently of each other, and the stop always judges the
-/// balance the next probe would actually be charged against.
-#[tokio::test]
-async fn plan_traffic_then_metered_traffic_then_a_return_to_plan_keep_two_balances_and_the_stop_reads_the_next_probes_unit(
-) {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            net_negative_grace_probes: 0,
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
-    let body = priced_body();
-    // Leg 1: on plan, the probe's cost and the next request's credit both land in the 5-hour share.
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    let after_plan_probe = r.status("main");
-    assert!(
-        after_plan_probe.net_five_hour_share < 0.0,
-        "{after_plan_probe:?}"
-    );
-    assert_eq!(after_plan_probe.net_usd, 0.0);
-    r.advance(60_000);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
-    r.observe_with("main", &body).await;
-    let after_plan_credit = r.status("main");
-    assert!(
-        after_plan_credit.net_five_hour_share > after_plan_probe.net_five_hour_share,
-        "{after_plan_credit:?}"
-    );
-    assert_eq!(after_plan_credit.net_usd, 0.0);
-    let share_balance = after_plan_credit.net_five_hour_share;
-
-    // Leg 2: the account enters overage; the next probe and credit land in dollars, the share balance stands.
-    r.enter_overage("o", r.now() + 10_000_000).await;
-    settled(&r, |r| async move {
-        r.h.router
-            .overage("o")
-            .await
-            .unwrap()
-            .is_some_and(|e| e.in_use && e.reset.unwrap() > r.now())
-    })
-    .await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", probe_answer(2_000, 0));
-    r.advance(270_000);
-    r.step().await;
-    let after_overage_probe = r.status("main");
-    assert!(after_overage_probe.net_usd < 0.0, "{after_overage_probe:?}");
-    assert_eq!(after_overage_probe.net_five_hour_share, share_balance);
-    // With no grace, the very next due tick holds under the dollar balance alone: a positive share balance
-    // never masks it, since the account is in overage and the stop reads the unit the next probe would be
-    // charged in.
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        r.status("main").reason,
-        Reason::NetNegative,
-        "{:?}",
-        r.status("main")
-    );
-    assert_eq!(
-        r.status("main").net_five_hour_share,
-        share_balance,
-        "still positive relative to where it started, and untouched by the dollar-side stop"
-    );
-    // A real request still reads the held recipe's own cache normally: its credit lands in the unit the
-    // withheld probe settled in, dollars here, and leaves the share balance it never touched alone.
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
-    r.observe_with("main", &body).await;
-    let after_overage_credit = r.status("main");
-    assert!(
-        after_overage_credit.net_usd > after_overage_probe.net_usd,
-        "the credit for a probe that settled in dollars lands in dollars too: {after_overage_credit:?}"
-    );
-    assert_eq!(
-        after_overage_credit.net_five_hour_share, share_balance,
-        "a warm request while in overage leaves the share balance untouched"
-    );
-    // The credit paid back past zero; one more dollar-funded probe returns the stop before the reset test.
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.advance(270_000);
-    r.step().await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        r.status("main").reason,
-        Reason::NetNegative,
-        "{:?}",
-        r.status("main")
-    );
-
-    // Leg 3: the overage's reset passes; a real request re-arms, and the next probe settles in the share again.
-    r.leave_overage("o").await;
-    settled(&r, |r| async move {
-        r.h.router
-            .overage("o")
-            .await
-            .unwrap()
-            .is_some_and(|e| e.reset.unwrap() < r.now())
-    })
-    .await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    assert_eq!(
-        r.status("main").reason,
-        Reason::Scheduled,
-        "the reset passing lifts the dollar-side stop"
-    );
-    r.advance(270_000);
-    r.step().await;
-    let after_return = r.status("main");
-    assert!(
-        after_return.net_five_hour_share < share_balance,
-        "the next probe's cost landed in the share again: {after_return:?}"
     );
 }
 
@@ -2926,13 +2551,12 @@ async fn one_opus_probe(spec: RigSpec, at: i64) -> (Rig, f64) {
     (r, spent)
 }
 
-/// The plan-side cap counts a subscription account's probes as the share of its own 5-hour window they
-/// consumed, weighed by the band at each probe's settlement, and stops probes for the day once the share is
-/// spent.
+/// A subscription account's probes count as the share of its own 5-hour window they consumed, weighed by the
+/// band at each probe's settlement.
 #[tokio::test]
-async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_counts_more() {
-    // The shipped model, since the test table's small capacities put a million-token probe far past the share
-    // cap's bound of 1; every figure below is read from the model loaded here.
+async fn a_probe_in_the_band_counts_more_of_the_window_share() {
+    // The shipped model, since the test table's small capacities put a million-token probe far past a whole
+    // window. Every figure below is read from the model loaded here.
     fn shipped_subscription_spec() -> RigSpec {
         RigSpec {
             tables: phoebis_ledger::PlanTables::shipped(),
@@ -2999,82 +2623,5 @@ async fn the_window_share_cap_stops_probes_for_the_day_and_a_probe_in_the_band_c
     assert!(
         (on_pro - pro).abs() < 1e-12,
         "on Pro the same tokens are that share over Pro's capacity ratio: {on_pro} against {pro}"
-    );
-
-    let (mut r, spent) = one_opus_probe(
-        RigSpec {
-            policy: KeepalivePolicy {
-                probe_cap_window_share_per_day: Some(opus_probe_share / 2.0),
-                ..RigSpec::default().policy
-            },
-            ..shipped_subscription_spec()
-        },
-        out_of_band,
-    )
-    .await;
-    assert!(
-        spent >= opus_probe_share / 2.0,
-        "the first probe alone reaches the cap: {spent}"
-    );
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (1, Reason::CapReached),
-        "the day's share reached the cap, so the next probe waits for midnight"
-    );
-}
-
-/// The window-share cap bounds what a subscription account's probes take of its plan; an API-key account's
-/// probes spend dollars, which the dollar cap bounds, so in one pool a zero share cap holds the first and leaves
-/// the second alone.
-#[tokio::test]
-async fn a_zero_window_share_cap_holds_a_subscription_probe_and_admits_an_api_key_probe() {
-    let mut r = rig(RigSpec {
-        accounts: vec![oauth("o", OAUTH_SECRET, 0), api_key("a", A, 1)],
-        policy: KeepalivePolicy {
-            probe_cap_window_share_per_day: Some(0.0),
-            ..RigSpec::default().policy
-        },
-        ..subscription_spec()
-    })
-    .await;
-    let body = priced_body();
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    assert_eq!(r.status("main").account_id.as_deref(), Some("o"));
-    // The API-key member first from here, so a new session lands on it while `main` keeps its recipe on `o`.
-    let member = |account_id: &str, priority| phoebis_store::MemberWrite {
-        account_id: account_id.to_string(),
-        priority,
-        budget_daily_usd: None,
-        budget_monthly_usd: None,
-    };
-    r.h.store
-        .set_pool_members("main", &[member("a", 0), member("o", 1)], "test")
-        .unwrap();
-    r.h.router.reload().await.unwrap();
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.event(session_start("other")).unwrap();
-    let mut req = r.request_with("main", &body);
-    relay_common::set_header(&mut req, "x-claude-code-session-id", "other");
-    let resp = r.h.app.clone().oneshot(req).await.unwrap();
-    assert_eq!(relay_common::outcome(&resp).account_id, "a");
-    let id = relay_common::outcome(&resp).request_id;
-    let _ = resp.into_body().collect().await.unwrap();
-    r.pump(Some(&id)).await;
-    let other = |r: &Rig| r.engine.agent_status("desktop", "other", "main").unwrap();
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("main").reason),
-        (0, Reason::CapReached),
-        "the subscription account's probe is held by the zero share cap"
-    );
-    assert_eq!(
-        other(&r).probes,
-        1,
-        "the API-key account's probe runs: {:?}",
-        other(&r)
     );
 }

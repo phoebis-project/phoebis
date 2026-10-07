@@ -1,11 +1,11 @@
 import { Fragment, useEffect, useId, useMemo, useRef, useState, type ReactNode } from 'react';
 import { Link, useLocation, useNavigate } from 'react-router-dom';
 import { Bar, ComposedChart, Line, ResponsiveContainer, Tooltip, XAxis, YAxis } from 'recharts';
-import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS, type PoolInput } from '@/api';
+import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput } from '@/api';
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
 import { slug } from '@/api/http';
 import type {
-  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, PoolStrategy, Session, SessionPlacement,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, Session, SessionPlacement,
   SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useSession } from '@/app/session';
@@ -23,7 +23,7 @@ import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, Erro
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
-import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, poolRefusals, type PoolGroup } from '@/lib/forms';
+import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
@@ -63,22 +63,6 @@ const OVERAGE_CHOICES: { body: string; title: string; value: OveragePolicy }[] =
   { value: 'allow', title: 'Allow', body: 'ignore extra usage' },
   { value: 'never', title: 'Never', body: 'treat an account in extra usage as unavailable until its window resets' },
 ];
-// A pair's hint sits below both fields and a lone field carries its own, keyed by the row's first field.
-const PROBE_HINT: Record<(typeof PROBE_TUNING_ROWS)[number][0], ReactNode> = {
-  coldProbeLimit: (
-    <>
-      Probes in a row that find the cache already gone, after which the session&apos;s probes pause until its next real request. A cold probe rewrites the entry, so a streak also pulls the <GroupLink id="keepalive">net</GroupLink> down; a probe that moved the session does not count.
-    </>
-  ),
-  jitterSeconds5m: 'Random seconds taken off each due time, so sessions that started together do not probe at the same instant; wider for 1-hour entries, whose due times cluster on the hour.',
-  leadSeconds5m: 'How long before an entry expires its probe is due. The lead covers the round trip and the jitter; the 1-hour lead also leaves room for a retry, since a missed refresh costs a full 1-hour write.',
-  maxIdleSeconds: (
-    <>
-      Stop probing once this long, or this many probes, passes without a real request: for the main agent while its companion reports, for every agent once the companion falls silent. 0 turns a limit off. The <PageLink to="/sessions">Sessions page</PageLink> shows each companion&apos;s state.
-    </>
-  ),
-  retrySeconds: 'After a failed probe the wait starts at the base and doubles up to the max, so a long outage settles into a steady retry.',
-};
 /** Members first, lowest priority number first, then alphabetically; non-members trail alphabetically. */
 const orderedAccountIds = (accounts: Account[], members: Record<string, number>): string[] =>
   [...accounts]
@@ -765,9 +749,6 @@ function Eligibility({ verdict, account, now, periodEnd }: { account: Account | 
   );
 }
 
-type ProbeTuning = Omit<PoolKeepalive, 'costCapUsdPerDay' | 'enabled' | 'warmSubagents'>;
-type NumericTuningKey = { [K in keyof ProbeTuning]-?: ProbeTuning[K] extends number ? K : never }[keyof ProbeTuning];
-
 interface PoolForm {
   affinity: number;
   affinityMode: AffinityMode;
@@ -776,16 +757,21 @@ interface PoolForm {
   budgets: Record<string, { daily: string; monthly: string }>;
   cacheDiagnostics: boolean;
   cacheTtl: PoolCacheTtl;
-  capEnabled: boolean;
   capture: boolean;
   /** The retention field as typed, so an emptied field stays empty rather than reading as 0. */
   captureHours: string;
-  capUsd: number;
   customAffinity: boolean;
   engine: PoolEngineFields;
   /** The Custom pill is held apart from the values, so its inputs stay open while an edit passes through a preset. */
   failoverCustom: boolean;
+  /** Off sends the scheduled horizon as null, the recipe's break-even, and keeps the number for the switch coming back. */
+  horizonOn: boolean;
+  horizonSeconds: number;
   keepalive: boolean;
+  maxIdleSeconds: number;
+  /** Off sends the parked ceiling as null, the recipe's break-even, and keeps the number for the switch coming back. */
+  maxParkedOn: boolean;
+  maxParkedSeconds: number;
   members: Record<string, number>;
   modelRules: ModelRule[];
   name: string;
@@ -803,8 +789,6 @@ interface PoolForm {
   status: 'active' | 'disabled';
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
-  tuning: ProbeTuning;
-  warmSubagents: boolean;
 }
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
@@ -816,14 +800,17 @@ const blankForm = (): PoolForm => ({
   budgets: {},
   cacheDiagnostics: false,
   cacheTtl: { ...CACHE_TTL_DEFAULTS },
-  capEnabled: false,
   capture: false,
   captureHours: '24',
-  capUsd: 5,
   customAffinity: false,
   engine: { ...POOL_ENGINE_DEFAULTS },
   failoverCustom: false,
+  horizonOn: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds !== null,
+  horizonSeconds: KEEPALIVE_DEFAULTS.scheduledHorizonSeconds ?? 3_600,
   keepalive: true,
+  maxIdleSeconds: KEEPALIVE_DEFAULTS.maxIdleSeconds,
+  maxParkedOn: KEEPALIVE_DEFAULTS.maxParkedSeconds !== null,
+  maxParkedSeconds: KEEPALIVE_DEFAULTS.maxParkedSeconds ?? 3_600,
   members: {},
   modelRules: [],
   name: '',
@@ -839,8 +826,6 @@ const blankForm = (): PoolForm => ({
   status: 'active',
   strategy: 'pace',
   subagentPlacement: POOL_AFFINITY_DEFAULTS.subagentPlacement,
-  tuning: { ...KEEPALIVE_TUNING_DEFAULTS },
-  warmSubagents: true,
 });
 
 const formFrom = (pool: Pool): PoolForm => ({
@@ -854,10 +839,8 @@ const formFrom = (pool: Pool): PoolForm => ({
     metered: { ...pool.cacheTtl.metered, models: pool.cacheTtl.metered.models.map((m) => ({ ...m })) },
     plan: { ...pool.cacheTtl.plan, models: pool.cacheTtl.plan.models.map((m) => ({ ...m })) },
   },
-  capEnabled: pool.keepalive.costCapUsdPerDay !== null,
   capture: pool.bodyCaptureHours > 0,
   captureHours: String(pool.bodyCaptureHours || 24),
-  capUsd: pool.keepalive.costCapUsdPerDay ?? 5,
   customAffinity: !isPreset(pool.affinityTtlSeconds),
   engine: {
     burnWindowSeconds: pool.burnWindowSeconds,
@@ -872,7 +855,12 @@ const formFrom = (pool: Pool): PoolForm => ({
     windDownMinutes: pool.windDownMinutes,
   },
   failoverCustom: failoverPresetOf(pool) === 'custom',
+  horizonOn: pool.keepalive.scheduledHorizonSeconds !== null,
+  horizonSeconds: pool.keepalive.scheduledHorizonSeconds ?? 3_600,
   keepalive: pool.keepalive.enabled,
+  maxIdleSeconds: pool.keepalive.maxIdleSeconds,
+  maxParkedOn: pool.keepalive.maxParkedSeconds !== null,
+  maxParkedSeconds: pool.keepalive.maxParkedSeconds ?? 3_600,
   members: Object.fromEntries(pool.members.map((m) => [m.accountId, m.priority])),
   modelRules: pool.modelRules,
   name: pool.name,
@@ -892,21 +880,6 @@ const formFrom = (pool: Pool): PoolForm => ({
   status: pool.status === 'disabled' ? 'disabled' : 'active',
   strategy: pool.strategy,
   subagentPlacement: pool.subagentPlacement,
-  tuning: {
-    capWindowSharePerDay: pool.keepalive.capWindowSharePerDay,
-    coldProbeLimit: pool.keepalive.coldProbeLimit,
-    jitterSeconds1h: pool.keepalive.jitterSeconds1h,
-    jitterSeconds5m: pool.keepalive.jitterSeconds5m,
-    leadSeconds1h: pool.keepalive.leadSeconds1h,
-    leadSeconds5m: pool.keepalive.leadSeconds5m,
-    maxIdleSeconds: pool.keepalive.maxIdleSeconds,
-    maxIdleTicks: pool.keepalive.maxIdleTicks,
-    netNegativeGraceProbes: pool.keepalive.netNegativeGraceProbes,
-    retryMaxSeconds: pool.keepalive.retryMaxSeconds,
-    retrySeconds: pool.keepalive.retrySeconds,
-    stopWhenNetNegative: pool.keepalive.stopWhenNetNegative,
-  },
-  warmSubagents: pool.keepalive.warmSubagents,
 });
 
 export function PoolDialog({
@@ -1033,8 +1006,13 @@ export function PoolDialog({
     // With warming off the block is disabled, so what it holds goes back as stored: an edit left in it can
     // neither reach the policy nor hold up the save.
     keepalive: warming
-      ? { ...form.tuning, costCapUsdPerDay: form.capEnabled ? form.capUsd : null, enabled: true, warmSubagents: form.warmSubagents }
-      : { ...(pool?.keepalive ?? { ...KEEPALIVE_TUNING_DEFAULTS, costCapUsdPerDay: null }), enabled: false },
+      ? {
+          enabled: true,
+          maxIdleSeconds: form.maxIdleSeconds,
+          maxParkedSeconds: form.maxParkedOn ? form.maxParkedSeconds : null,
+          scheduledHorizonSeconds: form.horizonOn ? form.horizonSeconds : null,
+        }
+      : { ...(pool?.keepalive ?? KEEPALIVE_DEFAULTS), enabled: false },
     members: Object.entries(form.members).map(([accountId, priority]) => {
       const budget = budgetOf(accountId);
       // A field that reads no number goes on as NaN, which the refusals below hold the save for.
@@ -1080,7 +1058,6 @@ export function PoolDialog({
   // A stored member the list does not hold gets a row of its own, the only place it can be unticked.
   const unlisted = accountsFailed === null ? Object.keys(form.members).filter((id) => !listed.has(id)).sort() : [];
 
-  const setTuning = <K extends NumericTuningKey>(key: K, value: number) => setForm((f) => ({ ...f, tuning: { ...f.tuning, [key]: value } }));
   const setEngine = <K extends keyof PoolEngineFields>(key: K, value: PoolEngineFields[K]) => setForm((f) => ({ ...f, engine: { ...f.engine, [key]: value } }));
   const sheddingPill: SheddingPreset = form.sheddingCustom ? 'custom' : sheddingPresetOf(form.engine);
   const failoverPill: FailoverPreset = form.failoverCustom ? 'custom' : failoverPresetOf(form.engine);
@@ -1103,7 +1080,6 @@ export function PoolDialog({
   const verdict = new Map((pool?.members ?? []).map((m) => [m.accountId, m.eligible]));
   const sized = useMemo(() => (settings.data ? sizedAccounts(accounts, settings.data.subscriptionCosts, 'five_hour') : new Set<string>()), [accounts, settings.data]);
   const preview = shedPreview({ ...input, members: input.members.map((m) => ({ ...m, eligible: verdict.get(m.accountId) })) }, accounts, sessions, now, sized);
-  const setNetNegative = (value: boolean) => setForm((f) => ({ ...f, tuning: { ...f.tuning, stopWhenNetNegative: value } }));
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
 
   const startMove = (k: ApiKey) => {
@@ -1183,20 +1159,6 @@ export function PoolDialog({
       <div>{text}</div>
     </div>
   );
-  const probeField = (key: NumericTuningKey, className?: string, hint?: ReactNode) => (
-    <Field key={key} label={KEEPALIVE_FIELD_LABELS[key]} className={className} hint={hint}>
-      <Input
-        type="number"
-        min={KEEPALIVE_BOUNDS[key].min}
-        max={KEEPALIVE_BOUNDS[key].max}
-        value={form.tuning[key]}
-        onChange={(e) => setTuning(key, Number(e.target.value))}
-        disabled={!warming}
-        aria-invalid={invalid(KEEPALIVE_FIELD_LABELS[key])}
-      />
-    </Field>
-  );
-
   // Keyed by group, so a group without a body fails to compile; `POOL_GROUPS` sets the rail order.
   const bodies: Record<PoolGroup, ReactNode> = {
     identity: (
@@ -1911,50 +1873,35 @@ export function PoolDialog({
           >
             <Toggle checked={warming} onChange={(v) => set('keepalive', v)} label="Keep prompt caches warm" disabled={keepaliveBlocked} />
           </Field>
-          <Field label="Also warm subagent caches" beside hint="Off probes the main conversation only.">
-            <Toggle checked={form.warmSubagents} onChange={(v) => set('warmSubagents', v)} label="Also warm subagent caches" disabled={!warming} />
-          </Field>
-          <Field
-            label="Stop when probes cost more than they save"
-            beside
-            className="cell--half"
-            hint={
-              <>
-                Pauses a session&apos;s probes once they have cost more than the cache reads they saved; a real request that lands warm resumes them. Savings per pool are on the{' '}
-                <PageLink to="/analytics#cache-warming">Analytics page</PageLink>.
-              </>
-            }
-          >
-            <Toggle checked={form.tuning.stopWhenNetNegative} onChange={setNetNegative} label="Stop when probes cost more than they save" disabled={!warming} />
-          </Field>
-          <Field
-            label={KEEPALIVE_FIELD_LABELS.netNegativeGraceProbes}
-            className="cell--half"
-            hint="Probes a session still gets after its net turns negative, granted again on every real request, so one expensive turn does not stop a session about to earn it back."
-          >
+          <Field label={KEEPALIVE_FIELD_LABELS.maxIdleSeconds} hint="The idle window of the main conversation. 0 and anything above the recipe's break-even read as the break-even.">
             <Input
               type="number"
-              min={KEEPALIVE_BOUNDS.netNegativeGraceProbes.min}
-              max={KEEPALIVE_BOUNDS.netNegativeGraceProbes.max}
-              value={form.tuning.netNegativeGraceProbes}
-              onChange={(e) => setTuning('netNegativeGraceProbes', Math.max(0, Number(e.target.value)))}
-              disabled={!warming || !form.tuning.stopWhenNetNegative}
-              aria-label="Grace probes after the net turns negative"
-              aria-invalid={invalid(KEEPALIVE_FIELD_LABELS.netNegativeGraceProbes)}
+              min={KEEPALIVE_BOUNDS.maxIdleSeconds.min}
+              max={KEEPALIVE_BOUNDS.maxIdleSeconds.max}
+              value={form.maxIdleSeconds}
+              onChange={(e) => set('maxIdleSeconds', Number(e.target.value))}
+              disabled={!warming}
+              aria-invalid={invalid(KEEPALIVE_FIELD_LABELS.maxIdleSeconds)}
             />
           </Field>
           <div className="cell--half">
             <SwitchedNumber
-              label="Daily probe cost cap ($)"
+              label="Max parked"
               disabled={!warming}
-              checked={form.capEnabled}
-              onChange={(v) => set('capEnabled', v)}
-              input={{ min: 0, step: 0.5, value: form.capUsd, onChange: (e) => set('capUsd', Number(e.target.value)), 'aria-label': 'Daily probe cost cap in dollars', 'aria-invalid': invalid('Daily probe cost cap in dollars') }}
-              hint={
-                <>
-                  Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here. The <CostReferenceLink tab="api-prices" /> prices a probe.
-                </>
-              }
+              checked={form.maxParkedOn}
+              onChange={(v) => set('maxParkedOn', v)}
+              input={{ min: KEEPALIVE_BOUNDS.maxParkedSeconds.min, max: KEEPALIVE_BOUNDS.maxParkedSeconds.max, value: form.maxParkedSeconds, onChange: (e) => set('maxParkedSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.maxParkedSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.maxParkedSeconds) }}
+              hint="How long a park on a background command or a subagent is probed. Off is the recipe's break-even."
+            />
+          </div>
+          <div className="cell--half">
+            <SwitchedNumber
+              label="Scheduled horizon"
+              disabled={!warming}
+              checked={form.horizonOn}
+              onChange={(v) => set('horizonOn', v)}
+              input={{ min: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.min, max: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.max, value: form.horizonSeconds, onChange: (e) => set('horizonSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds) }}
+              hint="A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe's break-even."
             />
           </div>
         </div>
@@ -1967,21 +1914,6 @@ export function PoolDialog({
           </div>
         )}
       </>
-    ),
-    probeTuning: (
-      <div className="cells">
-        {PROBE_TUNING_ROWS.map((keys) =>
-          keys.length === 1 ? (
-            probeField(keys[0], undefined, PROBE_HINT[keys[0]])
-          ) : (
-            <Fragment key={keys[0]}>
-              {probeField(keys[0], 'cell--half')}
-              {probeField(keys[1], 'cell--half')}
-              <p className="field__hint">{PROBE_HINT[keys[0]]}</p>
-            </Fragment>
-          ),
-        )}
-      </div>
     ),
     bodyCapture: (
       <div className="cells">

@@ -390,7 +390,7 @@ impl Inner {
                         let incarnation = self.incarnation();
                         self.sessions.get_mut(&key).unwrap().agents.insert(
                             agent_id.clone(),
-                            Agent::new(&agent_id, &key.0, incarnation, now),
+                            Agent::new(&agent_id, &key.0, incarnation, now, self.timing),
                         );
                         self.agents += 1;
                         self.set_reason(&key, &agent_id, Reason::AwaitingRequest);
@@ -633,7 +633,7 @@ impl Inner {
         let incarnation = self.incarnation();
         agents.insert(
             MAIN_AGENT.to_string(),
-            Agent::new(MAIN_AGENT, &key.0, incarnation, now),
+            Agent::new(MAIN_AGENT, &key.0, incarnation, now, self.timing),
         );
         self.sessions.insert(
             key.clone(),

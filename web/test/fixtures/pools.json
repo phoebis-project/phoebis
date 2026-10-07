@@ -36,21 +36,10 @@
           "spent": 1.0
         },
         "keepalive": {
-          "cold_probe_limit": 2,
           "enabled": true,
-          "jitter_seconds_1h": 30,
-          "jitter_seconds_5m": 5,
-          "lead_seconds_1h": 360,
-          "lead_seconds_5m": 60,
           "max_idle_seconds": 3600,
-          "max_idle_ticks": 0,
-          "net_negative_grace_probes": 2,
-          "probe_cap_window_share_per_day": null,
-          "probe_cost_cap_usd_per_day": 4.0,
-          "retry_max_seconds": 300,
-          "retry_seconds": 30,
-          "stop_when_net_negative": true,
-          "warm_subagents": true
+          "max_parked_seconds": null,
+          "scheduled_horizon_seconds": null
         },
         "cache_ttl": {
           "enabled": false,
@@ -69,8 +58,8 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1791268384988,
-        "updated_at": 1791268384988,
+        "created_at": 1791413157230,
+        "updated_at": 1791413157230,
         "members": [
           {
             "account_id": "business",
@@ -109,7 +98,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "HnZ0xSv5",
+            "prefix": "deSyK2JF",
             "enabled": true
           }
         ],

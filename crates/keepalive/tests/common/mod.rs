@@ -20,7 +20,7 @@ use phoebis_bus::{
     Usage,
 };
 use phoebis_keepalive::{
-    Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy,
+    Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming,
 };
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
@@ -77,6 +77,8 @@ pub struct Rig {
     pub sub: Subscriber,
     /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
     pub tables: Arc<PlanTables>,
+    /// The spec's timing, kept so `restart` builds its engine with what this one was built with.
+    pub timing: KeepaliveTiming,
     pub up: FakeUpstream,
 }
 
@@ -98,6 +100,7 @@ pub struct RigSpec {
     /// The subscription tier every OAuth account's stored profile names, `None` to store none: a plan-funded
     /// probe settles in the share of the tier's window, and in dollars on an account without one.
     pub tier: Option<&'static str>,
+    pub timing: KeepaliveTiming,
 }
 
 impl Default for RigSpec {
@@ -108,20 +111,23 @@ impl Default for RigSpec {
             catalog: Vec::new(),
             lifecycle: None,
             limits: KeepaliveLimits::default(),
-            // The Go rig's 90 percent deadline: a five-minute entry is probed at 270 s, and no jitter, so the
-            // parity cases assert exact times.
             policy: KeepalivePolicy {
                 enabled: true,
-                lead_seconds_5m: 30,
-                jitter_seconds_5m: 0,
-                lead_seconds_1h: 360,
-                jitter_seconds_1h: 0,
                 ..KeepalivePolicy::default()
             },
             pool: PoolSpec::default(),
             session_expiry: Duration::from_secs(86_400),
             tables: PlanTables::shipped(),
             tier: None,
+            // The Go rig's 90 percent deadline: a five-minute entry is probed at 270 s, and no jitter, so the
+            // parity cases assert exact times.
+            timing: KeepaliveTiming {
+                lead_5m_ms: 30_000,
+                jitter_5m_ms: 0,
+                lead_1h_ms: 360_000,
+                jitter_1h_ms: 0,
+                ..KeepaliveTiming::default()
+            },
         }
     }
 }
@@ -198,6 +204,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         session_expiry: spec.session_expiry,
         store: h.store.clone(),
         tables: tables.clone(),
+        timing: spec.timing,
     });
     let mut rig = Rig {
         bus,
@@ -212,6 +219,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         sequence: 0,
         sub,
         tables,
+        timing: spec.timing,
         up,
     };
     rig.event(Event {
@@ -296,6 +304,7 @@ impl Rig {
             session_expiry: Duration::from_secs(86_400),
             store: self.h.store.clone(),
             tables: self.tables.clone(),
+            timing: self.timing,
         })
     }
 

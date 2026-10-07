@@ -3,7 +3,7 @@
 A prompt cache entry expires five minutes, or one hour, after its last use. With keepalive enabled on a pool, the
 router keeps a replayable copy of every eligible request a session sends and, shortly before the entry would
 expire, sends a probe that reads it. This page covers how the engine learns which sessions are alive, when a probe
-may run, every tuning field, and how the ledger accounts what a probe cost against what it saved.
+may run, the policy's four fields, and how the ledger accounts what a probe cost against what it saved.
 
 ## How a probe works
 
@@ -84,8 +84,8 @@ Enabling `keepalive.enabled` on a pool needs `affinity_ttl_seconds` of at least 
 than the shortest cache TTL cannot keep the session on the account it warmed." A probe follows the session's pin to a
 subscription account as to an Anthropic-key one. A key with `keepalive_opt_out` is never retained.
 
-In the console: Pools, Edit, the Keepalive group under Caching for "Keep prompt caches warm" and the daily probe cost
-cap, and the Probe tuning group beside it.
+In the console: Pools, Edit, the Keepalive group under Caching for "Keep prompt caches warm" and the policy's three
+numbers.
 
 ## Which requests re-arm a recipe
 
@@ -104,55 +104,44 @@ request, the fallback the router's own warmth check applies for a client that se
 The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it. An auxiliary or a
 foreign request may still read a warm cache, but it never resets the recipe's schedule and settles nothing.
 
-## Tuning fields
+## The four fields
 
-The pool's `keepalive` object carries fifteen fields, each with its own default and bound:
+The pool's `keepalive` object carries four fields:
 
-| Field | Default | Accepts | What it does |
+| Field | Default | Bounds | Meaning |
 | --- | --- | --- | --- |
-| `cold_probe_limit` | `2` | 1 to 20 | Cache-miss probes before the recipe pauses until a real request arrives. |
-| `enabled` | `false` | | Turns keepalive on for the pool. |
-| `jitter_seconds_1h` | `30` | 0 to 3599 | Random seconds trimmed off a 1h probe's due time. |
-| `jitter_seconds_5m` | `5` | 0 to 299 | Random seconds trimmed off a 5m probe's due time. |
-| `lead_seconds_1h` | `360` | 0 to 3599 | How long before a 1h entry expires its probe is due. |
-| `lead_seconds_5m` | `60` | 0 to 299 | How long before a 5m entry expires its probe is due. |
-| `max_idle_seconds` | `3600` | 0 to 31536000 | Stops probing the main agent while reporting, every agent once silent. |
-| `max_idle_ticks` | `0` | 0 to 1000000 | The same limit counted in probes instead of seconds. |
-| `net_negative_grace_probes` | `2` | 0 to 100 | Probes still granted once the net turns negative. |
-| `probe_cap_window_share_per_day` | unset | unset or 0 to 1 | A subscription account's daily cap, a window share. |
-| `probe_cost_cap_usd_per_day` | unset | unset or a positive number | Daily probe spend cap per pool. |
-| `retry_max_seconds` | `300` | 1 to 604800 (a week), at least `retry_seconds` | Ceiling the retry backoff doubles to. |
-| `retry_seconds` | `30` | 1 to 3600 | Base backoff after a failed probe, doubling each retry. |
-| `stop_when_net_negative` | `true` | | Pauses the recipe once probes cost more than they saved. |
-| `warm_subagents` | `true` | | Off retains only the main conversation's recipe; a subagent is never probed. |
+| `enabled` | `false` | | Probing on for the pool's sessions, every member kind. |
+| `max_idle_seconds` | `3600` | 0 to 31536000 | The main conversation's idle window, at most the break-even. |
+| `max_parked_seconds` | `null` | 60 to 604800 | How long a park on a background command or a subagent is probed. |
+| `scheduled_horizon_seconds` | `null` | 60 to 604800 | How far off a wakeup may be for a scheduled park to be probed. |
 
-An out-of-range value is refused with `keepalive.{field} must be between {min} and {max}, not {value}`, except
-for three fields with their own message: `probe_cap_window_share_per_day` answers
-"keepalive.probe_cap_window_share_per_day must be null or between 0 and 1," `probe_cost_cap_usd_per_day` answers
-"keepalive.probe_cost_cap_usd_per_day must be null or a positive number," and `retry_max_seconds` answers
-"keepalive.retry_max_seconds must be at least keepalive.retry_seconds." The lead and jitter bounds stop short of
-their cache TTL because a lead or jitter at or past the TTL would put a probe's due time before the cache was
-even written, and a lead plus its jitter must stay under that TTL, refused as `keepalive.lead_seconds_5m plus
-keepalive.jitter_seconds_5m must stay under the cache TTL they apply to` (the 1h pair the same). A lead of 0 with a
-jitter of 0 never probes: the due time falls on the expiry, and the entry is dead at its expiry. `GET /admin/pools`
-answers the full policy with every default filled in, so a pool created with `{}` shows every value above.
+The break-even of a recipe is the pause length at which its chain of probes costs one re-write of its prefix,
+`(write - read) / (cadence * read)`. The read and write factors are those of the recipe's model under its account's
+funding. A plan-funded recipe reads the cost model's factors, a model the cost model leaves unweighted reads its row of
+the price table, and a model neither table prices reads the price table's tightest row. The cadence is the TTL's: 15
+probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model a plan-funded recipe
+breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
 
-Both daily caps count per UTC day and are kept in `router.sqlite` as each probe settles, so a restart resumes them
-where they stood. A probe settled in dollars counts toward its pool's `probe_cost_cap_usd_per_day`: one on an api_key
-account or a subscription account in overage, a plan-funded one the cost model cannot price (see [The cost
-reference](#the-cost-reference)), and a fast-mode session's whatever the account's funding. A probe settled in the
-window share counts toward its account's `probe_cap_window_share_per_day`. A migrated probe is priced from its usage
-like any other and counts against the daily caps.
+A `max_idle_seconds` of 0, a `null` ceiling and any number above the break-even resolve to the break-even, so a number
+in a field is a cap below it. `GET /admin/pools` answers `null` where null was set. An out-of-range value is refused
+with `keepalive.{field} must be between {min} and {max}, not {value}`, for example `keepalive.max_parked_seconds must
+be between 60 and 604800, not 59`, and a field the policy does not hold is refused as any unknown field, `keepalive is
+not a policy object: unknown field ...`.
+
+The schedule's numbers are fixed. A probe is due 60 seconds before a five-minute entry expires and 360 seconds before
+a one-hour entry, less a random jitter of up to 5 and 30 seconds. Two cold probes in a row pause the recipe until a real
+request. The third transient failure pauses it, after retries that wait 30 seconds and double up to 300. No limit
+counts idle probes, and every subagent's recipe is warmed.
 
 ## The cost reference
 
 The Cost reference dialog shows what a million tokens costs, in dollars at list price and as a share of a subscription
 window, on three tabs. The Sessions view's head and the pool dialog's Warm sessions hint open it on Plan rates, the pool
-dialog's Write cost and Daily probe cost cap hints on API prices, and the subtitle of the Dashboard's 5-hour ring and
-the note of the Analytics Burn view's Plan per hour chart on Tiers and peak band. It reads the two tables in force: the
-shipped price table (`crates/ledger/api_prices.yaml`), or the file `stats.api_prices_path` names (default
-`./api_prices.yaml`) when that file exists, and the subscription cost model (`crates/ledger/subscription_costs.yaml`),
-or the file `stats.subscription_costs_path` names (see [Statistics](statistics.md)).
+dialog's Write cost hint on API prices, and the subtitle of the Dashboard's 5-hour ring and the note of the Analytics
+Burn view's Plan per hour chart on Tiers and peak band. It reads the two tables in force: the shipped price table
+(`crates/ledger/api_prices.yaml`), or the file `stats.api_prices_path` names (default `./api_prices.yaml`) when that
+file exists, and the subscription cost model (`crates/ledger/subscription_costs.yaml`), or the file
+`stats.subscription_costs_path` names (see [Statistics](statistics.md)).
 
 **Tiers and peak band.** Windows by tier draws a row per tier the cost model sizes, its name over the tier key the
 profile reports, with the 5-hour and the 7-day window each as a bar labeled as a multiple of the smallest tier's window
@@ -280,8 +269,8 @@ frees within seconds. A probe answered `503 accounts_unavailable` because its ke
 flight is `retrying` rather than paused under `pool_exhausted`: its next attempt admits under the new pool.
 
 A probe the router refused with `503 ledger_behind`, its ledger catching up, holds under `ledger_behind` rather than
-`retrying`: its next attempt waits out that answer's `Retry-After`, or the pool's `retry_seconds` without one, and
-counts no failure toward `cold_probe_limit`, so a ledger that stays behind never pauses the recipe. The entry's expiry
+`retrying`: its next attempt waits out that answer's `Retry-After`, or the 30-second retry wait without one, and
+counts no failure toward the failure limit, so a ledger that stays behind never pauses the recipe. The entry's expiry
 still bounds the re-sends: once it passes, the recipe ends under `expired`, as under any other hold.
 
 A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
@@ -309,12 +298,12 @@ what sending the probes cost; both at the dearest listed cells for a model the p
 `probe_migrated`, a probe that landed on a different account than the recipe's; `wasted_probes` and `wasted_probe_usd`,
 probes settled wasted by one of the reasons above, and what they cost; `wasted_probe_reasons`, those wasted probes
 counted by the reason; and `probes_skipped`, a due probe a gate or a lapsed entry withheld rather than sending, for
-example because the cost cap or a cooldown already held the recipe.
+example because a cooldown already held the recipe.
 
-`GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost),
-`probes_24h` (`ok`, `failed`, `migrated`, `skipped`), and `cost_today` per pool against its daily cap. Its `bus_gaps`
-counts the times the engine found it had missed bus events; each gap discarded every observation still open, so those
-agents wait for their next request while an armed recipe keeps its schedule.
+`GET /admin/keepalive/overview` sums a week of these into `net_saved_7d_usd` (gross saved minus probe cost) and
+`probes_24h` (`ok`, `failed`, `migrated`, `skipped`). Its `bus_gaps` counts the times the engine found it had missed bus
+events; each gap discarded every observation still open, so those agents wait for their next request while an armed
+recipe keeps its schedule.
 
 ## In the console
 
@@ -324,18 +313,17 @@ session's fork badge](assets/sessions-light.png#only-light)
 session's fork badge](assets/sessions-dark.png#only-dark)
 
 The Sessions view opens with tiles for the session count, the cache-warming agents by state, cache probes in the last 24
-hours by outcome, sessions whose cache expired between turns, the keepalive engine's bus gaps, net savings over 7 days,
-and the day's probe cost in total and per pool against its cap; a tile whose read failed draws a dash with the reason on
-hover, and Try again under the tiles reads them again, as a line above the table does for a failed account read. Its
-table lists one row per session, led by the row's menu, and offers eleven columns, eight shown by default
-(last request, agents and next probe start hidden, and the Columns control turns any on): key, session,
-model, account, last used, requests, last request, agents, companion, cache warming, and next probe. The model
-column reads the family and version, with the whole id on hover, and the account cell names the account's kind on hover
-and to a screen reader. Opening a row expands into the recipe each of its agents carries. A session's menu offers "View
-in analytics" and "View in observe" once it has ledgered traffic, "View in routing log",
-which opens the log on that session's decisions, and Release. The analytics view opens on the requests of the
-key holder the row belongs to. The view reads its sessions again every 15 seconds, so a session that keeps sending
-requests stays on it, and its tiles once a minute.
+hours by outcome, sessions whose cache expired between turns, the keepalive engine's bus gaps, and net savings over 7
+days. A tile whose read failed draws a dash with the reason on hover, and Try again under the tiles reads them again, as
+a line above the table does for a failed account read. Its table lists one row per session, led by the row's menu, and
+offers eleven columns, eight shown by default (last request, agents and next probe start hidden, and the
+Columns control turns any on): key, session, model, account, last used, requests, last request, agents,
+companion, cache warming, and next probe. The model column reads the family and version, with the whole id on hover, and
+the account cell names the account's kind on hover and to a screen reader. Opening a row expands into the recipe each of
+its agents carries. A session's menu offers "View in analytics" and "View in observe" once it has ledgered traffic,
+"View in routing log", which opens the log on that session's decisions, and
+Release. The analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions
+again every 15 seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
 
 A session
 whose first request branched from another conversation carries a `fork at 3` badge beside its id, 3 being the depth

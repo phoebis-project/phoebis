@@ -50,16 +50,9 @@ const INCARNATION = 2 ** 32;
  * drifts from the route is refused here rather than agreed with.
  */
 const KEEPALIVE_RANGES: [NumericKeepaliveKey, string, number, number][] = [
-  ['coldProbeLimit', 'cold_probe_limit', 1, 20],
-  ['retrySeconds', 'retry_seconds', 1, 3_600],
-  ['retryMaxSeconds', 'retry_max_seconds', 1, 604_800],
   ['maxIdleSeconds', 'max_idle_seconds', 0, 31_536_000],
-  ['maxIdleTicks', 'max_idle_ticks', 0, 1_000_000],
-  ['leadSeconds5m', 'lead_seconds_5m', 0, 299],
-  ['leadSeconds1h', 'lead_seconds_1h', 0, 3_599],
-  ['jitterSeconds5m', 'jitter_seconds_5m', 0, 299],
-  ['jitterSeconds1h', 'jitter_seconds_1h', 0, 3_599],
-  ['netNegativeGraceProbes', 'net_negative_grace_probes', 0, 100],
+  ['maxParkedSeconds', 'max_parked_seconds', 60, 604_800],
+  ['scheduledHorizonSeconds', 'scheduled_horizon_seconds', 60, 604_800],
 ];
 
 /**
@@ -134,16 +127,9 @@ const poolRefusal = (input: PoolInput): string | null => {
   const k = input.keepalive;
   for (const [key, field, min, max] of KEEPALIVE_RANGES) {
     const value = k[key];
-    if (value < min || value > max) return `keepalive.${field} must be between ${min} and ${max}, not ${value}`;
-    if (key === 'retryMaxSeconds' && k.retryMaxSeconds < k.retrySeconds) return 'keepalive.retry_max_seconds must be at least keepalive.retry_seconds';
-    // The route reads the two sums once every lead and jitter has passed its own bound.
-    if (key === 'jitterSeconds1h') {
-      if (k.leadSeconds5m + k.jitterSeconds5m >= 300) return 'keepalive.lead_seconds_5m plus keepalive.jitter_seconds_5m must stay under the cache TTL they apply to';
-      if (k.leadSeconds1h + k.jitterSeconds1h >= 3_600) return 'keepalive.lead_seconds_1h plus keepalive.jitter_seconds_1h must stay under the cache TTL they apply to';
-    }
+    // A null ceiling is the recipe's break-even, which no bound applies to.
+    if (value !== null && (value < min || value > max)) return `keepalive.${field} must be between ${min} and ${max}, not ${value}`;
   }
-  if (k.costCapUsdPerDay !== null && !(k.costCapUsdPerDay > 0 && Number.isFinite(k.costCapUsdPerDay))) return 'keepalive.probe_cost_cap_usd_per_day must be null or a positive number';
-  if (k.capWindowSharePerDay !== null && !(k.capWindowSharePerDay >= 0 && k.capWindowSharePerDay <= 1)) return 'keepalive.probe_cap_window_share_per_day must be null or between 0 and 1';
   const engine = engineRefusal(input) ?? affinityRefusal(input);
   if (engine) return engine;
   if (k.enabled && affinity < 300) {
@@ -198,7 +184,6 @@ export const emptyStore = (): boolean => {
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
   busGaps: 0,
-  costToday: [],
   expiredBetweenTurns24h: 0,
   netSaved7dUsd: 0,
   probes24h: { failed: 0, migrated: 0, ok: 0, skipped: 0 },

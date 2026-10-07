@@ -4,7 +4,9 @@ mod common;
 
 use common::*;
 use fake_upstream::{Respond, SseEvent};
-use phoebis_keepalive::{CompanionState, Event, KeepalivePolicy, Reason, MAIN_AGENT, MAX_WORKERS};
+use phoebis_keepalive::{
+    CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, MAIN_AGENT, MAX_WORKERS,
+};
 use phoebis_store::AccountState;
 
 fn json(status: u16, body: &str) -> Respond {
@@ -350,7 +352,7 @@ fn the_recipe_keeps_a_client_sent_placeholder_line() {
 async fn a_heartbeat_does_not_reset_idle_or_refresh() {
     let mut r = rig(RigSpec {
         policy: KeepalivePolicy {
-            max_idle_ticks: 1,
+            max_idle_seconds: 500,
             ..RigSpec::default().policy
         },
         ..RigSpec::default()
@@ -386,7 +388,6 @@ async fn idle_seconds_include_parked_time_and_exclude_subagents() {
     let mut r = rig(RigSpec {
         policy: KeepalivePolicy {
             max_idle_seconds: 60,
-            max_idle_ticks: 1,
             ..RigSpec::default().policy
         },
         ..RigSpec::default()
@@ -813,12 +814,9 @@ async fn concurrency_is_bounded_by_max_workers_alone() {
 async fn a_migration_does_not_accumulate_a_cold_streak() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0), api_key("b", B, 0)],
-        // Every probe here is priced, the migrated one included; the net stop would hold the fourth, and this case
-        // is about the cold streak alone.
-        policy: KeepalivePolicy {
+        timing: KeepaliveTiming {
             cold_probe_limit: 3,
-            stop_when_net_negative: false,
-            ..RigSpec::default().policy
+            ..RigSpec::default().timing
         },
         ..RigSpec::default()
     })
@@ -1101,17 +1099,20 @@ async fn a_probe_that_read_its_clock_before_midnight_does_not_roll_the_day_back(
 }
 
 #[tokio::test]
-async fn retries_back_off_with_the_pools_settings_and_stop_at_the_limit() {
-    let mut r = rig(RigSpec {
+async fn retries_back_off_by_the_timing_and_pause_at_the_failure_limit() {
+    let timing = KeepaliveTiming {
         // A lead of two minutes leaves room for both retries before the entry expires at 300 s, past which none
         // would be sent.
-        policy: KeepalivePolicy {
-            cold_probe_limit: 3,
-            lead_seconds_5m: 120,
-            retry_seconds: 30,
-            retry_max_seconds: 45,
-            ..RigSpec::default().policy
-        },
+        lead_5m_ms: 120_000,
+        ..RigSpec::default().timing
+    };
+    assert_eq!(
+        (timing.retry_ms, timing.retry_max_ms, timing.failure_limit),
+        (30_000, 300_000, 3),
+        "the rig keeps the spec's backoff"
+    );
+    let mut r = rig(RigSpec {
+        timing,
         ..RigSpec::default()
     })
     .await;
@@ -1128,18 +1129,18 @@ async fn retries_back_off_with_the_pools_settings_and_stop_at_the_limit() {
     assert_eq!(
         (r.status("main").failures, r.status("main").next_probe_at),
         (1, Some(r.now() + 30_000)),
-        "retry_seconds after the first failure"
+        "30 s after the first failure"
     );
     r.up.push_credential_rule(A, "/v1/messages", server_error());
     r.advance(30_000);
     r.step().await;
     assert_eq!(
         (r.status("main").failures, r.status("main").next_probe_at),
-        (2, Some(r.now() + 45_000)),
-        "doubled, then capped at retry_max_seconds"
+        (2, Some(r.now() + 60_000)),
+        "doubled after the second"
     );
     r.up.push_credential_rule(A, "/v1/messages", server_error());
-    r.advance(45_000);
+    r.advance(60_000);
     r.step().await;
     assert_eq!(
         (

@@ -890,41 +890,6 @@ async fn a_request_observed_inside_a_gaps_backlog_never_arms() {
     assert!(r.status("main").next_probe_at.is_some() && r.engine.stats().retained_bytes > 0);
 }
 
-#[tokio::test]
-async fn warm_subagents_off_retains_the_main_agent_and_declines_a_subagent() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            enabled: true,
-            warm_subagents: false,
-            ..Default::default()
-        },
-        ..Default::default()
-    })
-    .await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("sub-1".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    r.observe("main").await;
-    assert_eq!(r.status("main").reason, Reason::Scheduled);
-    r.observe("sub-1").await;
-    assert_eq!(
-        r.status("sub-1").reason,
-        Reason::SubagentsOff,
-        "declined before a recipe is built"
-    );
-    assert_eq!(
-        r.engine
-            .recipes()
-            .iter()
-            .filter(|v| v.agent_id == "sub-1")
-            .count(),
-        0
-    );
-}
-
 /// An auxiliary or a foreign request must leave an armed recipe's schedule and retained bytes exactly as they
 /// were, proving the guard set the request aside before it ever reached `make_recipe`.
 #[tokio::test]

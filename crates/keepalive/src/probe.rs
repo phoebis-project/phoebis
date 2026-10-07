@@ -124,8 +124,8 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
-/// The unit and the cost a probe settles in: the unit `settlement_unit` decides, the same decision the gate took, and
-/// the probe's own usage priced in it.
+/// The unit and the cost a probe settles in: the unit `settlement_unit` decides, and the probe's own usage priced in
+/// it.
 #[allow(clippy::too_many_arguments)]
 fn settled_cost(
     default_unit: SavingsUnit,
@@ -506,7 +506,7 @@ impl Inner {
             .agents
             .get_mut(agent_id)
             .unwrap();
-        let cold_limit = agent.policy.cold_probe_limit;
+        let cold_limit = agent.timing.cold_probe_limit;
         let result = match exchange {
             Exchange::Cancelled | Exchange::TimedOut => {
                 self.probe_error(key, agent_id, 0, None, None, None, false, now);
@@ -743,7 +743,7 @@ impl Inner {
                 .agents
                 .get_mut(agent_id)
                 .unwrap();
-            let wait_ms = retry_after_secs.map_or(agent.policy.retry_ms(), |secs| {
+            let wait_ms = retry_after_secs.map_or(agent.timing.retry_ms, |secs| {
                 i64::try_from(secs)
                     .unwrap_or(i64::MAX)
                     .saturating_mul(1_000)
@@ -764,11 +764,10 @@ impl Inner {
         self.pause(key, agent_id);
     }
 
-    /// Exponential backoff from the pool's `retry_seconds`, capped at its `retry_max_seconds`, unless
-    /// `override_delay_ms` names this attempt's own wait (the `accounts_at_cap` header); the cold-probe limit
-    /// bounds consecutive retries either way. A retry that falls past the entry's expiry needs no check here: the
-    /// due time is the later of the two, so the first tick at or after the expiry holds the recipe as lapsed
-    /// before the retry could send.
+    /// Exponential backoff from the timing's `retry_ms`, capped at its `retry_max_ms`, unless `override_delay_ms`
+    /// names this attempt's own wait (the `accounts_at_cap` header); the failure limit bounds consecutive retries
+    /// either way. A retry that falls past the entry's expiry needs no check here: the due time is the later of the
+    /// two, so the first tick at or after the expiry holds the recipe as lapsed before the retry could send.
     pub(crate) fn retry(
         &mut self,
         key: &SessionKey,
@@ -785,16 +784,16 @@ impl Inner {
             .get_mut(agent_id)
             .unwrap();
         agent.failures += 1;
-        if agent.failures >= agent.policy.cold_probe_limit {
+        if agent.failures >= agent.timing.failure_limit {
             self.set_reason(key, agent_id, Reason::ProbeRetryLimit);
             self.pause(key, agent_id);
             return;
         }
         let delay = match override_delay_ms {
-            Some(delay) => delay.min(agent.policy.retry_max_ms()),
+            Some(delay) => delay.min(agent.timing.retry_max_ms),
             None => {
                 let exponent = (agent.failures - 1).min(4);
-                (agent.policy.retry_ms() << exponent).min(agent.policy.retry_max_ms())
+                (agent.timing.retry_ms << exponent).min(agent.timing.retry_max_ms)
             }
         };
         agent.retry_at = Some(now + delay);
@@ -817,26 +816,14 @@ impl Inner {
                 agent.last_activity,
             )
         };
-        counted
-            && ((agent.policy.max_idle_ticks > 0
-                && agent.idle_ticks >= agent.policy.max_idle_ticks)
-                || agent
-                    .policy
-                    .max_idle_ms()
-                    .is_some_and(|limit| now >= since + limit))
+        // Zero resolves to the recipe's break-even, which this check does not compute, so it bounds nothing here.
+        let limit_ms = agent.policy.max_idle_seconds as i64 * 1_000;
+        counted && limit_ms > 0 && now >= since + limit_ms
     }
 }
 
-/// A paid probe on the agent's net. The grace budget is granted on the way into a negative net, so the first paid
-/// probe leaves the configured allowance; each further paid probe while negative spends one.
 fn debit(agent: &mut Agent, unit: SavingsUnit, cost: f64) {
-    let was_negative = agent.net.in_unit(unit) < 0.0;
     agent.net.add(unit, -cost);
-    if agent.net.in_unit(unit) < 0.0 && !was_negative {
-        agent.grace_left = agent.policy.net_negative_grace_probes;
-    } else if agent.net.in_unit(unit) < 0.0 && agent.grace_left > 0 {
-        agent.grace_left -= 1;
-    }
 }
 
 pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
@@ -850,6 +837,7 @@ pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
 mod tests {
     use std::collections::BTreeMap;
 
+    use crate::config::KeepaliveTiming;
     use crate::engine::{Agent, Session};
 
     use super::*;
@@ -859,8 +847,11 @@ mod tests {
     fn one_agent_inner() -> (Inner, SessionKey) {
         let key: SessionKey = ("k".into(), "s".into());
         let mut agents = BTreeMap::new();
-        agents.insert("main".to_string(), Agent::new("main", "k", 1, 0));
-        let mut inner = Inner::empty(None);
+        agents.insert(
+            "main".to_string(),
+            Agent::new("main", "k", 1, 0, KeepaliveTiming::default()),
+        );
+        let mut inner = Inner::empty(None, KeepaliveTiming::default());
         inner.agents = 1;
         inner.sessions.insert(
             key.clone(),
@@ -978,7 +969,7 @@ mod tests {
         );
         let agent = &inner.sessions[&key].agents["main"];
         assert!(!agent.paused);
-        assert_eq!(agent.retry_at, Some(1_000 + agent.policy.retry_ms()));
+        assert_eq!(agent.retry_at, Some(1_000 + agent.timing.retry_ms));
     }
 
     #[test]
@@ -1003,7 +994,7 @@ mod tests {
     }
 
     #[test]
-    fn a_ledger_behind_answer_without_a_header_waits_the_pools_retry_seconds() {
+    fn a_ledger_behind_answer_without_a_header_waits_the_timings_retry() {
         let (mut inner, key) = one_agent_inner();
         inner.probe_error(
             &key,
@@ -1021,17 +1012,17 @@ mod tests {
             (
                 false,
                 0,
-                Some(1_000 + agent.policy.retry_ms()),
+                Some(1_000 + agent.timing.retry_ms),
                 Reason::LedgerBehind
             ),
-            "the pool's base wait stands in for a missing header, still with no failure counted"
+            "the timing's base wait stands in for a missing header, still with no failure counted"
         );
     }
 
     #[test]
-    fn cold_probe_limit_ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
+    fn failure_limit_ledger_behind_answers_in_a_row_never_reach_the_retry_limit() {
         let (mut inner, key) = one_agent_inner();
-        let answers = inner.sessions[&key].agents["main"].policy.cold_probe_limit + 1;
+        let answers = inner.sessions[&key].agents["main"].timing.failure_limit + 1;
         for answer in 0..answers {
             let now = 1_000 + i64::from(answer) * 6_000;
             inner.probe_error(

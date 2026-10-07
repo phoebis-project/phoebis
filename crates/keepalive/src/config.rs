@@ -1,5 +1,5 @@
-//! The two configuration records: the process-wide limits the bootstrap file carries, read once at start, and
-//! the per-pool policy a pool row carries, parsed on every read.
+//! The configuration records: the process-wide limits the bootstrap file carries, read once at start, the
+//! per-pool policy a pool row carries, parsed on every read, and the schedule's fixed timing.
 
 use serde::{Deserialize, Serialize};
 
@@ -85,62 +85,40 @@ impl KeepaliveLimits {
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, default)]
 pub struct KeepalivePolicy {
-    pub cold_probe_limit: u32,
     pub enabled: bool,
-    pub jitter_seconds_1h: u64,
-    pub jitter_seconds_5m: u64,
-    pub lead_seconds_1h: u64,
-    pub lead_seconds_5m: u64,
+    /// The idle window of the main conversation. 0 resolves to the recipe's break-even, as does any value above it.
     pub max_idle_seconds: u64,
-    pub max_idle_ticks: u64,
-    pub net_negative_grace_probes: u32,
-    /// Probes stop for the day once a subscription account's probes have consumed this share of its 5-hour
-    /// window; `None` is uncapped. Between 0 and 1.
-    pub probe_cap_window_share_per_day: Option<f64>,
-    pub probe_cost_cap_usd_per_day: Option<f64>,
-    pub retry_max_seconds: u64,
-    pub retry_seconds: u64,
-    pub stop_when_net_negative: bool,
-    /// Off retains no recipe for an agent other than `main`; a subagent's requests still count as real traffic
-    /// for the main agent's idle limits, since the session is alive.
-    pub warm_subagents: bool,
+    /// How long a park on a background command or a subagent is probed. `None` is the recipe's break-even.
+    pub max_parked_seconds: Option<u64>,
+    /// A park on a scheduled wakeup is probed while the wake is at most this far away. `None` is the recipe's
+    /// break-even.
+    pub scheduled_horizon_seconds: Option<u64>,
 }
 
 impl Default for KeepalivePolicy {
     fn default() -> Self {
         KeepalivePolicy {
-            cold_probe_limit: 2,
             enabled: false,
-            jitter_seconds_1h: 30,
-            jitter_seconds_5m: 5,
-            lead_seconds_1h: 360,
-            lead_seconds_5m: 60,
             max_idle_seconds: 3_600,
-            max_idle_ticks: 0,
-            net_negative_grace_probes: 2,
-            probe_cap_window_share_per_day: None,
-            probe_cost_cap_usd_per_day: None,
-            retry_max_seconds: 300,
-            retry_seconds: 30,
-            stop_when_net_negative: true,
-            warm_subagents: true,
+            max_parked_seconds: None,
+            scheduled_horizon_seconds: None,
         }
     }
 }
+
+/// The members a stored row is read for. A row saved before a field left still names it, and only the admin path
+/// refuses an unknown name: a stored one is ignored so the pool keeps the four fields it had.
+const POLICY_MEMBERS: [&str; 4] = [
+    "enabled",
+    "max_idle_seconds",
+    "max_parked_seconds",
+    "scheduled_horizon_seconds",
+];
 
 #[derive(Debug, thiserror::Error, PartialEq)]
 pub enum PolicyError {
     #[error("keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter than the shortest cache TTL cannot keep the session on the account it warmed")]
     AffinityTooShort,
-    #[error("keepalive.probe_cost_cap_usd_per_day must be null or a positive number")]
-    CapNotPositive,
-    #[error(
-        "keepalive.{lead} plus keepalive.{jitter} must stay under the cache TTL they apply to"
-    )]
-    LeadPlusJitter {
-        lead: &'static str,
-        jitter: &'static str,
-    },
     #[error("keepalive.{field} must be between {min} and {max}, not {value}")]
     OutOfRange {
         field: &'static str,
@@ -148,10 +126,6 @@ pub enum PolicyError {
         max: u64,
         value: u64,
     },
-    #[error("keepalive.retry_max_seconds must be at least keepalive.retry_seconds")]
-    RetryMaxBelowRetry,
-    #[error("keepalive.probe_cap_window_share_per_day must be null or between 0 and 1")]
-    ShareOutOfRange,
     #[error("keepalive is not a policy object: {0}")]
     Shape(String),
 }
@@ -182,7 +156,15 @@ impl KeepalivePolicy {
 
     /// A stored row with the refusal that turns it off, for the one place that reports it.
     pub fn read(raw: &str) -> Result<KeepalivePolicy, PolicyError> {
-        let policy = serde_json::from_str::<KeepalivePolicy>(raw)
+        let value: serde_json::Value =
+            serde_json::from_str(raw).map_err(|e| PolicyError::Shape(e.to_string()))?;
+        let serde_json::Value::Object(mut members) = value else {
+            return Err(PolicyError::Shape(
+                "keepalive policy must be a JSON object".to_string(),
+            ));
+        };
+        members.retain(|name, _| POLICY_MEMBERS.contains(&name.as_str()));
+        let policy: KeepalivePolicy = serde_json::from_value(serde_json::Value::Object(members))
             .map_err(|e| PolicyError::Shape(e.to_string()))?;
         policy.validate_fields()?;
         Ok(policy)
@@ -196,67 +178,17 @@ impl KeepalivePolicy {
             value,
         };
         bound(
-            "cold_probe_limit",
-            u64::from(self.cold_probe_limit),
-            1,
-            20,
-            range,
-        )?;
-        bound("retry_seconds", self.retry_seconds, 1, 3_600, range)?;
-        bound(
-            "retry_max_seconds",
-            self.retry_max_seconds,
-            1,
-            604_800,
-            range,
-        )?;
-        if self.retry_max_seconds < self.retry_seconds {
-            return Err(PolicyError::RetryMaxBelowRetry);
-        }
-        bound(
             "max_idle_seconds",
             self.max_idle_seconds,
             0,
             31_536_000,
             range,
         )?;
-        bound("max_idle_ticks", self.max_idle_ticks, 0, 1_000_000, range)?;
-        // A lead and its jitter together at or past the TTL they apply to would put the due time before the cache
-        // was even written; each alone is bounded first, so the sums cannot overflow.
-        bound("lead_seconds_5m", self.lead_seconds_5m, 0, 299, range)?;
-        bound("lead_seconds_1h", self.lead_seconds_1h, 0, 3_599, range)?;
-        bound("jitter_seconds_5m", self.jitter_seconds_5m, 0, 299, range)?;
-        bound("jitter_seconds_1h", self.jitter_seconds_1h, 0, 3_599, range)?;
-        if self.lead_seconds_5m + self.jitter_seconds_5m >= 300 {
-            return Err(PolicyError::LeadPlusJitter {
-                lead: "lead_seconds_5m",
-                jitter: "jitter_seconds_5m",
-            });
+        if let Some(seconds) = self.max_parked_seconds {
+            bound("max_parked_seconds", seconds, 60, 604_800, range)?;
         }
-        if self.lead_seconds_1h + self.jitter_seconds_1h >= 3_600 {
-            return Err(PolicyError::LeadPlusJitter {
-                lead: "lead_seconds_1h",
-                jitter: "jitter_seconds_1h",
-            });
-        }
-        bound(
-            "net_negative_grace_probes",
-            u64::from(self.net_negative_grace_probes),
-            0,
-            100,
-            range,
-        )?;
-        if self
-            .probe_cost_cap_usd_per_day
-            .is_some_and(|cap| cap <= 0.0 || !cap.is_finite())
-        {
-            return Err(PolicyError::CapNotPositive);
-        }
-        if self
-            .probe_cap_window_share_per_day
-            .is_some_and(|share| !(0.0..=1.0).contains(&share))
-        {
-            return Err(PolicyError::ShareOutOfRange);
+        if let Some(seconds) = self.scheduled_horizon_seconds {
+            bound("scheduled_horizon_seconds", seconds, 60, 604_800, range)?;
         }
         Ok(())
     }
@@ -268,34 +200,85 @@ impl KeepalivePolicy {
         }
         Ok(())
     }
+}
+
+/// The schedule's fixed numbers: not an operator's setting, and read by the binary through `for_start`.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct KeepaliveTiming {
+    /// A probe lands with a minute to spare on a five-minute entry.
+    pub lead_5m_ms: i64,
+    /// Six minutes on a one-hour entry, the Go engine's margin.
+    pub lead_1h_ms: i64,
+    /// Spreads a pool's probes so one tick never bursts.
+    pub jitter_5m_ms: i64,
+    pub jitter_1h_ms: i64,
+    /// Two cold probes in a row and the entry is gone for good.
+    pub cold_probe_limit: u32,
+    /// Transient failures before the recipe pauses.
+    pub failure_limit: u32,
+    /// The first retry's wait, which each further failure doubles up to `retry_max_ms`.
+    pub retry_ms: i64,
+    pub retry_max_ms: i64,
+}
+
+impl Default for KeepaliveTiming {
+    fn default() -> Self {
+        KeepaliveTiming {
+            lead_5m_ms: 60_000,
+            lead_1h_ms: 360_000,
+            jitter_5m_ms: 5_000,
+            jitter_1h_ms: 30_000,
+            cold_probe_limit: 2,
+            failure_limit: 3,
+            retry_ms: 30_000,
+            retry_max_ms: 300_000,
+        }
+    }
+}
+
+impl KeepaliveTiming {
+    /// The default. Under the `debug-hooks` feature, which only the router's test build turns on,
+    /// `PHOEBIS_DEBUG_KEEPALIVE_LEAD_5M_SECONDS` and `PHOEBIS_DEBUG_KEEPALIVE_JITTER_5M_SECONDS` replace the
+    /// five-minute lead and jitter, so an end-to-end test sees a probe a second after its request rather than
+    /// four minutes later.
+    pub fn for_start() -> KeepaliveTiming {
+        #[allow(unused_mut)]
+        let mut timing = KeepaliveTiming::default();
+        #[cfg(feature = "debug-hooks")]
+        {
+            let seconds = |name: &str| {
+                std::env::var(name)
+                    .ok()
+                    .and_then(|value| value.parse::<i64>().ok())
+            };
+            if let Some(lead) = seconds("PHOEBIS_DEBUG_KEEPALIVE_LEAD_5M_SECONDS") {
+                timing.lead_5m_ms = lead * 1_000;
+            }
+            if let Some(jitter) = seconds("PHOEBIS_DEBUG_KEEPALIVE_JITTER_5M_SECONDS") {
+                timing.jitter_5m_ms = jitter * 1_000;
+            }
+        }
+        timing
+    }
 
     pub fn lead_ms(&self, ttl_ms: i64) -> i64 {
-        (if ttl_ms > FIVE_MINUTES_MS {
-            self.lead_seconds_1h
+        if ttl_ms > FIVE_MINUTES_MS {
+            self.lead_1h_ms
         } else {
-            self.lead_seconds_5m
-        }) as i64
-            * 1_000
+            self.lead_5m_ms
+        }
     }
 
     pub fn jitter_ms(&self, ttl_ms: i64) -> i64 {
-        (if ttl_ms > FIVE_MINUTES_MS {
-            self.jitter_seconds_1h
+        if ttl_ms > FIVE_MINUTES_MS {
+            self.jitter_1h_ms
         } else {
-            self.jitter_seconds_5m
-        }) as i64
-            * 1_000
+            self.jitter_5m_ms
+        }
     }
 
-    pub fn retry_ms(&self) -> i64 {
-        self.retry_seconds as i64 * 1_000
-    }
-
-    pub fn retry_max_ms(&self) -> i64 {
-        self.retry_max_seconds as i64 * 1_000
-    }
-
-    pub fn max_idle_ms(&self) -> Option<i64> {
-        (self.max_idle_seconds > 0).then(|| self.max_idle_seconds as i64 * 1_000)
+    /// Probes an hour on an entry of `ttl_ms`: one every TTL less the lead, 15 on five minutes and 1.11 on an hour.
+    pub fn cadence_per_hour(&self, ttl_ms: i64) -> f64 {
+        ONE_HOUR_MS as f64 / (ttl_ms - self.lead_ms(ttl_ms)) as f64
     }
 }

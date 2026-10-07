@@ -15,7 +15,7 @@ use phoebis_admin::{
 };
 use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
 use phoebis_bus::Bus;
-use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits};
+use phoebis_keepalive::{Engine, EngineParts, KeepaliveLimits, KeepaliveTiming};
 use phoebis_ledger::{
     spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
 };
@@ -877,6 +877,7 @@ async fn build_app(
         session_expiry: Duration::from_secs(86_400),
         store: store.clone(),
         tables: tables.clone(),
+        timing: KeepaliveTiming::default(),
     });
     let (attention, attention_handles) = phoebis_attention::spawn(AttentionParts {
         bus: bus.clone(),

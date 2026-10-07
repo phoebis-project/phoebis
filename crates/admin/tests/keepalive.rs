@@ -15,16 +15,15 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     )
     .await;
     assert_eq!(created.status(), 201);
-    let body = json(created).await;
-    assert_eq!(body["keepalive"]["enabled"], false);
     assert_eq!(
-        (
-            body["keepalive"]["lead_seconds_5m"].as_u64(),
-            body["keepalive"]["retry_max_seconds"].as_u64(),
-            body["keepalive"]["probe_cost_cap_usd_per_day"].is_null()
-        ),
-        (Some(60), Some(300), true),
-        "a pool created without a policy renders the defaults"
+        json(created).await["keepalive"],
+        serde_json::json!({
+            "enabled": false,
+            "max_idle_seconds": 3_600,
+            "max_parked_seconds": null,
+            "scheduled_horizon_seconds": null
+        }),
+        "a pool created without a policy renders the four fields with their defaults"
     );
     let refused = patch(
         &app,
@@ -41,7 +40,21 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     let refused = patch(
         &app,
         "/admin/pools/main",
-        r#"{"keepalive":{"cold_probe_limit":0}}"#,
+        r#"{"keepalive":{"lead_seconds_5m":90}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        refused.status(),
+        400,
+        "a removed field is refused as any unknown field"
+    );
+    let error = json(refused).await["error"].as_str().unwrap().to_string();
+    assert!(error.contains("unknown field `lead_seconds_5m`"), "{error}");
+    let refused = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"keepalive":{"max_parked_seconds":59}}"#,
         Some(&cookie),
     )
     .await;
@@ -49,7 +62,7 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     assert!(json(refused).await["error"]
         .as_str()
         .unwrap()
-        .contains("cold_probe_limit must be between 1 and 20"));
+        .contains("max_parked_seconds must be between 60 and 604800, not 59"));
     assert_eq!(
         patch(
             &app,
@@ -100,17 +113,17 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
         400,
         "enabling on a pool whose affinity is already short"
     );
-    let enabled = patch(&app, "/admin/pools/main", r#"{"affinity_ttl_seconds":600,"keepalive":{"enabled":true,"lead_seconds_5m":90,"probe_cost_cap_usd_per_day":2.5}}"#, Some(&cookie)).await;
+    let enabled = patch(&app, "/admin/pools/main", r#"{"affinity_ttl_seconds":600,"keepalive":{"enabled":true,"max_idle_seconds":900,"max_parked_seconds":7200}}"#, Some(&cookie)).await;
     assert_eq!(enabled.status(), 200);
-    let body = json(enabled).await;
     assert_eq!(
-        (
-            body["keepalive"]["enabled"].as_bool(),
-            body["keepalive"]["lead_seconds_5m"].as_u64(),
-            body["keepalive"]["probe_cost_cap_usd_per_day"].as_f64(),
-            body["keepalive"]["jitter_seconds_1h"].as_u64()
-        ),
-        (Some(true), Some(90), Some(2.5), Some(30))
+        json(enabled).await["keepalive"],
+        serde_json::json!({
+            "enabled": true,
+            "max_idle_seconds": 900,
+            "max_parked_seconds": 7_200,
+            "scheduled_horizon_seconds": null
+        }),
+        "a null the PATCH left alone stays null on the way out"
     );
     assert_eq!(
         patch(
@@ -158,10 +171,23 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     assert_eq!(
         (
             main["keepalive"]["enabled"].as_bool(),
-            main["keepalive"]["lead_seconds_5m"].as_u64()
+            main["keepalive"]["max_idle_seconds"].as_u64(),
+            main["keepalive"]["max_parked_seconds"].as_u64()
         ),
-        (Some(false), Some(90)),
-        "the tuning survives the toggle"
+        (Some(false), Some(900), Some(7_200)),
+        "the fields survive the toggle"
+    );
+    let cleared = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"keepalive":{"max_parked_seconds":null}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(cleared.status(), 200);
+    assert!(
+        json(cleared).await["keepalive"]["max_parked_seconds"].is_null(),
+        "a null sets the field back to the recipe's break-even"
     );
     let with_policy = post(
         &app,
@@ -178,7 +204,7 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
     let refused = post(
         &app,
         "/admin/pools",
-        r#"{"id":"typo","label":"Typo","strategy":"priority","keepalive":{"warm_subagents":1}}"#,
+        r#"{"id":"typo","label":"Typo","strategy":"priority","keepalive":{"max_idle_second":60}}"#,
         Some(&cookie),
     )
     .await;
@@ -187,48 +213,78 @@ async fn a_pool_policy_is_typed_gated_by_affinity_and_rendered_whole() {
         .as_str()
         .unwrap()
         .starts_with("keepalive is not a policy object"));
-    let quiet = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"quiet","label":"Quiet","strategy":"priority","keepalive":{"enabled":true,"warm_subagents":false}}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(quiet.status(), 201);
-    assert_eq!(json(quiet).await["keepalive"]["warm_subagents"], false);
-    let untouched = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"loud","label":"Loud","strategy":"priority","keepalive":{}}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(untouched.status(), 201);
-    assert_eq!(json(untouched).await["keepalive"]["warm_subagents"], true);
-    let shared = patch(
+    let refused_horizon = patch(
         &app,
         "/admin/pools/main",
-        r#"{"keepalive":{"probe_cap_window_share_per_day":0.1}}"#,
+        r#"{"keepalive":{"scheduled_horizon_seconds":604801}}"#,
         Some(&cookie),
     )
     .await;
-    assert_eq!(shared.status(), 200);
-    assert_eq!(
-        json(shared).await["keepalive"]["probe_cap_window_share_per_day"].as_f64(),
-        Some(0.1)
-    );
-    let refused_share = patch(
-        &app,
-        "/admin/pools/main",
-        r#"{"keepalive":{"probe_cap_window_share_per_day":1.5}}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(refused_share.status(), 400);
-    assert!(json(refused_share).await["error"]
+    assert_eq!(refused_horizon.status(), 400);
+    assert!(json(refused_horizon).await["error"]
         .as_str()
         .unwrap()
-        .contains("probe_cap_window_share_per_day must be null or between 0 and 1"));
+        .contains("scheduled_horizon_seconds must be between 60 and 604800, not 604801"));
+}
+
+#[tokio::test]
+async fn a_stored_policy_naming_a_removed_field_reads_as_its_four_fields() {
+    let (app, _up, store, router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let mut row = store.pool("main").unwrap().unwrap();
+    row.keepalive_json = r#"{"enabled":true,"lead_seconds_5m":90}"#.into();
+    store.update_pool(&row, row.updated_at, "test").unwrap();
+    router.reload().await.unwrap();
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let main = listed["pools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "main")
+        .unwrap();
+    assert_eq!(
+        main["keepalive"],
+        serde_json::json!({
+            "enabled": true,
+            "max_idle_seconds": 3_600,
+            "max_parked_seconds": null,
+            "scheduled_horizon_seconds": null
+        }),
+        "the stored row stays on with the three defaults rather than reading as off"
+    );
+    let patched = patch(
+        &app,
+        "/admin/pools/main",
+        r#"{"keepalive":{"max_idle_seconds":600}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        patched.status(),
+        200,
+        "a PATCH over the stored row merges onto its four fields"
+    );
+    assert_eq!(
+        (
+            json(patched).await["keepalive"]["enabled"].as_bool(),
+            store
+                .pool("main")
+                .unwrap()
+                .unwrap()
+                .keepalive_json
+                .contains("lead_seconds_5m")
+        ),
+        (Some(true), false),
+        "the save writes the four fields alone"
+    );
 }
 
 use phoebis_keepalive::Event;
@@ -474,7 +530,6 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
         [
             "agents",
             "bus_gaps",
-            "cost_today",
             "expired_between_turns_24h",
             "net_saved_7d_usd",
             "probes_24h"
@@ -483,11 +538,9 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
     assert_eq!(
         (
             overview["agents"]["busy"].as_u64(),
-            overview["bus_gaps"].as_u64(),
-            overview["cost_today"][0]["pool_id"].as_str(),
-            overview["cost_today"][0]["cap_usd"].is_null()
+            overview["bus_gaps"].as_u64()
         ),
-        (Some(1), Some(0), Some("main"), true)
+        (Some(1), Some(0))
     );
     // Release discards the recipes; with no pin the router releases nothing, and the route still answers 204.
     let released = post(

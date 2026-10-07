@@ -7,7 +7,7 @@ import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
-import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Meter, Skeleton, useDescription } from '@/components/ui/primitives';
+import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, fmtShare, fmtUsd, shortId, shortModel, undatedModel } from '@/lib/format';
 import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
@@ -264,7 +264,6 @@ export function SessionsPage() {
           error={overviewError}
         />
         <Tile label="Net saved, 7d" value={o ? fmtUsd(o.netSaved7dUsd) : null} note="gross saved minus probe cost" tone={o && o.netSaved7dUsd < 0 ? 'critical' : undefined} error={overviewError} />
-        <CostTile overview={o} error={overviewError} />
       </div>
       {overviewError !== null && (
         <p className="sessions__notice" role="status">
@@ -714,33 +713,3 @@ function ProbeTile({ error, overview: o }: { error: string | null; overview: Kee
   );
 }
 
-function CostTile({ error, overview: o }: { error: string | null; overview: KeepaliveOverview | null }) {
-  return (
-    <Tile
-      label="Probe cost today"
-      value={o ? fmtUsd(o.costToday.reduce((sum, c) => sum + c.usd, 0)) : null}
-      error={error}
-      note={
-        o ? (
-          <ul className="cost-caps">
-            {o.costToday.map((c) => {
-              const ratio = c.capUsd ? c.usd / c.capUsd : 0;
-              return (
-                <li key={c.poolId}>
-                  <div className="cost-caps__head">
-                    <span className="mono">{c.poolId}</span>
-                    <span className="num">
-                      {fmtUsd(c.usd)}
-                      {c.capUsd !== null ? <span className="muted"> of {fmtUsd(c.capUsd)}</span> : <span className="muted"> uncapped</span>}
-                    </span>
-                  </div>
-                  {c.capUsd !== null && <Meter value={ratio} tone={ratio >= 0.9 ? 'low' : ratio >= 0.6 ? 'warn' : 'accent'} thin label={`Probe cost today for ${c.poolId} against its cap`} />}
-                </li>
-              );
-            })}
-          </ul>
-        ) : null
-      }
-    />
-  );
-}

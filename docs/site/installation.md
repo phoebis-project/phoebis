@@ -481,7 +481,7 @@ admin:
   # Without tls the listener serves plain HTTP on the address named, loopback or not.
   secret_env: PHOEBIS_ADMIN_SECRET
 keepalive:
-  # Process-wide limits only. Whether a pool's sessions are probed, and the probe tuning, are pool settings in
+  # Process-wide limits only. Whether a pool's sessions are probed, and for how long, are pool settings in
   # the registry. The largest retained recipe follows proxy.max_request_bytes, the relay's request body bound.
   max_agents: 1024
   max_retained_bytes: 268435456

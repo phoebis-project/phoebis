@@ -56,44 +56,19 @@ test('a pool input refuses the affinity the router refuses', () => {
 
 test('a pool input refuses every keepalive bound the policy check refuses', () => {
   const bounds = {
-    coldProbeLimit: [1, 20],
-    jitterSeconds1h: [0, 3_599],
-    jitterSeconds5m: [0, 299],
-    leadSeconds1h: [0, 3_599],
-    leadSeconds5m: [0, 299],
     maxIdleSeconds: [0, 31_536_000],
-    maxIdleTicks: [0, 1_000_000],
-    netNegativeGraceProbes: [0, 100],
-    retryMaxSeconds: [1, 604_800],
-    retrySeconds: [1, 3_600],
-  };
-  // The retry ceiling sits at or above its base, and a lead and its jitter stay under their TTL together, so each of
-  // a pair is read against the other at the setting that leaves it alone.
-  const pairs = {
-    jitterSeconds1h: { leadSeconds1h: 0 },
-    jitterSeconds5m: { leadSeconds5m: 0 },
-    leadSeconds1h: { jitterSeconds1h: 0 },
-    leadSeconds5m: { jitterSeconds5m: 0 },
-    retryMaxSeconds: { retrySeconds: 1 },
-    retrySeconds: { retryMaxSeconds: 604_800 },
+    maxParkedSeconds: [60, 604_800],
+    scheduledHorizonSeconds: [60, 604_800],
   };
   for (const [key, [min, max]] of Object.entries(bounds)) {
-    const other = pairs[key] ?? {};
-    assert.equal(d.validatePoolInput(tuned({ ...other, [key]: min }), accounts), true, `${key} ${min} is inside`);
-    assert.equal(d.validatePoolInput(tuned({ ...other, [key]: max }), accounts), true, `${key} ${max} is inside`);
-    assert.equal(d.validatePoolInput(tuned({ ...other, [key]: min - 1 }), accounts), false, `${key} ${min - 1} is below the floor`);
-    assert.equal(d.validatePoolInput(tuned({ ...other, [key]: max + 1 }), accounts), false, `${key} ${max + 1} is past the ceiling`);
+    assert.equal(d.validatePoolInput(tuned({ [key]: min }), accounts), true, `${key} ${min} is inside`);
+    assert.equal(d.validatePoolInput(tuned({ [key]: max }), accounts), true, `${key} ${max} is inside`);
+    assert.equal(d.validatePoolInput(tuned({ [key]: min - 1 }), accounts), false, `${key} ${min - 1} is below the floor`);
+    assert.equal(d.validatePoolInput(tuned({ [key]: max + 1 }), accounts), false, `${key} ${max + 1} is past the ceiling`);
   }
-  assert.equal(d.validatePoolInput(tuned({ coldProbeLimit: 2.5 }), accounts), false, 'counts are whole');
-  assert.equal(d.validatePoolInput(tuned({ retryMaxSeconds: 20, retrySeconds: 30 }), accounts), false, 'the ceiling sits at or above the base');
-  assert.equal(d.validatePoolInput(tuned({ retryMaxSeconds: 30, retrySeconds: 30 }), accounts), true);
-  assert.equal(d.validatePoolInput(tuned({ jitterSeconds5m: 100, leadSeconds5m: 200 }), accounts), false, 'a lead and its jitter stay under the TTL together');
-  assert.equal(d.validatePoolInput(tuned({ jitterSeconds1h: 600, leadSeconds1h: 3_000 }), accounts), false);
-  assert.equal(d.validatePoolInput(tuned({ jitterSeconds5m: 100, jitterSeconds1h: 600, leadSeconds5m: 199, leadSeconds1h: 2_999 }), accounts), true);
-  assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: 0 }), accounts), false, 'a cap is positive or absent');
-  assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: -1 }), accounts), false);
-  assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: null }), accounts), true);
-  assert.equal(d.validatePoolInput(tuned({ costCapUsdPerDay: 0.5 }), accounts), true);
+  assert.equal(d.validatePoolInput(tuned({ maxIdleSeconds: 2.5 }), accounts), false, 'seconds are whole');
+  assert.equal(d.validatePoolInput(tuned({ maxParkedSeconds: null, scheduledHorizonSeconds: null }), accounts), true, 'a null ceiling is the break-even');
+  assert.equal(d.validatePoolInput(tuned({ maxParkedSeconds: Number.NaN }), accounts), false, 'a switched-on ceiling left empty is held');
 });
 
 test('a pool input refuses members the member write would refuse', () => {
@@ -344,19 +319,12 @@ test('a pool refusal names the group its control sits in', () => {
     [{ overageMoveGraceMinutes: 301 }, refused('Overage grace (min)', 'overage', 'Overage grace (min) is a whole number from 0 to 300.')],
     [{ windDownMinutes: 10_081 }, refused('Wind down (min)', 'overage', 'Wind down (min) is a whole number from 0 to 10,080.')],
     [
-      { keepalive: { ...input.keepalive, netNegativeGraceProbes: 101 } },
-      refused('Grace probes after the net turns negative', 'keepalive', 'Grace probes after the net turns negative is a whole number from 0 to 100.'),
-    ],
-    [{ keepalive: { ...input.keepalive, costCapUsdPerDay: 0 } }, refused('Daily probe cost cap in dollars', 'keepalive', 'Daily probe cost cap ($) is above 0.')],
-    [
       { affinityTtlSeconds: 120, keepalive: { ...input.keepalive, enabled: true } },
       refused('Keep prompt caches warm', 'keepalive', 'Keep prompt caches warm needs Session affinity of at least 5m.'),
     ],
-    [{ keepalive: { ...input.keepalive, coldProbeLimit: 0 } }, refused('Cold probe limit', 'probeTuning', 'Cold probe limit is a whole number from 1 to 20.')],
-    [
-      { keepalive: { ...input.keepalive, retryMaxSeconds: 20, retrySeconds: 30 } },
-      refused('Retry backoff max (s)', 'probeTuning', 'Retry backoff max (s) is at or above Retry backoff base (s).'),
-    ],
+    [{ keepalive: { ...input.keepalive, maxIdleSeconds: 31_536_001 } }, refused('Max idle (s)', 'keepalive', 'Max idle (s) is a whole number from 0 to 31,536,000.')],
+    [{ keepalive: { ...input.keepalive, maxParkedSeconds: 59 } }, refused('Max parked (s)', 'keepalive', 'Max parked (s) is a whole number from 60 to 604,800.')],
+    [{ keepalive: { ...input.keepalive, scheduledHorizonSeconds: 604_801 } }, refused('Scheduled horizon (s)', 'keepalive', 'Scheduled horizon (s) is a whole number from 60 to 604,800.')],
   ];
   for (const [patch, expected, checks] of cases) assert.deepEqual(d.poolRefusals({ ...input, ...patch }, accounts, checks), expected, JSON.stringify(patch));
 });
@@ -384,11 +352,15 @@ test("a new pool's name is refused when its id is taken, by case or by punctuati
   assert.equal(d.slug('codex!'), 'codex', 'the id is the one the create call derives');
 });
 
-test('the Probe tuning rows lay out every numeric keepalive bound but the grace count, in the order the refusals read', () => {
-  assert.deepEqual(d.PROBE_TUNING_ROWS, [['leadSeconds5m', 'leadSeconds1h'], ['jitterSeconds5m', 'jitterSeconds1h'], ['coldProbeLimit'], ['retrySeconds', 'retryMaxSeconds'], ['maxIdleSeconds', 'maxIdleTicks']]);
-  assert.deepEqual(d.PROBE_TUNING_KEYS, d.PROBE_TUNING_ROWS.flat(), 'the refusals walk the fields in the order the group draws them');
+test('the Keepalive group refuses its three numbers in the order it draws them', () => {
   // A numeric keepalive field added later gets a bound from KEEPALIVE_BOUNDS; this keeps it from escaping the refusals.
-  assert.deepEqual([...d.PROBE_TUNING_KEYS, 'netNegativeGraceProbes'].sort(), Object.keys(d.KEEPALIVE_BOUNDS).sort());
+  const below = Object.fromEntries(Object.entries(d.KEEPALIVE_BOUNDS).map(([key, { min }]) => [key, min - 1]));
+  const refused = d.poolRefusals(tuned(below), accounts);
+  assert.deepEqual(
+    refused.map((r) => [r.group, r.field]),
+    [['keepalive', 'Max idle (s)'], ['keepalive', 'Max parked (s)'], ['keepalive', 'Scheduled horizon (s)']],
+  );
+  assert.deepEqual(Object.keys(d.KEEPALIVE_FIELD_LABELS).sort(), Object.keys(d.KEEPALIVE_BOUNDS).sort());
 });
 
 test("refusals come in rail order, a new pool's first two the name and the member", () => {
@@ -401,7 +373,7 @@ test("refusals come in rail order, a new pool's first two the name and the membe
     refusals.slice(0, 2).map((r) => r.text),
     ['the pool needs a name.', 'the pool needs a member.'],
   );
-  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'bodyCapture', 'cacheDiagnostics']);
+  assert.deepEqual(d.POOL_GROUPS, ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics']);
 });
 
 test('every bounded engine field is refused once it leaves its bound', () => {
@@ -436,8 +408,8 @@ test("the key dialog maps the server-side auto mode override to inherit, on, or 
 });
 
 const camel = (s) => s.replace(/_([a-z0-9])/g, (_, c) => c.toUpperCase());
-// A probe sends some fields beside the probed one, a retry ceiling at its base or a lead beside its jitter, which the
-// capture names under `with` and the replay sends the same way.
+// A probe may send fields beside the probed one, which the capture names under `with` and the replay sends the same
+// way.
 const keepaliveWith = (fields = {}) => Object.fromEntries(Object.entries(fields).map(([field, value]) => [camel(field.slice('keepalive.'.length)), value]));
 
 test('the form admits and refuses the values the routes do', () => {

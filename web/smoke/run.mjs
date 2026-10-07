@@ -2160,18 +2160,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on Anthropic-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked', 'Scheduled horizon', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
   results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
 
   // Grouped dialog: a two-level rail beside one group at a time, one heading per group.
-  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
+  const groupLabels = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
   const railParents = [...(dlg?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const railGroups = [...(dlg?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   results.push({
-    name: '/pools dialog rail lists the five parents and the seventeen groups in order',
+    name: '/pools dialog rail lists the five parents and the sixteen groups in order',
     ok: JSON.stringify(railParents) === JSON.stringify(['Pool', 'Routing', 'Load', 'Caching', 'Visibility']) && JSON.stringify(railGroups) === JSON.stringify(groupLabels),
     missing: [...railParents, ...railGroups],
   });
@@ -2193,7 +2193,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const members = group(dlg, 'Members');
     results.push({
       name: '/pools choosing a group hides every other group and marks its rail entry',
-      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 16 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
+      ok: (dlg?.querySelectorAll('section.dialog-group[hidden]').length ?? 0) === 15 && members?.hidden === false && rail(dlg, 'members')?.getAttribute('aria-current') === 'true',
       missing: shown(),
     });
     results.push({ name: "/pools focus lands on the group's heading", ok: !!members && document.activeElement === members.querySelector('h3'), missing: [document.activeElement?.outerHTML.slice(0, 80) ?? 'nothing focused'] });
@@ -2250,19 +2250,20 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools the pool dialog carries no subtitle', ok: !!dlg && dlg.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle') === null, missing: [dlg?.querySelector(':scope > .dialog__inner > .dialog__head .dialog__subtitle')?.textContent ?? ''] });
     const keepalive = group(dlg, 'Keepalive');
     results.push({ name: '/pools the Keepalive warning closes its group', ok: keepalive?.lastElementChild?.classList.contains('callout--warning') === true, missing: [keepalive?.lastElementChild?.className ?? 'no Keepalive group'] });
-    const cap = keepalive?.querySelector('button[role="switch"][aria-label="Daily probe cost cap ($)"]')?.closest('.switched')?.parentElement;
-    results.push({ name: '/pools the daily probe cost cap keeps to the left column', ok: cap?.classList.contains('cell--half') === true && keepalive?.querySelector('.cells')?.lastElementChild === cap, missing: [cap?.className ?? 'no cost cap block'] });
+    const halves = [...(keepalive?.querySelectorAll('.cells > .cell--half') ?? [])].map((c) => c.querySelector('button[role="switch"]')?.getAttribute('aria-label'));
+    results.push({ name: '/pools the two switched ceilings share the last row of the Keepalive group', ok: JSON.stringify(halves) === '["Max parked","Scheduled horizon"]' && keepalive?.querySelector('.cells')?.lastElementChild?.querySelector('button[aria-label="Scheduled horizon"]') != null, missing: halves.map(String) });
     const legacy = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent === 'legacy');
     const legacyPriority = legacy?.querySelector('input[aria-label="Priority for legacy"]');
     results.push({ name: '/pools a non-member row renders its Priority input disabled', ok: legacy?.querySelector('input[type="checkbox"]')?.checked === false && legacyPriority?.disabled === true, missing: [legacyPriority ? String(legacyPriority.disabled) : 'no Priority input for legacy'] });
 
-    // Each switch gates its number, which is drawn whatever the switch reads; warming off gates the cost cap whole.
+    // Each switch gates its number, which is drawn whatever the switch reads, and warming off gates the Keepalive group whole.
     const sw = (label) => dlg?.querySelector(`button[role="switch"][aria-label="${label}"]`);
     const num = (label) => dlg?.querySelector(`input[aria-label="${label}"]`);
     const switched = [
       ['Shed ahead of pace', 'Shed ahead of pace (%)'],
       ['Select below utilization', 'Select below utilization (%)'],
-      ['Daily probe cost cap ($)', 'Daily probe cost cap in dollars'],
+      ['Max parked', 'Max parked (s)'],
+      ['Scheduled horizon', 'Scheduled horizon (s)'],
     ];
     const read = () => switched.map(([s, n]) => `${sw(s)?.getAttribute('aria-checked')}/${num(n) ? String(num(n).disabled) : 'absent'}`);
     const follows = (states) => states.every((x) => x === 'true/false' || x === 'false/true');
@@ -2277,23 +2278,24 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       await m.settle(80);
     }
     const warm = sw('Keep prompt caches warm');
-    const tuning = () => [...(group(dlg, 'Probe tuning')?.querySelectorAll('input[type="number"]') ?? [])].map((i) => i.disabled);
-    const tuningOn = tuning();
+    const labels = [...(keepalive?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
+    // The idle window is a plain number under its field label, the group's first number input.
+    const idle = () => keepalive?.querySelector('input[type="number"]');
+    const idleOn = idle()?.disabled;
     warm?.click();
     await m.settle(120);
-    const warmOff = [warm?.getAttribute('aria-checked'), sw('Daily probe cost cap ($)')?.disabled, num('Daily probe cost cap in dollars')?.disabled];
-    const tuningOff = tuning();
+    const warmOff = [warm?.getAttribute('aria-checked'), idle()?.disabled, sw('Max parked')?.disabled, num('Max parked (s)')?.disabled, sw('Scheduled horizon')?.disabled, num('Scheduled horizon (s)')?.disabled];
     warm?.click();
     await m.settle(120);
     results.push({
       name: '/pools each switch enables its number, which stays rendered while the switch is off',
-      ok: follows(before) && follows(flipped) && JSON.stringify(before) !== JSON.stringify(flipped) && JSON.stringify(read()) === JSON.stringify(before) && JSON.stringify(warmOff) === '["false",true,true]' && warm?.getAttribute('aria-checked') === 'true',
+      ok: follows(before) && follows(flipped) && JSON.stringify(before) !== JSON.stringify(flipped) && JSON.stringify(read()) === JSON.stringify(before) && JSON.stringify(warmOff) === '["false",true,true,true,true,true]' && warm?.getAttribute('aria-checked') === 'true',
       missing: [...before, ...flipped, ...warmOff.map(String)],
     });
     results.push({
-      name: '/pools the Probe tuning group lists its nine fields, enabled while warming is on and disabled while it is off',
-      ok: tuningOn.length === 9 && tuningOn.every((d) => d === false) && tuningOff.length === 9 && tuningOff.every((d) => d === true),
-      missing: [JSON.stringify(tuningOn), JSON.stringify(tuningOff)],
+      name: '/pools the Keepalive group lists its three fields, the idle window enabled while warming is on',
+      ok: JSON.stringify(labels) === '["Keep prompt caches warm","Max idle (s)","Max parked","Scheduled horizon"]' && idleOn === false,
+      missing: [...labels.map(String), String(idleOn)],
     });
   }
 
@@ -2505,71 +2507,38 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 
   // Keepalive gate: 10m clears the 5-minute floor but still warns about 1-hour caches.
   expect('/pools cache warming warns below one hour', dlg?.textContent ?? '', ['Session affinity is 10m, shorter than one hour: a one-hour cache entry outlives the pin, so a session can move away from the cache it warmed. Raise it under Pinning.']);
-  expect('/pools cache warming stops when probes stop paying', dlg?.textContent ?? '', [
-    'Stop when probes cost more than they save',
-    "Pauses a session's probes once they have cost more than the cache reads they saved; a real request that lands warm resumes them.",
-    'Grace probes after the net turns negative',
-  ]);
   {
-    const grace = () => dlg?.querySelector('input[aria-label="Grace probes after the net turns negative"]');
-    const netToggle = [...(dlg?.querySelectorAll('button[role="switch"]') ?? [])].find((b) => b.getAttribute('aria-label') === 'Stop when probes cost more than they save');
-    results.push({ name: '/pools net-negative stop is on with two grace probes', ok: netToggle?.getAttribute('aria-checked') === 'true' && grace()?.value === '2' && grace()?.disabled === false, missing: [netToggle?.getAttribute('aria-checked'), grace()?.value] });
-    netToggle?.click();
-    await m.settle(150);
-    results.push({ name: '/pools grace count is disabled while the stop is off, and its hint stays', ok: grace()?.disabled === true && (dlg?.textContent ?? '').includes('Probes a session still gets after its net turns negative'), missing: [String(grace()?.disabled)] });
-    netToggle?.click();
-    await m.settle(150);
-    expect('/pools grace help says the budget is granted again on every real request', dlg?.textContent ?? '', [
-      'Probes a session still gets after its net turns negative, granted again on every real request, so one expensive turn does not stop a session about to earn it back.',
+    const keepalive = group(dlg, 'Keepalive');
+    expect('/pools the Keepalive group explains its three fields and their off words', keepalive?.textContent ?? '', [
+      'Max idle (s)',
+      "The idle window of the main conversation. 0 and anything above the recipe's break-even read as the break-even.",
+      'Max parked',
+      "How long a park on a background command or a subagent is probed. Off is the recipe's break-even.",
+      'Scheduled horizon',
+      "A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe's break-even.",
     ]);
-  }
-  const tuningGroup = group(dlg, 'Probe tuning');
-  expect('/pools probe tuning fields', tuningGroup?.textContent ?? '', [
-    'Lead time, 5m cache (s)',
-    'Lead time, 1h cache (s)',
-    'Jitter, 5m cache (s)',
-    'Jitter, 1h cache (s)',
-    'Cold probe limit',
-    'Retry backoff base (s)',
-    'Retry backoff max (s)',
-    'Max idle seconds',
-    'Max idle ticks',
-    'How long before an entry expires its probe is due. The lead covers the round trip and the jitter; the 1-hour lead also leaves room for a retry, since a missed refresh costs a full 1-hour write.',
-    'Random seconds taken off each due time, so sessions that started together do not probe at the same instant; wider for 1-hour entries, whose due times cluster on the hour.',
-    'After a failed probe the wait starts at the base and doubles up to the max, so a long outage settles into a steady retry.',
-  ]);
-  results.push({
-    name: '/pools probe tuning drops the two concurrency caps',
-    ok: !(dlg?.textContent ?? '').includes('Max probes in flight') && !(dlg?.textContent ?? '').includes('Max probes per session per hour'),
-    missing: [(dlg?.textContent ?? '').includes('Max probes in flight') ? 'in flight still there' : '', (dlg?.textContent ?? '').includes('Max probes per session per hour') ? 'per session per hour still there' : ''].filter(Boolean),
-  });
-  expect('/pools probe tuning explains a cold probe and the idle limits', tuningGroup?.textContent ?? '', [
-    "Probes in a row that find the cache already gone, after which the session's probes pause until its next real request. A cold probe rewrites the entry, so a streak also pulls the net down; a probe that moved the session does not count.",
-    'Stop probing once this long, or this many probes, passes without a real request: for the main agent while its companion reports, for every agent once the companion falls silent. 0 turns a limit off. The Sessions page',
-  ]);
-  const tuningValues = [...(tuningGroup?.querySelectorAll('input[type="number"]') ?? [])].map((i) => i.value);
-  results.push({ name: '/pools probe tuning defaults', ok: JSON.stringify(tuningValues) === JSON.stringify(['60', '360', '5', '30', '2', '30', '300', '3600', '0']), missing: tuningValues });
-  results.push({ name: '/pools cold probe limit defaults to 2', ok: tuningValues[4] === '2', missing: [tuningValues[4] ?? 'absent'] });
-  {
-    const inputs = [...(tuningGroup?.querySelectorAll('input[type="number"]') ?? [])];
+    const gone = ['Also warm subagent caches', 'Daily probe cost cap', 'Grace probes after the net turns negative', 'Probe tuning', 'Stop when probes cost more than they save'].filter((w) => (dlg?.textContent ?? '').includes(w));
+    results.push({ name: '/pools the dialog draws no subagent switch, cap, net stop, grace count or tuning group', ok: gone.length === 0, missing: gone });
+    const inputs = [...(keepalive?.querySelectorAll('input[type="number"]') ?? [])];
+    const values = inputs.map((i) => i.value);
     const ranges = inputs.map((i) => `${i.getAttribute('min')}-${i.getAttribute('max')}`);
-    results.push({ name: '/pools probe tuning inputs carry the policy ranges', ok: JSON.stringify(ranges) === JSON.stringify(['0-299', '0-3599', '0-299', '0-3599', '1-20', '1-3600', '1-604800', '0-31536000', '0-1000000']), missing: ranges });
+    results.push({ name: '/pools the keepalive numbers carry the defaults and the policy ranges', ok: JSON.stringify(values) === '["3600","3600","3600"]' && JSON.stringify(ranges) === '["0-31536000","60-604800","60-604800"]', missing: [...values, ...ranges] });
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    if (inputs[4]) setter.call(inputs[4], '0');
-    inputs[4]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    const parked = keepalive?.querySelector('button[role="switch"][aria-label="Max parked"]');
+    parked?.click();
     await m.settle(120);
-    const coldHeld = save()?.disabled === true && inputs[4]?.getAttribute('aria-invalid') === 'true';
-    if (inputs[4]) setter.call(inputs[4], '2');
-    inputs[4]?.dispatchEvent(new window.Event('input', { bubbles: true }));
-    if (inputs[6]) setter.call(inputs[6], '10');
-    inputs[6]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    if (inputs[1]) setter.call(inputs[1], '59');
+    inputs[1]?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(120);
-    const retryHeld = save()?.disabled === true;
-    if (inputs[6]) setter.call(inputs[6], '300');
-    inputs[6]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    const parkedHeld = save()?.disabled === true && inputs[1]?.getAttribute('aria-invalid') === 'true';
+    parked?.click();
     await m.settle(120);
-    results.push({ name: '/pools a cold probe limit of 0 or a retry ceiling under the base holds the save', ok: coldHeld && retryHeld && save()?.disabled === false, missing: [String(coldHeld), String(retryHeld), String(save()?.disabled)] });
+    const offFreed = save()?.disabled === false;
+    if (inputs[1]) setter.call(inputs[1], '3600');
+    inputs[1]?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await m.settle(120);
+    results.push({ name: '/pools a parked ceiling under a minute holds the save while its switch is on and frees it once off', ok: parkedHeld && offFreed && save()?.disabled === false, missing: [String(parkedHeld), String(offFreed), String(save()?.disabled)] });
   }
 
   {
@@ -2765,7 +2734,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools moved key leaves the list', ok: keyRows().length > 0 && !keyRows().some((tr) => tr.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((tr) => tr.children[0]?.textContent?.trim()) });
 
   // Cache TTL is served per pool, so the block only stands where the pool carries rules.
-  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Write cost', 'Plan writes', 'Metered writes', 'Main conversation', 'Subagents', 'Also warm subagent caches']);
+  expect('/pools the dialog draws the cache TTL rules the pool carries', dlg?.textContent ?? '', ['Cache TTL', 'Set the cache TTL for this pool', 'Write cost', 'Plan writes', 'Metered writes', 'Main conversation', 'Subagents']);
 
   {
     const ttl = group(dlg, 'Cache TTL');
@@ -3301,8 +3270,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(200);
 }
 {
-  // An edit left in the tuning of a pool whose warming ends up off is neither sent nor allowed to hold the save:
-  // the mock refuses a cold probe limit of 0 the way the route does, so a save that sent it would stay open.
+  // An edit left in the Keepalive group of a pool whose warming ends up off is neither sent nor allowed to hold the
+  // save: the mock refuses an idle window past a year the way the route does, so a save that sent it would stay open.
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool codex')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -3313,10 +3282,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   warm()?.click();
   await m.settle(120);
-  const cold = [...(group(dlg, 'Probe tuning')?.querySelectorAll('input[type="number"]') ?? [])][4];
+  const idle = group(dlg, 'Keepalive')?.querySelector('input[type="number"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  if (cold) setter.call(cold, '0');
-  cold?.dispatchEvent(new window.Event('input', { bubbles: true }));
+  if (idle) setter.call(idle, '31536001');
+  idle?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
   const heldWhileOn = save()?.disabled === true;
   warm()?.click();
@@ -3329,7 +3298,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const open = [...m.container.querySelectorAll('dialog[open]')].pop();
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'codex');
   results.push({
-    name: '/pools tuning left in a block whose warming is off is not sent and holds nothing',
+    name: '/pools an idle window left in a block whose warming is off is not sent and holds nothing',
     // The dialog offers active and disabled alone, so the save turns the exhausted pool active, and the write clears
     // the spend that held its member: the sentence reads what the save left.
     ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool codex') && card?.querySelector('.pool__status')?.textContent?.replace(/\s+/g, ' ').trim() === 'Active: Research workspace takes every fresh session.',
@@ -4057,7 +4026,7 @@ localStorage.removeItem('phoebis.expertView');
   const labels = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__group .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   const parents = (page) => [...(dialogOf(page)?.querySelectorAll('.dialog-rail__parent .dialog-rail__label') ?? [])].map((s) => s.textContent?.trim());
   x = await mount('/fixtures/grouped-dialog?expertOnly=autoMode');
-  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 16 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
+  results.push({ name: 'an expert-only group leaves the rail while the mode is off', ok: !labels(x).includes('Auto mode') && labels(x).length === 15 && parents(x).join() === 'Pool,Routing,Load,Caching,Visibility', missing: labels(x) });
   [...(group(dialogOf(x), 'Identity')?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'Auto mode')?.click();
   await x.settle(150);
   results.push({
@@ -4070,7 +4039,7 @@ localStorage.removeItem('phoebis.expertView');
   x = await mount('/fixtures/grouped-dialog?expertOnly=identity,members,keys,models,autoMode');
   await x.settle(100);
   const panel = (page) => [...(dialogOf(page)?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join();
-  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 12, missing: parents(x) });
+  results.push({ name: 'an expert-only run leaves with its parent heading', ok: parents(x).join() === 'Routing,Load,Caching,Visibility' && labels(x).length === 11, missing: parents(x) });
   results.push({
     name: 'a chosen group the filter takes off gives way to the first shown group',
     ok: panel(x) === 'Selection' && rail(dialogOf(x), 'selection')?.getAttribute('aria-current') === 'true' && localStorage.getItem('phoebis.expertView') === null,
@@ -4102,10 +4071,9 @@ localStorage.removeItem('phoebis.expertView');
   const headingsOf = (dlg) => [...(dlg?.querySelectorAll('.dialog-group__title') ?? [])].map((h) => h.textContent?.trim());
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
-  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Utilization thresholds', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture'];
-  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Probe tuning', 'Body capture', 'Cache diagnostics'];
-  const KEEPALIVE = ['Keep prompt caches warm', 'Also warm subagent caches', 'Stop when probes cost more than they save', 'Grace probes after the net turns negative', 'Daily probe cost cap ($)'];
-  const TUNING = ['Lead time, 5m cache (s)', 'Lead time, 1h cache (s)', 'Jitter, 5m cache (s)', 'Jitter, 1h cache (s)', 'Cold probe limit', 'Retry backoff base (s)', 'Retry backoff max (s)', 'Max idle seconds', 'Max idle ticks'];
+  const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Utilization thresholds', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
+  const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
+  const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked', 'Scheduled horizon'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
     Identity: [['Name', 'Status'], null],
@@ -4118,7 +4086,6 @@ localStorage.removeItem('phoebis.expertView');
     'Overage and plan end': [['Overage policy'], '2 more settings in the '],
     'Cache TTL': [['Set the cache TTL for this pool', 'Write cost'], '3 more settings in the '],
     Keepalive: [KEEPALIVE, null],
-    'Probe tuning': [TUNING, null],
     'Body capture': [['Capture request and response bodies', 'Retention (hours)'], null],
   };
   // With the mode on, the groups that hold an expert field read every one of them.
@@ -4147,8 +4114,8 @@ localStorage.removeItem('phoebis.expertView');
   let dlg = await open('all');
   const plainRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   results.push({
-    name: '/pools with the mode off the rail and the body hold twelve groups under the five parents, the five expert-only groups gone',
-    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 17,
+    name: '/pools with the mode off the rail and the body hold eleven groups under the five parents, the five expert-only groups gone',
+    ok: JSON.stringify(plainRail) === JSON.stringify([PARENTS, PLAIN_GROUPS, PLAIN_GROUPS]) && (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 16,
     missing: plainRail.map((x) => JSON.stringify(x)),
   });
   const plainRead = Object.fromEntries(PLAIN_GROUPS.map((label) => [label, [labelsIn(group(dlg, label)), lineIn(group(dlg, label))]]));
@@ -4173,11 +4140,11 @@ localStorage.removeItem('phoebis.expertView');
   const expertRail = [parentsOf(dlg), railOf(dlg), headingsOf(dlg)];
   const expertRead = Object.fromEntries(Object.keys(EXPERT_FIELDS).map((label) => [label, labelsIn(group(dlg, label))]));
   results.push({
-    name: '/pools the line turns the mode on: the rail holds all 22 entries, every group draws its expert fields, and no line is left',
+    name: '/pools the line turns the mode on: the rail holds all 21 entries, every group draws its expert fields, and no line is left',
     ok:
       localStorage.getItem('phoebis.expertView') === 'on' &&
       JSON.stringify(expertRail) === JSON.stringify([PARENTS, EVERY_GROUP, EVERY_GROUP]) &&
-      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 22 &&
+      (dlg?.querySelectorAll('.dialog-rail__parent, .dialog-rail__group').length ?? 0) === 21 &&
       JSON.stringify(expertRead) === JSON.stringify(EXPERT_FIELDS) &&
       dlg?.querySelector('.dialog-group__more') === null,
     missing: [localStorage.getItem('phoebis.expertView'), ...expertRail.map((x) => JSON.stringify(x)), ...Object.entries(expertRead).filter(([label, read]) => JSON.stringify(read) !== JSON.stringify(EXPERT_FIELDS[label])).map(([label, read]) => `${label}: ${JSON.stringify(read)}`)],
@@ -9029,7 +8996,7 @@ m.unmount();
     name: '/sessions a failed overview read draws dashes, could not load and one Try again',
     ok:
       page.container.querySelector('.stat-grid .skeleton') === null &&
-      fed.length === 6 &&
+      fed.length === 5 &&
       fed.every((t) => t.value === '-' && t.note === 'could not load' && t.title === 'ledger locked') &&
       sessionsTile?.value !== '-' &&
       companions > 0 &&
@@ -9198,7 +9165,7 @@ m.unmount();
 }
 
 m = await mount('/sessions');
-expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
+expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
   const lead = m.container.querySelector('.page-head__lead');
   const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
@@ -9216,8 +9183,6 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   results.push({ name: '/sessions a second click closes the paragraph', ok: how()?.getAttribute('aria-expanded') === 'false' && para()?.hidden === true, missing: [] });
 }
 {
-  const meters = m.container.querySelectorAll('.cost-caps .meter').length;
-  results.push({ name: '/sessions cost meter against cap', ok: meters === 1, missing: [String(meters)] });
   const tiles = [...m.container.querySelectorAll('.stat--compact')].map((t) => ({ label: t.querySelector('.stat__label')?.textContent?.trim(), value: t.querySelector('.stat__value')?.textContent?.trim(), warn: t.querySelector('.stat__value')?.classList.contains('is-warning') === true }));
   const expired = tiles.find((t) => t.label === 'Expired between turns, 24h');
   results.push({ name: '/sessions expired-between-turns tile follows the probe tile', ok: tiles.findIndex((t) => t.label === 'Expired between turns, 24h') === tiles.findIndex((t) => t.label === 'Cache probes, 24h') + 1, missing: tiles.map((t) => t.label ?? '') });
@@ -10095,13 +10060,12 @@ m.unmount();
   const fromPools = [
     ['Warm sessions', await opened(pools, near('Load shedding', 'A warm session rewrites its cache where it lands'))],
     ['Write cost', await opened(pools, near('Cache TTL', 'Plan writes apply while an account spends plan quota'))],
-    ['Daily probe cost cap', await opened(pools, near('Keepalive', 'Plan-funded probes do not count here.'))],
   ];
   pools.unmount();
   localStorage.removeItem('phoebis.expertView');
   results.push({
-    name: "/pools the pool dialog's Warm sessions hint opens the cost reference on Plan rates, its Write cost and probe cost cap hints on API prices",
-    ok: JSON.stringify(fromPools.map(([, tab]) => tab)) === JSON.stringify(['Plan rates', 'API prices', 'API prices']),
+    name: "/pools the pool dialog's Warm sessions hint opens the cost reference on Plan rates, its Write cost hint on API prices",
+    ok: JSON.stringify(fromPools.map(([, tab]) => tab)) === JSON.stringify(['Plan rates', 'API prices']),
     missing: fromPools.map((p) => p.join(': ')),
   });
   const dash = await mount('/');

@@ -5,23 +5,17 @@ import type { Account, ApiKey, ModelRule, ModelRulesMode, PoolKeepalive } from '
 import { fmtInt, toLocalInput } from './format';
 import { checkPattern } from './patterns';
 
-export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number ? K : never }[keyof PoolKeepalive];
+export type NumericKeepaliveKey = { [K in keyof PoolKeepalive]-?: PoolKeepalive[K] extends number | null ? K : never }[keyof PoolKeepalive];
 
 /**
- * The router's inclusive bound on each numeric keepalive field. The form holds a save to them so the operator
- * sees the field that is out of range rather than the policy check's refusal of the whole save.
+ * The router's inclusive bound on each numeric keepalive field. A null ceiling is the recipe's break-even and has
+ * none. The form holds a save to them so the operator sees the field that is out of range rather than the policy
+ * check's refusal of the whole save.
  */
 export const KEEPALIVE_BOUNDS: Record<NumericKeepaliveKey, { max: number; min: number }> = {
-  coldProbeLimit: { max: 20, min: 1 },
-  jitterSeconds1h: { max: 3_599, min: 0 },
-  jitterSeconds5m: { max: 299, min: 0 },
-  leadSeconds1h: { max: 3_599, min: 0 },
-  leadSeconds5m: { max: 299, min: 0 },
   maxIdleSeconds: { max: 31_536_000, min: 0 },
-  maxIdleTicks: { max: 1_000_000, min: 0 },
-  netNegativeGraceProbes: { max: 100, min: 0 },
-  retryMaxSeconds: { max: 604_800, min: 1 },
-  retrySeconds: { max: 3_600, min: 1 },
+  maxParkedSeconds: { max: 604_800, min: 60 },
+  scheduledHorizonSeconds: { max: 604_800, min: 60 },
 };
 
 /** The most entries one level's list holds, the route's own bound. */
@@ -68,7 +62,7 @@ export function prefixThresholdRefusal(value: string): string | null {
 }
 
 /** The pool dialog's groups in rail order; a refusal names the one its control sits in. */
-export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'probeTuning', 'bodyCapture', 'cacheDiagnostics'] as const;
+export const POOL_GROUPS = ['identity', 'members', 'keys', 'models', 'autoMode', 'selection', 'placement', 'pinning', 'utilization', 'shedding', 'failover', 'overage', 'cacheTtl', 'keepalive', 'bodyCapture', 'cacheDiagnostics'] as const;
 export type PoolGroup = (typeof POOL_GROUPS)[number];
 
 export interface PoolRefusal {
@@ -91,22 +85,10 @@ export const ENGINE_FIELD_LABELS: Record<keyof typeof ENGINE_BOUNDS, string> = {
 
 /** The labels the dialog draws over each numeric keepalive field, as the refusals name them. */
 export const KEEPALIVE_FIELD_LABELS: Record<NumericKeepaliveKey, string> = {
-  coldProbeLimit: 'Cold probe limit',
-  jitterSeconds1h: 'Jitter, 1h cache (s)',
-  jitterSeconds5m: 'Jitter, 5m cache (s)',
-  leadSeconds1h: 'Lead time, 1h cache (s)',
-  leadSeconds5m: 'Lead time, 5m cache (s)',
-  maxIdleSeconds: 'Max idle seconds',
-  maxIdleTicks: 'Max idle ticks',
-  netNegativeGraceProbes: 'Grace probes after the net turns negative',
-  retryMaxSeconds: 'Retry backoff max (s)',
-  retrySeconds: 'Retry backoff base (s)',
+  maxIdleSeconds: 'Max idle (s)',
+  maxParkedSeconds: 'Max parked (s)',
+  scheduledHorizonSeconds: 'Scheduled horizon (s)',
 };
-
-/** The Probe tuning group's rows as the dialog lays them out: a related pair, or a field alone. */
-export const PROBE_TUNING_ROWS = [['leadSeconds5m', 'leadSeconds1h'], ['jitterSeconds5m', 'jitterSeconds1h'], ['coldProbeLimit'], ['retrySeconds', 'retryMaxSeconds'], ['maxIdleSeconds', 'maxIdleTicks']] as const satisfies readonly (readonly NumericKeepaliveKey[])[];
-/** The same fields in the rows' order, so the refusals read in the order the group draws them. */
-export const PROBE_TUNING_KEYS: readonly NumericKeepaliveKey[] = PROBE_TUNING_ROWS.flat();
 
 /** A bound's sentence: a field with no practical ceiling states its floor alone. */
 const boundText = (label: string, { max, min }: { max: number; min: number }) =>
@@ -188,17 +170,11 @@ export function poolRefusals(input: PoolInput, accountIds: ReadonlySet<string> |
   engine('overage', 'overageMoveGraceMinutes');
   engine('overage', 'windDownMinutes');
 
-  const keepalive = (group: PoolGroup, key: NumericKeepaliveKey) =>
-    refuse(group, KEEPALIVE_FIELD_LABELS[key], whole(k[key], KEEPALIVE_BOUNDS[key].min, KEEPALIVE_BOUNDS[key].max) ? null : boundText(KEEPALIVE_FIELD_LABELS[key], KEEPALIVE_BOUNDS[key]));
-  keepalive('keepalive', 'netNegativeGraceProbes');
-  refuse('keepalive', 'Daily probe cost cap in dollars', k.costCapUsdPerDay === null || (Number.isFinite(k.costCapUsdPerDay) && k.costCapUsdPerDay > 0) ? null : 'Daily probe cost cap ($) is above 0.');
   refuse('keepalive', 'Keep prompt caches warm', !k.enabled || affinity >= 300 ? null : 'Keep prompt caches warm needs Session affinity of at least 5m.');
-
-  for (const key of PROBE_TUNING_KEYS) keepalive('probeTuning', key);
-  // A lead and its jitter together at the cache TTL would put the probe's due time before the entry was written.
-  refuse('probeTuning', KEEPALIVE_FIELD_LABELS.jitterSeconds5m, k.leadSeconds5m + k.jitterSeconds5m < 300 ? null : 'Lead time, 5m cache (s) plus Jitter, 5m cache (s) is under 300.');
-  refuse('probeTuning', KEEPALIVE_FIELD_LABELS.jitterSeconds1h, k.leadSeconds1h + k.jitterSeconds1h < 3_600 ? null : 'Lead time, 1h cache (s) plus Jitter, 1h cache (s) is under 3,600.');
-  refuse('probeTuning', KEEPALIVE_FIELD_LABELS.retryMaxSeconds, k.retryMaxSeconds >= k.retrySeconds ? null : 'Retry backoff max (s) is at or above Retry backoff base (s).');
+  for (const key of ['maxIdleSeconds', 'maxParkedSeconds', 'scheduledHorizonSeconds'] as const) {
+    const value = k[key];
+    refuse('keepalive', KEEPALIVE_FIELD_LABELS[key], value === null || whole(value, KEEPALIVE_BOUNDS[key].min, KEEPALIVE_BOUNDS[key].max) ? null : boundText(KEEPALIVE_FIELD_LABELS[key], KEEPALIVE_BOUNDS[key]));
+  }
 
   refuse('bodyCapture', 'Capture retention in hours', checks.capture?.on && !whole(Number(checks.capture.typed), 1, checks.capture.maxHours) ? `Retention is a whole number of hours from 1 to ${checks.capture.maxHours}.` : null);
   return out;

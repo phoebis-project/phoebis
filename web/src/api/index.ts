@@ -2,7 +2,7 @@ import type { Api } from './client';
 import { HttpApi } from './http';
 
 export type { Api, CreateKeyInput, KeyInput, PoolInput } from './client';
-export { CACHE_TTL_DEFAULTS, KEEPALIVE_TUNING_DEFAULTS } from './client';
+export { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS } from './client';
 export { ApiError } from './http';
 export * from './types';
 

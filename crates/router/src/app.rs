@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView};
 use phoebis_bus::Bus;
-use phoebis_keepalive::{keepalive_router, spawn_observer, Engine, EngineParts};
+use phoebis_keepalive::{keepalive_router, spawn_observer, Engine, EngineParts, KeepaliveTiming};
 use phoebis_ledger::{
     metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
 };
@@ -327,6 +327,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         session_expiry: Duration::from_secs(config.sessions.expire_after_seconds),
         store: store.clone(),
         tables: tables.clone(),
+        timing: KeepaliveTiming::for_start(),
     });
     // Both daily budgets are read back from the store so a restart resets neither cap.
     keepalive.load_spent_today().await;

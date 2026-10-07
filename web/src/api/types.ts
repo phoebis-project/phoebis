@@ -253,33 +253,13 @@ export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 
 export interface PoolKeepalive {
-  /** Probes stop for the day once a subscription account's probes have consumed this share of its 5-hour
-   * window; null means uncapped. */
-  capWindowSharePerDay: number | null;
-  /** Retries allowed for a session whose cache already went cold. */
-  coldProbeLimit: number;
-  /** Probes stop for the day once this is spent; null means uncapped. */
-  costCapUsdPerDay: number | null;
   enabled: boolean;
-  jitterSeconds1h: number;
-  jitterSeconds5m: number;
-  /** Seconds before a 1-hour cache entry expires at which its probe fires. */
-  leadSeconds1h: number;
-  /** Seconds before a 5-minute cache entry expires at which its probe fires. */
-  leadSeconds5m: number;
-  /** 0 means a session keeps being probed for as long as its pin lives. */
+  /** The idle window of the main conversation in seconds. 0 and any value above the recipe's break-even read as the break-even. */
   maxIdleSeconds: number;
-  /** 0 means no limit on consecutive probes without real traffic between them. */
-  maxIdleTicks: number;
-  /** Probes a recipe still gets once its session's net savings have gone below zero. */
-  netNegativeGraceProbes: number;
-  retryMaxSeconds: number;
-  /** First wait after a failed probe; each further failure doubles it. */
-  retrySeconds: number;
-  /** Pause a recipe whose probes have cost more than the cache reads they bought. */
-  stopWhenNetNegative: boolean;
-  /** Subagent recipes are probed too; off warms the main conversation only. */
-  warmSubagents: boolean;
+  /** How long a park on a background command or a subagent is probed. Null is the recipe's break-even. */
+  maxParkedSeconds: number | null;
+  /** A park on a scheduled wakeup is probed while the wake is at most this far away. Null is the recipe's break-even. */
+  scheduledHorizonSeconds: number | null;
 }
 
 export type CacheTtl = '5m' | '1h';
@@ -1313,7 +1293,6 @@ export interface KeepaliveOverview {
   agents: Record<KeepaliveState, number>;
   /** Times the keepalive engine found it had missed bus events; each gap discarded every observation still open. */
   busGaps: number;
-  costToday: { capUsd: number | null; poolId: string; usd: number }[];
   /** Requests whose prefix expired between turns in the last 24 hours. */
   expiredBetweenTurns24h: number;
   netSaved7dUsd: number;

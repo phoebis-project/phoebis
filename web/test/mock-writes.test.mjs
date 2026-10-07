@@ -41,7 +41,7 @@ test('a pool create refuses the values a pool edit refuses', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
   await assert.rejects(() => api.createPool({ ...all, affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false }, name: 'short' }), refusedAs(400, 'affinity_ttl_seconds is 0 or at least 60'));
-  await assert.rejects(() => api.createPool({ ...all, keepalive: { ...all.keepalive, coldProbeLimit: 0 }, name: 'cold' }), refusedAs(400, 'keepalive.cold_probe_limit must be between 1 and 20, not 0'));
+  await assert.rejects(() => api.createPool({ ...all, keepalive: { ...all.keepalive, maxParkedSeconds: 59 }, name: 'cold' }), refusedAs(400, 'keepalive.max_parked_seconds must be between 60 and 604800, not 59'));
   await assert.rejects(() => api.createPool({ ...all, bodyCaptureHours: 100_000, name: 'hoard' }), refusedAs(400, 'body_capture_hours exceeds stats.body_capture_max_hours'));
   assert.equal((await api.listPools()).some((p) => ['cold', 'hoard', 'short'].includes(p.id)), false);
 });

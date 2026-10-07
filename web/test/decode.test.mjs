@@ -309,8 +309,7 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   const [p] = fixture('pools').pools.map(d.decodePool);
   assert.equal(p.name, 'Main');
   assert.equal(p.strategy, 'pace');
-  assert.equal(p.keepalive.costCapUsdPerDay, 4);
-  assert.equal(p.keepalive.warmSubagents, true);
+  assert.deepEqual(p.keepalive, { enabled: true, maxIdleSeconds: 3_600, maxParkedSeconds: null, scheduledHorizonSeconds: null }, 'the four fields, the two ceilings null as the route answers them');
   assert.equal(p.cacheTtl.enabled, false);
   assert.equal(p.cacheTtl.plan.main, '1h');
   assert.equal(p.cacheDiagnostics, false);
@@ -384,21 +383,21 @@ test("a pool's cache TTL decodes the two rule sets and encodes them back", () =>
       metered: { main: '5m', subagent: '5m', models: [] },
     },
     cache_diagnostics: true,
-    keepalive: { ...row.keepalive, warm_subagents: false },
+    keepalive: { ...row.keepalive, max_parked_seconds: 7_200 },
   };
   const p = d.decodePool(wire);
   assert.deepEqual([p.cacheTtl.enabled, p.cacheTtl.injectWhenAbsent, p.cacheTtl.plan.main, p.cacheTtl.plan.subagent], [true, true, '5m', '1h']);
   assert.deepEqual(p.cacheTtl.plan.models, [{ main: '5m', model: 'claude-haiku-4-5-20251001', subagent: '5m' }]);
   assert.deepEqual([p.cacheTtl.metered.main, p.cacheTtl.metered.subagent], ['5m', '5m']);
   assert.equal(p.cacheDiagnostics, true);
-  assert.equal(p.keepalive.warmSubagents, false);
+  assert.equal(p.keepalive.maxParkedSeconds, 7_200);
   const back = d.encodePool({ ...p, name: p.name, status: 'active' });
   assert.equal(back.cache_ttl.enabled, true);
   assert.equal(back.cache_ttl.inject_when_absent, true);
   assert.equal(back.cache_ttl.plan.models[0].model, 'claude-haiku-4-5-20251001');
   assert.equal(back.cache_ttl.metered.main, '5m');
   assert.equal(back.cache_diagnostics, true);
-  assert.equal(back.keepalive.warm_subagents, false);
+  assert.deepEqual(back.keepalive, { enabled: true, max_idle_seconds: 3_600, max_parked_seconds: 7_200, scheduled_horizon_seconds: null }, 'the four fields go back under the names the route reads, a null ceiling as null');
   assert.equal(d.decodePool({ ...row, cache_diagnostics: false }).cacheDiagnostics, false);
   assert.equal(d.encodePool({ ...p, name: p.name, cacheDiagnostics: false, status: 'active' }).cache_diagnostics, false, 'the switch is sent off as it is sent on');
 });
@@ -465,8 +464,10 @@ test('a pool the route answers without a cache TTL policy decodes to the default
     'a field the route leaves out falls back one field at a time, each set against its own default',
   );
   const keepalive = { ...wire.keepalive };
-  delete keepalive.warm_subagents;
-  assert.equal(d.decodePool({ ...wire, keepalive }).keepalive.warmSubagents, true, 'a keepalive block without the flag warms subagents');
+  delete keepalive.max_parked_seconds;
+  delete keepalive.scheduled_horizon_seconds;
+  const bare = d.decodePool({ ...wire, keepalive }).keepalive;
+  assert.deepEqual([bare.maxParkedSeconds, bare.scheduledHorizonSeconds], [null, null], 'a keepalive block without the two ceilings reads them as the break-even');
 });
 
 test('a pool decodes the pin and placement fields and its members\' budgets, and encodes them back', () => {
@@ -1188,11 +1189,10 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(recipe.reason, null);
   assert.equal(recipe.netFiveHourShare, 0, 'no probe has settled into the recipe yet');
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
-  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'costToday', 'expiredBetweenTurns24h', 'netSaved7dUsd', 'probes24h'], 'the overview carries the tiles alone; the page counts its sessions over its rows');
+  assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'netSaved7dUsd', 'probes24h'], 'the overview carries the tiles alone; the page counts its sessions over its rows');
   assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
   assert.equal(d.decodeKeepaliveOverview({ ...fixture('keepalive_overview'), bus_gaps: 3 }).busGaps, 3, 'the engine\'s gap count reads off the route');
-  assert.equal(ov.costToday[0].capUsd, 4);
 });
 
 test('a session decodes its fork', () => {
