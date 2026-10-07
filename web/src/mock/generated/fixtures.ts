@@ -105,12 +105,10 @@ export const FIXTURES: Record<string, Fixture> = {
         "utilization": 0.25,
         "observed_at": 900000
       },
-      "pools": [
-        {
-          "pool_id": "main",
-          "priority": 0
-        }
-      ],
+      "pool": {
+        "pool_id": "main",
+        "priority": 0
+      },
       "requests": {
         "last_24h": 5,
         "last_7d": 5,
@@ -366,12 +364,10 @@ export const FIXTURES: Record<string, Fixture> = {
             "utilization": 0.25,
             "observed_at": 900000
           },
-          "pools": [
-            {
-              "pool_id": "main",
-              "priority": 0
-            }
-          ],
+          "pool": {
+            "pool_id": "main",
+            "priority": 0
+          },
           "requests": {
             "last_24h": 5,
             "last_7d": 5,
@@ -409,12 +405,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "windows": [],
           "fast_lane": null,
           "extra_usage": null,
-          "pools": [
-            {
-              "pool_id": "main",
-              "priority": 1
-            }
-          ],
+          "pool": {
+            "pool_id": "main",
+            "priority": 1
+          },
           "requests": {
             "last_24h": 1,
             "last_7d": 1,

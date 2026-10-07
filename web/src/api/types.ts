@@ -93,7 +93,8 @@ export interface Account {
   /** The router's own reading of whether requests bill as overage; `since` is null when a usage sample, not a response, reported it. */
   overage: { inUse: boolean; observedAt: string; reset: string | null; since: string | null } | null;
   plan: string | null;
-  pools: PoolMembership[];
+  /** An account belongs to one pool at most, so this is its one membership or null. */
+  pool: PoolMembership | null;
   requests: { last24h: number; last7d: number; lifetime: number };
   /** The row's edit token, which an edit sends back as `expected_revision`; an account deleted and created again
    * under its id never answers one its predecessor did. */

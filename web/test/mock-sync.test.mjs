@@ -194,5 +194,5 @@ test('the mock deletes an account with its pool memberships, and a disconnect ke
   await assert.rejects(api.deleteAccount('secondary'), (e) => e.status === 404);
   await api.disconnectAccount('primary');
   const primary = (await api.listAccounts()).find((a) => a.id === 'primary');
-  assert.deepEqual([primary.email, primary.status, primary.credential.refreshTokenExpiresAt, primary.pools.length > 0], ['operator@example.com', 'unpaired', null, true], 'a disconnect drops the credential and leaves the identity and the memberships');
+  assert.deepEqual([primary.email, primary.status, primary.credential.refreshTokenExpiresAt, primary.pool !== null], ['operator@example.com', 'unpaired', null, true], 'a disconnect drops the credential and leaves the identity and the membership');
 });

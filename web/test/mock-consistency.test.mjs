@@ -17,7 +17,7 @@ const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
 
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
-const RETIRED = ['business', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'studio', 'team'];
+const RETIRED = ['business', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
 
 /**
  * The story as every view reads it, loaded at `at`: the mock draws its story from the clock it loads at, so each
@@ -69,7 +69,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const poolName = new Map(s.pools.map((p) => [p.id, p.name]));
     const keyName = new Map(s.keys.map((k) => [k.id, k.name]));
     const named = (map, id, where) => assert.ok(map.has(id), `${where} names ${id}, which the list lacks`);
-    for (const a of s.accounts) for (const m of a.pools) named(poolName, m.poolId, `account ${a.id}`);
+    for (const a of s.accounts) if (a.pool) named(poolName, a.pool.poolId, `account ${a.id}`);
     for (const p of s.pools) {
       for (const m of p.members) named(accountLabel, m.accountId, `pool ${p.id}`);
       for (const k of p.keys) {
@@ -140,10 +140,22 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`an account belongs to one pool, and its pool is the one whose members name it, at ${at}`, async () => {
+    const s = await story;
+    const holder = new Map();
+    for (const p of s.pools) {
+      for (const m of p.members) {
+        assert.ok(!holder.has(m.accountId), `${m.accountId} is a member of ${holder.get(m.accountId)?.poolId} and ${p.id}`);
+        holder.set(m.accountId, { poolId: p.id, priority: m.priority });
+      }
+    }
+    for (const a of s.accounts) assert.deepEqual(a.pool, holder.get(a.id) ?? null, `account ${a.id} answers the pool whose members name it`);
+  });
+
   test(`no retired story name and no harness name reaches a row, at ${at}`, async () => {
     const s = await story;
     const names = [
-      ...s.accounts.flatMap((a) => [a.id, a.label, ...a.pools.map((m) => m.poolId)]),
+      ...s.accounts.flatMap((a) => [a.id, a.label, a.pool?.poolId]),
       ...s.pools.flatMap((p) => [p.id, p.name, ...p.members.map((m) => m.accountId), ...p.keys.flatMap((k) => [k.id, k.label])]),
       ...s.keys.flatMap((k) => [k.id, k.name, k.poolId]),
       ...s.sessions.flatMap((x) => [x.keyId, x.accountId]),
@@ -164,7 +176,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     assert.deepEqual(
       s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.email),
-      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+old@example.com', 'operator+spare@example.com'],
+      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com'],
       'every subscription keeps the identity it last paired with',
     );
     const pairing = await s.api.startPairing('legacy');

@@ -30,8 +30,8 @@ test('a key or a pool whose id is taken is refused with the route\'s 409', async
 
 test('the mock derives an id from a name the way the client does, which the slug rule always admits', async () => {
   const api = await signedIn();
-  const pool = await api.createPool({ ...(await storyPool(api)), name: '  Nightly batch!  ' });
-  const long = await api.createPool({ ...(await storyPool(api)), name: 'x'.repeat(80) });
+  const pool = await api.createPool({ ...(await storyPool(api)), members: [], name: '  Nightly batch!  ' });
+  const long = await api.createPool({ ...(await storyPool(api)), members: [], name: 'x'.repeat(80) });
   const { key } = await api.createKey({ ...keyInput, name: 'Build box' });
   assert.deepEqual([pool.id, long.id, key.id], [d.slug('  Nightly batch!  '), 'x'.repeat(64), 'build-box']);
   for (const id of [pool.id, long.id, key.id]) assert.match(id, /^[a-z0-9][a-z0-9-]{0,63}$/);
@@ -48,8 +48,14 @@ test('a pool create refuses the values a pool edit refuses', async () => {
 
 test('a new pool reads each member the way the pool route does', async () => {
   const api = await signedIn();
+  // An account belongs to one pool, so the story's pools let every account go and each probing pool leaves once read.
+  for (const p of await api.listPools()) await api.updatePool(p.id, { ...poolInputOf(p), members: [] });
   const members = (await api.listAccounts()).map((a) => ({ accountId: a.id, priority: 0 }));
-  const verdicts = async (name, overagePolicy) => Object.fromEntries((await api.createPool({ ...(await storyPool(api)), members, name, overagePolicy })).members.map((m) => [m.accountId, m.eligible]));
+  const verdicts = async (name, overagePolicy) => {
+    const pool = await api.createPool({ ...(await storyPool(api)), members, name, overagePolicy });
+    await api.deletePool(pool.id);
+    return Object.fromEntries(pool.members.map((m) => [m.accountId, m.eligible]));
+  };
   assert.deepEqual(await verdicts('first', 'never'), {
     legacy: 'unavailable',
     nightly: 'overage',
@@ -58,6 +64,7 @@ test('a new pool reads each member the way the pool route does', async () => {
     research: 'eligible',
     secondary: 'cooldown',
     spare: 'unavailable',
+    studio: 'eligible',
   });
   // Funded again, the flagged account serves; the account the router reads in overage is an obstacle only under a
   // policy that admits none.
@@ -89,12 +96,16 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
     assert.deepEqual([member.budgetDailyUsd, member.budgetMonthlyUsd, member.kind, member.spends, member.budgetUntil], [7.5, null, 'api_key', [], null], 'the mock keeps no ledger, so a write answers no spend');
   }
   assert.deepEqual(poolInputOf(stored).members, edit.members, 'the members read back as they were written');
+  // An account belongs to one pool, so all lets its members go before a new pool takes them, and that pool leaves
+  // before the next.
+  await api.updatePool('all', { ...edit, members: [] });
   const created = await api.createPool({ ...edit, name: 'budgeted' });
   assert.deepEqual(
     created.members.map((m) => [m.accountId, m.kind, m.budgetDailyUsd, m.budgetMonthlyUsd]),
     edit.members.map((m) => [m.accountId, m.accountId === 'overflow' ? 'api_key' : 'oauth', m.budgetDailyUsd, m.budgetMonthlyUsd]),
     'a create derives each member\'s kind from its account',
   );
+  await api.deletePool(created.id);
   const bare = await api.createPool({ ...edit, members: [{ accountId: 'overflow', priority: 0 }], name: 'bare' });
   assert.deepEqual([bare.members[0].budgetDailyUsd, bare.members[0].budgetMonthlyUsd], [null, null], 'a member written without a budget field has no budget over that period');
 });
@@ -190,7 +201,7 @@ test("a key write stores the server-side auto mode override and a pool write sto
   await api.updatePool('all', { ...pool, autoModeServer: false });
   assert.equal((await api.listPools()).find((p) => p.id === 'all').autoModeServer, false);
   const { autoModeServer: _dropped, ...unset } = pool;
-  const created = await api.createPool({ ...unset, name: 'fresh' });
+  const created = await api.createPool({ ...unset, members: [], name: 'fresh' });
   assert.equal(created.autoModeServer, true, "a new pool without the field takes the route's default");
 });
 
@@ -242,6 +253,30 @@ test('a pool save naming an account twice answers the route\'s 409 ahead of ever
   assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
 });
 
+test("a pool save naming an account another pool holds answers the route's 409 and stores nothing", async () => {
+  const api = await signedIn();
+  const before = await api.listPools();
+  const work = poolInputOf(before.find((p) => p.id === 'work'));
+  const primary = { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 };
+  const held = refusedAs(409, 'account primary is a member of pool all');
+  await assert.rejects(() => api.createPool({ ...work, members: [primary], name: 'third' }), held, 'on create');
+  await assert.rejects(() => api.updatePool('work', { ...work, members: [...work.members, primary] }), held, 'on edit');
+  assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
+});
+
+test('an account answers the pool a member write left it in', async () => {
+  const api = await signedIn();
+  const pools = await api.listPools();
+  const all = poolInputOf(pools.find((p) => p.id === 'all'));
+  const work = poolInputOf(pools.find((p) => p.id === 'work'));
+  const poolOf = async (id) => (await api.listAccounts()).find((a) => a.id === id).pool;
+  assert.deepEqual(await poolOf('primary'), { poolId: 'all', priority: 0 });
+  await api.updatePool('all', { ...all, members: all.members.filter((m) => m.accountId !== 'primary') });
+  assert.equal(await poolOf('primary'), null, 'out of all, primary is in no pool');
+  await api.updatePool('work', { ...work, members: [...work.members, { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 3 }] });
+  assert.deepEqual(await poolOf('primary'), { poolId: 'work', priority: 3 });
+});
+
 test('a model rule list the route refuses is refused on every pool and key write, with the route\'s text', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
@@ -276,7 +311,7 @@ test('a key write without the model fields takes the route\'s defaults on create
   const edited = await api.updateKey('laptop', { ...bare, name: 'laptop' });
   assert.deepEqual([edited.modelRules, edited.modelRulesMode, edited.longContextTwins], [laptop.modelRules, laptop.modelRulesMode, laptop.longContextTwins]);
   const { modelRules: _p, ...unruled } = await storyPool(api);
-  const pool = await api.createPool({ ...unruled, name: 'unruled' });
+  const pool = await api.createPool({ ...unruled, members: [], name: 'unruled' });
   assert.deepEqual(pool.modelRules, [], 'a pool created without a list starts with none');
 });
 

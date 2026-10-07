@@ -75,11 +75,15 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (43, V43),
     (44, V44),
     (45, V45),
+    (46, V46),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 45;
+pub const SCHEMA_VERSION: u32 = 46;
+
+/// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
+pub const ONE_POOL_VERSION: u32 = 46;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -657,3 +661,6 @@ DELETE FROM affinity WHERE chain IN ('request', 'response');
 const V45: &str = r#"
 ALTER TABLE pools RENAME COLUMN migrate_above_utilization TO shed_ahead_of_pace;
 "#;
+
+// An account's one membership, enforced below the member write's own check.
+const V46: &str = "CREATE UNIQUE INDEX pool_members_one_pool ON pool_members (account_id);";

@@ -139,7 +139,7 @@ const POOL_ROWS: PoolSeed[] = [
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
     bodyCaptureHours: 0,
     modelRules: [],
-    members: [unbudgeted('primary', 0)],
+    members: [unbudgeted('studio', 0)],
     ...UNTIL_DRAWN,
     activePins: 0,
     updatedAt: daysAgo(40),

@@ -2394,6 +2394,8 @@ async fn a_key_moved_to_another_pool_is_capped_and_charged_there() {
             "test",
         )
         .unwrap();
+    // An account belongs to one pool, so `a` leaves `main` before `warm` takes it.
+    r.h.store.set_pool_members("main", &[], "test").unwrap();
     r.h.store
         .set_pool_members(
             "warm",

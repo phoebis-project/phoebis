@@ -1376,7 +1376,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "windows": windows,
         "fast_lane": fast_lane,
         "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
-        "pools": ctx.members.iter().filter(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })).collect::<Vec<_>>(),
+        "pool": ctx.members.iter().find(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })),
         "requests": { "last_24h": ctx.day.get(&row.id).map_or(0, |t| t.requests), "last_7d": ctx.week.get(&row.id).map_or(0, |t| t.requests), "lifetime": ctx.lifetime.get(&row.id).map_or(0, |t| t.requests) },
         "usage": usage,
     })

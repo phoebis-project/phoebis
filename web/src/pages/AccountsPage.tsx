@@ -168,9 +168,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
         {account.email && <div className="account-row__sub mono muted">{account.email}</div>}
         <WindowTriple account={account} now={now} compact />
         <div className="account-row__foot">
-          <span className="muted">
-            {account.pools.length} {account.pools.length === 1 ? 'pool' : 'pools'}
-          </span>
+          <span className="muted">{account.pool ? `pool ${account.pool.poolId}` : 'no pool'}</span>
           {account.extraUsage?.inUse && <Badge tone="serious">Overage</Badge>}
           {account.extraUsage?.enabled && !account.extraUsage.inUse && <span className="muted">extra usage on</span>}
         </div>
@@ -364,7 +362,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
             onClick={() =>
               act(
                 paused ? 'Resume account' : 'Pause account',
-                'Paused accounts stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
+                'Paused accounts stay in their pool but receive no new sessions. Pinned sessions migrate on their next request.',
                 paused ? 'Resume' : 'Pause',
                 paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
                 paused ? 'Resumed' : 'Paused',
@@ -412,7 +410,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
             onClick={() =>
               act(
                 'Delete account',
-                `Removes ${account.label} from every pool it is in and deletes it; request history stays in the ledger.`,
+                `Removes ${account.label} from its pool and deletes it. Request history stays in the ledger.`,
                 'Delete',
                 async () => {
                   await api.deleteAccount(account.id);
@@ -600,19 +598,17 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           }
         />
         <div className="stack">
-          <Card title="Pools">
-            {account.pools.length === 0 ? (
-              <p className="muted">Not a member of any pool.</p>
+          <Card title="Pool">
+            {account.pool === null ? (
+              <p className="muted">Not a member of a pool.</p>
             ) : (
               <ul className="plain-list">
-                {account.pools.map((p) => (
-                  <li key={p.poolId} className="row">
-                    <Link to="/pools" className="mono">
-                      {p.poolId}
-                    </Link>
-                    <span className="muted">priority {p.priority}</span>
-                  </li>
-                ))}
+                <li className="row">
+                  <Link to="/pools" className="mono">
+                    {account.pool.poolId}
+                  </Link>
+                  <span className="muted">priority {account.pool.priority}</span>
+                </li>
               </ul>
             )}
           </Card>

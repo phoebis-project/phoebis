@@ -353,8 +353,8 @@ function buildRequests(): RequestLog[] {
     if (autoMode === 'stripped') {
       const moved = rows[rows.length - 1];
       Object.assign(moved, {
-        accountId: 'primary',
-        attempts: moved.attempts.map((a) => ({ ...a, accountId: 'primary' })),
+        accountId: 'studio',
+        attempts: moved.attempts.map((a) => ({ ...a, accountId: 'studio' })),
         canonicalModel: drawn,
         capturedBodies: false,
         costUsd: Math.round(costOf(drawn, moved.usage) * 10_000) / 10_000,

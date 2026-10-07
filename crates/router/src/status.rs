@@ -274,7 +274,7 @@ pub fn render(
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter(|account| account["pools"].as_array().is_none_or(Vec::is_empty))
+                .filter(|account| account["pool"].is_null())
                 .map(|account| (accounts.label(text(&account["id"])), state_word(account)))
                 .collect();
             if !unpooled.is_empty() {

@@ -371,7 +371,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} Max 20x windows left`;
   results.push({
     name: '/ the line under each ring reads the weighed figures',
-    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 3 && JSON.stringify(f7.rows.map((r) => r.id)) === JSON.stringify(['primary']),
+    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 4 && JSON.stringify(f7.rows.map((r) => r.id)) === JSON.stringify(['primary']),
     missing: [`5-hour ${JSON.stringify(lineOf('5h'))} against ${JSON.stringify(lineFrom(f5))}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7))}`, `rows ${f5.rows.map((r) => r.id)} and ${f7.rows.map((r) => r.id)}`],
   });
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
@@ -379,7 +379,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const strays = ['5h', '7d'].flatMap((id) => onRing(id).filter((n) => n === 'legacy' || n === 'spare').map((n) => `${n} on the ${id} ring`));
   results.push({
     name: '/ the 7-day ring names the unpriced accounts and the 5-hour ring names none',
-    ok: JSON.stringify(named('7d').sort()) === JSON.stringify(['nightly: Max 5x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured']) && lineOf('5h') !== '' && named('5h').length === 0 && strays.length === 0,
+    ok: JSON.stringify(named('7d').sort()) === JSON.stringify(['nightly: Max 5x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'studio: Max 5x 7-day capacity not measured']) && lineOf('5h') !== '' && named('5h').length === 0 && strays.length === 0,
     missing: [`7-day ${JSON.stringify(named('7d'))}`, `5-hour ${JSON.stringify(named('5h'))}`, ...strays],
   });
   const titled = (id) => {
@@ -1066,6 +1066,18 @@ results.push({ name: 'nav calls the pages Accounts and Keys, and no text names t
   results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
 }
 expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
+{
+  // An account belongs to one pool: the list row's foot names it or says there is none, and the Pool card holds the
+  // one membership.
+  const foot = (id) => m.container.querySelector(`a.account-row[href="/accounts/${id}"] .account-row__foot > span.muted`)?.textContent?.trim() ?? 'no row';
+  const cardOf = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  const rows = [...(cardOf('Pool')?.querySelectorAll('li') ?? [])].map((li) => [li.querySelector('a')?.textContent?.trim(), li.querySelector('.muted')?.textContent?.trim()]);
+  results.push({
+    name: '/accounts/primary names its one pool on the list row and in the Pool card, and an account in no pool says so',
+    ok: foot('primary') === 'pool all' && foot('legacy') === 'no pool' && cardOf('Pools') === undefined && JSON.stringify(rows) === '[["all","priority 0"]]',
+    missing: [foot('primary'), foot('legacy'), cardOf('Pools') ? 'a Pools card' : 'no Pools card', JSON.stringify(rows)],
+  });
+}
 await emailLines('/accounts each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/accounts/primary the head reads the email under the name', [['primary', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
@@ -1369,6 +1381,10 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
 await m.navigate('/accounts/legacy');
 expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a']);
 {
+  const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pool');
+  results.push({ name: '/accounts/legacy reads in its Pool card that it is in no pool', ok: card?.querySelector('p.muted')?.textContent === 'Not a member of a pool.', missing: [card?.textContent ?? 'no Pool card'] });
+}
+{
   const at = accountsInPlace(m);
   results.push({ name: '/accounts/legacy stays at its path on the Accounts page', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/legacy', missing: [JSON.stringify(at)] });
   const repair = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Re-pair');
@@ -1540,7 +1556,7 @@ await m.navigate('/accounts/spare');
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete account')?.click();
   await m.settle(250);
   const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/accounts Delete account names the consequence before it runs', confirm?.textContent ?? '', ['Delete account', 'Removes spare from every pool it is in and deletes it; request history stays in the ledger.']);
+  expect('/accounts Delete account names the consequence before it runs', confirm?.textContent ?? '', ['Delete account', 'Removes spare from its pool and deletes it. Request history stays in the ledger.']);
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
   await m.settle(1200);
   const listed = [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim());
@@ -1898,7 +1914,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(linked('all')) === '["/accounts/primary"]' &&
       sentence('codex') === `Exhausted: no member can take a request until Research workspace's daily budget resets at ${dayEnd}.` &&
       JSON.stringify(linked('codex')) === '["/accounts/research"]' &&
-      sentence('work') === 'Active: primary takes every fresh session.',
+      sentence('work') === 'Active: studio takes every fresh session.',
     missing: [sentence('all'), sentence('codex'), sentence('work')].map(String),
   });
   {
@@ -2243,7 +2259,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools the Keepalive warning closes its group', ok: keepalive?.lastElementChild?.classList.contains('callout--warning') === true, missing: [keepalive?.lastElementChild?.className ?? 'no Keepalive group'] });
     const cap = keepalive?.querySelector('button[role="switch"][aria-label="Daily probe cost cap ($)"]')?.closest('.switched')?.parentElement;
     results.push({ name: '/pools the daily probe cost cap keeps to the left column', ok: cap?.classList.contains('cell--half') === true && keepalive?.querySelector('.cells')?.lastElementChild === cap, missing: [cap?.className ?? 'no cost cap block'] });
-    const legacy = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent === 'legacy');
+    const legacy = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === 'legacy');
     const legacyPriority = legacy?.querySelector('input[aria-label="Priority for legacy"]');
     results.push({ name: '/pools a non-member row renders its Priority input disabled', ok: legacy?.querySelector('input[type="checkbox"]')?.checked === false && legacyPriority?.disabled === true, missing: [legacyPriority ? String(legacyPriority.disabled) : 'no Priority input for legacy'] });
 
@@ -2579,12 +2595,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 
   {
     const memberRows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
-    const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
+    const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
     {
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
-      await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => tr.querySelector('td:first-child label')).map((l) => [byLabel.get(l?.querySelector('span:nth-child(2)')?.textContent ?? '') ?? '', l?.querySelector('span:nth-child(3)')?.textContent ?? null]));
+      await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace'];
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -2594,7 +2610,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace', 'studio']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -3332,6 +3348,27 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
 }
 {
+  // primary sits in all, so the work dialog marks it held there and offers neither a checkbox nor a field for it.
+  m.unmount();
+  m = await mount('/pools');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const primary = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === 'primary');
+  const marking = primary?.querySelector('td:first-child span.muted:not(.mono)');
+  const cells = [...(primary?.querySelectorAll('td') ?? [])].slice(1).map((td) => td.childElementCount);
+  results.push({
+    name: '/pools the work dialog marks primary as held by all, with no checkbox and no field',
+    ok: marking?.textContent === 'In pool all' && marking.getAttribute('title') === 'An account belongs to one pool. Remove it from all first.' && !!primary && primary.querySelector('input') === null && JSON.stringify(cells) === '[0,0,0]',
+    missing: [marking?.textContent ?? 'no marking', marking?.getAttribute('title') ?? 'no title', primary?.querySelector('input') ? 'an input' : 'no input', JSON.stringify(cells)],
+  });
+  expect('/pools the Members hint says an account belongs to one pool', group(dlg, 'Members')?.querySelector('.field__hint')?.textContent ?? '', ['An account belongs to one pool.']);
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+  m.unmount();
+  m = await mount('/pools');
+}
+{
   // Emptying a stored budget sends none, which clears it, and leaves the member's other budget as it stood.
   const before = (await api.listPools()).find((p) => p.id === 'all');
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
@@ -3359,20 +3396,20 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // A budget on a subscription member bounds its metered spend: one stored through the API draws its two fields and
   // its metered lines, and the dialog's save keeps it.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.updatePool('work', { ...work, members: [{ accountId: 'primary', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
+  await api.updatePool('work', { ...work, members: [{ accountId: 'studio', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
   m.unmount();
   m = await mount('/pools');
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
-  const row = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'primary');
+  const row = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'studio');
   const lines = [...(row?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
   const standingBadges = [...(row?.querySelectorAll('td:nth-child(3) .badge') ?? [])].map((b) => b.textContent?.trim());
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const fields = ['Daily', 'Monthly'].map((period) => dlg?.querySelector(`input[aria-label="${period} budget for primary, USD"]`)?.value ?? null);
+  const fields = ['Daily', 'Monthly'].map((period) => dlg?.querySelector(`input[aria-label="${period} budget for studio, USD"]`)?.value ?? null);
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
   await m.settle(700);
-  const stored = (await api.listPools()).find((p) => p.id === 'work')?.members.find((x) => x.accountId === 'primary');
+  const stored = (await api.listPools()).find((p) => p.id === 'work')?.members.find((x) => x.accountId === 'studio');
   results.push({
     name: '/pools a budget on a subscription member draws its two fields and a save keeps it',
     ok:
@@ -3388,9 +3425,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await api.updatePool('work', work);
 }
 {
-  // A round marks the triggering pool's pins alone: with laptop moved into work, work's one primary pin (the busy
-  // laptop session) is its slice's last unmarked pin, so its preview sheds nothing, whatever desktop holds there. The
-  // mock's cost table prices none of the pin's Sonnet 5 cells either, so the 0 holds from both causes.
+  // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
+  // work's one primary pin (the busy laptop session) is its slice's last unmarked pin, so its preview sheds nothing,
+  // whatever desktop, still all's key, holds there. The mock's cost table prices none of the pin's Sonnet 5 cells
+  // either, so the 0 holds from both causes.
+  const pools = await api.listPools();
+  const story = (id) => pools.find((p) => p.id === id);
+  const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', written(story('all'), story('all').members.filter((x) => x.accountId !== 'primary')));
+  await api.updatePool('work', written(story('work'), [...story('work').members, { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   const moveLaptop = (poolId) =>
     api.updateKey('laptop', {
@@ -3421,7 +3464,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
   results.push({
-    name: "/pools the shedding preview counts the pool's own pins alone on an account shared with another pool",
+    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
     // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
     // count that it ran over laptop's one pin alone.
     ok: /^Would (move|mark) 0 sessions, 0 warm, 0% of the burn in window share\b.* 1 pin the table cannot price stays\.$/.test(line),
@@ -3430,6 +3473,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(300);
   await moveLaptop(laptop.poolId);
+  await api.updatePool('work', written(story('work'), story('work').members));
+  await api.updatePool('all', written(story('all'), story('all').members));
+  m.unmount();
+  m = await mount('/pools');
 }
 {
   // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and a
@@ -3553,7 +3600,7 @@ m.unmount();
   const unchecked = !(dlg?.textContent ?? '').includes('is not an account') && members?.querySelector('.members-table') === null;
   retry?.click();
   await m.settle(600);
-  const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
+  const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: "/pools a failed accounts read holds the dialog's save without naming a member",
     ok:
@@ -3562,7 +3609,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -3580,18 +3627,18 @@ m.unmount();
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const rows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
   const status = () => dlg?.querySelector('.dialog__status')?.textContent ?? '';
-  const early = rows().map((tr) => [tr.querySelector('td:first-child label span:nth-child(2)')?.textContent, tr.querySelector('input[type="checkbox"]')?.checked, tr.querySelector('.badge') === null]);
+  const early = rows().map((tr) => [tr.querySelector('td:first-child span')?.textContent, tr.querySelector('input[type="checkbox"]')?.checked, tr.querySelector('.badge') === null]);
   const before = status();
   read.release();
   await m.settle(600);
   read.restore();
-  const labels = rows().map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
+  const labels = rows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: '/pools while the accounts read is out the stored members draw unmarked and hold nothing',
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -3611,7 +3658,7 @@ m.unmount();
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const rowOf = (name) => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent === name);
+  const rowOf = (name) => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === name);
   const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
   const status = () => dlg?.querySelector('.dialog__status')?.textContent ?? '';
   const secondary = rowOf('secondary');
@@ -3764,8 +3811,9 @@ localStorage.removeItem('phoebis.expertView');
 // line and the Keys tiles wait for the refresh rather than read "No keys yet" and 0, and a failed refresh reads
 // unavailable rather than the list from before it.
 {
+  // No member, since each of the story's accounts already belongs to a pool.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.createPool({ ...work, members: work.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), name: 'keyless' });
+  await api.createPool({ ...work, members: [], name: 'keyless' });
   const read = (page) => {
     const card = [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'keyless');
     const tile = [...(card?.querySelectorAll('.pool__stats > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
@@ -6892,7 +6940,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
   await tab(m, 'Burn');
   const planned = legendOf('Plan per hour');
-  const windows = ['primary', 'secondary', 'nightly'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
+  const windows = ['primary', 'secondary', 'nightly', 'studio'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
   {
@@ -6909,10 +6957,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         windows.every((w) => planned.includes(w)) &&
         !planned.some((t) => t.startsWith('overflow')) &&
         dashedOf(planItems).every((t) => t.includes('(7-day)')) &&
-        dashedOf(planItems).length === 3 &&
-        fiveHour.length === 3 &&
+        dashedOf(planItems).length === 4 &&
+        fiveHour.length === 4 &&
         fiveHour.every((li) => (labelOf(li).startsWith('secondary ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
-        sevenDay.length === 3 &&
+        sevenDay.length === 4 &&
         sevenDay.every((li) => valueOf(li) === '-') &&
         unlisted.length === 1 &&
         valueOf(unlisted[0]) === '5-hour, 7-day' &&
@@ -9537,7 +9585,7 @@ m.unmount();
       !drawn.week.ring &&
       drawn.week.sentence === "No listed account's tier is sized for the 7-day window." &&
       drawn.week.listAfter &&
-      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: tier default_claude_max_20x is not in the cost table', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured']) &&
+      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: tier default_claude_max_20x is not in the cost table', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured', 'studio: Max 5x 7-day capacity not measured']) &&
       drawn.fiveHour.ring &&
       JSON.stringify(drawn.fiveHour.names) === JSON.stringify(['primary: tier default_claude_max_20x is not in the cost table']),
     missing: [JSON.stringify(drawn)],

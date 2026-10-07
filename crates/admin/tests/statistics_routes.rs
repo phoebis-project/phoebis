@@ -1831,8 +1831,22 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
 async fn budgets_route_answers_a_members_spend_against_its_budget() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // "direct" carries a budget in both pools (proving a second row sorts by pool ahead of "main") while
-    // "business" rides "main" unbudgeted (proving the route excludes it).
+    // "metered" carries a budget in "aux" (proving its row sorts by pool ahead of "main") while "business" rides
+    // "main" unbudgeted (proving the route excludes it).
+    parts
+        .store
+        .insert_account(&phoebis_store::AccountRow {
+            id: "metered".into(),
+            kind: phoebis_store::AccountKind::ApiKey,
+            label: "Metered".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: phoebis_store::AccountState::Ready,
+        })
+        .unwrap();
     post(
         &parts.app,
         "/admin/pools",
@@ -1846,7 +1860,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
         &parts.app,
         "/admin/pools",
         r#"{"id":"aux","label":"Aux","strategy":"priority",
-        "members":[{"account_id":"direct","priority":0,"budget_daily_usd":5.0}]}"#,
+        "members":[{"account_id":"metered","priority":0,"budget_daily_usd":5.0}]}"#,
         Some(&cookie),
     )
     .await;
@@ -1882,7 +1896,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
         ),
         (
             Some("aux"),
-            Some("direct"),
+            Some("metered"),
             Some(5.0),
             Some("day"),
             Some("api_key")

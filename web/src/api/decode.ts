@@ -143,6 +143,7 @@ export function decodeAccount(v: unknown): Account {
   const fastLane = a.fast_lane === null || a.fast_lane === undefined ? null : rec(a.fast_lane);
   const extra = a.extra_usage === null || a.extra_usage === undefined ? null : rec(a.extra_usage);
   const overage = a.overage === null || a.overage === undefined ? null : rec(a.overage);
+  const pool = a.pool === null || a.pool === undefined ? null : rec(a.pool);
   const profile = a.profile === null || a.profile === undefined ? null : rec(a.profile);
   const sub = a.subscription === null || a.subscription === undefined ? null : rec(a.subscription);
   const identity = rec(a.identity);
@@ -162,7 +163,7 @@ export function decodeAccount(v: unknown): Account {
     label: str(a.label),
     overage: overage ? { inUse: bool(overage.in_use), observedAt: isoOr(overage.observed_at, epoch), reset: isoOrNull(overage.reset), since: isoOrNull(overage.since) } : null,
     plan: planName(subscription),
-    pools: list(a.pools).map(rec).map((p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
+    pool: pool ? { poolId: str(pool.pool_id), priority: num(pool.priority) } : null,
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
     // than landing over a row it could not vouch for.

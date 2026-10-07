@@ -1507,8 +1507,8 @@ fn shed_round(
 ) -> Vec<PinKey> {
     let account_id = &current.account_id;
     let unit = burn_unit(state, snapshot, account_id, now, fallback_ms);
-    // The round is the pool's: a pin under another pool's key on the same account is in that pool's round, with
-    // that pool's share, dwell and bounds, and is neither marked nor counted here.
+    // The round is the account's one pool's: a pin under a key of a pool the account left is retained until it ends
+    // and is neither ranked nor marked here, so a former pool's pins never spend this pool's mark budget.
     let in_pool = |p: &PinRow| {
         snapshot
             .key(&p.key_id)

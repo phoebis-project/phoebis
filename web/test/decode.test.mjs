@@ -7,7 +7,7 @@ import { same, shapeOf } from './shape.mjs';
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
 const isIso = (s) => typeof s === 'string' && !Number.isNaN(Date.parse(s)) && s.endsWith('Z');
 
-test('an account decodes with its windows, plan, pools, and models', () => {
+test('an account decodes with its windows, plan, pool, and models', () => {
   const body = fixture('account');
   const a = d.decodeAccount(body);
   assert.equal(a.id, 'business');
@@ -28,7 +28,9 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.fableWindow.id, '7d_fable');
   assert.ok(isIso(a.windows[0].resetsAt) && isIso(a.windows[0].observedAt));
   assert.equal(a.windows[0].utilization, 0.62, 'the five_hour sample is the 5h window');
-  assert.deepEqual(a.pools, [{ poolId: 'main', priority: 0 }]);
+  assert.deepEqual(a.pool, { poolId: 'main', priority: 0 });
+  assert.equal(d.decodeAccount({ ...body, pool: null }).pool, null, 'an account in no pool answers a null pool');
+  assert.equal(d.decodeAccount({ ...body, pool: undefined }).pool, null, 'a row without the member reads as in no pool');
   assert.equal(a.extraUsage.monthlyLimitCredits, 5000);
   assert.equal(a.requests.lifetime, 5);
   // The fixture seeds one live model-scoped cooldown so the key-models and models-state fixtures have a row.
@@ -36,7 +38,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'revision', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
+    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pool', 'requests', 'revision', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });

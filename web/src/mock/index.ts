@@ -111,6 +111,15 @@ const repeatedMember = (members: PoolInput['members']): string | null => {
   return null;
 };
 
+/** The route's 409 for a member another pool holds, since an account belongs to one pool. */
+const heldElsewhere = (members: PoolInput['members'], pools: Omit<Pool, 'keys'>[], poolId: string): string | null => {
+  for (const m of members) {
+    const holder = pools.find((p) => p.id !== poolId && p.members.some((x) => x.accountId === m.accountId));
+    if (holder) return `account ${m.accountId} is a member of pool ${holder.id}`;
+  }
+  return null;
+};
+
 /** The member write's refusals, which the routes read once the pool's own fields have passed. */
 const memberRefusal = (members: PoolInput['members']): string | null => {
   for (const m of members) {
@@ -388,6 +397,13 @@ export class MockApi implements Api {
     return next;
   }
 
+  /** The account as the route answers it, its pool read off the member lists a pool write rewrites. */
+  private withPool(a: Account): Account {
+    const pool = this.pools.find((p) => p.members.some((m) => m.accountId === a.id));
+    const member = pool?.members.find((m) => m.accountId === a.id);
+    return { ...a, pool: pool && member ? { poolId: pool.id, priority: member.priority } : null };
+  }
+
   analyticsBudgets() {
     if (emptyStore()) return latency([]);
     // Read off the members as they stand, so a budget set on the Pools form shows here; one row per budgeted
@@ -463,7 +479,7 @@ export class MockApi implements Api {
       kind: input.kind,
       label: input.label,
       plan: null,
-      pools: [],
+      pool: null,
       requests: { last24h: 0, last7d: 0, lifetime: 0 },
       revision: ((this.buried.get(input.id) ?? 0) + 1) * INCARNATION + 1,
       routingEnabled: true,
@@ -473,7 +489,7 @@ export class MockApi implements Api {
       windows: [],
     };
     this.accounts = [...this.accounts, account];
-    return latency(account, 300);
+    return latency(this.withPool(account), 300);
   }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
@@ -520,6 +536,8 @@ export class MockApi implements Api {
     if (repeated) throw new ApiError(409, `members name account ${repeated} twice`, null);
     const members = memberRefusal(input.members);
     if (members) throw new ApiError(400, members, null);
+    const held = heldElsewhere(input.members, this.pools, id);
+    if (held) throw new ApiError(409, held, null);
     const pool: Omit<Pool, 'keys'> = {
       ...POOL_SAMPLE,
       ...input,
@@ -714,7 +732,7 @@ export class MockApi implements Api {
   }
 
   listAccounts() {
-    return latency(emptyStore() ? [] : this.accounts);
+    return latency(emptyStore() ? [] : this.accounts.map((a) => this.withPool(a)));
   }
 
   listCatalog() {
@@ -796,7 +814,7 @@ export class MockApi implements Api {
     if (revision !== undefined && revision !== a.revision) {
       return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
     }
-    return latency(this.putAccount(revised({ ...a, label })), 250);
+    return latency(this.withPool(this.putAccount(revised({ ...a, label }))), 250);
   }
 
   async resumeAccount(accountId: string) {
@@ -865,7 +883,7 @@ export class MockApi implements Api {
     const blank: Subscription = { billingType: '', derivedEndsAt: null, endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
     const base = a.subscription ?? (patch.cancelled ? blank : null);
     const subscription = base ? { ...base, endsAt: patch.cancelled ? patch.subscriptionEndsAt : null } : null;
-    return latency(this.putAccount(revised({ ...a, cancelled: patch.cancelled, subscription })), 250);
+    return latency(this.withPool(this.putAccount(revised({ ...a, cancelled: patch.cancelled, subscription }))), 250);
   }
 
   async updateKey(id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey> {
@@ -900,6 +918,8 @@ export class MockApi implements Api {
     if (members) return Promise.reject(new ApiError(400, members, null));
     const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
     if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
+    const held = heldElsewhere(input.members, this.pools, id);
+    if (held) return Promise.reject(new ApiError(409, held, null));
     const current = this.pools[idx];
     if (updatedAt !== undefined && updatedAt !== current.updatedAt) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited; reload and try again', 'stale_edit'));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));

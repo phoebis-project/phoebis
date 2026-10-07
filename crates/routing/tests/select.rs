@@ -4400,8 +4400,9 @@ fn an_entry_another_key_wrote_places_the_request() {
     );
 }
 
-#[test]
-fn two_pools_sharing_an_account_share_its_entries() {
+/// Accounts `a`, `b` and `c`, pools `p1` and `p2` at a shedding margin of 0.8 with the default shedding, each key
+/// `(id, pool)` and each member `(pool, account, priority)` as given.
+fn shedding_pools(keys: &[(&str, &str)], members: &[(&str, &str, u32)]) -> RegistrySnapshot {
     let account = |id: &str| AccountRow {
         id: id.into(),
         kind: AccountKind::Oauth,
@@ -4413,7 +4414,7 @@ fn two_pools_sharing_an_account_share_its_entries() {
         revision: 1,
         state: AccountState::Ready,
     };
-    let key = |id: &str, pool_id: &str| ApiKeyRow {
+    let api_key = |&(id, pool_id): &(&str, &str)| ApiKeyRow {
         id: id.into(),
         label: id.into(),
         notes: None,
@@ -4438,190 +4439,24 @@ fn two_pools_sharing_an_account_share_its_entries() {
     let pool = |id: &str| PoolRow {
         strategy: Strategy::Priority,
         prefer_subscription: false,
-        ..PoolRow::for_tests(id)
-    };
-    let member = |pool_id: &str, account_id: &str, priority: u32| PoolMember {
-        pool_id: pool_id.into(),
-        account_id: account_id.into(),
-        priority,
-        budget_daily_usd: None,
-        budget_monthly_usd: None,
-    };
-    let load = RegistryLoad {
-        accounts: vec![account("a"), account("b"), account("c")],
-        credential_generations: Vec::new(),
-        keys: vec![key("k1", "p1"), key("k2", "p2")],
-        // The account under test outranks neither sibling, so only placement (not the strategy) can land the
-        // request on it.
-        members: vec![
-            member("p1", "a", 1),
-            member("p1", "b", 0),
-            member("p2", "a", 1),
-            member("p2", "c", 0),
-        ],
-        pools: vec![pool("p1"), pool("p2")],
-        retired_secrets: Vec::new(),
-        reused_key_ids: Vec::new(),
-        terms: Vec::new(),
-    };
-    let s = RegistrySnapshot::from_load(load, [0; 32], 0, 1);
-    let mut st = RoutingState::from_load(RoutingLoad::default());
-    let row = AffinityRow {
-        model: "claude-sonnet-5".into(),
-        hash: "m1".into(),
-        chain: AffinityChain::Message,
-        account_id: "a".into(),
-        incarnation: 1,
-        written_at: 1_000,
-        ttl_ms: 300_000,
-        prefix_tokens: 900,
-        key_id: "k1".into(),
-        key_generation: s.key("k1").unwrap().created_at,
-        root: "root".into(),
-        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-    };
-    seed_affinity(&st, vec![row]);
-    let req_for = |key_id: &str, session: &str, now: i64| SelectRequest {
-        key_id: key_id.into(),
-        key_generation: s.key(key_id).unwrap().created_at,
-        agent_id: "main".into(),
-        session_id: Some(session.into()),
-        canonical_model: "claude-sonnet-5".into(),
-        folded_model: "claude-sonnet-5".into(),
-        candidates: resolve(
-            &s,
-            s.key(key_id).unwrap(),
-            "claude-sonnet-5",
-            "claude-sonnet-5",
-        )
-        .unwrap(),
-        portable: true,
-        attempted: Vec::new(),
-        now,
-        fallback_ms: 60_000,
-        revision: s.revision,
-        probe: false,
-        count: false,
-        request_class: None,
-        context_compacted: false,
-        static_hash: None,
-        boundaries: Arc::from(["m1".to_string()]),
-        client: ClientClass::ClaudeCode,
-        static_boundaries: Arc::from([]),
-        marker: false,
-        parent_agent_id: None,
-        holds: Vec::new(),
-        lane: lane_key("claude-sonnet-5", "standard", "none", "-"),
-        fast: false,
-    };
-    let SelectResult::Selected(sel1) =
-        select(&mut st, &s, &req_for("k1", "s1", 1_500), &mut rng()).0
-    else {
-        panic!("pool p1's request lands on the shared entry")
-    };
-    assert_eq!(
-        sel1.account.id, "a",
-        "pool p1's request lands on a via the shared entry"
-    );
-    assert_eq!(
-        sel1.trace.placement,
-        Some(Placement {
-            rung: "content",
-            depth: 1,
-            prefix_tokens: 900,
-        }),
-    );
-    let SelectResult::Selected(sel2) =
-        select(&mut st, &s, &req_for("k2", "s2", 1_500), &mut rng()).0
-    else {
-        panic!("pool p2's request lands on the shared entry")
-    };
-    assert_eq!(
-        sel2.account.id, "a",
-        "pool p2's request lands on the same entry"
-    );
-    assert_eq!(
-        sel2.trace.placement,
-        Some(Placement {
-            rung: "content",
-            depth: 1,
-            prefix_tokens: 900,
-        }),
-    );
-}
-
-/// The load of `two_pools_sharing_an_account_share_its_entries` with a shedding margin of 0.8 on both pools and
-/// each pool's `source_dwell_seconds` from `dwells`: keys `k1` in `p1` and `k2` in `p2`, `a` in both pools at
-/// priority 1 behind `b` in `p1` and `c` in `p2`, and `d` at priority 2 in the pool `d_in` names, so `a`
-/// outranks it there.
-fn shared_account(dwells: [u64; 2], d_in: Option<&str>) -> RegistrySnapshot {
-    let account = |id: &str| AccountRow {
-        id: id.into(),
-        kind: AccountKind::Oauth,
-        label: id.into(),
-        enabled: true,
-        identity: None,
-        lifecycle_generation: 1,
-        incarnation: 1,
-        revision: 1,
-        state: AccountState::Ready,
-    };
-    let api_key = |id: &str, pool_id: &str| ApiKeyRow {
-        id: id.into(),
-        label: id.into(),
-        notes: None,
-        pool_id: pool_id.into(),
-        enabled: true,
-        revoked_at: None,
-        expires_at: None,
-        model_rules: Vec::new(),
-        model_rules_mode: RulesMode::Extend,
-        long_context_twins: true,
-        keepalive_opt_out: false,
-        body_capture_hours: None,
-        secret_digest: vec![0; 32],
-        prefix: "00000000".into(),
-        created_at: 0,
-        updated_at: 0,
-        rotated_at: None,
-        last_used_at: None,
-        retired_secret_last_used_at: None,
-        auto_mode_server: None,
-    };
-    let pool = |id: &str, source_dwell_seconds: u64| PoolRow {
-        strategy: Strategy::Priority,
-        prefer_subscription: false,
         shed_ahead_of_pace: Some(0.8),
-        shedding: Shedding {
-            source_dwell_seconds,
-            ..Shedding::default()
-        },
         ..PoolRow::for_tests(id)
     };
-    let member = |pool_id: &str, account_id: &str, priority: u32| PoolMember {
-        pool_id: pool_id.into(),
-        account_id: account_id.into(),
-        priority,
-        budget_daily_usd: None,
-        budget_monthly_usd: None,
-    };
-    let mut accounts = vec![account("a"), account("b"), account("c")];
-    let mut members = vec![
-        member("p1", "a", 1),
-        member("p1", "b", 0),
-        member("p2", "a", 1),
-        member("p2", "c", 0),
-    ];
-    if let Some(pool_id) = d_in {
-        accounts.push(account("d"));
-        members.push(member(pool_id, "d", 2));
-    }
     let load = RegistryLoad {
-        accounts,
+        accounts: ["a", "b", "c"].map(account).to_vec(),
         credential_generations: Vec::new(),
-        keys: vec![api_key("k1", "p1"), api_key("k2", "p2")],
-        members,
-        pools: vec![pool("p1", dwells[0]), pool("p2", dwells[1])],
+        keys: keys.iter().map(api_key).collect(),
+        members: members
+            .iter()
+            .map(|&(pool_id, account_id, priority)| PoolMember {
+                pool_id: pool_id.into(),
+                account_id: account_id.into(),
+                priority,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            })
+            .collect(),
+        pools: vec![pool("p1"), pool("p2")],
         retired_secrets: Vec::new(),
         reused_key_ids: Vec::new(),
         terms: Vec::new(),
@@ -4677,78 +4512,77 @@ fn under(s: &RegistrySnapshot, key_id: &str, session: &str, now: i64) -> SelectR
 }
 
 #[test]
-fn an_account_in_two_pools_holds_one_prediction_that_both_pools_charges_feed() {
-    let s = shared_account([900, 900], None);
-    let charged = |completions: usize| {
-        let mut st = loaded(vec![
-            PinRow {
-                key_id: "k1".into(),
-                ..seeded_pin("s1", "a", T)
-            },
-            PinRow {
-                key_id: "k2".into(),
-                ..seeded_pin("s2", "a", T)
-            },
-        ]);
-        // A charge counts once it lands after the reading it adds to.
-        st.record_sample("a", sample(0.7, 0.0, T - 500));
-        for _ in 0..completions {
-            st.charge("a", T, &[(FIVE_HOUR, 0.06)]);
-        }
-        st
-    };
-    let five_hour = |st: &RoutingState| st.predicted("a", FIVE_HOUR, T).unwrap().utilization;
-
-    let mut both = charged(2);
-    assert!(
-        (five_hour(&both) - 0.82).abs() < 1e-9,
-        "the sample plus a completion under each pool: {}",
-        five_hour(&both)
+fn a_round_on_an_account_marks_among_every_pin_on_it_under_its_pools_share_and_dwell() {
+    let s = shedding_pools(
+        &[("k1", "p1"), ("k2", "p1")],
+        &[("p1", "a", 1), ("p1", "b", 0), ("p2", "c", 0)],
     );
-    assert_eq!(
-        landed(select(&mut both, &s, &under(&s, "k1", "s1", T + 1_000), &mut rng()).0),
-        ("a".into(), None)
-    );
-    assert_eq!(
-        both.last_shed("p1", "a"),
-        Some(T + 1_000),
-        "p1 reads a over its margin by the one prediction"
-    );
-    assert_eq!(
-        landed(select(&mut both, &s, &under(&s, "k2", "s2", T + 2_000), &mut rng()).0),
-        ("a".into(), None)
-    );
-    assert!(
-        both.last_shed("p2", "a").is_some(),
-        "p2 reads the same figure"
-    );
-
-    let mut one = charged(1);
-    assert!(
-        (five_hour(&one) - 0.76).abs() < 1e-9,
-        "one completion alone: {}",
-        five_hour(&one)
-    );
-    select(&mut one, &s, &under(&s, "k1", "s1", T + 1_000), &mut rng());
-    select(&mut one, &s, &under(&s, "k2", "s2", T + 2_000), &mut rng());
-    assert_eq!(
-        (one.last_shed("p1", "a"), one.last_shed("p2", "a")),
-        (None, None),
-        "either charge alone leaves a under the margin under both pools"
-    );
-}
-
-#[test]
-fn a_shedding_round_on_a_shared_account_marks_the_triggering_pools_pins_alone() {
-    let s = shared_account([900, 900], Some("p1"));
     let mut st = loaded(vec![
         PinRow {
             key_id: "k1".into(),
             ..burning("s1", "a", 4.0, false, T)
         },
         PinRow {
+            key_id: "k2".into(),
+            ..burning("s3", "a", 3.0, false, T)
+        },
+        PinRow {
             key_id: "k1".into(),
             ..burning("s0", "a", 1.0, false, T)
+        },
+        PinRow {
+            key_id: "k2".into(),
+            ..burning("s2", "a", 0.5, false, T)
+        },
+    ]);
+    hot_a_cool_b(&mut st, T);
+    // Through a pin the round leaves: a request through a marked pin would move it in the same selection, spending
+    // the mark read below.
+    assert_eq!(
+        landed(select(&mut st, &s, &under(&s, "k1", "s0", T), &mut rng()).0),
+        ("a".into(), None)
+    );
+    // Half of the 8.5 burning is 4.25, which k1's s1 and k2's s3 carry the marked burn past.
+    assert_eq!(
+        [
+            key("k1", "s1"),
+            key("k2", "s3"),
+            key("k1", "s0"),
+            key("k2", "s2"),
+        ]
+        .map(|k| st.shed_marked("p1", &k, T, 900_000)),
+        [true, true, false, false],
+        "the round ranks the pins under both of p1's keys and marks by p1's share"
+    );
+    assert_eq!(st.last_shed("p1", "a"), Some(T));
+
+    let inside = T + 450_000;
+    hot_a_cool_b(&mut st, inside);
+    assert_eq!(
+        landed(select(&mut st, &s, &under(&s, "k2", "s2", inside), &mut rng()).0),
+        ("a".into(), None)
+    );
+    assert_eq!(
+        st.last_shed("p1", "a"),
+        Some(T),
+        "a request under the pool's other key inside the dwell runs no second round"
+    );
+}
+
+#[test]
+fn pins_a_former_pool_left_on_an_account_stay_out_of_its_new_pools_round() {
+    let keys = [("k1", "p1"), ("k2", "p2")];
+    let before = shedding_pools(&keys, &[("p1", "a", 1), ("p1", "b", 0), ("p2", "c", 0)]);
+    // A pin enters the state through a load or a placement, so the k2 pins load with the rest: their key is p2's,
+    // so p1's round below reads none of them.
+    let mut st = loaded(vec![
+        PinRow {
+            key_id: "k1".into(),
+            ..burning("s1", "a", 8.0, false, T)
+        },
+        PinRow {
+            key_id: "k1".into(),
+            ..burning("s0", "a", 6.0, false, T)
         },
         PinRow {
             key_id: "k2".into(),
@@ -4758,115 +4592,53 @@ fn a_shedding_round_on_a_shared_account_marks_the_triggering_pools_pins_alone() 
             key_id: "k2".into(),
             ..burning("s2", "a", 1.0, false, T)
         },
-        PinRow {
-            key_id: "k1".into(),
-            ..seeded_pin("s5", "b", T)
-        },
     ]);
     hot_a_cool_b(&mut st, T);
-    st.record_sample("c", sample(0.1, 0.1, T));
-    // Each round starts through its pool's light pin: a request through the heavy one would mark it and move it in
-    // the same selection, spending the mark read below.
     assert_eq!(
-        landed(select(&mut st, &s, &under(&s, "k1", "s0", T), &mut rng()).0),
-        ("a".into(), None),
-        "s0 is the last unmarked pin of p1's slice"
-    );
-    assert!(st.shed_marked("p1", &key("k1", "s1"), T, 900_000));
-    assert!(!st.shed_marked("p1", &key("k1", "s0"), T, 900_000));
-    assert!(
-        !st.shed_marked("p1", &key("k2", "s3"), T, 900_000)
-            && !st.shed_marked("p2", &key("k2", "s3"), T, 900_000),
-        "p1's round marks among p1's pins alone"
-    );
-    assert_eq!(st.last_shed("p2", "a"), None);
-    assert_eq!(st.newest_shed("a"), Some(T));
-
-    // A minute decays every burn by the same tenth, so the order stands.
-    let second = T + 60_000;
-    hot_a_cool_b(&mut st, second);
-    assert_eq!(
-        landed(select(&mut st, &s, &under(&s, "k2", "s2", second), &mut rng()).0),
-        ("a".into(), None),
-        "s2 is the last unmarked pin of p2's slice"
-    );
-    assert_eq!(
-        st.last_shed("p2", "a"),
-        Some(second),
-        "p2 runs its own round inside p1's dwell"
-    );
-    assert!(st.shed_marked("p2", &key("k2", "s3"), second, 900_000));
-    assert!(!st.shed_marked("p2", &key("k2", "s2"), second, 900_000));
-    assert!(
-        st.shed_marked("p1", &key("k1", "s1"), second, 900_000),
-        "p2's round leaves p1's mark in place"
-    );
-    assert_eq!(st.newest_shed("a"), Some(second));
-
-    // p1's own round on a is past its 900 s dwell, p2's, 870 s old, is not.
-    let cool_check = T + 930_000;
-    st.record_sample("b", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, cool_check));
-    st.record_sample("a", sample(0.1, 0.1, cool_check));
-    st.record_sample("d", sample(0.1, 0.1, cool_check));
-    assert_eq!(
-        landed(select(&mut st, &s, &under(&s, "k1", "s5", cool_check), &mut rng()).0),
-        ("d".into(), Some(MigrateReason::Spent)),
-        "a outranks d and reads cool, and only p2's round keeps it off the cool set"
-    );
-}
-
-#[test]
-fn an_accounts_cooldown_outlives_the_shedding_pools_purged_marks() {
-    let s = shared_account([600, 1_800], Some("p2"));
-    let mut st = loaded(vec![
-        PinRow {
-            key_id: "k1".into(),
-            ..burning("s1", "a", 4.0, false, T)
-        },
-        PinRow {
-            key_id: "k1".into(),
-            ..burning("s0", "a", 1.0, false, T)
-        },
-        PinRow {
-            key_id: "k2".into(),
-            ..burning("s4", "c", 1.0, false, T)
-        },
-    ]);
-    hot_a_cool_b(&mut st, T);
-    st.record_sample("c", sample(0.1, 0.1, T));
-    assert_eq!(
-        landed(select(&mut st, &s, &under(&s, "k1", "s0", T), &mut rng()).0),
+        landed(select(&mut st, &before, &under(&before, "k1", "s0", T), &mut rng()).0),
         ("a".into(), None)
     );
-    assert_eq!(st.last_shed("p1", "a"), Some(T));
-    assert_eq!(st.newest_shed("a"), Some(T));
-
-    // Between p1's 600 s and p2's 1,800 s: the pins outlive the purge, since their accounts stand and their TTL
-    // has not passed.
-    let purged = T + 660_000;
-    st.purge(&s, purged);
-    assert!(st.pin(&key("k1", "s1")).is_some());
-    assert_eq!(
-        st.last_shed("p1", "a"),
-        None,
-        "p1's round leaves with its dwell"
-    );
-    // Read against a dwell the mark is still inside, so only the purge can answer false.
-    assert!(!st.shed_marked("p1", &key("k1", "s1"), purged, 1_800_000));
-    assert_eq!(
-        st.newest_shed("a"),
-        Some(T),
-        "p2 holds a and reads its stamp for its own 1,800 s"
+    assert!(st.shed_marked("p1", &key("k1", "s1"), T, 900_000));
+    assert!(
+        !st.shed_marked("p1", &key("k1", "s0"), T, 900_000),
+        "s0 is the last unmarked pin of p1's round, which no round marks"
     );
 
-    let moved = T + 661_000;
-    st.record_sample("c", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, moved));
-    st.record_sample("a", sample(0.1, 0.1, moved));
-    st.record_sample("d", sample(0.1, 0.1, moved));
+    let moved = T + 60_000;
+    let after = shedding_pools(&keys, &[("p1", "b", 0), ("p2", "a", 1), ("p2", "c", 0)]);
+    st.purge(&after, moved);
+    assert!(
+        st.pin(&key("k1", "s1")).is_some() && st.pin(&key("k1", "s0")).is_some(),
+        "the purge keeps the pins p1 left on a, since their key and pool stand"
+    );
+    hot_a_cool_b(&mut st, moved);
+    st.record_sample("c", sample(0.1, 0.1, moved));
     assert_eq!(
-        landed(select(&mut st, &s, &under(&s, "k2", "s4", moved), &mut rng()).0),
-        ("d".into(), Some(MigrateReason::Spent)),
-        "p1 shed from a 661 s ago, inside p2's dwell, so a is no cool destination though it outranks d"
+        landed(
+            select(
+                &mut st,
+                &after,
+                &under(&after, "k2", "s2", moved),
+                &mut rng()
+            )
+            .0
+        ),
+        ("a".into(), None)
+    );
+    assert_eq!(st.last_shed("p2", "a"), Some(moved));
+    assert!(
+        st.shed_marked("p2", &key("k2", "s3"), moved, 900_000),
+        "p2's round marks among the k2 pins"
+    );
+    assert!(!st.shed_marked("p2", &key("k2", "s2"), moved, 900_000));
+    assert!(
+        !st.shed_marked("p2", &key("k1", "s1"), moved, 900_000)
+            && !st.shed_marked("p2", &key("k1", "s0"), moved, 900_000),
+        "neither pin p1 left on a is ranked or marked in p2's round"
+    );
+    assert!(
+        !st.shed_marked("p1", &key("k1", "s0"), moved, 900_000),
+        "the pin p1's round left unmarked stays unmarked"
     );
 }
 

@@ -754,7 +754,7 @@ impl Store {
     }
 
     /// The pool row and its members under one `BEGIN IMMEDIATE`: a refused member (a duplicate, an unknown
-    /// account) leaves no row. Answers the stamp the row was created and last updated at.
+    /// account, an account in another pool) leaves no row. Answers the stamp the row was created and last updated at.
     pub fn insert_pool_with_members(
         &self,
         row: &PoolRow,
@@ -1347,6 +1347,22 @@ fn set_pool_members_in(
         )? == 0
         {
             return Err(StoreError::AccountNotFound(member.account_id.clone()));
+        }
+    }
+    // An account belongs to one pool. A member of the pool being written is fine, since the list replaces it.
+    for member in members {
+        let held: Option<String> = tx
+            .query_row(
+                "SELECT pool_id FROM pool_members WHERE account_id = ?1 AND pool_id != ?2",
+                params![member.account_id, pool_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(held) = held {
+            return Err(StoreError::AccountInPool {
+                account_id: member.account_id.clone(),
+                pool_id: held,
+            });
         }
     }
     tx.execute(

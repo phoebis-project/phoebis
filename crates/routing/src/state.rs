@@ -700,9 +700,9 @@ pub struct RoutingState {
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
     member_spend: HashMap<(String, String, BudgetPeriod), MemberSpend>,
-    /// When the newest round of any pool ran on each account: what a move's cool check reads, so no pool prefers a
-    /// destination another pool just shed from. A stamp of its own, since a pool's marks expire by that pool's dwell
-    /// while a slower pool still has to read the account as just shed. Memory only, as the rounds are.
+    /// When the newest round ran on each account: what a move's cool check reads, so no move prefers a destination
+    /// just shed from. A stamp of its own, since the rounds are keyed by pool and an account that moved pools keeps
+    /// the round its former pool ran. Memory only, as the rounds are.
     newest_shed: HashMap<String, i64>,
     next_epoch: u64,
     overage: HashMap<String, OverageEvidence>,
@@ -719,8 +719,8 @@ pub struct RoutingState {
     resolutions: HashMap<String, String>,
     round_robin: HashMap<(String, Tier, String), usize>,
     samples: HashMap<String, UtilizationSample>,
-    /// Each pool's latest shedding round on an account, by pool id and account id. Memory only, so a restart forgets
-    /// the marks with the dwell and the next hot request may start a fresh round.
+    /// The latest shedding round on each account, by the id of the pool that ran it and the account id. Memory only,
+    /// so a restart forgets the marks with the dwell and the next hot request may start a fresh round.
     shed_rounds: HashMap<(String, String), ShedRound>,
 }
 
@@ -1407,9 +1407,10 @@ impl RoutingState {
     }
 
     /// The pins of `account_id` that `keep` admits, each priced in `unit` through `rates` and decayed to `now`, and
-    /// the sum over the priced pins; `keep` is the triggering pool's slice, built by the caller from the snapshot
-    /// this state does not hold. Under `WindowShare` a burn is the cost table's reference share per second, which
-    /// orders the pins as the tier's share does; `None` for a pin burning a type its row cannot price.
+    /// the sum over the priced pins; `keep` is the account's current pool, built by the caller from the snapshot
+    /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
+    /// `WindowShare` a burn is the cost table's reference share per second, which orders the pins as the tier's
+    /// share does; `None` for a pin burning a type its row cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,

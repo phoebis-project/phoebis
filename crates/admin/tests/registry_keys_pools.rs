@@ -2338,33 +2338,6 @@ async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted
         "{member}"
     );
     assert!(unspent(&member), "{member}");
-    let accepted = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"aux","label":"Aux","strategy":"priority",
-            "members":[{"account_id":"business","priority":0,"budget_monthly_usd":null},
-                       {"account_id":"direct","priority":1,"budget_monthly_usd":5.0}]}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(
-        accepted.status(),
-        201,
-        "a null budget on the OAuth member and a budget on the API-key member are accepted"
-    );
-    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
-    let budgets = |account: &str| {
-        let member = member_of(&pools, "aux", account);
-        (
-            member["budget_daily_usd"].as_f64(),
-            member["budget_monthly_usd"].as_f64(),
-        )
-    };
-    assert_eq!(
-        (budgets("business"), budgets("direct")),
-        ((None, None), (None, Some(5.0))),
-        "the aux pool stores no budget on the subscription member and 5.0 on the API-key member: {pools}"
-    );
     for (method, path, body, expected) in [
         (
             "PATCH",
@@ -2396,6 +2369,45 @@ async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted
         );
         assert!(unspent(&member), "{method} {path}: {member}");
     }
+    // An account belongs to one pool, so main lets business go before aux takes it.
+    assert_eq!(
+        put(
+            &app,
+            "/admin/pools/main/members",
+            r#"{"members":[]}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    let accepted = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"aux","label":"Aux","strategy":"priority",
+            "members":[{"account_id":"business","priority":0,"budget_monthly_usd":null},
+                       {"account_id":"direct","priority":1,"budget_monthly_usd":5.0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        accepted.status(),
+        201,
+        "a null budget on the OAuth member and a budget on the API-key member are accepted"
+    );
+    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let budgets = |account: &str| {
+        let member = member_of(&pools, "aux", account);
+        (
+            member["budget_daily_usd"].as_f64(),
+            member["budget_monthly_usd"].as_f64(),
+        )
+    };
+    assert_eq!(
+        (budgets("business"), budgets("direct")),
+        ((None, None), (None, Some(5.0))),
+        "the aux pool stores no budget on the subscription member and 5.0 on the API-key member: {pools}"
+    );
 }
 
 #[tokio::test]
@@ -2646,6 +2658,154 @@ async fn a_member_list_naming_an_account_twice_is_refused_before_any_write_on_po
     );
 }
 
+/// Pool `main` holding `direct` and pool `other` holding `business`, both created through the route.
+async fn direct_in_main(app: &axum::Router, cookie: &str) {
+    for body in [
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#,
+        r#"{"id":"other","label":"Other","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#,
+    ] {
+        assert_eq!(
+            post(app, "/admin/pools", body, Some(cookie)).await.status(),
+            201
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_member_in_another_pool_is_refused_on_create_patch_and_put_naming_both() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    direct_in_main(&app, &cookie).await;
+    let other = |listed: serde_json::Value| {
+        listed["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "other")
+            .unwrap()
+            .clone()
+    };
+    let before = other(json(get(&app, "/admin/pools", Some(&cookie)).await).await);
+    let refusal = (
+        409,
+        serde_json::json!("account direct is a member of pool main"),
+    );
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"third","label":"Third","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            created.status().as_u16(),
+            json(created).await["error"].clone()
+        ),
+        refusal,
+        "the create"
+    );
+    let patched = patch(
+        &app,
+        "/admin/pools/other",
+        r#"{"label":"Renamed","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            patched.status().as_u16(),
+            json(patched).await["error"].clone()
+        ),
+        refusal,
+        "the edit"
+    );
+    let put_refused = put(
+        &app,
+        "/admin/pools/other/members",
+        r#"{"members":[{"account_id":"direct","priority":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            put_refused.status().as_u16(),
+            json(put_refused).await["error"].clone()
+        ),
+        refusal,
+        "the member list's own route"
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    assert!(
+        listed["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["id"] != "third"),
+        "the refused create left no pool row: {listed}"
+    );
+    let after = other(listed);
+    assert_eq!(
+        (&after["label"], &after["members"], &after["updated_at"]),
+        (&before["label"], &before["members"], &before["updated_at"]),
+        "neither the members, the label nor the stamp moved"
+    );
+}
+
+#[tokio::test]
+async fn a_list_with_a_repeat_and_a_foreign_member_is_refused_for_the_repeat() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    direct_in_main(&app, &cookie).await;
+    let members = r#"[{"account_id":"direct","priority":0},{"account_id":"business","priority":1},{"account_id":"business","priority":2}]"#;
+    let refusal = (
+        409,
+        serde_json::json!("members name account business twice"),
+    );
+    let created = post(
+        &app,
+        "/admin/pools",
+        &format!(r#"{{"id":"third","label":"Third","strategy":"priority","members":{members}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            created.status().as_u16(),
+            json(created).await["error"].clone()
+        ),
+        refusal
+    );
+    let patched = patch(
+        &app,
+        "/admin/pools/other",
+        &format!(r#"{{"members":{members}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            patched.status().as_u16(),
+            json(patched).await["error"].clone()
+        ),
+        refusal
+    );
+    let put_refused = put(
+        &app,
+        "/admin/pools/other/members",
+        &format!(r#"{{"members":{members}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            put_refused.status().as_u16(),
+            json(put_refused).await["error"].clone()
+        ),
+        refusal
+    );
+}
+
 #[tokio::test]
 async fn a_label_or_notes_past_256_bytes_is_refused_naming_the_field() {
     let (app, _up, store, _router) = common::admin_parts().await;
@@ -2740,11 +2900,13 @@ async fn a_label_or_notes_past_256_bytes_is_refused_naming_the_field() {
 async fn listing_three_pools_reads_the_registry_once() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
-    let create = |id: &'static str| {
+    // An account belongs to one pool, so the harness's two accounts go to the first two pools and the third holds
+    // none.
+    let create = |id: &'static str, members: &'static str| {
         let (app, cookie) = (app.clone(), cookie.clone());
         async move {
             let body = format!(
-                r#"{{"id":"{id}","label":"{id}","strategy":"priority","members":[{{"account_id":"direct","priority":0}},{{"account_id":"business","priority":1}}]}}"#
+                r#"{{"id":"{id}","label":"{id}","strategy":"priority","members":{members}}}"#
             );
             assert_eq!(
                 post(&app, "/admin/pools", &body, Some(&cookie))
@@ -2769,10 +2931,10 @@ async fn listing_three_pools_reads_the_registry_once() {
             fewest
         }
     };
-    create("one").await;
+    create("one", r#"[{"account_id":"direct","priority":0}]"#).await;
     let one = takes_per_list().await;
-    create("two").await;
-    create("three").await;
+    create("two", r#"[{"account_id":"business","priority":1}]"#).await;
+    create("three", "[]").await;
     let three = takes_per_list().await;
     assert_eq!(
         three, one,

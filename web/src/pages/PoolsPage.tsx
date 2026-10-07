@@ -1208,7 +1208,7 @@ export function PoolDialog({
     members: (
       <div className="cells">
         <p className="field__hint">
-          Lower numbers are tried first: the strategy picks inside the first tier that has an eligible account, after the kind order that <GroupLink id="selection">Prioritize subscription accounts</GroupLink> sets. Each account&apos;s windows and state are on the{' '}
+          Lower numbers are tried first: the strategy picks inside the first tier that has an eligible account, after the kind order that <GroupLink id="selection">Prioritize subscription accounts</GroupLink> sets. An account belongs to one pool. Each account&apos;s windows and state are on the{' '}
           <PageLink to="/accounts">Accounts page</PageLink>.
         </p>
         <p className="field__hint">
@@ -1238,6 +1238,25 @@ export function PoolDialog({
               <tbody>
                 {orderedAccounts.map((a) => {
                   const on = a.id in form.members;
+                  const heldBy = otherPools.find((p) => p.members.some((m) => m.accountId === a.id));
+                  if (heldBy) {
+                    return (
+                      <tr key={a.id}>
+                        <td>
+                          <div className="row">
+                            <span>{a.label}</span>
+                            {a.email && <span className="muted mono">{a.email}</span>}
+                            <span className="muted" title={`An account belongs to one pool. Remove it from ${heldBy.id} first.`}>
+                              In pool {heldBy.id}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="right" />
+                        <td className="right" />
+                        <td className="right" />
+                      </tr>
+                    );
+                  }
                   return (
                     <tr key={a.id}>
                       <td>

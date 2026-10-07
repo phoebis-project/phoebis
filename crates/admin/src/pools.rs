@@ -545,6 +545,15 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
         }
+        Err(StoreError::AccountInPool {
+            account_id,
+            pool_id,
+        }) => {
+            return failure(
+                StatusCode::CONFLICT,
+                &format!("account {account_id} is a member of pool {pool_id}"),
+            )
+        }
         Err(error) => return store_failure(error),
     }
     // The row exists from here on, so every answer, a refusal included, names it to the mutation log.
@@ -615,6 +624,15 @@ pub(crate) async fn patch(
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
         }
+        Err(StoreError::AccountInPool {
+            account_id,
+            pool_id,
+        }) => {
+            return failure(
+                StatusCode::CONFLICT,
+                &format!("account {account_id} is a member of pool {pool_id}"),
+            )
+        }
         Err(error) => return store_failure(error),
     }
     if let Err(refusal) = reload_or_refuse(&state).await {
@@ -666,6 +684,15 @@ pub(crate) async fn set_members(
         Ok(at) => row.updated_at = at,
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
+        }
+        Err(StoreError::AccountInPool {
+            account_id,
+            pool_id,
+        }) => {
+            return failure(
+                StatusCode::CONFLICT,
+                &format!("account {account_id} is a member of pool {pool_id}"),
+            )
         }
         Err(error) => return store_failure(error),
     }

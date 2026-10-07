@@ -679,7 +679,7 @@ async fn a_second_slot_cannot_be_paired_to_an_upstream_account_the_first_holds()
 }
 
 #[tokio::test]
-async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() {
+async fn the_account_view_carries_its_profile_windows_pool_totals_and_models() {
     use phoebis_ledger::{
         AttemptRecord, ExtraUsageSampleRecord, QuotaSampleRecord, Record, RequestRecord,
     };
@@ -820,10 +820,21 @@ async fn the_account_view_carries_its_profile_windows_pools_totals_and_models() 
     );
     assert_eq!(
         (
-            listed["pools"][0]["pool_id"].as_str(),
-            listed["pools"][0]["priority"].as_u64()
+            listed["pool"]["pool_id"].as_str(),
+            listed["pool"]["priority"].as_u64()
         ),
         (Some("main"), Some(2))
+    );
+    let unpooled = accounts["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["id"] == "direct")
+        .unwrap();
+    assert_eq!(
+        unpooled.as_object().unwrap().get("pool"),
+        Some(&serde_json::Value::Null),
+        "an account in no pool answers a null pool"
     );
     assert_eq!(
         (
