@@ -76,11 +76,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (44, V44),
     (45, V45),
     (46, V46),
+    (47, V47),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 46;
+pub const SCHEMA_VERSION: u32 = 47;
 
 /// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
 pub const ONE_POOL_VERSION: u32 = 46;
@@ -664,3 +665,12 @@ ALTER TABLE pools RENAME COLUMN migrate_above_utilization TO shed_ahead_of_pace;
 
 // An account's one membership, enforced below the member write's own check.
 const V46: &str = "CREATE UNIQUE INDEX pool_members_one_pool ON pool_members (account_id);";
+
+// A pool or key created again under a deleted id must not answer its predecessor's edit token; the tombstones
+// outlive the rows as the accounts' do.
+const V47: &str = r#"
+ALTER TABLE pools ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE api_keys ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS pool_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS api_key_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
+"#;

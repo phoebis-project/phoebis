@@ -3099,8 +3099,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   // Through the API, which the mock stamps later than the row the dialog opened with.
   await api.updatePool('all', { ...written, shedAheadOfPace: 0.3 });
+  const staleSave = countCalls('updatePool');
   footButton(stale, 'Save pool')?.click();
   await m.settle(600);
+  staleSave.restore();
+  results.push({
+    name: '/pools a stale save sends the revision the dialog opened with',
+    ok: staleSave.calls.length === 1 && staleSave.calls[0][2] === story.revision,
+    missing: [String(staleSave.calls.length), String(staleSave.calls[0]?.[2]), String(story.revision)],
+  });
   const sentence = 'the pool changed while it was being edited; reload and try again';
   const callout = stale?.querySelector('.dialog__body--grouped [role="alert"]');
   const reload = [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');
@@ -5072,8 +5079,15 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const stale = await edit('laptop');
   // Through the API, which the mock stamps later than the row the dialog opened with.
   await api.updateKey('laptop', input);
+  const staleSave = countCalls('updateKey');
   foot(stale, 'Save')?.click();
   await m.settle(600);
+  staleSave.restore();
+  results.push({
+    name: '/keys a stale save sends the revision the dialog opened with',
+    ok: staleSave.calls.length === 1 && staleSave.calls[0][2] === laptop.revision,
+    missing: [String(staleSave.calls.length), String(staleSave.calls[0]?.[2]), String(laptop.revision)],
+  });
   const sentence = 'the key changed while it was being edited; reload and try again';
   const callout = stale?.querySelector('.dialog__body--grouped [role="alert"]');
   const reload = [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');

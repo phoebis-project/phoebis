@@ -349,12 +349,30 @@ test('a pool decodes its shedding margin and encodes it back', () => {
   assert.equal(d.encodePool({ ...p, name: p.name, shedAheadOfPace: null, status: 'active' }).shed_ahead_of_pace, null, 'null clears it rather than leaving it alone');
 });
 
-test('a pool and a key decode the stamp of their last write, which an edit sends back', () => {
+test('a pool and a key decode the stamp of their last write', () => {
   const pool = fixture('pools').pools[0];
   const key = fixture('keys').keys[0];
   const [p, k] = [d.decodePool(pool), d.decodeKey(key)];
   assert.ok(isIso(p.updatedAt) && isIso(k.updatedAt));
   assert.deepEqual([p.updatedAt, k.updatedAt], [new Date(pool.updated_at).toISOString(), new Date(key.updated_at).toISOString()]);
+});
+
+test('a pool and a key decode the revision of their row, which an edit sends back', () => {
+  const pool = fixture('pools').pools[0];
+  const key = fixture('keys').keys[0];
+  const created = fixture('key_created');
+  for (const row of [pool, key, created]) {
+    assert.ok(Number.isSafeInteger(row.revision) && row.revision > 2 ** 42, "the capture carries the row's token");
+  }
+  const decoded = [d.decodePool(pool), d.decodeKey(key), d.decodeKey(created)];
+  assert.deepEqual(decoded.map((row) => row.revision), [pool.revision, key.revision, created.revision]);
+  // The token packs the incarnation above the stamp's 42 bits, so it reads back to the row's own stamp.
+  assert.deepEqual(decoded.map((row) => row.revision % 2 ** 42), [pool.updated_at, key.updated_at, created.updated_at]);
+  assert.deepEqual(
+    [d.decodePool({ ...pool, revision: undefined }).revision, d.decodeKey({ ...key, revision: undefined }).revision],
+    [0, 0],
+    'a row whose answer carried none reads 0, which the route refuses as stale',
+  );
 });
 
 test('an account decodes the revision of its row, which an edit sends back', () => {

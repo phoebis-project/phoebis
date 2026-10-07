@@ -991,6 +991,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest(secret).to_vec(),
                 prefix: phoebis_store::key_prefix(secret),
+                incarnation: 1,
                 created_at: common::NOW,
                 updated_at: 0,
                 rotated_at: None,
@@ -3094,16 +3095,16 @@ async fn two_key_edits_from_one_read_answer_409_on_the_second() {
     );
 }
 
-/// The `updated_at` a console read the row at, from the list it reads the rows from.
-async fn listed_stamp(app: &axum::Router, cookie: &str, list: &str, id: &str) -> i64 {
+/// The `revision` a console read the row at, from the list it reads the rows from.
+async fn listed_revision(app: &axum::Router, cookie: &str, list: &str, id: &str) -> u64 {
     let rows = json(get(app, &format!("/admin/{list}"), Some(cookie)).await).await;
     rows[list]
         .as_array()
         .unwrap()
         .iter()
         .find(|row| row["id"] == id)
-        .unwrap()["updated_at"]
-        .as_i64()
+        .unwrap()["revision"]
+        .as_u64()
         .unwrap()
 }
 
@@ -3138,10 +3139,10 @@ async fn a_pool_edit_with_a_stale_expected_revision_answers_409_and_writes_nothi
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "pools", "main").await;
-    // Behind the row's stamp, or ahead of it by up to the day the fence admits: a view the row no longer matches,
-    // refused as stale rather than as a malformed stamp.
-    for sent in [read_at - 1, read_at + 1, read_at + 86_400_000] {
+    let read = listed_revision(&app, &cookie, "pools", "main").await;
+    // A stamp behind or ahead of the row's, the row's stamp under the next incarnation, and an incarnation past the
+    // token's share: a view the row no longer matches, refused as stale rather than as a malformed token.
+    for sent in [read - 1, read + 1, read + (1 << 42), i64::MAX as u64] {
         let stale = patch(
             &app,
             "/admin/pools/main",
@@ -3169,11 +3170,11 @@ async fn a_pool_edit_with_the_fresh_stamp_lands_and_the_stamp_moves() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "pools", "main").await;
-    let body = format!(r#"{{"label":"Moved","expected_revision":{read_at}}}"#);
+    let read = listed_revision(&app, &cookie, "pools", "main").await;
+    let body = format!(r#"{{"label":"Moved","expected_revision":{read}}}"#);
     let fresh = patch(&app, "/admin/pools/main", &body, Some(&cookie)).await;
     assert_eq!(fresh.status(), 200);
-    assert!(json(fresh).await["updated_at"].as_i64().unwrap() > read_at);
+    assert!(json(fresh).await["revision"].as_u64().unwrap() > read);
     assert_eq!(store.pool("main").unwrap().unwrap().label, "Moved");
     let again = patch(&app, "/admin/pools/main", &body, Some(&cookie)).await;
     assert_eq!(
@@ -3188,15 +3189,7 @@ async fn a_malformed_expected_revision_answers_400_and_writes_nothing() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "pools", "main").await;
-    let past_a_day = (read_at + 86_400_001).to_string();
-    for value in [
-        "null",
-        r#""later""#,
-        "1.5",
-        "9223372036854775807",
-        &past_a_day,
-    ] {
+    for value in ["null", r#""later""#, "1.5", "-1"] {
         let refused = patch(
             &app,
             "/admin/pools/main",
@@ -3207,7 +3200,7 @@ async fn a_malformed_expected_revision_answers_400_and_writes_nothing() {
         assert_eq!(refused.status(), 400, "{value}");
         assert_eq!(
             json(refused).await["error"],
-            "expected_revision is the updated_at the row was read at",
+            "expected_revision is the revision the row was read at",
             "{value}"
         );
         assert_eq!(
@@ -3239,10 +3232,10 @@ async fn a_key_edit_with_a_stale_expected_revision_answers_409_and_writes_nothin
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "keys", "desktop").await;
-    // Behind the row's stamp, or ahead of it by up to the day the fence admits: a view the row no longer matches,
-    // refused as stale rather than as a malformed stamp.
-    for sent in [read_at - 1, read_at + 1, read_at + 86_400_000] {
+    let read = listed_revision(&app, &cookie, "keys", "desktop").await;
+    // A stamp behind or ahead of the row's, the row's stamp under the next incarnation, and an incarnation past the
+    // token's share: a view the row no longer matches, refused as stale rather than as a malformed token.
+    for sent in [read - 1, read + 1, read + (1 << 42), i64::MAX as u64] {
         let stale = patch(
             &app,
             "/admin/keys/desktop",
@@ -3270,11 +3263,11 @@ async fn a_key_edit_with_the_fresh_stamp_lands_and_the_stamp_moves() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "keys", "desktop").await;
-    let body = format!(r#"{{"label":"Moved","expected_revision":{read_at}}}"#);
+    let read = listed_revision(&app, &cookie, "keys", "desktop").await;
+    let body = format!(r#"{{"label":"Moved","expected_revision":{read}}}"#);
     let fresh = patch(&app, "/admin/keys/desktop", &body, Some(&cookie)).await;
     assert_eq!(fresh.status(), 200);
-    assert!(json(fresh).await["updated_at"].as_i64().unwrap() > read_at);
+    assert!(json(fresh).await["revision"].as_u64().unwrap() > read);
     assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Moved");
     let again = patch(&app, "/admin/keys/desktop", &body, Some(&cookie)).await;
     assert_eq!(
@@ -3289,15 +3282,7 @@ async fn a_malformed_expected_revision_on_a_key_answers_400_and_writes_nothing()
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "keys", "desktop").await;
-    let past_a_day = (read_at + 86_400_001).to_string();
-    for value in [
-        "null",
-        r#""later""#,
-        "1.5",
-        "9223372036854775807",
-        &past_a_day,
-    ] {
+    for value in ["null", r#""later""#, "1.5", "-1"] {
         let refused = patch(
             &app,
             "/admin/keys/desktop",
@@ -3308,7 +3293,7 @@ async fn a_malformed_expected_revision_on_a_key_answers_400_and_writes_nothing()
         assert_eq!(refused.status(), 400, "{value}");
         assert_eq!(
             json(refused).await["error"],
-            "expected_revision is the updated_at the row was read at",
+            "expected_revision is the revision the row was read at",
             "{value}"
         );
         assert_eq!(
@@ -3319,7 +3304,7 @@ async fn a_malformed_expected_revision_on_a_key_answers_400_and_writes_nothing()
     }
 }
 
-// A stamp no row carries, which an edit would refuse as stale: a create has no row to fence on, so it lands.
+// A token no row carries, which an edit would refuse as stale: a create has no row to fence on, so it lands.
 #[tokio::test]
 async fn a_pool_create_accepts_expected_revision_and_ignores_it() {
     let (app, _up, store, _router) = common::admin_parts().await;
@@ -3375,6 +3360,176 @@ async fn a_key_edit_without_expected_revision_lands_as_today() {
     .await;
     assert_eq!(plain.status(), 200);
     assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Plain");
+}
+
+/// The `revision` a pool or key answer carried.
+async fn answered_revision(response: axum::response::Response) -> u64 {
+    json(response).await["revision"].as_u64().unwrap()
+}
+
+/// A pool and a key read, deleted and created again under their ids: the predecessor's `revision` is refused, and so
+/// is the predecessor's incarnation at the replacement's own stamp, which an editor would hold had both writes landed
+/// in one millisecond. The replacement's `revision` lands.
+#[tokio::test]
+async fn a_stale_token_across_a_recreation_answers_stale_edit_for_a_pool_and_a_key() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pool_body = r#"{"id":"spare","label":"Spare","strategy":"priority"}"#;
+    let key_body = r#"{"id":"laptop","label":"Laptop","pool_id":"spare"}"#;
+    assert_eq!(
+        post(&app, "/admin/pools", pool_body, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    let old_pool = listed_revision(&app, &cookie, "pools", "spare").await;
+    assert_eq!(
+        post(&app, "/admin/keys", key_body, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    let old_key = listed_revision(&app, &cookie, "keys", "laptop").await;
+    assert_eq!(
+        delete(&app, "/admin/keys/laptop", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        delete(&app, "/admin/pools/spare", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        post(&app, "/admin/pools", pool_body, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    assert_eq!(
+        post(&app, "/admin/keys", key_body, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    let pool_row = store.pool("spare").unwrap().unwrap();
+    let key_row = store.api_key("laptop").unwrap().unwrap();
+    for (path, sent, stale) in [
+        (
+            "/admin/pools/spare",
+            old_pool,
+            "the pool changed while it was being edited; reload and try again",
+        ),
+        (
+            "/admin/pools/spare",
+            phoebis_store::stamp_token(1, pool_row.updated_at),
+            "the pool changed while it was being edited; reload and try again",
+        ),
+        (
+            "/admin/keys/laptop",
+            old_key,
+            "the key changed while it was being edited; reload and try again",
+        ),
+        (
+            "/admin/keys/laptop",
+            phoebis_store::stamp_token(1, key_row.updated_at),
+            "the key changed while it was being edited; reload and try again",
+        ),
+    ] {
+        let refused = patch(
+            &app,
+            path,
+            &format!(r#"{{"label":"Stale","expected_revision":{sent}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 409, "{path} {sent}");
+        assert_eq!(
+            refused.headers().get("x-phoebis-error-code").unwrap(),
+            "stale_edit",
+            "{path} {sent}"
+        );
+        assert_eq!(json(refused).await["error"], stale, "{path} {sent}");
+    }
+    assert_eq!(
+        (
+            store.pool("spare").unwrap().unwrap().label,
+            store.api_key("laptop").unwrap().unwrap().label
+        ),
+        ("Spare".to_string(), "Laptop".to_string()),
+        "the stale edits wrote nothing"
+    );
+    for (list, id, path) in [
+        ("pools", "spare", "/admin/pools/spare"),
+        ("keys", "laptop", "/admin/keys/laptop"),
+    ] {
+        let fresh = listed_revision(&app, &cookie, list, id).await;
+        let landed = patch(
+            &app,
+            path,
+            &format!(r#"{{"label":"Fresh","expected_revision":{fresh}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(landed.status(), 200, "{path}");
+    }
+}
+
+/// A pool and a key created, deleted and created again: the second `POST` answers the incarnation the store took, so
+/// a console that edits straight from that answer sends a `revision` the row carries.
+#[tokio::test]
+async fn a_patch_with_the_revision_the_post_answered_lands_on_a_recreated_pool_and_key() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pool_body = r#"{"id":"spare","label":"Spare","strategy":"priority"}"#;
+    let key_body = r#"{"id":"laptop","label":"Laptop","pool_id":"spare"}"#;
+    let first_pool =
+        answered_revision(post(&app, "/admin/pools", pool_body, Some(&cookie)).await).await;
+    let first_key =
+        answered_revision(post(&app, "/admin/keys", key_body, Some(&cookie)).await).await;
+    assert_eq!(
+        (first_pool >> 42, first_key >> 42),
+        (1, 1),
+        "a new id answers the first incarnation"
+    );
+    assert_eq!(
+        delete(&app, "/admin/keys/laptop", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        delete(&app, "/admin/pools/spare", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    let pool = answered_revision(post(&app, "/admin/pools", pool_body, Some(&cookie)).await).await;
+    let key = answered_revision(post(&app, "/admin/keys", key_body, Some(&cookie)).await).await;
+    assert_eq!(
+        (pool >> 42, key >> 42),
+        (2, 2),
+        "each answer decodes to the incarnation the store took"
+    );
+    for (path, sent) in [("/admin/pools/spare", pool), ("/admin/keys/laptop", key)] {
+        let landed = patch(
+            &app,
+            path,
+            &format!(r#"{{"label":"Edited","expected_revision":{sent}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(landed.status(), 200, "{path}");
+    }
+    assert_eq!(
+        (
+            store.pool("spare").unwrap().unwrap().label,
+            store.api_key("laptop").unwrap().unwrap().label
+        ),
+        ("Edited".to_string(), "Edited".to_string())
+    );
 }
 
 /// Each pool write answers the stamp it wrote, the one the next fenced edit reads back; a pool created from an id

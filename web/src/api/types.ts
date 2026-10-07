@@ -408,6 +408,9 @@ export interface Pool {
   requests24h: number;
   /** The longest throttle a request waits out on its own member before it fails over. */
   retryInPlaceSeconds: number;
+  /** The row's edit token, which an edit sends back as `expected_revision`. A pool deleted and created again under
+   * its id never answers one its predecessor did. */
+  revision: number;
   /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
   selectBelowUtilization: number | null;
   sessionPlacement: SessionPlacement;
@@ -422,7 +425,7 @@ export interface Pool {
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
   traffic24h: TrafficBucket[];
-  /** The stamp of the row's last write, which an edit sends back as `expected_revision`. */
+  /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;
   warmSessions: WarmSessions;
   /** Minutes before an account's subscription end from which it takes a fresh session only as the last resort. */
@@ -455,10 +458,13 @@ export interface ApiKey {
   prefix: string;
   /** When the secret the last rotation retired last authenticated; null until it does or once rotation clears it. */
   retiredSecretLastUsedAt: string | null;
+  /** The row's edit token, which an edit sends back as `expected_revision`. A key deleted and created again under
+   * its id never answers one its predecessor did. */
+  revision: number;
   /** Live sessions whose newest request still presented the previous secret; 0 once the grace ends. */
   sessionsOnRetiredSecret: number;
   status: KeyStatus;
-  /** The stamp of the row's last write, which an edit sends back as `expected_revision`. */
+  /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;
   usage7d: { cost: number; requests: number; tokens: number };
 }

@@ -12,20 +12,21 @@ use axum::Json;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD;
 use base64::Engine;
 use phoebis_routing::RegistrySnapshot;
-use phoebis_store::{ApiKeyRow, StoreError, ROTATION_GRACE_MS};
+use phoebis_store::{stamp_token, ApiKeyRow, StoreError, ROTATION_GRACE_MS};
 use rand::Rng;
 use serde_json::{json, Value};
 
 use crate::accounts::within_text_bound;
 use crate::pools::valid_slug;
 use crate::routes::{
-    double_option, failure, failure_with_code, fence_stamp, present, reload_or_refuse,
+    double_option, failure, failure_with_code, fence_token, present, reload_or_refuse,
     store_failure, CreatedId,
 };
 use crate::rules::{parse_mode, parse_rules, RuleInput};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
+const STALE_EDIT: &str = "the key changed while it was being edited; reload and try again";
 
 #[derive(serde::Deserialize, Default)]
 struct KeyInput {
@@ -272,6 +273,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         body_capture_hours: None,
         secret_digest: state.store.api_key_digest(&secret).to_vec(),
         prefix: phoebis_store::key_prefix(&secret),
+        incarnation: 1,
         created_at: now,
         updated_at: now,
         rotated_at: None,
@@ -284,11 +286,9 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
     }
     match state.store.insert_api_key(&row, ACTOR) {
         // The store stamps the generation, moving a create that lands inside the previous holder's millisecond
-        // one past it; an `<id>@<generation>` selector built from this answer has to name that stamp.
-        Ok(created_at) => {
-            row.created_at = created_at;
-            row.updated_at = created_at;
-        }
+        // one past it, and takes the incarnation. An `<id>@<generation>` selector or a `revision` built from this
+        // answer has to name what the store wrote.
+        Ok(written) => row = written,
         Err(StoreError::PoolNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "pool not found")
         }
@@ -322,7 +322,12 @@ pub(crate) async fn patch(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "key not found"),
         Err(e) => return store_failure(e),
     };
-    let read_at = match fence_stamp(input.expected_revision.as_ref(), row.updated_at) {
+    let read_at = match fence_token(
+        input.expected_revision.as_ref(),
+        row.incarnation,
+        row.updated_at,
+        STALE_EDIT,
+    ) {
         Ok(stamp) => stamp,
         Err(refusal) => return refusal,
     };
@@ -330,20 +335,12 @@ pub(crate) async fn patch(
         return refusal;
     }
     if read_at != row.updated_at {
-        return failure_with_code(
-            StatusCode::CONFLICT,
-            "stale_edit",
-            "the key changed while it was being edited; reload and try again",
-        );
+        return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT);
     }
     match state.store.update_api_key(&row, row.updated_at, ACTOR) {
         Ok(updated_at) => row.updated_at = updated_at,
         Err(StoreError::Stale) => {
-            return failure_with_code(
-                StatusCode::CONFLICT,
-                "stale_edit",
-                "the key changed while it was being edited; reload and try again",
-            )
+            return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT)
         }
         Err(StoreError::KeyNotFound(_)) => return failure(StatusCode::NOT_FOUND, "key not found"),
         Err(StoreError::PoolNotFound(_)) => {
@@ -444,7 +441,7 @@ fn key_json(
         "model_rules_mode": row.model_rules_mode.as_str(), "long_context_twins": row.long_context_twins,
         "keepalive_opt_out": row.keepalive_opt_out, "body_capture_hours": row.body_capture_hours, "effective_body_capture_hours": snapshot.body_capture_hours(row),
         "auto_mode_server": row.auto_mode_server, "effective_auto_mode_server": snapshot.auto_mode_server(row),
-        "prefix": row.prefix, "created_at": row.created_at, "updated_at": row.updated_at, "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
+        "prefix": row.prefix, "created_at": row.created_at, "updated_at": row.updated_at, "revision": stamp_token(row.incarnation, row.updated_at), "rotated_at": row.rotated_at, "last_used_at": row.last_used_at,
         "retired_secret_last_used_at": row.retired_secret_last_used_at, "sessions_on_retired_secret": sessions_on_retired_secret,
         "usage_7d": { "cost_usd": week.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": week.get(&row.id).map_or(0, |t| t.requests), "tokens": week.get(&row.id).map_or(0, |t| t.tokens) },
         "lifetime": { "cost_usd": lifetime.get(&row.id).map_or(0.0, |t| t.cost_usd), "requests": lifetime.get(&row.id).map_or(0, |t| t.requests) },

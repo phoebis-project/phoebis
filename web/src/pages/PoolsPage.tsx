@@ -1112,7 +1112,7 @@ export function PoolDialog({
         name: moving.name,
         notes: moving.notes,
         poolId: moveTo,
-      }, moving.updatedAt);
+      }, moving.revision);
       setMoved((prev) => new Set(prev).add(moving.id));
       setMoving(null);
       onKeysChanged();
@@ -1140,7 +1140,7 @@ export function PoolDialog({
     setError(null);
     setStale(null);
     try {
-      if (pool) await api.updatePool(pool.id, input, pool.updatedAt);
+      if (pool) await api.updatePool(pool.id, input, pool.revision);
       else await api.createPool(input);
     } catch (e) {
       // Stated inside the dialog, which stays open: it sits in the browser's top layer, where a toast raised

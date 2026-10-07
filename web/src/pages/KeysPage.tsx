@@ -498,7 +498,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     const input = keyInputOf(form, clock.now());
     try {
       if (existing) {
-        const updated = await api.updateKey(existing.id, input, existing.updatedAt);
+        const updated = await api.updateKey(existing.id, input, existing.revision);
         setBusy(false);
         onUpdated?.(updated);
         return;

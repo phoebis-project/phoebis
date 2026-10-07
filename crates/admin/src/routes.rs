@@ -28,7 +28,8 @@ use phoebis_routing::{
     SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember, StoreError,
+    answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
+    NewBundle, PoolMember, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -1651,23 +1652,36 @@ pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
     serde_json::Value::deserialize(d).map(Some)
 }
 
-const DAY_MS: i64 = 86_400_000;
-
-/// The stamp an edit's body names: the row's own when the body sent none, else the body's integer, refused when it
-/// is not one or lies more than a day past the row's stamp. The route answers 409 when it differs from its own read.
+/// The stamp a pool or key edit's body names through the row's `revision`: the row's own when the body sent none,
+/// refused when it is not a non-negative integer, and answered `409 stale_edit` with `stale` when it names another
+/// incarnation than the row's. A token of the row's incarnation answers the stamp it carries, which the route
+/// compares with its own read.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-pub(crate) fn fence_stamp(sent: Option<&serde_json::Value>, current: i64) -> Result<i64, Response> {
+pub(crate) fn fence_token(
+    sent: Option<&serde_json::Value>,
+    incarnation: u64,
+    updated_at: i64,
+    stale: &str,
+) -> Result<i64, Response> {
     let Some(value) = sent else {
-        return Ok(current);
+        return Ok(updated_at);
     };
-    match value.as_i64() {
-        Some(stamp) if stamp <= current.saturating_add(DAY_MS) => Ok(stamp),
-        _ => Err(failure(
+    let Some(token) = value.as_u64() else {
+        return Err(failure(
             StatusCode::BAD_REQUEST,
-            "expected_revision is the updated_at the row was read at",
-        )),
+            "expected_revision is the revision the row was read at",
+        ));
+    };
+    // What the token carries above the incarnation's floor is its stamp only when its incarnation is the row's, which
+    // `answers_stamp_token` confirms for the two parts together.
+    match token
+        .checked_sub(stamp_token(incarnation, 0))
+        .and_then(|stamp| i64::try_from(stamp).ok())
+    {
+        Some(stamp) if answers_stamp_token(incarnation, stamp, token) => Ok(stamp),
+        _ => Err(failure_with_code(StatusCode::CONFLICT, "stale_edit", stale)),
     }
 }
 

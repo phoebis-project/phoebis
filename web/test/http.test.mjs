@@ -400,21 +400,16 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   );
 });
 
-test('a pool or key edit sends the stamp it read as expected_revision, and one it cannot read is refused as stale unsent', async () => {
+test('a pool or key edit sends the revision it read as expected_revision, and none for a save that read no row', async () => {
   const pools = JSON.parse(readFileSync(new URL('./fixtures/pools.json', import.meta.url), 'utf8')).body.pools[0];
   const keys = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
   const calls = stub((url) => answer(200, url.startsWith('/admin/pools') ? pools : keys));
   const api = new HttpApi();
-  const read = '2026-09-16T14:30:00.000Z';
-  await api.updatePool('main', poolSave(pools.label), read);
-  await api.updateKey('desktop', keyEdit, read);
+  await api.updatePool('main', poolSave(pools.label), pools.revision);
+  await api.updateKey('desktop', keyEdit, keys.revision);
   await api.updatePool('main', poolSave(pools.label));
   const sent = calls.map((c) => JSON.parse(c.init.body).expected_revision);
-  assert.deepEqual(sent, [Date.parse(read), Date.parse(read), undefined], 'the millisecond stamp, and none for a save that read no row');
-  const unread = (e) => e instanceof ApiError && e.status === 409 && e.code === 'stale_edit';
-  await assert.rejects(api.updatePool('main', poolSave(pools.label), 'not a stamp'), unread);
-  await assert.rejects(api.updateKey('desktop', keyEdit, 'not a stamp'), unread);
-  assert.equal(calls.length, 3, 'a stamp the dialog cannot read sends nothing, so the route never sees a null');
+  assert.deepEqual(sent, [pools.revision, keys.revision, undefined], "the row's token as the answer carried it");
 });
 
 test('deleting an account calls the account route, and a disconnect keeps to the credentials route', async () => {

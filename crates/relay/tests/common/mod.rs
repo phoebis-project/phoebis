@@ -750,6 +750,7 @@ async fn build(
                     body_capture_hours: None,
                     secret_digest: store.api_key_digest(KEY).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY),
+                    incarnation: 1,
                     created_at: NOW,
                     updated_at: 0,
                     rotated_at: None,

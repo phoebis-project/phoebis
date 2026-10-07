@@ -297,6 +297,9 @@ export function decodeKey(v: unknown): ApiKey {
     poolId: str(k.pool_id),
     prefix: str(k.prefix),
     retiredSecretLastUsedAt: isoOrNull(k.retired_secret_last_used_at),
+    // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
+    // than landing over a row it could not vouch for.
+    revision: num(k.revision),
     sessionsOnRetiredSecret: num(k.sessions_on_retired_secret),
     // Routing refuses a key that is revoked, expired or switched off, in that order of finality.
     status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : enabled ? 'active' : 'disabled',
@@ -382,6 +385,9 @@ export function decodePool(v: unknown): Pool {
     preferSubscription: bool(p.prefer_subscription),
     requests24h: num(p.requests_24h),
     retryInPlaceSeconds: num(p.retry_in_place_seconds, POOL_ENGINE_DEFAULTS.retryInPlaceSeconds),
+    // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
+    // than landing over a row it could not vouch for.
+    revision: num(p.revision),
     selectBelowUtilization: numOrNull(p.select_below_utilization),
     sessionPlacement: SESSION_PLACEMENT_VALUES.find((x) => x === str(p.session_placement)) ?? POOL_AFFINITY_DEFAULTS.sessionPlacement,
     shedAheadOfPace: numOrNull(p.shed_ahead_of_pace),

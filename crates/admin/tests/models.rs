@@ -104,6 +104,7 @@ async fn the_key_models_route_answers_the_processed_list_with_the_matching_coold
                 body_capture_hours: None,
                 secret_digest: parts.store.api_key_digest(secret).to_vec(),
                 prefix: phoebis_store::key_prefix(secret),
+                incarnation: 1,
                 created_at: NOW,
                 updated_at: 0,
                 rotated_at: None,

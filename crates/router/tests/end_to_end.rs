@@ -2775,6 +2775,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     body_capture_hours: None,
                     secret_digest: store.api_key_digest(KEY_SECRET).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY_SECRET),
+                    incarnation: 1,
                     created_at: 0,
                     updated_at: 0,
                     rotated_at: None,

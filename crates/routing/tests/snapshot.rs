@@ -25,6 +25,7 @@ fn load(revoked_at: Option<i64>) -> RegistryLoad {
             body_capture_hours: None,
             secret_digest: digest_with(&DIGEST_KEY, b"two").to_vec(),
             prefix: "00000000".into(),
+            incarnation: 1,
             created_at: 0,
             updated_at: 0,
             rotated_at: None,

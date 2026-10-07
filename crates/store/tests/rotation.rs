@@ -28,6 +28,7 @@ fn key(store: &Store, id: &str, pool_id: &str, secret: &str) -> ApiKeyRow {
         body_capture_hours: None,
         secret_digest: store.api_key_digest(secret).to_vec(),
         prefix: phoebis_store::key_prefix(secret),
+        incarnation: 1,
         created_at: 1,
         updated_at: 0,
         rotated_at: None,

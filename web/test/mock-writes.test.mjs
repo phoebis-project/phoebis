@@ -178,21 +178,50 @@ const POOL_STALE = 'the pool changed while it was being edited; reload and try a
 const KEY_STALE = 'the key changed while it was being edited; reload and try again';
 const storyKey = async (api, id) => (await api.listKeys()).find((k) => k.id === id);
 
-test('a pool or key save over a stamp the row no longer carries is refused as stale and stores nothing, and one over its own stamp moves it', async () => {
+/** The route's token: the row's incarnation above the 42 bits of its stamp. */
+const tokenOf = (incarnation, updatedAt) => incarnation * 2 ** 42 + Date.parse(updatedAt);
+
+test('a pool or key save over a revision the row no longer carries is refused as stale and stores nothing, and one over its own revision moves it', async () => {
   const api = await signedIn();
   const pool = (await api.listPools()).find((p) => p.id === 'all');
-  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, '2020-01-01T00:00:00.000Z'), staleAs(POOL_STALE));
+  assert.equal(pool.revision, tokenOf(1, pool.updatedAt), "the story's pool carries the token of its stamp");
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.revision - 1), staleAs(POOL_STALE));
   assert.deepEqual((await api.listPools()).find((p) => p.id === 'all'), pool);
-  const savedPool = await api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.updatedAt);
+  const savedPool = await api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.revision);
   assert.equal(savedPool.name, 'moved');
   assert.ok(Date.parse(savedPool.updatedAt) > Date.parse(pool.updatedAt), 'the save moves the stamp past the one it was read at');
+  assert.equal(savedPool.revision, tokenOf(1, savedPool.updatedAt), 'the token moves with the stamp');
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'again' }, pool.revision), staleAs(POOL_STALE), 'the stamp moved past the sent token');
   const key = await storyKey(api, 'laptop');
+  assert.equal(key.revision, tokenOf(1, key.updatedAt), "the story's key carries the token of its stamp");
   const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
-  await assert.rejects(() => api.updateKey('laptop', edit, '2020-01-01T00:00:00.000Z'), staleAs(KEY_STALE));
+  await assert.rejects(() => api.updateKey('laptop', edit, key.revision + 1), staleAs(KEY_STALE));
   assert.deepEqual(await storyKey(api, 'laptop'), key);
-  const savedKey = await api.updateKey('laptop', edit, key.updatedAt);
+  const savedKey = await api.updateKey('laptop', edit, key.revision);
   assert.equal(savedKey.name, 'moved');
   assert.ok(Date.parse(savedKey.updatedAt) > Date.parse(key.updatedAt), 'the save moves the stamp past the one it was read at');
+  assert.equal(savedKey.revision, tokenOf(1, savedKey.updatedAt), 'the token moves with the stamp');
+  await assert.rejects(() => api.updateKey('laptop', edit, key.revision), staleAs(KEY_STALE), 'the stamp moved past the sent token');
+});
+
+test('an editor opened before its pool or key was deleted and created again is refused as stale and stores nothing', async () => {
+  const api = await signedIn();
+  const fresh = { ...(await storyPool(api)), members: [], name: 'fresh' };
+  const spare = { ...keyInput, name: 'spare', poolId: 'fresh' };
+  const first = await api.createPool(fresh);
+  const { key: firstKey } = await api.createKey(spare);
+  await api.deleteKey('spare');
+  await api.deletePool('fresh');
+  const pool = await api.createPool(fresh);
+  const { key } = await api.createKey(spare);
+  assert.deepEqual([pool.updatedAt, key.updatedAt], [first.updatedAt, firstKey.updatedAt], 'each replacement lands in its predecessor\'s millisecond');
+  assert.deepEqual([pool.revision, key.revision], [tokenOf(2, pool.updatedAt), tokenOf(2, key.updatedAt)], 'each replacement takes the next incarnation');
+  await assert.rejects(() => api.updatePool('fresh', { ...poolInputOf(pool), name: 'stale' }, first.revision), staleAs(POOL_STALE));
+  await assert.rejects(() => api.updateKey('spare', { ...spare, expiresAt: undefined, name: 'stale' }, firstKey.revision), staleAs(KEY_STALE));
+  assert.deepEqual([(await api.listPools()).find((p) => p.id === 'fresh').name, (await storyKey(api, 'spare')).name], ['fresh', 'spare'], 'the stale saves stored nothing');
+  const landedPool = await api.updatePool('fresh', { ...poolInputOf(pool), name: 'landed' }, pool.revision);
+  const landedKey = await api.updateKey('spare', { ...spare, expiresAt: undefined, name: 'landed' }, key.revision);
+  assert.deepEqual([landedPool.name, landedKey.name], ['landed', 'landed'], "the replacement's own token lands");
 });
 
 test('a rotation or a revocation moves the key\'s stamp, so an edit read before it is refused as stale', async () => {
@@ -202,8 +231,9 @@ test('a rotation or a revocation moves the key\'s stamp, so an edit read before 
     await write(api);
     const after = await storyKey(api, id);
     assert.ok(Date.parse(after.updatedAt) > Date.parse(before.updatedAt), id);
+    assert.equal(after.revision, tokenOf(1, after.updatedAt), id);
     // The key's own switch, since the route refuses re-enabling a revoked key ahead of the fence.
-    await assert.rejects(() => api.updateKey(id, { ...keyInput, enabled: before.enabled, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.updatedAt), staleAs(KEY_STALE), id);
+    await assert.rejects(() => api.updateKey(id, { ...keyInput, enabled: before.enabled, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.revision), staleAs(KEY_STALE), id);
     assert.equal((await storyKey(api, id)).name, before.name, id);
   }
 });

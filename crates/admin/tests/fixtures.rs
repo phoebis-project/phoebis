@@ -231,8 +231,11 @@ async fn bound_probes(app: &axum::Router, cookie: &str) -> Value {
         probes.push(probe);
     }
 
+    // The token carries the stamp, so it moves with it.
     let unstamped = |mut pool: Value| {
-        pool.as_object_mut().unwrap().remove("updated_at");
+        let fields = pool.as_object_mut().unwrap();
+        fields.remove("updated_at");
+        fields.remove("revision");
         pool
     };
     let after = json(get(app, "/admin/pools", Some(cookie)).await).await;

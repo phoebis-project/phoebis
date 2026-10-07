@@ -5300,9 +5300,10 @@ export const FIXTURES: Record<string, Fixture> = {
       "effective_body_capture_hours": 24,
       "auto_mode_server": null,
       "effective_auto_mode_server": true,
-      "prefix": "KuBQyWQy",
-      "created_at": 1791261397600,
-      "updated_at": 1791261397600,
+      "prefix": "RkUUhsuA",
+      "created_at": 1791412789134,
+      "updated_at": 1791412789134,
+      "revision": 6189459300238,
       "rotated_at": null,
       "last_used_at": null,
       "retired_secret_last_used_at": null,
@@ -5367,9 +5368,10 @@ export const FIXTURES: Record<string, Fixture> = {
           "effective_body_capture_hours": 24,
           "auto_mode_server": null,
           "effective_auto_mode_server": true,
-          "prefix": "KuBQyWQy",
-          "created_at": 1791261397600,
-          "updated_at": 1791261397600,
+          "prefix": "RkUUhsuA",
+          "created_at": 1791412789134,
+          "updated_at": 1791412789134,
+          "revision": 6189459300238,
           "rotated_at": null,
           "last_used_at": null,
           "retired_secret_last_used_at": null,
@@ -6395,8 +6397,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1791261397597,
-          "updated_at": 1791261397597,
+          "created_at": 1791412789130,
+          "updated_at": 1791412789130,
+          "revision": 6189459300234,
           "members": [
             {
               "account_id": "business",
@@ -6435,7 +6438,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "KuBQyWQy",
+              "prefix": "RkUUhsuA",
               "enabled": true
             }
           ],

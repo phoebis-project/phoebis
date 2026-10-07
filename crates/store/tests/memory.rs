@@ -61,12 +61,20 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
         store.load(&key("main")).unwrap(),
         Some(record(1, "{}", 1_000))
     );
-    assert_eq!(store.schema_version().unwrap(), 46);
+    assert_eq!(store.schema_version().unwrap(), 47);
 }
 
 // The reverse of the registry's member budgets migration, so a store stamped back below it can run it again. One
 // line with the marker last; the trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
+// The reverse of the registry's version 47, one statement per line, the key tombstones dropped so a replay that
+// reaches version 14 creates that version's table of the same name.
+const UNDO_V47: &str = r#"
+ALTER TABLE pools DROP COLUMN incarnation;
+ALTER TABLE api_keys DROP COLUMN incarnation;
+DROP TABLE pool_tombstones;
+DROP TABLE api_key_tombstones;
+"#;
 // The reverse of the registry's version 46, so a store stamped back below it can run it again. One line with the
 // marker last, and the trailing `\n` ends the marker's comment.
 const UNDO_V46: &str = "DROP INDEX pool_members_one_pool; -- rollback\n";
@@ -106,7 +114,7 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     // `session:s1`, both valid ids, each with its own payload.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V41}"
+        "{UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V41}"
     ))
     .unwrap();
     conn.execute_batch(
@@ -119,7 +127,7 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     .unwrap();
     drop(conn);
     let store = Store::open(&path, &storage).expect("the migration completes and the store opens");
-    assert_eq!(store.schema_version().unwrap(), 46);
+    assert_eq!(store.schema_version().unwrap(), 47);
     let payload = |session: &str| {
         store
             .load(&MemoryKey::for_session("desktop", 1_000, session, "main"))

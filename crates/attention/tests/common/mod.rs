@@ -199,6 +199,7 @@ fn seed(store: &Store) {
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-desktop").to_vec(),
                 prefix: "phoebis-desk".into(),
+                incarnation: 1,
                 created_at: NOW,
                 updated_at: 0,
                 rotated_at: None,

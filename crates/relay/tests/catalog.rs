@@ -680,6 +680,7 @@ async fn a_listing_that_drops_the_dated_entry_keeps_the_dated_id_and_its_denial_
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest("phoebis-open").to_vec(),
                 prefix: phoebis_store::key_prefix("phoebis-open"),
+                incarnation: 1,
                 created_at: NOW,
                 updated_at: 0,
                 rotated_at: None,

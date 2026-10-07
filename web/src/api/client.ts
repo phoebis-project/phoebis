@@ -209,8 +209,8 @@ export interface Api {
   subscribeLive(handler: (event: LiveEvent) => void): () => void;
   /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
   updateAccount(accountId: string, patch: AccountPatch, revision?: number): Promise<Account>;
-  /** `updatedAt` is the stamp the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
-  updateKey(id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey>;
-  updatePool(id: string, input: PoolInput, updatedAt?: string): Promise<Pool>;
+  /** `revision` is the one the row was read at; a save over a row that moved since answers 409 `stale_edit`. */
+  updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey>;
+  updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool>;
   verifyAccount(accountId: string): Promise<{ ok: boolean; status: number }>;
 }

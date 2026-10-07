@@ -2545,6 +2545,7 @@ mod tests {
                 body_capture_hours: None,
                 secret_digest: vec![0; 32],
                 prefix: "00000000".into(),
+                incarnation: 1,
                 created_at: 0,
                 updated_at: 0,
                 rotated_at: None,
