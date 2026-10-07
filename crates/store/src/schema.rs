@@ -660,15 +660,15 @@ ALTER TABLE pools RENAME COLUMN migrate_above_utilization TO shed_ahead_of_pace;
 "#;
 
 // One row per pin of a pool's and account's latest shedding round, marked or not, so the round itself (and the
-// dwell it arms) is on disk even when it marked nothing; `round_at` is the same on every row of one round. `epoch`
+// dwell it arms) is on disk even when it marked nothing. `round_at` is the same on every row of one round. `epoch`
 // is the pin's at the round and `incarnation` the account's: a mark is read back only for the pin it was made on,
 // never for a replacement pin under the key or a replaced account. A pin write that removes the pin or replaces it
 // under another epoch clears the mark in its own transaction (`marked` 0, the row and its `round_at` kept for the
 // dwell gate). A deleted account takes its rows with it, as the pins' cascade does. The affinity table gains the
 // ordinal of each entry's boundary in its chain, which the routing map records at the write and the purge reports.
 // The accounts table gains the word for who moved its state, so the routing log's transition row reads the cause off
-// the registry rather than inferring it from the path a change reached the mirror by; a row from before the column
-// reads `unrecorded`, and the writers that store the word land after this migration.
+// the registry rather than inferring it from the path a change reached the mirror by. A row from before the column
+// reads `unrecorded`.
 const V46: &str = r#"
 CREATE TABLE IF NOT EXISTS shed_rounds (
   pool_id TEXT NOT NULL,

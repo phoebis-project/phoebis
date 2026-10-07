@@ -556,7 +556,7 @@ pub const PROBE_KIND: &str = "probe";
 /// root on every tick, so it would bury the decisions it follows unless asked for.
 const HIDDEN_EVENT_KIND: &str = "warm_prefix_expired";
 
-/// The decision kinds that sent the request upstream, and so have an attempt that answered for them; the same three
+/// The decision kinds that sent the request upstream, and so have an attempt that answered for them: the same three
 /// as `COMPLETING_ATTEMPT` names.
 const DISPATCHING_KINDS: &[&str] = &["moved", "placed", "renewed"];
 
@@ -571,7 +571,7 @@ pub struct RoutingLogFilter {
     pub pools: Vec<String>,
     pub accounts: Vec<String>,
     pub models: Vec<String>,
-    /// `None` is the default set (every decision kind with `probe` 0, every event kind but `warm_prefix_expired`);
+    /// `None` is the default set (every decision kind with `probe` 0, every event kind but `warm_prefix_expired`).
     /// `Some` is exactly the kinds named, `probe` the pseudo-kind for a probe decision of any kind.
     pub kinds: Option<Vec<String>>,
 }
@@ -651,7 +651,7 @@ pub enum RoutingLogRow {
 }
 
 /// The summary column parsed, with the joined facts of the completing attempt (the newest attempt row at or after
-/// the decision's `attempt` and before the next dispatching decision's, by `seq`); `attempt` stays the decision's
+/// the decision's `attempt` and before the next dispatching decision's, by `seq`). `attempt` stays the decision's
 /// own, `cache` is `None` until the completing attempt has usage, and a `held`, `exhausted` or `refused` decision
 /// joins no attempt (`status` and `cache` null).
 #[derive(Clone, Debug, PartialEq)]
@@ -703,7 +703,7 @@ pub struct EventListRow {
 pub struct RoutingLogPage {
     pub rows: Vec<RoutingLogRow>,
     pub next_cursor: Option<String>,
-    /// `(decisions, events)` under the whole filter; answered only under a `request` filter, the one bounded set.
+    /// `(decisions, events)` under the whole filter, answered only under a `request` filter, the one bounded set.
     pub counts: Option<(u64, u64)>,
 }
 
@@ -712,7 +712,7 @@ pub struct RoutingLogPage {
 /// the pass that answered, and a hold and its placement (one attempt, two decisions) join it to the placement alone.
 const COMPLETING_ATTEMPT: &str = "CASE WHEN d.kind IN ('placed', 'renewed', 'moved') THEN (SELECT MAX(x.attempt) FROM attempts x WHERE x.request_id = d.request_id AND x.attempt >= d.attempt AND x.attempt < COALESCE((SELECT MIN(n.attempt) FROM decisions n WHERE n.request_id = d.request_id AND n.seq > d.seq AND n.attempt > d.attempt), 9223372036854775807)) END";
 
-/// The completing attempt's columns the log reads; every field `None` where none joined.
+/// The completing attempt's columns the log reads, every field `None` where none joined.
 struct Answered {
     status: Option<u16>,
     input_tokens: Option<u64>,
@@ -744,8 +744,8 @@ impl Answered {
             || self.cache_write_1h_tokens.is_some()
     }
 
-    /// The hit by the rule `placements` counts: a `content` rung reads up to the entry's promise; anything else hits
-    /// on a read at all, since a static entry's size is not on the usage.
+    /// The hit by the rule `placements` counts: a `content` rung reads up to the entry's promise, and anything else
+    /// hits on a read at all, since a static entry's size is not on the usage.
     fn cache(&self, summary: &Value) -> Option<CacheFacts> {
         if !self.has_usage() {
             return None;
@@ -1089,7 +1089,7 @@ fn count_of(
     Ok(count as u64)
 }
 
-/// Record v1 decoded from its frame with `outcome.completion` merged in; `None` when the row is absent.
+/// Record v1 decoded from its frame with `outcome.completion` merged in, or `None` when the row is absent.
 pub fn decision_record(
     conn: &Connection,
     request_id: &str,

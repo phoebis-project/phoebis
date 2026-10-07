@@ -84,7 +84,7 @@ pub enum StateCause {
     /// The upstream refused the credential: a 401, or a 403 `authentication_error`, on an `api_key` account, or a
     /// 401 on the replay with a freshly refreshed token.
     AuthFailed,
-    /// The account's deletion; the row goes with it, so the word reaches the log alone.
+    /// The account's deletion. The row goes with it, so the word reaches the log alone.
     Deleted,
     /// The upstream named an `api_key` account's credit balance.
     FundingRefused,
@@ -94,7 +94,7 @@ pub enum StateCause {
     Paired,
     /// The token refresh's definitive failure, the oauth manager's own write.
     RefreshFailed,
-    /// The migration's default on a row from before the column; no writer stores it.
+    /// The migration's default on a row from before the column. No writer stores it.
     Unrecorded,
 }
 
@@ -378,7 +378,7 @@ impl Store {
     /// verdict is about credentials that no longer exist and would only lock out what replaced them. A slot
     /// deleted and created again under the same id reads both generations at 1 again, so the incarnation has
     /// to match as well. Answers the row's revision after the write and the state it held before it when the fences
-    /// let the write through, a repeated verdict included; `None` when they refused it.
+    /// let the write through, a repeated verdict included, or `None` when they refused it.
     ///
     /// One statement for the fenced write, because two would leave a window between the check and the update
     /// exactly as wide as the one this exists to close.
@@ -406,7 +406,7 @@ impl Store {
 
     /// Disconnects the account: the new lifecycle generation invalidates any refresh in flight for the
     /// old one, and both credential kinds are deleted so a disconnected slot cannot keep spending money.
-    /// `cause` is who disconnected the slot; the statement writes `disconnected` and the word together.
+    /// `cause` is who disconnected the slot. The statement writes `disconnected` and the word together.
     pub fn bump_lifecycle(&self, id: &str, cause: StateCause) -> Result<u64, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;

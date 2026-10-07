@@ -1250,7 +1250,7 @@ async fn a_rate_limited_poll_writes_the_backoff_s_start_and_the_clean_one_its_en
     up.push_credential_rule(A, "/api/oauth/usage", rate_limited_bare());
     let paused = start_polling(&h, &up).await;
 
-    // The first slot at 300 s meets the 429 and holds the account for the ladder's two minutes; the read when
+    // The first slot at 300 s meets the 429 and holds the account for the ladder's two minutes. The read when
     // the hold ends is clean.
     step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(usage_asked(&up, A), 2);
@@ -1374,7 +1374,7 @@ async fn a_run_the_poll_never_saw_start_ends_without_a_row() {
     assert!(usage.poll_status("a").unwrap().backoff_since.is_some());
     let paused = start_polling(&h, &up).await;
 
-    // The scheduler's first read comes when the two-minute hold ends; it is clean and ends the run.
+    // The scheduler's first read comes when the two-minute hold ends. It is clean and ends the run.
     step_to(&h, &up, &paused, secs(302)).await;
     assert_eq!(usage_asked(&up, A), 2);
     assert_eq!(usage.poll_status("a").unwrap().backoff_since, None);

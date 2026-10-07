@@ -81,7 +81,7 @@ export const LANES: Lane[] = [
 /**
  * The account that serves the story's unmeasured traffic: Sonnet 5 alone, whose cells the cost table leaves `null`,
  * whatever the lane drew, so its buckets read no share. The sessions the story moves off it carry Sonnet 5 to primary,
- * whose 11:00 and 14:00 buckets read no 5-hour share either; every other subscription bucket stays priced.
+ * whose 11:00 and 14:00 buckets read no 5-hour share either. Every other subscription bucket stays priced.
  */
 const UNPRICED_ACCOUNT = 'secondary';
 const modelOn = (accountId: string, drawn: string) => (accountId === UNPRICED_ACCOUNT ? 'claude-sonnet-5' : drawn);
@@ -235,7 +235,7 @@ const STORY_READINGS: Record<string, { at: number; utilization: number }[]> = {
   ],
 };
 
-/** A 5-hour reading inside the window the story's readings cover, read off them; any other reading as walked back. */
+/** A 5-hour reading inside the window the story's readings cover, read off them. Any other reads as walked back. */
 function storyReading(accountId: string, w: RateLimitWindow, read: AttemptWindow, atMs: number): AttemptWindow {
   const points = STORY_READINGS[accountId];
   if (!points || w.id !== '5h' || read.resetsAt !== w.resetsAt || atMs < points[0].at) return read;
@@ -253,9 +253,9 @@ export const HAIKU = 'claude-haiku-4-5-20251001';
 /**
  * Whether an account could take a request at `atMs` by the story's own account facts, so no attempt lands where the
  * decision card would show the account out: secondary, which serves Sonnet 5 alone, reads its 5-hour window spent
- * from 14:02:11 and cools on it from 14:09:31 to 15:42; primary's fast lane cools from 14:27:00 to 14:42 and it
- * rejects Haiku from 14:24:10 to 15:24; nightly's usage credits take a fast request once its spend cap is raised at
- * 11:30:12; the Overflow workspace needs funding from 11:30:12; research spends its day's budget at 12:41:07.
+ * from 14:02:11 and cools on it from 14:09:31 to 15:42. Primary's fast lane cools from 14:27:00 to 14:42 and it
+ * rejects Haiku from 14:24:10 to 15:24. Nightly's usage credits take a fast request once its spend cap is raised at
+ * 11:30:12. The Overflow workspace needs funding from 11:30:12, and research spends its day's budget at 12:41:07.
  */
 export function servable(accountId: string, atMs: number, model: string, fast: boolean): boolean {
   const within = (from: number, to: number) => atMs >= from && atMs < to;
@@ -294,7 +294,7 @@ const CHAIN_FROM = new Map<string, number>();
  * exhausted without an upstream call), and fewer than drawn when the lane ran out of accounts it had not tried or an
  * answer ended it. `whole` says the request answered as drawn: every drawn attempt made, and none added after a 429.
  * `drawnHead` is where the draws end when secondary is barred from a fast request's earlier attempts alone and every
- * drawn attempt runs; the usage draw is sized by it, so every row keeps the draws the stream gives it.
+ * drawn attempt runs. The usage draw is sized by it, so every row keeps the draws the stream gives it.
  */
 function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWanted: number, model: string, fast: boolean): { attempts: Attempt[]; chainFrom: number; drawnHead: string | undefined; whole: boolean } {
   const attempts: Attempt[] = [];
@@ -416,7 +416,7 @@ function buildRequests(): RequestLog[] {
     // A request no account could serve still draws its answer below, so every later row keeps its draws.
     const head = tried[tried.length - 1] as Attempt | undefined;
     const model = modelOf(tried, drawn);
-    // The usage draws take the size of the model the draws end on, so every later row keeps its draws; a model that
+    // The usage draws take the size of the model the draws end on, so every later row keeps its draws. A model that
     // is not asked to think reads none.
     const drawnUsage = finalStatus === 200 ? usageFor(modelOn(drawnHead ?? '', drawn), kind) : { input: 0, cacheRead: 0, cacheWrite5m: 0, cacheWrite1h: 0, output: 0, ...NO_ANSWER_FACTS };
     const usage = model.includes('fable') || model.includes('opus') ? drawnUsage : { ...drawnUsage, thinking: 0 };
@@ -966,8 +966,8 @@ if (nightly?.overage) nightly.overage.since = iso(OVERAGE_FROM);
 /**
  * The pin each request's first selection found live, by request id: where the pin's last use left it within the
  * pool's affinity window, and when it landed there, so a renewal or a move rests on a request the day holds. A
- * request leaves its pin on its last attempt's account unless that answer cooled the account, which releases the pin;
- * a token count renews a live pin and creates none.
+ * request leaves its pin on its last attempt's account unless that answer cooled the account, which releases the pin.
+ * A token count renews a live pin and creates none.
  */
 const LIVE_PIN: Map<string, { accountId: string; createdAt: number }> = (() => {
   const out = new Map<string, { accountId: string; createdAt: number }>();
@@ -998,7 +998,7 @@ const serves = (accountId: string, model: string) => accountId !== UNPRICED_ACCO
  * an account holding allowance outside plan overage, nightly's overage hands a standard request back to a plan-funded
  * subscription, and an Anthropic key's pin returns to one once it has sat its dwell there. The first rule whose reason
  * holds decides, so a move to an account
- * that rule would not take is no move; a drain needs a cold pin and a shed a mark, which no drawn pin carries, and a
+ * that rule would not take is no move. A drain needs a cold pin and a shed a mark, which no drawn pin carries, and a
  * token count follows its pin without walking the rules.
  */
 function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
@@ -1027,7 +1027,7 @@ function supportedRule(r: RequestLog, from: string): PinMigrationReason | null {
   return null;
 }
 
-/** The move reasons the stream draws for a single-attempt row; the draw is kept so every later row keeps its own. */
+/** The move reasons the stream draws for a single-attempt row. The draw is kept so every later row keeps its own. */
 const MIGRATION_REASONS: { value: PinMigrationReason; weight: number }[] = [
   { value: 'drain', weight: 1 },
   { value: 'fast_lane', weight: 1 },
@@ -1049,20 +1049,20 @@ function buildRequestEvents(): Map<string, RequestEvent[]> {
     const events: RequestEvent[] = [];
     // The pin the event belongs to: the drawer shows a move only where these match the request's own.
     const pin = { keyId: r.keyId, model: r.canonicalModel, sessionId: r.sessionId };
-    // A failover moves the pin off the account whose answer set a cooldown; the event lands as the next attempt
+    // A failover moves the pin off the account whose answer set a cooldown. The event lands as the next attempt
     // starts. A token count writes no pin for one to move.
     for (let i = 1; i < r.attempts.length && r.kind !== 'count_tokens'; i += 1) {
       const from = r.attempts[i - 1];
       if (!failsOver(from)) continue;
       events.push({ ...pin, accountId: r.attempts[i].accountId, at: r.attempts[i].startedAt, detail: { agent_id: r.agentId, epoch: i + 1, from_account: from.accountId, reason: 'cooldown' }, kind: 'pin_migrated' });
     }
-    // An account's refusal of the model lands as its head does; the rejection story writes its own below.
+    // An account's refusal of the model lands as its head does. The rejection story writes its own below.
     for (const a of r.id === REJECTION_STORY_ID ? [] : r.attempts) {
       if (a.cooldownSet?.reason !== 'model_rejected') continue;
       events.push({ ...pin, accountId: a.accountId, at: iso(Date.parse(a.startedAt) + (a.durationMs ?? 0)), detail: { attempt: a.index + 1, request_id: a.upstreamRequestId, source_request_id: r.id, wire_model: r.model }, kind: 'model_rejected' });
     }
     // A few single-attempt rows moved on selection instead: the migrate rule read a sample, not a 429. The reason is
-    // drawn and set aside so the stream stays where it was; the move stands where a rule takes the pin there.
+    // drawn and set aside so the stream stays where it was. The move stands where a rule takes the pin there.
     const lane = LANES.find((l) => l.keyId === r.keyId);
     // One draw either way for this seed only: the chance the forced row skips comes up false here, and a seed where it came up true would spend a weighted draw as well and shift every later row.
     if (events.length === 0 && r.status === 200 && lane && lane.accountIds.length > 1 && (spentOwed || h.chance(0.07))) {
@@ -1238,7 +1238,7 @@ function traceRequests() {
       const tried = new Set(all.slice(0, i).map((x) => x.accountId));
       const skipped = members.filter((id) => id !== a.accountId).map((accountId) => ({ accountId, obstacle: tried.has(accountId) ? 'attempted' : h.weighted(OBSTACLE_DRAWS) }));
       const placement = moved === undefined ? placementOf(p, r) : null;
-      // Every placement draws its chance of a hold so the streams stay where they were; a request holds before its
+      // Every placement draws its chance of a hold so the streams stay where they were. A request holds before its
       // first attempt alone, and only where it could have waited.
       const drawnHold = cohortHoldOf(p, w, r, placement, a.accountId);
       const cohortHold = drawnHold !== null && i === 0 && holdFirst(r, drawnHold) ? drawnHold : null;
@@ -1342,9 +1342,9 @@ function seedHolds() {
     const members = (poolById.get(r.poolId ?? '')?.members ?? []).map((m) => m.accountId).sort((x, y) => Number(x === UNPRICED_ACCOUNT) - Number(y === UNPRICED_ACCOUNT));
     return members.find((id) => !tried.includes(id) && serves(id, r.canonicalModel) && servableFor(r, heldAt(r))(id));
   };
-  // A 429 fails the attempt over to a reselect, which can find every account at its cap; a 529 or a 502 is committed.
+  // A 429 fails the attempt over to a reselect, which can find every account at its cap. A 529 or a 502 is committed.
   const failedTurn = (r: RequestLog) => r !== atCap && !STORY_IDS.has(r.id) && r.kind === 'inference' && r.status === 429 && drawnPart(r).slice(-1)[0]?.upstreamStatus === 429 && untried(r) !== undefined;
-  // The draw skips by the local hour, so at some clocks no turn was exhausted after one attempt; the oldest turn
+  // The draw skips by the local hour, so at some clocks no turn was exhausted after one attempt. The oldest turn
   // that failed over then takes the story, which keeps it at every clock.
   const oldest = [...REQUESTS].reverse();
   const afterAttempt = oldest.find((r) => failedTurn(r) && drawnPart(r).length === 1) ?? oldest.find(failedTurn);

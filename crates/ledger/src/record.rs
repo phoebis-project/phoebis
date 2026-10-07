@@ -243,13 +243,13 @@ impl DecisionRow {
     }
 }
 
-/// A refusal under a key the snapshot no longer holds names no pool, which the record spells empty; the column
+/// A refusal under a key the snapshot no longer holds names no pool, which the record spells empty. The column
 /// reads null instead, so no filter finds the row under an empty id.
 fn column(value: &str) -> Option<String> {
     (!value.is_empty()).then(|| value.to_string())
 }
 
-/// A completed answer's cache-map rows, for the `cache_map` column of the decision `seq` names; `attempt` is the
+/// A completed answer's cache-map rows, for the `cache_map` column of the decision `seq` names. `attempt` is the
 /// wire attempt that completed, kept for the log line.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CacheMapWrite {

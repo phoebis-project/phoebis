@@ -131,7 +131,7 @@ export const ACCOUNTS: Account[] = ([
     extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
     fastLane: null,
     // In plan overage from the first head after its spend cap was raised at 11:30:12, which `requests.ts` dates once
-    // the day's requests are drawn; the raise stands in until then.
+    // the day's requests are drawn. The raise stands in until then.
     overage: { inUse: true, observedAt: ago(40_000), reset: ahead(1 * DAY + 18 * HOUR + 12 * MINUTE), since: ago(2 * HOUR + 59 * MINUTE + 48_000) },
     credential: {
       accessTokenExpiresAt: ahead(5 * HOUR + 50 * MINUTE),

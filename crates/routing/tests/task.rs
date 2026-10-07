@@ -2719,7 +2719,13 @@ async fn a_head_writes_the_windows_it_moved_and_a_restart_reads_them() {
     handle
         .report(observed(
             "a",
-            sample_with(900, FIVE_HOUR, 0.9, Some(100 * HOUR)),
+            sample(900).with(
+                FIVE_HOUR,
+                WindowReading {
+                    observed_at: 900,
+                    ..reading(0.9)
+                },
+            ),
         ))
         .await;
     handle.shutdown().await.unwrap();
@@ -3025,14 +3031,19 @@ fn drift_refusal() -> (RefusedRequest, RefusalFacts) {
             key_id: "k".into(),
             key_generation: 0,
             agent_id: "main".into(),
+            parent_agent_id: None,
             session_id: Some("s1".into()),
+            request_class: None,
             canonical_model: "claude-sonnet-5".into(),
+            lane: Default::default(),
+            flags: Default::default(),
+            chain: Default::default(),
             client: ClientClass::ClaudeCode,
             client_version: Some("2.1.274".into()),
         },
         RefusalFacts {
             kind: "client",
-            reason: "hash; client 2.1.274".into(),
+            reason: "hash".into(),
         },
     )
 }
@@ -4161,9 +4172,14 @@ async fn a_fail_over_after_a_cooldown_names_cooldown_in_the_trace() {
         ("placed", Some("cooldown"), Some("cooldown")),
         "the trace's move is the record's rule"
     );
+    assert_eq!(
+        record.outcome.from_account_id.as_deref(),
+        Some(a.as_str()),
+        "the record names the account the fail-over left, as the pin's move does"
+    );
     assert!(matches!(
         next_event(&mut events).await,
-        RouterEvent::PinMigrated { reason, .. } if reason == "cooldown"
+        RouterEvent::PinMigrated { reason, from_account, .. } if reason == "cooldown" && from_account == a
     ));
 }
 
@@ -5878,7 +5894,7 @@ async fn a_shedding_round_emits_its_pins_and_marks_once() {
         .await;
     handle.samples().await.unwrap();
     let mut events = handle.subscribe_events();
-    // Ten minutes on, `s2`'s cache has lapsed; `s1`'s is the one this request refreshes, so it reads warm.
+    // Ten minutes on, `s2`'s cache has lapsed. `s1`'s is the one this request refreshes, so it reads warm.
     let at = 1_000 + 600_000;
     now.store(at, Ordering::SeqCst);
     handle
@@ -6344,7 +6360,7 @@ async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
     pool.shedding.source_dwell_seconds = 600;
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     second_pool(&store, 1_800);
-    // p's round is past p's own dwell and inside q's, which can still read a's stamp from it after a restart; q's
+    // p's round is past p's own dwell and inside q's, which can still read a's stamp from it after a restart, and q's
     // round is past q's dwell, the longest.
     store
         .replace_shed_round("p", "a", 1, AT - 900_000, &[shed_pin("s1", 1, true)])
@@ -6399,7 +6415,7 @@ async fn after_a_restart_a_shared_account_reads_as_shed_by_another_pool_s_round(
     store
         .upsert_pin(&stored_pin(&store, "s1", "x", 1, 0.0))
         .unwrap();
-    // q's round on the shared account a minute before the restart; p never ran one there.
+    // q's round on the shared account a minute before the restart, and p never ran one there.
     store
         .replace_shed_round("q", "a", 1, AT - 60_000, &[shed_pin("s9", 9, true)])
         .unwrap();
@@ -6630,7 +6646,7 @@ async fn a_poll_naming_a_head_s_reset_to_the_millisecond_names_the_same_reset() 
     let now = Arc::new(AtomicI64::new(4_000));
     let handle = spawn(store.clone(), clock(&now), RouterConfig::default()).unwrap();
     let mut events = handle.subscribe_events();
-    // A head names the reset in whole seconds; the poll names the same reset to the millisecond.
+    // A head names the reset in whole seconds. The poll names the same reset to the millisecond.
     let reset = 5 * HOUR;
     handle
         .report(head_reading(1_000, 0.4, Some(reset), "r-1"))

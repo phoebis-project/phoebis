@@ -2,7 +2,7 @@ import { Fragment, useEffect, useId, useMemo, useRef, useState, type FocusEvent,
 import { IconCheck, IconChevron, IconX } from './icons';
 
 export interface Option {
-  /** The heading the option is listed under; the options of one group are adjacent. */
+  /** The heading the option is listed under. The options of one group are adjacent. */
   group?: string;
   label: string;
   value: string;

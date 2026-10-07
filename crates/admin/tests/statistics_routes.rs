@@ -2481,19 +2481,32 @@ async fn the_routing_log_refuses_a_filter_outside_its_keys() {
 async fn a_missing_record_answers_404() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    for (path, error) in [
-        (
-            "/admin/requests/r-none/decisions/1",
-            "no decision 1 for request r-none",
-        ),
-        (
-            "/admin/requests/r-none/decisions/first",
-            "no decision first for request r-none",
-        ),
-    ] {
-        let missing = get(&parts.app, path, Some(&cookie)).await;
-        assert_eq!(missing.status(), 404, "{path}");
-        assert_eq!(json(missing).await["error"], error, "{path}");
+    let missing = get(
+        &parts.app,
+        "/admin/requests/r-none/decisions/1",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(missing.status(), 404);
+    assert_eq!(
+        json(missing).await["error"],
+        "no decision 1 for request r-none"
+    );
+}
+
+#[tokio::test]
+async fn a_decision_seq_that_is_no_sequence_number_answers_400() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    for seq in ["first", "-1", "1.5"] {
+        let path = format!("/admin/requests/r-none/decisions/{seq}");
+        let refused = get(&parts.app, &path, Some(&cookie)).await;
+        assert_eq!(refused.status(), 400, "{path}");
+        assert_eq!(
+            json(refused).await["error"],
+            "seq is the decision's sequence number",
+            "{path}"
+        );
     }
 }
 

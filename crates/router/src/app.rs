@@ -212,14 +212,9 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: Duration::from_secs(60),
+            start_version: Some(env!("CARGO_PKG_VERSION").into()),
         },
     );
-    // Sent ahead of anything else this run records, so the gap it dates ends at the previous run's newest row.
-    ledger.record(phoebis_ledger::Record::RouterStarted {
-        version: env!("CARGO_PKG_VERSION").into(),
-        counts: router_task.load_counts(),
-        at: clock(),
-    });
     // The first purge announces the downtime's clock resets and wind-downs: held until here, its rows reach the
     // mirror and land behind the start row, whose gap they would otherwise date.
     router_task.release_purge().await;

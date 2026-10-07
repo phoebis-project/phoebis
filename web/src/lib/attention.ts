@@ -35,7 +35,7 @@ type LinkedItem = Pick<AttentionItem, 'kind' | 'link' | 'since'>;
 const exhaustedPool = ({ kind, link }: LinkedItem): string | null => (kind === 'pool_exhausted' && link?.page === 'pools' ? link.id : null);
 
 /**
- * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start; every
+ * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start. Every
  * other kind opens the account, pool or key where it is fixed. Null when the item names none.
  */
 export function attentionHref(item: LinkedItem, now: number): string | null {
@@ -49,7 +49,7 @@ export function attentionHref(item: LinkedItem, now: number): string | null {
 
 /**
  * The last line of a title whose item opens the routing log, naming what the log opens on, the start with its date
- * once it is a day away; null for any other item.
+ * once it is a day away, or null for any other item.
  */
 export function attentionLogLine(item: LinkedItem, now: number): string | null {
   const pool = exhaustedPool(item);

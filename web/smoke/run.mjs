@@ -6523,6 +6523,18 @@ m.unmount();
     results.push({ name: '/routing-log every Fact cell is a label from the table in its slot and a mono value, one pair or two and never a third, no value the Time column gives', ok: pairs > 40 && wrong.length === 0, missing: [`${pairs} pairs`, ...wrong.slice(0, 8)] });
   }
   {
+    // The refresh rows carry the router's detail, so the cell reads the new token's expiry or the failure's class.
+    const kinds = ['refresh_failed', 'refresh_succeeded', 'refresh_uncertain'];
+    const page = await mount(`/routing-log?kinds=${kinds.join(',')}&from=${iso(CLOCK_ORIGIN - 24 * HOUR)}&to=${iso(CLOCK_ORIGIN)}`, { now: CLOCK_ORIGIN });
+    const drawn = Object.fromEntries(
+      trs(page).map((tr) => [cell(tr, 'kind')?.querySelector('.badge')?.textContent ?? '', [...(cell(tr, 'fact')?.querySelectorAll('.fact__pair') ?? [])].map((p) => `${p.children[0]?.textContent} ${p.children[1]?.textContent}`)]),
+    );
+    page.unmount();
+    const want = { 'refresh failed': ['cause transport'], 'refresh succeeded': ['until 20:52'], 'refresh uncertain': ['cause refresh_response_lost'] };
+    const sorted = (o) => JSON.stringify(Object.entries(o).sort(([a], [b]) => a.localeCompare(b)));
+    results.push({ name: "/routing-log a refresh row's Fact reads the new token's expiry or the failure's class", ok: sorted(drawn) === sorted(want), missing: [JSON.stringify(drawn)] });
+  }
+  {
     // A link in reads the request a quarter hour either side of its first decision.
     const id = 'req_1d9c3e55-0b2';
     const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 2 * HOUR), limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows.filter((r) => r.type === 'decision');
@@ -6715,6 +6727,36 @@ m.unmount();
     });
   }
   {
+    // Follow turned off inside a failing streak and on again while the route still fails: the new run toasts once.
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const toasts = () => [...page.container.querySelectorAll('.toast')].map((t) => t.textContent);
+    followToggle(page)?.click();
+    await page.settle(100);
+    const outage = failCalls({ listRoutingLog: '/admin/routing-log' }, 'ledger locked');
+    tick(5_000);
+    await page.settle();
+    const first = toasts();
+    followToggle(page)?.click();
+    await page.settle(100);
+    // Past the notice's 6-second dwell, so a toast after it is the new run's.
+    tick(7_000);
+    await page.settle();
+    const quiet = toasts();
+    followToggle(page)?.click();
+    await page.settle(100);
+    tick(5_000);
+    await page.settle();
+    const again = toasts();
+    outage.restore();
+    page.unmount();
+    const notice = '/admin/routing-log failed: ledger locked';
+    results.push({
+      name: '/routing-log each Follow run toasts its failing streak once',
+      ok: JSON.stringify([first, quiet, again]) === JSON.stringify([[notice], [], [notice]]),
+      missing: [JSON.stringify([first, quiet, again])],
+    });
+  }
+  {
     const ROUTE = { account: /^\/accounts\/[^/?]+$/, key: /^\/keys\?key=[^&]+$/, model: /^\/models\?model=[^&]+$/, pool: /^\/pools\?pool=[^&]+$/, request: /^\/requests\/[^/?]+$/, session: /^\/sessions\?session=[^&]+$/ };
     const wrong = [];
     const hrefs = (td) => [...(td?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href') ?? '');
@@ -6746,6 +6788,18 @@ m.unmount();
     const page = await mount('/routing-log?session=zzzzzzzz', { now: CLOCK_ORIGIN });
     const t = page.text();
     results.push({ name: '/routing-log the empty state names the range', ok: trs(page).length === 0 && t.includes('No decisions or events in this range.') && t.includes('Widen the range or clear a filter.'), missing: [t.slice(0, 200)] });
+    page.unmount();
+  }
+  {
+    // A link from a newer router can carry a kind this build does not know: the route refuses it, and the page says so.
+    const page = await mount('/routing-log?kinds=budget_refilled', { now: CLOCK_ORIGIN });
+    const t = page.text();
+    const drawn = page.container.querySelectorAll('.routing-log__table tbody tr[data-row]').length;
+    results.push({
+      name: "/routing-log a kind the route refuses shows the route's refusal where the rows would be",
+      ok: drawn === 0 && t.includes('Could not load the routing log') && t.includes('unknown kind budget_refilled') && page.location().search === '?kinds=budget_refilled',
+      missing: [`${drawn} rows`, page.location().search, t.slice(0, 300)],
+    });
     page.unmount();
   }
   {
@@ -7278,9 +7332,9 @@ m.unmount();
       poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
       poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
       reauth_required: ['Routing'],
-      refresh_failed: [],
-      refresh_succeeded: [],
-      refresh_uncertain: [],
+      refresh_failed: ['Error'],
+      refresh_succeeded: ['Access token', 'Refresh token'],
+      refresh_uncertain: ['Error'],
       registry_changed: ['Change', 'shed ahead of pace', 'Actor', 'Reading it'],
       router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
       shedding_round: ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
@@ -7296,13 +7350,13 @@ m.unmount();
     ];
     const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
     const hhmm = (at) => new Date(at).toISOString().slice(11, 16);
-    // The pairs the event carries the facts for, worded as spec 8.4's rows: the state's effect, the gap's meaning, a
-    // registry edit's reading, the spent window's effect and the backoff's span.
+    // The pairs the event carries the facts for: the state's effect, the gap's meaning, a registry edit's reading, the
+    // spent window's effect and the backoff's span.
     const VALUES = {
       account_state_changed: () => ({ Effect: ['the account leaves every eligible set until funded'] }),
       ledger_gap: () => ({ Meaning: ['an interior chunk of the capture was dropped at the bus'] }),
       poll_backoff_ended: (e) => ({ 'Backed off': [`from ${hhmm(e.detail.resumed_at - e.detail.duration_ms)}`, `to ${hhmm(e.detail.resumed_at)}`] }),
-      registry_changed: (e) => ({ 'Reading it': [`decisions before ${hhmm(Date.parse(e.at))} carry shed ahead of pace off`] }),
+      registry_changed: (e) => ({ 'Reading it': [`decisions before ${hhmm(Date.parse(e.at))} carry shed ahead of pace none`] }),
       window_spent: () => ({ Effect: ['a pinned session moves by the spent rule at its next request'] }),
     };
     const modelLinks = {};

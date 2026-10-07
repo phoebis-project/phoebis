@@ -8,7 +8,7 @@ import { BUDGET_CROSSING_ID, HAIKU, OVERAGE_FROM, REQUEST_EVENTS, REQUESTS, SHED
 import { createRng } from './rng';
 import { DAY, HOUR, MINUTE, NOW, iso } from './time';
 
-/** Why a move rule fired, as the trace's `moved` names it; a failover's reasons move the pin from the task instead. */
+/** Why a move rule fired, as the trace's `moved` names it. A failover's reasons move the pin from the task instead. */
 const RULES = ['spent', 'overage', 'return_to_plan', 'drain', 'shed'] as const;
 const FAILOVER_REASONS = ['cooldown', 'fast_lane'];
 /** The line under which a destination of a fired rule reads cool. */
@@ -40,7 +40,7 @@ const summaryFact = (key: string, value: number | string, unit: SummaryFact['uni
 
 /** One decision as the story writes it or the builder reads it off a request row and its trace. */
 interface Spec {
-  /** The account placed, renewed on, or held on; null for an exhaustion and a refusal. */
+  /** The account placed, renewed on, or held on, or null for an exhaustion and a refusal. */
   accountId: string | null;
   at: number;
   attempt: number;
@@ -107,7 +107,7 @@ function settingsOf(pool: PoolSeed): RecordSettings {
 }
 
 /**
- * The share an older window's reading walks back to where no attempt names it; a draw would move the story's
+ * The share an older window's reading walks back to where no attempt names it. A draw would move the story's
  * streams.
  */
 const OLDER_FACTOR = 0.8;
@@ -346,7 +346,7 @@ interface Move {
  * Step 4 as the engine walks it for a live pin, each rule on the facts the record holds: `no` with the fact that kept
  * it, or `fired` with its destinations, `not_run` for every rule after it and the cool reading the destinations were
  * preferred by. A rule whose reason holds with no sibling to take the pin says so and the walk goes on. A destination
- * is an eligible sibling holding allowance; a cool one reads both leads under the band, no round within the dwell and
+ * is an eligible sibling holding allowance. A cool one reads both leads under the band, no round within the dwell and
  * room under the cap, and a move prefers the cool ones where any is.
  */
 function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, source: RecordCandidate | undefined, pin: RecordPin): Move {
@@ -375,7 +375,7 @@ function moveOf(spec: Spec, candidates: RecordCandidate[], pool: PoolSeed, sourc
   const siblings = candidates.filter((c) => c.obstacle === null && c.accountId !== source?.accountId);
   const lines: WalkStep[] = [];
   const no = (i: number, facts: WalkFact[]) => lines.push(step(`move:${RULES[i]}`, 'no', facts));
-  // The rule fires where any sibling it keeps holds allowance; otherwise its line says it found none.
+  // The rule fires where any sibling it keeps holds allowance. Otherwise its line says it found none.
   const tryRule = (i: number, facts: WalkFact[], keep: (c: RecordCandidate) => boolean): Move | null => {
     const reached = siblings.filter((c) => keep(c) && holdsAllowance(c));
     if (reached.length === 0) {
@@ -516,7 +516,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     walk.push(step('pin', 'none', [fact('found', 'none')]));
   } else {
     const on = spec.from ?? spec.accountId ?? '';
-    // A drawn trace names where the pin lived; a pin the day's rows last left past its window was used by a request
+    // A drawn trace names where the pin lived. A pin the day's rows last left past its window was used by a request
     // the day does not hold, so the trace's own idle age stands.
     const recent = held !== undefined && held.accountId === on && spec.at - held.lastUsedAt <= pool.affinityTtlSeconds * 1_000;
     const found = recent ? held : { accountId: on, createdAt: held?.createdAt ?? spec.at - 40 * MINUTE, epoch: held?.epoch ?? (epochs += 1), lastRefreshAt: spec.at - spec.pin.idleMs, lastUsedAt: spec.at - spec.pin.idleMs };
@@ -571,7 +571,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
     }
   }
   // A renewal stamps the refresh on a turn that refreshes the pin, and the hashes on any turn that touches it and
-  // carries a chain; a probe and a token count leave both.
+  // carries a chain. A probe and a token count leave both.
   const warmth = typeof spec.pin === 'object' ? spec.pin.warmth : null;
   const stamps = { hashes: warmth !== 'untouched' && r.kind === 'inference', refresh: warmth === 'refresh' };
   if (spec.kind === 'renewed') {
@@ -632,7 +632,7 @@ function build(spec: Spec): { record: DecisionRecord; summary: DecisionSummary }
   const tier = dispatched && !spec.rung && spec.kind !== 'renewed' ? (chosen?.tier ?? null) : null;
   const pinEvents = pinEventsOf(spec, pinning);
   let pinWritten: RecordOutcome['pinWritten'] = null;
-  // Every renewal writes the pin back; a token count creates and moves none, so the session keeps the one it had.
+  // Every renewal writes the pin back. A token count creates and moves none, so the session keeps the one it had.
   if (dispatched && pinning && (r.kind !== 'count_tokens' || spec.kind === 'renewed')) {
     const action = spec.kind === 'renewed' ? 'renewed' : pin?.found === 'live' || spec.failover ? 'moved' : 'created';
     const prior = pins.get(pinKey);
@@ -828,7 +828,7 @@ function derivedSpecs(r: RequestLog): Spec[] {
   const pinning = (pool?.affinityTtlSeconds ?? 0) > 0 && r.sessionId !== null;
   const noPin: Spec['pin'] = pinning ? 'none' : 'pinning_off';
   const at = Date.parse(r.at);
-  // A hold on the cohort's account waits on that account at its cap; one on the strategy's pick, and a request the
+  // A hold on the cohort's account waits on that account at its cap. One on the strategy's pick, and a request the
   // bound ran out on, waited with every member at its cap.
   const atCap = (accountId: string | null) => (accountId === null || pool === undefined ? {} : { [accountId]: pool.inFlightCap });
   const allAtCap = () => Object.fromEntries((pool?.members ?? []).map((m) => [m.accountId, pool?.inFlightCap ?? 0]));
@@ -924,7 +924,7 @@ function storySpecs(): Spec[] {
   const placedStatic: Placement = { depth: 2, prefixTokens: 31_200, rung: 'static' };
   const round: ShedRound = { marks: ROUND_PINS.filter((p) => p.marked).map((p) => ({ agentId: p.agentId, keyId: 'desktop', model: p.model, sessionId: p.sessionId })), pins: ROUND_PINS };
   return [
-    // Two of the round's sessions placed on secondary just before it; every pin a beat renews or moves is a request's.
+    // Two of the round's sessions placed on secondary just before it. Every pin a beat renews or moves is a request's.
     at('req_e5a1c093-4d7', 1, 1, t(10, 58, 59), 'placed', 'secondary'),
     at('req_f3b6d218-85a', 1, 1, t(10, 59, 10), 'placed', 'secondary'),
     at('req_0b7c2d94-e61', 1, 1, t(10, 59, 30), 'renewed', 'secondary', { pin: live('probe', 31_000, 'untouched') }),
@@ -963,12 +963,12 @@ function storySpecs(): Spec[] {
     // The keepalive's probe walks the move rules like any request on its pin, so the spent rule moves it too.
     at('req_c41d0311-200', 1, 1, t(14, 6, 30), 'moved', 'primary', { from: 'secondary', pin: live('probe', 290_000, 'untouched'), rule: 'spent' }),
     // A token count follows its pin without walking the rules, to the spent secondary, whose 429 cools it until the
-    // window resets; the count fails over to primary and writes no pin there.
+    // window resets. The count fails over to primary and writes no pin there.
     at('req_3b8e51f4-0a9', 1, 1, t(14, 9, 30), 'renewed', 'secondary', { pin: live('count', 480_000, 'untouched') }),
     at('req_3b8e51f4-0a9', 2, 2, t(14, 9, 31), 'placed', 'primary', { attempted: ['secondary'], failover: 'cooldown', from: 'secondary', pin: live('count', 1_000, 'untouched') }),
     at('req_ef099b34-453', 1, 1, t(14, 9, 41), 'placed', 'primary'),
-    // The member placed by its static prefix holds a deeper entry the rung refused as expired beside the one it took;
-    // a sibling's entry reads the gate that refused it.
+    // The member placed by its static prefix holds a deeper entry the rung refused as expired beside the one it took.
+    // A sibling's entry reads the gate that refused it.
     at('req_b2bed817-a58', 1, 1, t(14, 11, 44), 'placed', 'primary', {
       prefix: {
         nightly: { static: mainStatic(t(14, 11, 44), t(13, 30), 'band'), staticMatch: null },
@@ -977,12 +977,12 @@ function storySpecs(): Spec[] {
       rung: placedStatic,
     }),
     at('req_6c3a9e27-5b1', 1, 1, t(14, 18, 5), 'refused', null, { pin: 'not_looked_up', refusal: { kind: 'key', reason: 'the key was revoked' } }),
-    at('req_e0a4c6f2-118', 1, 1, t(14, 14, 2), 'refused', null, { pin: 'not_looked_up', refusal: { kind: 'client', reason: 'hash; client 2.1.271' } }),
+    at('req_e0a4c6f2-118', 1, 1, t(14, 14, 2), 'refused', null, { pin: 'not_looked_up', refusal: { kind: 'client', reason: 'hash' } }),
     at('req_51d0e2b8-7a0', 1, 1, t(14, 16, 40), 'exhausted', null, { exhaustion: { deadline: iso(startOfDay(t(14, 16, 40)) + DAY), kind: 'timed', obstacle: null, reason: null, window: 'overage' }, pin: 'pinning_off' }),
     // The compacted conversation renews its pin cold.
     at('req_31f0b7c2-6e1', 1, 1, t(14, 17, 52), 'renewed', 'primary', { pin: live('compacted', 491_000, 'cold') }),
     at('req_9a07c4e1-d55', 1, 1, t(14, 19, 2), 'renewed', 'primary', { pin: live('continues_pin', 438_000) }),
-    // A subagent request that carries no cache marker of its own pins nothing; its cohort's static entry places it.
+    // A subagent request that carries no cache marker of its own pins nothing. Its cohort's static entry places it.
     at('req_69e30548-32e', 1, 1, t(14, 21, 12), 'held', 'primary', { hold: { cohort: 'primary', place: 'cohort' }, inFlight: { nightly: 16, primary: 16 }, pin: 'pinning_off', prefix: { primary: { static: cohort(t(14, 21, 12), 'at_cap'), staticMatch: null } } }),
     at('req_69e30548-32e', 2, 1, t(14, 21, 14), 'placed', 'primary', {
       heldBefore: { cohort: 'primary', heldMs: 2_000, waitedOn: ['primary'] },
@@ -1126,6 +1126,8 @@ function buildEvents(): RoutingEvent[] {
     if (epoch !== undefined && epoch !== null) seed.detail.epoch = epoch;
   }
   const primary = accountOf.get('primary')!;
+  const primaryAccess = primary.credential.accessTokenExpiresAt === null ? null : Date.parse(primary.credential.accessTokenExpiresAt);
+  const primaryRefresh = primary.credential.refreshTokenExpiresAt === null ? null : Date.parse(primary.credential.refreshTokenExpiresAt);
   const fiveHourReset = Date.parse(primary.windows.find((w) => w.id === '5h')?.resetsAt ?? '') - 5 * HOUR;
   const oldestCooldown = COOLDOWNS.filter((c) => c.scope === 'account' && c.until < STORY_HOUR_FROM && c.until > NOW - DAY).sort((a, b) => a.until - b.until)[0];
   const gap = REQUESTS.filter((r) => r.responseTruncated && Date.parse(r.at) < STORY_HOUR_FROM)[0];
@@ -1142,9 +1144,11 @@ function buildEvents(): RoutingEvent[] {
     ...expiries(),
     { accountId: 'secondary', at: iso(t(13, 48, 20)), detail: { attempts: 1, endpoint: 'usage', last_clean_poll_at: t(13, 43), next_attempt_at: t(13, 53), reason: '429' }, kind: 'poll_backoff_started' },
     // Earlier the same day.
-    { accountId: 'primary', at: iso(t(12, 52, 10)), detail: {}, kind: 'refresh_succeeded' },
-    { accountId: 'nightly', at: iso(t(12, 19, 40)), detail: {}, kind: 'refresh_failed' },
-    { accountId: 'nightly', at: iso(t(12, 20)), detail: {}, kind: 'refresh_uncertain' },
+    // The refresh rows in the router's shape: primary's commit names its credential's expiry, and nightly's two
+    // failures name their class beside the text the manager stored.
+    { accountId: 'primary', at: iso(t(12, 52, 10)), detail: { access_expires_at: primaryAccess, refresh_expires_at: primaryRefresh, until: primaryAccess }, kind: 'refresh_succeeded' },
+    { accountId: 'nightly', at: iso(t(12, 19, 40)), detail: { cause: 'transport', error: 'transport: connection refused (os error 111)' }, kind: 'refresh_failed' },
+    { accountId: 'nightly', at: iso(t(12, 20)), detail: { cause: 'refresh_response_lost', error: 'refresh response lost: connection reset by peer' }, kind: 'refresh_uncertain' },
     { accountId: 'research', at: iso(t(12, 41, 7)), detail: { budget_usd: 20, period: 'day', period_end: startOfDay(t(12, 41, 7)) + DAY, source_request_id: BUDGET_CROSSING_ID, spent_usd: 20.4 }, kind: 'budget_reached', poolId: 'codex', requestId: BUDGET_CROSSING_ID },
     { accountId: 'primary', at: iso(fiveHourReset), detail: { next_reset: fiveHourReset + 5 * HOUR, observed: 'sample', reset_at: fiveHourReset, utilization_before: beforeReset, window: 'five_hour' }, kind: 'window_reset' },
     { accountId: 'overflow', at: iso(t(11, 30, 12)), detail: { cause: 'funding_refused', detail: 'Your credit balance is too low to access the Anthropic API.', from: 'ready', to: 'funding_required' }, kind: 'account_state_changed' },
@@ -1235,10 +1239,10 @@ const order = (a: RoutingLogPage['rows'][number], b: RoutingLogPage['rows'][numb
 };
 
 /**
- * The merged page by the route's rules: the range from an hour back by default; the default kinds every decision but
- * a probe's and every event but a warm prefix's expiry, `kinds` naming exactly what it lists with `probe` for a
- * probe's decision of any kind; `accounts` matching a decision's source too; `limit + 1` rows read so a cursor is
- * offered only when a next page exists; and the counts under a request filter.
+ * The merged page by the route's rules. The range runs from an hour back by default. The default kinds are every
+ * decision but a probe's and every event but a warm prefix's expiry, and `kinds` names exactly what it lists, `probe`
+ * for a probe's decision of any kind. `accounts` matches a decision's source too. `limit + 1` rows are read so a cursor
+ * is offered only when a next page exists, and the counts come under a request filter.
  */
 export function listRoutingLog(query: RoutingLogQuery, now: number): RoutingLogPage {
   const from = query.from ? Date.parse(query.from) : now - HOUR;

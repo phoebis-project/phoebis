@@ -24,10 +24,10 @@ use phoebis_bus::{
 };
 use phoebis_oauth::{AccessToken, AcquireError, Clock, CredentialManager};
 use phoebis_routing::{
-    cohort_hold, resolve, AccountTicket, ClientClass, CohortHold, EvidenceSource, Exhaustion,
-    HoldFacts, KeyPermit, KeyRefusal, OverageEvidence, PinRef, Presented, Refusal,
-    RefusalFacts, RefusedRequest, Report, ResolveError, RouterHandle, SelectRequest, SelectResult,
-    Selection, SelectionTrace, BUDGET_WINDOW,
+    cohort_hold, resolve, AccountTicket, ChainFacts, ClientClass, CohortHold, EvidenceSource,
+    Exhaustion, HoldFacts, KeyPermit, KeyRefusal, LaneFacts, OverageEvidence, PinRef,
+    Presented, Refusal, RefusalFacts, RefusedRequest, Report, RequestFlags, ResolveError,
+    RouterHandle, SelectRequest, SelectResult, Selection, SelectionTrace, BUDGET_WINDOW,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow, MemoryStore,
@@ -1932,8 +1932,8 @@ impl Relay {
     }
 
     /// One account's leg of the request. `attempt` is the wire-submission index every bus event and attempt row
-    /// carries; `seq` is the selecting decision's, which every pass of the leg reports its cache map under.
-    /// `key_permit` is the request's own, which a committed stream takes into its body; `selected` is the ticket the
+    /// carries. `seq` is the selecting decision's, which every pass of the leg reports its cache map under.
+    /// `key_permit` is the request's own, which a committed stream takes into its body. `selected` is the ticket the
     /// selection charged for the leg's first pass.
     ///
     /// An OAuth 401 runs the refresh ladder on this account: a refresh, and after one that failed without a
@@ -3385,14 +3385,19 @@ impl Relay {
                 key_id: key.id.clone(),
                 key_generation: key.created_at,
                 agent_id: identity.agent_id.clone(),
+                parent_agent_id: None,
                 session_id: identity.session_id.clone(),
+                request_class: None,
                 canonical_model: identity.canonical_model.clone(),
+                lane: LaneFacts::default(),
+                flags: RequestFlags::default(),
+                chain: ChainFacts::default(),
                 client: identity.class,
                 client_version: client_version.map(str::to_string),
             },
             RefusalFacts {
                 kind: "client",
-                reason: format!("{kind}; client {}", client_version.unwrap_or("unknown")),
+                reason: kind.to_string(),
             },
         );
         LocalRefusal {
@@ -3963,7 +3968,7 @@ struct Responding<'a> {
     replayed: bool,
     request_id: &'a str,
     retry_in_place: Duration,
-    /// The decision that selected this leg's account, its `seq` among the request's selections; every pass of the
+    /// The decision that selected this leg's account, its `seq` among the request's selections. Every pass of the
     /// leg answers under it.
     seq: u32,
     /// This pass's account ticket, which a committed stream takes into its body.

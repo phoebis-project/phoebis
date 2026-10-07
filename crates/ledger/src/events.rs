@@ -376,7 +376,7 @@ pub fn poll_backoff(edge: &BackoffEdge) -> Record {
     })
 }
 
-/// `catalog_changed` on the account whose listing moved; the ids travel in the detail, since one row names many
+/// `catalog_changed` on the account whose listing moved. The ids travel in the detail, since one row names many
 /// models.
 pub fn catalog_changed(change: &CatalogChange) -> Record {
     Record::Event(EventRecord {
@@ -452,14 +452,34 @@ fn record_deletion(ledger: &Ledger, account_id: &str, from: AccountState, at: i6
 }
 
 /// A refresh row's detail as fields: the committed token's expiry, or the failure's class beside its text as the
-/// store holds it. The expiry is read off the account's credential at the tick, so two commits inside one tick both
-/// name the newer bundle's.
-fn refresh_detail(store: &Store, attempt: &ResolvedAttempt) -> serde_json::Value {
-    if attempt.outcome == "committed" {
-        let credential = store
-            .credential_metadata(&attempt.account_id)
-            .ok()
-            .flatten();
+/// store holds it. The expiry is read off the account's credential at the tick, which names it only while the stored
+/// bundle is the one the commit wrote: a later commit, a re-pair or a disconnect in between leaves the expiry null
+/// rather than another bundle's. A failed read is logged at the first of a run of them, `read_failing` holding the run.
+fn refresh_detail(
+    store: &Store,
+    attempt: &ResolvedAttempt,
+    read_failing: &mut bool,
+) -> serde_json::Value {
+    if let Some(generation) = attempt.committed_generation() {
+        let credential = match store.credential_metadata(&attempt.account_id) {
+            Ok(credential) => {
+                *read_failing = false;
+                credential
+            }
+            Err(error) => {
+                if !std::mem::replace(read_failing, true) {
+                    tracing::warn!(
+                        account = %attempt.account_id,
+                        %error,
+                        "a refresh row names no expiry: the credential could not be read"
+                    );
+                }
+                None
+            }
+        }
+        .filter(|c| {
+            c.generation == generation && c.lifecycle_generation == attempt.lifecycle_generation
+        });
         let access = credential.as_ref().map(|c| c.expires_at);
         return json!({
             "until": access,
@@ -468,30 +488,9 @@ fn refresh_detail(store: &Store, attempt: &ResolvedAttempt) -> serde_json::Value
         });
     }
     json!({
-        "cause": attempt.detail.as_deref().map(refresh_cause),
+        "cause": attempt.detail.as_deref().map(phoebis_oauth::refresh_cause),
         "error": attempt.detail,
     })
-}
-
-/// The class of a refresh failure in the text the oauth manager stores: the words before the colon of a failure that
-/// carries the error after one (`transport`), else the token endpoint's error code where its answer named one, else
-/// the status it answered, else the text's own words.
-fn refresh_cause(text: &str) -> String {
-    let words = |text: &str| text.split_whitespace().collect::<Vec<_>>().join("_");
-    if let Some((lead, _)) = text.split_once(':') {
-        return words(lead);
-    }
-    let answered = text.split_once("status ").and_then(|(_, rest)| {
-        let status = rest
-            .split_whitespace()
-            .next()
-            .filter(|word| word.len() == 3 && word.bytes().all(|b| b.is_ascii_digit()))?;
-        let code = rest
-            .strip_suffix(')')
-            .and_then(|rest| rest.rsplit_once('('));
-        Some(code.map_or(status, |(_, code)| code))
-    });
-    answered.map_or_else(|| words(text), str::to_string)
 }
 
 fn record_reauth(ledger: &Ledger, account_id: &str, at: i64) {
@@ -578,6 +577,7 @@ pub fn spawn_event_mirror(
         }
     };
     tokio::spawn(async move {
+        let mut credential_read_failing = false;
         let mut tick = tokio::time::interval(poll);
         tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
         loop {
@@ -659,7 +659,7 @@ pub fn spawn_event_mirror(
                                 "uncertain" => "refresh_uncertain",
                                 _ => "refresh_failed",
                             };
-                            let detail = refresh_detail(&store, &attempt).to_string();
+                            let detail = refresh_detail(&store, &attempt, &mut credential_read_failing).to_string();
                             ledger.record(Record::Event(EventRecord {
                                 at: attempt.resolved_at,
                                 kind: kind.into(),
@@ -723,23 +723,6 @@ pub fn spawn_event_mirror(
 mod tests {
     use super::*;
     use phoebis_routing::RouterEvent;
-
-    #[test]
-    fn a_refresh_failure_s_class_is_the_endpoint_s_code_its_status_or_the_words_before_a_colon() {
-        for (text, class) in [
-            (
-                "refresh rejected with status 400 (invalid_grant)",
-                "invalid_grant",
-            ),
-            ("refresh rejected with status 503", "503"),
-            ("transport: connection refused (os error 111)", "transport"),
-            ("refresh response lost: timed out", "refresh_response_lost"),
-            ("identity mismatch", "identity_mismatch"),
-            ("quarantined at start", "quarantined_at_start"),
-        ] {
-            assert_eq!(refresh_cause(text), class, "{text}");
-        }
-    }
 
     #[test]
     fn router_events_map_to_rows_with_the_ids_in_their_columns_and_the_rest_in_detail() {
@@ -1241,15 +1224,20 @@ mod tests {
                 key_id: "k".into(),
                 key_generation: 0,
                 agent_id: "main".into(),
+                parent_agent_id: None,
                 session_id: None,
+                request_class: None,
                 canonical_model: "m".into(),
+                lane: Default::default(),
+                flags: Default::default(),
+                chain: Default::default(),
                 client: ClientClass::ClaudeCode,
                 client_version: None,
             },
             &snapshot,
             &RefusalFacts {
                 kind: "client",
-                reason: "hash; client unknown".into(),
+                reason: "hash".into(),
             },
         );
         assert_eq!(

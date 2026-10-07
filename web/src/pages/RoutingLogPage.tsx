@@ -11,7 +11,7 @@ import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, T
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
 import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
-import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, type LogLink, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, formatFact, logHref } from '@/lib/routingLog';
+import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, type LogFilters, type LogLink, ROUTING_LOG_CODEC, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, formatFact, logHref } from '@/lib/routingLog';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -36,65 +36,9 @@ const KIND_OPTIONS: Option[] = [
   ...EVENT_KINDS.map((k) => ({ group: 'Events', label: upperFirst(EVENT_KIND_LABEL[k]), value: k })).sort((a, b) => a.label.localeCompare(b.label)),
   { group: 'Events', label: 'Warm prefix expired (hidden by default)', value: HIDDEN_EVENT },
 ];
-const KNOWN_KINDS = new Set(KIND_OPTIONS.map((o) => o.value));
 const kindWords = (kind: string) => (kind === 'probe' ? 'probe decisions' : (DECISION_KIND_LABEL[kind as DecisionKind] ?? EVENT_KIND_LABEL[kind] ?? kind));
 
-/** The view's filters as the URL holds them; `from` and `to` are ISO instants, empty for the last hour. */
-interface Filters {
-  accounts: string[];
-  from: string;
-  keys: string[];
-  kinds: string[];
-  models: string[];
-  pools: string[];
-  request: string;
-  session: string;
-  to: string;
-}
-
-const DEFAULTS: Filters = { accounts: [], from: '', keys: [], kinds: [], models: [], pools: [], request: '', session: '', to: '' };
-
-/** An instant as the route reads one, else empty: a bare integer is Unix milliseconds. */
-const instantOf = (value: string | null) => {
-  if (!value) return '';
-  const ms = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
-  return Number.isNaN(ms) ? '' : new Date(ms).toISOString();
-};
-
-/** Absent keys read as the defaults, and a kind the route would refuse is dropped. */
-const CODEC = {
-  fromParams(params: URLSearchParams): Filters {
-    const list = (name: string) => (params.get(name) ?? '').split(',').filter(Boolean);
-    return {
-      accounts: list('accounts'),
-      from: instantOf(params.get('from')),
-      keys: list('keys'),
-      kinds: list('kinds').filter((k) => KNOWN_KINDS.has(k)),
-      models: list('models'),
-      pools: list('pools'),
-      request: params.get('request') ?? '',
-      session: params.get('session') ?? '',
-      to: instantOf(params.get('to')),
-    };
-  },
-  /** A filter at its default is left out, so the unfiltered view has a bare address. */
-  toParams(f: Filters): URLSearchParams {
-    const params = new URLSearchParams();
-    const put = (name: string, value: string) => {
-      if (value) params.set(name, value);
-    };
-    put('accounts', f.accounts.join(','));
-    put('keys', f.keys.join(','));
-    put('kinds', f.kinds.join(','));
-    put('models', f.models.join(','));
-    put('pools', f.pools.join(','));
-    put('request', f.request);
-    put('session', f.session);
-    put('from', f.from);
-    put('to', f.to);
-    return params;
-  },
-};
+const DEFAULTS: LogFilters = { accounts: [], from: '', keys: [], kinds: [], models: [], pools: [], request: '', session: '', to: '' };
 
 const iso = (ms: number) => new Date(ms).toISOString();
 const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((x) => b.includes(x));
@@ -126,7 +70,7 @@ const EntityLink = ({ children, id, kind, mono = false }: { children?: ReactNode
 );
 
 export function RoutingLogPage() {
-  const { address, filters, replace, update } = useQueryFilters(CODEC);
+  const { address, filters, replace, update } = useQueryFilters(ROUTING_LOG_CODEC);
   const navigate = useNavigate();
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
@@ -152,7 +96,7 @@ export function RoutingLogPage() {
       return { for: pageKey, ids };
     });
   const widen = (link: LogLink) => navigate(logHref(link));
-  // The last hour ends where the list was loaded, so a cursor page is read against the window its cursor came from;
+  // The last hour ends where the list was loaded, so a cursor page is read against the window its cursor came from.
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
   const [customOpen, setCustomOpen] = useState(false);
@@ -191,6 +135,8 @@ export function RoutingLogPage() {
     // An answer that lands once the poll has stopped would tint rows no later poll clears.
     const armed = { alive: true };
     const failures = streak.current;
+    // Each Follow run toasts its own streak once, so a run armed while the route still fails says so again.
+    failures.failing = false;
     const id = clock.setInterval(() => {
       const { address: polled, query: q } = latest.current;
       const read = () => api.listRoutingLog({ ...q, cursor: undefined, to: iso(clock.now()) });
@@ -241,7 +187,7 @@ export function RoutingLogPage() {
     setPaging({ for: address, stack: [] });
     setFollowed(null);
     setLoadedAt(now);
-    // A preset range keeps its span and ends now; a custom one is read again as it stands.
+    // A preset range keeps its span and ends now. A custom one is read again as it stands.
     const span = RANGES.find((r) => r.value === rangeValue && r.value !== '1h');
     if (span) update({ from: iso(now - span.ms), to: iso(now) });
     log.reload();
@@ -472,7 +418,7 @@ function RequestScope({ counts, now, onClear, requestId, rows }: { counts: { dec
 }
 
 /** The line any other narrowing opens: what the rows are narrowed to, the range, and the page's count. */
-function Narrowing({ filters, more, now, onClear, range, rows }: { filters: Filters; more: boolean; now: number; onClear: () => void; range: { from: number; to: number }; rows: number }) {
+function Narrowing({ filters, more, now, onClear, range, rows }: { filters: LogFilters; more: boolean; now: number; onClear: () => void; range: { from: number; to: number }; rows: number }) {
   const parts: ReactNode[] = [];
   const entities = (kind: FactEntity['kind'], ids: string[]) => {
     if (ids.length === 0) return;

@@ -1,13 +1,13 @@
 use phoebis_routing::{
     cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, warm,
     warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow, BudgetFacts, BurnRates,
-    BurnUnit, CandidateFacts, ClientClass, CohortHold, CreditsState, Decided, DecisionRecord,
-    EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome,
-    MemberSpend, MigrateReason, OverageEvidence, PinKeyFacts, PinRef, Placement,
-    RateTable, Rates, RefusalFacts, RefusedRequest, RegistrySnapshot, RoutingState, SelectRequest,
-    SelectResult, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
-    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON,
-    SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
+    BurnUnit, CandidateFacts, ChainFacts, ClientClass, CohortHold, CreditsState, Decided,
+    DecisionRecord, EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome,
+    LaneFacts, MemberSpend, MigrateReason, OverageEvidence, PinKeyFacts,
+    PinRef, Placement, RateTable, Rates, RefusalFacts, RefusedRequest, RegistrySnapshot,
+    RequestFlags, RoutingState, SelectRequest, SelectResult, StateWrite, UtilizationSample,
+    WalkStep, Warmth, WarmthCause, WindowReading, WindowSource, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -8627,7 +8627,7 @@ fn warmth_of_names_the_branch_that_decided_each_verdict() {
         &mut rng(),
     );
     let pin = pinned(&st, "s1");
-    // The builder's request carries no chain; every case below varies it by one fact.
+    // The builder's request carries no chain. Every case below varies it by one fact.
     let plain = || request(&s, Some("s1"), model, true, &[], T + 2_000);
     let chain = |static_hash: Option<&str>, boundaries: &[&str]| {
         with_facts(plain(), None, false, static_hash, boundaries)
@@ -11124,7 +11124,7 @@ fn from_load_restores_the_account_s_newest_round_from_the_loaded_rows() {
 #[test]
 fn a_pin_placed_after_a_load_takes_an_epoch_above_every_loaded_round_s() {
     let s = snapshot(Pool::default());
-    // The pin the round marked under epoch 7 was deleted before the restart; s1, under epoch 6, is the only pin left,
+    // The pin the round marked under epoch 7 was deleted before the restart. The only pin left is s1, under epoch 6,
     // so a seed read off the pins alone would hand out 7 again.
     let mut st = RoutingState::from_load(RoutingLoad {
         pins: vec![PinRow {
@@ -11887,6 +11887,37 @@ fn a_spent_move_records_the_cool_reading_and_the_cap_filter() {
 }
 
 #[test]
+fn a_cool_reading_names_an_api_key_member_s_band_as_a_full_bucket() {
+    let s = snapshot(cool_preference_pool(vec![("c", AccountKind::ApiKey)]));
+    let mut st = RoutingState::from_load(RoutingLoad::default());
+    select(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T),
+        &mut rng(),
+    );
+    st.record_sample("a", refreshing(1.0, T + 9 * HOUR, T + 9 * HOUR, T + 500));
+    hot_b_cool_c(&mut st, T + 500);
+    let d = decide(
+        &mut st,
+        &s,
+        &request(&s, Some("s1"), "claude-sonnet-5", true, &[], T + 1_000),
+        &mut rng(),
+    );
+    let cool = line(&d.record, "cool");
+    assert!(
+        (number(fact_of(cool, "band", "b")) - 0.75).abs() < 1e-9,
+        "a subscription member's band sits a step under the shed threshold"
+    );
+    assert_eq!(
+        fact_of(cool, "band", "c"),
+        &FactValue::Number(1.0),
+        "an api_key member holds room until its worst live bucket is full"
+    );
+    assert_eq!(fact_of(cool, "cool", "c"), &FactValue::Bool(true));
+}
+
+#[test]
 fn a_shed_move_records_the_round_and_its_marks() {
     let s = snapshot(pace_pool());
     let mut st = two_pins_on_a();
@@ -11959,7 +11990,7 @@ fn a_shed_round_answers_its_hot_window_and_its_pins_in_the_round_s_order() {
         "the round names the pin it ran on and that pin's account"
     );
     let round = ran.facts;
-    // The 5-hour lead of 0.1 stays under the threshold; the week's 0.4 is the first to reach it.
+    // The 5-hour lead of 0.1 stays under the threshold. The week's 0.4 is the first to reach it.
     assert_eq!(
         (round.window.as_str(), round.unit),
         ("seven_day", "window_share")
@@ -12327,6 +12358,121 @@ fn a_refusal_names_its_pin_not_looked_up() {
             (true, Some("not_looked_up")),
             "the refusal precedes the pin lookup, whatever session {:?} names",
             refused.session_id
+        );
+    }
+}
+
+#[test]
+fn a_refused_probe_reads_as_a_probe_and_keeps_what_its_request_carried() {
+    let s = snapshot(Pool::default());
+    let req = SelectRequest {
+        probe: true,
+        request_class: Some("subagent".into()),
+        context_compacted: true,
+        marker: true,
+        parent_agent_id: Some("main".into()),
+        static_hash: Some("s2".into()),
+        static_boundaries: Arc::from(["s1".to_string(), "s2".to_string()]),
+        boundaries: Arc::from(["b1".to_string(), "b2".to_string(), "b3".to_string()]),
+        lane: lane_key("claude-sonnet-5", "standard", "adaptive", "high"),
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
+    };
+    let (record, summary) = DecisionRecord::refused(
+        &RefusedRequest::from(&req),
+        &s,
+        &RefusalFacts {
+            kind: "key",
+            reason: "the key was revoked".into(),
+        },
+    );
+    assert_eq!(
+        (record.request.flags.probe, summary.probe),
+        (true, true),
+        "a refused probe stays out of the default kinds, as every probe's decision does"
+    );
+    assert_eq!(
+        (
+            record.request.parent_agent_id.as_deref(),
+            record.request.request_class.as_deref(),
+            &record.request.lane,
+            &record.request.flags,
+            &record.request.chain,
+        ),
+        (
+            Some("main"),
+            Some("subagent"),
+            &LaneFacts {
+                speed: "standard".into(),
+                thinking: "adaptive".into(),
+                effort: "high".into(),
+            },
+            &RequestFlags {
+                fast: false,
+                count: false,
+                probe: true,
+                portable: true,
+                marker: true,
+                context_compacted: true,
+            },
+            &ChainFacts {
+                static_boundaries: 2,
+                boundaries: 3,
+                static_hash: true,
+            },
+        ),
+        "the task refuses with the whole request in hand"
+    );
+}
+
+#[test]
+fn the_warmth_cause_and_the_window_source_serialize_as_the_words_they_spell() {
+    for cause in [
+        WarmthCause::Probe,
+        WarmthCause::Count,
+        WarmthCause::Compacted,
+        WarmthCause::LaneChanged,
+        WarmthCause::ClassRefreshes,
+        WarmthCause::ClassAuxiliary,
+        WarmthCause::Chainless,
+        WarmthCause::ContinuesPin,
+        WarmthCause::StaticRestart,
+        WarmthCause::Foreign,
+    ] {
+        // Exhaustive, so a variant added later fails to compile here until the list above names it.
+        match cause {
+            WarmthCause::Probe
+            | WarmthCause::Count
+            | WarmthCause::Compacted
+            | WarmthCause::LaneChanged
+            | WarmthCause::ClassRefreshes
+            | WarmthCause::ClassAuxiliary
+            | WarmthCause::Chainless
+            | WarmthCause::ContinuesPin
+            | WarmthCause::StaticRestart
+            | WarmthCause::Foreign => {}
+        }
+        assert_eq!(
+            serde_json::to_value(cause).unwrap(),
+            cause.as_str(),
+            "{cause:?}"
+        );
+    }
+    for source in [
+        WindowSource::Head,
+        WindowSource::Poll,
+        WindowSource::Predicted,
+        WindowSource::Stored,
+    ] {
+        match source {
+            WindowSource::Head
+            | WindowSource::Poll
+            | WindowSource::Predicted
+            | WindowSource::Stored => {}
+        }
+        assert_eq!(
+            serde_json::to_value(source).unwrap(),
+            source.as_str(),
+            "{source:?}"
         );
     }
 }
@@ -12770,6 +12916,61 @@ fn a_session_pin_placement_and_a_cohort_hold_name_no_strategy_score() {
         ),
         (None, None, None),
         "a hold on the cohort's account carries none of the strategy pick's standing"
+    );
+}
+
+#[test]
+fn a_cohort_hold_on_the_pick_s_own_account_reads_the_pick_s_tier_beside_its_score() {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        agent_id: "worker".into(),
+        ..seeded_pin("s1", "b", T)
+    }]);
+    // Pace alone picks b, the account with the more of its week left, and the cohort sits there too.
+    st.record_sample("a", sample(0.1, 0.6, T - 500));
+    st.record_sample("b", sample(0.1, 0.1, T - 500));
+    seed_affinity(
+        &st,
+        vec![AffinityRow {
+            written_at: T - 1_000,
+            ..static_row(&s, "s1", "b", 900)
+        }],
+    );
+    let _a = st.in_flight().dispatched("a", T - 1_000);
+    let _b = st.in_flight().dispatched("b", T - 1_000);
+    let cohort = subagent(
+        placement_req(
+            request(&s, Some("s2"), "claude-sonnet-5", true, &[], T),
+            &[],
+            &["s1"],
+            true,
+        ),
+        "worker",
+    );
+    let d = decide(&mut st, &s, &cohort, &mut rng());
+    assert!(matches!(
+        &d.result,
+        SelectResult::Held { account_id, .. } if account_id == "b"
+    ));
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "cohort")
+    );
+    assert_eq!(
+        (
+            d.record.outcome.tier,
+            d.summary.score.as_ref().map(|s| s.account_id.as_str())
+        ),
+        (Some(candidate(&d.record, "b").tier), Some("b")),
+        "the hold waits on the pick's own account, so the row reads the pick's tier as it reads its score"
     );
 }
 

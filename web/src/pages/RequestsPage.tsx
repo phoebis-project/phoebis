@@ -488,7 +488,7 @@ export function RequestsPage() {
 }
 
 function RequestDrawer({ request, requestId, now, onClose }: { now: number; onClose: () => void; request: RequestLog | null; requestId: string }) {
-  // The drawer reads the request on every open, and draws the list's own row first when the page holds it.
+  // The drawer reads the request on every open, and draws the list's own row whenever the page holds it.
   const detail = useAsync(() => api.getRequest(requestId), [requestId]);
   // A load that is pending or has failed leaves the answer to the request before it in hand, so only an answer
   // for this id is read.

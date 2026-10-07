@@ -1812,7 +1812,7 @@
   white-space: nowrap;
 }
 
-/* An event's badge is drawn in its outline, so it reads apart from a decision's filled one at a glance; the ring sits
+/* An event's badge is drawn in its outline, so it reads apart from a decision's filled one at a glance. The ring sits
    inside the box, so both badges take one height. */
 .routing-log__outline {
   background: transparent;

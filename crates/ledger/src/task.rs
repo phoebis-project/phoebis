@@ -69,6 +69,9 @@ pub struct LedgerConfig {
     pub event_poll: Duration,
     /// How often the assembler ages out entries whose completion never arrived.
     pub expire_interval: Duration,
+    /// The binary's version for the `router_started` row `spawn` records ahead of everything it starts. `None`
+    /// records none, as a test's ledger does.
+    pub start_version: Option<String>,
 }
 
 impl Default for LedgerConfig {
@@ -79,6 +82,7 @@ impl Default for LedgerConfig {
             purge_interval: Duration::from_secs(3_600),
             event_poll: Duration::from_secs(5),
             expire_interval: EXPIRE_INTERVAL,
+            start_version: None,
         }
     }
 }
@@ -100,11 +104,11 @@ pub struct LedgerStats {
     pub parked_priced: AtomicU64,
     /// Retention passes the purge task finished since start, whatever each one cut.
     pub purge_passes: AtomicU64,
-    /// Cache-map writes whose decision row the ledger never stored (dropped under pressure, or purged); counted
+    /// Cache-map writes whose decision row the ledger never stored (dropped under pressure, or purged), counted
     /// and never retried, since the decision precedes its answer's end by the upstream's whole turn.
     pub cache_map_orphans: AtomicU64,
     /// Router events the mirror's broadcast receiver missed because it lagged, each a decision or an event row
-    /// never written; apart from `dropped`, which counts the ledger's own records.
+    /// never written, counted apart from `dropped`, which counts the ledger's own records.
     pub mirror_lagged: AtomicU64,
 }
 
@@ -295,6 +299,15 @@ pub fn spawn(
         control,
     };
     let purge_store = store.clone();
+    // Into the empty channel before the mirror exists, so the mirror's first tick lands behind it and the gap the
+    // writer dates from its newest row ends at the previous run's last one.
+    if let Some(version) = &config.start_version {
+        ledger.record(Record::RouterStarted {
+            version: version.clone(),
+            counts: router.load_counts(),
+            at: clock(),
+        });
+    }
     let mirror = spawn_event_mirror(
         db.clone(),
         ledger.clone(),
@@ -469,8 +482,8 @@ async fn writer(
     };
     // Ahead of the start's spend read, so a parked priced record that lands now is in the first report.
     let _ = land_parked(&db, &pricing, &stats, &metrics, clock()).await;
-    // The start's budget rows wait for the first batch and follow its records: the router's start row is the first
-    // record it sends, and it dates the gap from the newest row before it, which must be the previous run's.
+    // The start's budget rows wait for the first batch and follow its records: the start row `spawn` recorded is the
+    // channel's first record, and it dates the gap from the newest row before it, which must be the previous run's.
     let mut spend_due = spends.start().await;
     // A batch whose transaction failed: while it is held the loop takes no new record, so order holds and the
     // channel fills behind it, which is what moves admission's mark before more money is spent.
@@ -993,7 +1006,7 @@ struct Budgets {
 impl Budgets {
     /// The budget rows `rows` cross against the rows the last refresh read, which they then replace: a spend at or
     /// above its member's budget where the held row of the same period was under it, or absent, or where this period
-    /// wrote no crossing yet (an edit lowered the budget under the spend), is reached; a row of a later period than
+    /// wrote no crossing yet (an edit lowered the budget under the spend), is reached. A row of a later period than
     /// the held one ends the held period.
     fn edges(
         &mut self,
@@ -1155,7 +1168,7 @@ struct Spends {
 
 impl Spends {
     /// The writer's first read, after taking the crossings the ledger holds since the current month began (every
-    /// period starts in it); a crossing without a row, such as one a budget set while the router was down made, is
+    /// period starts in it). A crossing without a row, such as one a budget set while the router was down made, is
     /// announced.
     async fn start(&mut self) -> Option<i64> {
         let (from, _) = period_bounds(BudgetPeriod::Month, (self.clock)());
@@ -1174,7 +1187,7 @@ impl Spends {
     }
 
     /// Runs `refresh_member_spends` and settles the ledger's standing on it. The writer calls this with nothing held,
-    /// so a read that succeeded and reached the router clears `degraded`; one that did not, while degraded, runs again
+    /// so a read that succeeded and reached the router clears `degraded`. One that did not, while degraded, runs again
     /// one `event_poll` later rather than at the period's end, since every budgeted member waits on it. The budget
     /// rows the read crosses wait in `pending`.
     async fn read(&mut self, current: Option<i64>, priced: &[PricedAttempt]) -> Option<i64> {
@@ -1478,7 +1491,7 @@ async fn land_acknowledging(
                     Record::Decision(row) => {
                         let summary = serde_json::to_string(&row.summary)?;
                         // Compressed here, inside the batch on the blocking thread, so the request path and the
-                        // broadcast carry the typed record and no frame; the default level folds this JSON four
+                        // broadcast carry the typed record and no frame. The default level folds this JSON four
                         // to six times. The one-shot call writes the content size into the frame's header, which
                         // a reader checks against its bound before it decodes.
                         let frame = zstd::bulk::compress(&serde_json::to_vec(&row.record)?, 0)?;
@@ -1779,7 +1792,7 @@ mod tests {
     }
 
     /// The writer's spend refresh over a router whose pool `p` holds the API-key members given with their monthly
-    /// budgets, and a ledger priced at a dollar per token of model `m`, read at `clock`; beside it the registry.
+    /// budgets, and a ledger priced at a dollar per token of model `m`, read at `clock`, with the registry beside it.
     fn spends_over(members: &[(&str, f64)], clock: Arc<AtomicI64>) -> (Spends, Arc<Store>) {
         let store =
             Arc::new(Store::open_in_memory(&phoebis_store::StorageKey::generate()).unwrap());

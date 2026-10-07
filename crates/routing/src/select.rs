@@ -57,7 +57,7 @@ impl ClientClass {
 pub struct SelectRequest {
     /// The request this decision belongs to and the wire attempt it dispatches, numbered from 1 as the bus and the
     /// attempt rows number it (the relay's counter at the selection plus one, since `dispatch_to` increments it
-    /// before publishing); `seq` counts the selections the relay asked for the request from 1, so a hold and the
+    /// before publishing). `seq` counts the selections the relay asked for the request from 1, so a hold and the
     /// placement after it are two decisions of one attempt, and a retry in place is one decision over two attempts.
     pub request_id: String,
     pub attempt: u32,
@@ -724,7 +724,7 @@ pub struct Decided {
     pub writes: Vec<StateWrite>,
     pub record: DecisionRecord,
     pub summary: DecisionSummary,
-    /// The round this decision ran, for the task's `SheddingRound` event; `None` when none ran.
+    /// The round this decision ran, for the task's `SheddingRound` event, or `None` when none ran.
     pub shed_round: Option<ShedRound>,
 }
 
@@ -859,7 +859,7 @@ impl Recorder {
         });
     }
 
-    /// The member's row; `None` for an account outside the pool, as an affinity entry another pool's member wrote.
+    /// The member's row, or `None` for an account outside the pool, as an affinity entry another pool's member wrote.
     fn candidate_mut(&mut self, account_id: &str) -> Option<&mut CandidateFacts> {
         self.candidates
             .iter_mut()
@@ -2148,7 +2148,7 @@ struct HotWindow {
 /// table's 5-hour share rate on its reference tier: the tier's factor divides every pin of the account alike, so
 /// neither the order nor the share of the sum needs it, and a pin on a fast lane is out of the round, since it draws
 /// no window and has nothing to shed there; in dollars it stays. The current pin's warmth and lane are this
-/// request's; every other pin's are the stored ones. Answers the marks with what the round read, `hot` the window
+/// request's. Every other pin's are the stored ones. Answers the marks with what the round read, `hot` the window
 /// that fired it.
 #[allow(clippy::too_many_arguments)]
 fn shed_round(
@@ -2539,7 +2539,7 @@ fn account_ok(
 
 /// What keeps placement off an affinity entry's account, `None` for one it may land on: `expired` (not live),
 /// `incarnation` (another holder of the id wrote it), `not_admitted` (the account admits no fresh placement).
-/// Shared by every rung; rung 4 adds its own blocker on top.
+/// Shared by every rung. Rung 4 adds its own blocker on top.
 fn account_refusal(
     state: &RoutingState,
     snapshot: &RegistrySnapshot,
@@ -2897,7 +2897,7 @@ fn remaining(state: &RoutingState, account_id: &str, window: &str, now: i64) -> 
 }
 
 /// Pace's inputs and score for a candidate at `now`: remaining allowance over the hours to the earlier of the
-/// window's reset and the account's derived end, so an account that runs out sooner is spent first; an api_key
+/// window's reset and the account's derived end, so an account that runs out sooner is spent first. An api_key
 /// account scores by its worst live bucket alone (a bucket refills within a minute, so Pace degrades to least
 /// utilized on it, and the bucket's own reset never enters the score). `choose` ranks by this score and the
 /// record carries the rest, so the two cannot disagree.
@@ -2945,7 +2945,7 @@ fn pace_of(
 /// overage, three api_key. The split holds under any overage_policy, because it orders by cost, not eligibility:
 /// `allow` still demotes an overage oauth account behind a plan-quota one. `overage_policy` governs eligibility
 /// everywhere and orders the tier itself only when the kind order is off, through the overage bit. The kind order
-/// puts the group ahead of the priority; within a group, `prefer_plan` still orders an overage account behind a
+/// puts the group ahead of the priority. Within a group, `prefer_plan` still orders an overage account behind a
 /// plan-quota one, group three (api_key) included. A candidate step 6 kept on extra usage with its model week
 /// spent (`spent_model`) bills as an account in overage does, so every plan-funded sibling goes ahead of it
 /// whatever the priorities: it joins the overage group under the kind order and leads the key otherwise. The third
@@ -3204,7 +3204,7 @@ fn pin_key_text(key: &PinKey) -> String {
     )
 }
 
-/// An obstacle as the exhausted line names it beside its account; the model-window partition's deadline is a
+/// An obstacle as the exhausted line names it beside its account. The model-window partition's deadline is a
 /// spent window rather than a cooldown row, so it reads as such.
 fn weighed_name(account_id: &str, obstacle: &Obstacle) -> String {
     let name = match obstacle {
@@ -3347,7 +3347,7 @@ fn obstacle_facts(obstacle: &Obstacle) -> ObstacleFacts {
 }
 
 /// A member's standing as step 2 reads it, eligible or not: the readings the rules and the pick below weigh. The
-/// tier is the one step 2 can know, with no member kept on extra usage yet; the partition corrects it.
+/// tier is the one step 2 can know, with no member kept on extra usage yet. The partition corrects it.
 #[allow(clippy::too_many_arguments)]
 fn candidate_facts(
     state: &RoutingState,
@@ -3492,11 +3492,6 @@ fn candidate_facts(
 }
 
 fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
-    // `lane_key` spells the lane `<model>|<speed>|<thinking>|<effort>`: the last three parts are the lane's own.
-    let mut lane = request.lane.rsplitn(4, '|').map(String::from);
-    let effort = lane.next().unwrap_or_default();
-    let thinking = lane.next().unwrap_or_default();
-    let speed = lane.next().unwrap_or_default();
     RequestFacts {
         request_id: request.request_id.clone(),
         attempt: request.attempt,
@@ -3510,24 +3505,9 @@ fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
         client_class: request.client.as_str(),
         request_class: request.request_class.clone(),
         canonical_model: request.canonical_model.clone(),
-        lane: LaneFacts {
-            speed,
-            thinking,
-            effort,
-        },
-        flags: RequestFlags {
-            fast: request.fast,
-            count: request.count,
-            probe: request.probe,
-            portable: request.portable,
-            marker: request.marker,
-            context_compacted: request.context_compacted,
-        },
-        chain: ChainFacts {
-            static_boundaries: u32::try_from(request.static_boundaries.len()).unwrap_or(u32::MAX),
-            boundaries: u32::try_from(request.boundaries.len()).unwrap_or(u32::MAX),
-            static_hash: request.static_hash.is_some(),
-        },
+        lane: LaneFacts::of(&request.lane),
+        flags: RequestFlags::of(request),
+        chain: ChainFacts::of(request),
         attempted: request.attempted.clone(),
         holds: request.holds.clone(),
         registry_revision: request.revision,
@@ -3535,7 +3515,7 @@ fn request_facts(request: &SelectRequest, pool_id: String) -> RequestFacts {
 }
 
 /// The record and its summary from the answer and what the steps recorded: the outcome, every member's verdict,
-/// and the row's `by` and `fact`; with the shedding round the decision ran, which the record keeps the marks of.
+/// and the row's `by` and `fact`, with the shedding round the decision ran, which the record keeps the marks of.
 fn finish(
     rec: Recorder,
     request: &SelectRequest,
@@ -3600,10 +3580,11 @@ fn finish(
         SelectResult::Held { account_id, hold } => {
             outcome.kind = "held";
             outcome.account_id = Some(account_id.clone());
-            // The pick's tier is the hold's only when the hold waits on the pick's account.
+            // The pick's tier is the hold's only when the hold waits on the pick's account, whatever placed the
+            // hold there, as `scores` keys the pick's score.
             outcome.tier = pick
                 .as_ref()
-                .filter(|_| hold_place == Some("strategy_pick"))
+                .filter(|pick| &pick.account_id == account_id)
                 .map(|pick| pick.tier);
             outcome.hold = Some(HoldOutcome {
                 account_id: hold.account_id.clone(),
@@ -3759,7 +3740,7 @@ impl Readings<'_> {
                 };
                 (by("rule", outcome.rule.unwrap_or_default()), fact)
             }
-            // The slot the cap's exemption found explains the landing, so it leads; the wait, when there was one,
+            // The slot the cap's exemption found explains the landing, so it leads. The wait, when there was one,
             // says what the landing cost.
             "placed" if self.hold_place == Some("session_pin") => {
                 (by("hold", "session_pin"), self.session_pin_fact())
@@ -3944,7 +3925,7 @@ impl Readings<'_> {
             .unwrap_or_default()
     }
 
-    /// The hold this attempt waited through, if the request's last hold is this attempt's; a failover's later
+    /// The hold this attempt waited through, if the request's last hold is this attempt's. A failover's later
     /// attempt took its own placement and reads `None`. Both arms that name a wait read it here.
     fn attempt_hold(&self) -> Option<&HoldFacts> {
         self.request
@@ -3964,7 +3945,7 @@ impl Readings<'_> {
         fact
     }
 
-    /// The pick's winning Pace score and the best of the rest of its tier; `None` without a Pace pick, and when the
+    /// The pick's winning Pace score and the best of the rest of its tier. `None` without a Pace pick, and when the
     /// row landed elsewhere than the pick (a session's pin, a cohort's account), whose standing the scores are not.
     fn scores(&self) -> (Option<Score>, Option<Score>) {
         let Some(Pick {

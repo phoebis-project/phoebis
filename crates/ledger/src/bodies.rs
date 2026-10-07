@@ -164,7 +164,7 @@ const PURGE_ATTEMPTS: &str = "DELETE FROM attempts WHERE request_id IN (SELECT i
 const PURGE_REQUESTS: &str = "DELETE FROM requests WHERE rowid IN (SELECT rowid FROM requests WHERE received_at < ?1 ORDER BY received_at, rowid LIMIT ?2)";
 
 /// Under the requests' cutoff and after their family, so a decision leaves in the pass that takes its request, which
-/// was received before it was decided; one whose request never landed leaves at the same age by its own stamp.
+/// was received before it was decided. One whose request never landed leaves at the same age by its own stamp.
 const PURGE_DECISIONS: &str = "DELETE FROM decisions WHERE rowid IN (SELECT rowid FROM decisions WHERE at < ?1 ORDER BY at, rowid LIMIT ?2)";
 
 /// One transaction under the purger over at most `PURGE_SLICE` rows of one family, selected by rowid.

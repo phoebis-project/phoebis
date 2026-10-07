@@ -114,7 +114,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
       <section>
         <h4 className="decision-card__title">How the router decided</h4>
         <ol className="decision-card__walk">
-          {walkLines(record).map((l) => (
+          {walkLines(record, row).map((l) => (
             <li key={l.number}>
               <span className="decision-card__n">{l.number}</span>
               <span className="decision-card__step">{l.step}</span>
@@ -213,7 +213,7 @@ function Card({ now, onWiden, record, row }: { now: number; onWiden: (link: LogL
 
       <section>
         <h4 className="decision-card__title">Outcome</h4>
-        <KeyValue className="decision-card__outcome" rows={keyValueRows(outcomeRows(record, now))} />
+        <KeyValue className="decision-card__outcome" rows={keyValueRows(outcomeRows(record, now, row))} />
       </section>
 
       <footer className="decision-card__foot">

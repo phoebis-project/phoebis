@@ -992,7 +992,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     // The GET reads no endpoint of its own, so the capture reads a clean poll's snapshot and standing.
     parts.usage.poll("business").await.unwrap();
     // The affinity report above stands for an earlier request, `r-0`, whose decision the ledger never stored, so its
-    // cache map is the one orphan `system.json` counts; waited for, so every capture reads the same figure.
+    // cache map is the one orphan `system.json` counts. It is waited for, so every capture reads the same figure.
     let stats = parts.ledger.stats();
     fake_upstream::wait_for(std::time::Duration::from_secs(5), || {
         (stats
@@ -1003,7 +1003,7 @@ async fn every_route_is_captured_and_holds_its_shape() {
     })
     .await;
     // The ledger's mirror reads the accounts on its own tick, so the transition the pairing above made lands a tick
-    // later; waited for, so the `written` figure `system.json` holds counts it in every capture.
+    // later. It is waited for, so the `written` figure `system.json` holds counts it in every capture.
     fake_upstream::wait_for(std::time::Duration::from_secs(15), || {
         let transitions = parts
             .db

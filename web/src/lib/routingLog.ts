@@ -46,7 +46,7 @@ const LABELS = {
 } as const satisfies Record<string, FactLabel>;
 type FactKey = keyof typeof LABELS;
 
-/** The fact keys the router and the event rows carry, each to its label; a key without a label is a type error. */
+/** The fact keys the router and the event rows carry, each to its label. A key without a label is a type error. */
 export const FACT_LABEL: Record<string, FactLabel> = LABELS;
 
 export interface FactPair {
@@ -218,7 +218,7 @@ function span(ms: number): string {
 }
 
 /**
- * An instant within a day of `now` reads as its clock time alone (`15:42`, a retry at the next midnight `00:00`); one
+ * An instant within a day of `now` reads as its clock time alone (`15:42`, a retry at the next midnight `00:00`). One
  * further off carries its date (`Sep 18 08:42`).
  */
 export function instant(ms: number, now: number): string {
@@ -229,7 +229,7 @@ export function instant(ms: number, now: number): string {
 
 const msOf = (value: number | string) => (typeof value === 'number' ? value : Date.parse(value));
 
-/** A fact's value drawn by its unit: 1.34 %/h, 15:42, 2 min 41 s, 31.2K, $20.40; a value of no unit reads as sent. */
+/** A fact's value drawn by its unit: 1.34 %/h, 15:42, 2 min 41 s, 31.2K, $20.40. A value of no unit reads as sent. */
 export function formatFact(value: number | string, unit: FactUnit | null, now: number): string {
   if (typeof value === 'string' && unit !== 'time') return value;
   switch (unit) {
@@ -262,10 +262,10 @@ const pair = (key: FactKey, value: number | string, unit: FactUnit | null, now: 
 
 const STRATEGY_WORD: Record<string, string> = { pace: 'Pace', priority: 'priority', round_robin: 'round robin' };
 const RUNG_WORD: Record<string, string> = { content: 'content rung', static: 'static rung', with_main: 'with main rung' };
-/** What a probe's pinned member could not get past; any other name reads as sent. */
+/** What a probe's pinned member could not get past. Any other name reads as sent. */
 const OBSTACLE_WORD: Record<string, string> = { attempted: 'already tried', budget_unknown: 'budget unknown', operator: 'by hand', subscription_ended: 'subscription ended' };
 /**
- * A key refusal's summary names its kind alone and its reason in the router's words, so the chip reads the reason; one
+ * A key refusal's summary names its kind alone and its reason in the router's words, so the chip reads the reason. One
  * the console has no words for reads as a key refusal.
  */
 const KEY_REFUSAL_WORD: Record<string, string> = {
@@ -412,8 +412,7 @@ function eventBy(e: RoutingEvent, page: readonly RoutingLogRow[]): Chip {
       return { value: 'by hand' };
     case 'poll_backoff_ended':
       return { value: 'clean poll' };
-    // The usage service opens a backoff on a rate limit alone, and its `reason` is the hold's English sentence, so the
-    // kind decides the word.
+    // The usage service opens a backoff on a rate limit alone, so the kind decides the word.
     case 'poll_backoff_started':
       return { value: POLL_OUTCOME_LABEL.rate_limited };
     case 'reauth_required':
@@ -487,7 +486,7 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
   const at = atOf(e);
   const time = (key: FactKey, v: unknown) => {
     const ms = num(v);
-    return ms === null ? [] : [pair(key, ms, 'time', now)];
+    return ms === null || repeatsAt(e, 'time', ms) ? [] : [pair(key, ms, 'time', now)];
   };
   const lasted = (ms: number | null) => (ms === null ? [] : [pair('lasted', ms, 'ms', now)]);
   const count = (key: FactKey, v: unknown) => {
@@ -537,6 +536,13 @@ function eventFacts(e: RoutingEvent, now: number, page: readonly RoutingLogRow[]
       return time('next', d.next_attempt_at);
     case 'reauth_required':
       return [pair('state', 'routing off', 'text', now)];
+    case 'refresh_failed':
+    case 'refresh_uncertain': {
+      const cause = str(d.cause);
+      return cause === null ? [] : [pair('cause', cause, 'text', now)];
+    }
+    case 'refresh_succeeded':
+      return time('until', d.access_expires_at);
     case 'registry_changed': {
       // Only a diff whose every entry is a change names its fields, and the whole row the store writes on an edit names
       // none.
@@ -575,7 +581,7 @@ function decisionFacts(row: DecisionSummary, now: number): FactPair[] {
 }
 
 /**
- * One or two pairs; never a time the row's `at` already gives. A failover move reads its answer off the decisions
+ * One or two pairs, never a time the row's `at` already gives. A failover move reads its answer off the decisions
  * among `page`, the rows drawn beside it.
  */
 export function factsOf(row: RoutingLogRow, now: number, page: readonly RoutingLogRow[] = []): FactPair[] {
@@ -603,6 +609,65 @@ export interface LogLink {
   session?: string;
   to: number;
 }
+
+/** The view's filters as the URL holds them. `from` and `to` are ISO instants, empty for the last hour. */
+export interface LogFilters {
+  accounts: string[];
+  from: string;
+  keys: string[];
+  kinds: string[];
+  models: string[];
+  pools: string[];
+  request: string;
+  session: string;
+  to: string;
+}
+
+/** An instant as the route reads one, else empty: a bare integer is Unix milliseconds. */
+const instantOf = (value: string | null) => {
+  if (!value) return '';
+  const ms = /^\d+$/.test(value) ? Number(value) : Date.parse(value);
+  return Number.isNaN(ms) ? '' : new Date(ms).toISOString();
+};
+
+/**
+ * The view's filters to and from its address. Absent keys read as the defaults, and a kind this build does not know
+ * stays, so the route's refusal reaches the page where a link from a newer router would otherwise read as the default
+ * set.
+ */
+export const ROUTING_LOG_CODEC = {
+  fromParams(params: URLSearchParams): LogFilters {
+    const list = (name: string) => (params.get(name) ?? '').split(',').filter(Boolean);
+    return {
+      accounts: list('accounts'),
+      from: instantOf(params.get('from')),
+      keys: list('keys'),
+      kinds: list('kinds'),
+      models: list('models'),
+      pools: list('pools'),
+      request: params.get('request') ?? '',
+      session: params.get('session') ?? '',
+      to: instantOf(params.get('to')),
+    };
+  },
+  /** A filter at its default is left out, so the unfiltered view has a bare address. */
+  toParams(f: LogFilters): URLSearchParams {
+    const params = new URLSearchParams();
+    const put = (name: string, value: string) => {
+      if (value) params.set(name, value);
+    };
+    put('accounts', f.accounts.join(','));
+    put('keys', f.keys.join(','));
+    put('kinds', f.kinds.join(','));
+    put('models', f.models.join(','));
+    put('pools', f.pools.join(','));
+    put('request', f.request);
+    put('session', f.session);
+    put('from', f.from);
+    put('to', f.to);
+    return params;
+  },
+};
 
 /** The log's address for `link`: the plural keys comma-joined, the range as two ISO instants after the filters. */
 export function logHref(link: LogLink): string {
@@ -646,7 +711,7 @@ export const clockMinute = (at: number, now: number): LogLink => {
 
 const FAMILIES = ['fable', 'opus', 'sonnet', 'haiku'];
 
-/** Model ids in the order fable, opus, sonnet, haiku, newest version first; an id of no known family sorts last. */
+/** Model ids in the order fable, opus, sonnet, haiku, newest version first. An id of no known family sorts last. */
 export function compareModels(a: string, b: string): number {
   const read = (id: string) => {
     const family = FAMILIES.findIndex((f) => id.includes(`-${f}-`) || id.endsWith(`-${f}`));
@@ -820,12 +885,16 @@ function markChip(text: string): Chip {
   return { ...(session ? { href: entityHref('session', session) } : {}), label: 'mark', mono: true, title: text, value: agent ? `${session.slice(0, 8)}/${agent}` : session.slice(0, 8) };
 }
 
-/** A refusal's reason: a drift refusal names its kind and the client's version, a key refusal the router's sentence. */
-function refusalChips(refusal: { kind: string; reason: string }): Chip[] {
+/** A drift refusal's client version: the summary's `client` fact carries it, the record's reason the trigger alone. */
+function clientVersionOf(row: DecisionSummary | undefined): string | null {
+  const value = row?.fact.find((f) => f.key === 'client')?.value;
+  return typeof value === 'string' ? value : null;
+}
+
+/** A refusal's reason: a drift's trigger beside the client's version, or a key refusal's sentence. */
+function refusalChips(refusal: { kind: string; reason: string }, version: string | null): Chip[] {
   if (refusal.kind !== 'client') return [plain(own(KEY_REFUSAL_WORD, refusal.reason) ? KEY_REFUSAL_WORD[refusal.reason] : refusal.reason)];
-  const [drift, ...rest] = refusal.reason.split(';').map((p) => p.trim());
-  const version = rest.find((p) => p.startsWith('client '))?.slice('client '.length);
-  return [plain(words(drift || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
+  return [plain(words(refusal.reason || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
 }
 
 function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
@@ -884,9 +953,9 @@ const ruleWord = (step: string) => (STEP_NAME[step] ?? words(step.slice('move:'.
 
 /**
  * The walk as numbered lines in the engine's order. The rules after a fired one never ran, so they fold into one line,
- * "Rules after spent", with the rules as chips.
+ * "Rules after spent", with the rules as chips. A drift refusal's admission line reads the client's version off `row`.
  */
-export function walkLines(record: DecisionRecord): WalkLine[] {
+export function walkLines(record: DecisionRecord, row?: DecisionSummary): WalkLine[] {
   const at = Date.parse(record.request.at);
   const lines: WalkLine[] = [];
   let fired: string | null = null;
@@ -905,7 +974,7 @@ export function walkLines(record: DecisionRecord): WalkLine[] {
     const refusal = record.outcome.refusal;
     const chips =
       s.step === 'admission' && refusal !== null
-        ? refusalChips(refusal)
+        ? refusalChips(refusal, clientVersionOf(row))
         : s.step === 'selection' && s.facts.length === 0
           ? ['moves', 'rungs', 'partitions'].map((p) => plain(p))
           : s.facts.flatMap((f) => factChips(f, record, at));
@@ -1109,7 +1178,7 @@ const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane
 const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
 
 /** The card's outcome: Pin written, Cache-map entries, Cache read, Hold, Answer and Spend, each where it applies. */
-export function outcomeRows(record: DecisionRecord, now: number): CardRow[] {
+export function outcomeRows(record: DecisionRecord, now: number, row?: DecisionSummary): CardRow[] {
   const o = record.outcome;
   const c = o.completion;
   const at = Date.parse(record.request.at);
@@ -1159,7 +1228,8 @@ export function outcomeRows(record: DecisionRecord, now: number): CardRow[] {
     });
   }
   if (o.refusal !== null) {
-    const said = o.refusal.kind === 'client' ? [plain('client drift'), ...refusalChips(o.refusal).filter((ch) => ch.label === 'client')] : refusalChips(o.refusal);
+    const version = clientVersionOf(row);
+    const said = o.refusal.kind === 'client' ? [plain('client drift'), ...refusalChips(o.refusal, version).filter((ch) => ch.label === 'client')] : refusalChips(o.refusal, version);
     rows.push({ chips: [...said, ...(record.request.keyId ? [{ entity: { id: record.request.keyId, kind: 'key' as const }, label: 'key', value: record.request.keyId }] : [])], label: 'Answer' });
   }
   const budget = (b: RecordCandidate['budget'][number]) => (b.spentUsd === null ? `${fmtUsd(b.budgetUsd)} spend unknown` : `${fmtUsd(b.spentUsd)} of ${fmtUsd(b.budgetUsd)}`);
@@ -1189,7 +1259,7 @@ const STATE_EFFECT: Record<string, string> = {
   deleted: 'the account left the registry and this is its last row',
   disconnected: 'the account leaves every eligible set until it is connected again',
   funding_required: 'the account leaves every eligible set until funded',
-  ready: 'the account joins the eligible sets again',
+  ready: 'the account joins the eligible sets',
   reauth_required: 'the account leaves every eligible set until it is paired again',
   unpaired: 'the account leaves every eligible set until it is paired',
 };
@@ -1394,8 +1464,7 @@ export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
       // A record holds the settings it was decided under, so one written before the edit reads each field's old value.
       if (diff.every(([, change]) => isChange(change))) {
         const before = formatFact(atOf(row), 'time', now);
-        const was = (field: string, v: unknown) => (v === null || v === undefined ? 'off' : fieldValue(field, v));
-        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${words(field)} ${was(field, rec(change).from)}`)));
+        add('Reading it', ...diff.filter(([, change]) => ['boolean', 'number', 'string'].includes(typeof rec(change).from) || rec(change).from === null).map(([field, change]) => plain(`decisions before ${before} carry ${words(field)} ${fieldValue(field, rec(change).from)}`)));
       }
       break;
     }

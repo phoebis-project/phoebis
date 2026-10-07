@@ -5,7 +5,7 @@ import { ATTENTION_LABEL, ATTENTION_TONE, attentionDetail, attentionHref, attent
 import { fmtRelative } from '@/lib/format';
 
 /**
- * A pool card's conditions in the route's order, which is the ranking; a subject links to where it is fixed, and a
+ * A pool card's conditions in the route's order, which is the ranking. A subject links to where it is fixed, and a
  * row pointing at the pool's own card stays put, since the card it sits on is that place. The pool's exhaustion is
  * the exception: it opens the routing log, as the dashboard's item does.
  */

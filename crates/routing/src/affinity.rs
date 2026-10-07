@@ -23,7 +23,7 @@ pub struct AffinityEntry {
     /// The cache lane of the last report that wrote the entry: the placement reads an entry of another lane as
     /// no warm prefix, while the conversation climb reads across lanes.
     pub lane: String,
-    /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it; 0 for an
+    /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it, or 0 for an
     /// entry restored from a row stored before the registry kept it.
     pub depth: u32,
 }
@@ -52,13 +52,13 @@ pub struct Visited<'a> {
     pub depth: u32,
     pub hash: &'a str,
     pub entry: &'a AffinityEntry,
-    /// `None` for an entry the gate accepted; the gate's name otherwise.
+    /// `None` for an entry the gate accepted, else the gate's name.
     pub refused_by: Option<&'static str>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RungWalk<'a> {
-    /// The index into `visited` of the deepest accepted entry, what `deepest` answers; `None` when every entry
+    /// The index into `visited` of the deepest accepted entry, what `deepest` answers, or `None` when every entry
     /// was refused or no boundary has one.
     pub matched: Option<usize>,
     pub visited: Vec<Visited<'a>>,
@@ -330,7 +330,7 @@ impl AffinityMap {
     }
 
     /// Entries past `ttl_of(key_id)` (an idle TTL in ms; `None` is unserved), or whose account is gone or under
-    /// another incarnation, leave; answers each with its cause, the account's before the TTL's, since a replaced
+    /// another incarnation, leave. Answers each with its cause, the account's before the TTL's, since a replaced
     /// holder's entry would have left whatever its age.
     pub fn purge(
         &mut self,

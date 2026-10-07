@@ -207,7 +207,7 @@ pub struct AffinityRow {
     pub root: String,
     /// The cache lane of the writing request: a filter beside the `(model, hash)` key, never part of it.
     pub lane: String,
-    /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it; a row
+    /// The boundary's place in its chain, counted from 1, as the report that wrote the entry listed it. A row
     /// stored before the registry kept it reads 0.
     pub depth: u32,
 }
@@ -249,8 +249,8 @@ pub struct ShedRoundRow {
     pub marked: bool,
 }
 
-/// One pin of a round as the write names it: its key, its epoch at the round, and whether the round marked it;
-/// the derives `StateWrite` (`Clone, Debug, PartialEq`) needs of what it carries.
+/// One pin of a round as the write names it: its key, its epoch at the round, and whether the round marked it.
+/// It takes the derives `StateWrite` (`Clone, Debug, PartialEq`) needs of what it carries.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct ShedPin {
     pub key: PinKey,
@@ -423,7 +423,7 @@ impl Store {
     }
 
     /// Deletes the pool's and account's rows and inserts the round's in one transaction, so a crash between two
-    /// rounds leaves the previous round whole; `incarnation` is the account's at the round.
+    /// rounds leaves the previous round whole. `incarnation` is the account's at the round.
     pub fn replace_shed_round(
         &self,
         pool_id: &str,

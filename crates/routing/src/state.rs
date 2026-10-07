@@ -226,7 +226,7 @@ impl UtilizationSample {
 pub enum StateWrite {
     /// The relay's verdict on an account, fenced by the incarnation and the generations the attempt that
     /// formed it went out with. It travels with the rest of the routing writes so shutdown drains it like any
-    /// other. `cause` is stored with the state; it and `detail` ride to the event the loop emits when the write
+    /// other. `cause` is stored with the state, and it and `detail` ride to the event the loop emits when the write
     /// moves the row's state.
     AccountState {
         account_id: String,
@@ -1327,7 +1327,7 @@ impl RoutingState {
     /// with none named: the reading, plus the share of the router's own requests completed on the account since
     /// it was observed. At or past the reset: zero plus the share of the requests completed since the reset; a
     /// weekly window's reset advanced by whole weeks past `now`, a 5-hour window's `None` until the next reading
-    /// names one. A reading the router's own figure moved names `Predicted` as its source; one nothing moved keeps
+    /// names one. A reading the router's own figure moved names `Predicted` as its source. One nothing moved keeps
     /// its own. `None` while the account holds no reading of the window.
     pub fn predicted(&self, account_id: &str, window: &str, now: i64) -> Option<WindowReading> {
         let reading = self.samples.get(account_id)?.reading(window)?;

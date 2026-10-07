@@ -118,7 +118,7 @@ fn row_json(row: &RoutingLogRow) -> Value {
     }
 }
 
-/// The summary repeats the `kind` and `probe` columns; the columns' values stand, so no field is answered twice.
+/// The summary repeats the `kind` and `probe` columns. The columns' values stand, so no field is answered twice.
 fn decision_json(d: &DecisionListRow) -> Value {
     let mut row = Map::new();
     row.insert("type".into(), "decision".into());
@@ -151,7 +151,8 @@ fn event_json(e: &EventListRow) -> Value {
     })
 }
 
-/// Purged and never written answer the same 404: the row is the only witness either way.
+/// Purged and never written answer the same 404: the row is the only witness either way. A `seq` that is no
+/// sequence number answers 400, since no decision could ever be written under it.
 pub(crate) async fn record(
     State(state): State<Arc<AdminState>>,
     Path((id, seq)): Path<(String, String)>,
@@ -162,6 +163,13 @@ pub(crate) async fn record(
             &format!("no decision {seq} for request {id}"),
         )
     };
+    if seq.is_empty() || !seq.bytes().all(|b| b.is_ascii_digit()) {
+        return failure(
+            StatusCode::BAD_REQUEST,
+            "seq is the decision's sequence number",
+        );
+    }
+    // Past `u32` it is still a sequence number, one no request reaches.
     let Ok(n) = seq.parse::<u32>() else {
         return missing();
     };

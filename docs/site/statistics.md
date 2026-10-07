@@ -413,7 +413,8 @@ then events), keys, pools, accounts, models, a session id or its prefix, and a r
 page's address, so a filtered view is a link, a reload keeps it and Back returns to the view before it: `from` and `to`
 as ISO instants (`2026-09-16T14:15:00.000Z`), `accounts`, `keys`, `kinds`, `models` and `pools` as comma lists, and
 `session` and `request`. A `kinds` value replaces the default set, so `kinds=probe` lists probe decisions alone. A
-filter change returns to the first page, and Refresh reads up to now.
+kind this build does not know stays in the address, and the route's refusal shows where the rows would be. A filter
+change returns to the first page, and Refresh reads up to now.
 
 A request filter opens a line above the table that counts the request's decisions and events and offers three
 widenings: this session (an hour either side of the request's time), this account (a quarter hour either side) and this

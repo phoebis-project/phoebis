@@ -1,5 +1,5 @@
 //! Record v1: the exact log of one routing decision, what the engine read in the order it read it and what it
-//! wrote. It travels beside the attempt's `SelectionTrace`, which the analytics keep reading; nothing a rollup
+//! wrote. It travels beside the attempt's `SelectionTrace`, which the analytics keep reading. Nothing a rollup
 //! reads lives here alone. A word from a fixed vocabulary is a `&'static str`, an entity is its id, and a field
 //! the decision did not reach serializes as `null`.
 
@@ -20,7 +20,7 @@ pub struct DecisionRecord {
     /// `None` for a request that pins nothing, with `pin_reason` beside it.
     pub pin: Option<PinFacts>,
     /// `not_looked_up` (a refusal's, made before
-    /// the pin lookup whatever session the request named) or `pinning_off`; `None` beside a pin block.
+    /// the pin lookup whatever session the request named) or `pinning_off`, and `None` beside a pin block.
     pub pin_reason: Option<&'static str>,
     /// `None` for a refusal whose key or pool the snapshot no longer holds (a revoked key's), written as `null`.
     pub settings: Option<Settings>,
@@ -52,14 +52,29 @@ pub struct RequestFacts {
 }
 
 /// The request's cache lane split from its `lane_key` spelling.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct LaneFacts {
     pub speed: String,
     pub thinking: String,
     pub effort: String,
 }
 
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+impl LaneFacts {
+    /// `lane_key` spells the lane `<model>|<speed>|<thinking>|<effort>`: the last three parts are the lane's own.
+    pub(crate) fn of(lane: &str) -> LaneFacts {
+        let mut parts = lane.rsplitn(4, '|').map(String::from);
+        let effort = parts.next().unwrap_or_default();
+        let thinking = parts.next().unwrap_or_default();
+        let speed = parts.next().unwrap_or_default();
+        LaneFacts {
+            speed,
+            thinking,
+            effort,
+        }
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct RequestFlags {
     pub fast: bool,
     pub count: bool,
@@ -69,15 +84,38 @@ pub struct RequestFlags {
     pub context_compacted: bool,
 }
 
+impl RequestFlags {
+    pub(crate) fn of(request: &SelectRequest) -> RequestFlags {
+        RequestFlags {
+            fast: request.fast,
+            count: request.count,
+            probe: request.probe,
+            portable: request.portable,
+            marker: request.marker,
+            context_compacted: request.context_compacted,
+        }
+    }
+}
+
 /// The chains' counts, never the hashes: the record keeps a matched boundary's hash in the prefix lookups alone.
-#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+#[derive(Clone, Debug, Default, PartialEq, serde::Serialize)]
 pub struct ChainFacts {
     pub static_boundaries: u32,
     pub boundaries: u32,
     pub static_hash: bool,
 }
 
-/// Step 1's reading of the pin. `found` is `live`, `expired_idle`, `left_pool` or `none`; the row's fields are
+impl ChainFacts {
+    pub(crate) fn of(request: &SelectRequest) -> ChainFacts {
+        ChainFacts {
+            static_boundaries: u32::try_from(request.static_boundaries.len()).unwrap_or(u32::MAX),
+            boundaries: u32::try_from(request.boundaries.len()).unwrap_or(u32::MAX),
+            static_hash: request.static_hash.is_some(),
+        }
+    }
+}
+
+/// Step 1's reading of the pin. `found` is `live`, `expired_idle`, `left_pool` or `none`. The row's fields are
 /// `None` under `none`, and the warmth pair under anything but `live`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PinFacts {
@@ -148,11 +186,11 @@ pub struct CandidateFacts {
     pub overage: Option<OverageFacts>,
     pub in_flight: u32,
     pub in_flight_cap: u32,
-    /// By window name; the three plan windows for a subscription member, the worst bucket and the two fast buckets
+    /// By window name: the three plan windows for a subscription member, the worst bucket and the two fast buckets
     /// for an api_key one, each as `predicted` reads it at decision time.
     pub windows: BTreeMap<String, WindowFacts>,
     pub allowance_known: bool,
-    /// Filled for every member under Pace, chosen or not; `None` under another strategy.
+    /// Filled for every member under Pace, chosen or not, and `None` under another strategy.
     pub pace: Option<PaceFacts>,
     pub budget: Vec<BudgetFacts>,
     pub cooldowns: Vec<CooldownFacts>,
@@ -176,7 +214,7 @@ pub struct OverageFacts {
     pub observed_at: i64,
 }
 
-/// `ahead` is the lead over pace `select.rs`'s `ahead` reads for the two shared plan windows; `None` elsewhere.
+/// `ahead` is the lead over pace `select.rs`'s `ahead` reads for the two shared plan windows, and `None` elsewhere.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct WindowFacts {
     pub utilization: f64,
@@ -187,8 +225,8 @@ pub struct WindowFacts {
     pub ahead: Option<f64>,
 }
 
-/// `end`, `deadline` and `hours` are `None` for an api_key member, which Pace scores by its remaining share alone;
-/// a subscription member with neither a reset nor an end reads a week of hours.
+/// `end`, `deadline` and `hours` are `None` for an api_key member, which Pace scores by its remaining share alone.
+/// A subscription member with neither a reset nor an end reads a week of hours.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PaceFacts {
     pub remaining: f64,
@@ -200,7 +238,7 @@ pub struct PaceFacts {
 }
 
 /// The spend and its period are the ledger's spend row for the budget's period, all `None` while the ledger has
-/// reported none; the budget stays listed.
+/// reported none. The budget stays listed.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct BudgetFacts {
     pub period: &'static str,
@@ -242,7 +280,7 @@ pub struct TermFacts {
 /// Per rung, the member's deepest visited entry (`content`, `static_`) and, apart from it, the entry the rung
 /// accepted on this member (`content_match`, `static_match`): the same entry when the deepest was accepted, a
 /// shallower one when a deeper entry was refused, `None` when the rung accepted none of the member's or did not
-/// run. The card's chips read the match; the deepest names the gate that refused it.
+/// run. The card's chips read the match, and the deepest names the gate that refused it.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct PrefixLookup {
     pub content: Option<PrefixEntry>,
@@ -353,7 +391,7 @@ pub enum FactValue {
 
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct Outcome {
-    /// `placed`, `renewed`, `moved`, `held`, `exhausted` or `refused`; a probe's decision keeps its kind and the
+    /// `placed`, `renewed`, `moved`, `held`, `exhausted` or `refused`. A probe's decision keeps its kind and the
     /// request's `probe` flag marks it.
     pub kind: &'static str,
     pub account_id: Option<String>,
@@ -373,7 +411,7 @@ pub struct Outcome {
     pub exhaustion: Option<ExhaustionFacts>,
     pub refusal: Option<RefusalFacts>,
     pub cohort_hold: Option<CohortHold>,
-    /// The pins the shedding round this decision ran marked; `None` when no round ran.
+    /// The pins the shedding round this decision ran marked, or `None` when no round ran.
     pub shed_marks: Option<Vec<PinKeyFacts>>,
 }
 
@@ -422,7 +460,7 @@ pub struct PinKeyFacts {
     pub model: String,
 }
 
-/// What a shedding round read and did, for the round's event; the record keeps the marks alone. The hot window's
+/// What a shedding round read and did, for the round's event. The record keeps the marks alone. The hot window's
 /// fields are the first of `five_hour` and `seven_day` whose lead over pace reached the threshold.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedRoundFacts {
@@ -445,7 +483,8 @@ pub struct ShedRoundFacts {
     pub dwell_until: i64,
 }
 
-/// One pin of the account a round ran on: those in the round in its order, then those it left out.
+/// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out. A
+/// pin there under another pool's key belongs to that pool's round and is not listed here.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,
@@ -458,8 +497,8 @@ pub struct ShedPinFacts {
     pub per_rewrite: Option<f64>,
     pub marked: bool,
     /// `unpriced` for a pin whose burn could not be priced, `fast_lane` for one left out of a window-share round,
-    /// `current` for the request's own pin; `None` otherwise. A pin left out reads `fast_lane` and an unpriced one
-    /// `unpriced` whether or not it is the request's own.
+    /// `current` for the request's own pin, and `None` otherwise. A pin left out reads `fast_lane` and an unpriced
+    /// one `unpriced` whether or not it is the request's own.
     pub note: Option<&'static str>,
 }
 
@@ -485,8 +524,8 @@ pub struct DecisionSummary {
     pub fast: bool,
 }
 
-/// `kind` is `rule`, `rung`, `strategy`, `hold`, `exhaustion`, `refusal` or `none`; `value` the rule's, the rung's,
-/// the strategy's, the hold's place, the exhaustion's kind or the refusal's kind.
+/// `kind` is `rule`, `rung`, `strategy`, `hold`, `exhaustion`, `refusal` or `none`, and `value` the rule's, the
+/// rung's, the strategy's, the hold's place, the exhaustion's kind or the refusal's kind.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct By {
     pub kind: &'static str,
@@ -494,8 +533,8 @@ pub struct By {
     pub tier: Option<Tier>,
 }
 
-/// `key` is one of the list route's fact keys; `unit` one of `ms`, `tokens`, `percent`, `percent_per_hour`, `usd`,
-/// `time`, `count`, `text`.
+/// `key` is one of the list route's fact keys, and `unit` one of `ms`, `tokens`, `percent`, `percent_per_hour`,
+/// `usd`, `time`, `count`, `text`.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct SummaryFact {
     pub key: &'static str,
@@ -537,7 +576,9 @@ pub struct CacheMapEntry {
 
 /// The identity a refused request has before any selection: what the relay holds at its own refusal site and what
 /// the task reads off a `SelectRequest` at its three. `attempt` and `seq` are 1 for the relay's refusal, the
-/// request's one decision; `at` and the client's version as the relay read them.
+/// request's one decision, and `at` and the client's version are as the relay read them. The relay refuses a drifted
+/// client before it builds a selection, so its refusal leaves the parent agent, the class, the lane, the flags and the
+/// chains at their empty values, a keepalive probe's flag among them.
 #[derive(Clone, Debug, PartialEq)]
 pub struct RefusedRequest {
     pub request_id: String,
@@ -547,8 +588,13 @@ pub struct RefusedRequest {
     pub key_id: String,
     pub key_generation: i64,
     pub agent_id: String,
+    pub parent_agent_id: Option<String>,
     pub session_id: Option<String>,
+    pub request_class: Option<String>,
     pub canonical_model: String,
+    pub lane: LaneFacts,
+    pub flags: RequestFlags,
+    pub chain: ChainFacts,
     pub client: ClientClass,
     pub client_version: Option<String>,
 }
@@ -563,8 +609,13 @@ impl From<&SelectRequest> for RefusedRequest {
             key_id: request.key_id.clone(),
             key_generation: request.key_generation,
             agent_id: request.agent_id.clone(),
+            parent_agent_id: request.parent_agent_id.clone(),
             session_id: request.session_id.clone(),
+            request_class: request.request_class.clone(),
             canonical_model: request.canonical_model.clone(),
+            lane: LaneFacts::of(&request.lane),
+            flags: RequestFlags::of(request),
+            chain: ChainFacts::of(request),
             client: request.client,
             client_version: None,
         }
@@ -572,12 +623,12 @@ impl From<&SelectRequest> for RefusedRequest {
 }
 
 impl DecisionRecord {
-    /// The record of a request refused before the engine ran: the request block from the identity, no pin block
-    /// (`pin_reason` `not_looked_up`, since the refusal precedes the lookup), the settings when the key and its pool
-    /// are still in the snapshot and `None` otherwise, no candidate, a two-line walk (`admission` `refused` with the
-    /// reason, `selection` `not_run`) and a `refused` outcome carrying `refusal`; with its summary (`by` `refusal`,
-    /// `fact` the reason's key: `client` for a drift refusal, whose reason names the trigger and the client version,
-    /// `key` for a key or a resolve refusal, whose reason is the refusal's `Display`).
+    /// The record of a request refused before the engine ran: the request block from what the refusal site held, no
+    /// pin block (`pin_reason` `not_looked_up`, since the refusal precedes the lookup), the settings when the key and
+    /// its pool are still in the snapshot and `None` otherwise, no candidate, a two-line walk (`admission` `refused`
+    /// with the reason, `selection` `not_run`) and a `refused` outcome carrying `refusal`. The summary reads `by`
+    /// `refusal` and one fact: `client`, the client's version, for a drift refusal, whose reason names its trigger
+    /// alone, and `key` for a key or a resolve refusal, whose reason is the refusal's `Display`.
     pub fn refused(
         request: &RefusedRequest,
         snapshot: &RegistrySnapshot,
@@ -597,28 +648,13 @@ impl DecisionRecord {
                 key_generation: request.key_generation,
                 pool_id: key.map(|key| key.pool_id.clone()).unwrap_or_default(),
                 agent_id: request.agent_id.clone(),
-                parent_agent_id: None,
+                parent_agent_id: request.parent_agent_id.clone(),
                 client_class: request.client.as_str(),
-                request_class: None,
+                request_class: request.request_class.clone(),
                 canonical_model: request.canonical_model.clone(),
-                lane: LaneFacts {
-                    speed: String::new(),
-                    thinking: String::new(),
-                    effort: String::new(),
-                },
-                flags: RequestFlags {
-                    fast: false,
-                    count: false,
-                    probe: false,
-                    portable: false,
-                    marker: false,
-                    context_compacted: false,
-                },
-                chain: ChainFacts {
-                    static_boundaries: 0,
-                    boundaries: 0,
-                    static_hash: false,
-                },
+                lane: request.lane.clone(),
+                flags: request.flags.clone(),
+                chain: request.chain.clone(),
                 attempted: Vec::new(),
                 holds: Vec::new(),
                 registry_revision: snapshot.revision,
@@ -675,7 +711,7 @@ impl DecisionRecord {
         };
         let summary = DecisionSummary {
             kind: "refused",
-            probe: false,
+            probe: request.flags.probe,
             by: By {
                 kind: "refusal",
                 value: refusal.kind.to_string(),
@@ -693,7 +729,7 @@ impl DecisionRecord {
             hold: None,
             exhaustion: None,
             refusal: Some(refusal.clone()),
-            fast: false,
+            fast: request.flags.fast,
         };
         (record, summary)
     }
@@ -757,7 +793,6 @@ mod tests {
     }
 
     fn renewal() -> DecisionRecord {
-        let static_entry = entry(&"a".repeat(64), 1, None);
         DecisionRecord {
             version: RECORD_VERSION,
             request: RequestFacts {
@@ -870,8 +905,8 @@ mod tests {
                 prefix: PrefixLookup {
                     content: None,
                     content_match: None,
-                    static_: Some(static_entry.clone()),
-                    static_match: Some(static_entry),
+                    static_: Some(entry(&"a".repeat(64), 2, Some("expired"))),
+                    static_match: Some(entry(&"b".repeat(64), 1, None)),
                     with_main: false,
                 },
                 obstacle: None,
@@ -955,8 +990,20 @@ mod tests {
                 "with_main"
             ]
         );
-        assert_eq!(prefix["static"]["hash"], "a".repeat(64));
-        assert_eq!(prefix["static"]["refused_by"], serde_json::Value::Null);
+        assert_eq!(
+            (&prefix["static"]["hash"], &prefix["static"]["refused_by"]),
+            (
+                &serde_json::json!("a".repeat(64)),
+                &serde_json::json!("expired")
+            )
+        );
+        assert_eq!(
+            (
+                &prefix["static_match"]["hash"],
+                &prefix["static_match"]["refused_by"]
+            ),
+            (&serde_json::json!("b".repeat(64)), &serde_json::Value::Null)
+        );
         assert_eq!(value["walk"][0]["facts"][0]["value"], "live");
         assert_eq!(value["pin_reason"], serde_json::Value::Null);
     }

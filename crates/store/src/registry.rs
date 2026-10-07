@@ -586,7 +586,7 @@ pub struct AccountUpdate<'a> {
     pub lifecycle_generation: u64,
     pub label: &'a str,
     pub secret: Option<&'a Secret>,
-    /// The staged state with who moves it; `None` leaves both the state and its word.
+    /// The staged state with who moves it. `None` leaves both the state and its word.
     pub state: Option<(AccountState, StateCause)>,
     pub at: i64,
     pub actor: &'a str,

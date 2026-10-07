@@ -138,7 +138,7 @@ pub enum RouterEvent {
         account_id: String,
         at: i64,
     },
-    /// One decision as the engine made it; the ledger stores the summary as the list row and the record as the
+    /// One decision as the engine made it. The ledger stores the summary as the list row and the record as the
     /// frame. Boxed so the enum stays the size of its other variants on the broadcast.
     Decision {
         summary: Box<DecisionSummary>,
@@ -199,7 +199,7 @@ pub enum RouterEvent {
         observed: &'static str,
         at: i64,
     },
-    /// The entries the purge removed for one root on one account, with the largest among them; `deepest.depth` is
+    /// The entries the purge removed for one root on one account, with the largest among them. `deepest.depth` is
     /// the ordinal the entry was written at, never the count removed.
     WarmPrefixExpired {
         account_id: String,
@@ -244,7 +244,7 @@ pub struct RouterConfig {
     pub band: BandWeight,
     /// Whether the loop's first purge waits for `RouterHandle::release_purge`. The purge tick fires at once, before
     /// the spawner can subscribe to the broadcast, and the first purge after a start announces the downtime's clock
-    /// resets and wind-downs; the router's start holds it until the ledger subscribed and holds the start row.
+    /// resets and wind-downs. The router's start holds it until the ledger subscribed and holds the start row.
     pub hold_first_purge: bool,
     pub purge_interval: Duration,
     /// The dollar table and the cost table's 5-hour share table the shedding round prices each pin's burn
@@ -356,7 +356,7 @@ pub enum Report {
         incarnation: u64,
         lifecycle_generation: u64,
         credential_generation: u64,
-        /// Who moved the state, named at the relay's mark site; the fenced write stores it with the state and the
+        /// Who moved the state, named at the relay's mark site. The fenced write stores it with the state and the
         /// event a moved row emits carries it.
         cause: StateCause,
         /// The upstream error's message where the verdict read one.
@@ -420,7 +420,7 @@ pub enum Report {
         account_id: String,
         sample: UtilizationSample,
         incarnation: u64,
-        /// The request whose response head carried the reading; `None` for the usage poll's.
+        /// The request whose response head carried the reading, or `None` for the usage poll's.
         source_request_id: Option<String>,
     },
     /// A finished inference or probe answer's typed tokens on the account that served it, pinned or not: what the
@@ -671,7 +671,7 @@ enum Command {
     PinsByPool {
         reply: oneshot::Sender<Vec<(String, u64)>>,
     },
-    /// A request the relay refused before asking for a selection; the loop records it as the request's decision.
+    /// A request the relay refused before asking for a selection. The loop records it as the request's decision.
     RecordRefusal {
         request: RefusedRequest,
         refusal: RefusalFacts,
@@ -814,7 +814,7 @@ pub struct RouterHandle {
     /// The reports the closed queue refused, one counter per kind at its position in `Report::KINDS`; the
     /// process's alone, zero at start.
     dropped: Arc<[AtomicU64; Report::KINDS.len()]>,
-    /// The refusal records a full or closed mailbox refused; the process's alone, zero at start.
+    /// The refusal records a full or closed mailbox refused, counted for this process alone from zero at start.
     dropped_refusals: Arc<AtomicU64>,
     events: broadcast::Sender<RouterEvent>,
     in_flight: InFlight,
@@ -852,7 +852,7 @@ impl RouterHandle {
         self.load_counts
     }
 
-    /// Lets the first purge run, under `RouterConfig::hold_first_purge`; a stopped task takes nothing.
+    /// Lets the first purge run, under `RouterConfig::hold_first_purge`. A stopped task takes nothing.
     pub async fn release_purge(&self) {
         let _ = self.tx.send(Command::ReleasePurge).await;
     }
@@ -869,7 +869,7 @@ impl RouterHandle {
 
     /// A request the relay refused before asking for a selection, recorded as the request's one decision: sends
     /// `Command::RecordRefusal { request, refusal }` through `try_send` and never waits for mailbox room, so the
-    /// 400 toward the client is not delayed by a full router queue; a full or closed mailbox drops the record,
+    /// 400 toward the client is not delayed by a full router queue. A full or closed mailbox drops the record,
     /// counted in `dropped_refusals` beside a warn. The loop's arm builds `DecisionRecord::refused` on its snapshot
     /// and emits the `Decision`.
     pub fn record_refusal(&self, request: RefusedRequest, refusal: RefusalFacts) {
@@ -887,8 +887,8 @@ impl RouterHandle {
         }
     }
 
-    /// The refusal records a full or closed mailbox refused, beside `dropped_reports`; the process's alone, zero at
-    /// start.
+    /// The refusal records a full or closed mailbox refused, beside `dropped_reports`. It counts this process's
+    /// alone, from zero at start.
     pub fn dropped_refusals(&self) -> u64 {
         self.dropped_refusals.load(Ordering::Relaxed)
     }
@@ -1289,7 +1289,7 @@ struct Task {
     invalidated: HashMap<PinKey, (String, &'static str, i64)>,
     /// The reloads the running load answers: those that were waiting when it started.
     load_waiters: Vec<oneshot::Sender<Result<(), String>>>,
-    /// The first purge waits while set; `Command::ReleasePurge` clears it.
+    /// The first purge waits while set. `Command::ReleasePurge` clears it.
     purge_held: bool,
     /// Whether a registry load runs; at most one does.
     loading: bool,
@@ -1395,7 +1395,7 @@ pub fn spawn(
                 batch.extend(more);
             }
             // An account-state mark that landed changes what the snapshot has to say, so the loop is asked for a
-            // reload once the write is on disk rather than before; the rows whose state it moved go first, so their
+            // reload once the write is on disk rather than before. The rows whose state it moved go first, so their
             // events leave ahead of the snapshot that shows them.
             let marks = writer.wake(batch).await;
             if marks.landed {
@@ -1594,7 +1594,7 @@ struct Writer {
 }
 
 impl Writer {
-    /// Lands what an earlier wake left to try again, then `batch`; answers what their account-state marks did.
+    /// Lands what an earlier wake left to try again, then `batch`, and answers what their account-state marks did.
     async fn wake(&mut self, batch: Vec<StateWrite>) -> Marks {
         let mut marks = self.retry().await;
         marks.absorb(self.land(batch, false).await);
@@ -1856,7 +1856,7 @@ fn apply_in(tx: &mut RoutingTx<'_>, batch: &[StateWrite]) -> Result<Marks, Store
     Ok(marks)
 }
 
-/// One write through the store's own method for it, its own commit; answers what an account-state mark did.
+/// One write through the store's own method for it, its own commit. Answers what an account-state mark did.
 fn apply_one(store: &Store, write: &StateWrite) -> Result<Marks, StoreError> {
     let none = Marks::default;
     match write {
@@ -2170,6 +2170,9 @@ impl Task {
                                         selection.trace.moved = Some(reason);
                                     }
                                     record.outcome.rule = Some(reason);
+                                    // The invalidation removed the pin `finish` reads a move's source from, so the
+                                    // entry it left behind names the account the request left.
+                                    record.outcome.from_account_id = Some(from.clone());
                                     summary.rule = Some(reason);
                                     pin_events.push(RouterEvent::PinMigrated {
                                         key_id: k.clone(),
@@ -3412,7 +3415,7 @@ impl Task {
                 let Some(term) = snapshot.term(&member.account_id) else {
                     continue;
                 };
-                // A cancelled term past its end still reads as winding down; its account has ended, which is no start.
+                // A cancelled term past its end still reads as winding down. Its account has ended, which is no start.
                 let Some(ends_at) = term::end_of(term, now)
                     .filter(|_| term::winding_down(term, now, minutes) && !term::ended(term, now))
                 else {

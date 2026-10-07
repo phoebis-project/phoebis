@@ -277,7 +277,7 @@ CREATE INDEX IF NOT EXISTS events_at ON events (at);
 /// start can try it again rather than lose the money it carries.
 ///
 /// Version 29: every routing decision is its own row beside the attempt rows, one compressed record per decision keyed
-/// by the request and the decision's place in it; and the events gain the pool, the agent and the request as columns
+/// by the request and the decision's place in it. The events gain the pool, the agent and the request as columns
 /// with their indexes, so a merged list filters both tables by the same keys without reading `detail`.
 pub const MIGRATIONS: &[(u32, &str)] = &[
     (

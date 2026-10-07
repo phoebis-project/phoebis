@@ -84,7 +84,7 @@ pub enum BackoffEdge {
         reason: String,
         attempts: u32,
         next_attempt_at: i64,
-        /// When the last clean usage answer before the run was read; `None` when none was this process.
+        /// When the last clean usage answer before the run was read, or `None` when this process read no clean answer.
         last_clean_at: Option<i64>,
     },
     Ended {
@@ -317,7 +317,7 @@ impl CachedEntry {
             account_id: account_id.to_string(),
             at,
             endpoint,
-            // A run opens on a 429 alone, so the status is its reason; the hold's sentence is the snapshot's.
+            // A run opens on a 429 alone, so the status is its reason. The hold's sentence is the snapshot's.
             reason: "429".into(),
             attempts: self.rate_limited_in_a_row,
             next_attempt_at: self.not_before,
@@ -481,7 +481,7 @@ impl UsageService {
         })
     }
 
-    /// Replaces the hook every backoff edge is handed to; none is called before one is set.
+    /// Replaces the hook every backoff edge is handed to. No edge reaches a hook before one is set.
     pub fn set_on_backoff(&self, hook: BackoffHook) {
         *self.inner.on_backoff.lock().expect(LOCK_POISONED) = Some(hook);
     }
@@ -925,7 +925,7 @@ impl Inner {
     }
 }
 
-/// Hands an edge to its hook; the caller has released the cache lock.
+/// Hands an edge to its hook. The caller has released the cache lock.
 fn announce(edge: Option<(BackoffHook, BackoffEdge)>) {
     if let Some((hook, edge)) = edge {
         hook(edge);

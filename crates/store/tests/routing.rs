@@ -1026,7 +1026,7 @@ fn a_pin_s_removal_or_replacement_clears_its_mark_and_keeps_the_round() {
     assert!(store.delete_pin(&shed_key("gone")).unwrap());
     store
         .write_routing(|tx| {
-            // A move lands the pin on b under a fresh epoch; a renewal keeps the pin's account and epoch.
+            // A move lands the pin on b under a fresh epoch. A renewal keeps the pin's account and epoch.
             tx.upsert_pin(&PinRow {
                 account_id: "b".into(),
                 epoch: 7,

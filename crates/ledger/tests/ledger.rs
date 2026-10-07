@@ -2051,7 +2051,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table, the
         // columns migrations 21, 25 and 26 add, migration 27's table and index and migration 29's table, columns and
-        // indexes, each dropped back out so the replay below has to add them again; `rollups_hourly` keeps the
+        // indexes, each dropped back out so the replay below has to add them again. `rollups_hourly` keeps the
         // shape the class dimension joins, since a primary-key column cannot be dropped in place and the rebuild
         // names its own columns regardless of what the source table still carries.
         db.write(|c| {
@@ -2775,8 +2775,13 @@ fn decision(
             key_id: "desktop".into(),
             key_generation: 0,
             agent_id: "main".into(),
+            parent_agent_id: None,
             session_id: Some("s1".into()),
+            request_class: None,
             canonical_model: "claude-sonnet-5".into(),
+            lane: Default::default(),
+            flags: Default::default(),
+            chain: Default::default(),
             client: phoebis_routing::ClientClass::ClaudeCode,
             client_version: None,
         },
@@ -5271,7 +5276,7 @@ async fn a_budget_reached_at_the_start_lands_behind_the_start_row_and_leaves_its
     let up = FakeUpstream::start(vec![]).await;
     let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    // The previous run seeded the registry and stopped; its last request spent past a budget the member carries now.
+    // The previous run seeded the registry and stopped. Its last request spent past a budget the member carries now.
     let previous = harness_on(
         store.clone(),
         db.clone(),
@@ -5395,7 +5400,7 @@ async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_
                 .collect::<Vec<_>>()
         }
     };
-    // A first run seeds the registry; the member then carries a budget its spend is past.
+    // A first run seeds the registry. The member then carries a budget its spend is past.
     let seeding = run().await;
     seeding.ledger.clone().shutdown().await.unwrap();
     seeding.router.shutdown().await.unwrap();
@@ -5479,7 +5484,7 @@ async fn a_restart_over_a_ledger_holding_the_period_s_crossing_writes_no_second_
 }
 
 /// A routing log row as the writer stores it, on the request `request_id` at `at`: a decision of `kind` on account
-/// `a` under routing session `s1`, no probe and no move; a case edits the columns it filters on.
+/// `a` under session `s1`, no probe and no move. A case edits the columns it filters on.
 fn logged(request_id: &str, seq: u32, attempt: u32, at: i64, kind: &'static str) -> DecisionRow {
     let (mut summary, mut record) = decision(request_id, seq, attempt);
     record.request.at = at;
@@ -6020,7 +6025,7 @@ fn a_record_read_decodes_the_frame_and_composes_the_completion() {
 fn a_record_frame_naming_a_size_past_the_reader_s_bound_is_refused_unread() {
     let db = LedgerDb::open_in_memory().unwrap();
     put_decision(&db, &logged("r1", 1, 1, 100, "placed"));
-    // A record of one long string folds to a few kilobytes, so a small frame names a size no record reaches; it is
+    // A record of one long string folds to a few kilobytes, so a small frame names a size no record reaches. It is
     // valid JSON, so only the bound refuses it.
     let record = format!(r#"{{"version":1,"pad":"{}"}}"#, "a".repeat(64 << 20));
     let frame = zstd::bulk::compress(record.as_bytes(), 0).unwrap();

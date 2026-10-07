@@ -573,7 +573,7 @@ export function decodeDecisionRecord(v: unknown): DecisionRecord {
       accountId: strOrNull(p.account_id), createdAt: isoOrNull(p.created_at), epoch: numOrNull(p.epoch), found: str(p.found, 'none'), idleMs: numOrNull(p.idle_ms), incarnation: numOrNull(p.incarnation), lane: strOrNull(p.lane), lastRefreshAt: isoOrNull(p.last_refresh_at), lastUsedAt: isoOrNull(p.last_used_at),
       marked: bool(p.marked), refreshAgeMs: numOrNull(p.refresh_age_ms), released: strings(p.released), shed: orNull(p.shed, (x) => ({ at: isoOr(x.at, epoch), from: str(x.from) })), warmth: strOrNull(p.warmth), warmthCause: strOrNull(p.warmth_cause),
     })),
-    // A word this build does not know reads as none, as a poll outcome does; the raw answer still carries it.
+    // A word this build does not know reads as none, as a poll outcome does. The raw answer still carries it.
     pinReason: PIN_REASON_VALUES.find((x) => x === r.pin_reason) ?? null,
     raw: v,
     request: {

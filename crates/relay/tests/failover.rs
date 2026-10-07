@@ -7,7 +7,7 @@ use http_body_util::BodyExt;
 use phoebis_bus::{Bus, Delivery};
 use phoebis_ledger::{Assembler, Record};
 use phoebis_oauth::AcquireError;
-use phoebis_routing::{DecisionRecord, DecisionSummary, RouterEvent};
+use phoebis_routing::{DecisionRecord, DecisionSummary, FactValue, RouterEvent};
 use phoebis_store::{AccountState, Failover, StateCause};
 use tokio::sync::broadcast;
 use tower::ServiceExt;
@@ -89,9 +89,15 @@ async fn a_failover_s_second_decision_names_attempt_two_and_seq_two() {
         (resp.status().as_u16(), o.account_id.as_str(), o.attempt),
         (200, "b", 2)
     );
-    let decisions = decisions_of(&already_sent(&mut events), &o.request_id);
+    // The body first and every event after it through the cache map: the body task is spawned, so a drain taken
+    // before it ends could swallow the cache map's event.
+    resp.into_body().collect().await.unwrap();
+    let written = router_events_until(&mut events, |event| {
+        matches!(event, RouterEvent::CacheMapWritten { request_id, .. } if *request_id == o.request_id)
+    })
+    .await;
     assert_eq!(
-        decisions
+        decisions_of(&written, &o.request_id)
             .iter()
             .map(|(_, record)| (
                 record.request.attempt,
@@ -101,11 +107,6 @@ async fn a_failover_s_second_decision_names_attempt_two_and_seq_two() {
             .collect::<Vec<_>>(),
         [(1, 1, Some("a")), (2, 2, Some("b"))]
     );
-    resp.into_body().collect().await.unwrap();
-    let written = router_events_until(&mut events, |event| {
-        matches!(event, RouterEvent::CacheMapWritten { request_id, .. } if *request_id == o.request_id)
-    })
-    .await;
     assert!(
         matches!(
             written.last(),
@@ -2835,10 +2836,16 @@ async fn a_drift_refusal_emits_one_decision_with_the_client_trigger_and_version(
                     .as_ref()
                     .map(|r| (r.kind, r.reason.as_str()))
             ),
-            (
-                "refused",
-                Some(("client", format!("{trigger}; client 2.1.269").as_str()))
-            )
+            ("refused", Some(("client", trigger)))
+        );
+        assert_eq!(
+            summary
+                .fact
+                .iter()
+                .map(|f| (f.key, &f.value))
+                .collect::<Vec<_>>(),
+            [("client", &FactValue::Text("2.1.269".into()))],
+            "{trigger}: the version rides the summary's own fact"
         );
         assert_eq!(
             (

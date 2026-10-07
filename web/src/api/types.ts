@@ -718,10 +718,10 @@ export interface RequestPage {
   requests: RequestLog[];
 }
 
-/** A decision's kind as the routing log names it; a probe's decision keeps its kind and the row's `probe` marks it. */
+/** A decision's kind as the routing log names it. A probe's decision keeps its kind and the row's `probe` marks it. */
 export type DecisionKind = 'exhausted' | 'held' | 'moved' | 'placed' | 'refused' | 'renewed';
 
-/** Why a record pins nothing; `not_looked_up` is a refusal's, made before the pin lookup whatever session it named. */
+/** Why a record pins nothing. `not_looked_up` is a refusal's, made before the pin lookup whatever session it named. */
 export type PinReason = 'not_looked_up' | 'pinning_off';
 
 /** How the console draws a fact's value. */
@@ -802,7 +802,7 @@ export interface RoutingEvent {
   actor: string | null;
   agentId: string | null;
   at: string;
-  /** The kind's own fields, decoded; the console reads them by name through `routingLog.ts`. */
+  /** The kind's own fields, decoded, which the console reads by name through `routingLog.ts`. */
   detail: Record<string, unknown>;
   id: number;
   keyId: string | null;
@@ -828,7 +828,7 @@ export interface RoutingLogQuery {
   cursor?: string;
   from?: string;
   keyIds?: string[];
-  /** Decision kinds, event kinds and the pseudo-kind `probe`; absent is the route's default set. */
+  /** Decision kinds, event kinds and the pseudo-kind `probe`. Absent, it is the route's default set. */
   kinds?: string[];
   limit?: number;
   models?: string[];
@@ -862,7 +862,7 @@ export interface RecordRequest {
   seq: number;
 }
 
-/** Step 1's reading of the pin; the row's fields are null when none was found. */
+/** Step 1's reading of the pin, its row's fields null when none was found. */
 export interface RecordPin {
   accountId: string | null;
   createdAt: string | null;
@@ -908,7 +908,7 @@ export interface RecordSettings {
   windDownMinutes: number;
 }
 
-/** A member's spend against one budget; the spend and its period are null while the ledger has reported none. */
+/** A member's spend against one budget. The spend and its period are null while the ledger has reported none. */
 export interface RecordBudget {
   budgetUsd: number;
   observedAt: string | null;
@@ -935,7 +935,7 @@ export interface RecordCredits {
   utilization: number | null;
 }
 
-/** One entry the rung walk visited on a member; `refusedBy` names the gate that refused it, null for one accepted. */
+/** One entry the rung walk visited on a member. `refusedBy` names the gate that refused it, null for one accepted. */
 export interface PrefixEntry {
   depth: number;
   /** The boundary's chain hash, 64 lowercase hex characters, as the affinity map keys it. */
@@ -966,7 +966,7 @@ export interface RecordCandidate {
   partition: string | null;
   planTier: string | null;
   /**
-   * Per rung the deepest visited entry and, apart from it, the one the rung accepted on this member; the card's chips
+   * Per rung the deepest visited entry and, apart from it, the one the rung accepted on this member. The card's chips
    * read the match.
    */
   prefix: { content: PrefixEntry | null; contentMatch: PrefixEntry | null; static: PrefixEntry | null; staticMatch: PrefixEntry | null; withMain: boolean };
@@ -995,7 +995,7 @@ export interface WalkFact {
   value: unknown;
 }
 
-/** What the record route adds from the attempt row at read time; null for a decision that sent nothing upstream. */
+/** What the record route adds from the attempt row at read time, null for a decision that sent nothing upstream. */
 export interface RecordCompletion {
   cacheMapWritten: { accountId: string; depth: number; prefixTokens: number; tier: string; ttlMs: number }[] | null;
   cacheReadTokens: number | null;
@@ -1023,14 +1023,14 @@ export interface RecordOutcome {
   refusal: { kind: string; reason: string } | null;
   rule: string | null;
   rung: Placement | null;
-  /** The pins the shedding round this decision ran marked; null when no round ran. */
+  /** The pins the shedding round this decision ran marked, or null when no round ran. */
   shedMarks: { agentId: string; keyId: string; model: string; sessionId: string }[] | null;
   strategy: string;
   tier: [number, number, number] | null;
   upstreamModel: string | null;
 }
 
-/** Record v1 as the record route answers it, every block of the spec's section 2 in camelCase; `raw` is the route's
+/** Record v1 as the record route answers it, every block in camelCase. `raw` is the route's
  * answer as it arrived, kept for the card's Copy as JSON, and `settings` null for a refusal under a key or pool the
  * registry no longer held. */
 export interface DecisionRecord {

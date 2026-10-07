@@ -397,6 +397,51 @@ async fn a_refresh_row_names_the_failure_s_class_and_text_or_the_committed_token
 }
 
 #[tokio::test]
+async fn a_refresh_row_names_the_expiry_of_the_bundle_its_own_commit_wrote() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), polled_every_50_ms()).await;
+    let bundle = |expires_at: i64| phoebis_store::NewBundle {
+        access_token: phoebis_store::Secret::new("rotated"),
+        refresh_token: Some(phoebis_store::Secret::new("rotated-refresh")),
+        issued_at: NOW,
+        expires_at,
+        refresh_expires_at: None,
+        scopes: "user:inference".into(),
+    };
+    // Two commits before the mirror's next tick: the first one's bundle is gone by the time the tick reads it.
+    let first = h.store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    h.store
+        .commit_credentials("a", 1, 1, Some(1), Some(first), &bundle(NOW + 3_600_000))
+        .unwrap();
+    let second = h.store.open_refresh_attempt("a", 1, 1, 2).unwrap();
+    h.store
+        .commit_credentials("a", 1, 1, Some(2), Some(second), &bundle(NOW + 7_200_000))
+        .unwrap();
+    let untils = wait_for_async(Duration::from_secs(5), || async {
+        let rows: Vec<serde_json::Value> =
+            h.db.events(0, i64::MAX, 100)
+                .await
+                .unwrap()
+                .into_iter()
+                .filter(|e| e.kind == "refresh_succeeded")
+                .map(|e| serde_json::from_str(e.detail.as_deref().unwrap()).unwrap())
+                .collect();
+        (rows.len() == 2).then(|| {
+            rows.iter()
+                .map(|detail| detail["until"].clone())
+                .collect::<Vec<_>>()
+        })
+    })
+    .await;
+    assert_eq!(
+        untils,
+        [serde_json::Value::Null, serde_json::json!(NOW + 7_200_000)],
+        "a commit whose bundle a later write replaced names no expiry rather than the newer bundle's"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn a_registry_change_lands_with_its_diff_decoded_once() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
@@ -750,6 +795,23 @@ async fn a_deleted_account_s_last_row_reads_deleted() {
         (account_rows(&h).await == last).then_some(())
     })
     .await;
+    let deletion: Vec<serde_json::Value> =
+        h.db.events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|e| e.kind == "registry_changed")
+            .map(|e| serde_json::from_str(e.detail.as_deref().unwrap()).unwrap())
+            .filter(|detail: &serde_json::Value| detail["kind"] == "account_deleted")
+            .collect();
+    assert_eq!(
+        deletion
+            .iter()
+            .map(|detail| (detail["target"].as_str(), detail["diff"].clone()))
+            .collect::<Vec<_>>(),
+        [(Some("a"), serde_json::json!({}))],
+        "the registry's own row of the deletion stands beside the account's last row"
+    );
     // The next tick finds no held account the rows lack: the row is written once.
     stays_for_async(Duration::from_millis(200), || async {
         account_rows(&h).await == last
@@ -981,7 +1043,7 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
     // A round trip through the loop: it turns, and its purge tick waits.
     router.pins().await.unwrap();
     stays_for(Duration::from_millis(200), || early.try_recv().is_err()).await;
-    let ledger = phoebis_ledger::spawn(
+    let _ledger = phoebis_ledger::spawn(
         db.clone(),
         Arc::new(phoebis_ledger::Pricing::new(
             phoebis_ledger::PriceTable::shipped(),
@@ -991,13 +1053,11 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
         router.clone(),
         clock,
         Arc::new(phoebis_ledger::Metrics::new()),
-        polled_every_50_ms(),
+        LedgerConfig {
+            start_version: Some("0.1.0".into()),
+            ..polled_every_50_ms()
+        },
     );
-    ledger.record(phoebis_ledger::Record::RouterStarted {
-        version: "0.1.0".into(),
-        counts: phoebis_routing::LoadCounts::default(),
-        at: NOW,
-    });
     router.release_purge().await;
     let rows = || async {
         db.events(0, i64::MAX, 100)
@@ -1028,4 +1088,83 @@ async fn a_clock_reset_that_passed_while_the_router_was_down_lands_once_at_the_s
         rows().await.len() == 3
     })
     .await;
+}
+
+#[tokio::test]
+async fn the_start_row_dates_the_gap_from_the_previous_run_whatever_the_mirror_finds_at_spawn() {
+    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+    store
+        .insert_account(&phoebis_store::AccountRow {
+            id: "a".into(),
+            kind: phoebis_store::AccountKind::Oauth,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Operator,
+        })
+        .unwrap();
+    let down_since = NOW - 60_000;
+    let db = Arc::new(LedgerDb::open_in_memory().unwrap());
+    db.insert_event(&EventRecord {
+        at: down_since,
+        kind: "pin_created".into(),
+        account_id: Some("a".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    let clock: phoebis_oauth::Clock = Arc::new(|| NOW);
+    let router = phoebis_routing::spawn(store.clone(), clock.clone(), Default::default()).unwrap();
+    let _ledger = phoebis_ledger::spawn(
+        db.clone(),
+        Arc::new(phoebis_ledger::Pricing::new(
+            phoebis_ledger::PriceTable::shipped(),
+        )),
+        store.clone(),
+        &phoebis_bus::Bus::new(),
+        router.clone(),
+        clock,
+        Arc::new(phoebis_ledger::Metrics::new()),
+        LedgerConfig {
+            start_version: Some("0.1.0".into()),
+            ..polled_every_50_ms()
+        },
+    );
+    // A refresh this run settled past the mirror's watermark, which its first tick lands.
+    let attempt = store.open_refresh_attempt("a", 1, 1, 1).unwrap();
+    store
+        .resolve_refresh_attempt(
+            attempt,
+            1,
+            phoebis_store::AttemptOutcome::Failed("quarantined at start".into()),
+        )
+        .unwrap();
+    let landed = wait_for_async(Duration::from_secs(5), || async {
+        let rows: Vec<(String, Option<String>)> = db
+            .events(0, i64::MAX, 100)
+            .await
+            .unwrap()
+            .into_iter()
+            .map(|e| (e.kind, e.detail))
+            .collect();
+        (rows.len() == 3).then_some(rows)
+    })
+    .await;
+    assert_eq!(
+        landed
+            .iter()
+            .map(|(kind, _)| kind.as_str())
+            .collect::<Vec<_>>(),
+        ["pin_created", "router_started", "refresh_failed"],
+        "the mirror's row lands behind the start row"
+    );
+    let start: serde_json::Value = serde_json::from_str(landed[1].1.as_deref().unwrap()).unwrap();
+    assert_eq!(
+        start["down_since"],
+        serde_json::json!(down_since),
+        "the gap ends at the previous run's last row"
+    );
 }

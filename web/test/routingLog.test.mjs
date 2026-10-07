@@ -88,7 +88,7 @@ const DECISIONS = [
   ['exhausted, the fast lane', decision({ accountId: null, by: by('exhaustion', 'fast_lane'), exhaustion: { deadline: iso(ms(14, 42)), kind: 'fast_lane', obstacle: null, reason: null, window: null }, fact: [fact('retry', ms(14, 42), 'time')], kind: 'exhausted' }), 'fast lane', ['retry 14:42']],
   ['exhausted, credits', decision({ accountId: null, by: by('exhaustion', 'fast_credits'), exhaustion: { deadline: null, kind: 'fast_credits', obstacle: null, reason: 'declined', window: null }, fact: [fact('cause', 'declined', 'text')], kind: 'exhausted' }), 'credits', ['cause declined']],
   ['exhausted with nothing dated', decision({ accountId: null, by: by('exhaustion', 'untimed'), exhaustion: { deadline: null, kind: 'untimed', obstacle: null, reason: null, window: null }, fact: [fact('retry', 'none', 'text')], kind: 'exhausted' }), 'no deadline', ['retry none']],
-  ['refused, client drift', decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.274', 'text')], kind: 'refused', refusal: { kind: 'client', reason: 'hash; client 2.1.274' } }), 'client drift', ['client 2.1.274']],
+  ['refused, client drift', decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.274', 'text')], kind: 'refused', refusal: { kind: 'client', reason: 'hash' } }), 'client drift', ['client 2.1.274']],
   ['refused, a key revoked after admission', decision({ accountId: null, by: by('refusal', 'key'), fact: [fact('key', 'laptop', null, { id: 'laptop', kind: 'key' })], kind: 'refused', refusal: { kind: 'key', reason: 'the key was revoked' } }), 'key revoked', ['key laptop']],
   ['probe, renewed its pin', decision({ fact: [fact('epoch', 50, 'count')], kind: 'renewed', probe: true }), 'keepalive', ['epoch 50']],
   ['probe, answered exhausted', decision({ accountId: null, by: by('exhaustion', 'timed'), exhaustion: { deadline: iso(MIDNIGHT), kind: 'timed', obstacle: null, reason: null, window: 'budget' }, fact: [fact('retry', MIDNIGHT, 'time')], kind: 'exhausted', probe: true }), 'budget', ['retry 00:00']],
@@ -125,6 +125,7 @@ const EVENTS = [
   ['pin released by hand', event('pin_released', { agent_id: 'main' }, { actor: 'admin' }), 'by hand', []],
   ['cooldown set, the whole account', event('cooldown_set', { reason: 'rate_limit', scope: 'account', source_request_id: 'req_1', until: ms(15, 42), window: 'five_hour' }), '429 on 5h', ['until 15:42']],
   ['cooldown set, a retry-after', event('cooldown_set', { reason: 'rate_limit', scope: 'account', until: ms(14, 1, 20), window: 'retry_after' }), '429 retry-after', ['until 14:01']],
+  ["cooldown set, a retry-after inside the row's minute", event('cooldown_set', { reason: 'rate_limit', scope: 'account', until: ms(14, 0, 40), window: 'retry_after' }), '429 retry-after', []],
   ['cooldown set, a spend cap', event('cooldown_set', { reason: 'spend_cap', scope: 'account', until: ms(16, 0), window: 'overage' }), 'spend cap', ['until 16:00']],
   ['cooldown set, the fast lane', event('cooldown_set', { reason: 'fast_rate_limit', scope: 'fast', until: ms(14, 42), window: 'fast' }), 'fast lane 429', ['until 14:42']],
   ['cooldown set, a model', event('cooldown_set', { reason: 'model_rejected', scope: 'model:claude-haiku-4-5-20251001', until: ms(15, 24), window: 'model' }), '404 on haiku-4-5', ['until 15:24']],
@@ -140,9 +141,10 @@ const EVENTS = [
   ['registry changed, the whole pool row', event('registry_changed', { diff: WHOLE_POOL_ROW, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', poolId: 'all' }), 'pool edited', []],
   ['registry changed, a key revoked', event('registry_changed', { diff: {}, kind: 'key_revoked', target: 'ci' }, { accountId: null, actor: 'admin', keyId: 'ci' }), 'key revoked', []],
   ['re-auth required', event('reauth_required', {}), 'credential refused', ['state routing off']],
-  ['refresh succeeded', event('refresh_succeeded', {}), 'refreshed', []],
-  ['refresh failed', event('refresh_failed', {}), 'refresh failed', []],
-  ['refresh uncertain', event('refresh_uncertain', {}), 'refresh uncertain', []],
+  ['refresh succeeded', event('refresh_succeeded', { access_expires_at: ms(20, 52), refresh_expires_at: null, until: ms(20, 52) }), 'refreshed', ['until 20:52']],
+  ['refresh failed', event('refresh_failed', { cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }), 'refresh failed', ['cause invalid_grant']],
+  ['refresh uncertain', event('refresh_uncertain', { cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }), 'refresh uncertain', ['cause refresh_response_lost']],
+  ['refresh succeeded, its bundle replaced since', event('refresh_succeeded', { access_expires_at: null, refresh_expires_at: null, until: null }), 'refreshed', []],
   ['ledger gap', event('ledger_gap', { reason: 'chunk_dropped', request_id: 'req_1' }, { accountId: null, requestId: 'req_1' }), 'chunk dropped', ['capture truncated']],
   ['shedding round', event('shedding_round', { marks: [{}, {}, {}], pins: [{}, {}, {}, {}], utilization: 0.92, window: 'five_hour' }), '92% on 5h', ['pins 3 of 4']],
   ['fast credits changed, blocked', event('fast_credits_changed', { after: { disabled_reason: 'org_spend_cap_reached', enabled: true, utilization: 1 }, blocked_after: 'org_spend_cap_reached', blocked_before: null }), 'spend cap reached', ['state unavailable']],
@@ -325,6 +327,12 @@ test('each link in builds its URL with its range', () => {
   assert.deepEqual(Object.fromEntries(session), { from: '2026-09-16T10:00:00.000Z', session: '407dd39b', to: '2026-09-16T12:00:00.000Z' });
 });
 
+test("the log's address keeps a kind this build does not know, so the route's refusal reaches the page", () => {
+  const filters = d.ROUTING_LOG_CODEC.fromParams(new URLSearchParams('kinds=placed,budget_refilled&accounts=primary'));
+  assert.deepEqual([filters.kinds, filters.accounts], [['placed', 'budget_refilled'], ['primary']]);
+  assert.equal(d.ROUTING_LOG_CODEC.toParams(filters).get('kinds'), 'placed,budget_refilled');
+});
+
 test('this minute is the clock minute that holds the moment, its last millisecond the end, never past now', () => {
   assert.deepEqual(d.clockMinute(ms(14, 2, 10), NOW), { from: ms(14, 2), to: ms(14, 3) - 1 });
   assert.deepEqual(d.clockMinute(ms(14, 29, 10), ms(14, 29, 30)), { from: ms(14, 29), to: ms(14, 29, 30) });
@@ -453,8 +461,9 @@ test('the walk collapses the rules after a fired one and marks the rung lines wi
 });
 
 test("a refusal's walk is two lines, the admission's reason and the rest of the walk not run", () => {
-  const r = record({ outcome: { accountId: null, kind: 'refused', refusal: { kind: 'client', reason: 'hash; client 2.1.274' }, upstreamModel: null }, pin: null, pinReason: 'not_looked_up', walk: [wstep('admission', 'refused', [wfact('reason', 'hash; client 2.1.274')]), wstep('selection', 'not_run')] });
-  const lines = d.walkLines(r);
+  const r = record({ outcome: { accountId: null, kind: 'refused', refusal: { kind: 'client', reason: 'hash' }, upstreamModel: null }, pin: null, pinReason: 'not_looked_up', walk: [wstep('admission', 'refused', [wfact('reason', 'hash')]), wstep('selection', 'not_run')] });
+  // The version rides the summary's `client` fact, so the reason names the trigger alone.
+  const lines = d.walkLines(r, decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.274', 'text')], kind: 'refused', refusal: { kind: 'client', reason: 'hash' } }));
   assert.deepEqual(lines.map((l) => [l.number, l.step, l.verdict, texts(l.chips)]), [
     [1, 'Admission', 'refused', ['drift hash', 'client 2.1.274']],
     [2, 'Rest of the walk', 'not_run', ['moves', 'rungs', 'partitions']],
@@ -501,7 +510,7 @@ test('the candidate cells word every verdict and its chip', () => {
 });
 
 test('the outcome rows read the cache tier off the deepest map entry and pending before it', () => {
-  const rows = (r) => d.outcomeRows(r, NOW).map((row) => [row.label, texts(row.chips)]);
+  const rows = (r, row) => d.outcomeRows(r, NOW, row).map((line) => [line.label, texts(line.chips)]);
   const answered = record({
     outcome: {
       completion: completion({ cacheMapWritten: [{ accountId: 'primary', depth: 7, prefixTokens: 50_000, tier: 'message', ttlMs: 300_000 }, { accountId: 'primary', depth: 8, prefixTokens: 52_000, tier: 'message', ttlMs: 3_600_000 }], cacheReadTokens: 48_100, completedAt: iso(ms(14, 27, 34)), hit: true, inputTokens: 3_900, status: 200 }),
@@ -528,9 +537,10 @@ test('the outcome rows read the cache tier off the deepest map entry and pending
   assert.deepEqual(rows(freed).find(([label]) => label === 'Hold'), ['Hold', ['on primary', 'cohort', 'freed after 2.0 s']]);
   const exhausted = record({ outcome: { accountId: null, exhaustion: { deadline: iso(ms(15, 42)), kind: 'timed', obstacle: null, reason: null, window: 'five_hour' }, kind: 'exhausted', upstreamModel: null } });
   assert.deepEqual(rows(exhausted), [['Answer', ['status 429', 'window 5h', 'retry after 15:42']]]);
-  const refused = record({ outcome: { accountId: null, kind: 'refused', refusal: { kind: 'client', reason: 'hash; client 2.1.274' }, upstreamModel: null }, request: { keyId: 'laptop' } });
-  assert.deepEqual(rows(refused), [['Answer', ['client drift', 'client 2.1.274', 'key laptop']]]);
-  assert.deepEqual(d.outcomeRows(refused, NOW)[0].chips[2].entity, { id: 'laptop', kind: 'key' });
+  const refused = record({ outcome: { accountId: null, kind: 'refused', refusal: { kind: 'client', reason: 'hash' }, upstreamModel: null }, request: { keyId: 'laptop' } });
+  const drift = decision({ accountId: null, by: by('refusal', 'client'), fact: [fact('client', '2.1.274', 'text')], kind: 'refused', refusal: { kind: 'client', reason: 'hash' } });
+  assert.deepEqual(rows(refused, drift), [['Answer', ['client drift', 'client 2.1.274', 'key laptop']]]);
+  assert.deepEqual(d.outcomeRows(refused, NOW, drift)[0].chips[2].entity, { id: 'laptop', kind: 'key' });
   const spend = record({ candidates: [candidate({ budget: [{ budgetUsd: 5, observedAt: iso(NOW), period: 'day', periodEnd: iso(MIDNIGHT), periodStart: iso(ms(0, 0)), spentUsd: 1.1 }] })] });
   assert.deepEqual(rows(spend), [['Spend', ['daily budget $1.10 of $5.00']]]);
 });
@@ -556,9 +566,9 @@ const DETAIL_EVENTS = {
   poll_backoff_ended: [{ attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) }, ['Backed off', 'Attempts', 'Resumed']],
   poll_backoff_started: [{ attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 43), next_attempt_at: ms(13, 53), reason: '429' }, ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect']],
   reauth_required: [{}, ['Routing']],
-  refresh_failed: [{}, []],
-  refresh_succeeded: [{}, []],
-  refresh_uncertain: [{}, []],
+  refresh_failed: [{ cause: 'invalid_grant', error: 'refresh rejected with status 400 (invalid_grant)' }, ['Error']],
+  refresh_succeeded: [{ access_expires_at: ms(20, 52), refresh_expires_at: ms(20, 52) + 58 * 24 * HOUR, until: ms(20, 52) }, ['Access token', 'Refresh token']],
+  refresh_uncertain: [{ cause: 'refresh_response_lost', error: 'refresh response lost: connection reset' }, ['Error']],
   registry_changed: [{ diff: { shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, ['Change', 'shed ahead of pace', 'Actor', 'Reading it']],
   router_started: [{ affinity_entries_loaded: 34, down_since: ms(6, 11, 58), holds_lost: true, pins_loaded: 10, shedding_marks_loaded: 0, shedding_rounds_stale: 0, version: '0.1.0', windows_loaded: 5 }, ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests']],
   shedding_round: [
@@ -656,7 +666,8 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
   const pairs = (kind, detail, o) => Object.fromEntries(d.detailPairs(event(kind, detail, o), NOW).map((p) => [p.label, texts(p.chips)]));
   assert.deepEqual(pairs('account_state_changed', { cause: 'funding_refused', detail: null, from: 'ready', to: 'funding_required' }).Effect, ['the account leaves every eligible set until funded']);
   assert.deepEqual(pairs('account_state_changed', { cause: 'deleted', detail: null, from: 'ready', to: 'deleted' }).Effect, ['the account left the registry and this is its last row']);
-  assert.deepEqual(pairs('account_state_changed', { cause: 'operator', detail: null, from: 'funding_required', to: 'ready' }).Effect, ['the account joins the eligible sets again']);
+  assert.deepEqual(pairs('account_state_changed', { cause: 'operator', detail: null, from: 'funding_required', to: 'ready' }).Effect, ['the account joins the eligible sets']);
+  assert.deepEqual(pairs('account_state_changed', { cause: 'paired', detail: null, from: 'unpaired', to: 'ready' }).Effect, ['the account joins the eligible sets']);
   assert.deepEqual(pairs('window_spent', { reset: ms(15, 42), source: 'head', utilization: 1, window: 'five_hour' }).Effect, ['a pinned session moves by the spent rule at its next request']);
   const skipped = pairs('ledger_gap', { reason: 'chunk_skipped', request_id: 'req_1' }, { requestId: 'req_1' });
   assert.deepEqual([skipped.Meaning, skipped.Effect], [['an interior chunk of the capture was dropped at the bus'], ['the captured response is stored truncated']]);
@@ -664,7 +675,9 @@ test('the event detail draws the pairs its event carries: the effect, the meanin
   assert.deepEqual([missing.Meaning, missing.Effect], [['the bus dropped an account selection and the trail is short an attempt row'], undefined]);
   for (const reason of ['attempt_missing', 'capture_budget', 'chunk_dropped', 'chunk_skipped', 'expired', 'in_flight_cap', 'poison']) assert.ok(pairs('ledger_gap', { reason }).Meaning?.[0], reason);
   const edit = pairs('registry_changed', { diff: { pace_floor: { from: 0.05, to: 0.1 }, shed_ahead_of_pace: { from: null, to: 0.9 } }, kind: 'pool_updated', target: 'all' }, { accountId: null, actor: 'admin', at: iso(ms(9, 5, 12)), poolId: 'all' });
-  assert.deepEqual(edit['Reading it'], ['decisions before 09:05 carry pace floor 5%', 'decisions before 09:05 carry shed ahead of pace off']);
+  // A null old value reads one word in the field's own row and in the reading.
+  assert.deepEqual(edit['shed ahead of pace'], ['from none', 'to 90%']);
+  assert.deepEqual(edit['Reading it'], ['decisions before 09:05 carry pace floor 5%', 'decisions before 09:05 carry shed ahead of pace none']);
   assert.deepEqual(pairs('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: ms(8, 15, 3) })['Backed off'], ['from 07:50', 'to 08:15']);
 });
 

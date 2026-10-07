@@ -552,7 +552,7 @@ pub(crate) fn insert_event_in(conn: &Connection, e: &EventRecord) -> Result<(), 
     Ok(())
 }
 
-/// `summary` is the summary's JSON, `frame` the record's zstd frame; the caller built both inside the batch.
+/// `summary` is the summary's JSON, `frame` the record's zstd frame. The caller built both inside the batch.
 pub(crate) fn insert_decision_in(
     conn: &Connection,
     row: &DecisionRow,
@@ -582,7 +582,7 @@ pub(crate) fn insert_decision_in(
     Ok(())
 }
 
-/// Sets `cache_map` on the decision `(request_id, seq)` names; answers the rows changed (0 when no decision row
+/// Sets `cache_map` on the decision `(request_id, seq)` names and answers the rows changed (0 when no decision row
 /// exists). Keyed by the selecting decision alone, so a retry in place that completed on a later attempt still lands
 /// on the decision that selected it.
 pub(crate) fn update_cache_map_in(

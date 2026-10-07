@@ -256,7 +256,7 @@ impl CatalogService {
         }
     }
 
-    /// Called once per fill whose listing differs from the one the slot held; the first listing of an account
+    /// Called once per fill whose listing differs from the one the slot held. The first listing of an account
     /// fires nothing, since there is no listing before it to differ from.
     pub fn set_on_change(&self, hook: CatalogHook) {
         *self.on_change.lock().expect(ON_CHANGE_POISONED) = Some(hook);
@@ -397,7 +397,7 @@ impl CatalogService {
         catalog
     }
 
-    /// What a landed listing moved against the account's previous one, which it then replaces; `None` for the
+    /// What a landed listing moved against the account's previous one, which it then replaces, or `None` for the
     /// first listing of a holder, whose incarnation names no listing before it, and for one that moved nothing.
     fn listing_changed(&self, key: &SlotKey, catalog: &Catalog) -> Option<CatalogChange> {
         let ids: BTreeSet<String> = catalog.models.iter().map(|row| row.id.clone()).collect();

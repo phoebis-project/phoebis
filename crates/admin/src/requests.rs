@@ -230,8 +230,8 @@ pub(crate) fn event_json(e: &phoebis_ledger::EventRecord) -> Value {
     json!({ "at": e.at, "kind": e.kind, "account_id": e.account_id, "key_id": e.key_id, "session_id": e.session_id, "model": e.model, "actor": e.actor, "detail": detail, "pool_id": e.pool_id, "agent_id": e.agent_id, "request_id": e.request_id })
 }
 
-/// A row the mirror wrote before `registry_changed`'s diff became a value still carries it as a JSON string; decoded
-/// here so every row reads the same.
+/// A row the mirror wrote before `registry_changed`'s diff became a value still carries it as a JSON string, which
+/// is decoded here so every row reads the same.
 pub(crate) fn decode_diff(detail: &mut Value) {
     if let Some(diff) = detail
         .get("diff")
