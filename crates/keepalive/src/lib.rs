@@ -20,14 +20,12 @@ pub use engine::{
     guard, spawn_observer, AgentState, AgentStatus, Engine, EngineParts, EngineStats, Funding,
     Guard, Net, ParkKind, Reason, SavingsUnit, SessionKey, Wasted, MAIN_AGENT,
 };
-pub use events::{
-    decode_json_event, Ack, AckAgent, Event, EventError, Snapshot, SnapshotSession, PROTOCOL,
-};
+pub use events::{decode_json_event, Ack, AckAgent, Event, EventError, PROTOCOL};
 pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,
 };
-pub use routes::{keepalive_router, EVENTS_PATH, MAX_BODY_BYTES, SNAPSHOT_PATH};
+pub use routes::{keepalive_router, EVENTS_PATH, MAX_BODY_BYTES};
 pub use usage::{ProbeUsage, MAX_USAGE_BYTES};
 pub use view::{
     view_reason, AgentCounts, CompanionState, KeepaliveSummary, RecipeState, RecipeView,

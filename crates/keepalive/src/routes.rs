@@ -1,4 +1,5 @@
-//! The keepalive mod's route, on the proxy listener under the API key, and the snapshot route beside it.
+//! The keepalive mod's one route, on the proxy listener under the API key: the mod's report in, its acknowledgment
+//! or its refusal code out.
 
 use std::sync::Arc;
 
@@ -7,7 +8,7 @@ use axum::extract::State;
 use axum::http::header::{CACHE_CONTROL, CONTENT_TYPE};
 use axum::http::{HeaderMap, Request, StatusCode};
 use axum::response::{IntoResponse, Response};
-use axum::routing::{get, post};
+use axum::routing::post;
 use axum::Router;
 use phoebis_relay::{auth_error_response, key_refusal_response, new_request_id, presented_key};
 
@@ -15,13 +16,11 @@ use crate::engine::Engine;
 use crate::events::{decode_json_event, err, EventError};
 
 pub const EVENTS_PATH: &str = "/v0/keepalive/events";
-pub const SNAPSHOT_PATH: &str = "/v0/resource/plugins/cache-keepalive/snapshot";
 pub const MAX_BODY_BYTES: usize = 16 << 10;
 
 pub fn keepalive_router(engine: Arc<Engine>) -> Router {
     Router::new()
         .route(EVENTS_PATH, post(events))
-        .route(SNAPSHOT_PATH, get(snapshot))
         .with_state(engine)
 }
 
@@ -89,15 +88,4 @@ async fn events(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Re
         ),
         Err(error) => event_error(error),
     }
-}
-
-async fn snapshot(State(engine): State<Arc<Engine>>, request: Request<Body>) -> Response {
-    let (key_id, key_generation) = match authenticate(&engine, &request) {
-        Ok(key) => key,
-        Err(refused) => return refused,
-    };
-    json(
-        StatusCode::OK,
-        serde_json::to_string(&engine.snapshot(&key_id, key_generation)).unwrap_or_default(),
-    )
 }

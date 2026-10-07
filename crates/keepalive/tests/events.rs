@@ -1,12 +1,13 @@
-//! The lifecycle protocol: registration, sequences, generations, leases, and the snapshot the companion
-//! reconciles against; the Go events and lifecycle suites.
+//! The Go events and lifecycle suites over the reporting protocol: registration, sequences, generations, leases,
+//! and the registration acknowledgment the mod reconciles from.
 mod common;
 use std::time::Duration;
 
 use common::*;
 use phoebis_bus::{Phase, ResponseChunk, Usage};
 use phoebis_keepalive::{
-    decode_json_event, AgentState, Event, EventError, KeepaliveLimits, RecipeState,
+    decode_json_event, AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind,
+    RecipeState,
 };
 
 #[tokio::test]
@@ -32,12 +33,11 @@ async fn the_session_bound_counts_live_sessions_only() {
     }
     let refused = rig.event(session_start("t-126")).unwrap_err();
     assert_eq!(refused.code, "session_limit");
-    let snapshot = rig.snapshot();
     assert!(
-        snapshot
-            .sessions
+        rig.engine
+            .sessions()
             .iter()
-            .any(|s| s.session_id == "s-0" && s.ended),
+            .any(|s| s.session_id == "s-0" && s.companion == CompanionState::None),
         "the tombstone is still read"
     );
 }
@@ -380,7 +380,10 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         })
         .unwrap();
     assert_eq!(renewed.lease_expires_ms, r.now() + r.lease_ms());
-    assert_eq!(r.agent("worker").state, AgentState::Parked);
+    assert_eq!(
+        (r.agent("worker").state, r.agent("worker").park_kind),
+        (AgentState::Parked, Some(ParkKind::Background))
+    );
     // The lease renews on a heartbeat or a same-instance session_start only; an event about an agent
     // leaves the companion's own lease alone.
     r.advance(1_000);
@@ -473,27 +476,23 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         (Some("worker"), AgentState::Busy)
     );
     // The failed events did not advance the sequence: the next accepted one is one past the last accepted.
-    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
-    assert_eq!(snapshot.sessions[0].sequence, r.sequence);
+    assert_eq!(restarted.sequence, r.sequence);
     // session_end releases every agent and ends the instance; anything after it is refused.
     r.event(Event {
         event: "session_end".into(),
         ..Default::default()
     })
     .unwrap();
-    assert!(
-        r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions[0]
-            .ended
+    assert_eq!(
+        (
+            r.engine.sessions()[0].companion,
+            r.engine.sessions()[0].agents
+        ),
+        (CompanionState::None, 2)
     );
-    assert!(r
-        .engine
-        .snapshot("desktop", r.generation("desktop"))
-        .sessions[0]
-        .agents
+    assert!(["main", "worker"]
         .iter()
-        .all(|a| a.state == AgentState::Released));
+        .all(|id| r.agent(id).state == AgentState::Released));
     assert_eq!(
         r.event(Event {
             event: "heartbeat".into(),
@@ -522,11 +521,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         (
             replaced.instance_id.as_str(),
             replaced.request_generation,
-            r.engine
-                .snapshot("desktop", r.generation("desktop"))
-                .sessions[0]
-                .agents
-                .len()
+            r.engine.sessions()[0].agents
         ),
         ("next", 0, 1)
     );
@@ -544,7 +539,8 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
     })
     .await;
     // The same session id under another key is another session: neither key sees the other's.
-    r.engine
+    let laptop = r
+        .engine
         .apply_event(
             "laptop",
             r.generation("laptop"),
@@ -557,23 +553,14 @@ async fn sessions_are_scoped_to_the_key_and_bounded_process_wide() {
             },
         )
         .unwrap();
+    assert_eq!(laptop.instance_id, "elsewhere");
     assert_eq!(
         r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions
-            .len(),
-        1
-    );
-    assert_eq!(
-        r.engine.snapshot("laptop", r.generation("laptop")).sessions[0].instance_id,
-        "elsewhere"
-    );
-    assert_eq!(
-        r.engine
-            .snapshot("nobody", r.generation("nobody"))
-            .sessions
-            .len(),
-        0
+            .sessions()
+            .iter()
+            .map(|s| (s.key_id.as_str(), s.session_id.as_str()))
+            .collect::<Vec<_>>(),
+        [("desktop", "session"), ("laptop", "session")]
     );
     assert_eq!(
         r.engine
@@ -647,13 +634,10 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     );
     r.advance(90_000);
     r.engine.expire();
-    let session = &r
-        .engine
-        .snapshot("desktop", r.generation("desktop"))
-        .sessions[0];
-    assert!(
-        session.ended,
-        "the companion sees an ended instance and re-registers"
+    assert_eq!(
+        r.engine.sessions()[0].companion,
+        CompanionState::Silent,
+        "the lapse leaves the session unattended, and the mod re-registers"
     );
     // A silent companion says nothing about the recipe: the lapse is counted, and the views keep reading the
     // reason the recipe's own last probe left.
@@ -674,11 +658,9 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
         })
         .unwrap();
     assert_eq!(again.instance_id, "instance");
-    assert!(
-        !r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions[0]
-            .ended,
+    assert_eq!(
+        r.engine.sessions()[0].companion,
+        CompanionState::Reporting,
         "the same instance re-adopted the session"
     );
     let counts = r.engine.reasons();
@@ -691,7 +673,7 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
 }
 
 #[tokio::test]
-async fn the_snapshot_carries_only_what_the_companion_reconciles() {
+async fn the_registration_acknowledgment_carries_only_what_the_mod_reconciles() {
     let mut r = rig(RigSpec::default()).await;
     r.event(Event {
         event: "agent_start".into(),
@@ -699,8 +681,8 @@ async fn the_snapshot_carries_only_what_the_companion_reconciles() {
         ..Default::default()
     })
     .unwrap();
-    let encoded =
-        serde_json::to_string(&r.engine.snapshot("desktop", r.generation("desktop"))).unwrap();
+    let ack = r.reregister();
+    let encoded = serde_json::to_string(&ack).unwrap();
     for forbidden in [
         "account",
         "usage",
@@ -715,22 +697,16 @@ async fn the_snapshot_carries_only_what_the_companion_reconciles() {
     ] {
         assert!(
             !encoded.contains(forbidden),
-            "snapshot leaks {forbidden}: {encoded}"
+            "the acknowledgment leaks {forbidden}: {encoded}"
         );
     }
-    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
     assert_eq!(
-        (
-            snapshot.sessions.len(),
-            snapshot.sessions[0].session_id.as_str(),
-            snapshot.sessions[0].instance_id.as_str(),
-            snapshot.sessions[0].ended
-        ),
-        (1, "session", "instance", false)
+        (ack.session_id.as_str(), ack.instance_id.as_str()),
+        ("session", "instance")
     );
-    let agents = &snapshot.sessions[0].agents;
     assert_eq!(
-        agents
+        ack.agents
+            .expect("a registration's acknowledgment lists the session's agents")
             .iter()
             .map(|a| (a.agent_id.as_str(), a.state))
             .collect::<Vec<_>>(),

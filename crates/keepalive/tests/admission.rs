@@ -457,11 +457,7 @@ async fn storage_bounds_hold_and_the_status_carries_no_prompt() {
     r.engine.observe(r.selected("req", "a"));
     r.engine
         .observe(r.complete("req", Outcome::Succeeded, Some(usage(0, 2_000))));
-    let encoded = format!(
-        "{:?}{:?}",
-        r.status("main"),
-        r.engine.snapshot("desktop", r.generation("desktop"))
-    );
+    let encoded = format!("{:?}{:?}", r.status("main"), r.reregister());
     assert!(
         !encoded.contains("private prompt")
             && !encoded.contains(KEY)
@@ -752,7 +748,7 @@ async fn a_body_whose_edited_member_is_spelled_with_an_escape_is_not_retained() 
 }
 
 #[tokio::test]
-async fn unknown_ownership_needs_a_lifecycle_snapshot_and_a_restart_rearms() {
+async fn unknown_ownership_needs_a_state_report_and_a_restart_rearms() {
     let mut r = rig(RigSpec::default()).await;
     r.observe("main").await;
     r.state("main", "unknown");
@@ -769,7 +765,7 @@ async fn unknown_ownership_needs_a_lifecycle_snapshot_and_a_restart_rearms() {
     r.observe("main").await;
     assert!(
         r.status("main").next_probe_at.is_some(),
-        "the snapshot restored observation"
+        "the state report restored observation"
     );
     r.event(Event {
         event: "agent_start".into(),

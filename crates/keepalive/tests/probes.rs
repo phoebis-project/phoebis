@@ -4,7 +4,7 @@ mod common;
 
 use common::*;
 use fake_upstream::{Respond, SseEvent};
-use phoebis_keepalive::{Event, KeepalivePolicy, Reason, MAIN_AGENT, MAX_WORKERS};
+use phoebis_keepalive::{CompanionState, Event, KeepalivePolicy, Reason, MAIN_AGENT, MAX_WORKERS};
 use phoebis_store::AccountState;
 
 fn json(status: u16, body: &str) -> Respond {
@@ -202,8 +202,7 @@ async fn a_probe_preserves_routing_and_constraints() {
         r.now() - 270_000,
         "a probe does not renew activity"
     );
-    let snapshot = r.engine.snapshot("desktop", r.generation("desktop"));
-    assert!(!snapshot.sessions[0].ended);
+    assert_eq!(r.engine.sessions()[0].companion, CompanionState::Reporting);
     let ack = r
         .event(Event {
             event: "heartbeat".into(),
@@ -439,12 +438,10 @@ async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discard
         r.engine.stats().retained_bytes > 0,
         "a lapsed lease keeps the recipe"
     );
-    assert!(
-        r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions[0]
-            .ended,
-        "the companion sees an ended instance"
+    assert_eq!(
+        r.engine.sessions()[0].companion,
+        CompanionState::Silent,
+        "the lapse leaves the session unattended"
     );
     assert_eq!(
         r.engine

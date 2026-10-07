@@ -1434,12 +1434,8 @@ async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
     assert_eq!(r.status("main").probes, 1);
     r.advance(330_000);
     r.step().await;
-    assert_eq!(
-        r.engine
-            .snapshot("desktop", r.generation("desktop"))
-            .sessions
-            .len(),
-        0,
+    assert!(
+        r.engine.sessions().is_empty(),
         "600 s past the last real request the session is gone"
     );
     assert_eq!(

@@ -1285,12 +1285,12 @@ async fn an_expiry_swept_by_an_observation_settles_from_that_observation() {
     );
 }
 
-/// A sweep run by a reader settles from that reader: `expire` and `snapshot` reach `Inner::expire` without a
+/// A sweep run by a reader settles from that reader: `expire` and `sessions` reach `Inner::expire` without a
 /// tick behind them, and what they queue has to land while the ledger is still up rather than wait for a
 /// `step` that a shutdown may never run.
 #[tokio::test]
 async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
-    for sweep in ["expire", "snapshot"] {
+    for sweep in ["expire", "sessions"] {
         let mut r = rig(RigSpec {
             session_expiry: Duration::from_secs(600),
             ..RigSpec::default()
@@ -1305,7 +1305,7 @@ async fn an_expiry_swept_by_a_reader_settles_from_that_call() {
         match sweep {
             "expire" => r.engine.expire(),
             _ => {
-                r.engine.snapshot("desktop", r.generation("desktop"));
+                r.engine.sessions();
             }
         }
         let rows = rollups(&r, |rows| probe_rows(rows).wasted_probes == 1).await;

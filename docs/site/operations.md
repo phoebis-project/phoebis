@@ -347,11 +347,8 @@ To re-pin the profile against a new build:
 A GitHub Actions workflow named `Tests` runs on every push to `main` and every pull request. Its `rust` job builds the
 console and embeds it, then runs `cargo fmt --check`, `cargo clippy` with warnings denied and `cargo test` over the
 workspace; its `web` job runs the console's unit tests, its jsdom smoke checks and the mock browser pass under Chromium;
-a third job, `Tests`, reports the two as the one check the branch protection on `main` requires. The companion
-registration test, which drives the keepalive companion's script through the binary, runs only when the repository
-secret `COMPANION_READ_TOKEN` holds a fine-grained token with contents read on the companion repository; without it the
-job prints a notice that the test was skipped and passes. The documentation workflow below and the release workflow are
-separate, so a failed test never blocks the site's build.
+a third job, `Tests`, reports the two as the one check the branch protection on `main` requires. The documentation
+workflow below and the release workflow are separate, so a failed test never blocks the site's build.
 
 The release workflow's jobs run with a read-only token except the build and publish jobs, which write packages, and the
 smoke job, which reads them.

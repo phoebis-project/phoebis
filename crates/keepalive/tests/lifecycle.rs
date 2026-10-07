@@ -350,9 +350,5 @@ async fn a_deleted_keys_sessions_end_at_the_next_tick() {
         (0, 0, 0),
         "and its agents and their recipes go with it"
     );
-    assert!(r
-        .engine
-        .snapshot(KEY, r.generation(KEY))
-        .sessions
-        .is_empty());
+    assert!(r.engine.sessions().is_empty());
 }

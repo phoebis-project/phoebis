@@ -5,6 +5,7 @@
 #[path = "../../../relay/tests/common/mod.rs"]
 pub mod relay_common;
 
+use std::collections::BTreeMap;
 use std::sync::atomic::Ordering;
 use std::sync::Arc;
 use std::time::Duration;
@@ -66,6 +67,8 @@ pub struct Rig {
     pub db: Arc<LedgerDb>,
     pub engine: Arc<Engine>,
     pub h: relay_common::Harness,
+    /// Session id to the instance its last accepted `session_start` through `event` registered.
+    instances: BTreeMap<String, String>,
     pub ledger: Ledger,
     /// The spec's limits, kept so `restart` builds its engine with what this one was built with.
     pub limits: KeepaliveLimits,
@@ -202,6 +205,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         db,
         engine,
         h,
+        instances: BTreeMap::new(),
         ledger,
         limits: spec.limits,
         metrics,
@@ -330,10 +334,10 @@ impl Rig {
             .unwrap_or_default()
     }
 
-    /// A lifecycle event under the harness key, with the next sequence. A caller that leaves `session_id`
-    /// unset gets the rig's one session; one that leaves `instance_id` unset gets that session's own current
-    /// instance (the rig's default session and instance before either is registered), so `session_end` and
-    /// `session_start` need only the session id a multi-session test is driving.
+    /// A report under the harness key, with the next sequence, handed to `Engine::apply_event` as the route hands
+    /// it a decoded body. A caller that leaves `session_id` unset gets the rig's one session, and one that leaves
+    /// `instance_id` unset gets `instance_of` that session, so `session_end` and `session_start` need only the
+    /// session id a multi-session test is driving.
     pub fn event(&mut self, mut event: Event) -> Result<Ack, EventError> {
         self.sequence += 1;
         event.sequence = self.sequence;
@@ -341,24 +345,39 @@ impl Rig {
             event.session_id = "session".into();
         }
         if event.instance_id.is_empty() {
-            let generation = self.generation("desktop");
-            event.instance_id = self
-                .engine
-                .snapshot("desktop", generation)
-                .sessions
-                .into_iter()
-                .find(|s| s.session_id == event.session_id)
-                .map(|s| s.instance_id)
-                .unwrap_or_else(|| "instance".into());
+            event.instance_id = self.instance_of(&event.session_id);
         }
-        self.engine
-            .apply_event("desktop", self.generation("desktop"), event)
+        let registers = event.event == "session_start";
+        let acked = self
+            .engine
+            .apply_event("desktop", self.generation("desktop"), event);
+        // A refused start registered nothing, so the session keeps the instance the engine still holds.
+        if let (true, Ok(ack)) = (registers, &acked) {
+            self.instances
+                .insert(ack.session_id.clone(), ack.instance_id.clone());
+        }
+        acked
     }
 
-    /// A snapshot of the rig's own key, for a test that reads a tombstone's `ended` flag or a live session's
-    /// sequence.
-    pub fn snapshot(&self) -> phoebis_keepalive::Snapshot {
-        self.engine.snapshot("desktop", self.generation("desktop"))
+    /// The instance each session of the rig registered under, kept by `event` from the `session_start` it sent
+    /// (the rig's default session starts as "instance"), so a report finds it without reading the engine.
+    pub fn instance_of(&self, session_id: &str) -> String {
+        self.instances
+            .get(session_id)
+            .cloned()
+            .unwrap_or_else(|| "instance".into())
+    }
+
+    /// The acknowledgment of a same-instance re-registration of the rig's session, the mod's view of the session.
+    pub fn reregister(&mut self) -> Ack {
+        let instance_id = self.instance_of("session");
+        self.event(Event {
+            event: "session_start".into(),
+            session_id: "session".into(),
+            instance_id,
+            ..Default::default()
+        })
+        .expect("a same-instance re-registration of the rig's session")
     }
 
     /// The companion's lease, so a test that waits one out never repeats the number.
@@ -366,6 +385,8 @@ impl Rig {
         phoebis_keepalive::LEASE_MS
     }
 
+    /// A `parked` word goes out as a background park, the shape the mod sends, since the route refuses a park
+    /// without its kind.
     pub fn state(&mut self, agent: &str, state: &str) {
         let generation = self.agent(agent).request_generation;
         self.event(Event {
@@ -373,22 +394,21 @@ impl Rig {
             agent_id: Some(agent.into()),
             state: Some(state.into()),
             request_generation: Some(generation),
+            park_kind: (state == "parked").then(|| "background".into()),
             ..Default::default()
         })
         .unwrap();
     }
 
-    pub fn agent(&self, id: &str) -> phoebis_keepalive::AckAgent {
+    /// One agent's state and generation as the engine records them, through `Engine::agent_status`.
+    pub fn agent(&self, id: &str) -> phoebis_keepalive::AgentStatus {
         self.engine
-            .snapshot("desktop", self.generation("desktop"))
-            .sessions
-            .into_iter()
-            .flat_map(|s| s.agents)
-            .find(|a| a.agent_id == id)
+            .agent_status("desktop", "session", id)
             .unwrap_or_else(|| panic!("missing agent {id}"))
     }
 
-    /// The engine's own record of one agent, past what the companion snapshot shows.
+    /// The engine's own record of one agent of the rig's session, for a test that reads past its state and
+    /// generation.
     pub fn status(&self, id: &str) -> phoebis_keepalive::AgentStatus {
         self.engine
             .agent_status("desktop", "session", id)

@@ -216,20 +216,6 @@ fn validate(event: Event) -> Result<Event, EventError> {
     Ok(event)
 }
 
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct SnapshotSession {
-    pub agents: Vec<AckAgent>,
-    pub ended: bool,
-    pub instance_id: String,
-    pub sequence: u64,
-    pub session_id: String,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct Snapshot {
-    pub sessions: Vec<SnapshotSession>,
-}
-
 fn agents_of(session: &Session) -> Vec<AckAgent> {
     session
         .agents
@@ -256,7 +242,7 @@ fn acknowledge(session: &Session, agent: Option<&Agent>, agents: Option<Vec<AckA
 
 impl Engine {
     /// `key_id` and `key_generation` are the authenticated key's, never fields of the event: a session is
-    /// scoped to the holder that reports it, and no query field can name another.
+    /// scoped to the holder that reports it, and no member of the body can name another.
     pub fn apply_event(
         &self,
         key_id: &str,
@@ -285,31 +271,6 @@ impl Engine {
         };
         self.flush();
         acked
-    }
-
-    pub fn snapshot(&self, key_id: &str, key_generation: i64) -> Snapshot {
-        let now = self.now();
-        let expiry = self.parts.session_expiry.as_millis() as i64;
-        let snapshot = {
-            let mut inner = self.lock();
-            inner.expire(now, expiry);
-            Snapshot {
-                sessions: inner
-                    .sessions
-                    .values()
-                    .filter(|s| s.key_id == key_id && s.key_generation == key_generation)
-                    .map(|s| SnapshotSession {
-                        agents: agents_of(s),
-                        ended: s.ended || !s.attended,
-                        instance_id: s.instance.clone(),
-                        sequence: s.sequence,
-                        session_id: s.session_id.clone(),
-                    })
-                    .collect(),
-            }
-        };
-        self.flush();
-        snapshot
     }
 }
 
@@ -566,9 +527,9 @@ impl Inner {
             .sessions
             .get(&key)
             .is_some_and(|s| s.key_generation == key_generation);
-        // An ended session keeps its entry for the snapshot's tombstone until the expiry and holds no slot;
-        // the bound is about what is live, and it is met by every start that brings a session to life, an
-        // instance replacement included. A same-instance recovery of a live session consumes nothing.
+        // An ended session keeps its entry until the expiry and holds no slot. The bound is about what is live,
+        // and it is met by every start that brings a session to life, an instance replacement included. A
+        // same-instance recovery of a live session consumes nothing.
         let becomes_live = self.sessions.get(&key).is_none_or(|s| s.ended);
         if becomes_live {
             let live = self.sessions.values().filter(|s| !s.ended).count();
