@@ -12,7 +12,8 @@ import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
 import { Tile } from '@/components/ui/Tile';
 import { IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Tabs, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, ErrorState, Input, Meter, Segmented, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { SectionBar } from '@/components/SectionBar';
 import { CONVERSATION_CLASSES, MAX_BURN_LINES, foldBurn, isolatedSlots, moveLabel, niceAxisTop, placementCells, placementRungLabel, readBurn, sizedAccounts, slotUnpriced, type BurnLine, type BurnLineUnit, type BurnRow } from '@/lib/analytics';
 import { bucketSizeFor } from '@/lib/buckets';
 import { WASTED_PROBE_LABEL, WASTED_PROBE_REASONS, missCount, missLabel, missReasonOrder } from '@/lib/cache';
@@ -487,9 +488,7 @@ export function AnalyticsPage() {
         )}
       </div>
 
-      <div className="section-bar" style={{ top: TOPBAR_HEIGHT + filtersHeight }}>
-        <Tabs<SectionId> label="Sections" value={tab} onChange={chooseTab} tabs={SECTIONS.map((s) => ({ controls: s.id === tab ? s.id : undefined, id: `tab-${s.id}`, label: s.label, value: s.id }))} />
-      </div>
+      <SectionBar sections={SECTIONS} shown={tab} onChoose={chooseTab} top={TOPBAR_HEIGHT + filtersHeight} />
 
       {failure !== null && (
         <ErrorState

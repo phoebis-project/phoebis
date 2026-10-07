@@ -189,7 +189,7 @@ export const ACCOUNTS: Account[] = ([
     pools: [],
     windows: [win('5h', 0.18, -2 * DAY, 2 * DAY + 3 * HOUR), win('7d', 0.52, 2 * DAY, 2 * DAY + 3 * HOUR)],
     fableWindow: null,
-    extraUsage: null,
+    extraUsage: { disabledReason: null, enabled: false, inUse: false, monthlyLimitCredits: 0, usedCredits: 0 },
     fastLane: null,
     credential: {
       accessTokenExpiresAt: ago(2 * DAY + 2 * HOUR),

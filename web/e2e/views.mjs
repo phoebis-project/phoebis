@@ -88,7 +88,11 @@ if (inside) {
 const VIEWS = [
   { path: '/', title: 'Dashboard', wait: '.stat-grid', slug: 'dashboard' },
   { path: '/observe', title: 'Observe', wait: '.mchip', slug: 'observe' },
-  { path: '/quota', title: 'Quota', wait: '.qcard', slug: 'quota' },
+  // The router's seed holds no subscription account, so its Quota view draws no card and the wait is on the section.
+  { path: '/quota', title: 'Quota', wait: '.quota-section#accounts', slug: 'quota' },
+  // The page shows one section at a time, so the timeline's shot is a view of its own, and the mock pass's alone,
+  // since the router's seed has no window to draw.
+  { path: '/quota#quota-windows', title: 'Quota', wait: '.timeline', slug: 'quota-windows', mockOnly: true },
   // Without an account id the page lands on the first account, and the detail head arrives with it.
   { path: '/accounts', title: 'Accounts', wait: '.detail__head', slug: 'accounts' },
   { path: '/pools', title: 'Pools', wait: '.pool .serving', slug: 'pools' },
@@ -1661,16 +1665,15 @@ async function accountLines(theme, path) {
 
 /**
  * Each Quota card's poll lines against the Refresh pill beside them: the lines end before the pill starts and
- * inside the card, the backoff line reads in the serious ink rather than the muted ink of the lines above it, and
+ * inside the card, the backoff line reads in the serious ink rather than the muted ink of the line above it, and
  * no line wraps. The router's seed has no subscription account, so only the story's pass has lines to read.
  */
 async function quotaPollLines(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
   const cards = await page.evaluate(() =>
     [...document.querySelectorAll('.qcard')].map((card) => {
-      const status = card.querySelector('.qcard__status');
       const pill = card.querySelector('.qcard__foot .pill');
-      const lines = [...(status?.children ?? [])].map((line) => {
+      const lines = [...card.querySelectorAll('.qcard__poll')].map((line) => {
         const box = line.getBoundingClientRect();
         return { color: getComputedStyle(line).color, height: Math.round(box.height), lineHeight: parseFloat(getComputedStyle(line).lineHeight), right: Math.round(box.right), serious: line.classList.contains('qcard__backoff'), text: line.textContent?.trim() ?? '' };
       });
@@ -1692,9 +1695,10 @@ async function quotaPollLines(theme) {
     }
   }
   if (mock && !polled.some((c) => c.lines.some((l) => l.serious))) say('the story backs one account off, yet no card draws a backoff line');
-  // A failed poll's reason is cut inside its line, and the line's title carries it whole.
+  // A failed poll's reason is cut inside its line, and the line's title carries it whole among the facts the lines
+  // leave to it.
   const reasons = await page.evaluate(() =>
-    [...document.querySelectorAll('.qcard__reason')].map((reason) => {
+    [...document.querySelectorAll('.qcard__poll .qcard__reason')].map((reason) => {
       const line = reason.closest('.qcard__poll');
       return { cut: reason.scrollWidth > reason.clientWidth, inside: !!line && reason.getBoundingClientRect().right <= line.getBoundingClientRect().right + 0.5, text: reason.textContent ?? '', title: line?.getAttribute('title') ?? '' };
     }),
@@ -1703,15 +1707,15 @@ async function quotaPollLines(theme) {
   if (mock && reasons.length === 0) say('the story fails one poll, yet no card names its reason');
   for (const r of reasons) {
     if (!r.inside) say(`the reason ${JSON.stringify(r.text)} runs past its line`);
-    if (!r.title.endsWith(`\n${r.text}`)) say(`the failed line's title does not carry the reason ${JSON.stringify(r.text)} whole`);
+    if (!r.title.split('\n').includes(r.text)) say(`the failed line's title does not carry the reason ${JSON.stringify(r.text)} whole`);
   }
 }
 
 /**
- * The Quota chips with their shares read "left" against the fixed columns that hold them: every card's window chip and
- * reset cell and every timeline chip fits its column on one line, the window grid stays inside its card, and an expired
- * window's longer reset cell may wrap but never runs past its column. The router's seed has no subscription account,
- * so only the story's pass has chips to read.
+ * The Quota cards' chips with their shares read "left" against the fixed columns that hold them: every card's window
+ * chip and reset cell fits its column on one line, the window grid stays inside its card, and an expired window's
+ * longer reset cell may wrap but never runs past its column. The router's seed has no subscription account, so only
+ * the story's pass has chips to read.
  */
 async function quotaChips(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -1725,13 +1729,12 @@ async function quotaChips(theme) {
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
       grids: [...document.querySelectorAll('.qcard')].filter((c) => c.querySelector('.qcard__windows')).map((c) => ({ card: Math.round(c.getBoundingClientRect().right), grid: Math.round(c.querySelector('.qcard__windows').getBoundingClientRect().right), name: c.querySelector('.qcard__name')?.textContent?.trim() ?? '' })),
-      lanes: [...document.querySelectorAll('.tl-chip')].map(cell),
       resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map(cell),
     };
   });
-  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), lanes: read.lanes.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines]) })}`);
-  if (mock && (read.chips.length === 0 || read.lanes.length === 0)) say('the story has subscription windows, yet no chip is drawn');
-  for (const chip of [...read.chips, ...read.lanes]) {
+  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines]) })}`);
+  if (mock && read.chips.length === 0) say('the story has subscription windows, yet no card chip is drawn');
+  for (const chip of read.chips) {
     if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
   }
   for (const chip of read.chips) {
@@ -1745,6 +1748,43 @@ async function quotaChips(theme) {
     if (card.grid > card.card) say(`${card.name}'s windows run past its card`);
   }
   if (mock && !read.resets.some((r) => /^expired .+, no reading since$/.test(r.text))) say("the story's legacy holds an expired window, yet no reset cell reads it");
+}
+
+/**
+ * The timeline's chips on the Quota windows section against the fixed column that holds them: every lane chip fits
+ * it on one line. Only the mock pass draws the section.
+ */
+async function quotaLaneChips(theme) {
+  const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
+  const lanes = await page.evaluate(() => [...document.querySelectorAll('.tl-chip')].map((el) => ({ client: el.clientWidth, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' })));
+  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))}`);
+  if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
+  for (const chip of lanes) {
+    if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
+  }
+}
+
+/**
+ * Every Quota card against the others, in either theme: one height, and the head's bottom rule and the foot's top rule
+ * each at one offset from the card's top, whatever the card holds. Sub-pixel layout noise is not a difference, so the
+ * values compare within half a pixel. The router's seed has no subscription account, so only the story's pass has
+ * cards to compare.
+ */
+async function quotaCardHeights(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const cards = await page.evaluate(() =>
+    [...document.querySelectorAll('.qcard')].map((card) => {
+      const box = card.getBoundingClientRect();
+      const at = (el, edge) => (el ? Math.round((el.getBoundingClientRect()[edge] - box.top) * 10) / 10 : null);
+      return { foot: at(card.querySelector('.qcard__foot'), 'top'), head: at(card.querySelector('.qcard__head'), 'bottom'), height: Math.round(box.height * 10) / 10, name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '' };
+    }),
+  );
+  measurements.push(`${theme} /quota card heights ${JSON.stringify(cards)}`);
+  if (mock && cards.length < 2) say('the story has several subscription accounts, yet fewer than two cards are drawn');
+  for (const key of ['foot', 'head', 'height']) {
+    const values = cards.map((c) => c[key]);
+    if (values.some((v) => v === null) || Math.max(...values) - Math.min(...values) > 0.5) say(`the cards' ${key} differs: ${cards.map((c) => `${c.name} ${c[key]}`).join(', ')}`);
+  }
 }
 
 /**
@@ -2429,58 +2469,31 @@ async function stickyStrip(theme) {
 }
 
 /**
- * An account's fast lane against the card it sits in: on the Quota view the Fast mode line takes the Plan chip's
- * type and label colour, and a cooldown chip is the Plan chip's box (type, height, padding, corners); on the
- * account page the lane is a section of the Usage card as extra usage is, with the same rule and spacing. Only a
- * subscription card draws a Plan chip and only an account with extra usage draws its section, so the check measures
- * a lane on a card with a Plan chip, compares each part where drawn, and stands down where the neighbour is missing,
- * as it does against the router's seed, which answers no fast request; the mock's story draws every part.
+ * An account's fast lane against the card it sits in: on the account page the lane is a section of the Usage card as
+ * extra usage is, with the same rule and spacing. Only an account with extra usage draws its section, so the check
+ * compares where both are drawn and stands down where the neighbor is missing, as it does against the router's seed,
+ * which answers no fast request. The mock's story draws both.
  */
 async function fastLane(theme, path) {
   const read = await page.evaluate(() => {
-    const chip = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      return { font: `${s.fontFamily}/${s.fontSize}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
-    };
     const section = (el) => {
       if (!el) return null;
       const s = getComputedStyle(el);
       return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, margin: s.marginTop, padding: s.paddingTop };
     };
-    const text = (el, label) => {
-      if (!el || !label) return null;
-      const s = getComputedStyle(el);
-      return { font: `${s.fontFamily}/${s.fontSize}`, label: getComputedStyle(label).color };
-    };
-    const planOf = (lane) => [...(lane.closest('.qcard, .card')?.querySelectorAll('.qcard__chips .chip') ?? [])].find((c) => c.querySelector('.chip__label')?.textContent?.trim() === 'Plan') ?? null;
-    const lanes = [...document.querySelectorAll('.fast-lane')];
-    const lane = lanes.find((l) => planOf(l) !== null) ?? lanes[0] ?? null;
-    const card = lane?.closest('.qcard, .card');
-    const plan = lane ? planOf(lane) : null;
-    const line = lane?.querySelector('.fast-lane__line');
-    return { cooldown: chip(lane?.querySelector('.fast-lane__cooldown')), drawn: lane !== null, extra: section(card?.querySelector('.extra-usage')), lane: section(lane), line: text(line, line?.querySelector('.fast-lane__label')), plan: chip(plan), planText: text(plan, plan?.querySelector('.chip__label')) };
+    const lane = document.querySelector('.fast-lane');
+    return { drawn: lane !== null, extra: section(lane?.closest('.card')?.querySelector('.extra-usage')), lane: section(lane) };
   });
   measurements.push(`${theme} ${path} fast lane ${JSON.stringify(read)}`);
   if (!read.drawn) {
     if (mock) failures.push(`${theme} ${path}: the story's first account holds a fast lane, yet none is drawn`);
     return;
   }
-  if (path === '/quota') {
-    if (read.plan === null) {
-      if (mock) failures.push(`${theme} /quota: the story's primary holds a fast lane beside its Plan chip, yet no drawn lane sits on a card with one`);
-      return;
-    }
-    if (read.line) failures.push(...compare(read.line, read.planText, ['font', 'label'], `${theme} /quota: the Fast mode line against the Plan chip`));
-    if (read.cooldown) failures.push(...compare(read.cooldown, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the fast cooldown chip against the Plan chip`));
-    if (mock && !read.cooldown) failures.push(`${theme} /quota: the story's primary cools on its fast lane, yet no cooldown chip is drawn`);
-  } else {
-    if (read.extra === null) {
-      if (mock) failures.push(`${theme} ${path}: the story's primary draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
-      return;
-    }
-    failures.push(...compare(read.lane, read.extra, ['border', 'margin', 'padding'], `${theme} ${path}: the fast lane section against the extra-usage section`));
+  if (read.extra === null) {
+    if (mock) failures.push(`${theme} ${path}: the story's primary draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
+    return;
   }
+  failures.push(...compare(read.lane, read.extra, ['border', 'margin', 'padding'], `${theme} ${path}: the fast lane section against the extra-usage section`));
 }
 
 /**
@@ -3379,8 +3392,9 @@ try {
       if (view.path === '/quota') {
         await quotaChips(theme);
         await quotaPollLines(theme);
-        await fastLane(theme, view.path);
+        await quotaCardHeights(theme);
       }
+      if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});

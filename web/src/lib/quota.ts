@@ -1,4 +1,6 @@
-import type { Account, RateLimitWindow, WindowId } from '@/api/types';
+import { planLabel } from '@/api/decode';
+import type { Account, ExtraUsage, PollOutcome, QuotaPoll, RateLimitWindow, WindowId } from '@/api/types';
+import { fmtAbsolute, fmtRelative } from '@/lib/format';
 
 export type MeterTone = 'good' | 'low' | 'warn';
 
@@ -44,6 +46,9 @@ export const STATUS_LABEL: Record<Account['status'], string> = {
   unpaired: 'Not paired',
 };
 
+/** How the usage poll last answered, in the words the Quota page and the routing log share. */
+export const POLL_OUTCOME_LABEL: Record<PollOutcome, string> = { clean: 'clean', failed: 'failed', rate_limited: 'rate limited' };
+
 export type BadgeTone = 'accent' | 'critical' | 'good' | 'neutral' | 'serious' | 'warning';
 
 export const STATUS_TONE: Record<Account['status'], BadgeTone> = {
@@ -54,3 +59,44 @@ export const STATUS_TONE: Record<Account['status'], BadgeTone> = {
   ready: 'good',
   unpaired: 'neutral',
 };
+
+/** The Plan chip's word: the tier's name with its multiple where `planLabel` parses the tier, else the plan's own
+ *  name from the profile's flag, so an unparsed tier still reads "Max" or "Pro". Null with no plan at all. */
+export function planChip(account: Pick<Account, 'plan' | 'subscription'>): string | null {
+  const tier = account.subscription?.rateLimitTier ?? '';
+  // `planLabel` answers a tier its pattern does not match unchanged, so a changed answer is the parsed one.
+  const parsed = tier === '' ? tier : planLabel(tier);
+  return parsed !== tier ? parsed : account.plan;
+}
+
+/** The Extra usage line's state: the serious `in_use`, or one of three quiet states drawn in the muted ink. */
+export type ExtraUsageState = 'disabled' | 'enabled' | 'in_use' | 'unreported';
+
+export function extraUsageState(extra: ExtraUsage | null): ExtraUsageState {
+  if (extra === null) return 'unreported';
+  if (!extra.enabled) return 'disabled';
+  return extra.inUse ? 'in_use' : 'enabled';
+}
+
+/** The footer's essential reading: one or two lines that never wrap, each in the muted or the serious tone, a
+ *  failed poll's reason cut inside its line, and a title carrying every fact the lines leave (the attempt's
+ *  instant, when the snapshot was read, since when the account backs off, the run, the next attempt). */
+export interface PollReading {
+  lines: { reason?: string; text: string; tone: 'muted' | 'serious' }[];
+  title: string;
+}
+
+export function pollReading(poll: QuotaPoll | null, fetchedAt: string | null, now: number): PollReading {
+  if (poll === null) return { lines: [{ text: 'not yet polled', tone: 'muted' }], title: '' };
+  const polled = `polled ${fmtRelative(poll.lastAttemptAt, now)}: `;
+  const reason = poll.lastOutcome === 'failed' && poll.lastError ? poll.lastError : null;
+  const lines: PollReading['lines'] = [reason === null ? { text: `${polled}${POLL_OUTCOME_LABEL[poll.lastOutcome]}`, tone: 'muted' } : { reason, text: `${polled}failed: `, tone: 'muted' }];
+  const title = [...(poll.lastAttemptAt ? [fmtAbsolute(poll.lastAttemptAt)] : []), ...(reason === null ? [] : [reason]), ...(fetchedAt ? [`checked ${fmtAbsolute(fetchedAt)}`] : [])];
+  if (poll.backoffSince !== null) {
+    const next = poll.nextAttemptAt;
+    lines.push({ text: next ? `backing off, next attempt ${fmtRelative(next, now)}` : 'backing off', tone: 'serious' });
+    const n = poll.rateLimitedInARow;
+    title.push(`backing off since ${fmtAbsolute(poll.backoffSince)}`, `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row`, ...(next ? [`next attempt ${fmtAbsolute(next)}`] : []));
+  }
+  return { lines, title: title.join('\n') };
+}

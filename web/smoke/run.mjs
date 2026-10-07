@@ -564,16 +564,41 @@ m = await mount('/observe');
 }
 m.unmount();
 
+/** Picks a section from the Quota page's bar on the given mount and lets the page draw it. */
+const quotaSection = async (page, label) => {
+  [...page.container.querySelectorAll('.section-bar [role="tab"]')].find((b) => b.textContent?.trim() === label)?.click();
+  await page.settle();
+};
 m = await mount('/quota');
-expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off since']);
+expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind === 'oauth').length} accounts`, '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off']);
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
 }
 {
-  // The story dates each subscription by its distance from the anchor, so each needle is the pinned origin moved by
-  // that distance and rendered with fmtDate's own options.
-  const dayOf = (days) => new Date(CLOCK_ORIGIN + days * 86_400_000).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+  // An API-key account carries no quota window, so the page lists the subscription accounts under a bar of its two
+  // sections, and the cards' section is the one /quota lands on.
+  const apiKeys = (await api.listAccounts()).filter((a) => a.kind === 'api_key').map((a) => a.label);
+  const tabs = [...m.container.querySelectorAll('.section-bar [role="tab"]')].map((b) => `${b.textContent?.trim()} ${b.getAttribute('aria-selected')}`);
+  const lists = [...m.container.querySelectorAll('[role="tablist"]')].map((l) => l.getAttribute('aria-label'));
+  const names = [...m.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? '');
+  const panel = m.container.querySelector('#accounts');
+  results.push({
+    name: '/quota draws the bar of its two sections in place of kind tabs, on Accounts with the cards and no timeline, and no API-key card',
+    ok:
+      JSON.stringify(tabs) === JSON.stringify(['Accounts true', 'Quota windows false']) &&
+      JSON.stringify(lists) === JSON.stringify(['Sections']) &&
+      panel?.getAttribute('role') === 'tabpanel' &&
+      panel.getAttribute('aria-labelledby') === 'tab-accounts' &&
+      panel.querySelector('select[aria-label="Sort"]') !== null &&
+      names.length > 0 &&
+      apiKeys.length > 0 &&
+      !names.some((n) => apiKeys.includes(n)) &&
+      m.container.querySelector('.timeline') === null,
+    missing: [...tabs, JSON.stringify(lists), names.join(','), m.container.querySelector('.timeline') ? 'a timeline is drawn' : 'no timeline'],
+  });
+}
+{
   const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
   const chipsOf = (label) =>
     [...(cardOf(label)?.querySelectorAll('.qcard__chips .chip') ?? [])]
@@ -581,10 +606,10 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
       .map((c) => [...c.childNodes].map((n) => n.textContent?.trim()).filter(Boolean).join(' '));
   // The story ends secondary's trial eight days after the anchor and the page reads it a moment later, so the whole
   // days still to run are seven.
-  const drawn = { legacy: chipsOf('legacy'), primary: chipsOf('primary'), secondary: chipsOf('secondary') };
-  const wanted = { legacy: ['Plan Pro'], primary: [`Plan Max since ${dayOf(-200)}`], secondary: [`Plan Pro since ${dayOf(-20)}`, 'Trial ends in 7 days'] };
+  const drawn = { legacy: chipsOf('legacy'), nightly: chipsOf('nightly'), primary: chipsOf('primary'), secondary: chipsOf('secondary') };
+  const wanted = { legacy: ['Plan Pro'], nightly: ['Plan Max 5x'], primary: ['Plan Max 20x'], secondary: ['Plan Pro', 'Trial ends in 7 days'] };
   results.push({
-    name: '/quota each card names its plan with the subscription start, and counts down the trial where the profile reports one',
+    name: '/quota each card names its plan by the tier with no start date, and counts down the trial where the profile reports one',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn), JSON.stringify(wanted)],
   });
@@ -603,9 +628,12 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   });
 }
 {
+  // The counts come from the list, so an account the story adds moves no check: a card draws its windows when the
+  // account holds a 5-hour, 7-day or Fable window.
+  const windowed = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && (a.windows.length > 0 || a.fableWindow !== null)).length;
   const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
-  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === 4 && names.every((n) => n === '5h,7d,Fable'), missing: [String(chipRows.length), ...new Set(names)] });
+  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === windowed && names.every((n) => n === '5h,7d,Fable'), missing: [`${chipRows.length} of ${windowed}`, ...new Set(names)] });
   const tones = [...m.container.querySelectorAll('.qcard__windows .qchip')].map((c) => [...c.classList].find((n) => n.startsWith('qchip--')) ?? 'none');
   results.push({ name: '/quota chips carry a meter tone', ok: tones.length > 0 && tones.every((t) => ['qchip--absent', 'qchip--good', 'qchip--low', 'qchip--warn'].includes(t)), missing: [...new Set(tones)] });
   results.push({ name: '/quota fixtures exercise all three meter tones', ok: ['qchip--good', 'qchip--low', 'qchip--warn'].every((t) => tones.includes(t)), missing: [...new Set(tones)] });
@@ -617,61 +645,80 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
   const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
-  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === 4 && aligned.every((n) => n === 3), missing: aligned.map(String) });
-  const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
-  results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
-  const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
-  results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
-  const toned = [...m.container.querySelectorAll('.tl-chip__pct')].map((c) => [...c.classList].find((n) => n.startsWith('tl-chip__pct--') || n === 'muted') ?? 'none');
-  results.push({ name: '/quota timeline chips tone the percentage only', ok: toned.length > 0 && toned.every((t) => ['muted', 'tl-chip__pct--good', 'tl-chip__pct--low', 'tl-chip__pct--warn'].includes(t)), missing: [...new Set(toned)] });
-  const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
-  results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
-  results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
-  const shares = [...m.container.querySelectorAll('.qcard__windows .qchip__pct, .tl-chip__pct')].map((e) => e.textContent?.trim() ?? '');
-  const liveShares = live.filter((l) => l.includes('%'));
-  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
-  results.push({ name: '/quota every window share reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
-  const axis = m.container.querySelector('.timeline__axis-label')?.textContent?.trim() ?? 'no axis label';
-  results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
+  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === windowed && aligned.every((n) => n === 3), missing: aligned.map(String) });
+  const shares = [...m.container.querySelectorAll('.qcard__windows .qchip__pct')].map((e) => e.textContent?.trim() ?? '');
+  const off = shares.filter((t) => t !== 'n/a' && !/\d+% left/.test(t));
+  results.push({ name: '/quota every window share on the cards reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && off.length === 0, missing: [...new Set(off)] });
 }
 {
   // The story's legacy was last read two days ago, before its 5-hour window reset, so that window has no reading since.
   const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
   const [chip, meter, reset] = [...(legacy?.querySelector('.qcard__windows')?.children ?? [])];
-  const lane = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy');
-  const laneChip = lane?.querySelector('.tl-chip');
   const absolute = /^[A-Z][a-z]{2} \d{2}, \d{4}/;
   const drawn = {
     chip: [chip?.textContent?.trim(), chip?.classList.contains('qchip--absent'), chip?.getAttribute('title')],
     meter: meter?.classList.contains('meter--absent'),
     reset: [reset?.textContent?.trim(), reset?.classList.contains('muted'), absolute.test(reset?.getAttribute('title') ?? '')],
-    lane: [laneChip?.textContent?.trim(), laneChip?.querySelector('.tl-chip__pct')?.classList.contains('muted'), (laneChip?.getAttribute('title') ?? '').endsWith(', no reading since')],
   };
   const wanted = {
     chip: ['5h', true, '5-hour: expired, no reading since the reset'],
     meter: true,
     reset: ['expired 2d 0h ago, no reading since', true, true],
-    lane: ['5-hour limit reset', true, true],
   };
-  // The 5-hour zoom draws the lanes on the 5-hour windows, where legacy's current bar sits past the reset it last read.
-  const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
-  zoom('5-hour');
-  await m.settle();
-  const bar = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy')?.querySelector('.lane__bar--live');
-  const barLabel = bar?.querySelector('.lane__label')?.textContent?.trim() ?? 'no label';
-  const barTitle = bar?.getAttribute('title') ?? 'no bar';
-  zoom('Weekly');
-  await m.settle();
   results.push({
     name: '/quota an expired window reads expired with no share and an empty meter',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn)],
   });
+}
+{
+  // Every card draws the same slots in the same order whatever its account's state, so a conditional line never
+  // grows one card past the rest.
+  const SLOTS = ['qcard__head', 'qcard__body', 'qcard__extra', 'qcard__chips', 'qcard__foot'];
+  const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
+  const cards = [...m.container.querySelectorAll('.qcard')];
+  const slotsOf = (card) => [...card.children].map((e) => SLOTS.find((s) => e.classList.contains(s)) ?? e.className).join();
+  const odd = cards.filter((c) => slotsOf(c) !== SLOTS.join()).map((c) => `${c.querySelector('.qcard__name')?.textContent?.trim()}: ${slotsOf(c)}`);
+  results.push({ name: '/quota every card holds the same slots in the same order', ok: cards.length === subscriptions.length && odd.length === 0, missing: [`${cards.length} cards of ${subscriptions.length}`, ...odd] });
+}
+{
+  // The story draws every state of the line: nightly in use, primary enabled and not in use, legacy disabled, and
+  // secondary and spare with no extra usage reported.
+  const cards = [...m.container.querySelectorAll('.qcard')];
+  const cardOf = (label) => cards.find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+  const read = (label) => {
+    const chip = cardOf(label)?.querySelector('.qcard__extra .chip');
+    return [chip?.textContent?.trim() ?? 'no line', chip?.classList.contains('chip--serious') ? 'serious' : chip?.classList.contains('qcard__extra-quiet') ? 'quiet' : 'neither'];
+  };
+  const drawn = { legacy: read('legacy'), nightly: read('nightly'), primary: read('primary'), secondary: read('secondary'), spare: read('spare') };
+  const wanted = {
+    legacy: ['Extra usageoff', 'quiet'],
+    nightly: ['Extra usage$6.12 / $20.00in use', 'serious'],
+    primary: ['Extra usage$12.34 / $50.00not in use', 'quiet'],
+    secondary: ['Extra usagenot reported', 'quiet'],
+    spare: ['Extra usagenot reported', 'quiet'],
+  };
+  const placed = cards.filter((c) => !(c.querySelectorAll('.qcard__extra').length === 1 && c.querySelector('.qcard__body')?.nextElementSibling?.classList.contains('qcard__extra')));
+  const fableLast = cards.filter((c) => c.querySelector('.qcard__windows')).every((c) => [...c.querySelectorAll('.qcard__windows .qchip__name')].pop()?.textContent === 'Fable');
   results.push({
-    name: "/quota an expired window's current bar carries its reset stamp and no share",
-    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%'),
-    missing: [barLabel, barTitle],
+    name: '/quota every card draws one Extra usage line directly after the Fable row, in use in the serious tone and each quiet state in the muted ink',
+    ok: cards.length > 0 && placed.length === 0 && fableLast && JSON.stringify(drawn) === JSON.stringify(wanted) && cardOf('nightly')?.querySelector('.qcard__extra .chip__flag')?.textContent === 'in use',
+    missing: [JSON.stringify(drawn), ...placed.map((c) => `misplaced on ${c.querySelector('.qcard__name')?.textContent?.trim()}`), fableLast ? 'Fable last' : 'a row after Fable'],
   });
+}
+{
+  // The Plan chip leads the chips row on every card, and a card whose account reports no plan keeps its place empty.
+  const firsts = [...m.container.querySelectorAll('.qcard')].map((c) => {
+    const first = c.querySelector('.qcard__chips')?.firstElementChild;
+    const what = !first ? 'no chips row' : first.classList.contains('chip--empty') ? 'empty' : (first.querySelector('.chip__label')?.textContent?.trim() ?? first.textContent?.trim());
+    return [c.querySelector('.qcard__name')?.textContent?.trim(), what];
+  });
+  results.push({
+    name: "/quota every card draws the chips row led by the Plan chip, and spare's first chip holds the empty slot",
+    ok: firsts.length > 0 && firsts.every(([name, what]) => what === (name === 'spare' ? 'empty' : 'Plan')),
+    missing: firsts.map(([name, what]) => `${name}: ${what}`),
+  });
+  results.push({ name: '/quota draws no fast-mode line or chip on any card', ok: m.container.querySelector('.fast-lane') === null && !m.text().includes('Fast mode'), missing: [m.container.querySelector('.fast-lane')?.outerHTML.slice(0, 160) ?? 'Fast mode in the text'] });
 }
 {
   // The mock's blocks read the same before and after a refresh, so the check watches the calls the button makes and
@@ -700,82 +747,165 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   });
 }
 {
-  // The mock registry holds seven, so the plural is what this can read; the singular is asserted by its absence.
+  // The story holds more than one subscription account, so the plural is what this can read, and the count comes from
+  // the list rather than a literal.
+  const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
-  results.push({ name: '/quota gives the account count the noun that number takes', ok: count === '7 accounts', missing: [count] });
+  results.push({ name: '/quota counts the subscription accounts with the noun that number takes', ok: count === `${subscriptions.length} accounts`, missing: [count, `${subscriptions.length} subscription accounts listed`] });
   // The route answers from the account's hold or its cache inside either, so the button says when it reads the
   // endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
   results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
   const nightly = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
-  results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: nightly?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [nightly?.textContent?.slice(0, 160) ?? 'no nightly card'] });
+  results.push({ name: '/quota draws the reason the provider gave for its extra usage inside the Extra usage line, whole in its title', ok: nightly?.querySelector('.qcard__extra .qcard__extra-reason')?.textContent?.includes('Payment method declined') === true && nightly.querySelector('.qcard__extra')?.getAttribute('title')?.includes('Payment method declined') === true, missing: [nightly?.querySelector('.qcard__extra')?.outerHTML.slice(0, 200) ?? 'no nightly card'] });
 }
 {
   const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
-  const lines = (label) => [...(cardOf(label)?.querySelectorAll('.qcard__status > span') ?? [])].map((n) => n.textContent?.trim() ?? '');
-  const drawn = { primary: lines('primary'), secondary: lines('secondary'), spare: lines('spare'), legacy: lines('legacy') };
+  const lines = (label) => [...(cardOf(label)?.querySelectorAll('.qcard__poll') ?? [])].map((n) => n.textContent?.trim() ?? '');
+  const drawn = { legacy: lines('legacy'), primary: lines('primary'), secondary: lines('secondary'), spare: lines('spare') };
   // The pinned clock runs on from the story's anchor, so a minute count may have ticked once by the time it is read.
   results.push({
-    name: '/quota each subscription card says when the poll last asked and how it answered, then when its snapshot was read',
+    name: '/quota each subscription card reads its poll on one or two lines: when it last asked and how it answered, and a backoff with its next attempt',
     ok:
+      drawn.primary.length === 1 &&
       /^polled (now|\d+s ago|1m ago): clean$/.test(drawn.primary[0] ?? '') &&
-      /^checked (now|\d+s ago|1m ago)$/.test(drawn.primary[1] ?? '') &&
+      drawn.secondary.length === 2 &&
       /^polled 1[12]m ago: rate limited$/.test(drawn.secondary[0] ?? '') &&
+      /^backing off, next attempt in [34]m$/.test(drawn.secondary[1] ?? '') &&
+      drawn.legacy.length === 1 &&
       /^polled [34]m ago: failed: usage request rejected with status 503$/.test(drawn.legacy[0] ?? '') &&
-      drawn.legacy[1] === 'checked 2d 3h ago' &&
       JSON.stringify(drawn.spare) === JSON.stringify(['not yet polled']),
     missing: [JSON.stringify(drawn)],
   });
-  // The reason is cut to the line's width on screen, so the line's title carries it whole, under the poll's time.
-  const failedLine = cardOf('legacy')?.querySelector('.qcard__status > span');
-  const title = (failedLine?.getAttribute('title') ?? '').split('\n');
-  const cleanTitle = cardOf('primary')?.querySelector('.qcard__status > span')?.getAttribute('title') ?? '';
+  // The lines keep the essential reading, so the title of the first one carries every fact they leave: the attempt's
+  // instant, a failed poll's whole reason and when the snapshot was read.
+  const titleOf = (label) => (cardOf(label)?.querySelector('.qcard__poll')?.getAttribute('title') ?? '').split('\n');
+  const failedLine = cardOf('legacy')?.querySelector('.qcard__poll');
+  const failedTitle = titleOf('legacy');
+  const cleanTitle = titleOf('primary');
+  const year = /\d{4}/;
   results.push({
-    name: "/quota a failed poll's line names its reason in a span of its own, the whole message under the poll's time in the title",
+    name: "/quota a failed poll's line names its reason in a span of its own, the whole message in the title between the attempt's time and the snapshot's",
     ok:
       failedLine?.querySelector('.qcard__reason')?.textContent === 'usage request rejected with status 503' &&
-      title.length === 2 &&
-      /\d{4}/.test(title[0]) &&
-      title[1] === 'usage request rejected with status 503' &&
-      !cleanTitle.includes('\n') &&
+      failedTitle.length === 3 &&
+      year.test(failedTitle[0]) &&
+      failedTitle[1] === 'usage request rejected with status 503' &&
+      failedTitle[2].startsWith('checked ') &&
+      year.test(failedTitle[2]) &&
       cardOf('secondary')?.querySelector('.qcard__reason') === null,
-    missing: [failedLine?.outerHTML.slice(0, 200) ?? 'no line on legacy', cleanTitle],
+    missing: [failedLine?.outerHTML.slice(0, 200) ?? 'no line on legacy', JSON.stringify(failedTitle)],
   });
-  const backoff = [...m.container.querySelectorAll('.qcard__backoff')];
   results.push({
-    name: '/quota a card backing off says since when and when the next attempt comes, the run in its title',
+    name: "/quota a clean poll's title names when it asked and when its snapshot was read",
+    ok: cleanTitle.length === 2 && year.test(cleanTitle[0]) && cleanTitle[1].startsWith('checked ') && year.test(cleanTitle[1]),
+    missing: [JSON.stringify(cleanTitle)],
+  });
+  // The story backs secondary off with a next attempt, and the check reads both instants by their date, as the end
+  // chip's check does.
+  const poll = (await api.listAccounts()).find((a) => a.id === 'secondary').usage.poll;
+  const dateOf = (iso) => new Date(iso).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+  const backoff = [...m.container.querySelectorAll('.qcard__backoff')];
+  const backoffTitle = titleOf('secondary');
+  results.push({
+    name: '/quota a card backing off reads it on one serious line, and the title names since when, the run and the next attempt',
     ok:
-      backoff.length === 2 &&
-      backoff.every((b) => cardOf('secondary')?.contains(b)) &&
-      /^backing off since 4[23]m ago$/.test(backoff[0].textContent?.trim() ?? '') &&
-      backoff[0].getAttribute('title') === '6 rate-limited answers in a row' &&
-      /^next attempt in [34]m$/.test(backoff[1].textContent?.trim() ?? ''),
-    missing: backoff.map((b) => `${b.textContent?.trim()} | ${b.getAttribute('title')}`),
+      backoff.length === 1 &&
+      cardOf('secondary')?.contains(backoff[0]) === true &&
+      backoff[0].classList.contains('qcard__poll') &&
+      /^backing off, next attempt in [34]m$/.test(backoff[0].textContent?.trim() ?? '') &&
+      backoffTitle.some((f) => f.startsWith(`backing off since ${dateOf(poll.backoffSince)}`)) &&
+      backoffTitle.includes('6 rate-limited answers in a row') &&
+      backoffTitle.some((f) => f.startsWith(`next attempt ${dateOf(poll.nextAttemptAt)}`)),
+    missing: [...backoff.map((b) => b.textContent?.trim() ?? ''), JSON.stringify(backoffTitle)],
+  });
+}
+await quotaSection(m, 'Quota windows');
+{
+  const panel = m.container.querySelector('#quota-windows');
+  results.push({
+    name: '/quota a click on Quota windows writes its hash, hides the cards and shows the timeline',
+    ok:
+      m.location().hash === '#quota-windows' &&
+      m.location().pathname === '/quota' &&
+      panel?.getAttribute('role') === 'tabpanel' &&
+      panel.getAttribute('aria-labelledby') === 'tab-quota-windows' &&
+      panel.querySelector('.timeline') !== null &&
+      m.container.querySelector('.qcard') === null,
+    missing: [JSON.stringify(m.location()), m.container.querySelector('.qcard') ? 'a card is drawn' : 'no card', panel?.querySelector('.timeline') ? 'a timeline' : 'no timeline'],
+  });
+}
+expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'plan ends']);
+{
+  const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
+  results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
+  const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
+  results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
+  const toned = [...m.container.querySelectorAll('.tl-chip__pct')].map((c) => [...c.classList].find((n) => n.startsWith('tl-chip__pct--') || n === 'muted') ?? 'none');
+  results.push({ name: '/quota timeline chips tone the percentage only', ok: toned.length > 0 && toned.every((t) => ['muted', 'tl-chip__pct--good', 'tl-chip__pct--low', 'tl-chip__pct--warn'].includes(t)), missing: [...new Set(toned)] });
+  const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
+  results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
+  results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
+  const shares = [...m.container.querySelectorAll('.tl-chip__pct')].map((e) => e.textContent?.trim() ?? '');
+  const liveShares = live.filter((l) => l.includes('%'));
+  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
+  results.push({ name: '/quota every window share on the timeline reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
+  const axis = m.container.querySelector('.timeline__axis-label')?.textContent?.trim() ?? 'no axis label';
+  results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
+}
+{
+  // legacy's 5-hour window reset two days ago with no reading since, so its lane reads the reset and no share.
+  const lane = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy');
+  const laneChip = lane?.querySelector('.tl-chip');
+  const drawn = [laneChip?.textContent?.trim(), laneChip?.querySelector('.tl-chip__pct')?.classList.contains('muted'), (laneChip?.getAttribute('title') ?? '').endsWith(', no reading since')];
+  results.push({ name: "/quota an expired window's lane chip reads reset with no share", ok: JSON.stringify(drawn) === JSON.stringify(['5-hour limit reset', true, true]), missing: [JSON.stringify(drawn)] });
+  // The 5-hour zoom draws the lanes on the 5-hour windows, where legacy's current bar sits past the reset it last read.
+  const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
+  zoom('5-hour');
+  await m.settle();
+  const bar = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy')?.querySelector('.lane__bar--live');
+  const barLabel = bar?.querySelector('.lane__label')?.textContent?.trim() ?? 'no label';
+  const barTitle = bar?.getAttribute('title') ?? 'no bar';
+  zoom('Weekly');
+  await m.settle();
+  results.push({
+    name: "/quota an expired window's current bar carries its reset stamp and no share",
+    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%'),
+    missing: [barLabel, barTitle],
   });
 }
 {
-  // The story's primary answered a fast request and cools on its fast lane's rate limit, the Overflow workspace
-  // answered one with room left, and secondary never answered one.
-  const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
-  const lineOf = (label) => cardOf(label)?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
-  const chip = cardOf('primary')?.querySelector('.fast-lane__cooldown');
+  // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so
+  // its lane marks the end and the window that spans it stops there.
+  const endsAt = (await api.listAccounts()).find((a) => a.id === 'secondary').subscription.endsAt;
+  const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
+  const ends = [...(laneOf('secondary')?.querySelectorAll('.lane__end') ?? [])];
+  const at = parseFloat(ends[0]?.style.left ?? 'NaN');
+  const bars = [...(laneOf('secondary')?.querySelectorAll('.lane__bar') ?? [])].map((b) => [parseFloat(b.style.left), parseFloat(b.style.left) + parseFloat(b.style.width)]);
+  const past = bars.filter(([left, right]) => left > at || right > at + 1e-9);
+  const day = new Date(endsAt).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
   results.push({
-    name: '/quota a card whose account answered a fast request reads its fast lane, both shares used and the reset, an Anthropic-key card too',
-    ok: /^Fast modeinput 100% used, output 64% used, resets in 1[12]m$/.test(lineOf('primary')) && /^Fast modeinput 18% used, output 5% used, resets /.test(lineOf('Overflow workspace')),
-    missing: [lineOf('primary') || 'no line on primary', lineOf('Overflow workspace') || 'no line on the Overflow workspace'],
+    name: "/quota on the weekly zoom a cancelled account's lane marks its saved end with no window past it, and a lane not cancelled marks none",
+    ok: ends.length === 1 && (ends[0].getAttribute('title') ?? '').startsWith(`secondary ends ${day}`) && bars.length > 0 && past.length === 0 && laneOf('primary')?.querySelectorAll('.lane__end').length === 0,
+    missing: [`${ends.length} end markers`, ends[0]?.getAttribute('title') ?? 'no title', JSON.stringify(bars), `at ${at}`, `primary ${laneOf('primary')?.querySelectorAll('.lane__end').length}`],
   });
-  results.push({
-    name: '/quota a card whose fast lane cools carries a serious chip naming the reason and the lift, the time on hover',
-    ok: /^Fast moderate limited, lifts in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious') && Boolean(chip.getAttribute('title')),
-    missing: [chip ? `${chip.textContent?.trim()} | ${chip.className} | ${chip.getAttribute('title')}` : 'no chip on primary'],
-  });
-  const secondary = cardOf('secondary');
-  results.push({ name: '/quota a card whose account never answered a fast request draws no Fast mode line', ok: secondary !== undefined && secondary.querySelector('.fast-lane') === null && !(secondary.textContent ?? '').includes('Fast mode'), missing: [secondary?.textContent?.slice(0, 160) ?? 'no secondary card'] });
 }
 m.unmount();
+{
+  // An address that names the timeline lands on it, drawn once the list has loaded.
+  const windows = await mount('/quota#quota-windows');
+  const selected = [...windows.container.querySelectorAll('.section-bar [role="tab"]')].filter((b) => b.getAttribute('aria-selected') === 'true').map((b) => b.textContent?.trim());
+  results.push({
+    name: '/quota#quota-windows lands on the timeline once the list has loaded, with no card drawn',
+    ok: JSON.stringify(selected) === JSON.stringify(['Quota windows']) && windows.container.querySelectorAll('#quota-windows .timeline .lane').length > 0 && windows.container.querySelector('.qcard') === null,
+    missing: [JSON.stringify(selected), `${windows.container.querySelectorAll('.lane').length} lanes`, windows.container.querySelector('.qcard') ? 'a card is drawn' : 'no card'],
+  });
+  windows.unmount();
+}
 
 // The router holds the fast pair in memory until the next fast answer, and its buckets reset within minutes, so a
-// reading past its reset reads as refilled rather than as the share the last answer reported.
+// reading past its reset reads as refilled rather than as the share the last answer reported. The account page's
+// Usage card draws the fast lane.
 {
   const { listAccounts } = api;
   const past = new Date(Date.now() - 2 * 3_600_000).toISOString();
@@ -790,26 +920,30 @@ m.unmount();
             ? { ...a, fastLane: { input: { observedAt: past, resetsAt: null, utilization: 0.5 }, output: { observedAt: past, resetsAt: past, utilization: 0.3 } } }
             : a,
     );
-  const stale = await mount('/quota');
-  const laneOf = (label) => [...stale.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label)?.querySelector('.fast-lane__line');
-  const lineOf = (label) => laneOf(label)?.textContent?.trim() ?? '';
-  const titleOf = (label) => laneOf(label)?.getAttribute('title') ?? null;
+  const usageLane = async (id) => {
+    const page = await mount(`/accounts/${id}`);
+    const usage = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+    const line = usage?.querySelector('.fast-lane__line');
+    const read = { text: line?.textContent?.trim() ?? '', title: line?.getAttribute('title') ?? null };
+    page.unmount();
+    return read;
+  };
+  const lanes = { overflow: await usageLane('overflow'), primary: await usageLane('primary'), secondary: await usageLane('secondary') };
   results.push({
-    name: '/quota a fast lane reading past its reset reads refilled, a lane past both says when it refilled, and one beside a reading with no reset says nothing of when',
+    name: '/accounts a fast lane reading past its reset reads refilled, a lane past both says when it refilled, and one beside a reading with no reset says nothing of when',
     ok:
-      /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lineOf('primary')) &&
-      /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lineOf('Overflow workspace')) &&
-      lineOf('secondary') === 'Fast modeinput 50% used, output 0% used',
-    missing: [lineOf('primary') || 'no line on primary', lineOf('Overflow workspace') || 'no line on the Overflow workspace', lineOf('secondary') || 'no line on secondary'],
+      /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lanes.primary.text) &&
+      /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lanes.overflow.text) &&
+      lanes.secondary.text === 'Fast modeinput 50% used, output 0% used',
+    missing: [lanes.primary.text || 'no line on primary', lanes.overflow.text || 'no line on overflow', lanes.secondary.text || 'no line on secondary'],
   });
   // The hover names the reset the line's suffix speaks of, so a line that says nothing of when carries none.
   results.push({
-    name: '/quota a fast lane line carries the reset on hover only where it names a reset or a refill',
-    ok: titleOf('primary') !== null && titleOf('Overflow workspace') !== null && titleOf('secondary') === null,
-    missing: [`primary: ${titleOf('primary')}`, `Overflow workspace: ${titleOf('Overflow workspace')}`, `secondary: ${titleOf('secondary')}`],
+    name: '/accounts a fast lane line carries the reset on hover only where it names a reset or a refill',
+    ok: lanes.primary.title !== null && lanes.overflow.title !== null && lanes.secondary.title === null,
+    missing: [`primary: ${lanes.primary.title}`, `overflow: ${lanes.overflow.title}`, `secondary: ${lanes.secondary.title}`],
   });
   api.listAccounts = listAccounts;
-  stale.unmount();
 }
 
 // A block's error can stand beside windows the ledger sampled, as before the poll's first read after a restart; the

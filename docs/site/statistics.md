@@ -306,22 +306,36 @@ that fails after its 200 head keeps that status, so a finished request with an e
 
 ### Quota
 
-The header counts the accounts and those needing attention. A card per account shows one row per rate-limit window,
-filterable by tabs for all accounts, OAuth accounts, and Anthropic-key accounts, and every window share on the view
-reads as the share left. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, a
-failed poll naming its reason (cut to the line's width, the whole message in the line's title), when the snapshot it
-shows was read, and, while the account backs off, since when and when the next attempt comes; Refresh reads the endpoint
-now unless the account is backing off or a fresh snapshot is cached. A card draws the windows the ledger sampled in the
-last day, or the ones the router holds when the ledger has none, whatever the last read said, and shows an error in
-their place only when it holds none; the page counts a card that shows an error, whose last poll failed, or that is
-backing off as needing attention. A window whose reset has passed with no reading since reads as expired, with no share
-and an empty meter, until the next reading. Each card names the account's plan with the date its subscription started
-and, for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its plan ends,
-in the serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode line: the share of
-the fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket past its reset
-reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate limited, or credits
-unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below the cards, a reset
-timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
+The Quota view covers the subscription accounts alone, since an API-key account has no quota window. The header counts
+them and those needing attention, and a section bar under it shows one of two sections at a time: Accounts, where the
+view opens, and Quota windows. The address names the section shown (`#accounts` or `#quota-windows`), so a link or a
+reload lands on it.
+
+Accounts draws a card per account, in the default order or by soonest recovery. Every card has the same height and the
+same slots in the same order, so a card with more to say moves no rule against its neighbors: the header, one row per
+rate-limit window (5-hour, 7-day and Fable), the Extra usage line, the chips and the poll reading. Every window share on
+the view reads as the share left. A card draws the windows the ledger sampled in the last day, or the ones the router
+holds when the ledger has none, whatever the last read said, and shows an error in their place only when it holds none.
+A window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
+reading. The Extra usage line reads the month's spend against its limit, in the serious tone while requests bill as
+extra usage and in the muted ink while they do not, and reads off or not reported in the muted ink when extra usage is
+disabled or the account has not reported it. The reason the provider gave for it sits inside the line, cut to the line's
+width, with the whole message on hover. The chips start with the plan, named by its tier (Max 20x, Max 5x or Pro), then
+say when the plan of an account marked cancelled ends, in the serious tone inside a week, and when the trial of an
+account on the Claude Code trial ends. The poll reading takes one or two lines: when the poll last asked the endpoint
+and how it answered, a failed poll naming its reason cut to the line's width, and, while the account backs off, the next
+attempt in the serious tone. The line's title carries the rest: the attempt's instant, a failed poll's whole message,
+when the snapshot shown was read, since when the account backs off, and how many rate-limited answers it has had in a
+row. Refresh reads the endpoint now unless the account is backing off or a fresh snapshot is cached. The page counts a
+card that shows an error, whose last poll failed, or that is backing off as needing attention.
+
+Quota windows lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
+view. An account marked cancelled with a saved end shows the end on its lane where it falls inside the drawn period: no
+window opens after it, and the window that spans it stops there.
+
+The fast-mode reading is on the account page's Usage card: a Fast mode line with the share of the fast lane's input and
+output buckets used, as the last answer reported them, with the reset, a bucket past its reset reading as refilled, and
+a chip while the account's fast lane cools, naming the reason (rate limited, or credits unavailable) and when it lifts.
 
 ![The Quota view: the cards per account and the reset timeline](assets/quota-light.png#only-light)
 ![The Quota view: the cards per account and the reset timeline](assets/quota-dark.png#only-dark)
