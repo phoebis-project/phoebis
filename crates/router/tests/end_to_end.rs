@@ -3052,17 +3052,31 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
     let resp = req.send().await.unwrap();
     assert_eq!(resp.status(), 200);
     let _ = resp.text().await.unwrap();
-    // Registered through the companion route under the key, so the recipe is retained.
-    let events = format!("http://127.0.0.1:{proxy_port}/v0/resource/plugins/cache-keepalive/events?event=session_start&session_id=e2e-warm&instance_id=e2e-instance&sequence=1");
+    // Registered through the keepalive route under the key, so the recipe is retained.
+    let events = format!("http://127.0.0.1:{proxy_port}/v0/keepalive/events");
+    let registration = serde_json::json!({
+        "protocol": 1,
+        "event": "session_start",
+        "session_id": "e2e-warm",
+        "instance_id": "e2e-instance",
+        "sequence": 1,
+    });
     let ack = client
-        .get(&events)
+        .post(&events)
         .header("authorization", format!("Bearer {secret}"))
+        .json(&registration)
         .send()
         .await
         .unwrap();
     assert_eq!(ack.status(), 200);
     assert_eq!(
-        client.get(&events).send().await.unwrap().status(),
+        client
+            .post(&events)
+            .json(&registration)
+            .send()
+            .await
+            .unwrap()
+            .status(),
         401,
         "no key, no event"
     );
@@ -3563,12 +3577,19 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .unwrap();
     assert_eq!(relayed.status(), 200);
     let _ = relayed.text().await.unwrap();
-    // Registered through the companion route under the key, so the recipe is retained.
-    let events = format!("http://127.0.0.1:{proxy_port}/v0/resource/plugins/cache-keepalive/events?event=session_start&session_id=e2e-ui&instance_id=e2e-instance&sequence=1");
+    // Registered through the keepalive route under the key, so the recipe is retained.
+    let events = format!("http://127.0.0.1:{proxy_port}/v0/keepalive/events");
     assert_eq!(
         client
-            .get(&events)
+            .post(&events)
             .header("authorization", format!("Bearer {secret}"))
+            .json(&serde_json::json!({
+                "protocol": 1,
+                "event": "session_start",
+                "session_id": "e2e-ui",
+                "instance_id": "e2e-instance",
+                "sequence": 1,
+            }))
             .send()
             .await
             .unwrap()

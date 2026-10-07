@@ -191,7 +191,7 @@ proxy accepts](#what-the-proxy-accepts) says.
 | GET | `/v1/usage` | router key | that key's own usage for the last 24 hours and 7 days, JSON or HTML by `Accept` |
 | GET | `/v1/models` | router key | the models the key may route to, with a `[1m]` twin per long-context model |
 | GET | `/v1/models/{*id}` | router key | one row of that listing, or `404` |
-| GET | `/v0/resource/plugins/cache-keepalive/events` | router key | the companion's event report |
+| POST | `/v0/keepalive/events` | router key | the keepalive mod's event report |
 | GET | `/v0/resource/plugins/cache-keepalive/snapshot` | router key | the companion's engine snapshot |
 | any other method on a known path | | none | `405` |
 | any unmatched path | | none | `404` |
@@ -204,7 +204,7 @@ check read `/api/ready` instead: `/api/hello` and `/api/ready` differ when the r
 store died while the listener stays up, and `dead` names each one that died as `ledger`, `router` or `store`. The two
 `/v1/models` routes answer the [models listing](#the-models-listing) below. Every refusal above, including the
 wrong-method and unknown-path answers, carries an Anthropic-shaped error body; the not-ready `503` of `/api/ready`
-reports the router's state and carries the readiness body instead. The two keepalive companion routes are covered on the
+reports the router's state and carries the readiness body instead. The keepalive routes are covered on the
 [Keepalive](keepalive.md) page; each session they report belongs to the key generation that registered it, so a key id
 created again reaches none of the sessions its previous holder left behind.
 

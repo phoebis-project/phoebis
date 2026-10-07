@@ -66,6 +66,34 @@ impl AgentState {
     }
 }
 
+/// What a parked agent waits on: a background task of its own, a scheduled wakeup, or both.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ParkKind {
+    Background,
+    Both,
+    Scheduled,
+}
+
+impl ParkKind {
+    pub fn parse(s: &str) -> Option<ParkKind> {
+        Some(match s {
+            "background" => ParkKind::Background,
+            "both" => ParkKind::Both,
+            "scheduled" => ParkKind::Scheduled,
+            _ => return None,
+        })
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            ParkKind::Background => "background",
+            ParkKind::Both => "both",
+            ParkKind::Scheduled => "scheduled",
+        }
+    }
+}
+
 /// Why probes a recipe paid for went unanswered: the stop that left them, or the request after them that read no
 /// cache. The label the wasted count carries.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -335,6 +363,11 @@ pub(crate) struct Agent {
     /// worker that started on the old one must not touch the new one's bookkeeping.
     pub incarnation: u64,
     pub state: AgentState,
+    // The park the last `parked` report described. A report of any other state clears the three, while a prompt
+    // or a real request moves the agent to busy and leaves them, so a reader judges them under `Parked` alone.
+    pub deadline: Option<i64>,
+    pub park_kind: Option<ParkKind>,
+    pub wake_at: Option<i64>,
     pub generation: u64,
     pub current: Option<Observation>,
     /// When the entry the recipe keeps warm expires; the due time is this less the pool's lead and jitter.
@@ -411,6 +444,9 @@ impl Agent {
             key_generation: 0,
             incarnation,
             state: AgentState::Busy,
+            deadline: None,
+            park_kind: None,
+            wake_at: None,
             generation: 0,
             current: None,
             expires: None,
@@ -1103,6 +1139,7 @@ pub struct AgentStatus {
     pub cache_ttl_ms: i64,
     pub canonical_model: String,
     pub cold: u32,
+    pub deadline: Option<i64>,
     pub failures: u32,
     pub grace_left: u32,
     pub idle_ticks: u64,
@@ -1112,6 +1149,7 @@ pub struct AgentStatus {
     pub net_five_hour_share: f64,
     pub net_usd: f64,
     pub next_probe_at: Option<i64>,
+    pub park_kind: Option<ParkKind>,
     pub paused: bool,
     pub probe_usage: ProbeUsage,
     pub probes: u64,
@@ -1119,6 +1157,7 @@ pub struct AgentStatus {
     pub request_generation: u64,
     pub state: AgentState,
     pub unanswered: usize,
+    pub wake_at: Option<i64>,
 }
 
 /// The engine's bus task. Every event is handed to `observe` under the lock; nothing here awaits while holding
@@ -1210,6 +1249,7 @@ impl Engine {
             cache_ttl_ms: agent.ttl_ms,
             canonical_model: agent.canonical_model.clone(),
             cold: agent.cold,
+            deadline: agent.deadline,
             failures: agent.failures,
             grace_left: agent.grace_left,
             idle_ticks: agent.idle_ticks,
@@ -1219,6 +1259,7 @@ impl Engine {
             net_five_hour_share: agent.net.five_hour_share,
             net_usd: agent.net.usd,
             next_probe_at: agent.due_at(),
+            park_kind: agent.park_kind,
             paused: agent.paused,
             probe_usage: agent.usage,
             probes: agent.probes,
@@ -1231,6 +1272,7 @@ impl Engine {
                     .iter()
                     .map(|kept| kept.costs.len())
                     .sum::<usize>(),
+            wake_at: agent.wake_at,
         })
     }
 

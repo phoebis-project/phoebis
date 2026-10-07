@@ -9,7 +9,7 @@ use anyhow::{anyhow, Context};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView};
 use phoebis_bus::Bus;
-use phoebis_keepalive::{companion_router, spawn_observer, Engine, EngineParts};
+use phoebis_keepalive::{keepalive_router, spawn_observer, Engine, EngineParts};
 use phoebis_ledger::{
     metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
 };
@@ -492,7 +492,7 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     let mut proxy = tokio::spawn(phoebis_relay::serve(
         proxy_listener,
         relay.clone(),
-        companion_router(keepalive.clone()).merge(usage_router(
+        keepalive_router(keepalive.clone()).merge(usage_router(
             ledger_db.clone(),
             router_task.clone(),
             clock.clone(),

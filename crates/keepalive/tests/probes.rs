@@ -1,7 +1,6 @@
 //! Probes through the relay's failover loop: what a probe carries, what its result does to the schedule, and
 //! how a late or a failed one is classified; the Go probe suite.
 mod common;
-use std::str::FromStr;
 
 use common::*;
 use fake_upstream::{Respond, SseEvent};
@@ -211,11 +210,9 @@ async fn a_probe_preserves_routing_and_constraints() {
             ..Default::default()
         })
         .unwrap();
+    assert_eq!(ack.lease_expires_ms, r.now() + r.lease_ms());
     assert!(
-        jiff::Timestamp::from_str(&ack.lease_expires)
-            .unwrap()
-            .as_millisecond()
-            > lease_before,
+        ack.lease_expires_ms > lease_before,
         "the heartbeats carried the lease past the one the session started with"
     );
     // The ledger has the probe under kind probe with the same session, and the pin is the real request's.

@@ -378,7 +378,7 @@ impl Rig {
         .unwrap();
     }
 
-    pub fn agent(&self, id: &str) -> phoebis_keepalive::SnapshotAgent {
+    pub fn agent(&self, id: &str) -> phoebis_keepalive::AckAgent {
         self.engine
             .snapshot("desktop", self.generation("desktop"))
             .sessions

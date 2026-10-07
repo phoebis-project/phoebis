@@ -15,9 +15,8 @@ ROOT = pathlib.Path(__file__).resolve().parent.parent
 SITE = ROOT / "site"
 ROUTES_RS = ROOT / "crates/admin/src/routes.rs"
 API_MD = ROOT / "docs/site/api.md"
-# The proxy listener's route tables: the relay's own router, the keepalive companion's two routes, and every
-# router the binary merges beside them. A file listed here that does not exist fails the check rather than
-# narrowing it.
+# The proxy listener's route tables: the relay's own router, the keepalive mod's route, and every router the
+# binary merges beside them. A file listed here that does not exist fails the check rather than narrowing it.
 PROXY_ROUTE_FILES = [
     ROOT / "crates/keepalive/src/routes.rs",
     ROOT / "crates/ledger/src/usage.rs",

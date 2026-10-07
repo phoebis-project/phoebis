@@ -1,6 +1,7 @@
-//! The companion's lifecycle protocol: six events, monotonic sequences, per-agent generations, a lease, and the
-//! snapshot the companion reconciles against. The contract is the Go engine's, plus `owner_id` on
-//! `session_start` and the key scope on every session.
+//! The keepalive mod's reporting protocol: six events in JSON bodies, monotonic sequences, per-agent
+//! generations, a lease, and a registration acknowledgment that carries the session's agents so the mod
+//! reconciles from the answer. The contract is the Go engine's, plus `owner_id` on `session_start`, the park
+//! fields of a `parked` state, the `presence` activity and the key scope on every session.
 
 use std::collections::BTreeMap;
 
@@ -8,103 +9,195 @@ use phoebis_bus::SessionLifecycle;
 
 use crate::config::LEASE_MS;
 use crate::engine::{
-    Agent, AgentState, Engine, Inner, Reason, Session, SessionKey, Wasted, MAIN_AGENT,
+    Agent, AgentState, Engine, Inner, ParkKind, Reason, Session, SessionKey, Wasted, MAIN_AGENT,
 };
 use crate::recipe::valid_id;
 
-/// Decoded key and value bytes of one event, with two per pair for the separators the wire had.
-const MAX_EVENT_BYTES: usize = 16 << 10;
+pub const PROTOCOL: u64 = 1;
 
-pub const EVENT_FIELDS: &[&str] = &[
-    "agent_id",
-    "event",
-    "instance_id",
-    "owner_id",
-    "previous_instance_id",
-    "request_generation",
-    "sequence",
-    "session_id",
-    "state",
-];
-
-#[derive(Clone, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Event {
     pub agent_id: Option<String>,
+    /// Epoch milliseconds: the latest deadline across the background commands a park waits on.
+    pub deadline: Option<i64>,
     pub event: String,
     pub instance_id: String,
+    pub kind: Option<String>,
     pub owner_id: Option<String>,
+    pub park_kind: Option<String>,
     pub previous_instance_id: Option<String>,
+    pub protocol: Option<u64>,
     pub request_generation: Option<u64>,
     pub sequence: u64,
     pub session_id: String,
     pub state: Option<String>,
+    /// Epoch milliseconds: the earliest scheduled wakeup a park waits on.
+    pub wake_at: Option<i64>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
+pub struct AckAgent {
+    pub agent_id: String,
+    pub request_generation: u64,
+    pub state: AgentState,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct Ack {
     #[serde(skip_serializing_if = "Option::is_none")]
     pub agent_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub agents: Option<Vec<AckAgent>>,
     pub instance_id: String,
-    /// RFC 3339, because the companion parses it with `datetime.fromisoformat`.
-    pub lease_expires: String,
+    pub lease_expires_ms: i64,
     pub request_generation: u64,
     pub sequence: u64,
     pub session_id: String,
 }
 
-#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq)]
+#[derive(Clone, Debug, thiserror::Error, PartialEq, Eq, serde::Serialize)]
 #[error("{code}")]
 pub struct EventError {
     pub code: &'static str,
+    /// The holder an `instance_conflict` names when it ended or went silent, so the mod can retry the start as
+    /// a takeover of that instance.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub instance_id: Option<String>,
+    /// The agent's current generation on `stale_request_generation` and `agent_released`, so the mod adopts it
+    /// without a registration.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub request_generation: Option<u64>,
+    #[serde(skip)]
     pub status: u16,
 }
 
-const fn err(code: &'static str, status: u16) -> EventError {
-    EventError { code, status }
+pub(crate) const fn err(code: &'static str, status: u16) -> EventError {
+    EventError {
+        code,
+        instance_id: None,
+        request_generation: None,
+        status,
+    }
 }
 
-pub fn rfc3339(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .map(|t| t.to_string())
-        .unwrap_or_default()
+fn err_for_instance(code: &'static str, instance: &str) -> EventError {
+    EventError {
+        instance_id: Some(instance.to_string()),
+        ..err(code, 409)
+    }
 }
 
-/// The raw query string, decoded here rather than by an extractor: the size bound is on decoded bytes, a
-/// repeated key is a refusal rather than a last-wins, and the codes are the ones the companion branches on.
-pub fn decode_query_event(query: &str) -> Result<Event, EventError> {
-    let mut seen: BTreeMap<String, String> = BTreeMap::new();
-    let mut total = 0usize;
-    for (key, value) in url::form_urlencoded::parse(query.as_bytes()) {
-        if !EVENT_FIELDS.contains(&key.as_ref()) || seen.contains_key(key.as_ref()) {
+fn err_for_generation(code: &'static str, generation: u64) -> EventError {
+    EventError {
+        request_generation: Some(generation),
+        ..err(code, 409)
+    }
+}
+
+/// The members each event takes beyond the five every report carries, each with whether it is required. A
+/// member on an event that does not take it is refused rather than ignored, so a report the mod got wrong never
+/// reads as one it got right.
+fn members(event: &str) -> Option<&'static [(&'static str, bool)]> {
+    let members: &'static [(&'static str, bool)] = match event {
+        "activity" => &[
+            ("agent_id", true),
+            ("kind", true),
+            ("request_generation", false),
+        ],
+        "agent_start" => &[("agent_id", true), ("request_generation", false)],
+        "heartbeat" | "session_end" => &[],
+        "session_start" => &[("owner_id", false), ("previous_instance_id", false)],
+        "state" => &[
+            ("agent_id", true),
+            ("deadline", false),
+            ("park_kind", false),
+            ("request_generation", false),
+            ("state", true),
+            ("wake_at", false),
+        ],
+        _ => return None,
+    };
+    Some(members)
+}
+
+#[derive(serde::Deserialize)]
+struct ProtocolOnly {
+    protocol: Option<u64>,
+}
+
+/// One report as the mod sends it. The body bound is the route's, and everything else the protocol does not
+/// take is refused here, before the state machine sees it.
+pub fn decode_json_event(body: &[u8]) -> Result<Event, EventError> {
+    let event: Event = match serde_json::from_slice(body) {
+        Ok(event) => event,
+        // A newer protocol's body may carry members this one does not know, and the mod has to learn that the
+        // protocol is what the router refuses rather than its report.
+        Err(_) => {
+            return Err(match serde_json::from_slice::<ProtocolOnly>(body) {
+                Ok(ProtocolOnly {
+                    protocol: Some(protocol),
+                }) if protocol != PROTOCOL => err("unsupported_protocol", 400),
+                _ => err("invalid_event", 400),
+            })
+        }
+    };
+    match event.protocol {
+        None => return Err(err("invalid_event", 400)),
+        Some(PROTOCOL) => {}
+        Some(_) => return Err(err("unsupported_protocol", 400)),
+    }
+    let Some(members) = members(&event.event) else {
+        return Err(err("unknown_event", 400));
+    };
+    let present: Vec<&str> = [
+        ("agent_id", event.agent_id.is_some()),
+        ("deadline", event.deadline.is_some()),
+        ("kind", event.kind.is_some()),
+        ("owner_id", event.owner_id.is_some()),
+        ("park_kind", event.park_kind.is_some()),
+        ("previous_instance_id", event.previous_instance_id.is_some()),
+        ("request_generation", event.request_generation.is_some()),
+        ("state", event.state.is_some()),
+        ("wake_at", event.wake_at.is_some()),
+    ]
+    .into_iter()
+    .filter_map(|(name, there)| there.then_some(name))
+    .collect();
+    if present
+        .iter()
+        .any(|name| !members.iter().any(|(member, _)| member == name))
+        || members
+            .iter()
+            .any(|(member, required)| *required && !present.contains(member))
+    {
+        return Err(err("invalid_event", 400));
+    }
+    if event
+        .kind
+        .as_deref()
+        .is_some_and(|kind| kind != "prompt" && kind != "presence")
+    {
+        return Err(err("invalid_state", 400));
+    }
+    if let Some(state) = event.state.as_deref() {
+        if AgentState::parse(state).is_none() {
+            return Err(err("invalid_state", 400));
+        }
+        let park = event.park_kind.is_some() || event.wake_at.is_some() || event.deadline.is_some();
+        if state != "parked" && park {
             return Err(err("invalid_event", 400));
         }
-        total += key.len() + value.len() + 2;
-        seen.insert(key.into_owned(), value.into_owned());
-    }
-    if total > MAX_EVENT_BYTES {
-        return Err(err("event_too_large", 413));
-    }
-    let single = |key: &str| seen.get(key).cloned();
-    let sequence = single("sequence")
-        .and_then(|s| s.parse::<u64>().ok())
-        .ok_or(err("invalid_event", 400))?;
-    let request_generation = match single("request_generation") {
-        None => None,
-        Some(raw) => Some(raw.parse::<u64>().map_err(|_| err("invalid_event", 400))?),
-    };
-    let event = Event {
-        agent_id: single("agent_id"),
-        event: single("event").unwrap_or_default(),
-        instance_id: single("instance_id").unwrap_or_default(),
-        owner_id: single("owner_id"),
-        previous_instance_id: single("previous_instance_id"),
-        request_generation,
-        sequence,
-        session_id: single("session_id").unwrap_or_default(),
-        state: single("state"),
-    };
-    if event.owner_id.is_some() && event.event != "session_start" {
-        return Err(err("invalid_event", 400));
+        if state == "parked" {
+            let kind = event
+                .park_kind
+                .as_deref()
+                .ok_or(err("invalid_event", 400))?;
+            let kind = ParkKind::parse(kind).ok_or(err("invalid_state", 400))?;
+            if kind != ParkKind::Background && event.wake_at.is_none() {
+                return Err(err("invalid_event", 400));
+            }
+        }
     }
     validate(event)
 }
@@ -124,15 +217,8 @@ fn validate(event: Event) -> Result<Event, EventError> {
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
-pub struct SnapshotAgent {
-    pub agent_id: String,
-    pub request_generation: u64,
-    pub state: AgentState,
-}
-
-#[derive(Clone, Debug, PartialEq, Eq, serde::Serialize)]
 pub struct SnapshotSession {
-    pub agents: Vec<SnapshotAgent>,
+    pub agents: Vec<AckAgent>,
     pub ended: bool,
     pub instance_id: String,
     pub sequence: u64,
@@ -144,11 +230,24 @@ pub struct Snapshot {
     pub sessions: Vec<SnapshotSession>,
 }
 
-fn acknowledge(session: &Session, agent: Option<&Agent>) -> Ack {
+fn agents_of(session: &Session) -> Vec<AckAgent> {
+    session
+        .agents
+        .values()
+        .map(|a| AckAgent {
+            agent_id: a.id.clone(),
+            request_generation: a.generation,
+            state: a.state,
+        })
+        .collect()
+}
+
+fn acknowledge(session: &Session, agent: Option<&Agent>, agents: Option<Vec<AckAgent>>) -> Ack {
     Ack {
         agent_id: agent.map(|a| a.id.clone()),
+        agents,
         instance_id: session.instance.clone(),
-        lease_expires: rfc3339(session.lease),
+        lease_expires_ms: session.lease,
         request_generation: agent.map(|a| a.generation).unwrap_or(0),
         sequence: session.sequence,
         session_id: session.session_id.clone(),
@@ -200,15 +299,7 @@ impl Engine {
                     .values()
                     .filter(|s| s.key_id == key_id && s.key_generation == key_generation)
                     .map(|s| SnapshotSession {
-                        agents: s
-                            .agents
-                            .values()
-                            .map(|a| SnapshotAgent {
-                                agent_id: a.id.clone(),
-                                request_generation: a.generation,
-                                state: a.state,
-                            })
-                            .collect(),
+                        agents: agents_of(s),
                         ended: s.ended || !s.attended,
                         instance_id: s.instance.clone(),
                         sequence: s.sequence,
@@ -300,7 +391,7 @@ impl Inner {
                 session.ended = true;
                 session.sequence = ev.sequence;
                 session.last_report_at = now;
-                let ack = acknowledge(session, session.agents.get(&agent_id));
+                let ack = acknowledge(session, session.agents.get(&agent_id), None);
                 self.emit(SessionLifecycle::SessionEnded {
                     key_id: key.0.clone(),
                     session_id: key.1.clone(),
@@ -357,10 +448,13 @@ impl Inner {
                     return Err(err("unknown_agent", 409));
                 };
                 if ev.request_generation != Some(agent.generation) {
-                    return Err(err("stale_request_generation", 409));
+                    return Err(err_for_generation(
+                        "stale_request_generation",
+                        agent.generation,
+                    ));
                 }
                 if agent.state == AgentState::Released {
-                    return Err(err("agent_released", 409));
+                    return Err(err_for_generation("agent_released", agent.generation));
                 }
                 let was = agent.state;
                 if ev.event == "activity" {
@@ -372,13 +466,17 @@ impl Inner {
                         .get_mut(&agent_id)
                         .unwrap();
                     agent.last_activity = now;
-                    agent.idle_ticks = 0;
-                    agent.state = AgentState::Busy;
-                    if agent_id == MAIN_AGENT && was == AgentState::Parked {
-                        self.emit(SessionLifecycle::MainResumed {
-                            key_id: key.0.clone(),
-                            session_id: key.1.clone(),
-                        });
+                    // A person at the terminal says nothing about the agent's work, so presence moves the idle
+                    // clock alone. Only the decoder requires the kind, so one a direct caller left out is a prompt.
+                    if ev.kind.as_deref() != Some("presence") {
+                        agent.idle_ticks = 0;
+                        agent.state = AgentState::Busy;
+                        if agent_id == MAIN_AGENT && was == AgentState::Parked {
+                            self.emit(SessionLifecycle::MainResumed {
+                                key_id: key.0.clone(),
+                                session_id: key.1.clone(),
+                            });
+                        }
                     }
                 } else {
                     let state = ev
@@ -386,13 +484,22 @@ impl Inner {
                         .as_deref()
                         .and_then(AgentState::parse)
                         .ok_or(err("invalid_state", 400))?;
-                    self.sessions
+                    let park_kind = match ev.park_kind.as_deref() {
+                        None => None,
+                        Some(kind) => Some(ParkKind::parse(kind).ok_or(err("invalid_state", 400))?),
+                    };
+                    let parked = state == AgentState::Parked;
+                    let agent = self
+                        .sessions
                         .get_mut(&key)
                         .unwrap()
                         .agents
                         .get_mut(&agent_id)
-                        .unwrap()
-                        .state = state;
+                        .unwrap();
+                    agent.state = state;
+                    agent.park_kind = park_kind.filter(|_| parked);
+                    agent.wake_at = ev.wake_at.filter(|_| parked);
+                    agent.deadline = ev.deadline.filter(|_| parked);
                     match state {
                         AgentState::Released => self.discard(
                             &key,
@@ -439,7 +546,7 @@ impl Inner {
         }
         session.attended = true;
         session.last_report_at = now;
-        Ok(acknowledge(session, session.agents.get(&agent_id)))
+        Ok(acknowledge(session, session.agents.get(&agent_id), None))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -472,14 +579,14 @@ impl Inner {
         if mine {
             let session = self.sessions.get_mut(&key).expect("the session just read");
             if session.instance == ev.instance_id {
-                // A same-instance start after a lapse re-adopts the session: the companion may only have been
-                // silent, and the recipes it left are still the ones its next request needs.
-                if session.ended && session.attended {
-                    return Err(err("instance_ended", 409));
-                }
+                // A same-instance start after a lapse re-adopts the session: the mod may only have been silent,
+                // and the recipes it left are still the ones its next request needs. One after the session's end
+                // revives it: the mod's instance is its process's, so a /clear and then a /resume back to this
+                // id registers it again under the same instance, and a refusal would only draw the same start.
                 if ev.sequence <= session.sequence {
                     return Err(err("stale_sequence", 409));
                 }
+                let revived = session.ended;
                 session.sequence = ev.sequence;
                 session.lease = now + lease_ms;
                 session.attended = true;
@@ -488,10 +595,31 @@ impl Inner {
                 if ev.owner_id.is_some() {
                     session.owner_id = ev.owner_id.clone();
                 }
-                return Ok(acknowledge(session, session.agents.get(MAIN_AGENT)));
+                if revived {
+                    // The end released every agent, and a real request arms nothing on a released one, so main
+                    // starts again as a registration starts it. The subagents stay released until the mod starts
+                    // them again, and every generation stays as the end left it.
+                    if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
+                        main.state = AgentState::Busy;
+                        main.last_activity = now;
+                        main.idle_ticks = 0;
+                    }
+                    self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
+                }
+                let session = &self.sessions[&key];
+                return Ok(acknowledge(
+                    session,
+                    session.agents.get(MAIN_AGENT),
+                    Some(agents_of(session)),
+                ));
             }
             if ev.previous_instance_id.as_deref() != Some(session.instance.as_str()) {
-                return Err(err("instance_conflict", 409));
+                // An ended or silent holder is named so the mod can take over from it, and a live one is not.
+                return Err(if session.ended || !session.attended {
+                    err_for_instance("instance_conflict", &session.instance)
+                } else {
+                    err("instance_conflict", 409)
+                });
             }
         } else if ev.previous_instance_id.is_some() {
             return Err(err("unknown_previous_instance", 409));
@@ -570,6 +698,10 @@ impl Inner {
             session_id: key.1.clone(),
         });
         let session = &self.sessions[&key];
-        Ok(acknowledge(session, session.agents.get(MAIN_AGENT)))
+        Ok(acknowledge(
+            session,
+            session.agents.get(MAIN_AGENT),
+            Some(agents_of(session)),
+        ))
     }
 }
