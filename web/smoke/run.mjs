@@ -7570,11 +7570,12 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
     const columns = [...(warming?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
     results.push({
-      name: '/analytics probes by outcome carries a held slice after migrated, and the warming table a Held column after Skipped',
+      name: '/analytics probes by outcome carries a held slice above zero after migrated, and the warming table a Held column before Skipped',
       ok:
         probeLegend.map((li) => li.textContent?.match(/^[A-Za-z]+/)?.[0]).join(',') === 'OK,Migrated,Held,Skipped,Failed' &&
         (held?.getAttribute('title') ?? '') === 'The router refused the probe while its ledger caught up. It was sent again and counts for neither the cold streak nor the net.' &&
-        columns.indexOf('Held') === columns.indexOf('Skipped') + 1,
+        columns.indexOf('Held') === columns.indexOf('Skipped') - 1 &&
+        /^Held\s*[1-9]/.test(held?.textContent ?? ''),
       missing: [probeLegend.map((li) => li.textContent ?? '').join('|').slice(0, 160), held?.getAttribute('title') ?? 'no held slice', columns.join(',')],
     });
   }

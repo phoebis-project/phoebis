@@ -2060,9 +2060,9 @@
   background: var(--series-3);
 }
 
-/* Matches the held slice of the analytics probe chart, --series-muted. */
+/* A tint of the muted tone, so it reads apart from the skipped segment beside it. */
 .probe-bar__seg--held {
-  background: var(--series-muted);
+  background: color-mix(in srgb, var(--series-muted) 50%, var(--surface));
 }
 
 .probe-bar__seg--skipped {

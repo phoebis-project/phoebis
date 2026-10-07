@@ -788,6 +788,9 @@ function classOfHour(seed: string): string {
   return 'main';
 }
 
+// The probes the router held while its ledger caught up draw from a stream of their own, so they shift no other draw.
+const heldRng = createRng(6_133);
+
 function rollups(): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -858,13 +861,15 @@ function rollups(): HourlyRollup[] {
       cost: sumSplit(list.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
       histograms: histogramsOf(list),
       keptWarm: { requests: kept.length, tokens: kept.reduce((s, r) => s + r.usage.cacheRead, 0) },
-      // No logged probe carries the router's `ledger_behind` refusal, so none counts as held.
       probes: isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : { ok: 0, failed: 0, held: 0, skipped: 0 },
       probeMigrated: isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0,
       savings: { grossUsd: kept.reduce((s, r) => s + keptWarmSaving(r.model, r.usage.cacheRead), 0), probeCostUsd },
       ...(isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE),
     });
   }
+  // The day holds one probe the router held while its ledger caught up, so the default range draws the slice.
+  const probeRows = out.filter((r) => r.kind === 'probe');
+  if (probeRows.length > 0) heldRng.pick(probeRows).probes.held = 1;
   return out.sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
 }
 
@@ -909,8 +914,6 @@ function historicalRollups(): HourlyRollup[] {
   const hm = createRng(521);
   // Its own stream as well: the desktop key's Opus hours ran part in fast mode.
   const hf = createRng(7_373);
-  // And one for the few probes the router held while its ledger caught up, so they shift none of the hour's draws.
-  const hh = createRng(6_133);
   // The desktop key asks for high effort throughout; one laptop hour asked for the most, so a grouping on
   // effort has a third group to show. The first eligible hour takes it rather than leaving it to a draw.
   let maxEffortOwed = true;
@@ -1038,7 +1041,7 @@ function historicalRollups(): HourlyRollup[] {
           cost: costSplitOf(model, probeUsage),
           histograms: { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() },
           keptWarm: { requests: 0, tokens: 0 },
-          probes: { ok: probes, failed, held: hh.chance(0.04) ? 1 : 0, skipped: h.int(0, 2) },
+          probes: { ok: probes, failed, held: heldRng.chance(0.04) ? 1 : 0, skipped: h.int(0, 2) },
           probeMigrated: h.chance(0.3) ? 1 : 0,
           savings: { grossUsd: 0, probeCostUsd: probeCost },
           ...wastedProbes(h, probes, probeCost),

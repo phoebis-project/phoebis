@@ -280,8 +280,8 @@ flight is `retrying` rather than paused under `pool_exhausted`: its next attempt
 A probe the router refused with `503 ledger_behind`, its ledger catching up, holds under `ledger_behind` rather than
 `retrying`: its next attempt waits out that answer's `Retry-After`, or the pool's `retry_seconds` without one, and
 counts no failure toward `cold_probe_limit`, so a ledger that stays behind never pauses the recipe. A held re-send
-counts no tick toward `max_idle_ticks`. The entry's expiry is the one bound on the hold: once it passes, the recipe ends
-under `expired`, as under any other hold.
+counts no tick toward `max_idle_ticks`. The entry's expiry and `max_idle_seconds` still bound the hold. Past the expiry
+the recipe ends under `expired`, as under any other hold.
 
 A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
 lapses or is evicted, or when the next request after the probe reads nothing from the entry it kept:

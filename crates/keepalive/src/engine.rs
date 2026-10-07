@@ -2028,6 +2028,7 @@ impl Engine {
                     recipe: observation.recipe.clone(),
                     expected: observation.expected,
                     types,
+                    counted_idle_tick: idle,
                 };
                 agent.in_flight = true;
                 agent.hold_counted = false;

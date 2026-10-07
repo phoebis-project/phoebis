@@ -1213,15 +1213,15 @@ function KeepaliveByPool({ groups, error, loading }: { error: string | null; gro
       error={error}
       loading={loading}
       groupLabel="Pool"
-      columns={['Probes OK', 'Skipped', 'Held', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Gross saved', 'Probe cost', 'Net saved']}
+      columns={['Probes OK', 'Held', 'Skipped', 'Failed', 'Kept-warm requests', 'Kept-warm tokens', 'Gross saved', 'Probe cost', 'Net saved']}
       rows={rows.map((g) => ({
         key: g.key,
         label: g.label,
         // A group folded from request rows measured none of these.
         cells: [
           g.fromRequests ? '-' : fmtInt(g.probes.ok),
-          g.fromRequests ? '-' : fmtInt(g.probes.skipped),
           g.fromRequests ? '-' : fmtInt(g.probes.held),
+          g.fromRequests ? '-' : fmtInt(g.probes.skipped),
           g.fromRequests ? '-' : fmtInt(g.probes.failed),
           g.keptWarm === null ? '-' : fmtInt(g.keptWarm.requests),
           g.keptWarm === null ? '-' : fmtCompact(g.keptWarm.tokens),

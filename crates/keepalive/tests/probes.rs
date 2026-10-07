@@ -496,6 +496,50 @@ async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
     );
 }
 
+/// A hold gives back only the tick its own dispatch counted: a `state` report moves the main agent off idle without
+/// resetting the ticks its idle probes counted, and a probe the router refuses while the agent is busy counted none,
+/// so the ticks stay where the idle probes left them.
+#[tokio::test]
+async fn a_hold_while_the_main_agent_is_busy_gives_back_no_tick_its_dispatch_never_counted() {
+    let behind = Arc::new(AtomicBool::new(false));
+    let reading = behind.clone();
+    let mut r = rig(RigSpec {
+        accounting: Some(Arc::new(move |_| Accounting {
+            behind: reading.load(Ordering::SeqCst),
+        })),
+        accounts: vec![api_key("a", A, 0)],
+        policy: KeepalivePolicy {
+            max_idle_ticks: 4,
+            ..RigSpec::default().policy
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.state("main", "idle");
+    for _ in 0..2 {
+        r.advance_attended(270_000);
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").idle_ticks),
+        (2, 2),
+        "two served idle probes count two ticks"
+    );
+    r.state("main", "busy");
+    behind.store(true, Ordering::SeqCst);
+    r.advance_attended(270_000);
+    r.step().await;
+    r.advance_attended(5_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.idle_ticks, status.reason),
+        (4, 2, Reason::LedgerBehind),
+        "two holds while busy leave the idle probes' ticks alone: {status:?}"
+    );
+}
+
 #[tokio::test]
 async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discards_at_once() {
     // The lapse case: the recipe stays, the probe at 270 s still runs, a heartbeat is refused, and the idle

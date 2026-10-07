@@ -43,6 +43,9 @@ pub(crate) struct ProbeJob {
     /// The typed usage the gate decided the probe's unit on, from the TTL the relay dispatches it with: the
     /// settlement decides on the same set, so the gate, the caps and the savings read one unit.
     pub types: PinUsage,
+    /// The dispatch counted this probe toward `max_idle_ticks`, as it does for an idle main agent or an unattended
+    /// session alone. A hold gives back only a tick its dispatch counted.
+    pub counted_idle_tick: bool,
 }
 
 pub(crate) struct ProbeResult {
@@ -518,7 +521,17 @@ impl Inner {
         let cold_limit = agent.policy.cold_probe_limit;
         let result = match exchange {
             Exchange::Cancelled | Exchange::TimedOut => {
-                self.probe_error(key, agent_id, 0, None, None, None, false, now);
+                self.probe_error(
+                    key,
+                    agent_id,
+                    0,
+                    None,
+                    None,
+                    None,
+                    false,
+                    job.counted_idle_tick,
+                    now,
+                );
                 return Applied::Landed { covered: false };
             }
             Exchange::Answered(result) => result,
@@ -533,6 +546,7 @@ impl Inner {
                 result.obstacle,
                 result.retry_after_secs,
                 exhausted,
+                job.counted_idle_tick,
                 now,
             );
             return Applied::Landed { covered: false };
@@ -699,6 +713,7 @@ impl Inner {
         obstacle: Option<&str>,
         retry_after_secs: Option<u64>,
         exhausted: bool,
+        counted_idle_tick: bool,
         now: i64,
     ) {
         let retry_after_ms = retry_after_secs.map(|secs| {
@@ -760,9 +775,12 @@ impl Inner {
                 .unwrap();
             let wait_ms = retry_after_ms.unwrap_or_else(|| agent.policy.retry_ms());
             agent.retry_at = Some(now.saturating_add(wait_ms));
-            // The dispatch counted this probe before the router refused it, so the hold costs no tick:
-            // `max_idle_ticks` counts served or failed probes, and the entry's lapse bounds the hold.
-            agent.idle_ticks = agent.idle_ticks.saturating_sub(1);
+            // A hold costs no tick: `max_idle_ticks` counts served or failed probes, so the tick this probe's
+            // dispatch counted comes back, and a dispatch that counted none gives back nothing. The entry's lapse
+            // and `max_idle_seconds` bound the hold.
+            if counted_idle_tick {
+                agent.idle_ticks = agent.idle_ticks.saturating_sub(1);
+            }
             self.set_reason(key, agent_id, Reason::LedgerBehind);
             return;
         }
@@ -914,6 +932,7 @@ mod tests {
                 Some(obstacle),
                 None,
                 true,
+                false,
                 1_000,
             );
             let agent = &inner.sessions[&key].agents["main"];
@@ -937,6 +956,7 @@ mod tests {
             Some("pool_moved"),
             Some(1),
             true,
+            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -958,6 +978,7 @@ mod tests {
             None,
             Some(3),
             false,
+            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -973,7 +994,7 @@ mod tests {
     #[test]
     fn every_other_429_still_pauses_as_probe_quota_exhausted() {
         let (mut inner, key) = one_agent_inner();
-        inner.probe_error(&key, "main", 429, None, None, None, false, 1_000);
+        inner.probe_error(&key, "main", 429, None, None, None, false, false, 1_000);
         let agent = &inner.sessions[&key].agents["main"];
         assert!(agent.paused);
         assert_eq!(agent.reason, Reason::ProbeQuotaExhausted);
@@ -989,6 +1010,7 @@ mod tests {
             Some("accounts_at_cap"),
             None,
             None,
+            false,
             false,
             1_000,
         );
@@ -1023,6 +1045,7 @@ mod tests {
             None,
             Some(5),
             false,
+            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -1043,6 +1066,7 @@ mod tests {
             Some("ledger_behind"),
             None,
             None,
+            false,
             false,
             1_000,
         );
@@ -1073,6 +1097,7 @@ mod tests {
                 None,
                 Some(5),
                 false,
+                false,
                 now,
             );
             let agent = &inner.sessions[&key].agents["main"];
@@ -1087,7 +1112,7 @@ mod tests {
     #[test]
     fn a_503_without_the_code_still_retries_under_backoff() {
         let (mut inner, key) = one_agent_inner();
-        inner.probe_error(&key, "main", 503, None, None, None, false, 1_000);
+        inner.probe_error(&key, "main", 503, None, None, None, false, false, 1_000);
         let agent = &inner.sessions[&key].agents["main"];
         assert_eq!(
             (agent.paused, agent.failures, agent.reason),
