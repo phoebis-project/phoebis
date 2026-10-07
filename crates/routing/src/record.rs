@@ -19,7 +19,8 @@ pub struct DecisionRecord {
     pub request: RequestFacts,
     /// `None` for a request that pins nothing, with `pin_reason` beside it.
     pub pin: Option<PinFacts>,
-    /// `pinning_off`; `None` beside a pin block.
+    /// `not_looked_up` (a refusal's, made before
+    /// the pin lookup whatever session the request named) or `pinning_off`; `None` beside a pin block.
     pub pin_reason: Option<&'static str>,
     /// `None` for a refusal whose key or pool the snapshot no longer holds (a revoked key's), written as `null`.
     pub settings: Option<Settings>,
@@ -572,11 +573,11 @@ impl From<&SelectRequest> for RefusedRequest {
 
 impl DecisionRecord {
     /// The record of a request refused before the engine ran: the request block from the identity, no pin block
-    /// (`pin_reason` `not_looked_up`), the settings when the key and its pool are still in the snapshot and `None`
-    /// otherwise, no candidate, a two-line walk (`admission` `refused` with the reason, `selection` `not_run`) and
-    /// a `refused` outcome carrying `refusal`; with its summary (`by` `refusal`, `fact` the reason's key: `client`
-    /// for a drift refusal, whose reason names the trigger and the client version, `key` for a key or a resolve
-    /// refusal, whose reason is the refusal's `Display`).
+    /// (`pin_reason` `not_looked_up`, since the refusal precedes the lookup), the settings when the key and its pool
+    /// are still in the snapshot and `None` otherwise, no candidate, a two-line walk (`admission` `refused` with the
+    /// reason, `selection` `not_run`) and a `refused` outcome carrying `refusal`; with its summary (`by` `refusal`,
+    /// `fact` the reason's key: `client` for a drift refusal, whose reason names the trigger and the client version,
+    /// `key` for a key or a resolve refusal, whose reason is the refusal's `Display`).
     pub fn refused(
         request: &RefusedRequest,
         snapshot: &RegistrySnapshot,

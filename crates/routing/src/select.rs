@@ -3759,17 +3759,14 @@ impl Readings<'_> {
                 };
                 (by("rule", outcome.rule.unwrap_or_default()), fact)
             }
+            // The slot the cap's exemption found explains the landing, so it leads; the wait, when there was one,
+            // says what the landing cost.
             "placed" if self.hold_place == Some("session_pin") => {
-                (by("hold", "session_pin"), self.in_flight_fact())
+                (by("hold", "session_pin"), self.session_pin_fact())
             }
-            "placed" => match self
-                .request
-                .holds
-                .last()
-                .filter(|hold| hold.attempt == self.request.attempt)
-            {
+            "placed" => match self.attempt_hold() {
                 // The wait explains the placement more than where it landed: the row names the hold it followed
-                // and how long it lasted. A failover's later attempt took its own placement.
+                // and how long it lasted.
                 Some(hold) => {
                     let place = if hold.cohort.is_some() {
                         "cohort"
@@ -3945,6 +3942,26 @@ impl Readings<'_> {
                 )]
             })
             .unwrap_or_default()
+    }
+
+    /// The hold this attempt waited through, if the request's last hold is this attempt's; a failover's later
+    /// attempt took its own placement and reads `None`. Both arms that name a wait read it here.
+    fn attempt_hold(&self) -> Option<&HoldFacts> {
+        self.request
+            .holds
+            .last()
+            .filter(|hold| hold.attempt == self.request.attempt)
+    }
+
+    /// A placement on the session's pin: `in_flight` as a hold's, then `held` with the wait when `attempt_hold`
+    /// answers one.
+    fn session_pin_fact(&self) -> Vec<SummaryFact> {
+        let mut fact = self.in_flight_fact();
+        if let Some(hold) = self.attempt_hold() {
+            let held = i64::try_from(hold.held_ms).unwrap_or(i64::MAX);
+            fact.push(summary_fact("held", FactValue::Int(held), "ms"));
+        }
+        fact
     }
 
     /// The pick's winning Pace score and the best of the rest of its tier; `None` without a Pace pick, and when the

@@ -1,13 +1,13 @@
 use phoebis_routing::{
     cohort_hold, decide, effective_warm, lane_key, release_reasons, resolve, select, warm,
-    warmth_of, AffinityChain, AffinityMap, AffinityRow, BudgetFacts, BurnRates, BurnUnit,
-    CandidateFacts, ClientClass, CohortHold, CreditsState, DecisionRecord, EvidenceSource,
-    Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome, MemberSpend,
-    MigrateReason, OverageEvidence, PinKeyFacts, PinRef, Placement, RateTable, Rates, RefusalFacts,
-    RefusedRequest, RegistrySnapshot, RoutingState, SelectRequest, SelectResult, StateWrite,
-    UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading, WindowSource,
-    FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WEEK_MS,
+    warmth_of, AccountTicket, AffinityChain, AffinityMap, AffinityRow, BudgetFacts, BurnRates,
+    BurnUnit, CandidateFacts, ClientClass, CohortHold, CreditsState, Decided, DecisionRecord,
+    EvidenceSource, Exhaustion, FactEntity, FactValue, HoldFacts, HoldOutcome,
+    MemberSpend, MigrateReason, OverageEvidence, PinKeyFacts, PinRef, Placement,
+    RateTable, Rates, RefusalFacts, RefusedRequest, RegistrySnapshot, RoutingState, SelectRequest,
+    SelectResult, StateWrite, UtilizationSample, WalkStep, Warmth, WarmthCause, WindowReading,
+    WindowSource, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, MODEL_REJECTED_REASON,
+    SEVEN_DAY, SEVEN_DAY_FABLE, WEEK_MS,
 };
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, Affinity, AffinityMode, ApiKeyRow, BudgetPeriod,
@@ -12309,6 +12309,29 @@ fn a_refusal_records_two_lines() {
 }
 
 #[test]
+fn a_refusal_names_its_pin_not_looked_up() {
+    let s = snapshot(Pool::default());
+    let named = RefusedRequest::from(&request(&s, Some("s1"), "claude-sonnet-5", true, &[], T));
+    let unnamed = RefusedRequest {
+        session_id: None,
+        ..named.clone()
+    };
+    let revoked = RefusalFacts {
+        kind: "key",
+        reason: "the key was revoked".into(),
+    };
+    for refused in [&named, &unnamed] {
+        let (record, _) = DecisionRecord::refused(refused, &s, &revoked);
+        assert_eq!(
+            (record.pin.is_none(), record.pin_reason),
+            (true, Some("not_looked_up")),
+            "the refusal precedes the pin lookup, whatever session {:?} names",
+            refused.session_id
+        );
+    }
+}
+
+#[test]
 fn the_candidate_table_fills_tier_pace_and_budget_for_every_member() {
     let s = with_member_budget(
         &with_member_budget(
@@ -12786,6 +12809,108 @@ fn a_placement_after_a_cohort_hold_reads_by_cohort_and_the_wait() {
             .map(|f| (f.key, f.value.clone(), f.unit))
             .collect::<Vec<_>>(),
         vec![("held", FactValue::Int(2_000), Some("ms"))]
+    );
+}
+
+/// Members `a` and `b` at their cap of 1, the session `s1` pinned on `b` under `worker`, and Pace alone picking
+/// `a`: a request of `main` in `s1` lands on the pin through the cap's exemption.
+fn session_pin_at_cap() -> (RegistrySnapshot, RoutingState, [AccountTicket; 2]) {
+    let s = snapshot(Pool {
+        strategy: Strategy::Pace,
+        members: vec![("a", 0), ("b", 0)],
+        failover: Failover {
+            in_flight_cap: 1,
+            ..Failover::default()
+        },
+        ..Pool::default()
+    });
+    let mut st = loaded(vec![PinRow {
+        agent_id: "worker".into(),
+        ..seeded_pin("s1", "b", T)
+    }]);
+    st.record_sample("a", sample(0.1, 0.1, T - 500));
+    st.record_sample("b", sample(0.1, 0.6, T - 500));
+    let tickets = [
+        st.in_flight().dispatched("a", T - 1_000),
+        st.in_flight().dispatched("b", T - 1_000),
+    ];
+    (s, st, tickets)
+}
+
+fn summary_facts(d: &Decided) -> Vec<(&'static str, FactValue, Option<&'static str>)> {
+    d.summary
+        .fact
+        .iter()
+        .map(|f| (f.key, f.value.clone(), f.unit))
+        .collect()
+}
+
+#[test]
+fn a_session_pin_placement_after_a_hold_reads_the_wait_beside_the_in_flight_count() {
+    let (s, mut st, _tickets) = session_pin_at_cap();
+    let req = SelectRequest {
+        holds: vec![HoldFacts {
+            account_id: "a".into(),
+            cohort: None,
+            held_ms: 2_000,
+            attempt: 1,
+        }],
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
+    };
+    let d = decide(&mut st, &s, &req, &mut rng());
+    assert_eq!(picked(&d.result), "b");
+    assert_eq!(d.record.outcome.kind, "placed");
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "session_pin")
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![
+            ("in_flight", FactValue::Text("1/1".into()), Some("text")),
+            ("held", FactValue::Int(2_000), Some("ms")),
+        ]
+    );
+    assert_eq!(
+        (d.summary.score.clone(), d.summary.runner_up.clone()),
+        (None, None)
+    );
+}
+
+#[test]
+fn a_session_pin_placement_with_no_wait_reads_the_in_flight_count_alone() {
+    let (s, mut st, _tickets) = session_pin_at_cap();
+    let unheld = request(&s, Some("s1"), "claude-sonnet-5", true, &[], T);
+    let d = decide(&mut st, &s, &unheld, &mut rng());
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "session_pin")
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![("in_flight", FactValue::Text("1/1".into()), Some("text"))]
+    );
+
+    let (s, mut st, _tickets) = session_pin_at_cap();
+    let later_attempt = SelectRequest {
+        attempt: 2,
+        holds: vec![HoldFacts {
+            account_id: "a".into(),
+            cohort: None,
+            held_ms: 2_000,
+            attempt: 1,
+        }],
+        ..request(&s, Some("s1"), "claude-sonnet-5", true, &[], T)
+    };
+    let d = decide(&mut st, &s, &later_attempt, &mut rng());
+    assert_eq!(
+        (d.summary.by.kind, d.summary.by.value.as_str()),
+        ("hold", "session_pin")
+    );
+    assert_eq!(
+        summary_facts(&d),
+        vec![("in_flight", FactValue::Text("1/1".into()), Some("text"))],
+        "a failover's later attempt took its own placement, so the earlier attempt's wait is not its"
     );
 }
 
