@@ -380,7 +380,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ok:
       exhausted !== undefined &&
       JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'codex', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
-      last === `Opens the Routing log: pool codex, exhausted, since ${exhausted.since.slice(11, 16)}` &&
+      exhausted.since.startsWith('2026-09-14') &&
+      last === `Opens the Routing log: pool codex, exhausted, since Sep 14 ${exhausted.since.slice(11, 16)}` &&
       `${landed.pathname}${landed.search}` === href,
     missing: [href ?? 'no badge', last ?? '', JSON.stringify(landed)],
   });
@@ -1929,7 +1930,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   });
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
   // The story's pool all moved two sessions by the spent rule, two by a failover and one by its fast lane cooling.
-  const allTitle = ['Rule moves in the last hour', 'window spent 2', 'Failovers left out of the count', 'failed over 2', 'fast lane cooling 1', 'Opens the Routing log on pool all and the moved kind for the last hour'].join('\n');
+  const allTitle = [
+    'Rule moves in the last hour',
+    'window spent 2',
+    'Failovers left out of the count',
+    'failed over 2',
+    'fast lane cooling 1',
+    "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
+  ].join('\n');
   results.push({
     name: '/pools six tiles per card, the sixth the count of rule moves in the last hour with the reasons and the failovers left out in its title',
     ok:
@@ -1966,11 +1974,37 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       exhausted !== undefined &&
       link?.textContent?.trim() === 'codex' &&
       JSON.stringify(logTarget(link.getAttribute('href'))) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'codex', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
-      last === `Opens the Routing log: pool codex, exhausted, since ${exhausted.since.slice(11, 16)}` &&
+      exhausted.since.startsWith('2026-09-14') &&
+      last === `Opens the Routing log: pool codex, exhausted, since Sep 14 ${exhausted.since.slice(11, 16)}` &&
       JSON.stringify(others) === JSON.stringify([['Priced record parked', null], ['Client drift', '/keys#laptop'], ['Funding required', '/accounts/overflow'], ['Usage poll backing off', '/accounts/secondary']]),
     missing: [link?.getAttribute('href') ?? 'no link', last ?? '', JSON.stringify(others)],
   });
   page.unmount();
+  {
+    // The route answers `unknown` for a move that named no reason, and a later router may add one: neither is a rule
+    // move or a failover, so the title lists it apart from both.
+    const { listPools } = api;
+    api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'all' ? { ...p, movesPerHour: { cooldown: 1, mark: 1, spent: 1, unknown: 2 } } : p));
+    const odd = await mount('/pools', { now: CLOCK_ORIGIN });
+    api.listPools = listPools;
+    const tile = [...odd.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'all')?.querySelector('.pool__stats > div:nth-child(6) dd');
+    const want = [
+      'Rule moves in the last hour',
+      'window spent 1',
+      'Failovers left out of the count',
+      'failed over 1',
+      'account marked 1',
+      'Other moves left out of the count',
+      'unknown 2',
+      "Opens the Routing log on pool all and the moved kind for the last hour, which lists a keepalive probe's move only with probe decisions chosen",
+    ].join('\n');
+    results.push({
+      name: '/pools the moves tile lists a reason outside the rule moves and the failovers apart from both',
+      ok: tile?.textContent?.trim() === '1' && tile.getAttribute('title') === want,
+      missing: [tile?.textContent?.trim() ?? 'no tile', tile?.getAttribute('title') ?? 'no title'],
+    });
+    odd.unmount();
+  }
 }
 {
   // The rows mounted on their own over every kind, in the route's order, which is the ranking: the tones do not group
@@ -5204,6 +5238,19 @@ m.unmount();
     missing: [`${links.length} links`, href ?? 'no link', JSON.stringify(landed)],
   });
   page.unmount();
+  {
+    // The link reads none of the cooldowns, so the error state that takes their place leaves it standing.
+    failNextCall('getModelsState', '/admin/models/state', 'ledger locked');
+    const failed = await mount('/models', { now: CLOCK_ORIGIN });
+    const error = failed.text().includes('Could not load the model cooldowns');
+    const kept = [...failed.container.querySelectorAll('a')].find((a) => a.textContent?.trim() === 'View rejections and permits in the routing log');
+    results.push({
+      name: '/models a failed cooldowns read keeps the link to the routing log',
+      ok: error && kept !== undefined && kept.getAttribute('href') === href,
+      missing: [`error ${error}`, kept?.getAttribute('href') ?? 'no link', href ?? 'no href'],
+    });
+    failed.unmount();
+  }
 }
 
 m = await mount('/requests');

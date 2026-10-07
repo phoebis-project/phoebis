@@ -221,7 +221,7 @@ function span(ms: number): string {
  * An instant within a day of `now` reads as its clock time alone (`15:42`, a retry at the next midnight `00:00`); one
  * further off carries its date (`Sep 18 08:42`).
  */
-function instant(ms: number, now: number): string {
+export function instant(ms: number, now: number): string {
   const at = new Date(ms).toISOString();
   if (Math.abs(ms - now) < 24 * HOUR) return fmtShortTime(at);
   return `${new Date(ms).toLocaleDateString('en-US', { day: 'numeric', month: 'short' })} ${fmtShortTime(at)}`;

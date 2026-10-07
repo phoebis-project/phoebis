@@ -497,12 +497,13 @@ reads `deleted`, as its new state and as who moved it.
 Other views open the log on what they show. A Requests row and its drawer open it on the request a quarter hour either
 side. The Sessions row menu's "View in routing log" opens the session's decisions an hour either side of its last
 request, ending no later than now, or over the last hour for a session with no request. On a pool card, the "Moves in
-the last hour" tile's figure opens the pool's moved decisions over the last hour. The figure counts the moves the pool's
-own rules made (`drain`, `overage`, `return_to_plan`, `shed` and `spent`), and its title lists them by reason with the
-failovers apart, since the log draws a failover as a later attempt's placement. The card's pool exhausted row and the
-dashboard's pool exhausted item open the pool's exhausted decisions from the moment the condition began. The Routing log
-action on an account's Requests card shows the account's rows over the last hour, and the Models view's link opens the
-model rejected and model permitted rows of the last 24 hours.
+the last hour" tile's figure opens the pool's moved decisions over the last hour. The figure counts the rule moves on
+the pool's member accounts in the last hour (`drain`, `overage`, `return_to_plan`, `shed` and `spent`), a keepalive
+probe's move included, which the log lists only with probe decisions chosen. Its title lists the moves by reason with
+the failovers apart, since the log draws a failover as a later attempt's placement. The card's pool exhausted row and
+the dashboard's pool exhausted item open the pool's exhausted decisions from the moment the condition began. The Routing
+log action on an account's Requests card shows the account's rows over the last hour, and the Models view's link opens
+the model rejected and model permitted rows of the last 24 hours.
 
 ### Analytics
 

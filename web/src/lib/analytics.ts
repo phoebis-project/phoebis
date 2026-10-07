@@ -13,8 +13,13 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
   shed: 'shed',
   spent: 'window spent',
 };
-/** The pool's own balancing: what the pool card's move tile sums, so the count and the list its link opens agree. */
+/**
+ * The pool's own balancing: what the pool card's move tile sums, the rule moves on the pool's member accounts in the
+ * last hour. A keepalive probe's move counts among them, and the routing log lists it only with probe decisions chosen.
+ */
 export const RULE_MOVE_REASONS: readonly PinMigrationReason[] = ['drain', 'overage', 'return_to_plan', 'shed', 'spent'];
+/** The moves an answer forced on a session, which the pool card's move tile names apart from its count. */
+export const FAILOVER_MOVE_REASONS: readonly PinMigrationReason[] = ['cooldown', 'fast_lane', 'mark'];
 /**
  * Whether a label map holds the name as its own key. The names are the router's data, and one could name a member
  * every object inherits.

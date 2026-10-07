@@ -17,7 +17,7 @@ export function AttentionRows({ items, now }: { items: AttentionItem[]; now: num
         const { subject } = item;
         const to = item.link?.page === 'pools' && item.kind !== 'pool_exhausted' ? null : attentionHref(item, now);
         const detail = attentionDetail(item, now);
-        const log = attentionLogLine(item);
+        const log = attentionLogLine(item, now);
         return (
           <li key={`${item.kind}:${subject.type}:${subject.id}`} className="attention__row" title={`${detail} (${fmtRelative(item.since, now)})${log === null ? '' : `\n${log}`}`}>
             <Badge tone={ATTENTION_TONE[item.kind]}>{ATTENTION_LABEL[item.kind]}</Badge>

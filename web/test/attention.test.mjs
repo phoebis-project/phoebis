@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { ATTENTION_KIND_VALUES, ATTENTION_LABEL, ATTENTION_REFRESH_MS, ATTENTION_TONE, attentionDetail, attentionHref, attentionTitle, createAttentionPoll, fmtAbsolute, fmtShortTime } from './dist/api.js';
+import { ATTENTION_KIND_VALUES, ATTENTION_LABEL, ATTENTION_REFRESH_MS, ATTENTION_TONE, attentionDetail, attentionHref, attentionTitle, createAttentionPoll, decodeAttention, fmtAbsolute, fmtShortTime } from './dist/api.js';
 
 const NOW = Date.parse('2026-09-18T12:00:00.000Z');
 const item = (kind, over = {}) => ({ detail: {}, kind, link: null, pools: [], since: '2026-09-18T10:00:00.000Z', subject: { id: kind, label: kind, type: 'account' }, ...over });
@@ -69,6 +69,25 @@ test("a badge's title lists the detail's members, an instant read as one, then t
   const backoff = item('poll_backoff', { detail: { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, since: new Date(NOW - 42 * 60_000).toISOString() });
   assert.equal(attentionTitle(backoff, NOW), ['account: secondary', `backoff_since: ${fmtAbsolute(new Date(NOW - 42 * 60_000).toISOString())}`, 'rate_limited_in_a_row: 6', 'started 42m ago'].join('\n'));
   assert.equal(attentionTitle(item('ledger_record_parked', { detail: { pool: 'codex', count: 1 } }), NOW), ['count: 1', 'pool: codex', 'started 2h 0m ago'].join('\n'), 'the members read in name order');
+});
+
+test('a kind this build does not know opens its link, never a pool log named by an account', () => {
+  // The route sends the start in milliseconds.
+  const since = Date.parse('2026-09-18T10:00:00.000Z');
+  const later = decodeAttention({ detail: { account: 'legacy' }, kind: 'quota_drift', link: { id: 'legacy', page: 'accounts' }, pools: [], since, subject: { id: 'legacy', label: 'legacy', type: 'account' } });
+  assert.equal(later.kind, 'pool_exhausted', 'the decoder reads an unknown kind as the worst one');
+  assert.equal(attentionHref(later, NOW), '/accounts/legacy');
+  assert.equal(attentionTitle(later, NOW).split('\n').pop(), 'started 2h 0m ago', 'and its title names no log');
+  const pooled = decodeAttention({ detail: {}, kind: 'quota_drift', link: { id: 'codex', page: 'pools' }, pools: ['codex'], since, subject: { id: 'codex', label: 'codex', type: 'pool' } });
+  assert.equal(new URL(attentionHref(pooled, NOW), 'http://console.test').pathname, '/routing-log', 'one that names a pool opens its log');
+});
+
+test('the pool exhausted title names the day of a condition that began more than a day ago', () => {
+  const since = '2026-09-16T10:41:00.000Z';
+  const exhausted = item('pool_exhausted', { detail: { pool: 'codex' }, link: { id: 'codex', page: 'pools' }, since });
+  const day = new Date(since).toLocaleDateString('en-US', { day: 'numeric', month: 'short' });
+  assert.match(day, /^[A-Z][a-z]{2} \d{1,2}$/);
+  assert.equal(attentionTitle(exhausted, NOW).split('\n').pop(), `Opens the Routing log: pool codex, exhausted, since ${day} ${fmtShortTime(since)}`);
 });
 
 test('the pool exhausted title ends with the sentence that names the log', () => {

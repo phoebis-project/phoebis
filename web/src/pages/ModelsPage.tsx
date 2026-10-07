@@ -156,13 +156,14 @@ export function ModelsPage() {
             // One block per model, so each opens on its own rows rather than keeping another model's toggle.
             state.data.cooldowns.map((g) => <CoolingDown key={g.model} title={g.model} busy={busy} now={now} rows={g.rows} showAccount onClear={setPending} />)
           )}
-          <div className="models__log">
-            <Link className="btn btn--secondary btn--md" to={logHref({ kinds: ['model_rejected', 'model_permitted'], from: now - DAY, to: now })}>
-              View rejections and permits in the routing log
-            </Link>
-          </div>
         </>
       )}
+      {/* The link reads none of the state above, so a failed read keeps it. */}
+      <div className="models__log">
+        <Link className="btn btn--secondary btn--md" to={logHref({ kinds: ['model_rejected', 'model_permitted'], from: now - DAY, to: now })}>
+          View rejections and permits in the routing log
+        </Link>
+      </div>
 
       <ConfirmDialog
         open={pending !== null}

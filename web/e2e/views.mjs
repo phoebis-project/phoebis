@@ -3322,8 +3322,8 @@ async function sessionsTableFits(theme) {
 
 /**
  * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
- * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, and
- * each item takes a pointer at its centre.
+ * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
+ * item takes a pointer at its centre, and the four entries draw a list 160 px wide and 141 px tall.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3350,7 +3350,7 @@ async function sessionRowMenu(theme) {
     });
     return {
       items,
-      list: { left: Math.round(box.left), right: Math.round(box.right) },
+      list: { height: Math.round(box.height), left: Math.round(box.left), right: Math.round(box.right), width: Math.round(box.width) },
       lists: 1,
       placement: list.classList.contains('menu__list--float') ? 'float' : list.classList.contains('menu__list--up') ? 'up' : 'down',
       wrap: { left: Math.round(edge.left + wrap.clientLeft), right: Math.round(edge.left + wrap.clientLeft + wrap.clientWidth) },
@@ -3363,6 +3363,7 @@ async function sessionRowMenu(theme) {
   if (read.lists !== 1) return say(`${read.lists} lists are open, not one`);
   if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
   if (read.items.length === 0) say('the list draws no item');
+  if (read.list.width !== 160 || read.list.height !== 141) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 141px`);
   for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
 }
 
