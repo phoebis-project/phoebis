@@ -131,8 +131,9 @@ round again.
 
 Each card on the Pools view carries attention rows under its status sentence: the conditions of the dashboard's
 attention line ([conditions](statistics.md#conditions-and-gauges)) filtered to the pools each item names, one row per
-condition with its badge, its subject linked where it is fixed (the pool's own row stays unlinked) and its detail, the
-age in the row's title.
+condition with its badge, its subject linked where it is fixed and its detail, the age in the row's title. The pool's
+own exhausted row opens the [routing log](statistics.md#routing-log) on the pool's exhausted decisions since the
+condition began. The card's other rows keep their targets, and a row that points at the pool's own card stays unlinked.
 
 ![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
 the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
@@ -263,12 +264,12 @@ at save time when it is empty, longer than 256 characters, ends in an unquoted b
 in a row; the refusal names the entry and the reason (`model_rules[0]: pattern is empty`).
 
 The Models view shows the processed list for a chosen key, each entry with the level it came from and the accounts
-cooling for a model it matches, and a note that an entry for an undated model is written with a trailing `*`; then
-every model-scoped cooldown grouped by model with a clear button per row, and the last rejections and permits the
-ledger recorded.
+cooling for a model it matches, and a note that an entry for an undated model is written with a trailing `*`. It then
+shows every model-scoped cooldown grouped by model with a clear button per row, and a link to the routing log's model
+rejected and model permitted rows.
 
-![The Models view: the processed rules of a key, the cooldowns by model, the recent rejections and permits][ml]
-![The Models view: the processed rules of a key, the cooldowns by model, the recent rejections and permits][md]
+![The Models view: the processed rules of a key, the cooldowns by model, the link to the routing log][ml]
+![The Models view: the processed rules of a key, the cooldowns by model, the link to the routing log][md]
 
 [ml]: assets/models-light.png#only-light
 [md]: assets/models-dark.png#only-dark

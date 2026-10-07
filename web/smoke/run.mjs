@@ -145,6 +145,16 @@ async function showColumn(m, label) {
 }
 /** The state each live status dot's class stands for, as its title names it. */
 const DOT_TITLES = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
+/**
+ * A link into the routing log read as its path and its query values, so a check compares the filters and the range
+ * whatever order the address writes them in.
+ */
+const logTarget = (href) => {
+  const url = new URL(href ?? '', 'http://console.test');
+  return { path: url.pathname, ...Object.fromEntries(url.searchParams) };
+};
+/** An instant as the routing log's address writes it. */
+const isoAt = (ms) => new Date(ms).toISOString();
 
 // The generator skips overnight rows by wall-clock hour, so pick rows by the
 // shape each check needs rather than by position.
@@ -262,10 +272,18 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   };
   results.push({ name: '/ the attention line runs on one schedule, registered as the dashboard mounts', ok: ticks.length === 1, missing: [`intervals at ${ATTENTION_REFRESH_MS} ms: ${ticks.length}`] });
   // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits.
-  const members = (title) => title.split('\n').slice(0, -1).map((l) => l.replace(/^(backoff_since|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
-  const read = badges().map((b) => [b.text, b.tone, b.href, members(b.title)]);
+  // The age and the routing log's line close a title, so neither is a member.
+  const members = (title) =>
+    title
+      .split('\n')
+      .filter((l) => !l.startsWith('started ') && !l.startsWith('Opens the Routing log'))
+      .map((l) => l.replace(/^(backoff_since|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
+  // The exhausted pool's badge opens the routing log on a range that ends now, which its own check reads; here the
+  // address's path stands for it.
+  const target = (href) => href?.split('?')[0] ?? null;
+  const read = badges().map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
   const want = [
-    ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
+    ['Pool exhausted: codex', 'badge--critical', '/routing-log', ['key: ci', 'pool: codex']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
     ['State writer degraded: routing', 'badge--serious', null, ['component: routing']],
     ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['account: legacy', 'label: legacy']],
@@ -274,9 +292,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ['Priced record parked: codex', 'badge--serious', '/pools#codex', ['accounts: ["research"]', 'count: 1', 'pool: codex']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
   ];
-  const ages = badges().map((b) => b.title.split('\n').pop());
+  const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: '/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed and titled with its detail and age',
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's the routing log, and titled with its detail and age",
     ok:
       lead() === '8 need attention' &&
       JSON.stringify(read) === JSON.stringify(want) &&
@@ -311,13 +329,13 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   const keyless = { detail: { client_version: '2.1.272', trigger: 'hash' }, kind: 'client_drift', link: null, pools: [], since: new Date(Date.now() - 2 * 60_000).toISOString(), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } };
   api.getAttention = async () => [exhausted, keyless];
   await tick();
-  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, b.href])), line()?.querySelectorAll('a').length];
+  const gained = [lead(), JSON.stringify(badges().map((b) => [b.text, b.tone, target(b.href)])), line()?.querySelectorAll('a').length];
   api.getAttention = getAttention;
   await tick();
   const lost = quiet();
   results.push({
     name: '/ with the dashboard open, a refresh tick draws the items the route gains, an item without a link as a badge that opens nothing, and the next one the quiet state once they clear',
-    ok: gained[0] === '2 need attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/pools#all'], ['Client drift: 2.1.272', 'badge--serious', null]]) && gained[2] === 1 && lost,
+    ok: gained[0] === '2 need attention' && gained[1] === JSON.stringify([['Pool exhausted: all', 'badge--critical', '/routing-log'], ['Client drift: 2.1.272', 'badge--serious', null]]) && gained[2] === 1 && lost,
     missing: [...gained.map(String), `quiet after the clear: ${lost}`],
   });
   api.getAttention = () => Promise.reject(new Error('the store is unavailable'));
@@ -345,6 +363,28 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   await tick();
   results.push({ name: '/ the story back, the next tick draws its eight items again', ok: lead() === '8 need attention', missing: [lead() ?? 'no lead'] });
   dash.unmount();
+}
+{
+  // The exhausted pool's item opens the routing log on the pool's exhausted decisions from the moment the condition
+  // began to now, read on the frozen clock so the range is the one the page computed.
+  const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
+  const page = await mount('/', { now: CLOCK_ORIGIN });
+  const badge = [...page.container.querySelectorAll('.attention-line .badge')].find((b) => b.textContent?.trim() === 'Pool exhausted: codex');
+  const href = badge?.getAttribute('href') ?? null;
+  const last = (badge?.getAttribute('title') ?? '').split('\n').pop();
+  badge?.click();
+  await page.settle(300);
+  const landed = page.location();
+  results.push({
+    name: '/ the Pool exhausted item opens the log and its title ends with the sentence',
+    ok:
+      exhausted !== undefined &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'codex', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
+      last === `Opens the Routing log: pool codex, exhausted, since ${exhausted.since.slice(11, 16)}` &&
+      `${landed.pathname}${landed.search}` === href,
+    missing: [href ?? 'no badge', last ?? '', JSON.stringify(landed)],
+  });
+  page.unmount();
 }
 
 let m = await mount('/');
@@ -1688,6 +1728,27 @@ m.unmount();
   await page.settle(200);
   page.unmount();
 }
+{
+  // The Requests card counts the account's traffic, so its action opens the routing log on the account for the last
+  // hour, read on the frozen clock so the range is the one the page computed.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  const card = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Requests');
+  const actions = [...(card?.querySelectorAll('.card__actions a') ?? [])];
+  const href = actions[0]?.getAttribute('href') ?? null;
+  actions[0]?.click();
+  await page.settle(300);
+  const landed = page.location();
+  results.push({
+    name: "/accounts/<id> the Requests card's action opens the log on the account for the last hour",
+    ok:
+      actions.length === 1 &&
+      actions[0].textContent?.trim() === 'Routing log' &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', accounts: 'primary', from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) }) &&
+      `${landed.pathname}${landed.search}` === href,
+    missing: [`${actions.length} actions`, href ?? 'no link', JSON.stringify(landed)],
+  });
+  page.unmount();
+}
 await readsAgain('/accounts', 'listAccounts');
 
 // Picks an Analytics tab on the given mount and lets its section's reads land; a check reads its counts afterwards.
@@ -1790,15 +1851,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [`held ${held.calls.length}`, ...waiting, ...landed].map((x) => JSON.stringify(x)),
     });
   }
+  // The exhausted row opens the routing log on a range that ends now, which its own check reads; here the address's
+  // path stands for it.
   const attentionRows = (name) =>
-    [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href') ?? null]);
+    [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href')?.split('?')[0] ?? null]);
   // The story's items: codex exhausted and holding a parked record; the laptop key's client drift, the Overflow
   // workspace out of funding and secondary's poll backoff in all; nothing on work, whose one member and one key carry
   // no item; and the routing state writer on no card, since it belongs to no pool.
   results.push({
-    name: "/pools each card draws the dashboard's items that belong to it, the pool's own row unlinked, and a card with none draws no list",
+    name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion, and a card with none draws no list",
     ok:
-      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', null], ['Priced record parked', 'codex', null]]) &&
+      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', '/routing-log'], ['Priced record parked', 'codex', null]]) &&
       JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'Overflow workspace', '/accounts/overflow'], ['Usage poll backing off', 'secondary', '/accounts/secondary']]) &&
       card('work')?.querySelector('.attention') === null,
     missing: ['codex', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
@@ -1865,12 +1928,49 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [...spend('codex', 'Research workspace'), ...research.badges.map((b) => b.join(' | ')), research.why],
   });
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
+  // The story's pool all moved two sessions by the spent rule, two by a failover and one by its fast lane cooling.
+  const allTitle = ['Rule moves in the last hour', 'window spent 2', 'Failovers left out of the count', 'failed over 2', 'fast lane cooling 1', 'Opens the Routing log on pool all and the moved kind for the last hour'].join('\n');
   results.push({
-    name: '/pools six tiles per card, the sixth the count of moves in the last hour split by reason in its title',
-    ok: tiles('all').length === 6 && JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '5', 'failed over 2, window spent 2, fast lane cooling 1']) && JSON.stringify(tiles('codex')[5]) === JSON.stringify(['Moves in the last hour', '0', 'No session moved in the last hour.']),
+    name: '/pools six tiles per card, the sixth the count of rule moves in the last hour with the reasons and the failovers left out in its title',
+    ok:
+      tiles('all').length === 6 &&
+      JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '2', allTitle]) &&
+      JSON.stringify(tiles('codex')[5]?.slice(0, 2)) === JSON.stringify(['Moves in the last hour', '0']) &&
+      tiles('codex')[5]?.[2]?.split('\n')[0] === 'No rule moved a session in the last hour',
     missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
   });
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
+}
+{
+  // The pool card's links into the routing log, read on the frozen clock so each range is the one the page computed.
+  const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
+  const page = await mount('/pools', { now: CLOCK_ORIGIN });
+  const card = (name) => [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
+  const figure = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
+  const lastHour = (pool) => ({ path: '/routing-log', kinds: 'moved', pools: pool, from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) });
+  const read = ['all', 'codex'].map((name) => [figure(name)?.textContent?.trim() ?? null, logTarget(figure(name)?.getAttribute('href'))]);
+  results.push({
+    name: "/pools the sixth tile's figure opens the log on the pool and the moved kind for the last hour",
+    ok: JSON.stringify(read) === JSON.stringify([['2', lastHour('all')], ['0', lastHour('codex')]]),
+    missing: read.map((r) => JSON.stringify(r)),
+  });
+  const rows = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])];
+  const row = (name, label) => rows(name).find((li) => li.querySelector('.badge')?.textContent?.trim() === label);
+  const exhaustedRow = row('codex', 'Pool exhausted');
+  const link = exhaustedRow?.querySelector('a');
+  const others = [...rows('codex'), ...rows('all')].filter((li) => li !== exhaustedRow).map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.querySelector('a')?.getAttribute('href') ?? null]);
+  const last = (exhaustedRow?.getAttribute('title') ?? '').split('\n').pop();
+  results.push({
+    name: "/pools the card's pool exhausted row opens the log since the condition began and its other rows keep their targets",
+    ok:
+      exhausted !== undefined &&
+      link?.textContent?.trim() === 'codex' &&
+      JSON.stringify(logTarget(link.getAttribute('href'))) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'codex', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
+      last === `Opens the Routing log: pool codex, exhausted, since ${exhausted.since.slice(11, 16)}` &&
+      JSON.stringify(others) === JSON.stringify([['Priced record parked', null], ['Client drift', '/keys#laptop'], ['Funding required', '/accounts/overflow'], ['Usage poll backing off', '/accounts/secondary']]),
+    missing: [link?.getAttribute('href') ?? 'no link', last ?? '', JSON.stringify(others)],
+  });
+  page.unmount();
 }
 {
   // The rows mounted on their own over every kind, in the route's order, which is the ranking: the tones do not group
@@ -1901,9 +2001,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     li.querySelector('.attention__detail')?.textContent,
     li.getAttribute('title'),
   ]);
-  const row = (label, tone, subject, href, detail, age) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})`];
+  const row = (label, tone, subject, href, detail, age, log) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})${log ? `\n${log}` : ''}`];
+  const exhaustedSince = at(1);
   const want = [
-    row('Pool exhausted', 'badge--critical', 'codex', null, 'no member could take a request from key ci', '1h 0m ago'),
+    row('Pool exhausted', 'badge--critical', 'codex', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'codex', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h 0m ago', `Opens the Routing log: pool codex, exhausted, since ${exhaustedSince.slice(11, 16)}`),
     row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
     row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
     row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried; budgeted members are held back until a batch lands', '1h 0m ago'),
@@ -1914,7 +2015,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h 0m ago'),
   ];
   results.push({
-    name: "the attention rows keep the route's order, link a subject through the item's link, name the pool's own row, a keyless drift and a router component alone, and read each detail as one sentence titled with its age",
+    name: "the attention rows keep the route's order, link a subject through the item's link and the pool's exhaustion to the routing log, name the pool's other own row, a keyless drift and a router component alone, and read each detail as one sentence titled with its age",
     ok: JSON.stringify(rows) === JSON.stringify(want),
     missing: rows.map((r) => r.join(' | ')),
   });
@@ -5003,7 +5104,7 @@ m = await mount('/models');
   results.push({ name: '/models sits in the nav after Keys and titles the page', ok: nav.indexOf('Models') === nav.indexOf('Keys') + 1 && document.title === 'Models - Phoebis Router' && m.container.querySelector('.topbar__title')?.textContent === 'Models', missing: [...nav, document.title] });
   // The keys checks leave a key of their own at the head of the list, so the first key is read, not assumed.
   const first = (await api.listKeys())[0];
-  expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'Recent rejections', 'Recent permits', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
+  expect('/models', m.text(), [`Processed rules for ${first?.name}`, "Extends the pool's rules", 'Level', 'Rule', 'Pattern', 'Cooling', 'View rejections and permits in the routing log', 'written with a trailing *', story?.canonicalModel ?? 'no story request']);
   const firstRules = first ? await answeredRules(first.id) : [];
   results.push({ name: '/models draws the first key\'s processed list as the route answers it', ok: firstRules.length > 0 && JSON.stringify(drawnRules()) === JSON.stringify(firstRules), missing: [JSON.stringify(drawnRules()), JSON.stringify(firstRules)] });
   const select = m.container.querySelector('select[aria-label="Key"]');
@@ -5077,27 +5178,33 @@ m = await mount('/models');
       missing: [String(disabledWhileBusy), String(reenabledAfter)],
     });
   }
-  const recent = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent === title);
-  const recentRow = (title) => recent(title)?.querySelector('tbody tr');
-  const hrefs = (el) => [...(el?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'));
-  const rejection = state.rejections[0];
-  const permit = state.permits[0];
-  results.push({ name: 'fixture: the newest rejection and permit name the request whose two names differ', ok: story !== undefined && rejection?.requestId === story.id && permit?.requestId === story.id && permit.rejectedBy.includes(rejection.accountId), missing: [story?.id ?? 'no story', rejection?.requestId ?? 'no rejection', permit?.requestId ?? 'no permit'] });
-  if (rejection && permit) {
-    const rejected = recentRow('Recent rejections');
-    const permitted = recentRow('Recent permits');
-    results.push({
-      name: '/models the recent rows link the request and the accounts and name both spellings',
-      ok:
-        JSON.stringify(hrefs(rejected)) === JSON.stringify([`/requests/${rejection.requestId}`, `/accounts/${rejection.accountId}`]) &&
-        JSON.stringify(hrefs(permitted)) === JSON.stringify([`/requests/${permit.requestId}`, `/accounts/${permit.accountId}`, ...permit.rejectedBy.map((id) => `/accounts/${id}`)]) &&
-        (rejected?.textContent ?? '').includes(`${rejection.model}sent as ${rejection.wireModel}`) &&
-        (permitted?.textContent ?? '').includes(`${permit.model}sent as ${permit.wireModel}`),
-      missing: [rejected?.textContent ?? 'no rejection row', JSON.stringify(hrefs(rejected)), permitted?.textContent ?? 'no permit row', JSON.stringify(hrefs(permitted))],
-    });
-  }
 }
 m.unmount();
+{
+  // The rejections and permits are read in the routing log, so one link below the cooling-down blocks opens it on the
+  // two model kinds over the last 24 hours, read on the frozen clock so the range is the one the page computed.
+  const page = await mount('/models', { now: CLOCK_ORIGIN });
+  const links = [...page.container.querySelectorAll('a')].filter((a) => a.textContent?.trim() === 'View rejections and permits in the routing log');
+  const link = links[0];
+  const cards = [...page.container.querySelectorAll('.card')];
+  const href = link?.getAttribute('href') ?? null;
+  link?.click();
+  await page.settle(300);
+  const landed = page.location();
+  results.push({
+    name: '/models the link opens the log on the two model kinds over the last 24 hours',
+    ok:
+      links.length === 1 &&
+      link.classList.contains('btn') &&
+      link.classList.contains('btn--secondary') &&
+      cards.length > 1 &&
+      cards.every((c) => c.compareDocumentPosition(link) & window.Node.DOCUMENT_POSITION_FOLLOWING) &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'model_rejected,model_permitted', from: isoAt(CLOCK_ORIGIN - 24 * 3_600_000), to: isoAt(CLOCK_ORIGIN) }) &&
+      `${landed.pathname}${landed.search}` === href,
+    missing: [`${links.length} links`, href ?? 'no link', JSON.stringify(landed)],
+  });
+  page.unmount();
+}
 
 m = await mount('/requests');
 expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'claude-code/cli', 'Agent type', 'Turn origin', 'fable-5-1', 'desktop', 'laptop', 'shown']);
@@ -8843,6 +8950,68 @@ m.unmount();
   results.push({ name: '/sessions Try again on the accounts notice reads the accounts again', ok: button !== undefined && button !== null && notices().length === 0 && page.container.querySelectorAll('td[title^="Subscription account"]').length > 0, missing: notices().map((n) => n.textContent ?? '') });
   page.unmount();
 }
+{
+  // A row's session is its own key, so every row's menu offers the routing log, which opens on the session an
+  // hour either side of its last request with the end at most now, or on the last hour for a row with none. Read on
+  // the frozen clock so each range is the one the page computed.
+  const HOUR = 3_600_000;
+  const listed = await api.listSessions();
+  const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+  const rows = () => [...page.container.querySelectorAll('tbody tr.srow')];
+  const sessionOf = (tr) => {
+    const id = sessionCell(page, tr, 'Session')?.getAttribute('title');
+    const key = sessionCell(page, tr, 'Key');
+    const historical = key?.querySelector('.sub') !== null;
+    return listed.find((s) => s.sessionId === id && s.keyId === key?.firstChild?.textContent && s.historical === historical);
+  };
+  const expected = (s) => {
+    const last = s.lastRequestAt === null ? null : Date.parse(s.lastRequestAt);
+    const range = last === null ? { from: CLOCK_ORIGIN - HOUR, to: CLOCK_ORIGIN } : { from: last - HOUR, to: Math.min(last + HOUR, CLOCK_ORIGIN) };
+    return { path: '/routing-log', session: s.sessionId, from: isoAt(range.from), to: isoAt(range.to) };
+  };
+  const entryOf = async (tr) => {
+    tr?.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    return [...(tr?.querySelectorAll('.menu__list button') ?? [])].find((b) => b.textContent?.trim() === 'View in routing log');
+  };
+  const offered = [];
+  for (const tr of rows()) {
+    const entry = await entryOf(tr);
+    offered.push({ enabled: entry !== undefined && !entry.disabled, session: sessionOf(tr)?.sessionId ?? null });
+    tr.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+  }
+  // One row whose last request ends the range at now, one whose hour after its last request ended before now, and one
+  // with no request at all.
+  const cases = [
+    (s) => s.lastRequestAt !== null && Date.parse(s.lastRequestAt) > CLOCK_ORIGIN - HOUR,
+    (s) => s.lastRequestAt !== null && Date.parse(s.lastRequestAt) < CLOCK_ORIGIN - HOUR,
+    (s) => s.lastRequestAt === null,
+  ];
+  const followed = [];
+  for (const wanted of cases) {
+    const tr = rows().find((r) => {
+      const s = sessionOf(r);
+      return s !== undefined && wanted(s);
+    });
+    const session = tr ? sessionOf(tr) : undefined;
+    (await entryOf(tr))?.click();
+    await page.settle(300);
+    const landed = page.location();
+    followed.push({ got: logTarget(`${landed.pathname}${landed.search}`), want: session ? expected(session) : null });
+    await page.navigate('/sessions');
+    await page.settle(300);
+  }
+  results.push({
+    name: '/sessions the row menu offers View in routing log whenever the row has a session, with its href',
+    ok:
+      offered.length > 0 &&
+      offered.every((o) => o.enabled && o.session !== null) &&
+      followed.every((f) => f.want !== null && JSON.stringify(f.got) === JSON.stringify(f.want)),
+    missing: [`${offered.filter((o) => !o.enabled || o.session === null).length} of ${offered.length} rows without the entry or a session`, ...followed.map((f) => JSON.stringify(f))],
+  });
+  page.unmount();
+}
 
 m = await mount('/sessions');
 expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Probe cost today', 'of $4.00', 'uncapped', 'Net saved, 7d', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
@@ -9085,16 +9254,35 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   {
     const items = await openMenu(barren);
     results.push({
-      name: '/sessions the overflow menu carries the same three entries',
-      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in observe|Release',
+      name: '/sessions the overflow menu carries the same four entries',
+      ok: items.map((b) => b.textContent?.trim()).join('|') === 'View in analytics|View in observe|View in routing log|Release',
       missing: items.map((b) => b.textContent?.trim() ?? ''),
     });
-    const jumps = items.filter((b) => b.textContent?.trim().startsWith('View in'));
-    results.push({ name: '/sessions disables both jumps without ledgered requests', ok: jumps.length === 2 && jumps.every((b) => b.disabled && (b.getAttribute('title') ?? '').includes('no ledgered requests')), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
-    await openMenu(barren);
+    // The routing log reads the session's decisions, which need no ledgered request, so only the two jumps
+    // into the ledger's views wait on one.
+    const jumps = items.filter((b) => ['View in analytics', 'View in observe'].includes(b.textContent?.trim() ?? ''));
+    const log = items.find((b) => b.textContent?.trim() === 'View in routing log');
+    const session = sessionCell(m, barren, 'Session')?.getAttribute('title') ?? '';
+    const enabled = log !== undefined && !log.disabled;
+    log?.click();
+    await m.settle(300);
+    const landed = m.location();
+    results.push({
+      name: "/sessions disables the analytics and observe jumps without ledgered requests and opens the routing log on the row's session",
+      ok:
+        jumps.length === 2 &&
+        jumps.every((b) => b.disabled && (b.getAttribute('title') ?? '').includes('no ledgered requests')) &&
+        enabled &&
+        session !== '' &&
+        landed.pathname === '/routing-log' &&
+        new URLSearchParams(landed.search).get('session') === session,
+      missing: [...jumps.map((b) => `${b.textContent} disabled=${b.disabled}`), `log enabled=${enabled}`, JSON.stringify(landed)],
+    });
+    await m.navigate('/sessions');
+    await m.settle(300);
   }
   {
-    const jumps = (await openMenu(busyRow())).filter((b) => b.textContent?.trim().startsWith('View in'));
+    const jumps = (await openMenu(busyRow())).filter((b) => ['View in analytics', 'View in observe'].includes(b.textContent?.trim() ?? ''));
     results.push({ name: '/sessions enables both jumps with ledgered requests', ok: jumps.length === 2 && jumps.every((b) => !b.disabled), missing: jumps.map((b) => `${b.textContent} disabled=${b.disabled}`) });
     await openMenu(busyRow());
   }
@@ -9149,7 +9337,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     await openMenu(gone);
     results.push({
       name: '/sessions only the live holder can be released',
-      ok: liveItems.includes('Release') && goneItems.length === 2 && !goneItems.includes('Release'),
+      ok: liveItems.includes('Release') && goneItems.length === 3 && !goneItems.includes('Release'),
       missing: [`live ${liveItems.join('|')}`, `gone ${goneItems.join('|')}`],
     });
     gone?.click();

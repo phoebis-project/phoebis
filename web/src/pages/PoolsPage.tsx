@@ -20,7 +20,7 @@ import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
-import { moveLabel, sizedAccounts } from '@/lib/analytics';
+import { RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, poolRefusals, type PoolGroup } from '@/lib/forms';
@@ -28,6 +28,7 @@ import { useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
+import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
 import { GROUP_LABEL, INELIGIBLE_LABEL, LAST_RESORT_LABEL, RULE_NOTE, STRATEGY_LABEL, kindOrdered, poolStatusSentence, selectionOrder } from '@/lib/selection';
 import { KeyDialog } from './KeysPage';
@@ -497,12 +498,23 @@ function PoolCard({
   // The selection order skips a member the accounts list does not carry, so the table lists it after the tiers.
   const unlisted = pool.members.filter((m) => !accountById.has(m.accountId));
   const pinsOf = (id: string) => sessions.filter((s) => s.pinned && s.accountId === id).length;
-  // The route counts the moves of the last hour by reason, so every figure is a whole number.
+  // The route counts the moves of the last hour by reason, so every figure is a whole number. The figure sums the
+  // rule moves alone, the rows the log lists as moved, and the title names the failovers apart, which the log draws
+  // as a later attempt's placement.
   const moveCounts = Object.entries(pool.movesPerHour)
     .filter(([, count]) => count > 0)
     .sort(([, a], [, b]) => b - a);
-  const movesTotal = moveCounts.reduce((s, [, count]) => s + count, 0);
-  const movesTitle = moveCounts.length === 0 ? 'No session moved in the last hour.' : moveCounts.map(([reason, count]) => `${moveLabel(reason)} ${fmtInt(count)}`).join(', ');
+  const isRule = (reason: string) => (RULE_MOVE_REASONS as readonly string[]).includes(reason);
+  const ruleMoves = moveCounts.filter(([reason]) => isRule(reason));
+  const failovers = moveCounts.filter(([reason]) => !isRule(reason));
+  const movesTotal = ruleMoves.reduce((s, [, count]) => s + count, 0);
+  const moveLine = ([reason, count]: [string, number]) => `${moveLabel(reason)} ${fmtInt(count)}`;
+  const movesTitle = [
+    ruleMoves.length === 0 ? 'No rule moved a session in the last hour' : 'Rule moves in the last hour',
+    ...ruleMoves.map(moveLine),
+    ...(failovers.length === 0 ? [] : ['Failovers left out of the count', ...failovers.map(moveLine)]),
+    `Opens the Routing log on pool ${pool.id} and the moved kind for the last hour`,
+  ].join('\n');
   return (
     <Card id={pool.id} tabIndex={-1} padded={false} className="pool">
       <header className="pool__head">
@@ -692,7 +704,7 @@ function PoolCard({
         <div>
           <dt>Moves in the last hour</dt>
           <dd className="num" title={movesTitle}>
-            {fmtInt(movesTotal)}
+            <Link to={logHref({ pools: [pool.id], kinds: ['moved'], ...aroundSubject(null, now) })}>{fmtInt(movesTotal)}</Link>
           </dd>
         </div>
       </dl>

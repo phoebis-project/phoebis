@@ -2,7 +2,7 @@ import type { AccountPatch, Api, CreateKeyInput, KeyInput, PoolInput } from '@/a
 import { AFFINITY_MODE_VALUES, SESSION_PLACEMENT_VALUES, SUBAGENT_PLACEMENT_VALUES, WARM_SESSIONS_VALUES, decodeLiveDelta, decodeLiveSnapshot, decodeSettings } from '@/api/decode';
 import { ApiError, catalogUnion, slug } from '@/api/http';
 import type {
-  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LiveEvent, MemberEligibility, ModelEvent,
+  Account, AccountCatalog, AccountInput, AnalyticsQuery, ApiKey, BurnGroup, CatalogModel, CreatedApiKey, DecisionRecord, KeepaliveOverview, KeyModels, LiveEvent, MemberEligibility,
   ModelRule, ModelsState, PairingInput, PairingPreview, PairingSession, Pool, PoolMember, RequestDetail, RequestLog, RequestPage, RequestQuery, RoutingLogPage, RoutingLogQuery, RuleCooldown, Session, SessionInfo, Settings,
   Subscription,
 } from '@/api/types';
@@ -157,31 +157,6 @@ const poolRefusal = (input: PoolInput): string | null => {
 const PAIRING_REDIRECT_URI = 'http://localhost:54545/callback';
 
 const MODEL_SCOPE_PREFIX = 'model:';
-
-/**
- * The Models view's newest rejections and permits, lifted off the request log's own events so each names a request
- * the drawer opens; the state route's live cooldowns come from the accounts.
- */
-const modelEvents = (kind: 'model_permitted' | 'model_rejected'): ModelEvent[] =>
-  [...REQUEST_EVENTS.values()]
-    .flat()
-    .filter((e) => e.kind === kind)
-    .sort((a, b) => Date.parse(b.at) - Date.parse(a.at))
-    .map((e) => ({
-      // Every model_rejected and model_permitted event this mock produces sets both fields: an unnamed
-      // account or model here is the fixture builder's own bug, worth a crash rather than a silent blank.
-      accountId: e.accountId!,
-      at: e.at,
-      keyId: e.keyId,
-      model: e.model!,
-      rejectedBy: Array.isArray(e.detail?.rejected_by) ? e.detail.rejected_by.map(String) : [],
-      requestId: typeof e.detail?.source_request_id === 'string' ? e.detail.source_request_id : null,
-      sessionId: e.sessionId,
-      upstreamRequestId: typeof e.detail?.request_id === 'string' ? e.detail.request_id : null,
-      wireModel: String(e.detail?.wire_model ?? ''),
-    }));
-const MODEL_REJECTIONS = modelEvents('model_rejected');
-const MODEL_PERMITS = modelEvents('model_permitted');
 
 /**
  * The signed-in mark, which outlives a reload the way the router's session cookie does: the smoke runner writes
@@ -638,14 +613,14 @@ export class MockApi implements Api {
   }
 
   getModelsState(): Promise<ModelsState> {
-    if (emptyStore()) return latency({ cooldowns: [], permits: [], rejections: [] });
+    if (emptyStore()) return latency({ cooldowns: [] });
     const byModel = new Map<string, RuleCooldown[]>();
     for (const row of this.modelCooldowns()) {
       const model = row.scope.slice(MODEL_SCOPE_PREFIX.length);
       byModel.set(model, [...(byModel.get(model) ?? []), row]);
     }
     const cooldowns = [...byModel.entries()].sort(([a], [b]) => a.localeCompare(b)).map(([model, rows]) => ({ model, rows }));
-    return latency({ cooldowns, permits: MODEL_PERMITS, rejections: MODEL_REJECTIONS });
+    return latency({ cooldowns });
   }
 
   getOverview() {

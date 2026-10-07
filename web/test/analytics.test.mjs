@@ -391,3 +391,9 @@ test('the cooldown move reason reads failed over and the other seven keep their 
   });
   assert.equal(d.moveLabel('cooldown'), 'failed over', 'every reader of the map takes the word through moveLabel');
 });
+
+test('RULE_MOVE_REASONS names the five rule reasons and leaves the three failover reasons out', () => {
+  assert.deepEqual([...d.RULE_MOVE_REASONS], ['drain', 'overage', 'return_to_plan', 'shed', 'spent']);
+  const failovers = Object.keys(d.PIN_MIGRATION_LABEL).filter((reason) => !d.RULE_MOVE_REASONS.includes(reason));
+  assert.deepEqual(failovers, ['cooldown', 'fast_lane', 'mark'], 'every reason the map names is a rule reason or a failover');
+});

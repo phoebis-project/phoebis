@@ -1,5 +1,6 @@
 import type { AttentionItem, AttentionKind } from '@/api/types';
-import { fmtAbsolute, fmtRelative } from './format';
+import { fmtAbsolute, fmtRelative, fmtShortTime } from './format';
+import { logHref, sinceCondition } from './routingLog';
 
 export const ATTENTION_LABEL: Record<AttentionKind, string> = {
   client_drift: 'Client drift',
@@ -25,11 +26,21 @@ export const ATTENTION_TONE: Record<AttentionKind, 'critical' | 'serious' | 'war
 /** How often a page with a reader open asks the route again, so an exhaustion or a cleared failure shows unprompted. */
 export const ATTENTION_REFRESH_MS = 30_000;
 
-/** The account's entry on Accounts, the pool's card on Pools or the key's row on Keys; null when the item names none. */
-export function attentionHref({ link }: Pick<AttentionItem, 'link'>): string | null {
+/**
+ * A `pool_exhausted` item opens the routing log on the pool's exhausted decisions from the condition's start; every
+ * other kind opens the account, pool or key where it is fixed. Null when the item names none.
+ */
+export function attentionHref(item: Pick<AttentionItem, 'kind' | 'link' | 'since'>, now: number): string | null {
+  const { link } = item;
   if (link === null) return null;
+  if (item.kind === 'pool_exhausted') return logHref({ pools: [link.id], kinds: ['exhausted'], ...sinceCondition(Date.parse(item.since), now) });
   const id = encodeURIComponent(link.id);
   return link.page === 'accounts' ? `/accounts/${id}` : `/${link.page}#${id}`;
+}
+
+/** The last line of a title whose item opens the routing log, naming what the log opens on; null for any other. */
+export function attentionLogLine(item: Pick<AttentionItem, 'kind' | 'link' | 'since'>): string | null {
+  return item.kind === 'pool_exhausted' && item.link !== null ? `Opens the Routing log: pool ${item.link.id}, exhausted, since ${fmtShortTime(item.since)}` : null;
 }
 
 /** The id an address's hash names, the way `attentionHref` wrote it; null for no hash or one that does not decode. */
@@ -85,7 +96,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
 /**
  * The detail's members as `name: value` lines in name order, an instant the route sends in milliseconds read as one,
  * then the age: the title of a badge on the dashboard's line. A member the route left null says nothing and is left
- * out.
+ * out. An item that opens the routing log ends with the line that says so.
  */
 export function attentionTitle(item: AttentionItem, now: number): string {
   const members = Object.entries(item.detail)
@@ -95,7 +106,8 @@ export function attentionTitle(item: AttentionItem, now: number): string {
       const at = /_(at|since)$/.test(name) ? instant(v) : null;
       return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v) : String(v)}`;
     });
-  return [...members, `started ${fmtRelative(item.since, now)}`].join('\n');
+  const log = attentionLogLine(item);
+  return [...members, `started ${fmtRelative(item.since, now)}`, ...(log === null ? [] : [log])].join('\n');
 }
 
 export interface AttentionRead {

@@ -176,26 +176,12 @@ export interface KeyModels {
   rules: ProcessedRule[];
 }
 
-/** One `model_rejected` or `model_permitted` ledger event, as `GET /admin/models/state` lists it. */
-export interface ModelEvent {
-  accountId: string;
-  at: string;
-  keyId: string | null;
-  model: string;
-  /** The accounts a permit's request failed over past; empty on a rejection. */
-  rejectedBy: string[];
-  requestId: string | null;
-  sessionId: string | null;
-  /** The upstream's own id for the attempt that was rejected or that permitted, `null` when it sent none. */
-  upstreamRequestId: string | null;
-  wireModel: string;
-}
-
-/** `GET /admin/models/state`: the live cooldowns grouped by model, and the newest rejections and permits. */
+/**
+ * `GET /admin/models/state`: the live cooldowns grouped by model. The route also answers the newest rejections and
+ * permits, which the console reads in the routing log instead.
+ */
 export interface ModelsState {
   cooldowns: { model: string; rows: RuleCooldown[] }[];
-  permits: ModelEvent[];
-  rejections: ModelEvent[];
 }
 
 export interface QuotaSample {

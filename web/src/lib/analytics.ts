@@ -13,6 +13,8 @@ export const PIN_MIGRATION_LABEL: Record<PinMigrationReason, string> = {
   shed: 'shed',
   spent: 'window spent',
 };
+/** The pool's own balancing: what the pool card's move tile sums, so the count and the list its link opens agree. */
+export const RULE_MOVE_REASONS: readonly PinMigrationReason[] = ['drain', 'overage', 'return_to_plan', 'shed', 'spent'];
 /**
  * Whether a label map holds the name as its own key. The names are the router's data, and one could name a member
  * every object inherits.

@@ -291,14 +291,16 @@ and at most 64 sockets are served at once, a further one refused `503 live feed 
 A line above the tiles names what needs the operator's attention, worst first, each item a badge that opens the account,
 pool or key where it is fixed, or nothing for an item with no such place (a drift refusal that named no key, a parked
 record without a pool, a pool deleted since, one of the router's own writers); it reads the same conditions the
-[`phoebis_attention` gauge](#conditions-and-gauges) exports. Four tiles report requests, tokens, estimated cost, and the
-error rate over the last 24 hours, and a line under them says when the figures were read, or that the last refresh
-failed and why. Two cards below show how much of the pooled 5-hour and 7-day capacity is left: each subscription account
-is weighed by its tier's capacity in Max 20x windows from the cost table and listed with its own remaining share, and
-the line under the ring reads the windows left against the pooled capacity, such as 0.39 of 1.30 Max 20x windows left. A
-window whose reset has passed with no reading since counts as a full allowance. An account whose tier the table does not
-size, or whose window the table has not measured, is named under the ring instead, with the reason. The page ends with
-the most recent requests and a sessions card that leads with the router's live pins and the accounts they sit on.
+[`phoebis_attention` gauge](#conditions-and-gauges) exports. The pool exhausted item opens the
+[routing log](#routing-log) instead, on the pool's exhausted decisions from the moment the condition began. Four tiles
+report requests, tokens, estimated cost, and the error rate over the last 24 hours, and a line under them says when the
+figures were read, or that the last refresh failed and why. Two cards below show how much of the pooled 5-hour and 7-day
+capacity is left: each subscription account is weighed by its tier's capacity in Max 20x windows from the cost table and
+listed with its own remaining share, and the line under the ring reads the windows left against the pooled capacity,
+such as 0.39 of 1.30 Max 20x windows left. A window whose reset has passed with no reading since counts as a full
+allowance. An account whose tier the table does not size, or whose window the table has not measured, is named under the
+ring instead, with the reason. The page ends with the most recent requests and a sessions card that leads with the
+router's live pins and the accounts they sit on.
 
 ### Observe
 
@@ -336,8 +338,8 @@ timeline lays the same windows across a calendar, zoomable between a two-week we
 ### Models
 
 The Models view lists a key's processed rules with their level and the accounts cooling for a matching model, every
-model-scoped cooldown grouped by model with a clear button per row, and the newest rejections and permits
-([routing](routing.md#model-rules)).
+model-scoped cooldown grouped by model with a clear button per row, and a link to the routing log's model rejected and
+model permitted rows ([routing](routing.md#model-rules)).
 
 ### Requests
 
@@ -491,6 +493,16 @@ An account state change names who moved the state in the console's words: `crede
 the account's credential, `credit balance` when it named the credit balance, `refresh failed` when the token refresh
 failed for good, `by hand` for an operator's change, and `paired` for a pairing's confirm. A deleted account's last row
 reads `deleted`, as its new state and as who moved it.
+
+Other views open the log on what they show. A Requests row and its drawer open it on the request a quarter hour either
+side. The Sessions row menu's "View in routing log" opens the session's decisions an hour either side of its last
+request, ending no later than now, or over the last hour for a session with no request. On a pool card, the "Moves in
+the last hour" tile's figure opens the pool's moved decisions over the last hour. The figure counts the moves the pool's
+own rules made (`drain`, `overage`, `return_to_plan`, `shed` and `spent`), and its title lists them by reason with the
+failovers apart, since the log draws a failover as a later attempt's placement. The card's pool exhausted row and the
+dashboard's pool exhausted item open the pool's exhausted decisions from the moment the condition began. The Routing log
+action on an account's Requests card shows the account's rows over the last hour, and the Models view's link opens the
+model rejected and model permitted rows of the last 24 hours.
 
 ### Analytics
 

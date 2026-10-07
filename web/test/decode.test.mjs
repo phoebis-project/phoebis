@@ -294,19 +294,13 @@ test('a key\'s processed rule list decodes with the level, the rule, and the coo
   );
 });
 
-test('the model state decodes the cooldowns grouped by model, and the rejections and permits with their detail lifted', () => {
-  const state = d.decodeModelsState(fixture('models_state'));
+test('the model state decodes the cooldowns grouped by model and leaves the rejections and permits to the routing log', () => {
+  const body = fixture('models_state');
+  const state = d.decodeModelsState(body);
   assert.deepEqual(state.cooldowns.map((g) => [g.model, g.rows.length]), [['claude-haiku-4-5-20251001', 1]]);
   assert.equal(state.cooldowns[0].rows[0].accountId, 'business');
-  assert.deepEqual(
-    state.rejections.map((r) => [r.accountId, r.model, r.wireModel, r.requestId, r.upstreamRequestId, r.rejectedBy]),
-    [['business', 'claude-haiku-4-5-20251001', 'claude-haiku-4-5', 'r-failover', 'req-rejected', []]],
-  );
-  assert.deepEqual(
-    state.permits.map((p) => [p.accountId, p.wireModel, p.requestId, p.upstreamRequestId, p.rejectedBy]),
-    [['direct', 'claude-haiku-4-5', 'r-failover', 'req-permitted', ['business']]],
-  );
-  assert.ok(isIso(state.rejections[0].at) && isIso(state.permits[0].at));
+  assert.ok(body.rejections.length > 0 && body.permits.length > 0, 'the route still answers both lists');
+  assert.deepEqual(Object.keys(state), ['cooldowns'], 'the console reads neither list');
 });
 
 test('a pool decodes its policy, status, members, and traffic', () => {
