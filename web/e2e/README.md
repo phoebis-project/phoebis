@@ -27,14 +27,16 @@ table's fit, the cost-cap rows, the live feed, the wasted-probe rows, the burn c
 entry, the placement and budget tables, the request table's fit, the request pages' widths, walked on a load of their
 own once every view's shot is taken, the speed filter, the traffic cards (each Analytics check
 opens the tab it reads and returns to Traffic), the tab strip docked under the filter bar at the end of the Latency tab,
-the fast lane, the request drawer, which opens once the request list's shot is taken, the subscription end editor, the
-catalog popup, the key dialog's Access selects, the Pool select against the Status select, the Sessions lead and its
-disclosure at 1280 by 800 and 1440 by 900 (the head's height closed and open, the button on the sentence's last line or
-flush left on the next, the opened paragraph 6 px under the lead, Cost reference one line at the head's top right), the
-cost reference, the session table's fit, the session row menu, the agent lines, the fork badge's face, the fork
-link, which is followed once the session list's shot is taken). A check that opens an editor, a dialog or a row closes
-it again before the view's shot, and one that turns a column on turns it off again. The script exits non-zero with the
-list of failures when any of that does not hold.
+the fast lane, the request drawer, which opens once the request list's shot is taken, the routing log's decision card,
+which opens once the log's shot is taken (the walk and the candidate table, 958 then 1118 px, inside the card at 1280 by
+800 and 1440 by 900, every verdict badge in the kind badge's box, and the chosen row's Prefix chips on the first rung
+placement the log lists), the subscription end editor, the catalog popup, the key dialog's Access selects, the Pool
+select against the Status select, the Sessions lead and its disclosure at 1280 by 800 and 1440 by 900 (the head's height
+closed and open, the button on the sentence's last line or flush left on the next, the opened paragraph 6 px under the
+lead, Cost reference one line at the head's top right), the cost reference, the session table's fit, the session row
+menu, the agent lines, the fork badge's face, the fork link, which is followed once the session list's shot is
+taken). A check that opens an editor, a dialog or a row closes it again before the view's shot, and one that turns a
+column on turns it off again. The script exits non-zero with the list of failures when any of that does not hold.
 
 The screenshot directory has to lie outside the repository, which the script enforces against every worktree `git
 worktree list` reports, and against the tree holding the nearest `Cargo.toml` when git cannot answer.

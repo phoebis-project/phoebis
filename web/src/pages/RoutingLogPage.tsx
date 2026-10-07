@@ -1,15 +1,17 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { Link } from 'react-router-dom';
+import { Fragment, useEffect, useMemo, useRef, useState, type MouseEvent, type ReactNode } from 'react';
+import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import { ApiError, quietly, reportRecovery } from '@/api/http';
 import type { DecisionKind, DecisionSummary, FactEntity, RoutingEvent, RoutingLogQuery, RoutingLogRow } from '@/api/types';
+import { DecisionCard } from '@/components/DecisionCard';
+import { EventDetail } from '@/components/EventDetail';
 import { MultiSelect, type Option } from '@/components/ui/MultiSelect';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh } from '@/components/ui/icons';
 import { Badge, Button, Card, EmptyState, ErrorState, Input, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { clock } from '@/lib/clock';
 import { fmtAbsolute, fmtTime, toLocalInput, upperFirst } from '@/lib/format';
 import { useAsync, useCommittedText, useQueryFilters } from '@/lib/hooks';
-import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, formatFact, logHref } from '@/lib/routingLog';
+import { DECISION_KIND_LABEL, DECISION_KIND_TONE, EVENT_KIND_LABEL, type LogLink, aroundRequest, aroundSubject, byOf, clockMinute, compareModels, entityHref, eventTone, factsOf, formatFact, logHref } from '@/lib/routingLog';
 
 const MINUTE = 60_000;
 const HOUR = 60 * MINUTE;
@@ -125,6 +127,7 @@ const EntityLink = ({ children, id, kind, mono = false }: { children?: ReactNode
 
 export function RoutingLogPage() {
   const { address, filters, replace, update } = useQueryFilters(CODEC);
+  const navigate = useNavigate();
   const keys = useAsync(() => api.listKeys(), []);
   const pools = useAsync(() => api.listPools(), []);
   const accounts = useAsync(() => api.listAccounts(), []);
@@ -136,6 +139,18 @@ export function RoutingLogPage() {
   if (paging.for !== address) setPaging({ for: address, stack: [] });
   const cursor = paging.for === address ? paging.cursor : undefined;
   const stack = paging.for === address ? paging.stack : [];
+  // The open rows belong to the page they were opened on, so another page or another filter starts with every row shut.
+  const pageKey = `${cursor ?? ''}|${address}`;
+  const [opened, setOpened] = useState<{ for: string; ids: Set<string> }>({ for: pageKey, ids: new Set() });
+  const open = opened.for === pageKey ? opened.ids : new Set<string>();
+  const toggle = (id: string) =>
+    setOpened((o) => {
+      const ids = new Set(o.for === pageKey ? o.ids : []);
+      if (ids.has(id)) ids.delete(id);
+      else ids.add(id);
+      return { for: pageKey, ids };
+    });
+  const widen = (link: LogLink) => navigate(logHref(link));
   // The last hour ends where the list was loaded, so a cursor page is read against the window its cursor came from;
   // Refresh moves the end to now.
   const [loadedAt, setLoadedAt] = useState(() => clock.now());
@@ -346,6 +361,7 @@ export function RoutingLogPage() {
           <table className="table routing-log__table">
             <thead>
               <tr>
+                <th className="routing-log__chevron" />
                 <th className="routing-log__time">Time</th>
                 <th className="routing-log__kind">Kind</th>
                 <th className="routing-log__session">Session</th>
@@ -360,15 +376,27 @@ export function RoutingLogPage() {
               {log.loading && !log.data
                 ? Array.from({ length: 8 }, (_, i) => (
                     <tr key={i}>
-                      <td colSpan={8}>
+                      <td colSpan={9}>
                         <Skeleton />
                       </td>
                     </tr>
                   ))
-                : rows.map((row) => <LogRow key={identityOf(row)} row={row} rows={rows} isNew={fresh.has(identityOf(row))} now={now} />)}
+                : rows.map((row, i) => {
+                    const id = identityOf(row);
+                    return (
+                      <Fragment key={id}>
+                        <LogRow row={row} rows={rows} isNew={fresh.has(id)} now={now} open={open.has(id)} striped={i % 2 === 1} onToggle={() => toggle(id)} />
+                        {open.has(id) && (
+                          <tr className="routing-log__panel">
+                            <td colSpan={9}>{row.type === 'decision' ? <DecisionCard now={now} onWiden={widen} row={row} /> : <EventDetail now={now} row={row} />}</td>
+                          </tr>
+                        )}
+                      </Fragment>
+                    );
+                  })}
               {!log.loading && rows.length === 0 && (
                 <tr>
-                  <td colSpan={8}>
+                  <td colSpan={9}>
                     {log.error ? (
                       <ErrorState title="Could not load the routing log" body={log.error} action={<Button onClick={log.reload}>Try again</Button>} />
                     ) : (
@@ -544,12 +572,31 @@ const modelOf = (row: RoutingLogRow) => {
   return named.length === 1 && typeof named[0] === 'string' ? named[0] : null;
 };
 
-function LogRow({ isNew, now, row, rows }: { isNew: boolean; now: number; row: RoutingLogRow; rows: RoutingLogRow[] }) {
+function LogRow({ isNew, now, onToggle, open, row, rows, striped }: { isNew: boolean; now: number; onToggle: () => void; open: boolean; row: RoutingLogRow; rows: RoutingLogRow[]; striped: boolean }) {
   const by = byOf(row, rows);
   const facts = factsOf(row, now, rows);
   const model = modelOf(row);
+  const className = ['routing-log__row', isNew && 'is-new', open && 'is-open', striped && 'is-striped'].filter(Boolean).join(' ');
+  // A click on a link or a button inside the row follows it, and anywhere else opens the row.
+  const click = (e: MouseEvent<HTMLTableRowElement>) => {
+    if (!(e.target as Element).closest('a, button')) onToggle();
+  };
   return (
-    <tr className={isNew ? 'is-new' : undefined}>
+    <tr
+      className={className}
+      data-row={identityOf(row)}
+      tabIndex={0}
+      aria-expanded={open}
+      onClick={click}
+      onKeyDown={(e) => {
+        if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+        e.preventDefault();
+        onToggle();
+      }}
+    >
+      <td className="routing-log__chevron" aria-hidden>
+        <IconChevronRight size={14} />
+      </td>
       <td className="num routing-log__time" title={fmtAbsolute(row.at)}>
         {fmtTime(row.at)}
         {row.type === 'decision' && (

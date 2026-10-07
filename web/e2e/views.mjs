@@ -2587,6 +2587,96 @@ async function requestDrawer(theme) {
   for (const b of drawn.badges.filter((x) => drawn.reference !== null && x.box !== drawn.reference)) failures.push(`${theme} /requests: the "${b.text}" badge measures ${b.box} against the status badge's ${drawn.reference}`);
 }
 
+/**
+ * The routing log's decision card, opened from the first decision row once the log's shot is taken: at 1280 by 800 and
+ * 1440 by 900 the walk and the candidate table (958 px, then 1118 px) sit inside the card with nothing to scroll
+ * sideways, and every verdict badge of the walk takes the kind badge's box. A renewal walks no rung, so the Prefix cell's two chips are read on the
+ * first rung placement the page lists. The router's seed places no request by a rung, so there that check stands down.
+ */
+async function decisionCard(theme) {
+  const say = (what) => failures.push(`${theme} /routing-log: ${what}`);
+  const decisions = page.locator('.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])');
+  const open = async (row) => {
+    await row.locator('td.routing-log__kind').click();
+    await advance(LOAD_MS);
+    try {
+      await page.waitForSelector('.routing-log__panel .decision-card__walk', { timeout: 15_000 });
+      return true;
+    } catch {
+      return false;
+    }
+  };
+  if ((await decisions.count()) === 0) {
+    say('no decision row to open');
+    return;
+  }
+  if (!(await open(decisions.first()))) {
+    say('the first decision row opened to no card');
+    return;
+  }
+  const read = () =>
+    page.evaluate(() => {
+      const box = (el) => {
+        const s = getComputedStyle(el);
+        return `${s.fontFamily}/${s.fontSize}/${s.lineHeight}/${s.paddingTop}/${s.paddingLeft}/${Math.round(el.getBoundingClientRect().height)}`;
+      };
+      const card = document.querySelector('.routing-log__panel .decision-card');
+      const walk = card?.querySelector('.decision-card__walk');
+      const table = card?.querySelector('.decision-card__candidates');
+      const wrap = table?.closest('.table-wrap');
+      const log = document.querySelector('.routing-log__table')?.closest('.table-wrap');
+      const kind = card?.querySelector('.decision-card__verdict > .badge');
+      return {
+        badges: [...(card?.querySelectorAll('.decision-card__walk .badge') ?? [])].map((b) => ({ box: box(b), text: b.textContent })),
+        card: card ? { client: card.clientWidth, scroll: card.scrollWidth, width: Math.round(card.getBoundingClientRect().width) } : null,
+        log: log ? { client: log.clientWidth, scroll: log.scrollWidth } : null,
+        reference: kind ? box(kind) : null,
+        table: wrap && table ? { client: wrap.clientWidth, scroll: wrap.scrollWidth, width: Math.round(table.getBoundingClientRect().width) } : null,
+        walk: walk ? { client: walk.clientWidth, scroll: walk.scrollWidth } : null,
+      };
+    });
+  for (const { height, table, width } of [
+    { height: 800, table: 958, width: 1280 },
+    { height: 900, table: 1118, width: 1440 },
+  ]) {
+    const where = `the open card at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /routing-log decision card at ${width} by ${height} ${JSON.stringify({ ...got, badges: got.badges.length })}`);
+    if (got.card === null || got.walk === null) {
+      say(`${where} draws no walk`);
+      continue;
+    }
+    if (got.card.scroll > got.card.client) say(`${where} runs ${got.card.scroll}px in ${got.card.client}px`);
+    if (got.walk.scroll > got.walk.client) say(`${where}: the walk runs ${got.walk.scroll}px in ${got.walk.client}px`);
+    if (got.table === null) say(`${where} draws no candidate table`);
+    else if (got.table.scroll > got.table.client) say(`${where}: the candidate table scrolls sideways (${got.table.scroll}px in ${got.table.client}px)`);
+    else if (got.table.width !== table) say(`${where}: the candidate table is ${got.table.width}px, not ${table}px`);
+    if (got.log !== null && got.log.scroll > got.log.client) say(`${where}: the log's table scrolls sideways (${got.log.scroll}px in ${got.log.client}px)`);
+    if (got.reference === null) say(`${where} has no kind badge to measure against`);
+    for (const b of got.badges.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the "${b.text}" verdict badge measures ${b.box} against the kind badge's ${got.reference}`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  const rung = decisions.filter({ has: page.locator('td.routing-log__by .chip', { hasText: / rung$/ }) }).first();
+  if ((await rung.count()) === 0) {
+    if (mock) say('the story lists no rung placement whose Prefix cell to read');
+    return;
+  }
+  if (!(await open(rung))) {
+    say('the first rung placement opened to no card');
+    return;
+  }
+  const prefix = await page.evaluate(() => {
+    const cell = [...document.querySelectorAll('.routing-log__panel .decision-card')].at(-1)?.querySelector('.decision-card__candidates tr.is-chosen .decision-card__prefix');
+    const hash = cell?.querySelector('.decision-card__hash');
+    return { hash: hash?.textContent ?? null, title: hash?.getAttribute('title') ?? null, warm: cell?.querySelector('.decision-card__warm')?.textContent ?? null };
+  });
+  measurements.push(`${theme} /routing-log prefix cell ${JSON.stringify(prefix)}`);
+  if (prefix.hash?.length !== 8 || prefix.title?.length !== 64 || !prefix.title.startsWith(prefix.hash) || !/^warm until /.test(prefix.warm ?? '')) say(`the chosen row's Prefix cell reads ${JSON.stringify(prefix)}, not the hash's eight characters with the whole hash on hover and the warm-until chip`);
+}
+
 /** The findings of comparing `mine` against `neighbour` on `keys`, each worded for the failure list. */
 const compare = (mine, neighbour, keys, what) => {
   if (!mine || !neighbour) return [`${what}: one side is not drawn to compare`];
@@ -3459,6 +3549,7 @@ try {
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       if (view.path === '/requests') await requestDrawer(theme);
+      if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
     }
   }

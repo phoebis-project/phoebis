@@ -1,7 +1,7 @@
-import { PIN_RELEASE_REASON_VALUES } from '@/api/decode';
-import type { DecisionKind, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, RoutingEvent, RoutingLogRow } from '@/api/types';
+import { PIN_RELEASE_REASON_VALUES, planLabel } from '@/api/decode';
+import type { DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, PinReason, PinReleaseReason, PrefixEntry, RecordCandidate, RecordSettings, RoutingEvent, RoutingLogRow, WalkFact, WalkStep } from '@/api/types';
 import { moveLabel, own } from './analytics';
-import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtUsd, shortModel } from './format';
+import { fmtCompact, fmtInt, fmtPct, fmtShortTime, fmtTime, fmtUsd, shortModel } from './format';
 import { POLL_OUTCOME_LABEL } from './quota';
 
 // The routing log's words. The routes answer structured values and no English, so a label change touches this module
@@ -57,7 +57,13 @@ export interface FactPair {
 
 export interface Chip {
   entity?: FactEntity | null;
+  /** Where the value links when it names a session or a request, which no fact entity covers. */
+  href?: string;
   label?: string;
+  /** The label names this entity and links it: a fact about one member takes the member as its key. */
+  labelEntity?: FactEntity | null;
+  mono?: boolean;
+  title?: string;
   value: string;
 }
 
@@ -655,4 +661,824 @@ export function compareModels(a: string, b: string): number {
     if (d !== 0) return d;
   }
   return a.localeCompare(b);
+}
+
+// The decision card and the event detail: the record's walk, its candidates, its folds and its outcome, and an event's
+// pairs. Every chip holds one value or one key-value pair, and every entity it names is a link.
+
+const accountEntity = (id: string): FactEntity => ({ id, kind: 'account' });
+const accountChip = (id: string, label?: string): Chip => ({ entity: accountEntity(id), ...(label === undefined ? {} : { label }), value: id });
+const modelChip = (id: string, label?: string): Chip => ({ entity: { id, kind: 'model' }, ...(label === undefined ? {} : { label }), mono: true, value: id });
+const sessionChip = (id: string): Chip => ({ href: entityHref('session', id), mono: true, title: id, value: id.slice(0, 8) });
+const requestChip = (id: string): Chip => ({ href: entityHref('request', id), mono: true, value: id });
+const plain = (value: string, label?: string): Chip => (label === undefined ? { value } : { label, value });
+
+/** Why a member could not take the request, the hover of the candidate table's verdict chip. */
+export const OBSTACLE_HINT: Record<string, string> = {
+  above_ceiling: 'above the utilization ceiling',
+  at_cap: 'at its in-flight cap',
+  attempted: 'already tried by this request',
+  budget: 'at its spend budget for the period',
+  budget_unknown: 'its spend unknown while the ledger is degraded',
+  cooldown: 'in a cooldown',
+  credits: 'its usage credits unavailable for fast mode',
+  floor: 'at the Pace floor',
+  operator: 'held by an operator',
+  overage: 'in overage',
+  ranked: 'ranked behind the account chosen',
+  spent: 'its window spent',
+  subscription_ended: 'its subscription ended',
+  winding_down: 'winding down toward its subscription end',
+};
+const hintOf = (name: string) => (own(OBSTACLE_HINT, name) ? OBSTACLE_HINT[name] : undefined);
+
+/** A boundary's hash as its chip draws it. The whole 64 characters ride the chip's hover. */
+export const shortHash = (hash: string) => hash.slice(0, 8);
+
+/** When the entry stops being warm, its write plus its TTL. A link the cache never confirmed (`ttlMs` 0) names none. */
+export const warmUntil = (entry: PrefixEntry, now: number): string | null => (entry.ttlMs === 0 ? null : `warm until ${instant(Date.parse(entry.writtenAt) + entry.ttlMs, now)}`);
+
+/** The hash chip's hover: the whole hash, and the gate that refused the entry when one did. */
+export const hashTitle = (entry: PrefixEntry): string => (entry.refusedBy === null ? entry.hash : `${entry.hash}\nrefused by the ${words(entry.refusedBy)}`);
+
+const VERDICT_WORD: Record<string, string> = { dropped: 'all at cap' };
+/** A walk verdict in the console's words: `not run`, `all at cap`, `fell through`. */
+export const verdictWord = (verdict: string) => wordOf(VERDICT_WORD, verdict);
+
+/**
+ * `hash` is the entry the rung accepted on the member it took (`contentMatch` or `staticMatch`) on a `match` line and
+ * the deepest refused entry on a `none` line, never the taken member's deeper refused entry.
+ */
+export interface WalkLine {
+  chips: Chip[];
+  collapsed?: string[];
+  hash?: PrefixEntry | null;
+  number: number;
+  step: string;
+  verdict: string;
+}
+
+/** The fact keys of the walk in the console's words. Any other key reads with its underscores as spaces. */
+const WALK_KEY: Record<string, string> = {
+  above_ceiling: 'above ceiling',
+  ahead_five_hour: '5h ahead',
+  ahead_seven_day: '7d ahead',
+  at_cap: 'at cap',
+  bound_ms: 'bound',
+  dwell_age_ms: 'dwell age',
+  elapsed_five_hour: '5h elapsed',
+  elapsed_seven_day: '7d elapsed',
+  grace_ms: 'grace',
+  idle_ms: 'idle',
+  last_shed_age_ms: 'last round',
+  migrate_when_spent: 'move when spent',
+  prefix_tokens: 'prefix',
+  refresh_age_ms: 'refresh age',
+  reset_in_grace: 'reset in',
+  worst_bucket: 'worst bucket',
+};
+const keyWord = (key: string) => wordOf(WALK_KEY, key);
+/** The keys whose value names itself, so a member's chip reads `primary eligible`, not `primary standing eligible`. */
+const SELF_NAMED = new Set(['score', 'standing']);
+
+/** `warmth_of`'s causes in words. */
+const WARMTH_CAUSE_WORD: Record<string, string> = { chainless: 'no chain', class_auxiliary: 'auxiliary class', class_refreshes: 'refreshing class', continues_pin: 'continues the pin', count: 'token count' };
+const WARMTH_WORD: Record<string, string> = { refresh: 'warm' };
+const SNAKE = /^[a-z][a-z0-9]*(?:_[a-z0-9]+)+$/;
+const FACT_UNITS: readonly FactUnit[] = ['count', 'ms', 'percent', 'percent_per_hour', 'text', 'time', 'tokens', 'usd'];
+const unitOf = (unit: string | null): FactUnit | null => FACT_UNITS.find((u) => u === unit) ?? null;
+
+/** A word the engine writes, in the console's words. An identifier such as a model or an id reads as written. */
+function textWord(key: string, value: string): string {
+  switch (key) {
+    case 'cause':
+      return wordOf(WARMTH_CAUSE_WORD, value);
+    case 'strategy':
+      return wordOf(STRATEGY_WORD, value);
+    case 'warmth':
+      return wordOf(WARMTH_WORD, value);
+    case 'window':
+      return wordOf(WINDOW_WORD, value);
+    default:
+      return SNAKE.test(value) ? words(value) : value;
+  }
+}
+
+const valueText = (key: string, value: unknown, unit: string | null, now: number): string => {
+  if (value === null || value === undefined) return 'none';
+  if (typeof value === 'boolean') return value ? 'yes' : 'no';
+  if (typeof value === 'number') return formatFact(value, unitOf(unit), now);
+  if (typeof value === 'string') return unit === 'time' ? formatFact(value, 'time', now) : textWord(key, value);
+  return String(value);
+};
+
+/** A tier as the engine keys it, `[group, priority, overage]`, from the list or the `0/0/0` text a walk fact holds. */
+const tierOf = (value: unknown): number[] | null => {
+  const parts = Array.isArray(value) ? value.map(Number) : typeof value === 'string' ? value.split('/').map(Number) : [];
+  return parts.length === 3 && parts.every((n) => Number.isFinite(n)) ? parts : null;
+};
+/** The kind tier's word: an Anthropic key, overage, or the plan's own quota. */
+const tierWord = (tier: readonly number[], kind: RecordCandidate['kind'] | null, plan: string) => (kind === 'api_key' || tier[0] === 2 ? 'keys' : tier[0] === 1 || tier[2] === 1 ? 'overage' : plan);
+
+/** A pin's lane is `model|speed|thinking|effort`. The model is the request's own, so the chips name the other three. */
+function laneChips(lane: string): Chip[] {
+  const parts = lane.split('|');
+  if (parts.length !== 4) return [plain(lane, 'lane')];
+  const [, speed, thinking, effort] = parts;
+  return [plain(speed, 'speed'), plain(thinking, 'thinking'), plain(effort === '-' ? 'none' : effort, 'effort')];
+}
+
+/** An exhausted line's obstacle, `account:name` as the engine weighs it, the account as the key. */
+function obstacleChip(text: string): Chip {
+  const at = text.lastIndexOf(':');
+  const name = at < 0 ? text : text.slice(at + 1);
+  const id = at < 0 ? '' : text.slice(0, at);
+  const value = wordOf(OBSTACLE_WORD, name);
+  return id === '' ? { label: 'obstacle', title: hintOf(name), value } : { label: id, labelEntity: accountEntity(id), title: hintOf(name), value };
+}
+
+/**
+ * A shedding mark is its pin's key, `key/session/agent/model`. The session's prefix and the agent tell a round's marks
+ * apart.
+ */
+function markChip(text: string): Chip {
+  const [, session = '', agent = ''] = text.split('/');
+  return { ...(session ? { href: entityHref('session', session) } : {}), label: 'mark', mono: true, title: text, value: agent ? `${session.slice(0, 8)}/${agent}` : session.slice(0, 8) };
+}
+
+/** A refusal's reason: a drift refusal names its kind and the client's version, a key refusal the router's sentence. */
+function refusalChips(refusal: { kind: string; reason: string }): Chip[] {
+  if (refusal.kind !== 'client') return [plain(own(KEY_REFUSAL_WORD, refusal.reason) ? KEY_REFUSAL_WORD[refusal.reason] : refusal.reason)];
+  const [drift, ...rest] = refusal.reason.split(';').map((p) => p.trim());
+  const version = rest.find((p) => p.startsWith('client '))?.slice('client '.length);
+  return [plain(words(drift || 'client'), 'drift'), ...(version ? [plain(version, 'client')] : [])];
+}
+
+function factChips(f: WalkFact, record: DecisionRecord, now: number): Chip[] {
+  const v = f.value;
+  const members = new Set(record.candidates.map((c) => c.accountId));
+  switch (f.key) {
+    // The rung line draws its entry from the candidate table instead, eight characters with the rest on hover.
+    case 'hash':
+      return [];
+    case 'account_id':
+      return typeof v === 'string' ? [accountChip(v, 'on')] : [];
+    case 'lane':
+      if (typeof v === 'string') return laneChips(v);
+      break;
+    case 'marks':
+      if (Array.isArray(v)) return v.map((m) => markChip(String(m)));
+      break;
+    case 'obstacles':
+      if (Array.isArray(v)) return v.map((o) => obstacleChip(String(o)));
+      break;
+    case 'tier': {
+      const tier = tierOf(v);
+      if (tier) return [plain(`${tierWord(tier, null, 'plan')} P${tier[1]}`, 'tier')];
+      break;
+    }
+  }
+  if (Array.isArray(v)) {
+    const label = keyWord(f.key).replace(/s$/, '');
+    return v.map((x) => (members.has(String(x)) ? accountChip(String(x), label) : plain(textWord(f.key, String(x)), label)));
+  }
+  const value = valueText(f.key, v, f.unit, now);
+  if (f.accountId) return [{ label: f.accountId, labelEntity: accountEntity(f.accountId), value: SELF_NAMED.has(f.key) ? value : `${keyWord(f.key)} ${value}` }];
+  return [plain(value, keyWord(f.key))];
+}
+
+const RUNG_OF: Record<string, 'content' | 'static' | 'with_main'> = { 'rung:content': 'content', 'rung:static': 'static', 'rung:with_main': 'with_main' };
+
+/**
+ * A rung line's entry: on a match the one the rung accepted on the member it took, on any other line the deepest entry
+ * a member's gate refused. A placement beside the main conversation names no entry.
+ */
+function rungEntry(s: WalkStep, record: DecisionRecord): PrefixEntry | null | undefined {
+  const rung = own(RUNG_OF, s.step) ? RUNG_OF[s.step] : undefined;
+  if (rung === undefined) return undefined;
+  if (rung === 'with_main' || s.verdict === 'not_run') return null;
+  if (s.verdict === 'match') {
+    const took = s.facts.find((f) => f.key === 'account_id');
+    const member = record.candidates.find((c) => c.accountId === (took?.accountId ?? took?.value));
+    return (rung === 'static' ? member?.prefix.staticMatch : member?.prefix.contentMatch) ?? null;
+  }
+  const refused = record.candidates.map((c) => c.prefix[rung]).filter((e): e is PrefixEntry => e !== null && e.refusedBy !== null);
+  return refused.sort((a, b) => b.depth - a.depth)[0] ?? null;
+}
+
+const ruleWord = (step: string) => (STEP_NAME[step] ?? words(step.slice('move:'.length))).toLowerCase();
+
+/**
+ * The walk as numbered lines in the engine's order. The rules after a fired one never ran, so they fold into one line,
+ * "Rules after spent", with the rules as chips.
+ */
+export function walkLines(record: DecisionRecord): WalkLine[] {
+  const at = Date.parse(record.request.at);
+  const lines: WalkLine[] = [];
+  let fired: string | null = null;
+  for (const s of record.walk) {
+    if (fired !== null && s.step.startsWith('move:') && s.verdict === 'not_run') {
+      const last = lines[lines.length - 1];
+      if (last?.collapsed) {
+        last.collapsed.push(s.step);
+        last.chips.push(plain(ruleWord(s.step)));
+      } else {
+        lines.push({ chips: [plain(ruleWord(s.step))], collapsed: [s.step], number: lines.length + 1, step: `Rules after ${ruleWord(fired)}`, verdict: 'not_run' });
+      }
+      continue;
+    }
+    if (s.step.startsWith('move:') && s.verdict === 'fired') fired = s.step;
+    const refusal = record.outcome.refusal;
+    const chips =
+      s.step === 'admission' && refusal !== null
+        ? refusalChips(refusal)
+        : s.step === 'selection' && s.facts.length === 0
+          ? ['moves', 'rungs', 'partitions'].map((p) => plain(p))
+          : s.facts.flatMap((f) => factChips(f, record, at));
+    const entry = rungEntry(s, record);
+    lines.push({ chips, ...(entry === undefined ? {} : { hash: entry }), number: lines.length + 1, step: STEP_NAME[s.step] ?? words(s.step), verdict: s.verdict });
+  }
+  return lines;
+}
+
+const memberOf = (record: DecisionRecord, id: string | null) => (id === null ? undefined : record.candidates.find((c) => c.accountId === id));
+
+/** The verdict line's words, with the accounts and the pool as entities: "Moved", secondary, "to", primary. */
+export function verdictSentence(record: DecisionRecord, row: DecisionSummary): Chip[] {
+  const o = record.outcome;
+  const failover = row.attempt > 1 && row.attemptCount !== null && row.attempt <= row.attemptCount;
+  const lead = (text: string) => plain(failover ? `Attempt ${row.attempt} of ${row.attemptCount}: ${text.charAt(0).toLowerCase()}${text.slice(1)}` : text);
+  const on = (id: string | null) => (id === null ? [] : [accountChip(id)]);
+  switch (o.kind) {
+    case 'exhausted':
+      return [plain('Exhausted in'), { entity: { id: record.request.poolId, kind: 'pool' }, value: record.request.poolId }];
+    case 'held':
+      return [lead('Held on'), ...on(o.hold?.accountId ?? o.accountId)];
+    case 'moved':
+      return [lead('Moved'), ...on(o.fromAccountId), plain('to'), ...on(o.accountId)];
+    case 'refused':
+      return [plain('Refused before selection')];
+    case 'renewed':
+      return [lead('Renewed on'), ...on(o.accountId)];
+    default:
+      return [lead('Placed on'), ...on(o.accountId)];
+  }
+}
+
+const ttlWord = (ttlMs: number) => (ttlMs >= HOUR ? '1h' : '5 min');
+
+/** The tier, the rule or the rung, the pin's warmth and the cache verdict once the attempt has usage. */
+export function verdictChips(record: DecisionRecord, row: DecisionSummary): Chip[] {
+  const o = record.outcome;
+  const chips: Chip[] = [];
+  const member = memberOf(record, o.accountId);
+  const tier = o.tier ?? member?.tier ?? null;
+  if (tier !== null && o.accountId !== null) chips.push(plain(`${tierWord(tier, member?.kind ?? null, 'plan quota')} P${tier[1]}`, 'tier'));
+  chips.push(decisionBy(row));
+  if (o.rung !== null && o.rung.rung !== 'with_main') chips.push(plain(String(o.rung.depth), 'depth'));
+  if (record.pin?.found === 'live' && record.pin.warmth) chips.push(plain(wordOf(WARMTH_WORD, record.pin.warmth), 'pin'));
+  const c = o.completion;
+  if (c !== null && c.hit !== null && c.cacheReadTokens !== null) {
+    const read = fmtCompact(c.cacheReadTokens);
+    chips.push(plain(c.promisedTokens !== null ? `${read} of ${fmtCompact(c.promisedTokens)} promised` : `${read} of ${fmtCompact(c.cacheReadTokens + (c.inputTokens ?? 0))}`, c.hit ? 'cache hit' : 'cache miss'));
+  } else if (c !== null && (c.status === null || c.status === 200)) {
+    chips.push(plain('cache pending'));
+  }
+  return chips;
+}
+
+const WINDOWS = ['five_hour', 'seven_day', 'seven_day_fable'];
+/** A reading's age, whole seconds under a minute. */
+const ageWord = (ms: number) => (ms < MINUTE ? `${Math.round(ms / 1_000)} s` : span(ms));
+const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : (['th', 'st', 'nd', 'rd'][n % 10] ?? 'th')}`;
+const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 'not needed' };
+const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };
+
+/** The plan beneath a member's account: `Max 20x`, `Pro`, `Anthropic key`. */
+const planWord = (c: RecordCandidate) => (c.kind === 'api_key' ? 'Anthropic key' : c.planTier === null ? 'OAuth' : planLabel(c.planTier));
+
+/** The member's prefix entry: the match on the rung the outcome names, else the deepest entry a gate refused. */
+function prefixEntryOf(c: RecordCandidate, record: DecisionRecord): PrefixEntry | null {
+  const rung = record.outcome.rung?.rung;
+  const match = rung === 'static' ? c.prefix.staticMatch : rung === 'content' ? c.prefix.contentMatch : (c.prefix.contentMatch ?? c.prefix.staticMatch);
+  if (match) return match;
+  const order = rung === 'static' ? [c.prefix.static, c.prefix.content] : [c.prefix.content, c.prefix.static];
+  return order.find((e): e is PrefixEntry => e !== null && e.refusedBy !== null) ?? null;
+}
+
+function cooldownWords(o: NonNullable<RecordCandidate['obstacle']>, now: number): string {
+  const until = o.until === null ? '' : ` until ${formatFact(o.until, 'time', now)}`;
+  const reason = o.reason ?? '';
+  if (reason === 'model_rejected' || o.window === 'model_rejection') return `model 404${until}`;
+  if (reason === 'fast_rate_limit' || o.window === 'fast') return `fast lane 429${until}`;
+  if (reason === 'rate_limited' || reason === 'rate_limit') return o.window !== null && own(WINDOW_WORD, o.window) ? `429 on ${WINDOW_WORD[o.window]}${until}` : `429${until}`;
+  return `${words(reason || 'cooldown')}${until}`;
+}
+
+function obstacleWords(c: RecordCandidate, now: number): string {
+  const o = c.obstacle;
+  if (o === null) return '';
+  switch (o.name) {
+    case 'budget': {
+      const b = c.budget.find((x) => x.period === o.reason) ?? c.budget[0];
+      return b && b.spentUsd !== null ? `budget ${fmtUsd(b.spentUsd)} of ${fmtUsd(b.budgetUsd)}` : 'budget';
+    }
+    case 'cooldown':
+      return cooldownWords(o, now);
+    case 'credits':
+      return `credits ${o.reason === null ? 'unavailable' : wordOf(CREDITS_WORD, o.reason)}`;
+    case 'operator':
+      return o.reason === null ? 'held by hand' : wordOf(STATE_WORD, o.reason);
+    case 'spent':
+      return `${o.window !== null ? wordOf(WINDOW_WORD, o.window) : 'window'} spent`;
+    default:
+      return own(PARTITION_WORD, o.name) ? PARTITION_WORD[o.name] : wordOf(OBSTACLE_WORD, o.name);
+  }
+}
+
+function verdictChipOf(c: RecordCandidate, now: number): Chip | null {
+  if (c.obstacle !== null) return { title: hintOf(c.obstacle.name), value: obstacleWords(c, now) };
+  if (c.partition !== null) return { title: hintOf(c.partition), value: wordOf(PARTITION_WORD, c.partition) };
+  if (c.verdict === 'destination') return plain('not placed');
+  if (c.verdict === 'held_on' && c.inFlight >= c.inFlightCap) return plain('at its cap');
+  if (c.verdict === 'source') {
+    const spent = WINDOWS.find((w) => own(c.windows, w) && c.windows[w].utilization >= 1);
+    return spent === undefined ? null : plain(`${WINDOW_WORD[spent]} spent`);
+  }
+  return null;
+}
+
+/**
+ * One member's row of the candidate table: the account and its plan, the tier, the three windows (or a key's one
+ * merged reading), the slots, the Pace score, the prefix entry and the verdict with the one chip that decided it.
+ */
+export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; tier: string; verdict: { badge: string; chip: Chip | null }; windows: string[][] } {
+  const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
+  const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
+  const windows =
+    c.kind === 'api_key'
+      ? [[own(c.windows, 'worst_bucket') ? `worst bucket ${fmtPct(c.windows.worst_bucket.utilization)}` : 'not reported']]
+      : WINDOWS.map((name) => {
+          if (!own(c.windows, name)) return ['not reported'];
+          const w = c.windows[name];
+          return [fmtPct(w.utilization), w.reset === null ? 'no reset' : formatFact(w.reset, 'time', now), `${w.source} ${ageWord(w.ageMs)}`];
+        });
+  const entry = prefixEntryOf(c, record);
+  return {
+    account: accountChip(c.accountId),
+    inFlight: `${c.inFlight} of ${c.inFlightCap}`,
+    pace: c.pace === null ? '-' : c.kind === 'api_key' ? `${fmtPct(c.pace.remaining)} left` : formatFact(c.pace.score, 'percent_per_hour', now),
+    plan: planWord(c),
+    prefix: { hash: entry, until: entry === null ? null : warmUntil(entry, now) },
+    tier: `${tierWord(c.tier, c.kind, 'plan')} P${c.tier[1]}`,
+    verdict: { badge, chip: verdictChipOf(c, now) },
+    windows,
+  };
+}
+
+/** The twenty settings of the card in its order, Strategy to Pace floor. */
+export const SETTINGS_ROWS: { key: keyof RecordSettings; label: string }[] = [
+  { key: 'strategy', label: 'Strategy' },
+  { key: 'preferSubscription', label: 'Tier order' },
+  { key: 'overagePolicy', label: 'Overage' },
+  { key: 'affinityTtlSeconds', label: 'Pin window' },
+  { key: 'affinityMode', label: 'Pin when' },
+  { key: 'sessionPlacement', label: 'Sessions placed by' },
+  { key: 'minSharedPrefixTokens', label: 'Minimum shared prefix' },
+  { key: 'subagentPlacement', label: 'Subagents placed by' },
+  { key: 'selectBelowUtilization', label: 'Select below' },
+  { key: 'shedAheadOfPace', label: 'Shed above' },
+  { key: 'migrateWhenSpent', label: 'Move when spent' },
+  { key: 'overageMoveGraceMinutes', label: 'Overage grace' },
+  { key: 'windDownMinutes', label: 'Wind-down' },
+  { key: 'shedShare', label: 'Shed share' },
+  { key: 'burnWindowSeconds', label: 'Burn window' },
+  { key: 'sourceDwellSeconds', label: 'Shed dwell' },
+  { key: 'warmSessions', label: 'Warm sessions' },
+  { key: 'inFlightCap', label: 'In-flight cap' },
+  { key: 'retryInPlaceSeconds', label: 'Retry in place' },
+  { key: 'paceFloor', label: 'Pace floor' },
+];
+
+const SECONDS: readonly (keyof RecordSettings)[] = ['affinityTtlSeconds', 'burnWindowSeconds', 'retryInPlaceSeconds', 'sourceDwellSeconds'];
+const MINUTES: readonly (keyof RecordSettings)[] = ['overageMoveGraceMinutes', 'windDownMinutes'];
+const SHARES: readonly (keyof RecordSettings)[] = ['paceFloor', 'selectBelowUtilization', 'shedAheadOfPace', 'shedShare'];
+
+/** One setting's value as the grid draws it: a span, a share, `on` or `off`, or the setting's word. */
+export function settingValue(key: keyof RecordSettings, settings: RecordSettings): string {
+  const v = settings[key];
+  if (key === 'strategy') return wordOf(STRATEGY_WORD, String(v));
+  if (key === 'preferSubscription') return v ? 'subscriptions first' : 'priority alone';
+  if (v === null) return 'off';
+  if (typeof v === 'boolean') return v ? 'on' : 'off';
+  if (typeof v === 'number') {
+    if (SECONDS.includes(key)) return v === 0 ? 'off' : span(v * 1_000);
+    if (MINUTES.includes(key)) return span(v * MINUTE);
+    if (SHARES.includes(key)) return fmtPct(v);
+    if (key === 'minSharedPrefixTokens') return fmtCompact(v);
+    return fmtInt(v);
+  }
+  return words(v);
+}
+
+/** The relay's status for an exhaustion: a dated one a 429, a model no member serves a 404, the rest a 503. */
+const EXHAUSTION_STATUS: Record<string, number> = { fast_credits: 429, fast_lane: 429, model_rejected: 404, timed: 429 };
+const PLACE_WORD: Record<string, string> = { strategy_pick: 'strategy pick' };
+
+/** The card's outcome: Pin written, Cache-map entries, Cache read, Hold, Answer and Spend, each where it applies. */
+export function outcomeRows(record: DecisionRecord, now: number): { chips: Chip[]; label: string }[] {
+  const o = record.outcome;
+  const c = o.completion;
+  const at = Date.parse(record.request.at);
+  const rows: { chips: Chip[]; label: string }[] = [];
+  if (o.pinWritten !== null && o.accountId !== null) {
+    rows.push({ chips: [accountChip(o.accountId, `${o.pinWritten.action} on`), plain(fmtInt(o.pinWritten.epoch), 'epoch'), ...(o.pinWritten.refreshStamped ? [plain(fmtTime(record.request.at), 'refresh')] : [])], label: 'Pin written' });
+  }
+  if (c !== null) {
+    const entries = c.cacheMapWritten ?? [];
+    if (entries.length === 0) rows.push({ chips: [plain(c.completedAt === null ? 'pending' : 'none')], label: 'Cache-map entries' });
+    else {
+      const accounts = [...new Set(entries.map((e) => e.accountId))];
+      rows.push({ chips: [...accounts.map((id) => accountChip(id, 'on')), ...entries.map((e) => plain(String(e.depth), `${e.tier} depth`)), plain(fmtCompact(Math.max(...entries.map((e) => e.prefixTokens))), 'prefix')], label: 'Cache-map entries' });
+    }
+    if (c.hit !== null && c.cacheReadTokens !== null) {
+      const read = fmtCompact(c.cacheReadTokens);
+      // The request's own TTL is the one its deepest entry was written under.
+      const deepest = entries.reduce<(typeof entries)[number] | null>((best, e) => (best === null || e.depth > best.depth ? e : best), null);
+      rows.push({
+        chips: [plain(c.hit ? 'hit' : 'miss'), plain(c.promisedTokens !== null ? `${read} of ${fmtCompact(c.promisedTokens)} promised` : `${read} of ${fmtCompact(c.cacheReadTokens + (c.inputTokens ?? 0))} input`, 'read'), ...(deepest ? [plain(ttlWord(deepest.ttlMs), 'tier')] : [])],
+        label: 'Cache read',
+      });
+    } else if (c.completedAt === null) {
+      rows.push({ chips: [plain('pending')], label: 'Cache read' });
+    }
+  }
+  if (o.hold !== null) {
+    const place = str(record.walk.find((s) => s.step === 'hold')?.facts.find((f) => f.key === 'place')?.value) ?? (o.hold.cohort !== null ? 'cohort' : 'strategy_pick');
+    rows.push({ chips: [accountChip(o.hold.accountId, 'on'), plain(wordOf(PLACE_WORD, place)), plain(span(o.hold.boundMs), 'bound')], label: 'Hold' });
+  } else if (o.cohortHold !== null) {
+    const h = o.cohortHold;
+    const on = h.cohort ?? h.waitedOn[h.waitedOn.length - 1] ?? null;
+    const held = c?.heldMs ?? h.heldMs;
+    rows.push({ chips: [...(on === null ? [] : [accountChip(on, 'on')]), plain(h.cohort !== null ? 'cohort' : 'strategy pick'), plain(span(held), c?.freed ? 'freed after' : 'held')], label: 'Hold' });
+  }
+  if (o.exhaustion !== null) {
+    const x = o.exhaustion;
+    rows.push({
+      chips: [
+        plain(String(own(EXHAUSTION_STATUS, x.kind) ? EXHAUSTION_STATUS[x.kind] : 503), 'status'),
+        ...(x.window !== null ? [plain(wordOf(WINDOW_WORD, x.window), 'window')] : []),
+        ...(x.reason !== null ? [plain(wordOf(CREDITS_WORD, x.reason), 'cause')] : []),
+        plain(x.deadline === null ? 'none' : formatFact(x.deadline, 'time', at), x.deadline === null ? 'retry' : 'retry after'),
+      ],
+      label: 'Answer',
+    });
+  }
+  if (o.refusal !== null) {
+    const said = o.refusal.kind === 'client' ? [plain('client drift'), ...refusalChips(o.refusal).filter((ch) => ch.label === 'client')] : refusalChips(o.refusal);
+    rows.push({ chips: [...said, ...(record.request.keyId ? [{ entity: { id: record.request.keyId, kind: 'key' as const }, label: 'key', value: record.request.keyId }] : [])], label: 'Answer' });
+  }
+  const budget = (b: RecordCandidate['budget'][number]) => (b.spentUsd === null ? `${fmtUsd(b.budgetUsd)} spend unknown` : `${fmtUsd(b.spentUsd)} of ${fmtUsd(b.budgetUsd)}`);
+  const member = memberOf(record, o.accountId);
+  if (member && member.budget.length > 0) {
+    rows.push({ chips: member.budget.map((b) => plain(budget(b), wordOf(PERIOD_WORD, b.period))), label: 'Spend' });
+  } else if (o.exhaustion !== null) {
+    const reached = record.candidates.filter((m) => m.obstacle?.name === 'budget');
+    const chips = reached.flatMap((m) => m.budget.filter((b) => b.period === m.obstacle?.reason).map((b) => ({ label: m.accountId, labelEntity: accountEntity(m.accountId), value: budget(b) })));
+    if (chips.length > 0) rows.push({ chips, label: 'Spend' });
+  }
+  return rows;
+}
+
+/** A pair of the event detail. The shedding round's pins are a table of their own. */
+export interface DetailPair {
+  chips: Chip[];
+  label: string;
+  table?: { head: string[]; rows: Chip[][] };
+}
+
+/** An instant to the second in UTC, the detail's When. */
+const utcSecond = (ms: number) => `${new Date(ms).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+const RULE_MOVES = new Set(['drain', 'overage', 'return_to_plan', 'shed', 'spent']);
+const SOURCE_WORD: Record<string, string> = { head: 'the response head', poll: 'the poll' };
+const PERCENT_PER_HOUR = (share: number) => `${(share * 100).toFixed(1)} %/h`;
+
+/** An event's detail as pairs: When, Account and Pool first, then the kind's own. */
+export function detailPairs(row: RoutingEvent, now: number): DetailPair[] {
+  const d = row.detail;
+  const pairs: DetailPair[] = [{ chips: [plain(utcSecond(atOf(row)))], label: 'When' }];
+  if (row.accountId !== null) pairs.push({ chips: [accountChip(row.accountId)], label: 'Account' });
+  if (row.poolId !== null) pairs.push({ chips: [{ entity: { id: row.poolId, kind: 'pool' }, value: row.poolId }], label: 'Pool' });
+  const add = (label: string, ...chips: (Chip | null)[]) => {
+    const kept = chips.filter((c): c is Chip => c !== null);
+    if (kept.length > 0) pairs.push({ chips: kept, label });
+  };
+  const time = (v: unknown, label?: string) => {
+    const ms = num(v);
+    return ms === null ? null : plain(formatFact(ms, 'time', now), label);
+  };
+  const count = (v: unknown) => {
+    const n = num(v);
+    return n === null ? null : plain(fmtInt(n));
+  };
+  const pct = (v: unknown, label?: string) => {
+    const n = num(v);
+    return n === null ? null : plain(fmtPct(n), label);
+  };
+  const text = (v: unknown, map: Record<string, string> = {}) => {
+    const s = str(v);
+    return s === null ? null : plain(wordOf(map, s));
+  };
+  const key = row.keyId === null ? null : { entity: { id: row.keyId, kind: 'key' as const }, mono: true, value: row.keyId };
+  const session = row.sessionId === null ? null : sessionChip(row.sessionId);
+  const agent = row.agentId ?? str(d.agent_id);
+  const model = row.model === null ? null : modelChip(row.model);
+  const request = row.requestId === null ? null : requestChip(row.requestId);
+  const pin = () => {
+    add('Key', key);
+    add('Session', session);
+    add('Agent', agent === null ? null : plain(agent));
+    add('Model', model);
+  };
+  const window = str(d.window);
+  switch (row.kind) {
+    case 'account_state_changed':
+      add('From', text(d.from, STATE_WORD));
+      add('To', text(d.to, STATE_WORD));
+      add('Cause', text(d.cause, CAUSE_WORD));
+      add('Detail', str(d.detail) === null ? null : plain(str(d.detail) ?? ''));
+      break;
+    case 'budget_period_ended': {
+      const spent = num(d.previous_spent_usd);
+      add('Previous period', text(d.period));
+      add('Spent', spent === null ? null : plain(fmtUsd(spent)));
+      add('Period start', time(d.period_start));
+      break;
+    }
+    case 'budget_reached': {
+      const budget = num(d.budget_usd);
+      const spent = num(d.spent_usd);
+      add('Budget', budget === null ? null : plain(`${fmtUsd(budget)} a ${str(d.period) ?? 'period'}`));
+      add('Spent', spent === null ? null : plain(fmtUsd(spent)));
+      add('Period ends', time(d.period_end));
+      add('Effect', plain('the pool answers exhausted until then'));
+      add('Crossed by', request);
+      break;
+    }
+    case 'catalog_changed':
+      add('Added', ...list(d.added).map((m) => modelChip(String(m))));
+      add('Removed', ...list(d.removed).map((m) => modelChip(String(m))));
+      add('Models', count(d.count));
+      break;
+    case 'cooldown_cleared':
+    case 'cooldown_set': {
+      const scope = str(d.scope) ?? '';
+      add('Scope', scope.startsWith('model:') ? modelChip(scope.slice('model:'.length), 'model') : plain(scope === 'fast' ? 'fast lane' : words(scope || 'account')));
+      if (row.kind === 'cooldown_cleared') {
+        add('Cleared', text(d.cause, CLEARED_WORD));
+        break;
+      }
+      add('Reason', text(d.reason));
+      add('Window', window === null ? null : plain(wordOf(WINDOW_WORD, window)));
+      add('Until', time(d.until));
+      add('Set by', request);
+      break;
+    }
+    case 'fast_credits_changed': {
+      const state = (blocked: unknown, side: unknown) => [plain(str(blocked) === null ? 'available' : 'unavailable', 'state'), pct(rec(side).utilization, 'used')];
+      if (d.before !== null && d.before !== undefined) add('Before', ...state(d.blocked_before, d.before));
+      add('After', ...state(d.blocked_after, d.after));
+      add('Cause', str(d.blocked_after) === null ? plain('room') : text(d.blocked_after, CREDITS_WORD));
+      add('Effect', plain(str(d.blocked_after) === null ? 'a fast request may draw on this account' : 'a fast request skips this account'));
+      break;
+    }
+    case 'ledger_gap':
+      add('Reason', text(d.reason));
+      if (str(d.reason)?.startsWith('chunk')) add('Effect', plain('the captured response is stored truncated'));
+      add('Request', request);
+      break;
+    case 'model_permitted':
+    case 'model_rejected': {
+      const wire = str(d.wire_model);
+      const attempt = num(d.attempt);
+      if (row.kind === 'model_permitted') {
+        add('Rejected by', ...list(d.rejected_by).map((a) => accountChip(String(a))));
+        add('Served at', attempt === null ? null : plain(`attempt ${attempt} of ${attempt}`));
+      }
+      add('Model sent', wire === null ? null : modelChip(wire));
+      add('Model resolved', model);
+      if (row.kind === 'model_rejected') {
+        add('Cooldown scope', plain('the model on this account'));
+        add('Attempt', attempt === null ? null : plain(String(attempt)));
+      }
+      add('Request', request);
+      break;
+    }
+    case 'overage_ended': {
+      const since = num(d.since);
+      add('Since', time(since));
+      add('Lasted', since === null ? null : plain(span(atOf(row) - since)));
+      break;
+    }
+    case 'overage_started':
+      add('Effect', plain('requests on this account draw on extra usage'));
+      break;
+    case 'pin_created':
+      pin();
+      add('Epoch', count(d.epoch));
+      break;
+    case 'pin_expired':
+      pin();
+      add('Reasons', ...list(d.reasons).map((r) => plain(releaseLabel(String(r)))));
+      add('Found by', request ?? plain('the sweep'));
+      break;
+    case 'pin_migrated': {
+      const from = str(d.from_account);
+      const reason = str(d.reason) ?? '';
+      const epoch = num(d.epoch);
+      add('From', from === null ? null : accountChip(from));
+      add('To', row.accountId === null ? null : accountChip(row.accountId), epoch === null ? null : plain(fmtInt(epoch), 'epoch'));
+      add('Reason', plain(moveLabel(reason)));
+      add('Moved by', plain(RULE_MOVES.has(reason) ? `${words(reason)} rule` : FAILOVER_MOVES.has(reason) ? 'failover' : words(reason || 'move')));
+      pin();
+      break;
+    }
+    case 'pin_released':
+      add('Actor', plain(row.actor ?? 'admin'));
+      pin();
+      break;
+    case 'poll_backoff_ended':
+      add('Backed off', num(d.duration_ms) === null ? null : plain(span(num(d.duration_ms) ?? 0)));
+      add('Attempts', count(d.attempts));
+      add('Resumed', time(d.resumed_at));
+      break;
+    case 'poll_backoff_started':
+      add('Reason', plain(POLL_OUTCOME_LABEL.rate_limited));
+      add('Attempts', count(d.attempts));
+      add('Next attempt', time(d.next_attempt_at));
+      add('Last clean poll', time(d.last_clean_poll_at));
+      add('Effect', plain("decisions read this account's windows from response heads alone"));
+      break;
+    case 'reauth_required':
+      add('Routing', plain('off until re-paired'));
+      break;
+    case 'refresh_failed':
+    case 'refresh_succeeded':
+    case 'refresh_uncertain':
+      add('Access token', time(d.access_expires_at, 'valid until'));
+      add('Refresh token', time(d.refresh_expires_at, 'valid until'));
+      add('Error', text(d.error));
+      break;
+    case 'registry_changed': {
+      const kind = str(d.kind) ?? 'registry_updated';
+      const target = str(d.target);
+      const subject = kind.slice(0, kind.indexOf('_'));
+      add('Change', plain(registryBy(kind)), target === null ? null : subject === 'pool' || subject === 'key' || subject === 'account' ? { entity: { id: target, kind: subject }, value: target } : plain(target));
+      const diff = Object.entries(rec(d.diff));
+      const primitive = (v: unknown) => v === null || ['boolean', 'number', 'string'].includes(typeof v);
+      if (diff.every(([, change]) => isChange(change) && primitive(rec(change).from) && primitive(rec(change).to))) {
+        for (const [field, change] of diff) add(words(field), plain(fieldValue(field, rec(change).from), 'from'), plain(fieldValue(field, rec(change).to), 'to'));
+      } else {
+        add('Fields', plain(fmtInt(diff.length)));
+      }
+      add('Actor', row.actor === null ? null : plain(row.actor));
+      break;
+    }
+    case 'router_started':
+      add('Version', text(d.version));
+      add('Pins loaded', count(d.pins_loaded));
+      add('Shedding marks loaded', count(d.shedding_marks_loaded));
+      add('Window readings loaded', count(d.windows_loaded));
+      add('Affinity entries loaded', count(d.affinity_entries_loaded));
+      add('Down from', time(d.down_since));
+      if (typeof d.holds_lost === 'boolean') add('Held requests', plain(d.holds_lost ? 'answered by the stop' : 'none'));
+      break;
+    case 'shedding_round': {
+      const w = window === null ? 'window' : wordOf(WINDOW_WORD, window);
+      const burn = num(d.burn_sum);
+      const target = num(d.target);
+      const share = num(d.shed_share);
+      const dwell = num(d.dwell_seconds);
+      add('Started by', request, session, agent === null ? null : plain(agent, 'agent'));
+      add('Reading', pct(d.utilization, w), pct(d.threshold, 'threshold'));
+      add('Unit', text(d.unit));
+      add('Burn window', num(d.burn_window_seconds) === null ? null : plain(span((num(d.burn_window_seconds) ?? 0) * 1_000)));
+      add('Share', share === null ? null : plain(fmtPct(share), 'share'), burn === null ? null : plain(PERCENT_PER_HOUR(burn), 'burn'), target === null ? null : plain(PERCENT_PER_HOUR(target), 'to shed'));
+      add('Warm sessions', text(d.warm_sessions));
+      const pins = list(d.pins).map(rec);
+      if (pins.length > 0) {
+        pairs.push({
+          chips: [],
+          label: 'Pins',
+          table: {
+            head: ['Session', 'Agent', 'Warmth', 'Burn', 'Last prompt', 'Mark'],
+            rows: pins.map((p) => {
+              const id = str(p.session_id) ?? '';
+              const b = num(p.burn);
+              const last = num(p.last_input_tokens);
+              return [sessionChip(id), plain(str(p.agent_id) ?? '-'), plain(p.cold === true ? 'cold' : 'warm'), plain(b === null ? '-' : PERCENT_PER_HOUR(b)), plain(last === null ? '-' : fmtCompact(last)), plain(p.marked === true ? 'marked' : (str(p.note) ?? '-'))];
+            }),
+          },
+        });
+      }
+      add('Marks kept until', time(d.dwell_until));
+      add('Dwell', dwell === null ? null : plain(span(dwell * 1_000)));
+      if (typeof d.persisted === 'boolean') add('Survive a restart', plain(d.persisted ? 'persisted' : 'not persisted'));
+      break;
+    }
+    case 'warm_prefix_expired': {
+      const deepest = rec(d.deepest);
+      const tokens = num(deepest.prefix_tokens);
+      const ttl = num(deepest.ttl_ms);
+      add('Boundary', text(deepest.tier));
+      add('Depth', count(deepest.depth));
+      add('Size', tokens === null ? null : plain(fmtCompact(tokens)));
+      add('Tier', ttl === null ? null : plain(ttlWord(ttl)));
+      add('Written', time(deepest.written_at));
+      add('Entries', count(d.entries));
+      add('Listed', plain('when the kind is chosen'));
+      break;
+    }
+    case 'wind_down_started': {
+      const minutes = num(d.wind_down_minutes);
+      add('Subscription ends', time(d.ends_at));
+      add('Wind-down', minutes === null ? null : plain(span(minutes * MINUTE)));
+      add('Effect', plain('no fresh session starts on this account'));
+      add('Cold pins', plain('drain to a sibling'));
+      add('End from', text(d.end_source));
+      break;
+    }
+    case 'window_reset':
+      add('Window', window === null ? null : plain(wordOf(WINDOW_WORD, window)));
+      add('Before the reset', pct(d.utilization_before));
+      add('Prediction', plain('0% until the next head'));
+      add('Next reset', time(d.next_reset));
+      break;
+    case 'window_spent':
+      add('Window', window === null ? null : plain(wordOf(WINDOW_WORD, window)));
+      add('Reading', pct(d.utilization));
+      add('Read from', text(d.source, SOURCE_WORD));
+      add('Resets', time(d.reset));
+      add('Request', request);
+      break;
+  }
+  return pairs;
+}
+
+/** A row of a fold or the outcome: one value, one entity, or a row of chips. */
+export interface CardRow {
+  chips: Chip[];
+  label: string;
+}
+
+/** The Request facts fold: the request as the engine read it, each entity a link, the lane and flags as chips. */
+export function requestRows(record: DecisionRecord, row: DecisionSummary): CardRow[] {
+  const r = record.request;
+  const counted = row.attemptCount !== null && r.attempt <= row.attemptCount;
+  const flags = Object.entries({ compacted: r.flags.contextCompacted, count: r.flags.count, fast: r.flags.fast, marker: r.flags.marker, portable: r.flags.portable, probe: r.flags.probe })
+    .filter(([, on]) => on)
+    .map(([name]) => plain(name));
+  const upstream = record.outcome.upstreamModel;
+  return [
+    { chips: [plain(counted ? `${r.attempt} of ${row.attemptCount}` : String(r.attempt))], label: 'Attempt' },
+    { chips: [plain(fmtTime(r.at))], label: 'At' },
+    { chips: [{ entity: { id: r.keyId, kind: 'key' }, mono: true, value: r.keyId }], label: 'Key' },
+    { chips: [{ entity: { id: r.poolId, kind: 'pool' }, value: r.poolId }], label: 'Pool' },
+    { chips: [plain(r.agentId)], label: 'Agent' },
+    { chips: [plain(r.requestClass ?? words(r.clientClass))], label: 'Class' },
+    { chips: [modelChip(r.canonicalModel)], label: 'Model resolved' },
+    ...(upstream !== null && upstream !== r.canonicalModel ? [{ chips: [modelChip(upstream)], label: 'Upstream model' }] : []),
+    { chips: [plain(r.lane.speed, 'speed'), plain(r.lane.thinking, 'thinking'), plain(r.lane.effort === '-' ? 'none' : r.lane.effort, 'effort')], label: 'Lane' },
+    { chips: flags.length > 0 ? flags : [plain('none')], label: 'Flags' },
+    ...(r.attempted.length > 0 ? [{ chips: r.attempted.map((id) => accountChip(id)), label: 'Attempted' }] : []),
+  ];
+}
+
+/** The Pin and warmth fold. A record that pins nothing reads one row, Pin, with why. */
+export function pinRows(record: DecisionRecord, now: number): CardRow[] {
+  const p = record.pin;
+  if (p === null) return [{ chips: [plain(record.pinReason === null ? 'none' : PIN_REASON_LABEL[record.pinReason])], label: 'Pin' }];
+  const rows: CardRow[] = [];
+  const released = p.released.length > 0 ? [{ chips: p.released.map((r) => plain(releaseLabel(r))), label: 'Released' }] : [];
+  if (p.accountId === null) return [{ chips: [plain(p.found === 'none' ? 'none found' : words(p.found))], label: 'Pin' }, ...released];
+  rows.push({ chips: [accountChip(p.accountId)], label: 'Pin on' });
+  if (p.found !== 'live') rows.push({ chips: [plain(words(p.found))], label: 'Found' });
+  if (p.epoch !== null) rows.push({ chips: [plain(fmtInt(p.epoch))], label: 'Epoch' });
+  if (p.createdAt !== null) rows.push({ chips: [plain(formatFact(p.createdAt, 'time', now))], label: 'Created' });
+  if (p.idleMs !== null) rows.push({ chips: [plain(span(p.idleMs))], label: 'Idle' });
+  if (p.refreshAgeMs !== null) rows.push({ chips: [plain(span(p.refreshAgeMs))], label: 'Refresh age' });
+  if (p.lane !== null) rows.push({ chips: laneChips(p.lane), label: 'Pin lane' });
+  if (p.warmth !== null) rows.push({ chips: [plain(wordOf(WARMTH_WORD, p.warmth))], label: 'Warmth' });
+  if (p.warmthCause !== null) rows.push({ chips: [plain(wordOf(WARMTH_CAUSE_WORD, p.warmthCause))], label: 'Cause' });
+  if (p.marked || p.shed !== null) {
+    rows.push({ chips: [...(p.marked ? [plain('marked by a round')] : []), ...(p.shed !== null ? [accountChip(p.shed.from, 'shed from'), plain(formatFact(p.shed.at, 'time', now), 'at')] : [])], label: 'Shed mark' });
+  }
+  return [...rows, ...released];
+}
+
+/** The Settings in force grid. */
+export function settingsRows(record: DecisionRecord): CardRow[] | null {
+  const s = record.settings;
+  if (s === null) return null;
+  return SETTINGS_ROWS.map((r) => ({ chips: [plain(settingValue(r.key, s))], label: r.label }));
 }

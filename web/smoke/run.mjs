@@ -6655,6 +6655,622 @@ m.unmount();
       missing: [JSON.stringify(open), JSON.stringify(dashboard), JSON.stringify(expertOn)],
     });
   }
+  // The open rows: a decision row opens to the card its record draws, an event row to its detail. Each card check
+  // opens the story's own row and reads what the card drew against the record the route answers.
+  const DAY = 24 * HOUR;
+  /** A token count as the card reads one, spelled out here so the checks hold the console's formatter to it. */
+  const fmtCompact = (n) => (Math.abs(n) < 1000 ? new Intl.NumberFormat('en-US').format(Math.round(n)) : new Intl.NumberFormat('en-US', { maximumFractionDigits: 1, notation: 'compact' }).format(n));
+  const rowOf = (page, id) => page.container.querySelector(`.routing-log__table tbody tr[data-row="${id}"]`);
+  /** Opens a row as a reader does, by a click on its Kind cell, and answers the panel beneath it once it has landed. */
+  const openRow = async (page, id) => {
+    rowOf(page, id)?.querySelector('td.routing-log__kind')?.click();
+    await page.settle(350);
+    const next = rowOf(page, id)?.nextElementSibling;
+    return next?.classList.contains('routing-log__panel') ? next : null;
+  };
+  /** A chip as `label value`: the label's text, then the value's. */
+  const chipWords = (el) => {
+    const label = el.querySelector('.chip__label')?.textContent ?? '';
+    const all = el.textContent ?? '';
+    return label ? `${label} ${all.slice(label.length)}` : all;
+  };
+  const walkOf = (card) =>
+    [...(card?.querySelectorAll('.decision-card__walk > li') ?? [])].map((li) => ({
+      chips: [...li.querySelectorAll('.chips > .chip')].map(chipWords),
+      li,
+      n: li.querySelector('.decision-card__n')?.textContent ?? '',
+      step: li.querySelector('.decision-card__step')?.textContent ?? '',
+      verdict: li.querySelector('.decision-card__verdict-cell')?.textContent ?? '',
+    }));
+  const kvRows = (dl) => [...(dl?.querySelectorAll('.kv__row') ?? [])].map((r) => ({ dd: r.querySelector('dd'), label: r.querySelector('dt')?.textContent ?? '' }));
+  const ddWords = (dd) => {
+    const chips = [...(dd?.querySelectorAll('.chip') ?? [])];
+    return chips.length ? chips.map(chipWords) : [dd?.textContent ?? ''];
+  };
+  const outcomeOf = (card) => Object.fromEntries(kvRows(card?.querySelector('.decision-card__outcome')).map((r) => [r.label, ddWords(r.dd)]));
+  const sentenceOf = (card) => [...(card?.querySelectorAll('.decision-card__sentence > span') ?? [])].map((s) => (s.querySelector('a') ? `[${s.textContent}]` : s.textContent)).join(' ');
+  const verdictChipsOf = (card) => [...(card?.querySelectorAll('.decision-card__verdict > .chips > .chip') ?? [])].map(chipWords);
+  const candidateRows = (card) => [...(card?.querySelectorAll('.decision-card__candidates tbody tr') ?? [])];
+  /** The story's own decision: its row's page, a quarter hour either side of the request, its record and its card. */
+  const story = async (id, seq = 1, kinds = '') => {
+    const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: kinds ? kinds.split(',') : undefined, limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows;
+    const at = Math.min(...own.filter((r) => r.type === 'decision').map((r) => Date.parse(r.at)));
+    const page = await mount(`/routing-log?${kinds ? `kinds=${kinds}&` : ''}request=${id}&from=${iso(at - 15 * MINUTE)}&to=${iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN))}`, { now: CLOCK_ORIGIN });
+    const panel = await openRow(page, `${id}/${seq}`);
+    return { card: panel?.querySelector('.decision-card') ?? null, page, panel, record: await api.getDecision(id, seq), row: own.find((r) => r.type === 'decision' && r.seq === seq) };
+  };
+  // Every card and detail the checks below open is scanned for a joined value once it is drawn.
+  const scanned = [];
+  const scan = (where, root) => {
+    if (root) scanned.push({ root: root.cloneNode(true), where });
+  };
+
+  {
+    const { card, page, panel, record } = await story('req_f8085653-422');
+    scan('renewal', card);
+    const lines = walkOf(card);
+    const moves = lines.filter((l) => ['Spent', 'Overage', 'Return to plan', 'Drain', 'Shed'].includes(l.step));
+    const pin = lines.find((l) => l.step === 'Pin');
+    const row = rowOf(page, 'req_f8085653-422/1');
+    results.push({
+      name: "/routing-log the renewal's card reads no rule fired, five move lines and idle",
+      ok:
+        row?.classList.contains('is-open') && row.getAttribute('aria-expanded') === 'true' && panel?.querySelector('td')?.getAttribute('colspan') === '9' &&
+        card?.querySelector('.decision-card__verdict > .badge')?.textContent === 'renewed' && sentenceOf(card) === `Renewed on [${record.outcome.accountId}]` &&
+        verdictChipsOf(card).includes('no rule fired') && verdictChipsOf(card).includes('pin warm') &&
+        moves.length === 5 && moves.every((l) => l.verdict === 'no' && l.chips.length > 0) && lines.some((l) => l.step === 'Renew' && l.verdict === 'renewed') &&
+        pin?.chips.some((c) => c.startsWith('idle ')) && JSON.stringify(lines.map((l) => l.n)) === JSON.stringify(lines.map((_, i) => String(i + 1))),
+      missing: [sentenceOf(card), verdictChipsOf(card).join(' / '), ...lines.map((l) => `${l.n} ${l.step} ${l.verdict}: ${l.chips.join(' / ')}`)],
+    });
+    // The re-made drawer check: a renewal reads as the pin continued, renewed in place on the account it was on.
+    const out = outcomeOf(card);
+    results.push({
+      name: '/routing-log a card reads a renewed pin as continued',
+      ok: lines.at(-1)?.step === 'Renew' && lines.at(-1)?.chips.includes(`on ${record.outcome.accountId}`) && out['Pin written']?.[0] === `renewed on ${record.outcome.accountId}` && !lines.some((l) => l.step === 'Pick'),
+      missing: [JSON.stringify(out['Pin written']), lines.at(-1)?.chips.join(' / ') ?? 'no line'],
+    });
+    results.push({
+      name: "/routing-log a card reads the answering attempt's cache read as a hit or a miss against its input",
+      ok: record.outcome.completion?.hit === true && JSON.stringify(out['Cache read']) === JSON.stringify(['hit', `read ${fmtCompact(record.outcome.completion.cacheReadTokens)} of ${fmtCompact(record.outcome.completion.cacheReadTokens + record.outcome.completion.inputTokens)} input`, 'tier 1h']),
+      missing: [JSON.stringify(out['Cache read'])],
+    });
+    {
+      // The three folds are closed until the reader opens them.
+      const folds = [...(card?.querySelectorAll('details.decision-card__fold') ?? [])];
+      const closed = folds.map((f) => f.open);
+      for (const f of folds) f.open = true;
+      await page.settle(50);
+      const labels = (f) => kvRows(f?.querySelector('.kv')).map((r) => r.label);
+      const settings = kvRows(folds[2]?.querySelector('.kv.decision-card__settings'));
+      const twenty = ['Strategy', 'Tier order', 'Overage', 'Pin window', 'Pin when', 'Sessions placed by', 'Minimum shared prefix', 'Subagents placed by', 'Select below', 'Shed above', 'Move when spent', 'Overage grace', 'Wind-down', 'Shed share', 'Burn window', 'Shed dwell', 'Warm sessions', 'In-flight cap', 'Retry in place', 'Pace floor'];
+      const request = Object.fromEntries(kvRows(folds[0]?.querySelector('.kv')).map((r) => [r.label, r.dd]));
+      results.push({
+        name: '/routing-log the three folds open to Request facts, Pin and warmth and the twenty settings in order',
+        ok:
+          JSON.stringify(folds.map((f) => f.querySelector('summary')?.textContent)) === JSON.stringify(['Request facts', 'Pin and warmth', 'Settings in force']) && closed.every((o) => o === false) &&
+          JSON.stringify(labels(folds[0])) === JSON.stringify(['Attempt', 'At', 'Key', 'Pool', 'Agent', 'Class', 'Model resolved', 'Lane', 'Flags']) &&
+          request.Key?.querySelector('a')?.getAttribute('href') === `/keys?key=${record.request.keyId}` && request.Pool?.querySelector('a')?.getAttribute('href') === `/pools?pool=${record.request.poolId}` &&
+          JSON.stringify(ddWords(request.Lane)) === JSON.stringify([`speed ${record.request.lane.speed}`, `thinking ${record.request.lane.thinking}`, `effort ${record.request.lane.effort}`]) &&
+          JSON.stringify(labels(folds[1])) === JSON.stringify(['Pin on', 'Epoch', 'Created', 'Idle', 'Refresh age', 'Pin lane', 'Warmth', 'Cause']) &&
+          JSON.stringify(settings.map((r) => r.label)) === JSON.stringify(twenty) && settings.every((r) => (r.dd?.textContent ?? '') !== ''),
+        missing: [JSON.stringify(closed), labels(folds[0]).join(','), labels(folds[1]).join(','), settings.map((r) => `${r.label}=${r.dd?.textContent}`).join(',')],
+      });
+      scan('renewal, folds open', card);
+    }
+    {
+      // Copy as JSON hands the route's answer to the clipboard as it arrived, every field the card does not draw
+      // included.
+      let copied = null;
+      Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: { writeText: (t) => ((copied = t), Promise.resolve()) } });
+      const foot = card?.querySelector('.decision-card__foot');
+      [...(foot?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Copy as JSON')?.click();
+      await page.settle(50);
+      Object.defineProperty(window.navigator, 'clipboard', { configurable: true, value: undefined });
+      const widen = [...(foot?.querySelectorAll('button.link-btn') ?? [])].map((b) => b.textContent);
+      results.push({
+        name: '/routing-log the foot reads Record v1 and Copy as JSON copies the record whole with the full hash',
+        ok: foot?.querySelector('.decision-card__record')?.textContent === 'Record v1' && JSON.stringify(widen) === JSON.stringify(['this session', 'this account', 'this minute']) && copied !== null && JSON.stringify(JSON.parse(copied)) === JSON.stringify(record.raw) && copied === JSON.stringify(record.raw, null, 2),
+        missing: [foot?.textContent ?? 'no foot', String(copied).slice(0, 80)],
+      });
+      // A widening replaces the request filter with the account's quarter hour around the row.
+      const at = Date.parse(record.request.at);
+      [...(foot?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent === 'this account')?.click();
+      await page.settle(300);
+      const went = params(`/x${page.location().search}`);
+      results.push({
+        name: "/routing-log the card's widening opens the log on the row's account a quarter hour either side, every row shut",
+        ok: JSON.stringify(went) === JSON.stringify({ accounts: record.outcome.accountId, from: iso(at - 15 * MINUTE), to: iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN)) }) && page.container.querySelectorAll('.routing-log__panel').length === 0,
+        missing: [JSON.stringify(went)],
+      });
+    }
+    page.unmount();
+  }
+  {
+    // The static placement's chosen member carries a deeper static entry the TTL refused beside the one the rung took.
+    const { card, page, record } = await story('req_b2bed817-a58');
+    scan('static placement', card);
+    const lines = walkOf(card);
+    const rungs = lines.filter((l) => l.step.startsWith('Rung: '));
+    const chosen = record.candidates.find((c) => c.accountId === record.outcome.accountId);
+    const refused = record.candidates.find((c) => c.accountId !== chosen.accountId && c.prefix.static?.refusedBy);
+    const staticLine = rungs.find((l) => l.step === 'Rung: static');
+    const hash = staticLine?.li.querySelector('.decision-card__hash');
+    const warm = staticLine?.li.querySelector('.decision-card__warm');
+    const until = (e) => `warm until ${new Date(Date.parse(e.writtenAt) + e.ttlMs).toISOString().slice(11, 16)}`;
+    const prefixCell = (id) => candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === id)?.querySelector('.decision-card__prefix');
+    const mine = prefixCell(chosen.accountId);
+    const theirs = prefixCell(refused?.accountId);
+    results.push({
+      name: "/routing-log the static placement's card reads the three rung lines, the hash chip of eight characters with the full hash in its title, the warm-until chip and the candidate table's Prefix cells",
+      ok:
+        JSON.stringify(rungs.map((l) => `${l.step} ${l.verdict}`)) === JSON.stringify(['Rung: content none', 'Rung: with main none', 'Rung: static match']) &&
+        chosen.prefix.static.hash !== chosen.prefix.staticMatch.hash && chosen.prefix.static.depth > chosen.prefix.staticMatch.depth &&
+        hash?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && hash?.getAttribute('title') === chosen.prefix.staticMatch.hash && hash.getAttribute('title').length === 64 && warm?.textContent === until(chosen.prefix.staticMatch) &&
+        mine?.querySelector('.decision-card__hash')?.textContent === chosen.prefix.staticMatch.hash.slice(0, 8) && mine?.querySelector('.decision-card__warm')?.textContent === until(chosen.prefix.staticMatch) &&
+        refused !== undefined && theirs?.querySelector('.decision-card__hash')?.textContent === refused.prefix.static.hash.slice(0, 8) && (theirs?.querySelector('.decision-card__hash')?.getAttribute('title') ?? '').includes(refused.prefix.static.refusedBy) &&
+        !(card?.textContent ?? '').includes(chosen.prefix.static.hash.slice(0, 8)),
+      missing: [...rungs.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), `${hash?.textContent} ${hash?.getAttribute('title')}`, warm?.textContent ?? 'no warm-until', mine?.textContent ?? 'no prefix cell', theirs?.textContent ?? 'no refused cell'],
+    });
+    page.unmount();
+  }
+  {
+    const { card, page, record } = await story('req_da52d141-a5a');
+    scan('spent move', card);
+    const lines = walkOf(card);
+    const steps = lines.map((l) => `${l.step} ${l.verdict}`);
+    const cool = lines.find((l) => l.step === 'Cool reading');
+    const rules = lines.find((l) => l.step === 'Rules after spent');
+    const landed = lines.find((l) => l.step === 'Rung: static');
+    results.push({
+      name: "/routing-log the spent move's card reads the cool reading, the cap filter and where it landed",
+      ok:
+        sentenceOf(card) === `Moved [${record.outcome.fromAccountId}] to [${record.outcome.accountId}]` && verdictChipsOf(card).includes('spent rule') &&
+        steps.includes('Spent fired') && JSON.stringify(rules?.chips) === JSON.stringify(['overage', 'return to plan', 'drain', 'shed']) && rules?.verdict === 'not run' &&
+        cool?.verdict === 'preferred' && cool.chips.includes(`${record.outcome.accountId} cool yes`) && steps.includes('Cap filter passed') &&
+        landed?.verdict === 'match' && landed.chips.includes(`on ${record.outcome.accountId}`) && steps.indexOf('Spent fired') < steps.indexOf('Cool reading preferred'),
+      missing: [sentenceOf(card), ...lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`)],
+    });
+    // The re-made drawer check: the move and the rung that placed it read on one card.
+    results.push({
+      name: '/routing-log a card reads a placement beside the move that led to it',
+      ok: record.outcome.rule === 'spent' && record.outcome.rung?.rung === 'static' && verdictChipsOf(card).includes('spent rule') && landed?.verdict === 'match' && outcomeOf(card)['Pin written']?.[0] === `moved on ${record.outcome.accountId}`,
+      missing: [verdictChipsOf(card).join(' / '), JSON.stringify(outcomeOf(card)['Pin written'])],
+    });
+    page.unmount();
+  }
+  {
+    // The shed move ran no round of its own: the round at 11:00 marked its pin, which its card reads twice.
+    const { card, page, record } = await story('req_868264bc-611');
+    scan('shed move', card);
+    const shed = walkOf(card).find((l) => l.step === 'Shed');
+    const pinFold = card?.querySelectorAll('details.decision-card__fold')[1];
+    const mark = kvRows(pinFold?.querySelector('.kv')).find((r) => r.label === 'Shed mark');
+    page.unmount();
+    const round = await story('req_1eaa9bc1-a18');
+    scan('shedding round', round.card);
+    const ran = walkOf(round.card).find((l) => l.step === 'Shed');
+    const marks = [...(ran?.li.querySelectorAll('.chip') ?? [])].filter((c) => c.querySelector('.chip__label')?.textContent === 'mark');
+    const sessions = (round.record.outcome.shedMarks ?? []).map((m) => m.sessionId);
+    results.push({
+      name: "/routing-log the shed move's card reads the round and its marks",
+      ok:
+        record.outcome.rule === 'shed' && shed?.verdict === 'fired' && shed.chips.includes('round within dwell') && shed.chips.includes('marked yes') && JSON.stringify(ddWords(mark?.dd)) === JSON.stringify(['marked by a round']) &&
+        ran?.verdict === 'no' && ran.chips.includes('round ran') && marks.length === sessions.length && sessions.length === 3 &&
+        JSON.stringify(marks.map((c) => params(c.querySelector('a')?.getAttribute('href')).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
+      missing: [shed?.chips.join(' / ') ?? 'no shed line', JSON.stringify(ddWords(mark?.dd)), ran?.chips.join(' / ') ?? 'no round line'],
+    });
+    round.page.unmount();
+  }
+  {
+    const { card, page, record } = await story('req_69e30548-32e', 1);
+    scan('hold', card);
+    const hold = walkOf(card).find((l) => l.step === 'Hold');
+    const out = outcomeOf(card);
+    const bound = record.outcome.hold?.boundMs;
+    results.push({
+      name: "/routing-log the hold's card reads its place and bound",
+      ok: sentenceOf(card) === `Held on [${record.outcome.hold.accountId}]` && hold?.verdict === 'held' && hold.chips.includes('place cohort') && hold.chips.includes(`on ${record.outcome.hold.accountId}`) && bound === 60_000 && hold.chips.includes('bound 1 min') && JSON.stringify(out.Hold) === JSON.stringify([`on ${record.outcome.hold.accountId}`, 'cohort', 'bound 1 min']),
+      missing: [sentenceOf(card), hold?.chips.join(' / ') ?? 'no hold line', JSON.stringify(out.Hold)],
+    });
+    // The held-on member is at its cap, which its chip says beneath the badge.
+    const heldOn = candidateRows(card).find((tr) => tr.classList.contains('is-chosen'));
+    results.push({
+      name: "/routing-log a held card tints the held-on member and reads it at its cap",
+      ok: heldOn?.querySelector('.decision-card__judged .badge')?.textContent === 'held on' && heldOn.querySelector('.decision-card__why')?.textContent === 'at its cap',
+      missing: [heldOn?.textContent ?? 'no tinted row'],
+    });
+    const after = await openRow(page, 'req_69e30548-32e/2');
+    const placed = after?.querySelector('.decision-card');
+    scan('placement after the hold', placed);
+    const { cohort, heldMs } = (await api.getDecision('req_69e30548-32e', 2)).outcome.cohortHold;
+    results.push({
+      name: '/routing-log a card names the account a hold waited on and how long it waited',
+      ok: JSON.stringify(outcomeOf(placed).Hold) === JSON.stringify([`on ${cohort}`, 'cohort', `freed after ${waitText(heldMs)}`]),
+      missing: [JSON.stringify(outcomeOf(placed).Hold)],
+    });
+    page.unmount();
+  }
+  {
+    // A hold on the strategy's pick names no cohort, and the placement after it reads the account it waited on.
+    const { card, page, record } = await story('req_e8b7eb13-060', 1);
+    scan('strategy hold', card);
+    const hold = walkOf(card).find((l) => l.step === 'Hold');
+    results.push({
+      name: "/routing-log a held card reads the hold's place on the strategy's pick",
+      ok: record.outcome.hold?.cohort === null && hold?.chips.includes('place strategy pick') && outcomeOf(card).Hold?.[1] === 'strategy pick',
+      missing: [hold?.chips.join(' / ') ?? 'no hold line', JSON.stringify(outcomeOf(card).Hold)],
+    });
+    const after = (await openRow(page, 'req_e8b7eb13-060/2'))?.querySelector('.decision-card');
+    scan('placement after a strategy hold', after);
+    const { heldMs, waitedOn } = (await api.getDecision('req_e8b7eb13-060', 2)).outcome.cohortHold;
+    results.push({
+      name: '/routing-log a card names the last account a hold with no cohort waited on and the wait',
+      ok: JSON.stringify(outcomeOf(after).Hold) === JSON.stringify([`on ${waitedOn.at(-1)}`, 'strategy pick', `freed after ${waitText(heldMs)}`]),
+      missing: [JSON.stringify(outcomeOf(after).Hold)],
+    });
+    page.unmount();
+  }
+  {
+    // A request held until its bound ran out answers without a dispatch: the exhaustion after the hold reads why.
+    const [id, seq] = ['req_77634945-72b', 2];
+    const { card, page, record } = await story(id, seq);
+    scan('exhaustion after a hold', card);
+    results.push({
+      name: "/routing-log a hold whose bound ran out reads the exhaustion after it with nothing dispatched",
+      ok: record.outcome.kind === 'exhausted' && record.request.holds.length > 0 && record.outcome.completion === null && outcomeOf(card).Answer?.[0] === `status ${record.outcome.exhaustion.kind === 'untimed' ? 503 : 429}` && !('Pin written' in outcomeOf(card)) && !('Cache read' in outcomeOf(card)),
+      missing: [JSON.stringify(outcomeOf(card))],
+    });
+    page.unmount();
+  }
+  {
+    const { card, page, record } = await story('req_51d0e2b8-7a0');
+    scan('exhaustion', card);
+    const line = walkOf(card).find((l) => l.step === 'Exhausted');
+    const weighed = record.walk.find((s) => s.step === 'exhausted')?.facts.find((f) => f.key === 'obstacles')?.value ?? [];
+    const drawn = [...(line?.li.querySelectorAll('.chip') ?? [])].filter((c) => c.getAttribute('title')).map((c) => c.textContent);
+    results.push({
+      name: "/routing-log the exhaustion's card reads the obstacles in order",
+      ok:
+        sentenceOf(card) === `Exhausted in [${record.request.poolId}]` && card?.querySelector('.decision-card__sentence a')?.getAttribute('href') === `/pools?pool=${record.request.poolId}` && line?.verdict === 'exhausted' &&
+        weighed.length > 0 && JSON.stringify(drawn.map((t) => t.replace(/^obstacle/, ''))) === JSON.stringify(weighed.map((w) => String(w).split(':').pop().replace(/_/g, ' '))) &&
+        JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['status 429', 'window overage', 'retry after 00:00']),
+      missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(weighed), JSON.stringify(outcomeOf(card).Answer)],
+    });
+    page.unmount();
+  }
+  {
+    const { card, page, record } = await story('req_e0a4c6f2-118');
+    scan('refusal', card);
+    const lines = walkOf(card);
+    const folds = [...(card?.querySelectorAll('details.decision-card__fold') ?? [])];
+    for (const f of folds) f.open = true;
+    await page.settle(50);
+    const pin = kvRows(folds[1]?.querySelector('.kv'));
+    scan('refusal, folds open', card);
+    results.push({
+      name: "/routing-log the refusal's card reads two lines and Pin not looked up",
+      ok:
+        record.pinReason === 'not_looked_up' && sentenceOf(card) === 'Refused before selection' &&
+        JSON.stringify(lines.map((l) => [l.step, l.verdict])) === JSON.stringify([['Admission', 'refused'], ['Rest of the walk', 'not run']]) && JSON.stringify(lines[1]?.chips) === JSON.stringify(['moves', 'rungs', 'partitions']) &&
+        JSON.stringify(pin.map((r) => [r.label, r.dd?.textContent])) === JSON.stringify([['Pin', 'not looked up']]) &&
+        candidateRows(card).length === 0 && JSON.stringify(outcomeOf(card).Answer) === JSON.stringify(['client drift', `client ${lines[0]?.chips[1]?.replace(/^client /, '')}`, `key ${record.request.keyId}`]),
+      missing: [...lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`), JSON.stringify(pin.map((r) => r.label)), JSON.stringify(outcomeOf(card).Answer)],
+    });
+    page.unmount();
+  }
+  {
+    // A probe's decision keeps its kind, so it opens to the same card, its probe line among the steps.
+    const { card, page } = await story('req_c41d0311-200', 1, 'probe');
+    scan('probe', card);
+    const steps = walkOf(card).map((l) => l.step);
+    results.push({
+      name: "/routing-log the probe's card is the decision card",
+      ok: card !== null && steps.includes('Probe') && steps.includes('Pin') && candidateRows(card).length > 0 && card.querySelector('.decision-card__foot') !== null,
+      missing: [steps.join(', ')],
+    });
+    page.unmount();
+  }
+  {
+    const { card, page, record, row } = await story('req_1d9c3e55-0b2', 2);
+    scan('failover attempt', card);
+    results.push({
+      name: "/routing-log a failover attempt's card reads attempt n of m",
+      ok: row.attempt === 2 && row.attemptCount === 2 && sentenceOf(card) === `Attempt 2 of 2: placed on [${record.outcome.accountId}]`,
+      missing: [sentenceOf(card)],
+    });
+    page.unmount();
+  }
+  {
+    // A fresh placement by the strategy: no pin found, the partitions and the pick, and a pin created.
+    const { card, page, record } = await story('req_ef099b34-453');
+    scan('fresh placement', card);
+    const lines = walkOf(card);
+    results.push({
+      name: '/routing-log a card reads a fresh placement',
+      ok: sentenceOf(card) === `Placed on [${record.outcome.accountId}]` && lines[0]?.chips.includes('found none') && lines.some((l) => l.step === 'Pick' && l.verdict === 'chosen') && outcomeOf(card)['Pin written']?.[0] === `created on ${record.outcome.accountId}`,
+      missing: lines.map((l) => `${l.step} ${l.verdict}: ${l.chips.join(' / ')}`),
+    });
+    page.unmount();
+  }
+  {
+    // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
+    const { card, page, record } = await story('req_4b0e9d17-c31', 2);
+    scan('fast failover', card);
+    const out = record.candidates.find((c) => c.obstacle?.name === 'credits');
+    const chip = candidateRows(card).find((tr) => tr.querySelector('td a')?.textContent === out?.accountId)?.querySelector('.decision-card__why .chip');
+    results.push({
+      name: '/routing-log a card hints why a member was passed over for its credits',
+      ok: out !== undefined && chip?.textContent?.startsWith('credits') && chip.getAttribute('title') === 'its usage credits unavailable for fast mode',
+      missing: [String(out?.accountId), chip ? `${chip.textContent} (${chip.getAttribute('title')})` : 'no credits chip'],
+    });
+    page.unmount();
+  }
+  {
+    // A placement beside the main conversation promised no size, so its cache read is weighed against the input.
+    const { card, page, record } = await story('req_52f62e67-839');
+    scan('with main placement', card);
+    const line = walkOf(card).find((l) => l.step === 'Rung: with main');
+    const read = outcomeOf(card)['Cache read'] ?? [];
+    results.push({
+      name: '/routing-log a card reads a placement with the main conversation against the input, since it promised no size',
+      ok: record.outcome.rung?.rung === 'with_main' && line?.verdict === 'match' && line.li.querySelector('.decision-card__hash') === null && read.some((c) => c.startsWith('read ') && c.endsWith(' input')) && !read.some((c) => c.includes('promised')),
+      missing: [line?.chips.join(' / ') ?? 'no line', JSON.stringify(read)],
+    });
+    page.unmount();
+  }
+  {
+    // The candidate table's windows: three lines a window on a subscription member, one merged reading on a key, and a
+    // window the member never reported reads so rather than as 0%.
+    const { card, page, record } = await story('req_f8085653-422');
+    const rows = candidateRows(card);
+    const cells = (tr) => [...(tr?.children ?? [])].map((td) => [...td.childNodes].map((n) => n.textContent).filter(Boolean));
+    const fable = record.candidates.find((c) => c.kind === 'oauth' && c.windows.seven_day_fable);
+    const noFable = record.candidates.find((c) => c.kind === 'oauth' && !c.windows.seven_day_fable);
+    const key = record.candidates.find((c) => c.kind === 'api_key');
+    const rowOfMember = (id) => rows.find((tr) => tr.querySelector('td a')?.textContent === id);
+    const fableCells = fable ? cells(rowOfMember(fable.accountId)) : [];
+    const noFableCells = noFable ? cells(rowOfMember(noFable.accountId)) : [];
+    const keyRow = key ? rowOfMember(key.accountId) : null;
+    const headers = [...(card?.querySelectorAll('.decision-card__candidates thead th') ?? [])].map((th) => th.textContent);
+    results.push({
+      name: '/routing-log the candidate table reads all three windows on a subscription member and one merged reading on a key',
+      ok:
+        JSON.stringify(headers) === JSON.stringify(['Account', 'Tier', '5h', '7d', 'Fable', 'In flight', 'Pace', 'Prefix', 'Verdict']) && fableCells.slice(2, 5).every((c) => c.length === 3) &&
+        /^\d+%$/.test(fableCells[2]?.[0] ?? '') && /^(head|poll|predicted|stored) /.test(fableCells[2]?.[2] ?? '') && keyRow?.children[2]?.getAttribute('colspan') === '3' && /^worst bucket \d+%$/.test(keyRow?.children[2]?.textContent ?? ''),
+      missing: [headers.join(','), JSON.stringify(fableCells), keyRow?.textContent ?? 'no key member'],
+    });
+    results.push({ name: "/routing-log the candidate table's Fable cell reads a utilization and a reset", ok: /^\d+%$/.test(fableCells[4]?.[0] ?? '') && (fableCells[4]?.[1] ?? '') !== '', missing: [JSON.stringify(fableCells[4])] });
+    results.push({ name: "/routing-log the candidate table's Fable cell reads not reported without a Fable window", ok: noFable !== undefined && JSON.stringify(noFableCells[4]) === JSON.stringify(['not reported']), missing: [JSON.stringify(noFableCells[4])] });
+    page.unmount();
+    // No story member lacks a 5-hour reading, so the route's answer drops one while the check reads it.
+    const original = api.getDecision;
+    api.getDecision = async (id, seq) => {
+      const r = await original.call(api, id, seq);
+      if (!r) return r;
+      const [first, ...rest] = r.candidates;
+      const { five_hour: _, ...windows } = first.windows;
+      return { ...r, candidates: [{ ...first, windows }, ...rest] };
+    };
+    const dropped = await story('req_f8085653-422');
+    api.getDecision = original;
+    const first = candidateRows(dropped.card)[0];
+    results.push({
+      name: '/routing-log a window with no reading reads not reported rather than 0%',
+      ok: first?.children[2]?.textContent === 'not reported' && !/^0%/.test(first?.children[2]?.textContent ?? ''),
+      missing: [first?.children[2]?.textContent ?? 'no row'],
+    });
+    dropped.page.unmount();
+  }
+  {
+    // The answer has not ended, so the attempt has no usage and wrote no cache-map entry yet.
+    const original = api.getDecision;
+    api.getDecision = async (id, seq) => {
+      const r = await original.call(api, id, seq);
+      return r && { ...r, outcome: { ...r.outcome, completion: { ...r.outcome.completion, cacheMapWritten: null, cacheReadTokens: null, completedAt: null, hit: null, inputTokens: null, status: null } } };
+    };
+    const { card, page } = await story('req_f8085653-422');
+    api.getDecision = original;
+    const out = outcomeOf(card);
+    results.push({
+      name: '/routing-log the cache-map row reads pending before the answer ends',
+      ok: JSON.stringify(out['Cache-map entries']) === JSON.stringify(['pending']) && JSON.stringify(out['Cache read']) === JSON.stringify(['pending']) && verdictChipsOf(card).includes('cache pending') && !(card?.textContent ?? '').includes('tier 1h'),
+      missing: [JSON.stringify(out), verdictChipsOf(card).join(' / ')],
+    });
+    page.unmount();
+  }
+  {
+    // The outcome rows across the story's cards: the renewal's pin, map and read, the hold, and an exhaustion's answer.
+    const renewal = await story('req_f8085653-422');
+    const out = outcomeOf(renewal.card);
+    const entries = renewal.record.outcome.completion.cacheMapWritten;
+    renewal.page.unmount();
+    const held = await story('req_69e30548-32e', 1);
+    const hold = outcomeOf(held.card).Hold;
+    held.page.unmount();
+    const exhausted = await story('req_51d0e2b8-7a0');
+    const answer = outcomeOf(exhausted.card).Answer;
+    exhausted.page.unmount();
+    results.push({
+      name: '/routing-log the outcome reads the pin written, the cache-map entries, the cache read with tier 1h, the hold and the answer',
+      ok:
+        JSON.stringify(Object.keys(out)) === JSON.stringify(['Pin written', 'Cache-map entries', 'Cache read', 'Spend']) && out['Pin written']?.[0] === `renewed on ${renewal.record.outcome.accountId}` &&
+        JSON.stringify(out['Cache-map entries']) === JSON.stringify([`on ${entries[0].accountId}`, ...entries.map((e) => `${e.tier} depth ${e.depth}`), `prefix ${fmtCompact(Math.max(...entries.map((e) => e.prefixTokens)))}`]) &&
+        out['Cache read']?.at(-1) === 'tier 1h' && hold?.[1] === 'cohort' && answer?.[0] === 'status 429',
+      missing: [JSON.stringify(out), JSON.stringify(hold), JSON.stringify(answer)],
+    });
+  }
+  {
+    // A record the retention took answers 404, which the route's client reads as null.
+    const original = api.getDecision;
+    api.getDecision = () => Promise.resolve(null);
+    const { page, panel } = await story('req_f8085653-422');
+    api.getDecision = original;
+    results.push({
+      name: "/routing-log a record the retention took reads its sentence in the card's place",
+      ok: (panel?.textContent ?? '') === 'The record left with the retention' && panel?.querySelector('.decision-card__walk') === null,
+      missing: [panel?.textContent ?? 'no panel'],
+    });
+    page.unmount();
+  }
+  {
+    // Each event kind opens to its pairs: When to the second in UTC, then the account and the pool as links, then the
+    // kind's own. The wind-down is dated at the instant it fires, five days past the pinned clock, so no range up to
+    // the clock lists it: its page is mounted on a clock a minute past the event, its `to` a minute past the event.
+    const OWN = {
+      account_state_changed: ['From', 'To', 'Cause', 'Detail'],
+      budget_period_ended: ['Previous period', 'Spent', 'Period start'],
+      budget_reached: ['Budget', 'Spent', 'Period ends', 'Effect', 'Crossed by'],
+      catalog_changed: ['Added', 'Models'],
+      cooldown_cleared: ['Scope', 'Cleared'],
+      cooldown_set: ['Scope', 'Reason', 'Window', 'Until', 'Set by'],
+      fast_credits_changed: ['Before', 'After', 'Cause', 'Effect'],
+      ledger_gap: ['Reason', 'Effect', 'Request'],
+      model_permitted: ['Rejected by', 'Served at', 'Model sent', 'Model resolved', 'Request'],
+      model_rejected: ['Model sent', 'Model resolved', 'Cooldown scope', 'Attempt', 'Request'],
+      overage_ended: ['Since', 'Lasted'],
+      overage_started: ['Effect'],
+      pin_created: ['Key', 'Session', 'Agent', 'Model', 'Epoch'],
+      pin_expired: ['Key', 'Session', 'Agent', 'Model', 'Reasons', 'Found by'],
+      pin_migrated: ['From', 'To', 'Reason', 'Moved by', 'Key', 'Session', 'Agent', 'Model'],
+      pin_released: ['Actor', 'Key', 'Session', 'Agent', 'Model'],
+      poll_backoff_ended: ['Backed off', 'Attempts', 'Resumed'],
+      poll_backoff_started: ['Reason', 'Attempts', 'Next attempt', 'Last clean poll', 'Effect'],
+      reauth_required: ['Routing'],
+      refresh_failed: [],
+      refresh_succeeded: [],
+      refresh_uncertain: [],
+      registry_changed: ['Change', 'Actor'],
+      router_started: ['Version', 'Pins loaded', 'Shedding marks loaded', 'Window readings loaded', 'Affinity entries loaded', 'Down from', 'Held requests'],
+      shedding_round: ['Started by', 'Reading', 'Unit', 'Burn window', 'Share', 'Warm sessions', 'Pins', 'Marks kept until', 'Dwell', 'Survive a restart'],
+      warm_prefix_expired: ['Boundary', 'Depth', 'Size', 'Tier', 'Written', 'Entries', 'Listed'],
+      wind_down_started: ['Subscription ends', 'Wind-down', 'Effect', 'Cold pins', 'End from'],
+      window_reset: ['Window', 'Before the reset', 'Prediction', 'Next reset'],
+      window_spent: ['Window', 'Reading', 'Read from', 'Resets', 'Request'],
+    };
+    const EVENT_KINDS = [
+      'account_state_changed', 'budget_period_ended', 'budget_reached', 'catalog_changed', 'cooldown_cleared', 'cooldown_set', 'fast_credits_changed', 'ledger_gap', 'model_permitted', 'model_rejected',
+      'overage_ended', 'overage_started', 'pin_created', 'pin_expired', 'pin_migrated', 'pin_released', 'poll_backoff_ended', 'poll_backoff_started', 'reauth_required', 'refresh_failed',
+      'refresh_succeeded', 'refresh_uncertain', 'registry_changed', 'router_started', 'shedding_round', 'warm_prefix_expired', 'wind_down_started', 'window_reset', 'window_spent',
+    ];
+    const utc = (at) => `${new Date(at).toISOString().slice(0, 19).replace('T', ' ')} UTC`;
+    const modelLinks = {};
+    for (const kind of EVENT_KINDS) {
+      const [e] = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 7 * DAY), kinds: [kind], limit: 1, to: iso(CLOCK_ORIGIN + 7 * DAY) })).rows;
+      if (!e) {
+        results.push({ name: `/routing-log the ${kind} detail reads its pairs`, ok: false, missing: ['no event of the kind in the story'] });
+        continue;
+      }
+      const at = Date.parse(e.at);
+      const page = await mount(`/routing-log?kinds=${kind}&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: Math.max(CLOCK_ORIGIN, at + MINUTE) });
+      const panel = await openRow(page, `event/${e.id}`);
+      const detail = panel?.querySelector('.event-detail');
+      scan(kind, detail);
+      const pairs = kvRows(detail?.querySelector(':scope > .kv'));
+      const href = (label) => pairs.find((p) => p.label === label)?.dd?.querySelector('a')?.getAttribute('href') ?? null;
+      const head = [['When', utc(at)], ...(e.accountId ? [['Account', e.accountId]] : []), ...(e.poolId ? [['Pool', e.poolId]] : [])];
+      if (kind.startsWith('model_')) modelLinks[kind] = { event: e, links: Object.fromEntries(pairs.map((p) => [p.label, [...(p.dd?.querySelectorAll('a') ?? [])].map((a) => a.getAttribute('href'))])) };
+      results.push({
+        name: `/routing-log the ${kind} detail reads its pairs`,
+        ok:
+          JSON.stringify(pairs.slice(0, head.length).map((p) => [p.label, p.dd?.textContent])) === JSON.stringify(head) &&
+          (e.accountId === null || href('Account') === `/accounts/${e.accountId}`) && (e.poolId === null || href('Pool') === `/pools?pool=${e.poolId}`) &&
+          JSON.stringify(pairs.slice(head.length).map((p) => p.label)) === JSON.stringify(OWN[kind]) && (e.requestId === null) === (detail?.querySelector('.event-detail__foot') === null),
+        missing: pairs.map((p) => `${p.label}: ${p.dd?.textContent}`),
+      });
+      page.unmount();
+    }
+    // The re-made drawer check: the account that refused the model and the one that served it, and both of its names.
+    const rejected = modelLinks.model_rejected;
+    const permitted = modelLinks.model_permitted;
+    const model = (id) => `/models?model=${id}`;
+    results.push({
+      name: '/routing-log the model rejected and permitted details link each account and model they name',
+      ok:
+        rejected !== undefined && permitted !== undefined &&
+        JSON.stringify(permitted.links['Rejected by']) === JSON.stringify(permitted.event.detail.rejected_by.map((id) => `/accounts/${id}`)) &&
+        JSON.stringify(rejected.links['Model sent']) === JSON.stringify([model(rejected.event.detail.wire_model)]) && JSON.stringify(rejected.links['Model resolved']) === JSON.stringify([model(rejected.event.model)]) &&
+        JSON.stringify(permitted.links['Model sent']) === JSON.stringify([model(permitted.event.detail.wire_model)]) && JSON.stringify(rejected.links.Request) === JSON.stringify([`/requests/${rejected.event.requestId}`]),
+      missing: [JSON.stringify(rejected?.links), JSON.stringify(permitted?.links)],
+    });
+  }
+  {
+    // Source request opens the log on the event's request alone, a quarter hour either side of the event.
+    const [e] = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - HOUR), kinds: ['cooldown_set'], limit: 25, to: iso(CLOCK_ORIGIN - 20 * MINUTE) })).rows.filter((r) => r.requestId !== null);
+    const at = Date.parse(e.at);
+    const page = await mount(`/routing-log?kinds=cooldown_set&from=${iso(at - MINUTE)}&to=${iso(at + MINUTE)}`, { now: CLOCK_ORIGIN });
+    const panel = await openRow(page, `event/${e.id}`);
+    const links = Object.fromEntries([...(panel?.querySelectorAll('.event-detail__foot a') ?? [])].map((a) => [a.textContent, a.getAttribute('href')]));
+    const source = new URL(links['Source request'] ?? '/', 'http://phoebis.test');
+    const query = new URLSearchParams(source.search);
+    results.push({
+      name: '/routing-log an event that names a request links Source request to the log on that request',
+      ok: source.pathname === '/routing-log' && query.get('request') === e.requestId && query.get('from') === iso(at - 15 * MINUTE) && query.get('to') === iso(at + 15 * MINUTE) && links.Details === `/requests/${e.requestId}`,
+      missing: [JSON.stringify(links)],
+    });
+    // A link inside an open row follows it rather than shutting the row.
+    rowOf(page, `event/${e.id}`)?.querySelector('td.routing-log__link a')?.click();
+    await page.settle(300);
+    const followed = page.location().pathname;
+    page.unmount();
+    results.push({ name: '/routing-log a link inside a row follows the link rather than opening the row', ok: followed === `/requests/${e.requestId}`, missing: [followed] });
+  }
+  {
+    const page = await mount('/routing-log', { now: CLOCK_ORIGIN });
+    const first = trs(page)[0];
+    const id = first?.getAttribute('data-row');
+    await openRow(page, id);
+    const opened = page.container.querySelectorAll('.routing-log__panel').length;
+    rowOf(page, id)?.querySelector('td.routing-log__fact')?.click();
+    await page.settle(100);
+    const shut = page.container.querySelectorAll('.routing-log__panel').length;
+    await openRow(page, id);
+    [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'Next page')?.click();
+    await page.settle(300);
+    const paged = page.container.querySelectorAll('.routing-log__panel').length;
+    const chevrons = trs(page).filter((tr) => tr.classList.contains('routing-log__row')).every((tr) => tr.firstElementChild?.classList.contains('routing-log__chevron'));
+    results.push({
+      name: '/routing-log a click anywhere but a link opens the row and shuts it again, and another page starts with every row shut',
+      ok: opened === 1 && shut === 0 && paged === 0 && chevrons && first?.querySelector('td.routing-log__chevron svg') !== null,
+      missing: [`opened ${opened}, shut ${shut}, after paging ${paged}, chevrons ${chevrons}`],
+    });
+    // Every decision and every event of the default hour opens, the second page's rows and then the first's, and the
+    // cards and details join the scan.
+    const openAll = async () => {
+      const rows = trs(page).filter((tr) => tr.classList.contains('routing-log__row'));
+      for (const tr of rows) tr.querySelector('td.routing-log__kind')?.click();
+      await page.settle(800);
+      const panels = [...page.container.querySelectorAll('.routing-log__panel')];
+      for (const p of panels) scan('the hour', p.querySelector('.decision-card, .event-detail'));
+      return { drawn: panels.filter((p) => p.querySelector('.decision-card .decision-card__walk, .event-detail .kv') !== null).length, panels: panels.length, rows: rows.length };
+    };
+    const second = await openAll();
+    [...page.container.querySelectorAll('.pager__nav button')].find((b) => b.getAttribute('aria-label') === 'First page')?.click();
+    await page.settle(300);
+    const firstPage = await openAll();
+    results.push({
+      name: '/routing-log every row of a page opens to its card or its detail',
+      ok: [second, firstPage].every((p) => p.rows > 0 && p.panels === p.rows && p.drawn === p.rows) && second.rows + firstPage.rows === hour.rows.length,
+      missing: [JSON.stringify({ firstPage, second }), `${hour.rows.length} rows in the hour`],
+    });
+    page.unmount();
+  }
+  {
+    // A value joined by a comma or a semicolon is two values in one place. A digit group's comma (`12,345`) joins
+    // nothing, and the user agent is the one value that carries its own commas as the client sent them.
+    const JOINED = /(?<!\d),|,(?!\d)|;/;
+    const wrong = [];
+    let read = 0;
+    for (const { root, where } of scanned) {
+      const nodes = [...root.querySelectorAll('.chip, .kv dd, td, .decision-card__sentence')];
+      for (const n of nodes) {
+        if (n.closest('.kv__row')?.querySelector('dt')?.textContent === 'User agent') continue;
+        read += 1;
+        const text = n.textContent ?? '';
+        if (JOINED.test(text)) wrong.push(`${where}: ${text.slice(0, 80)}`);
+      }
+    }
+    results.push({ name: '/routing-log no chip, value or cell joins values with a comma or a semicolon, the user agent excepted', ok: scanned.length > 40 && read > 1000 && wrong.length === 0, missing: [`${scanned.length} panels, ${read} read`, ...wrong.slice(0, 8)] });
+  }
   m.unmount();
 }
 

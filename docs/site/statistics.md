@@ -433,6 +433,70 @@ accent tint until the next read, a filter change keeps Follow on, and paging to 
 Probe decisions and warm prefix expiries are hidden by default. The Kinds filter lists them last in their groups, and
 its button reads "Kinds (2 hidden)" until another set is chosen.
 
+Every row opens. A click anywhere on a row but a link opens it beneath itself on a tint and a second click shuts it,
+and another page or another filter starts with every row shut. A decision row loads its record and draws its card, a
+probe decision's included. The verdict line names the decision with its accounts and its pool as links ("Moved
+secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in codex") and chips for the tier, the rule or
+the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
+router decided" numbers the walk in the engine's order: the pin, every member's eligibility, the move rules, the cool
+reading and the cap filter after a fired rule, the renewal, the three rungs, the partitions, the pick, and a hold or an
+exhaustion. Each line reads the step, its verdict in a badge and the facts the engine read as chips, one value or one
+key-value pair each, a member's fact keyed by the member. The rules after a fired one never run, so they fold into one
+line, "Rules after spent". A rung line adds the entry the rung took, or the deepest one a gate refused: the boundary's
+hash as its first eight characters with the whole hash and any refusing gate on hover, and `warm until 14:58` from the
+entry's write and its TTL, which an entry the cache never confirmed leaves out. A refusal's walk is two lines, the
+admission with its reason and the rest of the walk not run.
+
+The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
+with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
+each (the utilization, the reset, the reading's source and age), or an Anthropic key's one merged reading, the requests
+in flight against the cap, the Pace score, the prefix entry, and the verdict with the one chip that decided it (`429 on
+5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed over. Three folds, closed until
+opened, hold the request's facts, the pin and its warmth (a record that pins nothing reads why: not looked
+up or pinning off) and the twenty settings in force.
+A refusal under a key or pool the registry no longer holds says so in its place. The outcome
+lists the pin written, the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL
+tier of its deepest entry, the hold, the answer an exhaustion or a refusal gave, and the spend against a budget. The
+foot repeats the three widenings for the row, names the record's version (Record v1), and Copy as JSON copies the
+record route's answer whole, every field the card does not draw included. A record the retention purged reads "The
+record left with the retention" in the card's place.
+
+An event row opens to a bordered panel of pairs: When to the second in UTC, the account and the pool as links, then the
+kind's own pairs. An event that names a request ends with Source request, which opens the log on that request a quarter
+hour either side of the event, and Details, which opens the request's drawer. The kinds and what each row records:
+
+| Event | What it records |
+| --- | --- |
+| account state changed | An account's state moved, with the old state, the new one and the cause the registry stored. |
+| budget period ended | A member's budget period closed, with the spend it closed on. |
+| budget reached | A member's spend crossed its budget, so the pool answers exhausted for it until the period ends. |
+| catalog changed | An account's model catalog gained or lost models. |
+| cooldown cleared | A cooldown ended by its deadline, by hand or by a recovery. |
+| cooldown set | An answer cooled an account, its fast lane or one model on it until a time. |
+| fast credits changed | An account's usage credits for fast mode became available or unavailable. |
+| ledger gap | The ledger dropped part of a captured body, so the stored response is truncated. |
+| model permitted | An account served a model another account had rejected. |
+| model rejected | An account answered 404 for a model, which cools that model on the account. |
+| overage ended | An account left overage at its 7-day reset. |
+| overage started | An account went into overage, so its requests draw on extra usage. |
+| pin created | A placement pinned a session to an account. |
+| pin expired | A pin was released, idle past the pin window or for the reasons it lists. |
+| pin moved | A rule or a failover moved a session's pin to another account. |
+| pin released | An operator released a session's pin by hand. |
+| poll backoff ended | The usage poll answered cleanly again after backing off. |
+| poll backoff started | The usage poll was rate limited, so decisions read the account's windows from response heads. |
+| re-auth required | An account's refresh was refused, and routing to it stays off until it is paired again. |
+| refresh failed | An access-token refresh failed. |
+| refresh succeeded | An access-token refresh succeeded. |
+| refresh uncertain | An access-token refresh ended without a clear answer. |
+| registry changed | An operator edited a pool, a key or an account, field by field where the change names them. |
+| router started | The router started and loaded its pins, shedding marks, window readings and affinity entries. |
+| shedding round | A round marked pins on an account ahead of pace and kept the marks across a restart. |
+| warm prefix expired | A warm prefix's cache-map entry lapsed past its TTL, listed only when the kind is chosen. |
+| wind-down started | An account's subscription end entered the pool's wind-down, so no fresh session starts on it. |
+| window reset | A quota window reset, with the reading before it. |
+| window spent | A response head or the poll read a quota window at its limit. |
+
 ### Analytics
 
 A range control offers 1 hour, 24 hours, 7 days, 30 days, or a custom span, and a group-by control regroups every chart
