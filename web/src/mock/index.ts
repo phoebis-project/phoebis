@@ -958,6 +958,10 @@ export class MockApi implements Api {
     if (input.bodyCaptureHours > this.settings.retention.bodyCaptureMaxHours) {
       return Promise.reject(new ApiError(400, 'body_capture_hours exceeds stats.body_capture_max_hours', null));
     }
+    // The stamp is checked ahead of the members, as the route checks it ahead of the store's member lookups, so a
+    // stale edit answers `stale_edit` whatever its list names and the editor reloads before a member refusal.
+    const current = this.pools[idx];
+    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited; reload and try again', 'stale_edit'));
     // The route refuses a repeat and a budget before the store looks any member up, and the store checks every member
     // inside the one transaction that writes the pool, so a refusal stores nothing.
     const repeated = repeatedMember(input.members);
@@ -968,8 +972,6 @@ export class MockApi implements Api {
     if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
     const held = heldElsewhere(input.members, this.pools, id);
     if (held) return Promise.reject(new ApiError(409, held, null));
-    const current = this.pools[idx];
-    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited; reload and try again', 'stale_edit'));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
     const next: Omit<Pool, 'keys'> = {
       ...current,

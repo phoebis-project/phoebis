@@ -1238,12 +1238,15 @@ export function PoolDialog({
               <tbody>
                 {orderedAccounts.map((a) => {
                   const on = a.id in form.members;
-                  const heldBy = otherPools.find((p) => p.members.some((m) => m.accountId === a.id));
+                  // A ticked member keeps its checkbox even once a re-read finds another pool holding it, so the
+                  // operator can still untick it.
+                  const heldBy = on ? undefined : otherPools.find((p) => p.members.some((m) => m.accountId === a.id));
                   if (heldBy) {
                     return (
                       <tr key={a.id}>
                         <td>
                           <div className="row">
+                            <div className="members-table__check" />
                             <span>{a.label}</span>
                             {a.email && <span className="muted mono">{a.email}</span>}
                             <span className="muted" title={`An account belongs to one pool. Remove it from ${heldBy.id} first.`}>
@@ -1251,7 +1254,9 @@ export function PoolDialog({
                             </span>
                           </div>
                         </td>
-                        <td className="right" />
+                        <td className="right">
+                          <div className="input members-table__blank">&nbsp;</div>
+                        </td>
                         <td className="right" />
                         <td className="right" />
                       </tr>
@@ -2051,9 +2056,9 @@ export function PoolDialog({
         chosen={chosen}
         initialGroup={initialGroup}
         onChoose={(id) => setChosen(id as PoolGroup)}
-        // The line always explains the current hold: a refusal of the form's own beats a server message left from
-        // before the edit.
-        status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
+        // The line always explains the current hold: a row that moved under the dialog first, since only Reload clears
+        // it, then a refusal of the form's own, which beats a server message left from before the edit.
+        status={stale ? 'Save is held: the pool changed since you opened it. Reload to edit the current version.' : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
         hold={first?.group ?? null}
         held={first !== null || error !== null || stale !== null}
         notice={

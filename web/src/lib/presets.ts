@@ -135,10 +135,11 @@ export function shedPreview(
   };
   // The router's destination readings: a subscription account's two shared windows by their lead over pace against the
   // band, an API-key account's worst live bucket against 1.0 (a bucket refills within its minute); a window the
-  // row does not carry reads as under.
+  // row does not carry reads as under. An API-key account's live buckets are its `rpm:`, `itpm:` and `otpm:` ones whose
+  // reset is ahead, or which carry none and were read within the minute, as the router's `worst_bucket` reads them.
   const under = (a: Account) =>
     a.kind === 'api_key'
-      ? Math.max(0, ...a.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now).map((w) => w.utilization)) < 1
+      ? Math.max(0, ...a.windows.filter((w) => /^(rpm|itpm|otpm):/.test(w.id) && (w.resetsAt === null ? now - Date.parse(w.observedAt) < 60_000 : Date.parse(w.resetsAt) > now)).map((w) => w.utilization)) < 1
       : (['5h', '7d'] as const).every((id) => (lead(a, id) ?? Number.NEGATIVE_INFINITY) < band);
   const cool = pool.members.some((m) => {
     const account = byId.get(m.accountId);

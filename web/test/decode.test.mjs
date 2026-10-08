@@ -321,7 +321,7 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.cacheTtl.plan.main, '1h');
   assert.equal(p.cacheDiagnostics, false);
   assert.equal(p.status, 'active');
-  assert.equal(p.traffic24h.length, 24);
+  assert.equal(p.traffic24h.length, 25);
   assert.ok(isIso(p.traffic24h[0].at));
   assert.deepEqual(p.members.map((m) => m.accountId), ['business', 'direct']);
   assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible'], 'both members are servable in the captured pool');

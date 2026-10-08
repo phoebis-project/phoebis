@@ -716,9 +716,9 @@ async function poolCachingControls(theme) {
 }
 
 /**
- * The Utilization thresholds group's select-below switch, drawn in the expert view, against the migrate switch beside
- * it: the same switch, the same percent field and the same label, so either reading smaller or lighter than the other
- * is the defect to catch.
+ * The Utilization thresholds group's select-below switch, drawn in the expert view, against the shed-ahead switch
+ * beside it: the same switch, the same percent field and the same label, so either reading smaller or lighter than the
+ * other is the defect to catch.
  */
 async function poolSelectBelow(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -755,17 +755,17 @@ async function poolSelectBelow(theme) {
         switch: `${box.width} ${box.height}`,
       };
     };
-    const migrate = read('Shed ahead of pace');
+    const shedAhead = read('Shed ahead of pace');
     const select = read('Select below utilization');
-    return migrate && select ? { migrate, select } : null;
+    return shedAhead && select ? { select, shedAhead } : null;
   });
   if (!pair) {
-    say('the migration and select-below switches are not both drawn to compare');
+    say('the shed-ahead and select-below switches are not both drawn to compare');
   } else {
-    measurements.push(`${theme} /pools shed ahead of pace ${JSON.stringify(pair.migrate)}`);
+    measurements.push(`${theme} /pools shed ahead of pace ${JSON.stringify(pair.shedAhead)}`);
     measurements.push(`${theme} /pools select below ${JSON.stringify(pair.select)}`);
-    const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.migrate[key]);
-    if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the migration control's`);
+    const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.shedAhead[key]);
+    if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the shed-ahead control's`);
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));

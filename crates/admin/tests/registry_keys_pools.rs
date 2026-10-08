@@ -1102,7 +1102,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     .await;
     // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
     let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
-    for (id, at) in [("r1", now - 60_000), ("r2", now - 2 * 86_400_000)] {
+    let land = |id: &str, at: i64| {
         parts.ledger.record(Record::Request {
             request: RequestRecord {
                 id: id.into(),
@@ -1136,6 +1136,9 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
             }],
             bodies: None,
         });
+    };
+    for (id, at) in [("r1", now - 60_000), ("r2", now - 2 * 86_400_000)] {
+        land(id, at);
     }
     let keys = common::wait_json(&parts.app, "/admin/keys", &cookie, |v| {
         v["keys"][0]["lifetime"]["requests"].as_u64() == Some(2)
@@ -1163,14 +1166,31 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     );
     // Only r1 falls in the last 24h; r2 is two days old. One request costs 0.0007, per the note above.
     assert!((pool["cost_24h"].as_f64().unwrap() - 0.0007).abs() < 1e-9);
-    let traffic = pool["traffic_24h"].as_array().unwrap();
-    assert_eq!(traffic.len(), 24);
-    assert_eq!(
+    let hour = phoebis_ledger::hour_of(now);
+    let requests = |traffic: &[serde_json::Value]| {
         traffic
             .iter()
             .map(|b| b["requests"].as_u64().unwrap())
-            .sum::<u64>(),
-        1
+            .sum::<u64>()
+    };
+    let traffic = pool["traffic_24h"].as_array().unwrap();
+    assert_eq!(
+        (traffic.len(), traffic[0]["at"].as_i64()),
+        (25, Some((hour - 24 * 3_600) * 1_000)),
+        "the series starts where the day total does and ends with the current partial hour"
+    );
+    assert_eq!(Some(requests(traffic)), pool["requests_24h"].as_u64());
+    // Older than 24 hours, yet inside the hour a day back that the day total counts from.
+    land("r3", (hour - 24 * 3_600) * 1_000 + 60_000);
+    let pools = common::wait_json(&parts.app, "/admin/pools", &cookie, |v| {
+        v["pools"][0]["requests_24h"].as_u64() == Some(2)
+    })
+    .await;
+    let traffic = pools["pools"][0]["traffic_24h"].as_array().unwrap();
+    assert_eq!(
+        (requests(traffic), traffic[0]["requests"].as_u64()),
+        (2, Some(1)),
+        "the card's head figure equals its bars"
     );
     assert_eq!(
         post(

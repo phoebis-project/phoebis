@@ -92,12 +92,23 @@ test("a listener's certificate items read the listener, the file, the date and w
 });
 
 test("a badge's title lists the detail's members, an instant read as one, then the age", () => {
-  const backoff = item('poll_backoff', { detail: { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, since: new Date(NOW - 42 * 60_000).toISOString() });
+  const backoff = item('poll_backoff', { detail: { account: 'secondary', backoff_since: NOW - 42 * 60_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, pools: ['all'], since: new Date(NOW - 42 * 60_000).toISOString() });
   assert.equal(attentionTitle(backoff, NOW), ['account: secondary', `backoff_since: ${fmtAbsolute(new Date(NOW - 42 * 60_000).toISOString())}`, 'rate_limited_in_a_row: 6', 'started 42m ago'].join('\n'));
-  assert.equal(attentionTitle(item('pool_exhausted', { detail: { pool: 'codex', key: 'ci' } }), NOW), ['key: ci', 'pool: codex', 'started 2h 0m ago'].join('\n'), 'the members read in name order');
+  assert.equal(attentionTitle(item('pool_exhausted', { detail: { pool: 'codex', key: 'ci' }, pools: ['codex'] }), NOW), ['key: ci', 'pool: codex', 'started 2h 0m ago'].join('\n'), 'the members read in name order');
+});
+
+test("a badge's title for an item that carries no pool leads with its sentence, which no pool card's row draws", () => {
   const expires = NOW + 12 * 86_400_000;
-  const expiring = item('certificate_expiring', { detail: { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires }, since: new Date(NOW - 18 * 86_400_000).toISOString() });
-  assert.equal(attentionTitle(expiring, NOW), ['cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', `expires: ${fmtAbsolute(new Date(expires).toISOString())}`, 'started 18d 0h ago'].join('\n'), "a certificate's end reads as an instant");
+  const expiring = item('certificate_expiring', { detail: { cert_file: '/etc/phoebis/proxy.pem', days_left: 12, expires }, since: new Date(NOW - 18 * 86_400_000).toISOString(), subject: { id: 'proxy.tls', label: 'proxy.tls', type: 'router' } });
+  assert.equal(
+    attentionTitle(expiring, NOW),
+    [`The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (${fmtAbsolute(new Date(expires).toISOString())}). Replace the pair and run phoebis tls reload.`, 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', `expires: ${fmtAbsolute(new Date(expires).toISOString())}`, 'started 18d 0h ago'].join('\n'),
+    "a certificate's end reads as an instant",
+  );
+  const degraded = item('writer_degraded', { detail: { component: 'ledger' } });
+  assert.equal(attentionTitle(degraded, NOW), [attentionDetail(degraded, NOW), 'component: ledger', 'started 2h 0m ago'].join('\n'));
+  const pooled = item('writer_degraded', { detail: { component: 'ledger' }, pools: ['all'] });
+  assert.equal(attentionTitle(pooled, NOW), ['component: ledger', 'started 2h 0m ago'].join('\n'), "an item a pool carries reads its sentence on that pool's card");
 });
 
 test('one poll serves every reader, reads again on its schedule, and keeps the last list through a failed read', async (t) => {

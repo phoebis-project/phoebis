@@ -452,6 +452,45 @@ test("the replay is one POST that decodes its counts, and a held writer's 503 re
   assert.equal(failures, 0, 'the dashboard line draws the refusal in its own slot');
 });
 
+test("a dialog's write reaches no toast when refused, since the dialog draws the refusal, while every other write still does", async () => {
+  let failures = 0;
+  let forbidden = 0;
+  let unauthorized = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => { forbidden += 1; }, onUnauthorized: () => { unauthorized += 1; } });
+  const api = new HttpApi();
+  const dialogs = [
+    () => api.createAccount({ id: 'work', kind: 'oauth', label: 'work', secret: null }),
+    () => api.createKey({ ...keyEdit, expiresInDays: null }),
+    () => api.createPool(poolSave('Spare')),
+    () => api.renameAccount('work', 'Work', 1),
+    () => api.updateAccount('work', { cancelled: false, subscriptionEndsAt: null }, 1),
+    () => api.updateKey('desktop', keyEdit, 1),
+    () => api.updatePool('main', poolSave('Main'), 1),
+  ];
+  for (const status of [400, 403, 409, 500]) {
+    stub(() => answer(status, { error: 'refused' }));
+    for (const write of dialogs) await assert.rejects(write(), (e) => e instanceof ApiError && e.status === status && e.message === 'refused');
+  }
+  stub(() => Promise.reject(new TypeError('fetch failed')));
+  for (const write of dialogs) await assert.rejects(write(), (e) => e instanceof ApiError && e.status === 0);
+  assert.deepEqual([failures, forbidden], [0, 0], 'the dialog shows the refusal once, in its own callout or footer');
+  stub(() => answer(401, { error: 'no admin session' }));
+  await assert.rejects(dialogs[0]());
+  assert.equal(unauthorized, 1, 'a lapsed session still returns the console to the login');
+  stub(() => answer(500, { error: 'the store is unavailable' }));
+  const others = [
+    () => api.clearCooldown('work', 'account'),
+    () => api.deleteAccount('work'),
+    () => api.pauseAccount('work'),
+    () => api.releaseSession('desktop', 's1'),
+    () => api.resumeAccount('work'),
+    () => api.revokeKey('desktop'),
+    () => api.rotateKey('desktop'),
+  ];
+  for (const write of others) await assert.rejects(write());
+  assert.equal(failures, others.length, 'a write no dialog draws keeps the toast');
+});
+
 test('the attention read is one GET, and its failures reach no toast, since the line draws its own', async () => {
   let failures = 0;
   let unauthorized = 0;

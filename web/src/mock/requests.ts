@@ -1055,8 +1055,8 @@ function historicalRollups(): HourlyRollup[] {
 export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...ROLLUPS];
 
 /**
- * The first hour the dashboard and the pools' traffic charts draw: 24 hourly buckets, the current hour last. An
- * account's or a pool's day total starts an hour earlier, on the hour a full day back, and the week on the hour seven
+ * The first hour the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total,
+ * and a pool's 25 hourly buckets, start an hour earlier, on the hour a full day back, and the week on the hour seven
  * days back, as the routes total their rollups.
  */
 export const DAY_FROM = startOfHour(NOW) - 23 * HOUR;
@@ -1064,9 +1064,9 @@ const TOTALS_FROM = startOfHour(NOW) - 24 * HOUR;
 const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
 
 const counted = (from: number) => REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= from);
-/** The rows the dashboard and the charts count. A probe is the router's own traffic, which the routes leave out. */
+/** The rows the dashboard counts. A probe is the router's own traffic, which the routes leave out. */
 export const DAY_ROWS: RequestLog[] = counted(DAY_FROM);
-/** The rows an account's or a pool's day total counts. */
+/** The rows an account's or a pool's day total counts, and a pool's hourly buckets. */
 const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
@@ -1102,9 +1102,9 @@ function deriveFigures() {
   }
   for (const p of poolById.values()) {
     const mine = TOTAL_ROWS.filter((r) => r.poolId === p.id);
-    const traffic24h: TrafficBucket[] = Array.from({ length: 24 }, (_, i) => ({ at: iso(DAY_FROM + i * HOUR), costUsd: 0, failed: 0, requests: 0, tokens: 0 }));
-    for (const r of DAY_ROWS.filter((row) => row.poolId === p.id)) {
-      const bucket = traffic24h[Math.floor((Date.parse(r.at) - DAY_FROM) / HOUR)];
+    const traffic24h: TrafficBucket[] = Array.from({ length: 25 }, (_, i) => ({ at: iso(TOTALS_FROM + i * HOUR), costUsd: 0, failed: 0, requests: 0, tokens: 0 }));
+    for (const r of mine) {
+      const bucket = traffic24h[Math.floor((Date.parse(r.at) - TOTALS_FROM) / HOUR)];
       bucket.costUsd += r.costUsd;
       bucket.failed += r.outcome === 'succeeded' ? 0 : 1;
       bucket.requests += 1;

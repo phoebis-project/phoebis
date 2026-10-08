@@ -1441,6 +1441,20 @@
   align-items: center;
 }
 
+/* A held row draws no checkbox and no Priority field, so blanks of their size keep its name in line with the names
+   around it and the row as tall as theirs. The checkbox's box is the browser's own, 13 px inside 3 px and 4 px
+   margins. */
+.members-table__check {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin: 3px 3px 3px 4px;
+}
+
+.members-table__blank {
+  visibility: hidden;
+}
+
 .members-table th:nth-child(2),
 .members-table td:nth-child(2) {
   width: 96px;

@@ -6397,9 +6397,9 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1791412789130,
-          "updated_at": 1791412789130,
-          "revision": 6189459300234,
+          "created_at": 1791419928210,
+          "updated_at": 1791419928210,
+          "revision": 6189466439314,
           "members": [
             {
               "account_id": "business",
@@ -6438,7 +6438,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "RkUUhsuA",
+              "prefix": "sQmkyWI2",
               "enabled": true
             }
           ],
@@ -6447,6 +6447,13 @@ export const FIXTURES: Record<string, Fixture> = {
           "cost_24h": 0.0252,
           "active_pins": 1,
           "traffic_24h": [
+            {
+              "at": -86400000,
+              "requests": 0,
+              "failed": 0,
+              "tokens": 0,
+              "cost_usd": 0
+            },
             {
               "at": -82800000,
               "requests": 0,

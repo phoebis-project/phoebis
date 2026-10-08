@@ -305,6 +305,22 @@ test('a pool save naming an account twice answers the route\'s 409 ahead of ever
   assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
 });
 
+test("a stale pool save answers the route's 409 stale_edit ahead of every member refusal and stores nothing", async () => {
+  const api = await signedIn();
+  const before = await api.listPools();
+  const all = before.find((p) => p.id === 'all');
+  const input = poolInputOf(all);
+  const member = (accountId, budgetDailyUsd = null) => ({ accountId, budgetDailyUsd, budgetMonthlyUsd: null, priority: 0 });
+  // An unknown member, an account the work pool holds, a repeat and a budget the member write refuses.
+  const lists = [[...input.members, member('ghost')], [...input.members, member('studio')], [member('overflow'), member('overflow')], [member('overflow', 0)]];
+  for (const members of lists) {
+    await assert.rejects(() => api.updatePool('all', { ...input, members }, all.revision - 1), staleAs(POOL_STALE), members.map((m) => m.accountId).join());
+  }
+  assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
+  await assert.rejects(() => api.updatePool('all', { ...input, members: lists[0] }, all.revision), refusedAs(404, 'account ghost not found'), 'over its own revision the member refusal answers');
+  await assert.rejects(() => api.updatePool('all', { ...input, members: lists[1] }, all.revision), refusedAs(409, 'account studio is a member of pool work'), 'over its own revision the held member answers');
+});
+
 test("a pool save naming an account another pool holds answers the route's 409 and stores nothing", async () => {
   const api = await signedIn();
   const before = await api.listPools();

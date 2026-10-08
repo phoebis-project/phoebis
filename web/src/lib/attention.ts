@@ -100,7 +100,7 @@ export function attentionDetail(item: AttentionItem, now: number): string {
 /**
  * The detail's members as `name: value` lines in name order, an instant the route sends in milliseconds read as one,
  * then the age: the title of a badge on the dashboard's line. A member the route left null says nothing and is left
- * out.
+ * out. An item that carries no pool leads with its sentence, since no pool card's row draws it.
  */
 export function attentionTitle(item: AttentionItem, now: number): string {
   const members = Object.entries(item.detail)
@@ -110,7 +110,8 @@ export function attentionTitle(item: AttentionItem, now: number): string {
       const at = /_(at|since)$|^expires$/.test(name) ? instant(v) : null;
       return `${name}: ${at ? fmtAbsolute(at) : typeof v === 'object' ? JSON.stringify(v) : String(v)}`;
     });
-  return [...members, `started ${fmtRelative(item.since, now)}`].join('\n');
+  const sentence = item.pools.length === 0 ? [attentionDetail(item, now)] : [];
+  return [...sentence, ...members, `started ${fmtRelative(item.since, now)}`].join('\n');
 }
 
 export interface AttentionRead {

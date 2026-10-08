@@ -800,10 +800,12 @@ pub(crate) async fn pool_json_from(
     let now = context.now;
     let hour = phoebis_ledger::hour_of(now);
     let day = &context.day;
+    // From the hour `pool_context` totals the day from, so the bars sum to `requests_24h`: 25 buckets, the current
+    // partial hour last.
     let traffic = phoebis_ledger::pool_traffic(
         state.ledger.db(),
         &row.id,
-        hour - 23 * 3_600,
+        hour - 24 * 3_600,
         hour + 3_600,
         3_600,
     )

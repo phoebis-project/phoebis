@@ -252,23 +252,28 @@ const failoverRow = requests.find((r) => r.attempts.length > 1 && r.attempts.som
     await dash.settle(300);
   };
   results.push({ name: '/ the attention line runs on one schedule, registered as the dashboard mounts', ok: ticks.length === 1, missing: [`intervals at ${ATTENTION_REFRESH_MS} ms: ${ticks.length}`] });
-  // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits.
-  const members = (title) => title.split('\n').slice(0, -1).map((l) => l.replace(/^(backoff_since|expires|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
+  // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits,
+  // and so does the date a certificate's sentence names. An item that carries no pool leads with its sentence.
+  const members = (title) =>
+    title
+      .split('\n')
+      .slice(0, -1)
+      .map((l) => l.replace(/^(backoff_since|expires|next_attempt_at): (?!\d+$).+$/, '$1: <instant>').replace(/ \((?!\d+\))[^()]+\)\. Replace the pair/, ' (<instant>). Replace the pair'));
   const read = badges().map((b) => [b.text, b.tone, b.href, members(b.title)]);
   const want = [
     ['Pool exhausted: codex', 'badge--critical', '/pools#codex', ['key: ci', 'pool: codex']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
-    ['State writer degraded: routing', 'badge--serious', null, ['component: routing']],
-    ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['account: legacy', 'label: legacy']],
+    ['State writer degraded: routing', 'badge--serious', null, ['routing state is kept in memory until the registry file takes writes again', 'component: routing']],
+    ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['serves nothing until its credential is renewed', 'account: legacy', 'label: legacy']],
     ['Funding required: Overflow workspace', 'badge--serious', '/accounts/overflow', ['account: overflow', 'label: Overflow workspace']],
-    ['Credential refresh failed: legacy', 'badge--critical', '/accounts/legacy', ['account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
-    ['Certificate expiring: proxy.tls', 'badge--warning', null, ['cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
+    ['Credential refresh failed: legacy', 'badge--critical', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
     ['Priced record parked: codex', 'badge--serious', '/pools#codex', ['accounts: ["research"]', 'count: 1', 'pool: codex']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
   ];
   const ages = badges().map((b) => b.title.split('\n').pop());
   results.push({
-    name: '/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed and titled with its detail and age',
+    name: '/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed and titled with its detail and age, its sentence first where no pool card draws it',
     ok:
       lead() === '9 need attention' &&
       JSON.stringify(read) === JSON.stringify(want) &&
@@ -1346,9 +1351,16 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(m.container.querySelectorAll('dialog[open]').length)] });
+  const hints = () => [...(dlg?.querySelectorAll('.form-row input') ?? [])].map((i) => i.getAttribute('placeholder'));
+  const oauthHints = hints();
   const kinds = [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])];
   kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
+  results.push({
+    name: "/accounts Add account suggests personal for an OAuth account's id and label, and Console workspace for an API key's label",
+    ok: JSON.stringify(oauthHints) === '["personal","personal"]' && hints()[1] === 'Console workspace',
+    missing: [JSON.stringify(oauthHints), JSON.stringify(hints())],
+  });
   const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
   const choices = [...(dlg?.querySelectorAll('[role="group"]') ?? [])].map((g) => g.getAttribute('aria-label') ?? '');
   const inputs = dlg?.querySelectorAll('input').length ?? 0;
@@ -1614,8 +1626,8 @@ await m.navigate('/accounts/spare');
 }
 m.unmount();
 {
-  // A mount of its own on the frozen clock: the shell holds a refusal's route failure for six seconds ahead of the
-  // page's own report, and only a tick takes it down, so neither toast reaches another check's read.
+  // A mount of its own on the frozen clock: a toast there stays until a tick takes it down, so a toast one check raised
+  // never reaches another check's read.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeInto = async (input, value) => {
@@ -1631,7 +1643,7 @@ m.unmount();
     page.container.querySelector('button[aria-label="Edit label"]')?.click();
     await page.settle(150);
   };
-  /** The shell's route failure shows first; after its six seconds the page's own report takes its place. */
+  /** The toast line at once and after the shell's six seconds, when a page's own report would follow a route failure. */
   const reports = async () => {
     const shell = toast();
     tick(6_000);
@@ -1644,7 +1656,7 @@ m.unmount();
 
   await editLabel();
   await typeInto(labelInput(), 'primary 2');
-  failNextCall('renameAccount', '/admin/accounts/primary', 'that label is taken');
+  failNextCall('renameAccount', '/admin/accounts/primary', 'that label is taken', { quiet: true });
   // Held in front of the refusal: the release runs the refusal, which puts the mock's method back, so neither hold here
   // is restored.
   const renaming = deferNextCall('renameAccount');
@@ -1654,11 +1666,12 @@ m.unmount();
   renaming.release();
   await page.settle(600);
   const typed = labelInput()?.value ?? null;
+  const renameCallout = page.container.querySelector('.detail__ident [role="alert"]')?.textContent ?? null;
   const renamed = await reports();
   results.push({
-    name: '/accounts a refused rename keeps the editor open with the typed label and reports the sentence',
-    ok: typed === 'primary 2' && renamed.shell === '/admin/accounts/primary failed: that label is taken' && renamed.own === 'that label is taken',
-    missing: [typed === null ? 'the editor closed' : `input ${typed}`, renamed.shell || 'no route failure', renamed.own || 'no page report'],
+    name: "/accounts a refused rename keeps the editor open with the typed label and the sentence in the editor's callout, in no toast",
+    ok: typed === 'primary 2' && renameCallout === 'that label is taken' && renamed.shell === '' && renamed.own === '',
+    missing: [typed === null ? 'the editor closed' : `input ${typed}`, renameCallout ?? 'no callout', renamed.shell || 'no first toast', renamed.own || 'no second toast'],
   });
 
   titleButton('Cancel')?.click();
@@ -1690,7 +1703,7 @@ m.unmount();
   box()?.click();
   await page.settle(100);
   await typeInto(field(), '2027-03-01T10:00');
-  failNextCall('updateAccount', '/admin/accounts/primary', 'the store is unavailable');
+  failNextCall('updateAccount', '/admin/accounts/primary', 'the store is unavailable', { quiet: true });
   const ending = deferNextCall('updateAccount');
   identityButton('Save')?.click();
   await page.settle(100);
@@ -1698,12 +1711,13 @@ m.unmount();
   ending.release();
   await page.settle(600);
   const kept = { checked: box()?.checked ?? null, ends: field()?.value ?? null };
+  const endCalloutText = identity()?.querySelector('[role="alert"]')?.textContent ?? null;
   const ended = await reports();
   const stored = (await api.listAccounts()).find((a) => a.id === 'primary');
   results.push({
-    name: '/accounts a refused end edit keeps the form with the typed date',
-    ok: kept.checked === true && kept.ends === '2027-03-01T10:00' && ended.shell === '/admin/accounts/primary failed: the store is unavailable' && ended.own === 'the store is unavailable' && stored?.cancelled === false,
-    missing: [kept.checked === null ? 'the form closed' : `ticked ${kept.checked}, ends ${kept.ends}`, ended.shell || 'no route failure', ended.own || 'no page report', `stored cancelled ${stored?.cancelled}`],
+    name: "/accounts a refused end edit keeps the form with the typed date and the sentence in the editor's callout, in no toast",
+    ok: kept.checked === true && kept.ends === '2027-03-01T10:00' && endCalloutText === 'the store is unavailable' && ended.shell === '' && ended.own === '' && stored?.cancelled === false,
+    missing: [kept.checked === null ? 'the form closed' : `ticked ${kept.checked}, ends ${kept.ends}`, endCalloutText ?? 'no callout', ended.shell || 'no first toast', ended.own || 'no second toast', `stored cancelled ${stored?.cancelled}`],
   });
   results.push({
     name: '/accounts the label and end editors take no typing and no Cancel while their save runs',
@@ -1829,8 +1843,96 @@ m.unmount();
     ok: endStaleShown && endCancelReads === 1 && field() === null,
     missing: [`callout ${endStaleShown}`, `listAccounts ${endCancelReads}`, `field ${field() !== null}`],
   });
+
+  // The operator's own save moves the token both editors opened on, so the other editor takes the answer's token and
+  // its save lands without a Reload: the label first, then the subscription end.
+  const putBack = async () => {
+    await api.renameAccount('primary', 'primary');
+    await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+    tick(30_000);
+    await page.settle(400);
+  };
+  await putBack();
+  opened = (await primary())?.revision ?? null;
+  await editLabel();
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  await typeInto(labelInput(), 'primary 2');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  box()?.click();
+  await page.settle(100);
+  await typeInto(field(), '2027-03-01T10:00');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const both = { alert: identity()?.querySelector('[role="alert"]')?.textContent ?? null, field: field() !== null, stored: await primary() };
+  results.push({
+    name: '/accounts a label save and then an end save from editors opened together both land without a Reload',
+    ok: both.alert === null && !both.field && both.stored?.label === 'primary 2' && both.stored?.cancelled === true && both.stored?.revision === opened + 2,
+    missing: [both.alert ?? 'no callout', `field ${both.field}`, `label ${both.stored?.label}`, `cancelled ${both.stored?.cancelled}`, `revision ${both.stored?.revision}, opened ${opened}`],
+  });
+
+  // An end editor opened before another operator's write keeps its token through the title editor's own save, which
+  // moved a row the end editor never read, so its save still meets the fence.
+  await putBack();
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  await api.renameAccount('primary', 'primary (written)');
+  await editLabel();
+  await typeInto(labelInput(), 'primary 3');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  reloadIn(page.container.querySelector('.detail__ident [role="alert"]'))?.click();
+  await page.settle(400);
+  await editLabel();
+  await typeInto(labelInput(), 'primary 3');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  box()?.click();
+  await page.settle(100);
+  await typeInto(field(), '2027-03-01T10:00');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const fenced = { callout: identity()?.querySelector('[role="alert"]')?.textContent ?? '', stored: await primary() };
+  results.push({
+    name: "/accounts an end editor opened before another operator's write still reads stale_edit after the title editor's own save",
+    ok: fenced.callout === `${sentence} Reload` && fenced.stored?.label === 'primary 3' && fenced.stored?.cancelled === false,
+    missing: [fenced.callout || 'no callout', `label ${fenced.stored?.label}`, `cancelled ${fenced.stored?.cancelled}`],
+  });
+  identityButton('Cancel')?.click();
+  await page.settle(400);
   await api.renameAccount('primary', 'primary');
   await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+  page.unmount();
+}
+{
+  // A mount of its own, whose provider holds the shell's toast: a refused create reads in the Add account dialog's own
+  // callout and raises no toast.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+  await page.settle(300);
+  const dlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+  [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
+  await page.settle(150);
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const values = ['refused', 'Refused workspace', 'sk-ant-api03-not-a-key'];
+  for (const [n, input] of [...(dlg?.querySelectorAll('input') ?? [])].entries()) {
+    setter.call(input, values[n]);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  await page.settle(100);
+  const refusal = 'secret must be an API key';
+  failNextCall('createAccount', '/admin/accounts', refusal, { quiet: true, status: 400 });
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Add API key')?.click();
+  await page.settle(500);
+  const refused = [String(dlg?.hasAttribute('open')), dlg?.querySelector('[role="alert"]')?.textContent ?? 'no callout', page.container.querySelector('.toast')?.textContent ?? ''];
+  results.push({
+    name: "/accounts a refused create keeps the Add account dialog open with the route's sentence and raises no toast",
+    ok: JSON.stringify(refused) === JSON.stringify(['true', refusal, '']),
+    missing: refused,
+  });
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await page.settle(200);
   page.unmount();
 }
 {
@@ -1962,6 +2064,18 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       JSON.stringify(linked('codex')) === '["/accounts/research"]' &&
       sentence('work') === 'Active: studio takes every fresh session.',
     missing: [sentence('all'), sentence('codex'), sentence('work')].map(String),
+  });
+  // The head totals the day from the hour a full day back, where the bars start, so the head reads the bars' sum.
+  const series = new Map((await api.listPools()).map((p) => [p.name, p.traffic24h]));
+  const heads = [...cards.entries()].map(([name, c]) => {
+    const head = Number(/([\d,]+) requests/.exec(c.querySelector('.pool__chart-head .num')?.textContent ?? '')?.[1]?.replace(/,/g, '') ?? -1);
+    const bars = series.get(name) ?? [];
+    return [name, head, bars.length, bars.reduce((n, b) => n + b.requests, 0)];
+  });
+  results.push({
+    name: "/pools each card's head figure equals the sum of its 25 hourly bars",
+    ok: heads.length > 0 && heads.some(([, head]) => head > 0) && heads.every(([, head, length, sum]) => length === 25 && head === sum),
+    missing: heads.map((h) => h.join(' ')),
   });
   {
     // Without the accounts the order has no members to place, so until they land the sentence says what the pool's
@@ -2502,7 +2616,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const ticks = [...(util?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
     results.push({
       name: '/pools the bar draws each member reading with no migrate handle, and the percent field holds the typed margin',
-      ok: percent?.value === '50' && ticks.length === 6 && ticks.includes('primary: 5-hour 62%') && util?.querySelector('[role="slider"][aria-label="Migrate threshold"]') === null && util?.querySelector('.ubar__band') === null,
+      ok: percent?.value === '50' && ticks.length === 6 && ticks.includes('primary: 5-hour 62%') && util?.querySelector('[role="slider"][aria-label="Shed ahead of pace"]') === null && util?.querySelector('.ubar__band') === null,
       missing: [String(percent?.value), ...ticks],
     });
     // At the mock's clock nightly's 5-hour window leads its pace by about 0.71 and secondary's 7-day window by about
@@ -2759,7 +2873,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
     const moveDlg = await openMove();
     const before = problems.length;
-    failNextCall('updateKey', '/admin/keys/laptop', 'the pool is disabled');
+    failNextCall('updateKey', '/admin/keys/laptop', 'the pool is disabled', { quiet: true });
     // Held until read, so the button can be seen while the move is out.
     const refuse = api.updateKey;
     let release = () => {};
@@ -3007,7 +3121,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   {
     const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    failNextCall('updatePool', '/admin/pools/all', 'body_capture_hours exceeds stats.body_capture_max_hours', { status: 400 });
+    failNextCall('updatePool', '/admin/pools/all', 'body_capture_hours exceeds stats.body_capture_max_hours', { quiet: true, status: 400 });
     [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
     await m.settle(600);
     const open = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -3067,7 +3181,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // The dialog keys its members by account, so it cannot send a repeat itself; the route's 409 is stubbed to prove the
   // refusal reaches the footer line as the route words it, with the dialog left open.
   const twice = 'members name account overflow twice';
-  failNextCall('updatePool', '/admin/pools/all', twice, { status: 409 });
+  failNextCall('updatePool', '/admin/pools/all', twice, { quiet: true, status: 409 });
   footButton(dlg, 'Save pool')?.click();
   await m.settle(600);
   const repeat = [dlg?.hasAttribute('open') === true, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
@@ -3401,7 +3515,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
 }
 {
-  // primary sits in all, so the work dialog marks it held there and offers neither a checkbox nor a field for it.
+  // primary sits in all, so the work dialog marks it held there and offers neither a checkbox nor a field for it. Blanks
+  // of their size stand in the checkbox's place and the Priority cell, so the row keeps the others' alignment.
   m.unmount();
   m = await mount('/pools');
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
@@ -3409,15 +3524,86 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const primary = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === 'primary');
   const marking = primary?.querySelector('td:first-child span.muted:not(.mono)');
-  const cells = [...(primary?.querySelectorAll('td') ?? [])].slice(1).map((td) => td.childElementCount);
+  const cells = [...(primary?.querySelectorAll('td') ?? [])].slice(1).map((td) => [...td.children].map((c) => c.className).join(' '));
+  const spacer = primary?.querySelector('td:first-child .row')?.firstElementChild?.className;
   results.push({
-    name: '/pools the work dialog marks primary as held by all, with no checkbox and no field',
-    ok: marking?.textContent === 'In pool all' && marking.getAttribute('title') === 'An account belongs to one pool. Remove it from all first.' && !!primary && primary.querySelector('input') === null && JSON.stringify(cells) === '[0,0,0]',
-    missing: [marking?.textContent ?? 'no marking', marking?.getAttribute('title') ?? 'no title', primary?.querySelector('input') ? 'an input' : 'no input', JSON.stringify(cells)],
+    name: '/pools the work dialog marks primary as held by all, with no checkbox and no field, and blanks in their place',
+    ok:
+      marking?.textContent === 'In pool all' &&
+      marking.getAttribute('title') === 'An account belongs to one pool. Remove it from all first.' &&
+      !!primary &&
+      primary.querySelector('input') === null &&
+      spacer === 'members-table__check' &&
+      JSON.stringify(cells) === '["input members-table__blank","",""]',
+    missing: [marking?.textContent ?? 'no marking', marking?.getAttribute('title') ?? 'no title', primary?.querySelector('input') ? 'an input' : 'no input', String(spacer), JSON.stringify(cells)],
   });
   expect('/pools the Members hint says an account belongs to one pool', group(dlg, 'Members')?.querySelector('.field__hint')?.textContent ?? '', ['An account belongs to one pool.']);
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
+  m.unmount();
+  m = await mount('/pools');
+}
+{
+  // A re-read can find another pool holding a member the dialog has ticked: the row keeps its checkbox, so the operator
+  // can untick it, and only then reads held. The pools read here answers work holding primary as well, as a re-read
+  // would once another pool took it.
+  const listPools = api.listPools;
+  api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'work' ? { ...p, members: [...p.members, { ...p.members[0], accountId: 'primary' }] } : p));
+  const page = await mount('/pools');
+  [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await page.settle(300);
+  const dlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+  const row = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === 'primary');
+  const box = row()?.querySelector('input[type="checkbox"]');
+  const ticked = box?.checked === true;
+  box?.click();
+  await page.settle(150);
+  const unticked = row()?.querySelector('td:first-child span.muted:not(.mono)')?.textContent ?? null;
+  results.push({
+    name: '/pools a ticked member a re-read finds in another pool keeps its checkbox, and reads held there once unticked',
+    ok: ticked && unticked === 'In pool work' && row()?.querySelector('input') === null,
+    missing: [`ticked ${ticked}`, String(unticked)],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await page.settle(200);
+  api.listPools = listPools;
+  page.unmount();
+}
+{
+  // A mount of its own, whose provider holds the shell's toast: a save the route refuses for a field and the stale
+  // story's 409 each read in the pool dialog alone, and the stale footer says what is held.
+  const page = await mount('/pools');
+  const openAll = async () => {
+    [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+    await page.settle(300);
+    return [...page.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const toast = () => page.container.querySelector('.toast')?.textContent ?? '';
+  let dlg = await openAll();
+  failNextCall('updatePool', '/admin/pools/all', 'shed_share is between 0 and 1', { quiet: true, status: 400 });
+  footButton(dlg, 'Save pool')?.click();
+  await page.settle(600);
+  const refused = [String(dlg?.hasAttribute('open')), dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
+  results.push({ name: '/pools a save the route refuses for a field reads in the dialog footer and raises no toast', ok: JSON.stringify(refused) === JSON.stringify(['true', 'shed_share is between 0 and 1', '']), missing: refused });
+  footButton(dlg, 'Cancel')?.click();
+  await page.settle(400);
+  dlg = await openAll();
+  const story = (await api.listPools()).find((p) => p.id === 'all');
+  // Another operator's write through the API: the same settings under a later stamp.
+  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  footButton(dlg, 'Save pool')?.click();
+  await page.settle(600);
+  const held = [dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
+  results.push({
+    name: "/pools a stale refusal's footer says the save is held because the pool changed, and no toast repeats it",
+    ok: JSON.stringify(held) === JSON.stringify(['Save is held: the pool changed since you opened it. Reload to edit the current version.', '']),
+    missing: held,
+  });
+  footButton(dlg, 'Cancel')?.click();
+  await page.settle(400);
+  page.unmount();
+  // The write above moved the pool's stamp under the page mounted before it, which reads its lists again.
   m.unmount();
   m = await mount('/pools');
 }
@@ -4640,7 +4826,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   };
   const status = () => dlg?.querySelector('.dialog__status');
   const read = () => `${status()?.classList.contains('is-held') ? 'held' : 'free'} | ${status()?.textContent ?? ''}`;
-  failNextCall('createKey', '/admin/keys', 'name is taken');
+  failNextCall('createKey', '/admin/keys', 'name is taken', { quiet: true });
   await type(dlg?.querySelector('input[placeholder="workstation"]'), 'taken');
   [...(dlg?.querySelectorAll('.dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create')?.click();
   await m.settle(400);
@@ -5123,6 +5309,44 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     ok: m.container.querySelector('dialog[open]') === null && labelled('laptop') && (await api.listKeys()).find((k) => k.id === 'laptop')?.name === 'laptop',
     missing: [String(labelled('laptop'))],
   });
+}
+{
+  // A mount of its own, whose provider holds the shell's toast: a save the route refuses for a field and the stale
+  // story's 409 each read in the key dialog alone, and the stale footer says what is held.
+  const page = await mount('/keys');
+  const rows = () => [...page.container.querySelectorAll('.card--table tbody tr')];
+  const edit = async (name) => {
+    rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name)?.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    [...page.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+    await page.settle(400);
+    return [...page.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const foot = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const toast = () => page.container.querySelector('.toast')?.textContent ?? '';
+  let dlg = await edit('laptop');
+  failNextCall('updateKey', '/admin/keys/laptop', 'model_rules_mode is extend or replace', { quiet: true, status: 400 });
+  foot(dlg, 'Save')?.click();
+  await page.settle(600);
+  const refused = [String(dlg?.hasAttribute('open')), dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
+  results.push({ name: '/keys a save the route refuses for a field reads in the dialog footer and raises no toast', ok: JSON.stringify(refused) === JSON.stringify(['true', 'model_rules_mode is extend or replace', '']), missing: refused });
+  foot(dlg, 'Cancel')?.click();
+  await page.settle(300);
+  dlg = await edit('laptop');
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
+  // Another operator's write through the API: the same fields under a later stamp.
+  await api.updateKey('laptop', { autoModeServer: laptop.autoModeServer, bodyCaptureHours: laptop.bodyCaptureHours, enabled: laptop.enabled, keepaliveOptOut: laptop.keepaliveOptOut, longContextTwins: laptop.longContextTwins, modelRules: laptop.modelRules, modelRulesMode: laptop.modelRulesMode, name: laptop.name, notes: laptop.notes, poolId: laptop.poolId });
+  foot(dlg, 'Save')?.click();
+  await page.settle(600);
+  const held = [dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
+  results.push({
+    name: "/keys a stale refusal's footer says the save is held because the key changed, and no toast repeats it",
+    ok: JSON.stringify(held) === JSON.stringify(['Save is held: the key laptop changed since you opened it. Reload to edit the current version.', '']),
+    missing: held,
+  });
+  foot(dlg, 'Cancel')?.click();
+  await page.settle(300);
+  page.unmount();
 }
 {
   const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
