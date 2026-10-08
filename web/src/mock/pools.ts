@@ -21,6 +21,8 @@ export const KEY_REVOKED_AT = NOW - (12 * MINUTE + 30_000);
 
 /** The day's traffic, which `requests.ts` derives from the request rows once they are drawn. */
 const UNTIL_DRAWN: Pick<PoolSeed, 'cost24h' | 'requests24h' | 'traffic24h'> = { cost24h: 0, requests24h: 0, traffic24h: [] };
+/** The pins the story's sessions hold, which `operations.ts` counts once the sessions are drawn. */
+const UNTIL_PINNED: Pick<PoolSeed, 'activePins'> = { activePins: 0 };
 
 const POOL_ROWS: PoolSeed[] = [
   {
@@ -78,7 +80,7 @@ const POOL_ROWS: PoolSeed[] = [
       },
     ],
     ...UNTIL_DRAWN,
-    activePins: 10,
+    ...UNTIL_PINNED,
     // The 09:05:12 edit that set its shedding margin, the registry change the routing log records.
     updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
     // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both. The
@@ -120,7 +122,7 @@ const POOL_ROWS: PoolSeed[] = [
     ],
     members: [{ accountId: 'research', budgetDailyUsd: 20, budgetMonthlyUsd: null, priority: 0, spends: [{ period: 'day', periodEnd: periodEndAfter('day', NOW), spentUsd: 20.4 }] }],
     ...UNTIL_DRAWN,
-    activePins: 2,
+    ...UNTIL_PINNED,
     updatedAt: daysAgo(12),
   },
   {
@@ -144,7 +146,7 @@ const POOL_ROWS: PoolSeed[] = [
     modelRules: [],
     members: [unbudgeted('studio', 0)],
     ...UNTIL_DRAWN,
-    activePins: 0,
+    ...UNTIL_PINNED,
     updatedAt: daysAgo(40),
   },
 ];

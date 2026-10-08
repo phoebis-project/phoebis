@@ -154,11 +154,23 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`no account's rollup row predates the plan it was served under, at ${at}`, async () => {
     const s = await story;
+    const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
     // A row covers its whole hour, so one whose hour ends after the plan started can hold the plan's first requests.
     for (const a of s.accounts.filter((x) => x.subscription?.since)) {
       const since = Date.parse(a.subscription.since);
-      const early = s.allRollups.filter((r) => r.accountId === a.id && Date.parse(r.hour) + HOUR <= since);
+      const early = [...s.allRollups, ...facts].filter((r) => r.accountId === a.id && Date.parse(r.hour) + HOUR <= since);
       assert.equal(early.length, 0, `${a.id}'s plan started at ${a.subscription.since}, after ${early.length} of its rollup rows from ${early[0]?.hour}`);
+    }
+  });
+
+  test(`no account fact outlasts the account's newest window reading, at ${at}`, async () => {
+    const s = await story;
+    const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
+    // A fact's peaks are readings, so an hour that starts after the account's newest window reading has none behind it.
+    for (const a of s.accounts) {
+      const readings = [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+      const late = facts.filter((r) => r.accountId === a.id && Date.parse(r.hour) > Math.max(...readings));
+      assert.equal(late.length, 0, `${a.id}'s newest reading is ${readings.length ? iso(Math.max(...readings)) : 'none'}, before ${late.length} of its account facts from ${late[0]?.hour}`);
     }
   });
 
@@ -329,6 +341,22 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const item = s.attention.find((i) => i.kind === 'pool_exhausted' && i.subject.id === ci.poolId);
     assert.ok(first !== undefined && item !== undefined, `the ${ci.poolId} pool holds an exhausted answer after its last success and an exhaustion item`);
     assert.deepEqual([item.since, item.detail.key], [iso(Date.parse(first.at) + (first.durationMs ?? 0)), first.keyId], `the ${ci.poolId} pool's exhaustion`);
+  });
+
+  test(`the runner's sessions on ci read their last use off their own newest request, at ${at}`, async () => {
+    const s = await story;
+    const runner = s.sessions.filter((x) => x.keyId === 'ci' && !x.historical);
+    assert.ok(runner.length > 0, 'the story lists sessions of the ci key');
+    for (const x of runner) assert.equal(x.lastUsedAt, x.lastRequestAt, `${x.sessionId}'s last use`);
+  });
+
+  test(`each pool's active pins are the pinned sessions under its keys, and the dashboard's are their sum, at ${at}`, async () => {
+    const s = await story;
+    const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
+    for (const p of s.pools) {
+      assert.equal(p.activePins, s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).length, `${p.id}'s active pins`);
+    }
+    assert.equal(s.overview.activePins, sum(s.pools, (p) => p.activePins), "the dashboard's active pins");
   });
 
   test(`the key with one request in its life reads one, at ${at}`, async () => {

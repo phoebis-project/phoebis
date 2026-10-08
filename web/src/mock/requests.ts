@@ -1791,6 +1791,12 @@ function accountRollups(): AccountRollup[] {
     let drift5 = h.float(0.2, 0.7);
     let drift7 = h.float(0.3, 0.8);
     let driftF = h.float(0.05, 0.4);
+    // An hour holds facts from the one the plan started in to the one of the newest window reading, since a peak needs
+    // a reading behind it. Every hour is still drawn, so cutting one account's hours moves no other account's values.
+    const since = account.subscription?.since;
+    const from = since ? startOfHour(Date.parse(since)) : start;
+    const readings = [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+    const until = readings.length > 0 ? Math.max(...readings) : end;
     for (let t = start; t < end; t += HOUR) {
       const sampled5 = sampleIndex.get(`${account.id}|5h`)?.get(t);
       const sampled7 = sampleIndex.get(`${account.id}|7d`)?.get(t);
@@ -1804,7 +1810,7 @@ function accountRollups(): AccountRollup[] {
       const cooldown = peak5 >= 0.97 ? h.int(600, 3_600) : 0;
       const overage = account.extraUsage?.enabled && peak5 >= 0.9 ? h.int(300, 3_600) : 0;
       const busy = new Date(t).getHours() >= 8 && new Date(t).getHours() <= 19;
-      out.push({
+      const row: AccountRollup = {
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(t),
@@ -1812,7 +1818,8 @@ function accountRollups(): AccountRollup[] {
         cooldownSeconds: cooldown,
         overageSeconds: overage,
         pins: { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 },
-      });
+      };
+      if (t >= from && t <= until) out.push(row);
     }
   }
   return out;

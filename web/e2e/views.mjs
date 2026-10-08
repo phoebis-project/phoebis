@@ -3533,10 +3533,6 @@ async function sessionForkMark(theme) {
 }
 
 /**
- * Following the fork badge scrolls its base's row into view and marks it current. It runs after the view's shot, so
- * that shot shows the list at rest.
- */
-/**
  * The Sessions tile's probe bar draws the outcomes the Analytics probe chart also draws in that chart's slots
  * (`PROBE_SERIES` in `web/src/components/charts/theme.ts`), so one color reads one outcome on both pages. The ok and
  * failed segments keep the status colors.
@@ -3567,6 +3563,10 @@ async function probeBarSlots(theme) {
   for (const r of read) if (r.drawn !== r.slot) say(`draws ${r.outcome} in ${r.drawn}, not the ${r.slot} the chart draws it in`);
 }
 
+/**
+ * Following the fork badge scrolls its base's row into view and marks it current. It runs after the view's shot, so
+ * that shot shows the list at rest.
+ */
 async function forkLink(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
   const link = page.locator('.sessions-table a.srow__fork').first();
