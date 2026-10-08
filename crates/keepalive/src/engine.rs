@@ -24,6 +24,7 @@ use crate::breakeven::{resolve, shipped_tightest, Ceilings, FactorRows};
 use crate::config::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
 };
+use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
 use crate::savings::gross_saving;
@@ -36,7 +37,9 @@ pub const MAIN_AGENT: &str = "main";
 
 pub type SessionKey = (String, String);
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize)]
+#[derive(
+    Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash, serde::Serialize, serde::Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum AgentState {
     Busy,
@@ -70,7 +73,7 @@ impl AgentState {
 }
 
 /// What a parked agent waits on: a background task of its own, a scheduled wakeup, or both.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ParkKind {
     Background,
@@ -99,7 +102,8 @@ impl ParkKind {
 
 /// Why probes a recipe paid for went unanswered: the stop that left them, or the request after them that read no
 /// cache. The label the wasted count carries.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum Wasted {
     ColdReturn,
     Evicted,
@@ -156,6 +160,7 @@ reasons! {
     Cooled => "cooled",
     Evicted => "evicted",
     Expired => "expired",
+    ExpiredAtRestart => "expired_at_restart",
     FixedThinking => "fixed_thinking",
     ForcedTool => "forced_tool",
     HeadersTooLarge => "headers_too_large",
@@ -210,7 +215,7 @@ reasons! {
 }
 
 /// What an observation does to the agent's recipe.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Guard {
     Auxiliary,
@@ -410,6 +415,9 @@ pub struct EngineParts {
 pub struct EngineStats {
     pub agents: usize,
     pub bus_gaps: u64,
+    /// The request completions and reports refused because they arrived after the shutdown's quiesce, so the state
+    /// the last save holds is the state at the quiesce.
+    pub late_updates: u64,
     pub retained_bytes: usize,
     pub running_probes: usize,
     pub sessions: usize,
@@ -835,6 +843,14 @@ pub(crate) struct Inner {
     /// The idle-age counters by pool id. Never pruned while the engine runs, so a pool that leaves keeps the counts
     /// it already took until the restart.
     pub idle_returns: BTreeMap<String, IdleReturns>,
+    /// The rows changed or removed since their last acknowledged save, each under the revision of its latest change.
+    pub dirty: Dirty,
+    /// Bumped by every touch, so a save that lands after a newer change still knows which change it carried.
+    pub revision: u64,
+    /// Whether the last save failed, so a failing registry is logged once per streak rather than every flush.
+    pub persist_failing: bool,
+    /// The completions and reports refused after the quiesce.
+    pub late_updates: u64,
 }
 
 pub struct Engine {
@@ -847,6 +863,12 @@ pub struct Engine {
     /// How many times `step` has actually asked the router, for a test to hold against one ask per due tick.
     /// Cheap enough to keep in every build; only the reader is gated.
     router_view_calls: AtomicU64,
+    /// Orders the flushes: a snapshot, its save and its acknowledgment run under it whole, so two flushes never
+    /// overlap and an older batch never reaches the store after a newer one.
+    pub(crate) flush_lock: Mutex<()>,
+    /// How many flushes have read their batch, for a test to change a row only once the save it races has read it.
+    /// Cheap enough to keep in every build, so only the reader is gated.
+    pub(crate) persist_snapshots: AtomicU64,
 }
 
 impl Engine {
@@ -871,6 +893,8 @@ impl Engine {
             idle: Notify::new(),
             workers: TaskTracker::new(),
             router_view_calls: AtomicU64::new(0),
+            flush_lock: Mutex::new(()),
+            persist_snapshots: AtomicU64::new(0),
         })
     }
 
@@ -904,6 +928,7 @@ impl Engine {
         EngineStats {
             agents: inner.agents,
             bus_gaps: inner.bus_gaps,
+            late_updates: inner.late_updates,
             retained_bytes: inner.retained,
             running_probes: inner.running,
             sessions: inner.sessions.len(),
@@ -974,6 +999,10 @@ impl Inner {
             next_incarnation: 0,
             timing,
             idle_returns: BTreeMap::new(),
+            dirty: Dirty::default(),
+            revision: 0,
+            persist_failing: false,
+            late_updates: 0,
         }
     }
 
@@ -986,7 +1015,7 @@ impl Inner {
     }
 
     /// The one writer of an agent's reason, so the counter behind the views never disagrees with the reason
-    /// they show.
+    /// they show. Nearly every change to a recipe writes a reason, so this is where most of them become dirty.
     pub(crate) fn set_reason(&mut self, key: &SessionKey, agent_id: &str, reason: Reason) {
         if let Some(agent) = self
             .sessions
@@ -996,6 +1025,7 @@ impl Inner {
             agent.reason = reason;
         }
         *self.reasons.entry(reason).or_default() += 1;
+        self.touch_agent(key, agent_id);
     }
 
     /// Drops the agent's recipe and everything following it, and moves the agent to a new generation so no
@@ -1036,6 +1066,7 @@ impl Inner {
     /// resolutions followed it. A probe sent while the request was open is not among them: it pays for the
     /// request after this one.
     pub(crate) fn decide_unanswered(&mut self, key: &SessionKey, agent_id: &str, read: u64) {
+        self.touch_agent(key, agent_id);
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -1067,6 +1098,7 @@ impl Inner {
         wasted: Option<Wasted>,
         unanswered: Unanswered,
     ) {
+        self.touch_agent(key, agent_id);
         let Some(agent) = self
             .sessions
             .get_mut(key)
@@ -1130,12 +1162,17 @@ impl Inner {
         let began = agent.reason != reason;
         let counted = agent.hold_counted && !began;
         let was_due = !agent.in_flight && agent.due_at().is_some_and(|at| at <= now);
+        // A hold spans every tick it lasts, so only a change is written: a held recipe would otherwise rewrite its
+        // sealed prompt at every flush.
+        let moved = agent.hold_counted != (counted || was_due);
         agent.hold_counted = counted || was_due;
         if !counted && was_due {
             self.skipped.push((key.clone(), agent_id.to_string()));
         }
         if began {
             self.set_reason(key, agent_id, reason);
+        } else if moved {
+            self.touch_agent(key, agent_id);
         }
     }
 
@@ -1159,6 +1196,7 @@ impl Inner {
             .unwrap_or_else(|| agent.current.as_ref().is_some_and(|o| o.recipe.fast));
         self.settlements
             .push(Kept::of(agent, fast, costs).settle(key, label));
+        self.touch_agent(key, agent_id);
     }
 
     /// The entry is dead at its expiry and the lead already places the due time ahead of it, so a probe past it warms
@@ -1217,7 +1255,11 @@ impl Inner {
         else {
             return;
         };
+        let park = (agent.park_kind, agent.deadline, agent.wake_at);
         if !agent.pass_park(now) {
+            if park != (agent.park_kind, agent.deadline, agent.wake_at) {
+                self.touch_agent(key, agent_id);
+            }
             return;
         }
         // The window restarts here, so the one counted so far ends with no return, closed before its start moves.
@@ -1225,9 +1267,11 @@ impl Inner {
         agent.park_ended_at = Some(now);
         if agent.id != MAIN_AGENT {
             agent.park_began = None;
+            self.touch_agent(key, agent_id);
             return;
         }
         agent.set_state(AgentState::Idle);
+        self.touch_agent(key, agent_id);
         self.emit(SessionLifecycle::MainResumed {
             key_id: key.0.clone(),
             session_id: key.1.clone(),
@@ -1239,7 +1283,9 @@ impl Inner {
     /// sent a request, still reaches the later buckets. A busy main keeps its window and counts nothing, and a window
     /// whose return a prompt announced waits for the request.
     pub(crate) fn advance_idle_episodes(&mut self, snapshot: &RegistrySnapshot, now: i64) {
-        for session in self.sessions.values_mut() {
+        let mut opened: Vec<SessionKey> = Vec::new();
+        let mut raised: Vec<(SessionKey, String)> = Vec::new();
+        for (key, session) in self.sessions.iter_mut() {
             if session.ended || !session.attended {
                 continue;
             }
@@ -1268,6 +1314,7 @@ impl Inner {
                     prompt_at: None,
                     pool_key,
                 });
+                opened.push(key.clone());
             }
             let Some(episode) = main.idle_episode.as_mut() else {
                 continue;
@@ -1276,6 +1323,10 @@ impl Inner {
                 continue;
             }
             let bucket = idle_age_bucket(now - episode.started);
+            // Only a window that crossed into a new bucket is written, so an idle session costs no save per tick.
+            if episode.bucket.is_none_or(|counted| bucket > counted) {
+                raised.push((key.clone(), episode.pool_key.clone()));
+            }
             raise_reached(
                 self.idle_returns
                     .entry(episode.pool_key.clone())
@@ -1284,6 +1335,13 @@ impl Inner {
                 bucket,
             );
             episode.bucket = Some(episode.bucket.map_or(bucket, |counted| counted.max(bucket)));
+        }
+        for key in opened {
+            self.touch_agent(&key, MAIN_AGENT);
+        }
+        for (key, pool) in raised {
+            self.touch_agent(&key, MAIN_AGENT);
+            self.touch_pool(&pool);
         }
     }
 
@@ -1305,14 +1363,23 @@ impl Inner {
         // Never below the fence: the window already counted as reaching it, so its return is read there.
         let bucket = idle_age_bucket(episode.prompt_at.unwrap_or(now) - episode.started)
             .max(episode.bucket.unwrap_or(0));
-        let counters = self.idle_returns.entry(episode.pool_key).or_default();
+        let counters = self
+            .idle_returns
+            .entry(episode.pool_key.clone())
+            .or_default();
+        let raised = episode.bucket.is_none_or(|counted| bucket > counted);
         raise_reached(counters, episode.bucket, bucket);
         let anchor = episode
             .anchor
             .as_ref()
             .map(|(static_hash, tail)| (static_hash.as_str(), tail.as_str()));
-        if continues_prefix(anchor, boundaries) {
+        let returned = continues_prefix(anchor, boundaries);
+        if returned {
             counters.buckets[bucket].returned += 1;
+        }
+        self.touch_agent(key, MAIN_AGENT);
+        if raised || returned {
+            self.touch_pool(&episode.pool_key);
         }
     }
 
@@ -1355,22 +1422,33 @@ impl Inner {
     /// A resolution that landed after a recipe was retained moved the router's pins and model cooldowns to the
     /// dated id; the recipe follows, so the gate finds them and the next request's credit compares like names.
     pub(crate) fn follow_resolutions(&mut self, canonical: &HashMap<String, String>) {
-        for session in self.sessions.values_mut() {
-            for agent in session.agents.values_mut() {
+        let mut followed: Vec<(SessionKey, String)> = Vec::new();
+        for (key, session) in self.sessions.iter_mut() {
+            for (agent_id, agent) in session.agents.iter_mut() {
+                let mut moved = false;
                 if let Some(dated) = canonical.get(&agent.canonical_model) {
                     agent.canonical_model = dated.clone();
+                    moved = true;
                 }
                 if let Some(prior) = agent.current.as_mut().and_then(|o| o.prior.as_mut()) {
                     if let Some(dated) = canonical.get(&prior.model) {
                         prior.model = dated.clone();
+                        moved = true;
                     }
                 }
                 for kept in &mut agent.kept {
                     if let Some(dated) = canonical.get(&kept.canonical_model) {
                         kept.canonical_model = dated.clone();
+                        moved = true;
                     }
                 }
+                if moved {
+                    followed.push((key.clone(), agent_id.clone()));
+                }
             }
+        }
+        for (key, agent_id) in followed {
+            self.touch_agent(&key, &agent_id);
         }
     }
 
@@ -1467,6 +1545,8 @@ impl Inner {
                     main.close_idle_episode();
                 }
             }
+            self.touch_session(&key);
+            self.touch_agent(&key, MAIN_AGENT);
         }
         let expired: Vec<SessionKey> = self
             .sessions
@@ -1485,6 +1565,7 @@ impl Inner {
                 );
             }
             self.agents -= agents.len();
+            self.forget_session(&key);
             // A session whose companion reported its end was announced then; the entry outlives the report
             // only so a result still in flight finds it, and the channel carries one end, not two.
             let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
@@ -1520,6 +1601,7 @@ impl Inner {
                 );
             }
             self.agents -= agents.len();
+            self.forget_session(&key);
             let announced = self.sessions.remove(&key).is_some_and(|s| s.ended);
             if !announced {
                 self.emit(SessionLifecycle::SessionEnded {
@@ -1693,11 +1775,15 @@ impl Engine {
         let expiry = self.parts.session_expiry.as_millis() as i64;
         let limits = self.parts.limits.clone();
         let mut inner = self.lock();
+        let key: SessionKey = (key_id, session_id);
         if inner.closed {
+            // A request on a session the engine holds is one the last save can no longer carry.
+            if inner.sessions.contains_key(&key) {
+                inner.late_updates += 1;
+            }
             return;
         }
         inner.expire(now, expiry);
-        let key: SessionKey = (key_id, session_id);
         let Some(session) = inner.sessions.get(&key) else {
             return;
         };
@@ -1761,6 +1847,9 @@ impl Engine {
             .get_mut(&agent_id)
             .unwrap()
             .last_guard = Some(verdict);
+        // One touch for everything below: the lock is held to the end, so the flush reads the agent as this request
+        // leaves it.
+        inner.touch_agent(&key, &agent_id);
         // Ahead of the return below, so a foreign request on a new prefix ends the window too. The return is judged
         // against the prefix the window opened on, never on the verdict, which re-arms on any chain once a ceiling
         // has discarded the recipe.
@@ -1802,9 +1891,15 @@ impl Engine {
         };
         let poisoned = inner.gap_backlog > 0;
         inner.discard_keeping_unanswered(&key, &agent_id, Reason::AwaitingSelection);
-        let session = inner.sessions.get_mut(&key).unwrap();
-        session.last_real_at = Some(now);
-        let agent = session.agents.get_mut(&agent_id).unwrap();
+        inner.sessions.get_mut(&key).unwrap().last_real_at = Some(now);
+        inner.touch_session(&key);
+        let agent = inner
+            .sessions
+            .get_mut(&key)
+            .unwrap()
+            .agents
+            .get_mut(&agent_id)
+            .unwrap();
         agent.covered_since_real = false;
         agent.covered_account = None;
         agent.covered_unit = None;
@@ -1980,6 +2075,7 @@ impl Engine {
             // A failed attempt is not evidence about the cache; the next selection re-arms the attempt.
             if observation.attempt == head.attempt && !(200..300).contains(&head.status) {
                 observation.ready = false;
+                inner.touch_agent(&key, &agent_id);
             }
         }
     }
@@ -2015,6 +2111,13 @@ impl Engine {
         let Some((key, agent_id)) = inner.pending.get(&complete.request_id).cloned() else {
             return;
         };
+        // After the quiesce the last save holds the agent as it stood then, so a completion that lands later earns no
+        // credit and arms nothing. The relay has already answered the client either way.
+        if inner.closed {
+            inner.late_updates += 1;
+            return;
+        }
+        inner.touch_agent(&key, &agent_id);
         let read = complete
             .usage
             .as_ref()
@@ -2342,7 +2445,7 @@ impl Engine {
                 // Before any hold can short-circuit: a recipe held under `horizon` never reaches the gate, and the
                 // ceilings below read the pool's policy as it stands now, so a horizon raised in the console
                 // reopens the hold and an opt-out discards the prompt the hold retained.
-                let refreshed = {
+                let (refreshed, moved) = {
                     let agent = inner
                         .sessions
                         .get_mut(&key)
@@ -2350,8 +2453,17 @@ impl Engine {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    refresh_policy(&view, agent)
+                    let before = (agent.policy.clone(), agent.pool_id.clone());
+                    let refreshed = refresh_policy(&view, agent);
+                    (
+                        refreshed,
+                        before != (agent.policy.clone(), agent.pool_id.clone()),
+                    )
                 };
+                // Read at every tick, so only a change is written.
+                if moved {
+                    inner.touch_agent(&key, &agent_id);
+                }
                 if let Err(Gate::Drop(reason, label)) = refreshed {
                     inner.discard(&key, &agent_id, reason, Some(label));
                     continue;
@@ -2412,7 +2524,7 @@ impl Engine {
                 if inner.lapse(&key, &agent_id, now, &mut lapsed) {
                     continue;
                 }
-                let held = {
+                let (held, moved) = {
                     let agent = inner
                         .sessions
                         .get_mut(&key)
@@ -2420,8 +2532,22 @@ impl Engine {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    gate(&view, agent, &key.1)
+                    let before = (
+                        agent.policy.clone(),
+                        agent.pool_id.clone(),
+                        agent.account.clone(),
+                    );
+                    let held = gate(&view, agent, &key.1);
+                    let after = (
+                        agent.policy.clone(),
+                        agent.pool_id.clone(),
+                        agent.account.clone(),
+                    );
+                    (held, before != after)
                 };
+                if moved {
+                    inner.touch_agent(&key, &agent_id);
+                }
                 match held {
                     Err(Gate::Drop(reason, label)) => {
                         inner.discard(&key, &agent_id, reason, Some(label));
@@ -2529,12 +2655,15 @@ impl Engine {
         }
     }
 
-    /// Stops the scheduler, cancels the probes in flight, and waits for their tasks: the caller drains the
-    /// listeners after this, so a probe never outlives the relay it runs through.
-    pub async fn shutdown(&self) {
-        self.close();
+    /// Quiesces, waits for the probes the quiesce cancelled, saves, and only then clears: the last save carries
+    /// everything the engine held at the quiesce, and a flush already in flight finishes first under the flush lock.
+    /// The caller drains the listeners after this, so a probe never outlives the relay it runs through.
+    pub async fn shutdown(self: &Arc<Self>) {
+        self.quiesce();
         self.workers.close();
         self.workers.wait().await;
+        self.flush_persisted().await;
+        self.close();
     }
 }
 

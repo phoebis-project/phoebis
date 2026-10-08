@@ -76,11 +76,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (44, V44),
     (45, V45),
     (46, V46),
+    (49, V49),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 46;
+pub const SCHEMA_VERSION: u32 = 49;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -685,4 +686,27 @@ CREATE TABLE IF NOT EXISTS shed_rounds (
 );
 ALTER TABLE affinity ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE accounts ADD COLUMN state_cause TEXT NOT NULL DEFAULT 'unrecorded';
+"#;
+
+// The keepalive engine's state, so a restart keeps its sessions, its agents with their retained prompts and the
+// idle-age counters. An agent row carries one versioned payload of the agent's fields rather than a column per field,
+// so a field the engine reshapes moves the payload's version and no column. The prompt sits beside it sealed under the
+// storage key, with the header block, the size and the dispatch TTL the probe replays it with.
+const V49: &str = r#"
+CREATE TABLE keepalive_sessions (
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL, payload TEXT NOT NULL, updated_at INTEGER NOT NULL,
+  PRIMARY KEY (key_id, key_generation, session_id)
+);
+CREATE TABLE keepalive_agents (
+  key_id TEXT NOT NULL, key_generation INTEGER NOT NULL, session_id TEXT NOT NULL, agent_id TEXT NOT NULL,
+  record_version INTEGER NOT NULL, payload TEXT NOT NULL,
+  body_sealed BLOB, body_nonce BLOB, headers TEXT NOT NULL, body_size INTEGER NOT NULL, dispatched_ms INTEGER, fast INTEGER NOT NULL,
+  updated_at INTEGER NOT NULL,
+  PRIMARY KEY (key_id, key_generation, session_id, agent_id)
+);
+CREATE TABLE keepalive_idle_returns (
+  pool_id TEXT NOT NULL, bucket INTEGER NOT NULL, reached INTEGER NOT NULL, returned INTEGER NOT NULL,
+  PRIMARY KEY (pool_id, bucket)
+);
 "#;

@@ -6,7 +6,8 @@
 pub mod relay_common;
 
 use std::collections::BTreeMap;
-use std::sync::atomic::Ordering;
+use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::time::Duration;
 
@@ -28,6 +29,7 @@ use phoebis_ledger::{
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::AccountingSource;
+use phoebis_store::{StorageKey, Store};
 // Re-exported for every test binary that shares this rig; only some of them, this one included, reach for all
 // of `oauth`, `wait_for`, and `NOW` themselves.
 #[allow(unused_imports)]
@@ -77,12 +79,39 @@ pub struct Rig {
     /// The spec's price table, kept so `restart` builds its engine with what this one was built with.
     pub pricing: PriceTable,
     pub sequence: u64,
+    /// The registry file of a rig built `on_disk`, which a restart test opens beside the store.
+    pub store_path: Option<PathBuf>,
     pub sub: Subscriber,
     /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
     pub tables: Arc<PlanTables>,
     /// The spec's timing, kept so `restart` builds its engine with what this one was built with.
     pub timing: KeepaliveTiming,
     pub up: FakeUpstream,
+    /// Last, so the directory goes after every holder of the store inside it has let go.
+    _scratch: Option<Scratch>,
+}
+
+/// A directory of the rig's own for an on-disk registry, removed with the rig.
+struct Scratch(PathBuf);
+
+impl Scratch {
+    fn new() -> Scratch {
+        static NEXT: AtomicU64 = AtomicU64::new(0);
+        let path = std::env::temp_dir().join(format!(
+            "phoebis-keepalive-rig-{}-{}",
+            std::process::id(),
+            NEXT.fetch_add(1, Ordering::SeqCst)
+        ));
+        // A run that died before its drop leaves its directory behind, whose registry would read as this rig's.
+        let _ = std::fs::remove_dir_all(&path);
+        Scratch(path)
+    }
+}
+
+impl Drop for Scratch {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.0);
+    }
 }
 
 pub struct RigSpec {
@@ -94,6 +123,9 @@ pub struct RigSpec {
     pub catalog: Vec<Rule>,
     pub lifecycle: Option<LifecycleSender>,
     pub limits: KeepaliveLimits,
+    /// The registry in a file of its own rather than in memory, for a test that reaches it past the store. The
+    /// relay's harness then answers the catalog from its default fake, and the ledger's standing is not read.
+    pub on_disk: bool,
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
     /// The shipped table by default. A ceiling test writes its own rows so a break-even follows from the text.
@@ -116,6 +148,7 @@ impl Default for RigSpec {
             catalog: Vec::new(),
             lifecycle: None,
             limits: KeepaliveLimits::default(),
+            on_disk: false,
             policy: KeepalivePolicy {
                 enabled: true,
                 ..KeepalivePolicy::default()
@@ -155,15 +188,26 @@ pub async fn rig(spec: RigSpec) -> Rig {
     // Most of this suite is about a session's pin and account continuity, where a spelling resolving to a dated id
     // mid-test is not what it is testing; the cases that are about a resolution name the rules that answer one.
     let catalog_up = FakeUpstream::start(spec.catalog).await;
-    let h = relay_common::harness_with_bus_and_catalog(
-        &up,
-        &spec.accounts,
-        spec.pool,
-        bus.clone(),
-        catalog_up,
-        spec.accounting,
-    )
-    .await;
+    let (h, store_path, scratch) = if spec.on_disk {
+        let scratch = Scratch::new();
+        let path = scratch.0.join("router.sqlite");
+        let store = Arc::new(Store::open(&path, &StorageKey::generate()).unwrap());
+        let h =
+            relay_common::harness_on_with_bus(store, &up, &spec.accounts, spec.pool, bus.clone())
+                .await;
+        (h, Some(path), Some(scratch))
+    } else {
+        let h = relay_common::harness_with_bus_and_catalog(
+            &up,
+            &spec.accounts,
+            spec.pool,
+            bus.clone(),
+            catalog_up,
+            spec.accounting,
+        )
+        .await;
+        (h, None, None)
+    };
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&spec.policy).unwrap();
     h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
@@ -224,10 +268,12 @@ pub async fn rig(spec: RigSpec) -> Rig {
         metrics,
         pricing: spec.pricing,
         sequence: 0,
+        store_path,
         sub,
         tables,
         timing: spec.timing,
         up,
+        _scratch: scratch,
     };
     rig.event(Event {
         event: "session_start".into(),
@@ -290,8 +336,14 @@ pub fn session_start_as(
 impl Rig {
     /// A second engine over the same ledger, store and router: a real restart, whose fresh `Inner` starts
     /// empty and has to restore `spent_today` and `share_spent_today` itself, unlike a `load_spent_today`
-    /// called back on this rig's own engine, which the running one already answers from.
+    /// called back on this rig's own engine, which the running one already answers from. The persistence round
+    /// trip runs through it too: the first engine's `flush_persisted`, then this one's `load_persisted`.
     pub async fn restart(&self) -> Arc<Engine> {
+        self.restart_with_limits(self.limits.clone()).await
+    }
+
+    /// `restart` under the limits a changed bootstrap file would give the next process.
+    pub async fn restart_with_limits(&self, limits: KeepaliveLimits) -> Arc<Engine> {
         let clock: Clock = {
             let c = self.clock.clone();
             Arc::new(move || c.load(Ordering::SeqCst))
@@ -302,7 +354,7 @@ impl Rig {
             cooldown_fallback: Duration::from_secs(60),
             ledger: self.ledger.clone(),
             lifecycle: None,
-            limits: self.limits.clone(),
+            limits,
             max_request_bytes: 32 << 20,
             metrics: Arc::new(Metrics::new()),
             pricing: Arc::new(Pricing::new(self.pricing.clone())),

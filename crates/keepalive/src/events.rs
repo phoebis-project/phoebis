@@ -256,6 +256,7 @@ impl Engine {
         let acked = {
             let mut inner = self.lock();
             if inner.closed {
+                inner.late_updates += 1;
                 return Err(err("quiesced", 503));
             }
             inner.expire(now, expiry);
@@ -355,6 +356,8 @@ impl Inner {
                 session.ended = true;
                 session.sequence = ev.sequence;
                 session.last_report_at = now;
+                self.touch_session(&key);
+                let session = &self.sessions[&key];
                 let ack = acknowledge(session, session.agents.get(&agent_id), None);
                 self.emit(SessionLifecycle::SessionEnded {
                     key_id: key.0.clone(),
@@ -545,6 +548,12 @@ impl Inner {
         }
         session.attended = true;
         session.last_report_at = now;
+        self.touch_session(&key);
+        // A heartbeat moves the session alone, so it rewrites no agent's sealed prompt.
+        if !renews_lease {
+            self.touch_agent(&key, &agent_id);
+        }
+        let session = &self.sessions[&key];
         Ok(acknowledge(session, session.agents.get(&agent_id), None))
     }
 
@@ -605,6 +614,7 @@ impl Inner {
                     }
                     self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
                 }
+                self.touch_session(&key);
                 let session = &self.sessions[&key];
                 return Ok(acknowledge(
                     session,
@@ -659,6 +669,9 @@ impl Inner {
                 });
             }
             self.agents -= agents.len();
+            // Filed under the generation the replaced rows were saved under: a start under a new generation leaves
+            // one removal for the old row and one write for the new, so a load never meets both.
+            self.forget_session(&key);
         }
         // A previous holder's traffic says nothing about this key's session, so only a start of the same
         // generation inherits when the session last carried a real request.
@@ -691,6 +704,7 @@ impl Inner {
             },
         );
         self.agents += 1;
+        self.touch_session(&key);
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
         self.emit(SessionLifecycle::SessionStarted {
             key_id: key.0.clone(),

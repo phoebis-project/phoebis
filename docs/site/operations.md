@@ -61,10 +61,11 @@ same snapshot, one database at a time.
 A backup taken before an upgrade needs both snapshots to succeed: the registry and the ledger migrate together,
 and a restore built from only one of them leaves the two databases at different points in the request history.
 
-The key seals every credential in the registry, so a backup that carries the database is useless without the key,
-and dangerous with it. Keep the key somewhere separate, such as a password manager or a secrets store, and never
-beside the database copy. The ledger holds captured bodies, which are prompts, so a ledger backup needs the same
-care as the registry.
+The key seals every credential in the registry, so a backup that carries the database is useless without the key, and
+dangerous with it. The registry also holds the keepalive engine's retained recipes, each prompt sealed under the same
+key, so a restored registry needs its key for them as it does for the credentials. Keep the key somewhere separate, such
+as a password manager or a secrets store, and never beside the database copy. The ledger holds captured bodies, which
+are prompts, so a ledger backup needs the same care as the registry.
 
 ## Restore
 

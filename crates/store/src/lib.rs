@@ -11,6 +11,7 @@ mod schema;
 
 pub mod backup;
 pub mod crypto;
+pub mod keepalive;
 pub mod permissions;
 
 use std::path::{Path, PathBuf};
@@ -36,6 +37,9 @@ pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,
     ResolvedAttempt, Secret,
+};
+pub use keepalive::{
+    keepalive_aad, IdleReturnsRow, KeepaliveAgentRow, KeepaliveBatch, KeepaliveSessionRow,
 };
 pub use memory::{MemoryKey, MemoryRecord, MemoryStore};
 pub use registry::{

@@ -1641,6 +1641,7 @@ dependencies = [
  "phoebis-store",
  "phoebis-transport",
  "rand 0.10.2",
+ "rusqlite",
  "serde",
  "serde_json",
  "thiserror",

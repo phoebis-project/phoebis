@@ -6,6 +6,7 @@ mod breakeven;
 mod config;
 mod engine;
 mod events;
+mod persist;
 mod probe;
 mod recipe;
 mod routes;
@@ -16,7 +17,7 @@ mod view;
 pub use breakeven::{break_even_ms, factors_for, resolve, Ceilings, Factors};
 pub use config::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
-    LEASE_MS, LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
+    LEASE_MS, LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS, PERSIST_INTERVAL,
 };
 pub use engine::{
     continues_prefix, guard, idle_age_bucket, spawn_observer, AgentState, AgentStatus, Engine,

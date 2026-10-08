@@ -1,6 +1,8 @@
 //! The configuration records: the process-wide limits the bootstrap file carries, read once at start, the
 //! per-pool policy a pool row carries, parsed on every read, and the schedule's fixed timing.
 
+use std::time::Duration;
+
 use serde::{Deserialize, Serialize};
 
 pub const FIVE_MINUTES_MS: i64 = 300_000;
@@ -15,6 +17,9 @@ pub const LEASE_SECONDS: u64 = 90;
 pub const LEASE_MS: i64 = LEASE_SECONDS as i64 * 1_000;
 /// The most probes running at once.
 pub const MAX_WORKERS: usize = 4;
+/// How often the engine writes its changed sessions, agents and counters to the registry. The shutdown writes
+/// whatever is left.
+pub const PERSIST_INTERVAL: Duration = Duration::from_secs(30);
 
 #[derive(Clone, Debug, Deserialize, Serialize, PartialEq)]
 #[serde(deny_unknown_fields, default)]
@@ -203,7 +208,7 @@ impl KeepalivePolicy {
 }
 
 /// The schedule's fixed numbers: not an operator's setting, and read by the binary through `for_start`.
-#[derive(Clone, Copy, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Serialize, Deserialize)]
 pub struct KeepaliveTiming {
     /// A probe lands with a minute to spare on a five-minute entry.
     pub lead_5m_ms: i64,

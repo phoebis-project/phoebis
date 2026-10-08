@@ -48,7 +48,7 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
         RepeatedColdProbe | PartialCacheCoverage => ViewReason::ColdProbes,
         Cooled => ViewReason::Cooled,
         Evicted => ViewReason::Evicted,
-        Expired => ViewReason::Expired,
+        Expired | ExpiredAtRestart => ViewReason::Expired,
         Horizon => ViewReason::Horizon,
         IdleLimit => ViewReason::IdleLimit,
         LedgerBehind => ViewReason::LedgerBehind,

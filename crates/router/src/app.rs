@@ -9,7 +9,9 @@ use anyhow::{anyhow, Context};
 use axum::Router;
 use phoebis_admin::{AdminSecrets, AdminState, PairingVault, Readiness, Sessions, SettingsView};
 use phoebis_bus::Bus;
-use phoebis_keepalive::{keepalive_router, spawn_observer, Engine, EngineParts, KeepaliveTiming};
+use phoebis_keepalive::{
+    keepalive_router, spawn_observer, Engine, EngineParts, KeepaliveTiming, PERSIST_INTERVAL,
+};
 use phoebis_ledger::{
     metrics_router, usage_router, LedgerConfig, LedgerDb, Metrics, Pricing, QuotaPoll,
 };
@@ -329,8 +331,11 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         tables: tables.clone(),
         timing: KeepaliveTiming::for_start(),
     });
+    let keepalive_flush = keepalive.clone().spawn_persist_flush(PERSIST_INTERVAL);
     // Both daily budgets are read back from the store so a restart resets neither cap.
     keepalive.load_spent_today().await;
+    // The sessions, recipes and counters the last process saved, back before the scheduler's first tick.
+    keepalive.load_persisted().await;
     let (attention, mut attention_handles) =
         phoebis_attention::spawn(phoebis_attention::AttentionParts {
             bus: bus.clone(),
@@ -599,8 +604,14 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
     attention_handles.stop();
     let served = match tokio::time::timeout(DRAIN_TIMEOUT, async {
         // The scheduler stops and its probes end before the listeners drain: a probe runs through the relay,
-        // which the drain is about to drop.
+        // which the drain is about to drop. The engine quiesces first, so no update lands after the state it saves,
+        // then drains its probes, saves, and clears last, so the clear takes nothing unsaved. The flusher is joined
+        // rather than aborted: the quiesce ended its loop, and a flush it had in flight ran to its end under the
+        // flush lock ahead of the shutdown's own.
         keepalive.shutdown().await;
+        if let Err(error) = keepalive_flush.await {
+            tracing::warn!(%error, "the keepalive's flush task did not end cleanly");
+        }
         join_remaining(
             &mut ended,
             [&mut proxy, &mut admin_server, &mut metrics_server],

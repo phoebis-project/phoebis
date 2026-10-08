@@ -1,0 +1,760 @@
+//! The engine's state across a restart: a flush writes the sessions, the agents with their recipes and the idle-age
+//! counters to the registry, and a second engine over the same registry reads them back silent, within the limits it
+//! starts under. The shutdown quiesces before its save, and the saves never overlap.
+
+mod common;
+
+use std::time::Duration;
+
+use common::*;
+use phoebis_bus::{Outcome, Usage};
+use phoebis_keepalive::{Ack, CompanionState, Event, EventError, KeepaliveLimits, Reason};
+use phoebis_store::{KeepaliveAgentRow, KeepaliveSessionRow};
+
+fn on_disk() -> RigSpec {
+    RigSpec {
+        on_disk: true,
+        ..RigSpec::default()
+    }
+}
+
+/// The rig's registry file, opened beside the store as an operator's `sqlite3` would open it. Its own busy wait is
+/// short, so the test never sits behind the store's.
+fn registry(r: &Rig) -> rusqlite::Connection {
+    let conn = rusqlite::Connection::open(r.store_path.as_ref().expect("an on-disk rig")).unwrap();
+    conn.busy_timeout(Duration::from_millis(200)).unwrap();
+    conn
+}
+
+fn saved_sessions(r: &Rig) -> Vec<KeepaliveSessionRow> {
+    r.h.store.load_keepalive().unwrap().0
+}
+
+fn saved_agents(r: &Rig) -> Vec<KeepaliveAgentRow> {
+    r.h.store.load_keepalive().unwrap().1
+}
+
+/// One member of the saved payload of `agent` on `session`.
+fn saved_field(r: &Rig, session: &str, agent: &str, field: &str) -> serde_json::Value {
+    let row = saved_agents(r)
+        .into_iter()
+        .find(|row| row.session_id == session && row.agent_id == agent)
+        .unwrap_or_else(|| panic!("no saved row for {session} {agent}"));
+    serde_json::from_str::<serde_json::Value>(&row.payload).unwrap()[field].clone()
+}
+
+fn heartbeat() -> Event {
+    Event {
+        event: "heartbeat".into(),
+        ..Default::default()
+    }
+}
+
+/// A `parked` report of kind `background` with the command's deadline.
+fn parked_until(r: &Rig, deadline: i64) -> Event {
+    Event {
+        event: "state".into(),
+        agent_id: Some("main".into()),
+        state: Some("parked".into()),
+        park_kind: Some("background".into()),
+        deadline: Some(deadline),
+        request_generation: Some(r.agent("main").request_generation),
+        ..Default::default()
+    }
+}
+
+/// One real request on `session` rather than the rig's own.
+async fn observe_on(r: &mut Rig, session: &str, agent: &str) {
+    let mut req = r.request(agent);
+    relay_common::set_header(&mut req, "x-claude-code-session-id", session);
+    let resp = r.h.app.clone().oneshot(req).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let id = relay_common::outcome(&resp).request_id;
+    let _ = resp.into_body().collect().await.unwrap();
+    r.pump(Some(&id)).await;
+}
+
+/// `Rig::event` under a key generation read beforehand. The rig reads it from the store, whose connection a save
+/// waiting on the registry's write lock holds, so a report sent while the test holds that lock goes through here.
+fn report(r: &mut Rig, key_generation: i64, mut event: Event) -> Result<Ack, EventError> {
+    r.sequence += 1;
+    event.sequence = r.sequence;
+    if event.session_id.is_empty() {
+        event.session_id = "session".into();
+    }
+    if event.instance_id.is_empty() {
+        event.instance_id = r.instance_of(&event.session_id);
+    }
+    r.engine.apply_event("desktop", key_generation, event)
+}
+
+/// A `state` report for `agent` under its current generation.
+fn state_of(r: &Rig, agent: &str, state: &str) -> Event {
+    Event {
+        event: "state".into(),
+        agent_id: Some(agent.into()),
+        state: Some(state.into()),
+        request_generation: Some(r.agent(agent).request_generation),
+        park_kind: (state == "parked").then(|| "background".into()),
+        ..Default::default()
+    }
+}
+
+/// Waits on the test's own thread until `count` flushes have read their batch, so a change the test makes next is
+/// one that save missed. A save held in the store's busy wait keeps the store's connection, and a runtime task that
+/// reads the store (the relay's catalog refresh does every few milliseconds) blocks its worker behind it. The workers
+/// drive the runtime's timer, so a wait on that timer would stall until the save gave up.
+fn snapshots_reach(r: &Rig, count: u64) {
+    let give_up = std::time::Instant::now() + Duration::from_secs(5);
+    while r.engine.persist_snapshots() < count {
+        assert!(
+            std::time::Instant::now() < give_up,
+            "the save never read its batch"
+        );
+        std::thread::sleep(Duration::from_millis(1));
+    }
+}
+
+#[tokio::test]
+async fn a_flush_writes_the_sessions_the_agents_and_the_recipes_and_a_restart_loads_them_silent() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    let deadline = r.now() + 2 * 3_600_000;
+    r.event(parked_until(&r, deadline)).unwrap();
+    r.advance(MINUTE);
+    let (sessions, agents) = r.engine.persist_rows();
+    let stats = r.engine.stats();
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        (saved_sessions(&r).len(), saved_agents(&r).len()),
+        (1, 1),
+        "the flush wrote the session and its agent"
+    );
+
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let (loaded_sessions, loaded_agents) = second.persist_rows();
+    assert_eq!(
+        loaded_agents, agents,
+        "every field of the agent and its recipe reads back as it stood"
+    );
+    let main = &loaded_agents[0];
+    let payload: serde_json::Value = serde_json::from_str(&main.payload).unwrap();
+    assert_eq!(
+        (
+            payload["state"].as_str(),
+            payload["park_kind"].as_str(),
+            payload["deadline"].as_i64(),
+            payload["park_began"].as_i64(),
+        ),
+        (
+            Some("parked"),
+            Some("background"),
+            Some(deadline),
+            Some(r.now() - MINUTE)
+        )
+    );
+    assert!(main.body.as_ref().is_some_and(|body| !body.is_empty()));
+    assert_eq!(
+        (main.body_size, main.fast),
+        (stats.retained_bytes, false),
+        "the recipe's size is the retained bytes"
+    );
+    let before: serde_json::Value = serde_json::from_str(&sessions[0].payload).unwrap();
+    let after: serde_json::Value = serde_json::from_str(&loaded_sessions[0].payload).unwrap();
+    assert_eq!(
+        (after["attended"].as_bool(), after["lease"].as_i64()),
+        (Some(false), Some(0)),
+        "the session reads silent with its lease at zero"
+    );
+    assert_eq!(
+        (&after["sequence"], &after["instance"], &after["owner_id"]),
+        (
+            &before["sequence"],
+            &before["instance"],
+            &before["owner_id"]
+        )
+    );
+    assert_eq!(second.stats().retained_bytes, stats.retained_bytes);
+    assert_eq!((second.stats().sessions, second.stats().agents), (1, 1));
+    assert_eq!(second.sessions()[0].companion, CompanionState::Silent);
+}
+
+#[tokio::test]
+async fn a_heartbeat_after_the_restart_answers_instance_ended_and_the_same_instance_re_adopts_with_the_sequence_kept(
+) {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.event(heartbeat()).unwrap();
+    let sequence = r.sequence;
+    r.engine.flush_persisted().await;
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
+
+    assert_eq!(
+        r.event(heartbeat()).unwrap_err().code,
+        "instance_ended",
+        "a silent session answers the mod's heartbeat as an ended instance"
+    );
+    let ack = r.reregister();
+    assert_eq!(ack.sequence, sequence + 2, "the same instance re-adopts it");
+    assert_eq!(r.engine.sessions()[0].companion, CompanionState::Reporting);
+    let generation = r.generation("desktop");
+    let stale = r.engine.apply_event(
+        "desktop",
+        generation,
+        Event {
+            event: "heartbeat".into(),
+            session_id: "session".into(),
+            instance_id: "instance".into(),
+            sequence,
+            ..Default::default()
+        },
+    );
+    assert_eq!(
+        stale.unwrap_err().code,
+        "stale_sequence",
+        "the sequence the save carried still fences a report the mod already sent"
+    );
+    r.event(heartbeat()).expect("the next sequence is accepted");
+    assert_eq!(
+        r.engine.recipes_for("desktop", "session"),
+        vec!["main".to_string()],
+        "the recipe the mod's session left stays retained"
+    );
+}
+
+#[tokio::test]
+async fn the_generations_survive_so_the_next_state_report_is_not_a_409() {
+    let mut r = rig(on_disk()).await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("main").await;
+    r.observe("main").await;
+    r.observe("sub").await;
+    let generations = (
+        r.agent("main").request_generation,
+        r.agent("sub").request_generation,
+    );
+    assert!(generations.0 > 0 && generations.1 > 0, "{generations:?}");
+    r.engine.flush_persisted().await;
+    r.engine = r.restart().await;
+    r.engine.load_persisted().await;
+
+    let ack = r.reregister();
+    let acked: Vec<(String, u64)> = ack
+        .agents
+        .unwrap()
+        .into_iter()
+        .map(|agent| (agent.agent_id, agent.request_generation))
+        .collect();
+    assert_eq!(
+        acked,
+        vec![
+            ("main".to_string(), generations.0),
+            ("sub".to_string(), generations.1)
+        ]
+    );
+    for (agent, generation) in [("main", generations.0), ("sub", generations.1)] {
+        r.event(Event {
+            event: "state".into(),
+            agent_id: Some(agent.into()),
+            state: Some("idle".into()),
+            request_generation: Some(generation),
+            ..Default::default()
+        })
+        .unwrap_or_else(|e| panic!("{agent} under its saved generation: {e:?}"));
+    }
+}
+
+#[tokio::test]
+async fn an_ended_session_and_an_expired_recipe_are_dropped_at_the_load_under_expired_at_restart() {
+    let mut r = rig(on_disk()).await;
+    r.event(session_start("gone")).unwrap();
+    r.event(session_end("gone")).unwrap();
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_sessions(&r).len(),
+        2,
+        "the ended session was saved too"
+    );
+    // The router is down past the entry's expiry.
+    r.advance(400_000);
+    let second = r.restart().await;
+    second.load_persisted().await;
+
+    assert_eq!(
+        second.reasons().get(&Reason::ExpiredAtRestart).copied(),
+        Some(1)
+    );
+    assert!(second.recipes_for("desktop", "session").is_empty());
+    assert_eq!(
+        (second.stats().sessions, second.stats().retained_bytes),
+        (1, 0)
+    );
+    assert_eq!(
+        saved_sessions(&r)
+            .iter()
+            .map(|s| s.session_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["session"],
+        "the ended session's row is gone"
+    );
+    let agents = saved_agents(&r);
+    assert_eq!(
+        agents
+            .iter()
+            .map(|a| (a.session_id.as_str(), a.body.is_some(), a.body_size))
+            .collect::<Vec<_>>(),
+        vec![("session", false, 0)],
+        "the ended session's agent is gone and the expired recipe's prompt with it"
+    );
+    assert_eq!(
+        saved_field(&r, "session", "main", "reason"),
+        "expired_at_restart"
+    );
+}
+
+#[tokio::test]
+async fn the_idle_age_counters_round_trip() {
+    let mut r = rig(on_disk()).await;
+    r.state("main", "idle");
+    r.advance_attended(6 * MINUTE);
+    r.step().await;
+    let counters = r.engine.idle_returns();
+    assert_eq!(
+        counters["main"].buckets[..2]
+            .iter()
+            .map(|b| b.reached)
+            .collect::<Vec<_>>(),
+        vec![1, 1],
+        "a window six minutes old reached the first two buckets"
+    );
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(second.idle_returns(), counters);
+}
+
+#[tokio::test]
+async fn a_body_that_cannot_be_opened_leaves_the_agent_without_a_recipe() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    let damaged = registry(&r)
+        .execute(
+            "UPDATE keepalive_agents SET body_sealed = zeroblob(length(body_sealed)) WHERE agent_id = 'main'",
+            [],
+        )
+        .unwrap();
+    assert_eq!(damaged, 1);
+    let second = r.restart().await;
+    second.load_persisted().await;
+
+    let main = second
+        .agent_status("desktop", "session", "main")
+        .expect("the agent keeps its record");
+    assert_eq!(main.reason, Reason::Reset);
+    assert!(second.recipes_for("desktop", "session").is_empty());
+    assert_eq!(
+        (second.stats().agents, second.stats().retained_bytes),
+        (1, 0)
+    );
+    assert_eq!(
+        saved_field(&r, "session", "main", "current"),
+        serde_json::Value::Null
+    );
+}
+
+#[tokio::test]
+async fn the_shutdown_quiesces_drains_saves_and_then_clears() {
+    let mut r = rig(on_disk()).await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("main").await;
+    r.observe("sub").await;
+    r.state("main", "idle");
+    let (sessions, agents) = r.engine.persist_rows();
+    r.engine.shutdown().await;
+
+    assert_eq!(
+        (r.engine.stats().sessions, r.engine.stats().retained_bytes),
+        (0, 0),
+        "the clear came after the save"
+    );
+    assert_eq!(saved_sessions(&r), sessions);
+    assert_eq!(
+        saved_agents(&r),
+        agents,
+        "every agent as it stood at the quiesce, recipes and all"
+    );
+}
+
+#[tokio::test]
+async fn a_request_that_completes_during_shutdown_is_refused_and_counted_and_the_save_holds_the_quiesced_state(
+) {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.observe(r.observed("late", "main", BODY));
+    r.engine.observe(r.selected("late", "a"));
+    let (_, agents) = r.engine.persist_rows();
+    r.engine.quiesce();
+    r.bus.publish(r.complete(
+        "late",
+        Outcome::Succeeded,
+        Some(Usage {
+            cache_read_tokens: Some(2_000),
+            ..Default::default()
+        }),
+    ));
+    r.pump(None).await;
+    r.engine.flush_persisted().await;
+    r.engine.close();
+
+    assert_eq!(r.engine.stats().late_updates, 1);
+    assert_eq!(
+        saved_agents(&r),
+        agents,
+        "the saved agent is the quiesced one: the completion armed nothing and credited nothing"
+    );
+    assert_eq!(
+        saved_field(&r, "session", "main", "reason"),
+        "awaiting_cache_evidence"
+    );
+    assert_eq!(r.event(heartbeat()).unwrap_err().code, "quiesced");
+    assert_eq!(r.engine.stats().late_updates, 2);
+}
+
+// From the hold to its release the test awaits nothing: it runs on a thread apart from the runtime's workers, which a
+// held save can leave blocked behind the store's connection (see `snapshots_reach`).
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_shutdown_while_an_earlier_save_is_held_lands_both_saves_in_order() {
+    let mut r = rig(on_disk()).await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    r.state("main", "idle");
+    r.state("sub", "idle");
+    let held_at = r.now();
+    let generation = r.generation("desktop");
+    let held = registry(&r);
+    held.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = r.engine.clone();
+    let first = tokio::spawn(async move { engine.flush_persisted().await });
+    snapshots_reach(&r, 2);
+    // After the held save read its batch: only a later save carries this.
+    r.advance(MINUTE);
+    let parked = state_of(&r, "main", "parked");
+    report(&mut r, generation, parked).unwrap();
+    let engine = r.engine.clone();
+    let shutdown = tokio::spawn(async move { engine.shutdown().await });
+    // Released well inside the store's own busy wait, which the case never waits out.
+    held.execute_batch("COMMIT").unwrap();
+    first.await.unwrap();
+    shutdown.await.unwrap();
+
+    let saved = |agent: &str| {
+        saved_agents(&r)
+            .into_iter()
+            .find(|row| row.agent_id == agent)
+            .map(|row| row.updated_at)
+    };
+    assert_eq!(
+        (
+            saved_field(&r, "session", "main", "state"),
+            saved("main")
+        ),
+        (serde_json::json!("parked"), Some(held_at + MINUTE)),
+        "the shutdown's save carried the change the held save missed, so it was still dirty after the held save's \
+         acknowledgment"
+    );
+    assert_eq!(
+        (saved_field(&r, "session", "sub", "state"), saved("sub")),
+        (serde_json::json!("idle"), Some(held_at)),
+        "the held save landed first and retired what it carried, which the shutdown's save left as it found it"
+    );
+}
+
+// Apart from the workers, as the case above explains.
+#[tokio::test(flavor = "multi_thread", worker_threads = 2)]
+async fn a_flush_failure_keeps_the_rows_dirty_with_their_revisions_and_the_next_flush_writes_them()
+{
+    let mut r = rig(on_disk()).await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert_eq!(saved_field(&r, "session", "main", "state"), "busy");
+
+    // A save that fails: a trigger in the registry file refuses every session row, which the store's own connection
+    // meets on its next write whatever the file's journal mode. The subagent's change is carried by that save and
+    // touched by nothing after it.
+    r.state("main", "idle");
+    r.state("sub", "idle");
+    let generation = r.generation("desktop");
+    let conn = registry(&r);
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = r.engine.clone();
+    let failed = tokio::spawn(async move { engine.flush_persisted().await });
+    snapshots_reach(&r, 2);
+    // Between the failed save's snapshot and its outcome.
+    let parked = state_of(&r, "main", "parked");
+    report(&mut r, generation, parked).unwrap();
+    conn.execute_batch(
+        "CREATE TRIGGER refuse_insert BEFORE INSERT ON keepalive_sessions BEGIN SELECT RAISE(ABORT, 'refused'); END; \
+         CREATE TRIGGER refuse_update BEFORE UPDATE ON keepalive_sessions BEGIN SELECT RAISE(ABORT, 'refused'); END; \
+         COMMIT;",
+    )
+    .unwrap();
+    failed.await.unwrap();
+    assert_eq!(
+        (
+            saved_field(&r, "session", "main", "state"),
+            saved_field(&r, "session", "sub", "state")
+        ),
+        (serde_json::json!("busy"), serde_json::json!("busy")),
+        "the failed save wrote nothing"
+    );
+    conn.execute_batch("DROP TRIGGER refuse_insert; DROP TRIGGER refuse_update;")
+        .unwrap();
+
+    // The next save carries the rows, at the revision the change since left them.
+    let last_activity = saved_field(&r, "session", "main", "last_activity");
+    conn.execute_batch("BEGIN IMMEDIATE").unwrap();
+    let engine = r.engine.clone();
+    let next = tokio::spawn(async move { engine.flush_persisted().await });
+    snapshots_reach(&r, 3);
+    r.advance(MINUTE);
+    // Between this save's snapshot and its acknowledgment: a presence report moves the idle clock alone.
+    let presence = Event {
+        event: "activity".into(),
+        agent_id: Some("main".into()),
+        kind: Some("presence".into()),
+        request_generation: Some(r.agent("main").request_generation),
+        ..Default::default()
+    };
+    report(&mut r, generation, presence).unwrap();
+    conn.execute_batch("COMMIT").unwrap();
+    next.await.unwrap();
+    assert_eq!(
+        (
+            saved_field(&r, "session", "main", "state"),
+            saved_field(&r, "session", "main", "last_activity"),
+            saved_field(&r, "session", "sub", "state")
+        ),
+        (serde_json::json!("parked"), last_activity, serde_json::json!("idle")),
+        "the rows the failure kept dirty landed, the subagent's at the revision the failed save carried, and main's \
+         from the snapshot this save read"
+    );
+
+    r.engine.flush_persisted().await;
+    assert_eq!(
+        saved_field(&r, "session", "main", "last_activity"),
+        serde_json::json!(r.now()),
+        "the change the acknowledgment found newer than its revision stayed dirty and lands now"
+    );
+}
+
+/// Two sessions under the default limits: `session` with its main agent and a recipe, saved first, and `newer`,
+/// saved a minute later, with its main agent's recipe and a subagent that retains nothing. Answers the two recipes'
+/// sizes, the older first.
+async fn two_sessions() -> (Rig, usize, usize) {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    let older = r.engine.stats().retained_bytes;
+    r.engine.flush_persisted().await;
+    r.advance(MINUTE);
+    r.event(session_start("newer")).unwrap();
+    r.event(Event {
+        event: "agent_start".into(),
+        session_id: "newer".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    observe_on(&mut r, "newer", "main").await;
+    let newer = r.engine.stats().retained_bytes - older;
+    r.engine.flush_persisted().await;
+    assert_eq!((saved_sessions(&r).len(), saved_agents(&r).len()), (2, 3));
+    (r, older, newer)
+}
+
+#[tokio::test]
+async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_the_rest() {
+    let rows = |r: &Rig| {
+        saved_agents(r)
+            .iter()
+            .map(|a| (a.session_id.clone(), a.agent_id.clone(), a.body.is_some()))
+            .collect::<Vec<_>>()
+    };
+    let row =
+        |session: &str, agent: &str, recipe: bool| (session.to_string(), agent.to_string(), recipe);
+
+    for limits in [
+        KeepaliveLimits {
+            max_sessions: 1,
+            ..KeepaliveLimits::default()
+        },
+        KeepaliveLimits {
+            max_agents: 2,
+            ..KeepaliveLimits::default()
+        },
+    ] {
+        let (r, _, newer) = two_sessions().await;
+        let second = r.restart_with_limits(limits.clone()).await;
+        second.load_persisted().await;
+        let stats = second.stats();
+        assert_eq!(
+            (stats.sessions, stats.agents, stats.retained_bytes),
+            (1, 2, newer),
+            "{limits:?}"
+        );
+        assert_eq!(
+            second.reasons().get(&Reason::Evicted).copied(),
+            Some(1),
+            "{limits:?}"
+        );
+        assert_eq!(
+            rows(&r),
+            vec![row("newer", "main", true), row("newer", "sub", false)],
+            "{limits:?}"
+        );
+        assert_eq!(
+            saved_sessions(&r)
+                .iter()
+                .map(|s| s.session_id.as_str())
+                .collect::<Vec<_>>(),
+            vec!["newer"],
+            "{limits:?}"
+        );
+    }
+
+    let (r, older, newer) = two_sessions().await;
+    let limits = KeepaliveLimits {
+        max_retained_bytes: older + newer - 1,
+        ..KeepaliveLimits::default()
+    };
+    let second = r.restart_with_limits(limits).await;
+    second.load_persisted().await;
+    let stats = second.stats();
+    assert_eq!(
+        (stats.sessions, stats.agents, stats.retained_bytes),
+        (2, 3, newer)
+    );
+    assert_eq!(second.reasons().get(&Reason::Evicted).copied(), Some(1));
+    assert_eq!(
+        second.recipes_for("desktop", "newer"),
+        vec!["main".to_string()]
+    );
+    assert!(second.recipes_for("desktop", "session").is_empty());
+    assert_eq!(
+        rows(&r),
+        vec![
+            row("newer", "main", true),
+            row("newer", "sub", false),
+            row("session", "main", false)
+        ],
+        "the older recipe's prompt left the registry with it"
+    );
+}
+
+#[tokio::test]
+async fn a_loaded_recipe_probes_warm_when_due() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let sent = r.up.requests().len();
+    r.advance(270_000);
+    second.step().await;
+    second.wait_idle().await;
+
+    assert_eq!(
+        r.up.requests().len(),
+        sent + 1,
+        "the restored recipe's probe reached the upstream"
+    );
+    let main = second.agent_status("desktop", "session", "main").unwrap();
+    assert_eq!(
+        (main.probes, main.cold, main.reason),
+        (1, 0, Reason::Scheduled),
+        "and read the whole prefix back: {main:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_start_under_a_new_key_generation_leaves_one_saved_row_for_the_session() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    let old = r.generation("desktop");
+    // A later holder of the key id registers the same session id, which replaces the earlier holder's session in place.
+    r.engine
+        .apply_event(
+            "desktop",
+            old + 1,
+            Event {
+                event: "session_start".into(),
+                session_id: "session".into(),
+                instance_id: "later".into(),
+                sequence: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    r.engine.flush_persisted().await;
+
+    assert_eq!(
+        saved_sessions(&r)
+            .into_iter()
+            .map(|s| (s.session_id, s.key_generation))
+            .collect::<Vec<_>>(),
+        vec![("session".to_string(), old + 1)],
+        "the earlier holder's row went as the later one's was written"
+    );
+    assert!(saved_agents(&r).iter().all(|a| a.key_generation == old + 1));
+    let second = r.restart().await;
+    second.load_persisted().await;
+    assert_eq!(second.stats().sessions, 1);
+    assert_eq!(second.sessions()[0].key_generation, old + 1);
+}
+
+#[tokio::test]
+async fn an_expired_session_leaves_the_registry_at_the_next_flush() {
+    let mut r = rig(RigSpec {
+        session_expiry: Duration::from_secs(600),
+        ..on_disk()
+    })
+    .await;
+    r.observe("main").await;
+    r.engine.flush_persisted().await;
+    assert_eq!(saved_sessions(&r).len(), 1);
+    r.advance(700_000);
+    r.engine.expire();
+    assert_eq!(r.engine.stats().sessions, 0);
+    r.engine.flush_persisted().await;
+    assert!(saved_sessions(&r).is_empty());
+    assert!(
+        saved_agents(&r).is_empty(),
+        "the session's agents and its recipe went with it"
+    );
+}
