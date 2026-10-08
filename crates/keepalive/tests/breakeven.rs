@@ -195,7 +195,7 @@ models:
 "#;
 
 #[test]
-fn a_plan_priced_model_takes_the_plan_factors_an_unpriced_one_falls_back_to_dollars_and_a_model_priced_nowhere_takes_the_tightest_row(
+fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_its_row_or_the_tightest_row(
 ) {
     let pricing = PriceTable::from_yaml(PRICES, "test").unwrap();
     let tables = PlanTables {
@@ -239,16 +239,63 @@ fn a_plan_priced_model_takes_the_plan_factors_an_unpriced_one_falls_back_to_doll
     }
     assert_eq!(
         both(Funding::Plan, "claude-sonnet-5-5"),
-        (Some(2_760_000), Some(61_560_000)),
-        "a model the plan leaves unweighted falls back to its dollar row"
+        both(Funding::Plan, "claude-opus-5-5"),
+        "a model the plan leaves unweighted breaks even on the plan's multipliers, since the weight cancels"
     );
-    for funding in [Funding::ApiKey, Funding::Plan] {
-        assert_eq!(
-            both(funding, "claude-unlisted-9"),
-            both(Funding::ApiKey, "claude-sonnet-5-5"),
-            "{funding:?}: a model neither table prices takes the smallest break-even of the priced rows"
-        );
-    }
+    assert_eq!(
+        both(Funding::Plan, "claude-unlisted-9"),
+        both(Funding::Plan, "claude-opus-5-5"),
+        "a plan recipe on a model neither table prices breaks even on the plan's multipliers too"
+    );
+    assert_eq!(
+        both(Funding::ApiKey, "claude-unlisted-9"),
+        (Some(2_760_000), Some(61_560_000)),
+        "a dollar recipe on a model neither table prices takes the smallest break-even of the priced rows, Sonnet's"
+    );
+}
+
+/// On the shipped tables `claude-sonnet-5` has a dollar row and no plan weight. A token costs the model's weight times
+/// the type's multiplier, so the weight cancels from read over write and a plan recipe on it breaks even where every
+/// plan recipe does.
+#[test]
+fn a_plan_recipe_breaks_even_on_the_plans_multipliers_whatever_the_models_weight() {
+    let timing = KeepaliveTiming::default();
+    let both = |pricing: &PriceTable, tables: &PlanTables, model: &str| {
+        let factors = factors_for(pricing, tables, Funding::Plan, model);
+        (
+            break_even_ms(factors, FIVE_MINUTES_MS, &timing),
+            break_even_ms(factors, ONE_HOUR_MS, &timing),
+        )
+    };
+    let (prices, plan) = (PriceTable::shipped(), PlanTables::shipped());
+    assert_eq!(
+        both(&prices, &plan, "claude-sonnet-5"),
+        (Some(11_760_000), Some(158_760_000)),
+        "44.1 h on the hour, not the 17.1 h of its dollar row"
+    );
+    assert_eq!(
+        both(&prices, &plan, "claude-sonnet-5"),
+        both(&prices, &plan, "claude-sonnet-5-5"),
+        "the same figure as the weighted model beside it"
+    );
+    let costs = COSTS.replace(
+        "overrides: {}",
+        "overrides:\n  claude-sonnet-5-5: {type_multiplier: {cache_read: 0.05}}",
+    );
+    let overridden = PlanTables {
+        costs: SubscriptionCosts::from_yaml(&costs).unwrap(),
+        path: None,
+        source: "test".to_string(),
+    };
+    assert_eq!(
+        both(
+            &PriceTable::from_yaml(PRICES, "test").unwrap(),
+            &overridden,
+            "claude-sonnet-5-5"
+        ),
+        (Some(5_760_000), Some(77_760_000)),
+        "an unweighted model's own multipliers stand in for the shared ones: a read of 0.05 against 1.25"
+    );
 }
 
 /// The tightest row differs by TTL: `claude-early-1` gains the least over its read on a five-minute write and
@@ -397,6 +444,27 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
         seconds.0,
         between(2_760.0, 11_760.0),
         "no rule: every model the price table lists, Sonnet to Fable on five minutes"
+    );
+
+    // The dialog's override picker and a rule both name the catalog's dated id, which a price row keys undated.
+    let dated_override = r#"{"enabled":true,"plan":{"models":[{"model":"claude-opus-5-5-20261001","main":"5m","subagent":"5m"}]}}"#;
+    let (seconds, _) = figures(
+        &pool(dated_override, Vec::new()),
+        std::slice::from_ref(&plan),
+    );
+    assert_eq!(
+        seconds.0,
+        between(11_760.0, 158_760.0),
+        "a dated override that writes five minutes for main brings the plan's five-minute figure as the low end"
+    );
+    let (seconds, _) = figures(
+        &pool(rewritten, only(&["claude-opus-5-5-20261001"])),
+        std::slice::from_ref(&dollars),
+    );
+    assert_eq!(
+        seconds.0,
+        one(5_760.0),
+        "an allow entry naming the dated id reads that model's row through its undated base, not the tightest row"
     );
 
     let (seconds, _) = figures(

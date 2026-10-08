@@ -55,9 +55,12 @@ pub fn break_even_ms(factors: Factors, ttl_ms: i64, timing: &KeepaliveTiming) ->
     Some((exact + 1e-6).floor().max(0.0) as i64)
 }
 
-/// The factors for `canonical_model` under `funding`. Plan funding reads `tables.rate_table(FIVE_HOUR).rows` and falls
-/// back to the dollar row when the plan prices the model nowhere, dollars read `pricing.rate_table().rows`, and a model
-/// neither prices takes the tightest dollar row (the smallest break-even among the priced rows).
+/// The factors for `canonical_model` under `funding`. Plan funding reads `tables.rate_table(FIVE_HOUR).rows`, and a
+/// model the cost model leaves unweighted or names nowhere reads its type multipliers, the model's own override where
+/// it has one. A token costs the model's weight times the type's multiplier, so the weight cancels from read over write
+/// and every plan recipe breaks even alike. Dollars read `pricing.rate_table().rows`, and a model the price table
+/// prices nowhere takes the tightest dollar row (the smallest break-even among the priced rows). Only the break-even
+/// reads these factors, so how a probe's cost is priced is untouched.
 pub fn factors_for(
     pricing: &PriceTable,
     tables: &PlanTables,
@@ -72,6 +75,9 @@ pub fn factors_for(
 pub(crate) struct FactorRows {
     dollars: HashMap<String, Rates>,
     plan: HashMap<String, Rates>,
+    /// The cost model's shared type multipliers, and the models that set their own.
+    plan_multipliers: Factors,
+    plan_overrides: HashMap<String, Factors>,
     tightest: Factors,
 }
 
@@ -79,20 +85,55 @@ impl FactorRows {
     pub(crate) fn of(pricing: &PriceTable, tables: &PlanTables) -> FactorRows {
         let dollars = pricing.rate_table().rows;
         let tightest = tightest(dollars.values().filter_map(Factors::of));
+        let shared = &tables.costs.type_multiplier;
+        let plan_multipliers = Factors {
+            read: shared.cache_read,
+            write_5m: shared.cache_write_5m,
+            write_1h: shared.cache_write_1h,
+        };
+        let plan_overrides = tables
+            .costs
+            .overrides
+            .iter()
+            .filter_map(|(model, row)| {
+                let own = row.type_multiplier.as_ref()?;
+                Some((
+                    model.clone(),
+                    Factors {
+                        read: own.cache_read.unwrap_or(plan_multipliers.read),
+                        write_5m: own.cache_write_5m.unwrap_or(plan_multipliers.write_5m),
+                        write_1h: own.cache_write_1h.unwrap_or(plan_multipliers.write_1h),
+                    },
+                ))
+            })
+            .collect();
         FactorRows {
             dollars,
             plan: tables.rate_table(FIVE_HOUR).rows,
+            plan_multipliers,
+            plan_overrides,
             tightest,
         }
     }
 
     pub(crate) fn factors(&self, funding: Funding, canonical_model: &str) -> Factors {
-        let plan = match funding {
-            Funding::Plan => row_for(canonical_model, |k| self.plan.get(k)).and_then(Factors::of),
-            Funding::ApiKey | Funding::Overage => None,
-        };
-        plan.or_else(|| row_for(canonical_model, |k| self.dollars.get(k)).and_then(Factors::of))
-            .unwrap_or(self.tightest)
+        match funding {
+            Funding::Plan => row_for(canonical_model, |k| self.plan.get(k))
+                .and_then(Factors::of)
+                .or_else(|| row_for(canonical_model, |k| self.plan_overrides.get(k)).copied()),
+            Funding::ApiKey | Funding::Overage => {
+                row_for(canonical_model, |k| self.dollars.get(k)).and_then(Factors::of)
+            }
+        }
+        .unwrap_or_else(|| self.priced_nowhere(funding))
+    }
+
+    /// A model no row and no override names: the plan's shared multipliers, or the tightest dollar row.
+    pub(crate) fn priced_nowhere(&self, funding: Funding) -> Factors {
+        match funding {
+            Funding::Plan => self.plan_multipliers,
+            Funding::ApiKey | Funding::Overage => self.tightest,
+        }
     }
 }
 
@@ -213,9 +254,11 @@ pub struct ResolvedCeilings {
 }
 
 /// `resolve` over every combination of `fundings`, the main agent's TTL for each under `cache_ttl` (both TTLs when
-/// the policy leaves the markers as sent) and the models `rules` allow among the dollar table's rows (the tightest row
-/// when they allow none, as a recipe on a model priced nowhere reads). Tables that give no break-even fall back to the
-/// shipped tightest row, as `ceilings_for` does. `None` with no funding.
+/// the policy leaves the markers as sent) and the models `rules` allow. The models are the dollar table's rows and the
+/// ids the TTL sets and the rules' wildcard-free entries name, since those name the catalog's dated ids where a row is
+/// keyed undated, and each is judged, priced and given its TTL as a request on it would be. Rules that allow none of
+/// them leave a model priced nowhere. Tables that give no break-even fall back to the shipped tightest row, as
+/// `ceilings_for` does. `None` with no funding.
 pub(crate) fn resolve_pool(
     policy: &KeepalivePolicy,
     cache_ttl: &CacheTtlPolicy,
@@ -225,13 +268,27 @@ pub(crate) fn resolve_pool(
     timing: &KeepaliveTiming,
 ) -> Option<ResolvedCeilings> {
     let processed = process(&[], RulesMode::Extend, rules);
+    let named = cache_ttl
+        .plan
+        .models
+        .iter()
+        .chain(&cache_ttl.metered.models)
+        .map(|m| m.model.as_str())
+        .chain(
+            rules
+                .iter()
+                .map(|r| r.pattern.as_str())
+                .filter(|p| !p.contains(['*', '?', '\\'])),
+        );
     let mut models: Vec<&str> = rows
         .dollars
         .keys()
         .map(String::as_str)
+        .chain(named)
         .filter(|model| allows(&processed, model))
         .collect();
     models.sort_unstable();
+    models.dedup();
     let ttl_ms = |ttl: CacheTtl| match ttl {
         CacheTtl::FiveMinutes => FIVE_MINUTES_MS,
         CacheTtl::OneHour => ONE_HOUR_MS,
@@ -240,7 +297,7 @@ pub(crate) fn resolve_pool(
     for &funding in fundings {
         let metered = funding != Funding::Plan;
         let picks: Vec<(Factors, &str)> = if models.is_empty() {
-            vec![(rows.tightest, "")]
+            vec![(rows.priced_nowhere(funding), "")]
         } else {
             models
                 .iter()

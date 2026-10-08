@@ -16,7 +16,7 @@ import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE } from './operations';
-import { KEYS, PLAN_HOUR_RESOLVED, POOLS, resolvedFor } from './pools';
+import { KEYS, POOLS, composedFor, resolvedFor } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
@@ -489,8 +489,8 @@ export class MockApi implements Api {
       activePins: 0,
       cost24h: 0,
       id,
-      // The route resolves nothing for a pool with no member.
-      keepaliveResolved: input.members.length === 0 ? null : resolvedFor(PLAN_HOUR_RESOLVED, input.keepalive),
+      // From the members' kinds, as the router composes them, and nothing for a pool with no member.
+      keepaliveResolved: resolvedFor(composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive),
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
         return writtenMember(m, account, (member) => eligibilityOf(account, input.overagePolicy, member));
@@ -887,7 +887,8 @@ export class MockApi implements Api {
     const next: Omit<Pool, 'keys'> = {
       ...current,
       ...input,
-      keepaliveResolved: input.members.length === 0 ? null : resolvedFor(current.keepaliveResolved ?? PLAN_HOUR_RESOLVED, input.keepalive),
+      keepaliveResolved:
+        input.members.length === 0 ? null : resolvedFor(current.keepaliveResolved ?? composedFor(input.members.map((m) => this.accounts.find((a) => a.id === m.accountId)?.kind ?? 'oauth'), input.cacheTtl), input.keepalive),
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set. A save
       // does rewrite the budget, and a write answers no spend here, so a budget verdict is read again.
       members: input.members.map((m) => {

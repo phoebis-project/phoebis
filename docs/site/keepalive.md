@@ -114,8 +114,10 @@ The pool's `keepalive` object carries four fields:
 
 The break-even of a recipe is the pause length at which its chain of probes costs one re-write of its prefix,
 `(write - read) / (cadence * read)`. The read and write factors are those of the recipe's model under its account's
-funding. A plan-funded recipe reads the cost model's factors, a model the cost model leaves unweighted reads its row of
-the price table, and a model neither table prices reads the price table's tightest row. The cadence is the TTL's: 15
+funding. A plan-funded recipe reads the cost model's type multipliers, the model's own where it sets them. A token costs
+the model's weight times the type's multiplier, so a plan recipe's break-even does not depend on the model's weight, and
+a model the cost model leaves unweighted breaks even where a weighted one does. A dollar-funded recipe reads its model's
+row of the price table, and a model the price table does not price reads its tightest row. The cadence is the TTL's: 15
 probes an hour on a five-minute entry and 1.11 on a one-hour entry. On the shipped cost model a plan-funded recipe
 breaks even after 44.1 hours on a one-hour entry and 3 hours 16 minutes on a five-minute entry.
 
@@ -129,8 +131,9 @@ For the console, `GET /admin/pools` also answers each pool's `keepalive_resolved
 in seconds and the idle window's cost as a share of one re-write, each as the lowest and the highest figure over the
 pool's combinations. An OAuth member brings the cost model's factors and an Anthropic-key member the price table's. The
 pool's cache TTL policy gives the main conversation's TTL under each, and a policy that leaves the markers as sent
-brings both TTLs. The models are those of the price table the pool's model rules allow, and rules that allow none of
-them read the tightest row. A pool with no member answers `null`.
+brings both TTLs. The models are the price table's and those the cache TTL policy's per-model rows and the model rules'
+entries without a wildcard name, which carry the catalog's dated ids, each kept where the pool's model rules allow it.
+Rules that allow none of them leave a model priced nowhere. A pool with no member answers `null`.
 
 The schedule's numbers are fixed. A probe is due 60 seconds before a five-minute entry expires and 360 seconds before
 a one-hour entry, less a random jitter of up to 5 and 30 seconds. Two cold probes in a row pause the recipe until a real

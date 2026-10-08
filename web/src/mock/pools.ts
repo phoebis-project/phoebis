@@ -1,5 +1,5 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
-import type { ApiKey, BudgetPeriod, Pool, PoolKeepalive, PoolMember, Range } from '@/api/types';
+import type { AccountKind, ApiKey, BudgetPeriod, CacheTtl, Pool, PoolCacheTtl, PoolKeepalive, PoolMember, Range } from '@/api/types';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
 
@@ -19,25 +19,61 @@ function periodEndAfter(period: BudgetPeriod, now: number): string {
 /** The instant the ci key was revoked, on the story's pinned day at 14:17:30. */
 export const KEY_REVOKED_AT = NOW - (12 * MINUTE + 30_000);
 
+type Resolved = NonNullable<Pool['keepaliveResolved']>;
+
 const one = (value: number): Range => ({ max: value, min: value });
+const span = (min: number, max: number): Range => ({ max, min });
+/** The two ceilings left null read the break-even, as the router answers them under the default policy. */
+const figures = (breakEven: Range, idle: Range, share: Range): Resolved => ({ breakEvenSeconds: breakEven, horizonSeconds: breakEven, idleSeconds: idle, idleShare: share, parkedSeconds: breakEven });
 
 /**
- * The router's figures for a plan pool whose main turns write the one-hour entry: a break-even of 44.1 hours and the
- * default hour of idle window at 2 percent of one re-write. The mock holds no price, so every pool's figures are
- * fixed here rather than resolved from its members, and a pool created in the mock starts from these.
+ * The router's figures for one funding on one main TTL over the shipped tables, at the default policy of an hour of idle
+ * window and both ceilings null. The mock holds no price, so they are written out here. A plan recipe breaks even on the
+ * cost model's multipliers whatever its model: 44.1 hours on the hour, 3 hours 16 minutes on five minutes. The dollar
+ * rows span the price table: Sonnet, Haiku and the older Opus rows break even first, Fable last, and on five minutes the
+ * first of them also cap the hour of idle window.
  */
-export const PLAN_HOUR_RESOLVED: NonNullable<Pool['keepaliveResolved']> = {
-  breakEvenSeconds: one(158_760),
-  horizonSeconds: one(158_760),
-  idleSeconds: one(3_600),
-  idleShare: one(0.0222),
-  parkedSeconds: one(158_760),
+const FIGURES: Record<'dollars' | 'plan', Record<CacheTtl, Resolved>> = {
+  dollars: {
+    '1h': figures(span(61_560, 255_960), one(3_600), span(0.0139, 0.0556)),
+    '5m': figures(span(2_760, 11_760), span(2_760, 3_600), span(0.3, 0.92)),
+  },
+  plan: {
+    '1h': figures(one(158_760), one(3_600), one(0.0222)),
+    '5m': figures(one(11_760), one(3_600), one(0.3)),
+  },
 };
+
+const widen = (a: Range, b: Range): Range => span(Math.min(a.min, b.min), Math.max(a.max, b.max));
+const merged = (a: Resolved, b: Resolved): Resolved => ({
+  breakEvenSeconds: widen(a.breakEvenSeconds, b.breakEvenSeconds),
+  horizonSeconds: widen(a.horizonSeconds, b.horizonSeconds),
+  idleSeconds: widen(a.idleSeconds, b.idleSeconds),
+  idleShare: widen(a.idleShare, b.idleShare),
+  parkedSeconds: widen(a.parkedSeconds, b.parkedSeconds),
+});
+
+/**
+ * A pool's figures from its members' kinds as the router composes them: an OAuth member brings the plan's figures on the
+ * plan set's main TTL, an Anthropic-key member the dollar rows' on the metered set's, and a policy that leaves the
+ * markers as sent brings both TTLs. Per-model overrides and model rules are not read, so a pool that narrows its models
+ * reads wider here than the router answers it. Null with no member.
+ */
+export function composedFor(kinds: AccountKind[], cacheTtl: PoolCacheTtl): Pool['keepaliveResolved'] {
+  const ttls = (main: CacheTtl): CacheTtl[] => (cacheTtl.enabled ? [main] : ['5m', '1h']);
+  const parts = [
+    ...(kinds.includes('oauth') ? ttls(cacheTtl.plan.main).map((t) => FIGURES.plan[t]) : []),
+    ...(kinds.includes('api_key') ? ttls(cacheTtl.metered.main).map((t) => FIGURES.dollars[t]) : []),
+  ];
+  return parts.length === 0 ? null : parts.reduce(merged);
+}
 
 /**
  * What the route answers once a save sets `policy`: the three ceilings capped at the stored break-even, a null or a
- * zero reading as the break-even, and the idle share moved with the window, since a window's probes cost in
- * proportion to its length. The break-even itself depends on prices alone and stays as seeded.
+ * zero reading as the break-even, and the idle share moved with the window, since a window's probes cost in proportion
+ * to its length. An approximation: the router keeps each combination apart, while this recomputes the low and the high
+ * end alone, so where the two ends come from different combinations (the five-minute 0.92 and the hour's 3,600 s on
+ * `codex`) a save answers a share range the router would not. The break-even depends on prices alone and stays.
  */
 export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKeepalive): Pool['keepaliveResolved'] {
   if (resolved === null) return null;
@@ -69,7 +105,9 @@ const POOL_ROWS: PoolSeed[] = [
     sessionPlacement: 'by_warm_prefix',
     subagentPlacement: 'by_cohort',
     keepalive: { ...KEEPALIVE_DEFAULTS, enabled: true },
-    keepaliveResolved: PLAN_HOUR_RESOLVED,
+    // Three plan members on the hour (Haiku's five-minute override lands inside the range) and the Anthropic-key
+    // `overflow` on the metered five minutes, which brings the low end: 46 minutes to 44.1 hours.
+    keepaliveResolved: merged(FIGURES.plan['1h'], FIGURES.dollars['5m']),
     autoModeServer: true,
     cacheDiagnostics: true,
     cacheTtl: {
@@ -174,19 +212,13 @@ const POOL_ROWS: PoolSeed[] = [
     selectBelowUtilization: null,
     affinityTtlSeconds: 3_600,
     movesPerHour: {},
-    keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
-    // The plan on both TTLs, the markers going as sent: 3 hours 16 minutes on five minutes to 44.1 hours on the hour.
-    keepaliveResolved: {
-      breakEvenSeconds: { max: 158_760, min: 11_760 },
-      horizonSeconds: { max: 158_760, min: 11_760 },
-      idleSeconds: one(3_600),
-      idleShare: { max: 0.3, min: 0.0222 },
-      parkedSeconds: { max: 158_760, min: 11_760 },
-    },
+    // Warming on with the plan's main turns on the hour, so its one plan member reads one figure each.
+    keepalive: { ...KEEPALIVE_DEFAULTS, enabled: true },
+    keepaliveResolved: FIGURES.plan['1h'],
     // Off, so the pool card's badge and the key dialog's Inherit label each read both states in the story.
     autoModeServer: false,
     cacheDiagnostics: false,
-    cacheTtl: { ...CACHE_TTL_DEFAULTS },
+    cacheTtl: { ...CACHE_TTL_DEFAULTS, enabled: true },
     bodyCaptureHours: 0,
     modelRules: [],
     members: [unbudgeted('primary', 0)],

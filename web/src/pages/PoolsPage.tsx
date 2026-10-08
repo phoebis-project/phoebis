@@ -1079,6 +1079,9 @@ export function PoolDialog({
           min: form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds.min : Math.min(form.maxIdleSeconds, resolved.breakEvenSeconds.min),
         }
       : null;
+  // The share is the router's for the saved window, so a typed window names the window the share belongs to.
+  const savedIdle = pool?.keepalive.maxIdleSeconds ?? form.maxIdleSeconds;
+  const shareOf = savedIdle === form.maxIdleSeconds ? '' : ` at the saved ${savedIdle === 0 ? 'break-even' : fmtDuration(savedIdle * 1_000)}`;
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', monthly: '' };
@@ -1967,7 +1970,9 @@ export function PoolDialog({
                 The idle window of the main conversation. 0 and anything above the recipe&apos;s break-even read as the break-even.
                 {resolved && (
                   <span className="keepalive-resolved">
-                    <span title={SHARE_HINT}>Costs {shareText(resolved.idleShare)} of one re-write</span>
+                    <span title={SHARE_HINT}>
+                      Costs {shareText(resolved.idleShare)} of one re-write{shareOf}
+                    </span>
                     {idleCapped && (
                       <>
                         {' · '}capped at the break-even, <RangeFigures range={idleCapped} />

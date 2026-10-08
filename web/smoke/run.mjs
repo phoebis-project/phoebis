@@ -1808,7 +1808,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok:
       JSON.stringify(strip('all')) === JSON.stringify([['load shedding', '/pools?edit=all&group=shedding', 'Opens the pool dialog on Load shedding'], ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
       JSON.stringify(strip('codex')) === JSON.stringify([['load shedding', '/pools?edit=codex&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
-      JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode']]),
+      JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'], ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive']]),
     missing: [...strip('all'), ...strip('codex'), ...strip('work')].map((b) => b.join(' | ')),
   });
   const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
@@ -2155,16 +2155,90 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   m = await mount('/pools');
 }
 {
+  // A warming pool with no member resolves nothing: its card draws the chip and no line, and its dialog no figure.
+  const work = (await api.listPools()).find((p) => p.id === 'work');
+  await api.createPool({ ...work, members: [], name: 'bare' });
+  const page = await mount('/pools?edit=bare&group=keepalive');
+  await page.settle(300);
+  const card = [...page.container.querySelectorAll('.pool')].find((c) => c.id === 'bare');
+  const chips = [...(card?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => b.textContent?.trim());
+  const section = group([...page.container.querySelectorAll('dialog[open]')].pop(), 'Keepalive');
+  results.push({
+    name: '/pools a warming pool with no member draws no resolved line on its card or in its dialog',
+    ok: chips.includes('keepalive') && card?.querySelector('.pool__ceilings') === null && section !== undefined && section.querySelector('.keepalive-resolved') === null && (section.textContent ?? '').includes('No idle windows recorded yet'),
+    missing: [JSON.stringify(chips), String(card?.querySelector('.pool__ceilings')?.textContent), String(section?.querySelector('.keepalive-resolved')?.textContent), section ? 'a Keepalive group' : 'no Keepalive group'],
+  });
+  page.unmount();
+  await api.deletePool('bare');
+}
+{
   // The card reads the router's figures in whole hours, floored, right after the keepalive chip, and a pool that keeps
-  // no caches warm draws no line.
+  // no caches warm draws no line. The story's `work` holds one plan member on the hour, so it reads one figure each,
+  // while `all` mixes plan members with the Anthropic-key `overflow` on five minutes and reads both ends.
   const cards = [...m.container.querySelectorAll('.pool')];
   const ceilingsOf = (id) => cards.find((c) => c.id === id)?.querySelector('.pool__ceilings') ?? null;
-  const all = ceilingsOf('all');
+  const work = ceilingsOf('work');
   results.push({
     name: '/pools the pool card reads the three resolved ceilings',
-    ok: all?.textContent === 'idle 1h · parked 44h · horizon 44h' && all.previousElementSibling?.textContent?.trim() === 'keepalive' && ceilingsOf('codex') === null && ceilingsOf('work') === null,
-    missing: [all?.textContent ?? 'no line on the all card', all?.previousElementSibling?.textContent ?? '', String(ceilingsOf('codex')?.textContent), String(ceilingsOf('work')?.textContent)],
+    ok: work?.textContent === 'idle 1h · parked 44h · horizon 44h' && work.previousElementSibling?.textContent?.trim() === 'keepalive' && ceilingsOf('codex') === null,
+    missing: [work?.textContent ?? 'no line on the work card', work?.previousElementSibling?.textContent ?? '', String(ceilingsOf('codex')?.textContent)],
   });
+  const hint = (dlg) => group(dlg, 'Keepalive');
+  const linesOf = (dlg) => [...(hint(dlg)?.querySelectorAll('.keepalive-resolved') ?? [])].map((l) => l.textContent?.replace(/\s+/g, ' ').trim());
+  const cancel = async (dlg) => {
+    [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+    await m.settle(200);
+  };
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
+  await m.settle(300);
+  {
+    const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+    rail(dlg, 'keepalive')?.click();
+    await m.settle(120);
+    const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
+    const SHARE_HINT = "The idle window's probes against one re-write of the prefix, so the bet this window makes is visible per pool.";
+    const breakEvens = [...(hint(dlg)?.querySelectorAll('.keepalive-resolved[title]') ?? [])].map((l) => l.getAttribute('title'));
+    const shareTitle = hint(dlg)?.querySelector('.keepalive-resolved > span[title]')?.getAttribute('title');
+    results.push({
+      name: '/pools the Keepalive group shows the break-even beside an unset ceiling and the share beside the idle window',
+      ok: JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% of one re-write', 'Break-even: 1d 20h', 'Break-even: 1d 20h']) && breakEvens.length === 2 && breakEvens.every((h) => h === BREAK_EVEN_HINT) && shareTitle === SHARE_HINT,
+      missing: [...linesOf(dlg).map(String), ...breakEvens.map(String), String(shareTitle)],
+    });
+    // The router's share is the saved window's, so a typed window names the window the share belongs to, while the cap
+    // follows the field as typed, 0 reading as the break-even.
+    const idleField = hint(dlg)?.querySelector('input[type="number"]');
+    const setIdle = async (value) => {
+      if (idleField) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(idleField, value);
+      idleField?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    await setIdle('200000');
+    const past = linesOf(dlg)[0];
+    await setIdle('0');
+    const zero = linesOf(dlg)[0];
+    await setIdle('3600');
+    results.push({
+      name: '/pools an idle window past the break-even, or 0, reads the break-even it runs to beside the saved window\'s share',
+      ok: past === 'Costs 2% of one re-write at the saved 1h 0m · capped at the break-even, 1d 20h' && zero === past && linesOf(dlg)[0] === 'Costs 2% of one re-write',
+      missing: [String(past), String(zero), String(linesOf(dlg)[0])],
+    });
+    await cancel(dlg);
+  }
+  // The story's `all` resolves to a range: the card and the dialog read both ends.
+  const allLine = ceilingsOf('all')?.textContent;
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await m.settle(300);
+  {
+    const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+    rail(dlg, 'keepalive')?.click();
+    await m.settle(120);
+    results.push({
+      name: '/pools a pool whose combinations differ reads both ends on its card and in its dialog',
+      ok: allLine === 'idle 46m to 1h · parked 46m to 44h · horizon 46m to 44h' && JSON.stringify(linesOf(dlg)) === JSON.stringify(['Costs 2% to 92% of one re-write · capped at the break-even, 46m to 1h 0m', 'Break-even: 46m to 1d 20h', 'Break-even: 46m to 1d 20h']),
+      missing: [String(allLine), ...linesOf(dlg).map(String)],
+    });
+    await cancel(dlg);
+  }
   const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all');
   edit?.click();
   await m.settle(300);
@@ -2527,40 +2601,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       'Scheduled horizon (s)',
       "A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe's break-even.",
     ]);
-    // The story's pool all resolves to the plan's one-hour figures, its two ceilings left off and its idle window
-    // under the break-even, so each off ceiling reads the break-even and the idle window its share.
-    const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
-    const SHARE_HINT = "The idle window's probes against one re-write of the prefix, so the bet this window makes is visible per pool.";
-    const resolvedLines = () => [...(keepalive?.querySelectorAll('.keepalive-resolved') ?? [])].map((l) => l.textContent?.replace(/\s+/g, ' ').trim());
-    const breakEvens = [...(keepalive?.querySelectorAll('.keepalive-resolved[title]') ?? [])].map((l) => l.getAttribute('title'));
-    const shareTitle = keepalive?.querySelector('.keepalive-resolved > span[title]')?.getAttribute('title');
-    results.push({
-      name: '/pools the Keepalive group shows the break-even beside an unset ceiling and the share beside the idle window',
-      ok: JSON.stringify(resolvedLines()) === JSON.stringify(['Costs 2% of one re-write', 'Break-even: 1d 20h', 'Break-even: 1d 20h']) && breakEvens.every((h) => h === BREAK_EVEN_HINT) && breakEvens.length === 2 && shareTitle === SHARE_HINT,
-      missing: [...resolvedLines().map(String), ...breakEvens.map(String), String(shareTitle)],
-    });
     const rows = [...(keepalive?.querySelectorAll('.return-rate__row') ?? [])].map((r) => [...r.children].map((c) => c.getAttribute('role') === 'meter' ? `meter ${c.getAttribute('aria-valuenow')}` : c.textContent?.trim()).join(' | '));
     results.push({
       name: '/pools the return rate block lists ten buckets',
       ok: rows.length === 10 && rows[0] === '0 to 5m | 24 of 96 | meter 25' && rows[4] === '1h to 2h | 7 of 22 | meter 31.8' && rows[9] === 'over 32h | 0 of 1 | meter 0' && (keepalive?.textContent ?? '').includes('Return rate by idle age'),
       missing: rows,
-    });
-    // The router's share is the saved window's, while the cap follows the field as typed, 0 reading as the break-even.
-    const idleField = keepalive?.querySelector('input[type="number"]');
-    const setIdle = async (value) => {
-      if (idleField) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(idleField, value);
-      idleField?.dispatchEvent(new window.Event('input', { bubbles: true }));
-      await m.settle(120);
-    };
-    await setIdle('200000');
-    const past = resolvedLines()[0];
-    await setIdle('0');
-    const zero = resolvedLines()[0];
-    await setIdle('3600');
-    results.push({
-      name: '/pools an idle window past the break-even, or 0, reads the break-even it runs to',
-      ok: past === 'Costs 2% of one re-write · capped at the break-even, 1d 20h' && zero === past && resolvedLines()[0] === 'Costs 2% of one re-write',
-      missing: [String(past), String(zero), String(resolvedLines()[0])],
     });
     const gone = ['Also warm subagent caches', 'Daily probe cost cap', 'Grace probes after the net turns negative', 'Probe tuning', 'Stop when probes cost more than they save'].filter((w) => (dlg?.textContent ?? '').includes(w));
     results.push({ name: '/pools the dialog draws no subagent switch, cap, net stop, grace count or tuning group', ok: gone.length === 0, missing: gone });
