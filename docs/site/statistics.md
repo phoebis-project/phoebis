@@ -175,9 +175,8 @@ The Fable-scoped week is a row of the file, `model_windows.seven_day_fable`, hal
 Fable request's share of it is twice its 7-day share.
 
 A model without a weight prices no share: the prediction adds no charge, the shedding round ranks the pin after every
-priced one, a plan-funded probe settles in dollars, the analytics list the share under model unlisted and the cost
-reference shows a dash. A tier without a capacity on a window prices no share there either, and the prediction adds no
-charge on that window. A plan-funded probe on a tier without a 5-hour capacity settles in dollars. The shedding round
+priced one, the analytics list the share under model unlisted and the cost reference shows a dash. A tier without a
+capacity on a window prices no share there either, and the prediction adds no charge on that window. The shedding round
 ranks that tier's pins like any other, on the model's anchor rates, and in the analytics an account on a tier the file
 lacks reads tier unknown, while a window the file leaves `null` on a listed tier reads model unlisted. The file carries
 one date, `effective`. A dated model id reads the weight of its undated name.

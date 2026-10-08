@@ -204,10 +204,12 @@ The client probes `/api/hello` before it sends anything, and ignores the answer.
 check read `/api/ready` instead: `/api/hello` and `/api/ready` differ when the router loop, the ledger consumer or the
 store died while the listener stays up, and `dead` names each one that died as `ledger`, `router` or `store`. The two
 `/v1/models` routes answer the [models listing](#the-models-listing) below. Every refusal above, including the
-wrong-method and unknown-path answers, carries an Anthropic-shaped error body; the not-ready `503` of `/api/ready`
-reports the router's state and carries the readiness body instead. The keepalive route is covered on the
-[Keepalive](keepalive.md) page. Each session reported to it belongs to the key generation that registered it, so a key
-id created again reaches none of the sessions its previous holder left behind.
+wrong-method and unknown-path answers, carries an Anthropic-shaped error body, with two exceptions. The not-ready `503`
+of `/api/ready` reports the router's state and carries the readiness body instead, and the keepalive route answers a
+report it refuses with `{"code": "<code>"}`, the code the mod reads, while a key it refuses gets the answer
+`/v1/messages` gives. The keepalive route is covered on the [Keepalive](keepalive.md#the-mod) page. Each session
+reported to it belongs to the key generation that registered it, so a key id created again reaches none of the sessions
+its previous holder left behind.
 
 pool's members are unusable for the moment, and the answer when an account's authentication failure is the request's
 last word: the router never forwards an upstream `401`, and the answer names no account and no reason. `phoebis status`

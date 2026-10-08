@@ -596,7 +596,7 @@ between {min} and {max}, not {value}`.
 | `max_sessions` | `128` | 1 to 4096 |
 
 `max_sessions` counts live sessions only: an ended session frees its slot at once, though its tombstone stays until
-the session expiry sweeps it. The companion's lease is 90 seconds and four probes run at once; neither is a key.
+the session expiry sweeps it. The mod's lease is 90 seconds and four probes run at once. Neither is a key.
 
 ### proxy
 
