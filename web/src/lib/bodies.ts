@@ -15,7 +15,8 @@ const SSE_LINE = /^(?:event:|data:|id:|retry:|:)/;
  * The frames of a stored stream capture, or null for text that is not one or holds no frame: a capture is SSE text
  * when every non-empty line of it starts with `event:`, `data:`, `id:`, `retry:` or `:`, frames parting at a blank
  * line, the lines ending LF, CRLF or bare CR alike. A capture cut mid-frame keeps its last frame as the text it has:
- * the ledger's cut falls anywhere, so a last line without a line break after it is read as data whatever its shape.
+ * the ledger's cut falls anywhere, so a last line without a line break after it is read as data whatever its shape,
+ * once a field line before it has shown the text to be a stream.
  */
 export function sseFrames(text: string): SseFrame[] | null {
   // The relay keeps the captured bytes as they came, and its parser takes all three endings.
@@ -24,6 +25,7 @@ export function sseFrames(text: string): SseFrame[] | null {
   let event: string | null = null;
   let data: string[] = [];
   let hasData = false;
+  let sawField = false;
   const close = () => {
     if (event !== null || hasData) {
       const joined = data.join('\n');
@@ -41,11 +43,12 @@ export function sseFrames(text: string): SseFrame[] | null {
     }
     const last = i === lines.length - 1;
     if (!SSE_LINE.test(line)) {
-      if (!last) return null;
+      if (!last || !sawField) return null;
       data.push(line);
       hasData = true;
       continue;
     }
+    sawField = true;
     if (line.startsWith('event:')) event = afterPrefix(line, 6);
     else if (line.startsWith('data:')) {
       data.push(afterPrefix(line, 5));

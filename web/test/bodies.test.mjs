@@ -48,6 +48,7 @@ test('a capture cut inside a data prefix keeps its last frame as the text it has
 test('plain text is not a stream', () => {
   assert.equal(d.sseFrames('line one\nline two'), null);
   assert.equal(d.sseFrames('event: a\ndata: {}\n\nplain\n'), null);
+  assert.equal(d.sseFrames('upstream connect error'), null, 'one unterminated line with no field before it');
   assert.equal(d.sseFrames(''), null);
 });
 
@@ -90,6 +91,13 @@ test('an escaped quote stays inside its string', () => {
   const tokens = d.highlightJson('{"k": "a \\"quoted\\" word", "m": 1}');
   assert.deepEqual(tokens.filter((t) => t.cls === 'tok-string').map((t) => t.text), ['"a \\"quoted\\" word"']);
   assert.deepEqual(tokens.filter((t) => t.cls === 'tok-key').map((t) => t.text), ['"k"', '"m"']);
+});
+
+test('a string the cut left open runs to the text end as one string token', () => {
+  const text = '{"text":"abc';
+  const tokens = d.highlightJson(text);
+  assert.equal(tokens.map((t) => t.text).join(''), text);
+  assert.deepEqual(tokens.at(-1), { cls: 'tok-string', text: '"abc' });
 });
 
 test('a negative exponent number is one token', () => {

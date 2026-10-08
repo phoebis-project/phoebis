@@ -764,6 +764,17 @@ function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: num
   useEffect(() => {
     if (pretty) (wide ? widePre : pre).current?.focus();
   }, [pretty]);
+  // The dialog leaves the tree while it is open, so the browser's close steps never hand the focus back to the control
+  // that opened it. The link takes it as the dialog goes.
+  const link = useRef<HTMLButtonElement>(null);
+  const wasWide = useRef(false);
+  useEffect(() => {
+    if (wide) wasWide.current = true;
+    else if (wasWide.current) {
+      wasWide.current = false;
+      link.current?.focus();
+    }
+  }, [wide]);
   return (
     <div className="body-block">
       <div className="body-block__head">
@@ -775,7 +786,7 @@ function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: num
               Pretty-print
             </Button>
           )}
-          <button type="button" className="body-block__link" onClick={() => setWide(true)}>
+          <button ref={link} type="button" className="body-block__link" onClick={() => setWide(true)}>
             Open wide
           </button>
           <CopyButton text={text} />

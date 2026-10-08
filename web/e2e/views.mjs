@@ -2657,8 +2657,8 @@ async function requestDrawerCompact(theme) {
  * inside it while the body and the dialog do not, and Escape closes the dialog and leaves the drawer open. It runs
  * after the drawer measure, so a drawer is open, and moves down the first page to the first row whose drawer draws a
  * body when that one draws none. In the mock pass it then narrows the list to the laptop key, opens a row whose answer
- * was cut and reads that the block's head, with the cut note and three actions in one row, overflows nowhere at the
- * 400 px drawer.
+ * was cut and reads that the block's head, with the cut note and the row's actions (two on the story's cut row, whose
+ * answer is small), overflows nowhere at the 400 px drawer and keeps the "Open wide" link on one line.
  */
 async function wideBodyDialog(theme) {
   const say = (what) => failures.push(`${theme} /requests wide body: ${what}`);
@@ -2693,10 +2693,12 @@ async function wideBodyDialog(theme) {
       const pre = body?.querySelector('.body-block__pre');
       if (!dialog || !body || !pre) return null;
       const s = getComputedStyle(body);
+      // The text is long when its lines outrun the box, read from the text rather than from the scroll it causes.
+      const lines = (pre.textContent ?? '').split('\n').length;
       return {
         body: { client: body.clientHeight, inner: Math.round(body.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom)), scroll: body.scrollHeight },
         dialog: { client: dialog.clientHeight, height: Math.round(dialog.getBoundingClientRect().height), scroll: dialog.scrollHeight, width: Math.round(dialog.getBoundingClientRect().width) },
-        pre: { client: pre.clientHeight, outer: pre.offsetHeight, scroll: pre.scrollHeight },
+        pre: { client: pre.clientHeight, lines, long: lines * parseFloat(getComputedStyle(pre).lineHeight) > pre.clientHeight, outer: pre.offsetHeight, scroll: pre.scrollHeight },
       };
     });
   for (const { height, width } of [
@@ -2717,7 +2719,7 @@ async function wideBodyDialog(theme) {
     if (got.dialog.height !== tall) say(`${where} is ${got.dialog.height}px tall, not ${tall}px`);
     if (got.pre.client <= 260) say(`${where}: the text box is ${got.pre.client}px tall, within the drawer's 260px cap`);
     if (Math.abs(got.pre.outer - got.body.inner) > 1) say(`${where}: the text box is ${got.pre.outer}px tall in a body of ${got.body.inner}px`);
-    if (got.pre.scroll <= got.pre.client) say(`${where}: the text does not scroll inside its box (${got.pre.scroll}px in ${got.pre.client}px)`);
+    if (got.pre.long && got.pre.scroll <= got.pre.client) say(`${where}: the text of ${got.pre.lines} lines does not scroll inside its box (${got.pre.scroll}px in ${got.pre.client}px)`);
     if (got.body.scroll !== got.body.client) say(`${where}: the body scrolls (${got.body.scroll}px in ${got.body.client}px)`);
     if (got.dialog.scroll !== got.dialog.client) say(`${where}: the dialog scrolls (${got.dialog.scroll}px in ${got.dialog.client}px)`);
   }
@@ -2725,9 +2727,13 @@ async function wideBodyDialog(theme) {
   await settle();
   await page.keyboard.press('Escape');
   await settle();
-  const after = await page.evaluate(() => ({ dialog: document.querySelector('dialog[open]') !== null, drawer: document.querySelector('.drawer') !== null }));
+  const after = await page.evaluate(() => {
+    const active = document.activeElement;
+    return { dialog: document.querySelector('dialog[open]') !== null, drawer: document.querySelector('.drawer') !== null, focus: active?.classList.contains('body-block__link') && active.textContent?.trim() === 'Open wide' ? 'Open wide' : (active?.tagName ?? 'nothing') };
+  });
   if (after.dialog) say('Escape left the dialog open');
   if (!after.drawer) say('Escape closed the drawer with the dialog');
+  if (after.focus !== 'Open wide') say(`Escape left the focus on ${after.focus}, not on the Open wide link`);
   if (!mock) return;
   // The story's cut answers sit on every seventh laptop row, so the list is narrowed to that key for the read.
   await page.goto(`${base}/requests?keys=laptop`);
@@ -2744,9 +2750,10 @@ async function wideBodyDialog(theme) {
         return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
       };
       const note = [...head.children].find((c) => c.textContent?.includes('cut at'));
+      const link = head.querySelector('.body-block__link');
       const buttons = [...head.querySelectorAll('.body-block__actions button')];
       const box = (b) => b.getBoundingClientRect();
-      return { actions: { buttons: buttons.length, stacked: buttons.some((b, i) => i > 0 && box(b).left < box(buttons[i - 1]).right) }, client: head.clientWidth, height: Math.round(head.getBoundingClientRect().height), note: note ? linesOf(note) : 0, scroll: head.scrollWidth };
+      return { actions: { buttons: buttons.length, stacked: buttons.some((b, i) => i > 0 && box(b).left < box(buttons[i - 1]).right) }, client: head.clientWidth, height: Math.round(head.getBoundingClientRect().height), link: link ? linesOf(link) : 0, note: note ? linesOf(note) : 0, scroll: head.scrollWidth };
     });
   let cut = await cutHead();
   for (let i = 0, n = await rows.count(); i < n && cut === null; i += 1) {
@@ -2757,7 +2764,10 @@ async function wideBodyDialog(theme) {
   }
   measurements.push(`${theme} /requests cut body head at the 400px drawer ${JSON.stringify(cut)}`);
   if (cut === null) say('no row on the first page draws a cut answer');
-  else if (cut.scroll > cut.client) say(`the cut body's head needs ${cut.scroll}px of its ${cut.client}px`);
+  else {
+    if (cut.scroll > cut.client) say(`the cut body's head needs ${cut.scroll}px of its ${cut.client}px`);
+    if (cut.link !== 1) say(`the cut body's Open wide link breaks over ${cut.link} lines`);
+  }
 }
 
 const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';

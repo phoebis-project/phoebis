@@ -6475,11 +6475,12 @@ await m.navigate(`/requests/${laptopRow.id}`);
     const held = { dialog: m.container.querySelector('dialog[open]') !== null, drawer: m.container.querySelector('.drawer') !== null };
     m.container.querySelector('dialog[open] .dialog__close')?.click();
     await m.settle(100);
-    const closed = { dialog: m.container.querySelector('dialog[open]') !== null, drawer: m.container.querySelector('.drawer') !== null };
+    // The dialog leaves the tree as it closes, so the link that opened it takes the focus back.
+    const closed = { dialog: m.container.querySelector('dialog[open]') !== null, drawer: m.container.querySelector('.drawer') !== null, focused: document.activeElement === wide(request) };
     results.push({
       name: escapeCheck,
-      ok: held.dialog && held.drawer && !closed.dialog && closed.drawer,
-      missing: [`after Escape: ${held.dialog ? 'dialog open' : 'dialog closed'}, ${held.drawer ? 'drawer open' : 'drawer closed'}`, `after the close button: ${closed.dialog ? 'dialog open' : 'dialog closed'}, ${closed.drawer ? 'drawer open' : 'drawer closed'}`],
+      ok: held.dialog && held.drawer && !closed.dialog && closed.drawer && closed.focused,
+      missing: [`after Escape: ${held.dialog ? 'dialog open' : 'dialog closed'}, ${held.drawer ? 'drawer open' : 'drawer closed'}`, `after the close button: ${closed.dialog ? 'dialog open' : 'dialog closed'}, ${closed.drawer ? 'drawer open' : 'drawer closed'}, focus on ${closed.focused ? 'Open wide' : (document.activeElement?.tagName ?? 'nothing')}`],
     });
 
     stub({ request: 'line one\nline two', requestBytesStored: 17 });
