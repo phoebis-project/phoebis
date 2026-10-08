@@ -23,7 +23,8 @@ use phoebis_keepalive::{
     Ack, Engine, EngineParts, Event, EventError, KeepaliveLimits, KeepalivePolicy, KeepaliveTiming,
 };
 use phoebis_ledger::{
-    spawn as spawn_ledger, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables, PriceTable, Pricing,
+    spawn as spawn_ledger, AttemptRecord, Ledger, LedgerConfig, LedgerDb, Metrics, PlanTables,
+    PriceTable, Pricing, Record, RequestRecord,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::AccountingSource;
@@ -694,4 +695,81 @@ impl Rig {
             })
             .await;
     }
+}
+
+/// A report lands on the router task's own queue, and the state it changes is visible once the handle says so.
+///
+/// The lifetime is named rather than elided: `check` is only ever called with this one borrow of `r`, and an
+/// elided `Fn(&Rig) -> Fut` would desugar to a higher-ranked bound that no borrowing async closure can satisfy.
+pub async fn settled<'a, F, Fut>(r: &'a Rig, check: F)
+where
+    F: Fn(&'a Rig) -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    while !check(r).await {
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the router never applied the report"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+/// A real request and attempt for `a` in `main`: enough `claude-sonnet-5` input tokens, at the shipped table's
+/// live rate, to price at `usd` dollars, so a spend this test wants is a row the ledger's own rollups carry
+/// rather than a number the test invented.
+pub fn spend_of(id: &str, now: i64, usd: f64) -> (RequestRecord, AttemptRecord) {
+    let rate = PriceTable::shipped()
+        .price("claude-sonnet-5")
+        .expect("the shipped table prices claude-sonnet-5")
+        .input;
+    let request = RequestRecord {
+        id: id.into(),
+        received_at: now,
+        finished_at: Some(now + 500),
+        key_id: Some("desktop".into()),
+        pool_id: Some("main".into()),
+        canonical_model: "claude-sonnet-5".into(),
+        model: "claude-sonnet-5".into(),
+        kind: "inference".into(),
+        origin: "client".into(),
+        outcome: "succeeded".into(),
+        attempts: 1,
+        ..Default::default()
+    };
+    let attempt = AttemptRecord {
+        request_id: id.into(),
+        attempt: 1,
+        account_id: "a".into(),
+        account_kind: "api_key".into(),
+        outcome: "succeeded".into(),
+        input_tokens: Some((usd / rate * 1_000_000.0).round() as u64),
+        ..Default::default()
+    };
+    (request, attempt)
+}
+
+/// Lands a real, priced request for `a` through the ledger's own channel, the path a real request's completion
+/// uses, and waits for the router's view of `a`'s spend to agree: a priced landing is what makes the writer
+/// refresh the router at once, rather than at its next slow poll of the registry for the members a test just
+/// changed, so this is safe as the seed each test starts from, before anything else races its timing.
+pub async fn plant_spend(r: &Rig, id: &str, usd: f64) {
+    let (request, attempts) = spend_of(id, r.now(), usd);
+    r.ledger
+        .record_request(Record::Request {
+            request,
+            attempts: vec![attempts],
+            bodies: None,
+        })
+        .await;
+    settled(r, |r| async move {
+        r.h.router
+            .member_spends()
+            .await
+            .unwrap()
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd >= usd - 0.01)
+    })
+    .await;
 }

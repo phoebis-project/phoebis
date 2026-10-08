@@ -47,10 +47,20 @@ model_windows: {}
 overrides: {}
 "#;
 
-/// The production leads and jitters, so each figure below is the one the console shows; the parity cases of the
+/// The production leads and jitters, so each figure below is the one the console shows. The parity cases of the
 /// other files keep the rig's 30-second lead.
 fn timing() -> KeepaliveTiming {
     KeepaliveTiming::default()
+}
+
+/// The production leads without the jitter, so a case that reads an entry's expiry off its due time finds it exactly:
+/// a five-minute entry expires 60 seconds after its probe is due.
+fn exact() -> KeepaliveTiming {
+    KeepaliveTiming {
+        jitter_5m_ms: 0,
+        jitter_1h_ms: 0,
+        ..KeepaliveTiming::default()
+    }
 }
 
 fn policy(edit: impl FnOnce(&mut KeepalivePolicy)) -> KeepalivePolicy {
@@ -142,6 +152,20 @@ fn retained(r: &Rig, agent: &str) -> bool {
         .recipes_for("desktop", "session")
         .iter()
         .any(|id| id == agent)
+}
+
+/// The due probes the ledger counts as withheld, once `want` of them have landed.
+async fn skipped(r: &Rig, want: u64) -> u64 {
+    wait_for(Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+            })
+            .unwrap();
+        let total: u64 = rows.iter().map(|row| row.probes_skipped).sum();
+        (total == want).then_some(total)
+    })
+    .await
 }
 
 /// The wasted probes the ledger has settled, by reason, once `probes` of them have landed.
@@ -412,18 +436,35 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
     r.observe("main").await;
     let start = r.now();
     park(&mut r, "main", "scheduled", None, Some(start + 90 * MINUTE));
+    tick_to(&mut r, start + HOUR).await;
+    let at_hour = r.status("main").probes;
     tick_to(&mut r, start + 90 * MINUTE - 1).await;
+    let near = r.status("main");
     assert_eq!(
-        (r.status("main").state, retained(&r, "main")),
-        (AgentState::Parked, true)
+        (near.state, near.reason, retained(&r, "main")),
+        (AgentState::Parked, Reason::Scheduled, true),
+        "{near:?}"
     );
-    // A wake three days out is past it: probed for the window's hour, then held with its probes written off.
-    let mut r = rig(plan(policy(|_| {}))).await;
+    assert!(
+        near.probes > at_hour,
+        "probed past the window's hour: {at_hour} then {near:?}"
+    );
+    // A wake three days out is past it: probed for the window's hour, then held with its probes written off. Without
+    // the jitter a probe is due every four minutes from the request, one of them at the hour, so the entry the last
+    // one kept expires 60 seconds into the hold.
+    let mut r = rig(RigSpec {
+        timing: exact(),
+        ..plan(policy(|_| {}))
+    })
+    .await;
     r.observe("main").await;
     let start = r.now();
     park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR));
     tick_to(&mut r, start + HOUR - 1).await;
-    assert_eq!(r.status("main").reason, Reason::Scheduled);
+    assert_eq!(
+        (r.status("main").reason, r.status("main").next_probe_at),
+        (Reason::Scheduled, Some(start + HOUR))
+    );
     tick_to(&mut r, start + HOUR).await;
     let held = r.status("main");
     assert_eq!(
@@ -431,20 +472,28 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
             held.reason,
             held.state,
             retained(&r, "main"),
-            held.unanswered
+            held.unanswered,
+            held.next_probe_at
         ),
-        (Reason::Horizon, AgentState::Parked, true, 0),
+        (Reason::Horizon, AgentState::Parked, true, 0, None),
         "{held:?}"
     );
     assert_eq!(
         wasted(&r, held.probes).await,
         BTreeMap::from([("horizon".to_string(), held.probes)])
     );
-    tick_to(&mut r, start + HOUR + MINUTE).await;
+    for at in [10_000, 20_000] {
+        tick_to(&mut r, start + HOUR + at).await;
+    }
     assert_eq!(
         (r.status("main").reason, r.status("main").probes),
         (Reason::Horizon, held.probes),
         "the hold sends nothing"
+    );
+    assert_eq!(
+        r.engine.reasons().get(&Reason::Horizon).copied(),
+        Some(1),
+        "three held ticks are one hold"
     );
     assert_eq!(
         wasted(&r, held.probes).await,
@@ -452,9 +501,8 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
         "the hold settles its probes once"
     );
     // A nearer wake re-opens it while the entry the last probe kept is still warm.
-    let now = r.now();
-    park(&mut r, "main", "scheduled", None, Some(now + 2 * HOUR));
-    tick_to(&mut r, now + 5 * MINUTE).await;
+    park(&mut r, "main", "scheduled", None, Some(start + 3 * HOUR));
+    tick_to(&mut r, start + HOUR + 30_000).await;
     let reopened = r.status("main");
     assert_eq!(
         (
@@ -464,6 +512,157 @@ async fn a_scheduled_park_is_probed_to_a_wake_within_the_horizon_and_held_with_h
         ),
         (Reason::Scheduled, AgentState::Parked, true),
         "{reopened:?}"
+    );
+}
+
+#[tokio::test]
+async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_due() {
+    let mut r = rig(RigSpec {
+        timing: exact(),
+        ..plan(policy(|_| {}))
+    })
+    .await;
+    r.observe("main").await;
+    let start = r.now();
+    park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR));
+    tick_to(&mut r, start + HOUR - 1).await;
+    // The probe due at the hour is the one the hold withholds, and the entry the one before it kept expires a lead
+    // after that due time.
+    let expires = r.status("main").next_probe_at.unwrap() + 60_000;
+    tick_to(&mut r, start + HOUR).await;
+    let held = r.status("main");
+    assert_eq!(
+        (held.reason, held.next_probe_at),
+        (Reason::Horizon, None),
+        "a held recipe has no probe due: {held:?}"
+    );
+    tick_to(&mut r, expires - 1).await;
+    assert!(
+        retained(&r, "main") && r.engine.stats().retained_bytes > 0,
+        "{:?}",
+        r.status("main")
+    );
+    tick_to(&mut r, expires).await;
+    assert_eq!(
+        (
+            r.status("main").reason,
+            retained(&r, "main"),
+            r.engine.stats().retained_bytes
+        ),
+        (Reason::Expired, false, 0),
+        "the cold body is freed at its expiry"
+    );
+    assert_eq!(
+        wasted(&r, held.probes).await,
+        BTreeMap::from([("horizon".to_string(), held.probes)]),
+        "the hold settled every probe, so the lapse settles none"
+    );
+    assert_eq!(skipped(&r, 1).await, 1, "the withheld probe counts once");
+}
+
+#[tokio::test]
+async fn a_disabled_pool_lapses_a_recipe_at_its_expiry_and_one_enabled_again_inside_the_ttl_probes_on(
+) {
+    // Without the jitter the request's probe is due at 240 s and its entry expires at 300 s.
+    let mut r = rig(RigSpec {
+        timing: exact(),
+        ..plan(policy(|_| {}))
+    })
+    .await;
+    r.observe("main").await;
+    let start = r.now();
+    park(&mut r, "main", "background", Some(start + 2 * MINUTE), None);
+    edit_pool(&r, |pool| pool.enabled = false).await;
+    tick_to(&mut r, start + 2 * MINUTE).await;
+    assert_eq!(
+        (r.status("main").state, r.status("main").reason),
+        (AgentState::Idle, Reason::PoolDisabled),
+        "the deadline that passes under the disabled pool ends the park on time"
+    );
+    tick_to(&mut r, start + 300_000 - 1).await;
+    assert_eq!(
+        (r.status("main").reason, retained(&r, "main")),
+        (Reason::PoolDisabled, true)
+    );
+    tick_to(&mut r, start + 300_000).await;
+    assert_eq!(
+        (
+            r.status("main").reason,
+            retained(&r, "main"),
+            r.status("main").probes
+        ),
+        (Reason::Expired, false, 0)
+    );
+    let mut r = rig(RigSpec {
+        timing: exact(),
+        ..plan(policy(|_| {}))
+    })
+    .await;
+    r.observe("main").await;
+    let start = r.now();
+    edit_pool(&r, |pool| pool.enabled = false).await;
+    tick_to(&mut r, start + 3 * MINUTE).await;
+    assert_eq!(r.status("main").reason, Reason::PoolDisabled);
+    edit_pool(&r, |pool| pool.enabled = true).await;
+    tick_to(&mut r, start + 4 * MINUTE).await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").probes),
+        (Reason::Scheduled, 1),
+        "enabled again inside the entry's TTL, the recipe probes on"
+    );
+}
+
+#[tokio::test]
+async fn a_park_with_no_deadline_ends_at_the_break_even_under_a_null_parked_ceiling() {
+    let mut r = rig(plan(policy(|_| {}))).await;
+    r.observe("main").await;
+    let start = r.now();
+    park(&mut r, "main", "background", None, None);
+    ends_at(
+        &mut r,
+        "main",
+        start + 11_760_000,
+        Reason::ParkedLimit,
+        "parked_limit",
+    )
+    .await;
+}
+
+#[tokio::test]
+async fn a_paused_recipe_held_under_horizon_settles_its_probes_there_and_keeps_its_pause() {
+    let mut r = rig(plan(policy(|_| {}))).await;
+    r.observe("main").await;
+    let start = r.now();
+    park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR));
+    tick_to(&mut r, start + 30 * MINUTE).await;
+    // An answer with no usage pauses the recipe and cools no account, so no gate hold rewrites the pause's reason.
+    r.up.push_credential_rule(
+        OAUTH,
+        "/v1/messages",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"m","type":"message","content":[]}"#.to_vec(),
+        },
+    );
+    tick_to(&mut r, start + 40 * MINUTE).await;
+    let paused = r.status("main");
+    assert_eq!(
+        (paused.paused, paused.reason),
+        (true, Reason::InvalidProbeUsage),
+        "{paused:?}"
+    );
+    assert!(paused.unanswered > 0, "{paused:?}");
+    tick_to(&mut r, start + HOUR).await;
+    let held = r.status("main");
+    assert_eq!(
+        (held.paused, held.reason, held.unanswered),
+        (true, Reason::InvalidProbeUsage, 0),
+        "the pause keeps its reason: {held:?}"
+    );
+    assert_eq!(
+        wasted(&r, paused.unanswered as u64).await,
+        BTreeMap::from([("horizon".to_string(), paused.unanswered as u64)])
     );
 }
 
@@ -507,11 +706,17 @@ async fn a_raised_horizon_releases_a_held_recipe_and_a_key_opt_out_discards_it()
     })
     .await;
     let now = r.now();
-    tick_to(&mut r, now + 5 * MINUTE).await;
+    tick_to(&mut r, now + 1).await;
     assert_eq!(
-        (r.status("main").reason, r.status("main").probes > held),
-        (Reason::Scheduled, true),
+        r.status("main").reason,
+        Reason::Scheduled,
         "the raised horizon reaches the held recipe on the next tick"
+    );
+    tick_to(&mut r, now + 5 * MINUTE).await;
+    assert!(
+        r.status("main").probes > held,
+        "and probing goes on while the entry is warm: {:?}",
+        r.status("main")
     );
     let (mut r, _) = held_under_a_one_hour_horizon().await;
     let held = r.status("main").probes;
@@ -698,6 +903,28 @@ async fn a_busy_main_past_the_window_ends_with_idle_limit() {
         "idle_limit",
     )
     .await;
+}
+
+/// A price file that prices no row leaves no break-even of its own: the ceilings read the shipped table's tightest
+/// row, whose excess of 11.5 over the read gives 2,760,000 ms on a five-minute entry, rather than running unbounded.
+#[tokio::test]
+async fn a_price_file_with_no_usable_row_falls_back_to_the_shipped_tightest_row() {
+    let mut r = rig(RigSpec {
+        pricing: PriceTable::from_yaml("effective: 2026-01-01\nmodels: {}\n", "test").unwrap(),
+        ..dollars(policy(|_| {}))
+    })
+    .await;
+    r.observe("main").await;
+    let start = r.now();
+    r.state("main", "idle");
+    tick_to(&mut r, start + 2_760_000 - 1).await;
+    assert!(retained(&r, "main"), "{:?}", r.status("main"));
+    tick_to(&mut r, start + 2_760_000).await;
+    assert_eq!(
+        (r.status("main").reason, retained(&r, "main")),
+        (Reason::IdleLimit, false),
+        "the default window of 3,600 s capped at the shipped tightest row's break-even"
+    );
 }
 
 #[tokio::test]

@@ -1,6 +1,9 @@
 //! The break-even: the pause length at which a recipe's chain of probes costs one re-write of its prefix, the
 //! default every ceiling of the policy resolves to and the cap each of its numbers stays under.
 
+use std::collections::HashMap;
+use std::sync::OnceLock;
+
 use phoebis_ledger::{PlanTables, PriceTable};
 use phoebis_routing::{listing::row_for, Rates, FIVE_HOUR};
 
@@ -58,16 +61,52 @@ pub fn factors_for(
     funding: Funding,
     canonical_model: &str,
 ) -> Factors {
-    let dollars = pricing.rate_table().rows;
-    let plan = match funding {
-        Funding::Plan => {
-            let rows = tables.rate_table(FIVE_HOUR).rows;
-            row_for(canonical_model, |k| rows.get(k)).and_then(Factors::of)
+    FactorRows::of(pricing, tables).factors(funding, canonical_model)
+}
+
+/// The rows `factors_for` reads, built once so a tick that resolves every retained recipe builds each table's rows
+/// and the tightest row once rather than per recipe.
+pub(crate) struct FactorRows {
+    dollars: HashMap<String, Rates>,
+    plan: HashMap<String, Rates>,
+    tightest: Factors,
+}
+
+impl FactorRows {
+    pub(crate) fn of(pricing: &PriceTable, tables: &PlanTables) -> FactorRows {
+        let dollars = pricing.rate_table().rows;
+        let tightest = tightest(dollars.values().filter_map(Factors::of));
+        FactorRows {
+            dollars,
+            plan: tables.rate_table(FIVE_HOUR).rows,
+            tightest,
         }
-        Funding::ApiKey | Funding::Overage => None,
-    };
-    plan.or_else(|| row_for(canonical_model, |k| dollars.get(k)).and_then(Factors::of))
-        .unwrap_or_else(|| tightest(dollars.values().filter_map(Factors::of)))
+    }
+
+    pub(crate) fn factors(&self, funding: Funding, canonical_model: &str) -> Factors {
+        let plan = match funding {
+            Funding::Plan => row_for(canonical_model, |k| self.plan.get(k)).and_then(Factors::of),
+            Funding::ApiKey | Funding::Overage => None,
+        };
+        plan.or_else(|| row_for(canonical_model, |k| self.dollars.get(k)).and_then(Factors::of))
+            .unwrap_or(self.tightest)
+    }
+}
+
+/// The shipped price table's tightest row: what a recipe's ceilings fall back to when the tables in force give no
+/// break-even, since an operator's price file with no usable row must not leave a parked session probed until the
+/// session expires.
+pub(crate) fn shipped_tightest() -> Factors {
+    static SHIPPED: OnceLock<Factors> = OnceLock::new();
+    *SHIPPED.get_or_init(|| {
+        tightest(
+            PriceTable::shipped()
+                .rate_table()
+                .rows
+                .values()
+                .filter_map(Factors::of),
+        )
+    })
 }
 
 /// The smallest break-even any row gives at each TTL, as one set of factors in the ratio's own unit: a row

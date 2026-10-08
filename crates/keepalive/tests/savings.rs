@@ -2296,22 +2296,6 @@ async fn an_aggregate_only_cache_write_is_charged_as_a_five_minute_write() {
     );
 }
 
-/// Waits for the router to have applied a report this test just sent it.
-async fn settled<'a, F, Fut>(r: &'a Rig, check: F)
-where
-    F: Fn(&'a Rig) -> Fut,
-    Fut: std::future::Future<Output = bool>,
-{
-    let deadline = tokio::time::Instant::now() + Duration::from_secs(5);
-    while !check(r).await {
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the router never applied the report"
-        );
-        tokio::time::sleep(Duration::from_millis(5)).await;
-    }
-}
-
 const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
 
 fn subscription_spec() -> RigSpec {

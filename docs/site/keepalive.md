@@ -153,14 +153,16 @@ other than `parked` ends the park. A command's deadline ends the park when it pa
 command and wakes nobody, and the idle window restarts at that moment.
 
 **Parked on a scheduled wakeup.** With kind `scheduled`, a due probe goes out while the wakeup is at most
-`scheduled_horizon_seconds` away. Beyond that the recipe is held with the reason `horizon` and its prompt kept, and a
-later `parked` report with a nearer wakeup reopens it, as does a horizon raised on the pool. A wakeup that passes ends
-the park as a deadline does, which bounds a deleted or expired cron and covers the scheduler's jitter of up to 15
-minutes.
+`scheduled_horizon_seconds` away. Beyond that the recipe is held with the reason `horizon`, its probes stopped and its
+prompt kept while the entry lasts. A later `parked` report with a nearer wakeup reopens it, as does a horizon raised on
+the pool, and probing resumes if the entry is still warm. A held recipe whose entry expires ends as `expired`. A wakeup
+that passes ends the park as a deadline does, which bounds a deleted or expired cron and covers the scheduler's jitter
+of up to 15 minutes.
 
-A park of kind `both` is probed while either part says so, and a hold or an end applies only once neither does. A
-subagent's park follows the two park rules on its own, and the idle window never applies to a subagent, which is busy,
-parked or released. A busy agent that stays silent past the lead is probed with no ceiling of its own: a long
+A park of kind `both` is probed while either part says so, and a hold or an end applies only once neither does. When
+neither does and the wakeup lies beyond the horizon, the recipe is held rather than ended, since the wakeup's return is
+certain. A subagent's park follows the two park rules on its own, and the idle window never applies to a subagent, which
+is busy, parked or released. A busy agent that stays silent past the lead is probed with no ceiling of its own: a long
 foreground tool call on a five-minute entry stays covered, and the lease and the idle window bound a client that died.
 
 At a ceiling the recipe ends with the reason `idle_limit` or `parked_limit`, or is held with `horizon`, and its
@@ -243,7 +245,7 @@ over the cache read price: 50 for the two Fable models, 25 for `claude-opus-5-5`
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight; or `held`, with no probe scheduled and one of twenty-two reasons attached.
+`probing`, with a probe in flight, or `held`, with no probe scheduled and one of twenty-two reasons attached.
 
 ### The guard field
 
@@ -264,12 +266,12 @@ probe that made its net negative, not a contradiction.
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits it out while the entry lasts. |
 | `evicted` | evicted | The engine reached its retained-bytes cap and this recipe was the oldest idle one. |
 | `expired` | entry expired | The cache entry expired before its probe was due; no probe was sent. |
-| `horizon` | held: wake too far | Parked on a wakeup further off than the pool's horizon: held, its prompt kept. |
+| `horizon` | held: wake too far | Parked on a wakeup past the pool's horizon: held while the entry lasts. |
 | `idle_limit` | idle limit | The idle window ran out (see [The ceilings](#the-ceilings)). |
 | `ledger_behind` | ledger behind | The router's ledger was behind; the probe is sent again after the answer's wait. |
 | `net_negative` | net negative | Probes cost more than they saved; a real request grants the grace probes again. |
 | `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
-| `parked_limit` | parked limit | The parked ceiling ran out on a background command or a subagent: ended. |
+| `parked_limit` | parked limit | The parked ceiling ran out, or a subagent's park ended by deadline, wake or `idle`. |
 | `paused` | paused | The account is paused or its subscription has ended, the pool is disabled, or the key opted out. |
 | `pool_exhausted` | pool exhausted | Every account of the pool was exhausted or cooled when the probe was selected. |
 | `probe_error` | probe error | The last probe failed on the transport or was refused. |
@@ -287,13 +289,13 @@ that `keepalive.enabled` asks of the pool when it is saved stays the one refusal
 An entry the engine knows has expired is never probed: its recipe ends under `expired`, its unanswered probes are
 settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. A recipe
 held under any other reason, a gate's hold among them (`affinity_too_short`, `budget`, `cap_reached`, `cooled`,
-`net_negative`, `overage`, `paused` or `reauth`), leaves as `expired` once its entry has expired; the next real request
-starts a new one. Two holds keep the prompt past the expiry and leave as `expired` at the first tick after they end:
-`horizon`, which keeps it for the wakeup, and `paused` on a disabled pool, which keeps it for the pool coming back.
-While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes cap the
-engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended sessions' idle
-agents, never one with a probe or a request in flight. A lapsed or evicted recipe leaves the recipe list, as one stopped
-under `idle_limit` or `storage_limit` does, and shows on the wasted counter; a lapse also shows in that log line.
+`net_negative`, `overage`, `paused` or `reauth`), leaves as `expired` once its entry has expired, and the next real
+request starts a new one. A recipe held under `horizon` or on a disabled pool leaves the same way, and one reopened or
+enabled again while its entry is warm probes on. While the request a recipe follows is still open, the lapse waits for
+its completion. At the retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first, oldest
+activity first, then attended sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted
+recipe leaves the recipe list, as one stopped under `idle_limit` or `storage_limit` does, and shows on the wasted
+counter. A lapse also shows in that log line.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and holds the recipe under `unsupported_shape`: a probe built from it

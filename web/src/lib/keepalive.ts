@@ -34,7 +34,7 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   cooled: 'The account the session is pinned to is under a cooldown; the probe waits for it to end while the entry lasts.',
   evicted: 'The engine was at its retained-bytes cap and this recipe was the oldest idle one; the next real request starts a new recipe.',
   expired: 'The cache entry expired before its probe was due, so no probe was sent; the next real request starts a new recipe.',
-  horizon: "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held and probing resumes once the wake is within it.",
+  horizon: "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held. Probing resumes once the wake is within the horizon while the entry is still warm, and the recipe ends as expired when the entry's TTL passes.",
   idle_limit: "The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded. The next real request starts a new recipe.",
   ledger_behind: "The router refused the probe while its ledger was catching up; the probe is sent again after the answer's wait.",
   net_negative: "Probes on this session have cost more than the cache reads they bought. The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again.",

@@ -961,8 +961,8 @@ async fn probe_outcomes_are_classified() {
     );
 }
 
-/// `a` at a monthly budget of 5.0, with 5.01 of priced spend the ledger landed and the router's view of `a` reading
-/// it, so the next tick's gate holds a probe pinned to `a` under `budget`.
+/// `a` alone at a monthly budget of 5.0, with 5.01 of priced spend the router's view of `a` reads, so the next tick's
+/// gate holds a probe pinned to `a` under `budget`.
 async fn over_budget(r: &Rig) {
     r.h.store
         .set_pool_members(
@@ -977,54 +977,7 @@ async fn over_budget(r: &Rig) {
         )
         .unwrap();
     r.h.router.reload().await.unwrap();
-    let rate = phoebis_ledger::PriceTable::shipped()
-        .price("claude-sonnet-5")
-        .expect("the shipped table prices claude-sonnet-5")
-        .input;
-    let now = r.now();
-    r.ledger
-        .record_request(phoebis_ledger::Record::Request {
-            request: phoebis_ledger::RequestRecord {
-                id: "over-budget".into(),
-                received_at: now,
-                finished_at: Some(now + 500),
-                key_id: Some("desktop".into()),
-                pool_id: Some("main".into()),
-                canonical_model: "claude-sonnet-5".into(),
-                model: "claude-sonnet-5".into(),
-                kind: "inference".into(),
-                origin: "client".into(),
-                outcome: "succeeded".into(),
-                attempts: 1,
-                ..Default::default()
-            },
-            attempts: vec![phoebis_ledger::AttemptRecord {
-                request_id: "over-budget".into(),
-                attempt: 1,
-                account_id: "a".into(),
-                account_kind: "api_key".into(),
-                outcome: "succeeded".into(),
-                input_tokens: Some((5.01 / rate * 1_000_000.0).round() as u64),
-                ..Default::default()
-            }],
-            bodies: None,
-        })
-        .await;
-    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
-    loop {
-        let spends = r.h.router.member_spends().await.unwrap();
-        if spends
-            .iter()
-            .any(|row| row.account_id == "a" && row.spent_usd >= 5.0)
-        {
-            return;
-        }
-        assert!(
-            tokio::time::Instant::now() < deadline,
-            "the router never read the spend"
-        );
-        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-    }
+    plant_spend(r, "over-budget", 5.01).await;
 }
 
 /// An exhaustion pauses the recipe until the next real request, while a gate hold keeps it armed for the tick that

@@ -9580,7 +9580,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     results.push({
       name: "/sessions a parked agent's horizon hold and its parked limit render with their hints, the limit as a warning",
       ok:
-        (horizon?.getAttribute('title') ?? '') === "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held and probing resumes once the wake is within it." &&
+        (horizon?.getAttribute('title') ?? '') === "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held. Probing resumes once the wake is within the horizon while the entry is still warm, and the recipe ends as expired when the entry's TTL passes." &&
         horizon?.classList.contains('badge--neutral') === true &&
         (parked?.getAttribute('title') ?? '') === "The pool's parked ceiling ran out while the session waited on a background command or a subagent, so the retained prompt was discarded. The next real request starts a new recipe." &&
         parked?.classList.contains('badge--warning') === true,
