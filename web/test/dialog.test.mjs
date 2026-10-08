@@ -26,7 +26,10 @@ afterEach(() => {
   document.body.replaceChildren();
 });
 
-/** An open dialog whose onClose counts its calls, with `unsaved` as a form page passes it. */
+/**
+ * An open dialog whose onClose counts its calls, with `unsaved` as a form page passes it. Its footer holds a Save
+ * button, a second control after the X, so a case can tell the control that held the focus from the first one.
+ */
 function dialog(unsaved) {
   const container = document.createElement('div');
   document.body.append(container);
@@ -38,6 +41,7 @@ function dialog(unsaved) {
       h(
         Dialog,
         {
+          footer: h('button', { type: 'button' }, 'Save'),
           onClose: () => {
             closes.count += 1;
           },
@@ -49,7 +53,8 @@ function dialog(unsaved) {
       ),
     ),
   );
-  return { closes, element: container.querySelector('dialog') };
+  const element = container.querySelector('dialog');
+  return { close: element.querySelector('.dialog__close'), closes, element, save: buttonIn(element, 'Save') };
 }
 
 /** The discard question, an open dialog of its own, or null while none is asked. */
@@ -78,9 +83,8 @@ test('an unchanged dialog closes on a click on its own element', () => {
 });
 
 test('an unsaved dialog asks on the outside click and keeps editing', () => {
-  const { closes, element } = dialog(true);
-  const close = element.querySelector('.dialog__close');
-  act(() => close.focus());
+  const { close, closes, element, save } = dialog(true);
+  act(() => save.focus());
   clickOn(element);
   const q = question();
   assert.ok(q, 'a second open dialog carries the question');
@@ -91,15 +95,29 @@ test('an unsaved dialog asks on the outside click and keeps editing', () => {
   assert.equal(question(), null, 'Keep editing closes the question alone');
   assert.equal(closes.count, 0);
   assert.equal(element.hasAttribute('open'), true);
-  focusedIs(close, 'the focus is back on the control that held it');
+  focusedIs(save, 'the focus is back on the control that held it');
+  assert.ok(document.activeElement !== close, 'the first control did not take it');
+});
+
+test('Keep editing hands the focus back to the last control the dialog held when the click took it away', () => {
+  // A click on the backdrop moves the focus off the control before the dialog hears the click, as a mouse does.
+  const { closes, element, save } = dialog(true);
+  act(() => save.focus());
+  act(() => save.blur());
+  focusedIs(document.body, 'the focus left the dialog before the click');
+  clickOn(element);
+  assert.ok(question(), 'the dialog asks');
+  act(() => buttonIn(question(), 'Keep editing').click());
+  assert.equal(closes.count, 0);
+  focusedIs(save, 'the last control the dialog held has the focus again');
 });
 
 test('Keep editing focuses the first control of the dialog when none held the focus', () => {
-  const { element } = dialog(true);
+  const { close, element } = dialog(true);
   focusedIs(document.body, 'nothing holds the focus before the click');
   clickOn(element);
   act(() => buttonIn(question(), 'Keep editing').click());
-  focusedIs(element.querySelector('.dialog__close'), 'the first control a Tab reaches has the focus');
+  focusedIs(close, 'the first control a Tab reaches has the focus');
 });
 
 test('Discard closes the dialog', () => {

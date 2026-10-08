@@ -353,14 +353,18 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
   // element and never reads a stale prop.
   const latest = useRef({ onClose, unsaved });
   latest.current = { onClose, unsaved };
-  // The control inside the dialog that held the focus as the question opened, so Keep editing can hand it back.
+  // The last control inside the dialog that took the focus: a click on the backdrop moves the focus off the control
+  // before the dialog hears the click, so the active element alone would miss it.
+  const lastFocused = useRef<HTMLElement | null>(null);
+  // The control that held the focus as the question opened, so Keep editing can hand it back.
   const held = useRef<HTMLElement | null>(null);
   const request = useCallback(() => {
     if (!latest.current.unsaved) {
       latest.current.onClose();
       return;
     }
-    const active = document.activeElement;
+    const last = lastFocused.current;
+    const active = last?.isConnected ? last : document.activeElement;
     held.current = active instanceof HTMLElement && ref.current?.contains(active) ? active : null;
     setAsking(true);
   }, []);
@@ -372,7 +376,9 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     setAsking(false);
   }, []);
   useEffect(() => {
-    if (!open) setAsking(false);
+    if (open) return;
+    setAsking(false);
+    lastFocused.current = null;
   }, [open]);
   useEffect(() => {
     const el = ref.current;
@@ -390,6 +396,15 @@ function useModalDialog(open: boolean, onClose: () => void, unsaved: boolean) {
     const target = was?.isConnected && el.contains(was) && was.matches(HELD_FOCUS) && !was.matches(':disabled') ? was : el.querySelector<HTMLElement>(TABBABLE);
     target?.focus();
   }, [asking]);
+  useEffect(() => {
+    const el = ref.current;
+    if (!el) return;
+    const onFocusIn = (e: Event) => {
+      if (e.target instanceof HTMLElement && e.target !== el) lastFocused.current = e.target;
+    };
+    el.addEventListener('focusin', onFocusIn);
+    return () => el.removeEventListener('focusin', onFocusIn);
+  }, []);
   useEffect(() => {
     const el = ref.current;
     if (!el) return;
