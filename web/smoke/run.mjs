@@ -3690,6 +3690,16 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [prefer ? String(prefer.getAttribute('aria-checked')) : 'absent'],
   });
   {
+    // A new pool starts at the store's defaults, both placements by strategy, so nothing reads the threshold yet.
+    const placements = [dlg?.querySelector('select[aria-label="Subagent placement"]')?.value, dlg?.querySelector('select[aria-label="Session placement"]')?.value];
+    const threshold = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
+    results.push({
+      name: '/pools create dialog places subagents and sessions by strategy, with the prefix threshold disabled',
+      ok: JSON.stringify(placements) === '["by_strategy","by_strategy"]' && threshold?.disabled === true,
+      missing: [JSON.stringify(placements), threshold ? String(threshold.disabled) : 'no threshold input'],
+    });
+  }
+  {
     const autoMode = group(dlg, 'Auto mode');
     const toggle = autoMode?.querySelector('[role="switch"][aria-label="Support server-side auto mode"]');
     results.push({
@@ -3784,14 +3794,33 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [JSON.stringify(states), section?.querySelector('select') ? 'a select is left' : '', hint ?? 'no hint'],
     });
   }
-  // Subagents by cohort read the threshold too, so it is enabled with sessions by strategy.
+  // A pool that took the store's defaults places both by strategy, so neither placement reads the threshold.
   const placements = [dlg?.querySelector('select[aria-label="Subagent placement"]')?.value, dlg?.querySelector('select[aria-label="Session placement"]')?.value];
   const threshold = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]');
   results.push({
-    name: '/pools the threshold is enabled while subagents are placed by cohort and sessions by strategy',
-    ok: JSON.stringify(placements) === '["by_cohort","by_strategy"]' && threshold?.disabled === false,
+    name: '/pools the threshold is disabled while subagents and sessions are both placed by strategy',
+    ok: JSON.stringify(placements) === '["by_strategy","by_strategy"]' && threshold?.disabled === true,
     missing: [JSON.stringify(placements), threshold ? String(threshold.disabled) : 'no threshold input'],
   });
+  {
+    // Subagents by cohort read the threshold, so that choice alone enables it. The select goes back to the stored
+    // choice so the Cancel below closes an unchanged dialog.
+    const subagents = dlg?.querySelector('select[aria-label="Subagent placement"]');
+    const place = async (value) => {
+      if (!subagents) return;
+      subagents.value = value;
+      subagents.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(120);
+    };
+    await place('by_cohort');
+    const enabled = dlg?.querySelector('input[aria-label="Minimum shared prefix, tokens"]')?.disabled;
+    await place('by_strategy');
+    results.push({
+      name: '/pools the threshold enables once subagents are placed by cohort',
+      ok: enabled === false,
+      missing: [enabled === undefined ? 'no threshold input' : String(enabled)],
+    });
+  }
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }

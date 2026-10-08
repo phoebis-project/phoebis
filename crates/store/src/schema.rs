@@ -452,7 +452,7 @@ FROM pins;
 DROP TABLE pins;
 ALTER TABLE pins_next RENAME TO pins;
 ALTER TABLE pools ADD COLUMN affinity_mode TEXT NOT NULL DEFAULT 'always';
-ALTER TABLE pools ADD COLUMN subagent_placement TEXT NOT NULL DEFAULT 'by_cohort';
+ALTER TABLE pools ADD COLUMN subagent_placement TEXT NOT NULL DEFAULT 'by_strategy';
 ALTER TABLE pools ADD COLUMN session_placement TEXT NOT NULL DEFAULT 'by_strategy';
 ALTER TABLE pools ADD COLUMN min_shared_prefix_tokens INTEGER NOT NULL DEFAULT 20000;
 ALTER TABLE pools ADD COLUMN quota_headers TEXT NOT NULL DEFAULT 'pass';

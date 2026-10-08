@@ -156,7 +156,7 @@ test('a pool input holds every engine bound', () => {
 test('a pool input carries the store defaults for the pin and placement fields, and each unknown spelling is refused', () => {
   assert.deepEqual(
     [input.affinityMode, input.subagentPlacement, input.sessionPlacement, input.minSharedPrefixTokens],
-    ['always', 'by_cohort', 'by_strategy', 20_000],
+    ['always', 'by_strategy', 'by_strategy', 20_000],
   );
   const spellings = {
     affinityMode: [['always', 'when_cached'], 'sometimes'],

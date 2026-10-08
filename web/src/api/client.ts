@@ -119,7 +119,7 @@ export const POOL_AFFINITY_DEFAULTS: PoolAffinityFields = {
   affinityMode: 'always',
   minSharedPrefixTokens: 20_000,
   sessionPlacement: 'by_strategy',
-  subagentPlacement: 'by_cohort',
+  subagentPlacement: 'by_strategy',
 };
 
 export interface PoolInput extends PoolEngineFields, PoolAffinityFields {

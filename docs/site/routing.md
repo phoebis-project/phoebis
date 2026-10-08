@@ -60,7 +60,7 @@ Every field, in the order the request body takes them:
 | `prefer_subscription` | `true` | see below |
 | `affinity_ttl_seconds` | `3600` | `0` or at least 60: `affinity_ttl_seconds is 0 or at least 60`; see below |
 | `affinity_mode` | `always` | `always` or `when_cached`; see below |
-| `subagent_placement` | `by_cohort` | `by_cohort`, `by_strategy`, or `with_main`; see Selection |
+| `subagent_placement` | `by_strategy` | `by_cohort`, `by_strategy`, or `with_main`. See Selection. |
 | `session_placement` | `by_strategy` | `by_strategy` or `by_warm_prefix`; see Selection |
 | `min_shared_prefix_tokens` | `20000` | at least 0; see Selection |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |

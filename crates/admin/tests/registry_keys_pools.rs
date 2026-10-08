@@ -2085,7 +2085,7 @@ async fn a_pool_accepts_its_affinity_fields_and_a_members_budget() {
         ),
         (
             Some("always"),
-            Some("by_cohort"),
+            Some("by_strategy"),
             Some("by_strategy"),
             Some(20_000),
             Some(false)
