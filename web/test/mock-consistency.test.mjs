@@ -52,7 +52,21 @@ async function storyAt(at) {
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, lib: d, live, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
+}
+
+/** Every decision record of the story, read as the routing log answers them, newest first. */
+async function decisionsOf(s) {
+  const from = iso(Math.min(...s.requests.map((r) => Date.parse(r.at))) - HOUR);
+  const records = [];
+  let cursor;
+  do {
+    const page = await s.api.listRoutingLog({ cursor, from, limit: 200, to: iso(s.now) });
+    // Each mock answer waits out its latency, so a page's records are read together rather than one by one.
+    records.push(...(await Promise.all(page.rows.filter((row) => row.type === 'decision').map((row) => s.api.getDecision(row.requestId, row.seq)))));
+    cursor = page.nextCursor ?? undefined;
+  } while (cursor !== undefined);
+  return records.filter((r) => r !== null);
 }
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -363,6 +377,18 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     const notebook = s.keys.find((k) => k.id === 'notebook');
     assert.deepEqual([notebook.lifetime.requests, notebook.usage7d.requests], [1, 1]);
+  });
+
+  test(`a Fable request's member without the model week's reading scores untouched on the model week, at ${at}`, async () => {
+    const s = await story;
+    const records = (await decisionsOf(s)).filter((r) => r.request.canonicalModel.includes('fable') && r.candidates.some((c) => c.pace !== null));
+    const unread = records.flatMap((r) => r.candidates.filter((c) => c.kind === 'oauth' && c.pace !== null && c.windows.seven_day_fable === undefined).map((c) => [r, c]));
+    assert.ok(records.length > 0 && unread.length > 0, 'the story runs a Fable request under Pace past a member that reports no model week');
+    for (const [r, c] of unread) {
+      assert.deepEqual([c.pace.remaining, c.pace.reset, c.pace.window], [1, null, 'seven_day_fable'], `${r.requestId}: ${c.accountId}`);
+      assert.ok(s.lib.candidateCells(c, r, s.now).paceTitle.startsWith('100% of the Fable week left'), `${r.requestId}: ${c.accountId}`);
+    }
+    for (const r of records) for (const c of r.candidates) if (c.kind === 'oauth' && c.pace !== null) assert.equal(c.pace.window, 'seven_day_fable', r.requestId);
   });
 }
 

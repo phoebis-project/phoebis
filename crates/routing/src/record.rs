@@ -268,6 +268,9 @@ pub struct PaceFacts {
     pub deadline: Option<i64>,
     pub hours: Option<f64>,
     pub score: f64,
+    /// The window the score read (`seven_day`, or the model's week such as `seven_day_fable`). `None` for an api_key
+    /// member, which the worst bucket scores. The caller holds the window, so the console derives nothing.
+    pub window: Option<String>,
 }
 
 /// The spend and its period are the ledger's spend row for the budget's period, all `None` while the ledger has

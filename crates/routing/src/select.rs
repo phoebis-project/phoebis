@@ -2930,6 +2930,7 @@ fn pace_of(
             deadline: None,
             hours: None,
             score: remaining,
+            window: None,
         };
     }
     let end = snapshot
@@ -2951,6 +2952,7 @@ fn pace_of(
         deadline,
         hours: Some(hours),
         score: remaining / hours,
+        window: Some(window.to_string()),
     }
 }
 

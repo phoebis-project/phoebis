@@ -7622,6 +7622,11 @@ m.unmount();
   const sentenceOf = (card) => [...(card?.querySelectorAll('.decision-card__sentence > span') ?? [])].map((s) => (s.querySelector('a') ? `[${s.textContent}]` : s.textContent)).join(' ');
   const verdictChipsOf = (card) => [...(card?.querySelectorAll('.decision-card__verdict > .chips > .chip') ?? [])].map(chipWords);
   const candidateRows = (card) => [...(card?.querySelectorAll('.decision-card__candidates tbody tr') ?? [])];
+  /** The Pace column's header as the card words it, from the window the first subscription member's score read. */
+  const paceWord = (record) => {
+    const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
+    return id === null ? 'Pace' : `Pace, ${{ seven_day: '7-day', seven_day_fable: 'Fable week' }[id] ?? id.replace(/_/g, ' ')} left per hour`;
+  };
   /** The story's own decision: its row's page, a quarter hour either side of the request, its record and its card. */
   const story = async (id, seq = 1, kinds = '') => {
     const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - DAY), kinds: kinds ? kinds.split(',') : undefined, limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows;
@@ -7927,6 +7932,27 @@ m.unmount();
     page.unmount();
   }
   {
+    // A Pace pick: the header names the window the record read, each member's Pace cell says on hover what its score
+    // divided, and the row's By chip how the strategy ranks.
+    const { card, page, record } = await story('req_ef099b34-453');
+    const header = [...(card?.querySelectorAll('.decision-card__candidates thead th') ?? [])].find((th) => th.textContent.startsWith('Pace'))?.textContent ?? '';
+    // Pace sits third from the end whatever a key's merged windows span.
+    const paceTitle = (tr) => tr.children[tr.children.length - 3]?.getAttribute('title') ?? '';
+    const titles = candidateRows(card).map((tr) => ({ id: tr.querySelector('td a')?.textContent, title: paceTitle(tr) }));
+    const kind = (id) => record.candidates.find((c) => c.accountId === id)?.kind;
+    const oauth = titles.filter((t) => kind(t.id) === 'oauth');
+    const keys = titles.filter((t) => kind(t.id) === 'api_key');
+    const hint = rowOf(page, 'req_ef099b34-453/1')?.querySelector('td.routing-log__by .chip')?.getAttribute('title') ?? '';
+    results.push({
+      name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover and the By chip its hint",
+      ok:
+        header === paceWord(record) && header !== 'Pace' && oauth.length > 0 && oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ h/.test(t.title)) &&
+        keys.length > 0 && keys.every((t) => /worst live bucket left/.test(t.title)) && hint.startsWith('Pace: the account with the most of its window left'),
+      missing: [header, ...titles.map((t) => `${t.id}: ${t.title}`), hint],
+    });
+    page.unmount();
+  }
+  {
     // The fast request's failover passed over a member whose usage credits are out, which its chip's hover says.
     const { card, page, record } = await story('req_4b0e9d17-c31', 2);
     scan('fast failover', card);
@@ -7969,7 +7995,8 @@ m.unmount();
     results.push({
       name: '/routing-log the candidate table reads all three windows on a subscription member and one merged reading on a key',
       ok:
-        JSON.stringify(headers) === JSON.stringify(['Account', 'Tier', '5h', '7d', 'Fable', 'In flight', 'Pace', 'Prefix', 'Verdict']) && fableCells.slice(2, 5).every((c) => c.length === 3) &&
+        record.candidates.some((c) => c.kind === 'oauth' && c.pace?.window) &&
+        JSON.stringify(headers) === JSON.stringify(['Account', 'Tier', '5h', '7d', 'Fable', 'In flight', paceWord(record), 'Prefix', 'Verdict']) && fableCells.slice(2, 5).every((c) => c.length === 3) &&
         /^\d+%$/.test(fableCells[2]?.[0] ?? '') && /^(head|poll|predicted|stored) /.test(fableCells[2]?.[2] ?? '') && keyRow?.children[2]?.getAttribute('colspan') === '3' && /^worst bucket \d+%$/.test(keyRow?.children[2]?.textContent ?? ''),
       missing: [headers.join(','), JSON.stringify(fableCells), keyRow?.textContent ?? 'no key member'],
     });

@@ -5239,7 +5239,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "seq": 1,
         "at": 1000000,
         "key_id": "desktop",
-        "key_generation": 1791268384992,
+        "key_generation": 1791494012554,
         "pool_id": "main",
         "routing_session_id": "s-static",
         "agent_id": "main",
@@ -5309,7 +5309,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "retry_in_place_seconds": 60,
         "pace_floor": 0.05,
         "migrate_band": 0.05,
-        "pool_updated_at": 1791268385223
+        "pool_updated_at": 1791494012857
       },
       "candidates": [
         {
@@ -5354,7 +5354,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "end": null,
             "deadline": null,
             "hours": 168,
-            "score": 0.005952380952380952
+            "score": 0.005952380952380952,
+            "window": "seven_day"
           },
           "budget": [
             {
@@ -5438,7 +5439,8 @@ export const FIXTURES: Record<string, Fixture> = {
             "end": null,
             "deadline": null,
             "hours": null,
-            "score": 1
+            "score": 1,
+            "window": null
           },
           "budget": [
             {

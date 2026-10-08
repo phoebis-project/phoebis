@@ -434,12 +434,13 @@ the kind (a decision in a filled badge with `attempt 2/3` beneath a failover att
 session's first eight characters with the agent beneath, the account (a move names the account it left and the one it
 landed on, a pool or key event names its pool or key), the model, By and Fact, and Details, which opens the request's
 drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it (`static
-rung`), the strategy and the tier's priority (`Pace P0`), where a hold waited (`cohort`, `session pin`), what exhausted
-the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no rule fired` for a
-renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so, one labeled value or
-two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a time the row's
-own time already gives. Every account, key, pool, model, session and request a row names is a link, and a column with
-nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
+rung`), the strategy and the tier's priority (`Pace P0`, whose hover says how Pace ranks), where a hold waited
+(`cohort`, `session pin`), what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`,
+`key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value
+that made it so, one labeled value or two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the
+value after it, never a time the row's own time already gives. Every account, key, pool, model, session and request a
+row names is a link, and a column with nothing to say shows a dash. Below a window width of 1420 pixels the model moves
+beneath the account.
 
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the
@@ -481,16 +482,18 @@ admission with its reason and the rest of the walk not run.
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
 each (the utilization, the reset, the reading's source and age), or an API key's one merged reading, the requests
-in flight against the cap, the Pace score, the prefix entry, and the verdict with the one chip that decided it (`429 on
-5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed over. Three folds, closed until
-opened, hold the request's facts, the pin and its warmth (a record that pins nothing reads why: not looked
-up or pinning off) and the twenty settings in force.
-A refusal under a key or pool the registry no longer holds says so in its place. The outcome
-lists the pin written, the cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL
-tier of its deepest entry, the hold, the answer an exhaustion or a refusal gave, and the spend against a budget. The
-foot repeats the three widenings for the row, names the record's version (Record v1), and Copy as JSON copies the
-record route's answer whole, every field the card does not draw included. A record the retention purged reads "The
-record left with the retention" in the card's place.
+in flight against the cap, the Pace score under a header that names the window it read (the 7-day window or the model's
+week), each cell's hover spelling the share left, the hours to the reset or the subscription's end and the rate, the
+highest winning, the prefix entry, and the verdict with the one chip that decided it (`429 on 5h until 15:42`, `budget
+$1.10 of $5.00`), whose hover says why the member was passed over. Three folds, closed until opened, hold the request's
+facts, the pin and its warmth (a record that pins nothing reads why: not looked up or pinning off) and the
+twenty settings in force. A
+refusal under a key or pool the registry no longer holds says so in its place. The outcome lists the pin written, the
+cache-map entries the answer wrote (`pending` until it ends), the cache read with the TTL tier of its deepest entry, the
+hold, the answer an exhaustion or a refusal gave, and the spend against a budget. The foot repeats the three widenings
+for the row, names the record's version (Record v1), and Copy as JSON copies the record route's answer whole, every
+field the card does not draw included. A record the retention purged reads "The record left with the retention" in the
+card's place.
 
 An event row opens to a bordered panel of pairs: When to the second in UTC, the account and the pool as links, then the
 kind's own pairs. An event that names a request ends with Source request, which opens the log on that request a quarter

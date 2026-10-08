@@ -790,3 +790,46 @@ test('the card carries the hover hints of the hold, the promise and the placemen
   assert.equal(verdict.find((c) => c.value === 'static rung').title, d.PLACED.static(2));
   assert.equal(verdict.find((c) => c.label === 'cache hit').title, d.PROMISE_HINT.static);
 });
+
+test("the Pace cell's title names the share, the hours, the deadline and the rate, and the header names the window", () => {
+  const title = (pace, o = {}) => d.candidateCells(candidate({ pace, ...o }), record(), NOW).paceTitle;
+  const reset = Date.UTC(2026, 8, 19, 8, 30);
+  const read = { deadline: iso(reset), end: null, hours: 66, remaining: 0.08, reset: iso(reset), score: 0.08 / 66, window: 'seven_day' };
+  assert.equal(title(read), '8% of the 7-day window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
+  const end = ms(16, 44);
+  assert.equal(
+    title({ deadline: iso(end), end: iso(end), hours: 2.23, remaining: 0.45, reset: iso(reset), score: 0.45 / 2.23, window: 'seven_day_fable' }),
+    "45% of the Fable week left over 2 h to its subscription's end at 16:44: 20.18 %/h. The highest wins.",
+  );
+  assert.equal(
+    title({ deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' }),
+    '100% of the 7-day window left over 168 h with no reset read: 0.60 %/h. The highest wins.',
+  );
+  assert.equal(title({ ...read, window: null }), '8% of its window left over 66 h to its reset at Sep 19 08:30: 0.12 %/h. The highest wins.');
+  // A pace written without the field reads as the null window.
+  assert.equal(d.candidateCells(candidate({}), record(), NOW).paceTitle, '91% of its window left over 120 h with no reset read: 0.76 %/h. The highest wins.');
+  const keyPace = { deadline: null, end: null, hours: null, remaining: 0.45, reset: null, score: 0.45, window: null };
+  const key = candidate({ accountId: 'overflow', kind: 'api_key', pace: keyPace, planTier: null, tier: [2, 0, 0], windows: { worst_bucket: window5h(0.55, ms(14, 28, 8)) } });
+  assert.equal(d.candidateCells(key, record(), NOW).paceTitle, '45% of its worst live bucket left. Scored by the remaining share alone, with no division by hours.');
+  assert.equal(title(null), null);
+
+  const header = (window) => d.paceHeader(record({ candidates: [key, candidate({ pace: { ...read, window } })] }));
+  assert.equal(header('seven_day_fable'), 'Pace, Fable week left per hour', 'the first subscription member names it, past a key');
+  assert.equal(header('seven_day'), 'Pace, 7-day left per hour');
+  assert.equal(header('seven_day_opus'), 'Pace, seven day opus left per hour');
+  assert.equal(header(null), 'Pace');
+  assert.equal(d.paceHeader(record({ candidates: [key] })), 'Pace', 'API key members alone name no window');
+});
+
+test("a Pace row's By chip carries the strategy's hint and a rung row's none", () => {
+  assert.equal(
+    d.PACE_HINT,
+    "Pace: the account with the most of its window left per hour until the window resets or the subscription ends wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.",
+  );
+  const placed = d.byOf(decision({ by: strategy('pace', [0, 0, 0]), tier: [0, 0, 0] }));
+  assert.deepEqual([placed.value, placed.title], ['Pace P0', d.PACE_HINT]);
+  const held = d.byOf(decision({ by: by('hold', 'strategy_pick'), kind: 'held', tier: [0, 0, 0] }));
+  assert.deepEqual([held.value, held.title], ['Pace P0', d.PACE_HINT]);
+  assert.deepEqual(d.byOf(decision({ by: strategy('priority', [0, 1, 0]), strategy: 'priority' })), { value: 'priority P1' });
+  assert.deepEqual(d.byOf(decision({ by: by('rung', 'static') })), { value: 'static rung' });
+});

@@ -278,8 +278,14 @@ const KEY_REFUSAL_WORD: Record<string, string> = {
   'the key was revoked': 'key revoked',
 };
 
-/** The strategy's word and the tier's priority: `Pace P0`. */
-const strategyChip = (strategy: string, tier: DecisionSummary['tier']) => (tier === null ? wordOf(STRATEGY_WORD, strategy) : `${wordOf(STRATEGY_WORD, strategy)} P${tier[1]}`);
+/** How the strategy ranks, the hover of a Pace chip on a routing log row. */
+export const PACE_HINT = "Pace: the account with the most of its window left per hour until the window resets or the subscription ends wins. A request reads the model's own window when the model has one, else the 7-day window, and a window the account has not read counts as untouched.";
+
+/** The strategy's word and the tier's priority (`Pace P0`), a Pace chip with how the strategy ranks as its hover. */
+const strategyChip = (strategy: string, tier: DecisionSummary['tier']): Chip => {
+  const value = tier === null ? wordOf(STRATEGY_WORD, strategy) : `${wordOf(STRATEGY_WORD, strategy)} P${tier[1]}`;
+  return strategy === 'pace' ? { title: PACE_HINT, value } : { value };
+};
 
 function exhaustionWord(row: DecisionSummary): string {
   const x = row.exhaustion ?? { kind: row.by.value, obstacle: null, window: null };
@@ -309,7 +315,7 @@ function decisionBy(row: DecisionSummary): Chip {
     case 'exhaustion':
       return { value: exhaustionWord(row) };
     case 'hold':
-      return { value: value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : words(value) };
+      return value === 'strategy_pick' ? strategyChip(row.strategy, row.tier) : { value: words(value) };
     case 'none':
       return { value: 'no rule fired' };
     case 'refusal':
@@ -320,7 +326,7 @@ function decisionBy(row: DecisionSummary): Chip {
     case 'rung':
       return { value: wordOf(RUNG_WORD, value) };
     case 'strategy':
-      return { value: strategyChip(value, row.by.tier ?? row.tier) };
+      return strategyChip(value, row.by.tier ?? row.tier);
   }
 }
 
@@ -1164,11 +1170,36 @@ function verdictChipOf(c: RecordCandidate, now: number): Chip | null {
   return null;
 }
 
+/** A Pace window's word in the column header and its phrase in a cell's hover. Any other window reads its id. */
+const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day_fable: 'Fable week' };
+const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the Fable week' };
+
+/** The Pace column's header: the window the first subscription candidate's score read, "Pace" when none carries one. */
+export function paceHeader(record: DecisionRecord): string {
+  const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
+  return id === null ? 'Pace' : `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour`;
+}
+
+/** A Pace cell's hover: the share left, the hours it is spread over and the rate, or an API key's share alone. */
+function paceTitle(c: RecordCandidate, now: number): string | null {
+  const p = c.pace;
+  if (p === null) return null;
+  if (c.kind === 'api_key') return `${fmtPct(p.remaining)} of its worst live bucket left. Scored by the remaining share alone, with no division by hours.`;
+  // A pace built by hand without the key names no window, as a null one does.
+  const id = p.window ?? null;
+  const share = id === null ? 'its window' : own(PACE_WINDOW_PHRASE, id) ? PACE_WINDOW_PHRASE[id] : `the ${words(id)} window`;
+  const over = p.hours === null ? '' : ` over ${Math.round(p.hours)} h`;
+  // The deadline is the earlier of the two, so one equal to the reset is the reset whatever the end reads.
+  const deadline = p.deadline === null ? ' with no reset read' : ` to ${p.reset !== null && msOf(p.reset) === msOf(p.deadline) ? 'its reset' : "its subscription's end"} at ${formatFact(p.deadline, 'time', now)}`;
+  return `${fmtPct(p.remaining)} of ${share} left${over}${deadline}: ${formatFact(p.score, 'percent_per_hour', now)}. The highest wins.`;
+}
+
 /**
  * One member's row of the candidate table: the account and its plan, the tier, the three windows (or a key's one
- * merged reading), the slots, the Pace score, the prefix entry and the verdict with the one chip that decided it.
+ * merged reading), the slots, the Pace score with its hover, the prefix entry and the verdict with the one chip that
+ * decided it.
  */
-export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; tier: string; verdict: { badge: string; chip: Chip | null }; windows: string[][] } {
+export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: number): { account: Chip; inFlight: string; pace: string; paceTitle: string | null; plan: string; prefix: { hash: PrefixEntry | null; until: string | null }; tier: string; verdict: { badge: string; chip: Chip | null }; windows: string[][] } {
   const atCap = c.verdict === 'out' && (c.partition === 'at_cap' || c.obstacle?.name === 'at_cap');
   const badge = c.verdict === 'ranked' && c.rank !== null ? `ranked ${ordinal(c.rank)}` : atCap ? 'at cap' : wordOf(VERDICT_BADGE, c.verdict);
   const windows =
@@ -1184,6 +1215,7 @@ export function candidateCells(c: RecordCandidate, record: DecisionRecord, now: 
     account: accountChip(c.accountId),
     inFlight: `${c.inFlight} of ${c.inFlightCap}`,
     pace: c.pace === null ? '-' : c.kind === 'api_key' ? `${fmtPct(c.pace.remaining)} left` : formatFact(c.pace.score, 'percent_per_hour', now),
+    paceTitle: paceTitle(c, now),
     plan: planWord(c),
     prefix: { hash: entry, until: entry === null ? null : warmUntil(entry, now) },
     tier: `${tierWord(c.tier, c.kind, 'plan')} P${c.tier[1]}`,

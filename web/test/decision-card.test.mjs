@@ -68,3 +68,27 @@ test("an open card reads its record again when the row's answer lands", async ()
   const read = outcome(container, 'Cache read');
   assert.ok(read !== null && read.startsWith('hit'), `the card draws the answer: ${read}`);
 });
+
+test("the candidates table's header names the window the record read", async () => {
+  const mock = new MockApi();
+  const page = await mock.listRoutingLog({ from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
+  const row = page.rows.find((r) => r.type === 'decision' && r.kind === 'placed');
+  assert.ok(row, 'the mock holds a placement');
+  const placed = await mock.getDecision(row.requestId, row.seq);
+  const [first] = placed.candidates;
+  const pace = { deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day_fable' };
+  const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, hours: null, score: 1, window: null }, planTier: null, windows: {} };
+  // A card of its own per record, so each draws from its first read.
+  const header = async (candidates) => {
+    api.getDecision = async () => ({ ...placed, candidates });
+    const container = document.createElement('div');
+    document.body.append(container);
+    const root = createRoot(container);
+    roots.push(root);
+    act(() => root.render(h(MemoryRouter, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row }))));
+    await settled();
+    return [...container.querySelectorAll('.decision-card__candidates thead th')].map((th) => th.textContent).find((t) => t.startsWith('Pace'));
+  };
+  assert.equal(await header([key, { ...first, kind: 'oauth', pace }]), 'Pace, Fable week left per hour');
+  assert.equal(await header([key]), 'Pace');
+});

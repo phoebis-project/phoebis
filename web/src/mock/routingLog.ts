@@ -276,10 +276,12 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
     // Drawn for every member, so a count the story sets moves no later draw.
     const drawnInFlight = inFlightRng.int(0, 5);
     const obstacle = obstacleOf(a, pool, at, r.canonicalModel, fast, spec.attempted);
-    const fiveHour = windows.five_hour?.utilization ?? 0;
-    const sevenDay = windows.seven_day;
-    const remaining = a.kind === 'api_key' ? Math.round((1 - (budget[0]?.spentUsd ?? 0) / (budget[0]?.budgetUsd ?? 1)) * 100) / 100 : Math.max(0, 1 - Math.max(fiveHour, sevenDay?.utilization ?? 0));
-    const reset = sevenDay?.reset ?? null;
+    // Pace reads one window as the engine does, chosen by the model alone: the Fable week for a Fable request, else the
+    // 7-day window, one the account has not read counting as untouched. An API key scores by its worst live bucket.
+    const windowName = r.canonicalModel.includes('fable') ? 'seven_day_fable' : 'seven_day';
+    const reading = a.kind === 'api_key' ? windows.worst_bucket : windows[windowName];
+    const remaining = reading === undefined ? 1 : Math.max(0, 1 - reading.utilization);
+    const reset = a.kind === 'api_key' ? null : (reading?.reset ?? null);
     const deadlineMs = [reset ? Date.parse(reset) : null, endsAt].filter((x): x is number => x !== null).reduce<number | null>((min, x) => (min === null || x < min ? x : min), null);
     const hours = a.kind === 'api_key' ? null : deadlineMs === null ? 168 : Math.max(1, (deadlineMs - at) / HOUR);
     return {
@@ -296,7 +298,7 @@ function candidatesOf(spec: Spec, pool: PoolSeed): RecordCandidate[] {
       kind: a.kind,
       obstacle,
       overage: overage ? { observedAt: iso(at - 40_000), reset: a.overage?.reset ?? null, since: iso(OVERAGE_FROM), source: 'head' } : null,
-      pace: pool.strategy === 'pace' ? { deadline: deadlineMs === null ? null : iso(deadlineMs), end: endsAt === null ? null : iso(endsAt), hours: hours === null ? null : Math.round(hours * 10) / 10, remaining, reset, score: hours === null ? remaining : Math.round((remaining / hours) * 100_000) / 100_000 } : null,
+      pace: pool.strategy === 'pace' ? { deadline: deadlineMs === null ? null : iso(deadlineMs), end: endsAt === null ? null : iso(endsAt), hours: hours === null ? null : Math.round(hours * 10) / 10, remaining, reset, score: hours === null ? remaining : Math.round((remaining / hours) * 100_000) / 100_000, window: a.kind === 'api_key' ? null : windowName } : null,
       partition: null,
       planTier: sub?.rateLimitTier ?? null,
       prefix: { ...NO_PREFIX, ...spec.prefix?.[a.id] },
