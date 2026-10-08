@@ -11,7 +11,7 @@ import { snippetFor } from '@/lib/snippet';
 const ENV_TERMS: { body: string; term: string }[] = [
   {
     term: 'ANTHROPIC_BASE_URL',
-    body: "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine; the address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
+    body: "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
   },
   {
     term: 'CLAUDE_CODE_OAUTH_TOKEN',

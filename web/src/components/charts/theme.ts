@@ -74,7 +74,7 @@ export const TOKEN_SERIES = [
 ] as const;
 
 export const MIGRATED_PROBE_HINT =
-  "The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows.";
+  "The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows it or when the request after it reads no cache.";
 
 /** Ordered best outcome first rather than alphabetically, so the stack reads top to bottom as it degrades. */
 export const PROBE_SERIES: { hint?: string; key: 'failed' | 'migrated' | 'ok' | 'skipped'; label: string; slot: number }[] = [
