@@ -202,13 +202,11 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
     assert_eq!(last_guard(&r), Some(Guard::Restart));
     tick_to(&mut r, start, 40).await;
     assert_eq!((reached(&r), returned(&r)), (counted, [0; 10]), "restart");
-    // A foreign request: neither the chain nor the static prefix. The client reports the prompt before the request
-    // it sends, and the prompt is what moves the window's start, since a foreign request leaves the recipe and its
-    // window alone.
+    // A foreign request: neither the chain nor the static prefix. It leaves the recipe and the window's start alone,
+    // and no prompt moves the start, so the ticks after it open no window from the same start again.
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
-    activity(&mut r, "prompt");
     let other = r#"{"model":"claude-opus-5","max_tokens":1024,"messages":[{"role":"user","content":"a different conversation"}]}"#;
     r.engine.observe(r.observed_with(
         "foreign",
@@ -246,13 +244,48 @@ async fn a_request_on_a_new_prefix_a_session_end_and_a_lapse_count_as_no_return(
         ([2, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
         "revived"
     );
-    // The lease lapses at 13 minutes 30 seconds, still inside bucket 1, and the session goes silent.
+    // The lease lapses at 13 minutes 30 seconds, still inside bucket 1, and the session goes silent. A same-instance
+    // registration adopts it again at 40 minutes with the window's start unmoved, so no window opens until a prompt
+    // moves it, and the next one counts from the prompt.
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
     tick_to(&mut r, start, 12).await;
     tick_silent_to(&mut r, start, 40).await;
-    r.observe_with("main", &next_turn()).await;
+    r.event(Event {
+        event: "session_start".into(),
+        ..Default::default()
+    })
+    .unwrap();
+    tick_to(&mut r, start, 45).await;
     assert_eq!((reached(&r), returned(&r)), (counted, [0; 10]), "lapse");
+    activity(&mut r, "prompt");
+    r.state("main", "idle");
+    tick_to(&mut r, start, 52).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        ([2, 2, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
+        "a window from the prompt at 45 minutes, 7 minutes old"
+    );
+}
+
+#[tokio::test]
+async fn a_return_counts_on_a_pool_with_keepalive_off() {
+    let mut r = rig(RigSpec {
+        policy: KeepalivePolicy::default(),
+        ..RigSpec::default()
+    })
+    .await;
+    let start = idle_after_request(&mut r).await;
+    assert!(!retained(&r), "keepalive off retains no recipe");
+    tick_to(&mut r, start, 12).await;
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        )
+    );
 }
 
 #[tokio::test]
@@ -355,6 +388,21 @@ async fn an_attended_session_without_a_recipe_still_reaches_buckets() {
     assert_eq!(
         (reached_in(&r, "warm"), returned_in(&r, "warm")),
         ([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10])
+    );
+    // The session's first request: the window opened before any request, so it has no prefix to compare against.
+    r.engine.observe(r.observed_with(
+        "first",
+        "main",
+        None,
+        Some("static"),
+        &["tail"],
+        BODY.as_bytes(),
+        "claude-sonnet-4-5",
+    ));
+    assert_eq!(
+        (reached_in(&r, "warm"), returned_in(&r, "warm")),
+        ([1, 1, 0, 0, 0, 0, 0, 0, 0, 0], [0; 10]),
+        "no return before the first request"
     );
 }
 

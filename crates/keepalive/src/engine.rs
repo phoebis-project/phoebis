@@ -280,9 +280,10 @@ pub struct IdleReturns {
     pub buckets: [IdleReturnBucket; 10],
 }
 
-/// One open idle window of main: when it began, the highest bucket `reached` has been raised for, the prefix the
-/// window's recipe held when it opened (kept after the recipe's disposal, so a late return is still judged against
-/// it), and the moment a prompt announced the return, when one has.
+/// One open idle window of main: when it began, the highest bucket `reached` has been raised for, the prefix main's
+/// last admitted request carried when the window opened (kept apart from the recipe, so a return is judged against it
+/// after a ceiling discarded the recipe and on a pool that retains none), and the moment a prompt announced the
+/// return, when one has.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct IdleEpisode {
     pub started: i64,
@@ -453,6 +454,12 @@ pub(crate) struct Agent {
     pub park_ended_at: Option<i64>,
     /// The open idle window of main, `None` while none is counted.
     pub idle_episode: Option<IdleEpisode>,
+    /// The start of main's last closed idle window. The next opens only from a start past it, so a close that leaves
+    /// the start in place, a foreign request or a lapse a registration adopts again, never reopens the same window.
+    pub idle_window_floor: Option<i64>,
+    /// The static and tail hash of main's last admitted request, retained or not, which the next idle window judges a
+    /// return against.
+    pub last_prefix: Option<(String, String)>,
     pub generation: u64,
     pub current: Option<Observation>,
     /// When the entry the recipe keeps warm expires; the due time is this less the timing's lead and jitter.
@@ -541,6 +548,8 @@ impl Agent {
             park_began: None,
             park_ended_at: None,
             idle_episode: None,
+            idle_window_floor: None,
+            last_prefix: None,
             generation: 0,
             current: None,
             expires: None,
@@ -603,6 +612,13 @@ impl Agent {
             return None;
         }
         self.due_at()
+    }
+
+    /// Every close of an idle window: its start becomes the floor the next window's start has to pass.
+    pub(crate) fn close_idle_episode(&mut self) -> Option<IdleEpisode> {
+        let episode = self.idle_episode.take()?;
+        self.idle_window_floor = Some(episode.started);
+        Some(episode)
     }
 
     pub(crate) fn pause(&mut self) {
@@ -1191,7 +1207,7 @@ impl Inner {
         }
         agent.park_ended_at = Some(now);
         // The window restarts here, so the one counted so far ends with no return.
-        agent.idle_episode = None;
+        agent.close_idle_episode();
         if agent.id != MAIN_AGENT {
             agent.park_began = None;
             return;
@@ -1227,20 +1243,23 @@ impl Inner {
                 };
                 main.pool_id = pool;
             }
-            let episode = main.idle_episode.get_or_insert_with(|| IdleEpisode {
-                started: main
+            if main.idle_episode.is_none() {
+                let start = main
                     .park_ended_at
-                    .map_or(main.last_activity, |ended| ended.max(main.last_activity)),
-                bucket: None,
-                anchor: main.current.as_ref().and_then(|observation| {
-                    let recipe = &observation.recipe;
-                    recipe
-                        .tail_hash
-                        .clone()
-                        .map(|tail| (recipe.static_hash.clone().unwrap_or_default(), tail))
-                }),
-                prompt_at: None,
-            });
+                    .map_or(main.last_activity, |ended| ended.max(main.last_activity));
+                if main.idle_window_floor.is_some_and(|floor| start <= floor) {
+                    continue;
+                }
+                main.idle_episode = Some(IdleEpisode {
+                    started: start,
+                    bucket: None,
+                    anchor: main.last_prefix.clone(),
+                    prompt_at: None,
+                });
+            }
+            let Some(episode) = main.idle_episode.as_mut() else {
+                continue;
+            };
             if episode.prompt_at.is_some() {
                 continue;
             }
@@ -1266,7 +1285,7 @@ impl Inner {
         else {
             return;
         };
-        let Some(episode) = main.idle_episode.take() else {
+        let Some(episode) = main.close_idle_episode() else {
             return;
         };
         if main.pool_id.is_empty() {
@@ -1432,7 +1451,7 @@ impl Inner {
                 session.attended = false;
                 // A lapse is no return, so main's window ends here.
                 if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
-                    main.idle_episode = None;
+                    main.close_idle_episode();
                 }
             }
         }
@@ -1737,6 +1756,21 @@ impl Engine {
         }
         if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;
+        }
+        // Apart from the recipe, which keepalive off, an opt-out or a refused body leaves unretained: the next idle
+        // window judges a return against this request's prefix either way. A request without both hashes leaves none.
+        if agent_id == MAIN_AGENT {
+            inner
+                .sessions
+                .get_mut(&key)
+                .unwrap()
+                .agents
+                .get_mut(&agent_id)
+                .unwrap()
+                .last_prefix = observed
+                .static_hash
+                .clone()
+                .zip(observed.boundaries.last().cloned());
         }
         // What the previous recipe proved, taken before anything below overwrites it and consumed with the
         // observation: the kept-warm credit reads this and nothing on the agent.
