@@ -312,19 +312,23 @@ const todayOf = (peak: SubscriptionCosts['peak'], at: number): { date: string; s
  *  the hours here read from the band day of `at`. */
 export const bandCaption = (costs: SubscriptionCosts, at: number, zone: string, clock: (minutes: number) => string): string => {
   const { fromHour, toHour, weekdays, zone: own } = costs.peak;
-  const defined = `${weekdays ? 'Mon to Fri' : 'Every day'}, ${clock(fromHour * 60)} to ${clock(toHour * 60)}`;
+  const wholeDays = weekdays && fromHour === 0 && toHour === 24;
+  const defined = `${weekdays ? 'Mon to Fri' : 'Every day'}, ${wholeDays ? 'all day' : `${clock(fromHour * 60)} to ${clock(toHour * 60)}`}`;
   // A zone this browser cannot read has no hours here, so the band reads in its own zone alone.
   if (zone === own || !readable(own)) return `${defined} in ${zoneCity(own)} (${own}), the zone the cost model names.`;
   if (everyHour(costs.peak)) return `Every day, at every hour here (${zone}). In ${zoneCity(own)}: ${defined}.`;
   const today = todayOf(costs.peak, at);
   if (today === null) return `Never here (${zone}). In ${zoneCity(own)}: ${defined}.`;
   const here = hereOf(today.span, today.date, zone);
+  // Whole days read all day only where they start at midnight here. Elsewhere the week's two ends are what the now
+  // line and the change beside the caption move against, so the caption names them.
+  if (wholeDays && here.start !== 0) {
+    const ends = daysBetween(here.startDate, partsIn(today.span.end, zone).date);
+    return `${WEEKDAYS[(7 + here.shift) % 7]} ${clock(here.start)} to ${WEEKDAYS[(11 + here.shift + ends) % 7]} ${clock(here.end)} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
+  }
   // The days follow the band's weekdays as they fall here: in Auckland a Monday's band starts on a Tuesday.
   const days = weekdays ? `${WEEKDAYS[(7 + here.shift) % 7]} to ${WEEKDAYS[(11 + here.shift) % 7]}` : 'Every day';
-  // A band of whole days reads all day wherever its days start here. The change keeps the clock hours, since the hour
-  // those days start at is what a clock change moves.
-  const hours = fromHour === 0 && toHour === 24 ? 'all day' : hoursText(here, clock);
-  return `${days}, ${hours} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
+  return `${days}, ${wholeDays ? 'all day' : hoursText(here, clock)} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
 };
 
 /** The band's state at `at`, or the peak zone when this browser cannot read it, which leaves the state unknown. */

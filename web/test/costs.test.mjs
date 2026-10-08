@@ -279,13 +279,19 @@ test("the caption names the band in the viewing zone beside the zone the file de
 // both keep summer time.
 const wholeDays = { ...costs, peak: { ...costs.peak, fromHour: 0, toHour: 24 } };
 
-test('a weekday band of whole days reads all day here wherever its days start, on the weekdays they fall on', () => {
-  assert.equal(d.bandCaption(wholeDays, NOW, 'UTC', clock24), 'Mon to Fri, all day here (UTC). In Los Angeles: Mon to Fri, 00:00 to 24:00.');
-  assert.equal(d.bandCaption(wholeDays, NOW, 'Europe/Berlin', clock24), 'Mon to Fri, all day here (Europe/Berlin). In Los Angeles: Mon to Fri, 00:00 to 24:00.');
-  // In Auckland at UTC+12 a band day starts at 12:00 UTC on the day before, 05:00 in Los Angeles, so its weekdays fall
-  // a day earlier there.
+test("a weekday band of whole days reads all day where its days start at midnight here, else its week's ends", () => {
+  assert.equal(d.bandCaption(wholeDays, NOW, 'UTC', clock24), 'Mon 07:00 to Sat 07:00 here (UTC). In Los Angeles: Mon to Fri, all day.');
+  assert.equal(d.bandCaption(wholeDays, NOW, 'Europe/Berlin', clock24), 'Mon 09:00 to Sat 09:00 here (Europe/Berlin). In Los Angeles: Mon to Fri, all day.');
+  // Berlin's band at UTC+2 starts its week at 22:00 UTC on the Sunday before and ends it at 22:00 on Friday.
+  const berlin = { ...wholeDays, peak: { ...wholeDays.peak, zone: 'Europe/Berlin' } };
+  assert.equal(d.bandCaption(berlin, NOW, 'UTC', clock24), 'Sun 22:00 to Fri 22:00 here (UTC). In Berlin: Mon to Fri, all day.');
+  // In Auckland at UTC+12 a band day starts at 12:00 UTC on the day before, 05:00 in Los Angeles, so its week falls a
+  // day earlier there.
   const auckland = { ...wholeDays, peak: { ...wholeDays.peak, zone: 'Pacific/Auckland' } };
-  assert.equal(d.bandCaption(auckland, NOW, 'America/Los_Angeles', clock24), 'Sun to Thu, all day here (America/Los_Angeles). In Auckland: Mon to Fri, 00:00 to 24:00.');
+  assert.equal(d.bandCaption(auckland, NOW, 'America/Los_Angeles', clock24), 'Sun 05:00 to Fri 05:00 here (America/Los_Angeles). In Auckland: Mon to Fri, all day.');
+  // Its own zone and Paris, on Berlin's clocks, start each band day at midnight.
+  assert.equal(d.bandCaption(wholeDays, NOW, 'America/Los_Angeles', clock24), 'Mon to Fri, all day in Los Angeles (America/Los_Angeles), the zone the cost model names.');
+  assert.equal(d.bandCaption(berlin, NOW, 'Europe/Paris', clock24), 'Mon to Fri, all day here (Europe/Paris). In Berlin: Mon to Fri, all day.');
 });
 
 test('a weekday band of whole days still names the next change of the hour its days start at here', () => {
