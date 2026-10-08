@@ -225,8 +225,12 @@ async fn an_armed_recipe_that_saw_an_auxiliary_request_still_reports_armed() {
         .find(|v| v.agent_id == "main")
         .expect("the armed recipe");
     assert_eq!(
-        (recipe.state, recipe.reason, recipe.last_guard),
-        (RecipeState::Armed, None, Some(Guard::Auxiliary)),
+        (recipe.state, recipe.cause, recipe.last_guard),
+        (
+            RecipeState::Retained,
+            Reason::Scheduled,
+            Some(Guard::Auxiliary)
+        ),
         "{recipe:?}"
     );
 }

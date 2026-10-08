@@ -329,11 +329,23 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             row["agents"].as_u64(),
             row["pinned"].as_bool(),
             row["requests"].as_u64(),
-            row["keepalive"]["state"].is_null()
+            row["keepalive"]["state"].is_null(),
+            row["keepalive"]["cause"].is_null()
         ),
-        (Some("reporting"), Some(1), Some(false), Some(0), true)
+        (Some("reporting"), Some(1), Some(false), Some(0), true, true)
     );
-    assert!(row["companion_since"].is_null() && row["account_id"].is_null());
+    assert!(
+        row["companion_since"].is_null()
+            && row["account_id"].is_null()
+            && row["presence_age_seconds"].is_null()
+    );
+    assert!(
+        json(get(&parts.app, "/admin/keepalive/recipes", Some(&cookie)).await).await["recipes"]
+            .as_array()
+            .unwrap()
+            .is_empty(),
+        "an agent that has sent no request has no row"
+    );
     // A retained recipe shows the main agent's companion state and the next probe.
     let now = common::NOW;
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r1".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: common::generation(&parts.store, "desktop"), pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, received_at: now }));
@@ -397,36 +409,58 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
         [
             "account_id",
             "agent_id",
+            "agent_state",
+            "cause",
+            "credited_today",
+            "deadline",
             "key_id",
             "last_guard",
+            "last_probe_at",
             "last_request_at",
             "model",
             "next_probe_at",
+            "park_kind",
             "pool_id",
-            "reason",
+            "probes_today",
             "session_id",
             "state",
-            "ttl_seconds"
+            "ttl_seconds",
+            "wake_at"
         ]
     );
     assert_eq!(
         (
             recipe["agent_id"].as_str(),
             recipe["state"].as_str(),
-            recipe["reason"].is_null(),
+            recipe["cause"].as_str(),
+            recipe["agent_state"].as_str(),
             recipe["last_request_at"].as_i64(),
             recipe["ttl_seconds"].as_i64(),
             recipe["last_guard"].as_str()
         ),
         (
             Some("main"),
-            Some("armed"),
-            true,
+            Some("retained"),
+            Some("scheduled"),
+            Some("busy"),
             Some(now),
             Some(300),
             Some("rearm")
         ),
         "the first request re-armed a fresh recipe"
+    );
+    assert_eq!(
+        (
+            recipe["account_id"].as_str(),
+            recipe["park_kind"].is_null(),
+            recipe["deadline"].is_null(),
+            recipe["wake_at"].is_null(),
+            recipe["last_probe_at"].is_null(),
+            recipe["probes_today"].as_u64(),
+            recipe["credited_today"].as_u64()
+        ),
+        (Some("direct"), true, true, true, true, Some(0), Some(0)),
+        "a busy agent that has not been probed yet"
     );
     // An auxiliary request never re-arms, but the guard's own verdict still reaches the view.
     parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved {
@@ -492,9 +526,10 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             .keys()
             .cloned()
             .collect::<Vec<_>>(),
-        ["last_guard", "next_probe_at", "state"],
+        ["cause", "last_guard", "next_probe_at", "state"],
         "the session's keepalive summary carries no balance"
     );
+    assert_eq!(row["keepalive"]["cause"].as_str(), Some("scheduled"));
     // Silent after the lease lapses: the recipe stays and the row says since when.
     parts
         .clock_cell
@@ -543,11 +578,31 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
     )
     .await;
     assert_eq!(released.status(), 204);
-    assert!(
-        json(get(&parts.app, "/admin/keepalive/recipes", Some(&cookie)).await).await["recipes"]
+    let recipes = json(get(&parts.app, "/admin/keepalive/recipes", Some(&cookie)).await).await;
+    assert_eq!(
+        recipes["recipes"]
             .as_array()
             .unwrap()
-            .is_empty()
+            .iter()
+            .map(|r| (
+                r["agent_id"].as_str(),
+                r["state"].as_str(),
+                r["cause"].as_str()
+            ))
+            .collect::<Vec<_>>(),
+        [(Some("main"), Some("ended"), Some("released"))],
+        "the release discards the recipe and the agent's row stays with the cause"
+    );
+    let listed = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
+    let row = listed["sessions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["session_id"] == "s1")
+        .unwrap();
+    assert!(
+        row["keepalive"]["state"].is_null() && row["keepalive"]["cause"].is_null(),
+        "the session's summary reads main's recipe, which the release discarded"
     );
     let settings = json(get(&parts.app, "/admin/settings", Some(&cookie)).await).await;
     assert_eq!(settings["keepalive"]["max_sessions"].as_u64(), Some(128));
@@ -823,31 +878,30 @@ async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_
     );
 }
 
+/// The console decodes a recipe's cause against the `RecipeCause` union of its API types, so a word the engine
+/// serializes that the union lacks would read as no cause at all, and a word the union keeps that the engine dropped
+/// is a label nothing can reach.
 #[test]
-fn every_engine_reason_maps_onto_the_view_vocabulary() {
-    use phoebis_keepalive::{view_reason, Reason};
-    let unheld = [
-        Reason::AwaitingRequest,
-        Reason::AwaitingSelection,
-        Reason::Probing,
-        Reason::Scheduled,
-    ];
+fn every_engine_reason_is_a_cause_word_the_console_types_list() {
+    use phoebis_keepalive::Reason;
+    use std::collections::BTreeSet;
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../web/src/api/types.ts");
+    let types = std::fs::read_to_string(&path).unwrap();
+    let start = types
+        .find("export type RecipeCause =")
+        .expect("types.ts declares the RecipeCause union");
+    let union = &types[start..];
+    let union = &union[..union.find(';').expect("the union ends with a semicolon")];
+    let listed: BTreeSet<&str> = union.split('\'').skip(1).step_by(2).collect();
+    let engine: BTreeSet<&str> = Reason::ALL.iter().map(|reason| reason.as_str()).collect();
+    assert_eq!(listed, engine);
     for reason in Reason::ALL {
-        let mapped = view_reason(*reason);
         assert_eq!(
-            mapped.is_none(),
-            unheld.contains(reason),
-            "{reason:?} -> {mapped:?}"
+            serde_json::to_value(reason).unwrap(),
+            serde_json::json!(reason.as_str()),
+            "the cause is serialized as the word itself"
         );
     }
-    assert_eq!(
-        serde_json::to_string(&view_reason(Reason::RepeatedColdProbe)).unwrap(),
-        r#""cold_probes""#
-    );
-    assert_eq!(
-        serde_json::to_string(&view_reason(Reason::ProbeQuotaExhausted)).unwrap(),
-        r#""quota_exhausted""#
-    );
 }
 
 /// A `session_end` leaves the session listed, as the tombstone the lifecycle protocol needs, but nothing is
@@ -909,6 +963,17 @@ async fn an_ended_session_is_listed_without_a_companion() {
         (row["companion"].as_str(), row["companion_since"].as_i64()),
         (Some("none"), Some(common::NOW)),
         "the end time is when the companion stopped reporting"
+    );
+    assert_eq!(
+        (
+            row["keepalive"].clone(),
+            row["presence_age_seconds"].clone()
+        ),
+        (
+            serde_json::json!({"cause": null, "last_guard": null, "next_probe_at": null, "state": null}),
+            serde_json::Value::Null
+        ),
+        "no recipe and no presence reported"
     );
     assert_eq!(
         listed["sessions"].as_array().map(Vec::len),

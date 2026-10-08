@@ -2722,6 +2722,13 @@
   white-space: nowrap;
 }
 
+/* The recipe summary and the presence age run longer than the badges above them, and the default columns have no room
+   for them on one line at 1280 px, so they wrap under their badge rather than widening the column. */
+.sessions-table .srow__presence,
+.sessions-table .srow__summary {
+  white-space: normal;
+}
+
 /* The default columns fit a 990px card at 1280px only with the cells 8px apart; the row's first and last cells keep the
    card's 12px edge, and an expanded row's detail cell keeps its own inset. */
 .sessions-table th,
@@ -2802,17 +2809,20 @@
   color: var(--ink-2);
 }
 
+/* The session table keeps its cells on one line, and an agent line's narrow columns, its head and its cause's sentence
+   wrap inside the line instead. */
 .agents {
   display: flex;
   flex-direction: column;
+  white-space: normal;
   border-left: 2px solid var(--accent);
 }
 
-/* The floor gives a reason badge a cell to wrap in. */
+/* The floor gives a cause badge a cell to wrap in. */
 .agents__row {
   display: grid;
-  grid-template-columns: 90px 190px 110px 60px 120px 100px minmax(140px, 1fr);
-  gap: 12px;
+  grid-template-columns: 64px 140px 84px 44px 76px 76px 112px 64px minmax(150px, 1fr);
+  gap: 4px 10px;
   align-items: center;
   padding: 6px 12px;
 }
@@ -2821,12 +2831,33 @@
   border-top: 1px solid var(--hairline);
 }
 
-/* A badge keeps its text on one line, so the reason badge after the State badge carries the wrap itself: a long reason
+/* A badge keeps its text on one line, so the cause badge after the state badge carries the wrap itself: a long cause
    wraps inside the State cell rather than running past it. */
-.agents__row > span:nth-child(7) .badge + .badge {
+.agents__state .badge + .badge {
   min-width: 0;
   max-width: 100%;
   white-space: normal;
+}
+
+/* The lifecycle word with the park and the cause's sentence run the line's full width under its columns, so neither
+   takes a column the 1280 px window does not have. */
+.agents__more {
+  grid-column: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  font-size: 12px;
+  color: var(--ink-2);
+}
+
+.agents__life {
+  display: inline-flex;
+  gap: 4px;
+  align-items: center;
+}
+
+.agents__cause {
+  margin: 0;
 }
 
 .agents__row--head {

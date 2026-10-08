@@ -3178,7 +3178,7 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
             recipes["recipes"][0]["session_id"].as_str(),
             recipes["recipes"][0]["state"].as_str()
         ),
-        (Some("e2e-warm"), Some("armed"))
+        (Some("e2e-warm"), Some("retained"))
     );
     let log = wait_json(
         &client,
@@ -3515,7 +3515,7 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
             recipes["recipes"][0]["session_id"].as_str(),
             recipes["recipes"][0]["state"].as_str()
         ),
-        (Some("e2e-ui"), Some("armed"))
+        (Some("e2e-ui"), Some("retained"))
     );
     let probes = wait_json(
         &client,

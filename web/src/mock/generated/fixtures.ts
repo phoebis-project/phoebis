@@ -5433,16 +5433,23 @@ export const FIXTURES: Record<string, Fixture> = {
         {
           "account_id": "direct",
           "agent_id": "main",
+          "agent_state": "busy",
+          "cause": "scheduled",
+          "credited_today": 0,
+          "deadline": null,
           "key_id": "desktop",
           "last_guard": "rearm",
+          "last_probe_at": null,
           "last_request_at": 1000000,
           "model": "claude-sonnet-5",
-          "next_probe_at": 1239220,
+          "next_probe_at": 1238433,
+          "park_kind": null,
           "pool_id": "main",
-          "reason": null,
+          "probes_today": 0,
           "session_id": "s1",
-          "state": "armed",
-          "ttl_seconds": 300
+          "state": "retained",
+          "ttl_seconds": 300,
+          "wake_at": null
         }
       ]
     }
@@ -9295,7 +9302,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "sessions": [
         {
           "key_id": "desktop",
-          "key_generation": 1791445351671,
+          "key_generation": 1791461905480,
           "session_id": "s-fixture",
           "agent_id": "main",
           "model": "claude-sonnet-5",
@@ -9318,16 +9325,18 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 1,
           "keepalive": {
+            "cause": null,
             "last_guard": null,
             "next_probe_at": null,
             "state": null
           },
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791445351671,
+          "key_generation": 1791461905480,
           "session_id": "s3",
           "agent_id": null,
           "model": "claude-sonnet-5",
@@ -9350,16 +9359,18 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "keepalive": {
+            "cause": null,
             "last_guard": null,
             "next_probe_at": null,
             "state": null
           },
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791445351671,
+          "key_generation": 1791461905480,
           "session_id": "s1",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -9381,17 +9392,19 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 1,
           "keepalive": {
+            "cause": "scheduled",
             "last_guard": "rearm",
-            "next_probe_at": 1239220,
+            "next_probe_at": 1238433,
             "state": "busy"
           },
+          "presence_age_seconds": null,
           "historical": false,
           "forked_from": "s0",
           "fork_depth": 2
         },
         {
           "key_id": "desktop",
-          "key_generation": 1791445351671,
+          "key_generation": 1791461905480,
           "session_id": "s2",
           "agent_id": null,
           "model": "claude-sonnet-5-5",
@@ -9414,10 +9427,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "keepalive": {
+            "cause": null,
             "last_guard": null,
             "next_probe_at": null,
             "state": null
           },
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         },
@@ -9446,10 +9461,12 @@ export const FIXTURES: Record<string, Fixture> = {
           "companion_since": null,
           "agents": 0,
           "keepalive": {
+            "cause": null,
             "last_guard": null,
             "next_probe_at": null,
             "state": null
           },
+          "presence_age_seconds": null,
           "forked_from": null,
           "fork_depth": null
         }

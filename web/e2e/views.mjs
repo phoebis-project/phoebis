@@ -3409,8 +3409,8 @@ async function sessionRowMenu(theme) {
 
 /**
  * The agent lines Expand all opens on Sessions: every line's state badge ends inside the table's visible width, and
- * State closes the line. A reason badge wraps inside its own State cell, its left and right edges within the cell's
- * box; its right edge against the table's visible edge is logged beside them.
+ * State closes the line's columns. A cause badge wraps inside its own State cell, its left and right edges within the
+ * cell's box, and its right edge against the table's visible edge is logged beside them.
  */
 async function agentLines(theme) {
   const say = (what) => failures.push(`${theme} /sessions: ${what}`);
@@ -3425,13 +3425,16 @@ async function agentLines(theme) {
     const edge = document.querySelector('.sessions-table')?.closest('.table-wrap')?.getBoundingClientRect().right ?? null;
     const head = [...(document.querySelector('.agents__row--head')?.children ?? [])].map((c) => c.textContent?.trim());
     const lines = [...document.querySelectorAll('.agents__row:not(.agents__row--head)')].map((row) => {
-      const state = row.children[6];
+      const state = row.querySelector('.agents__state');
       const cell = state.getBoundingClientRect();
-      const [badge, reason] = [...state.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
+      const [badge, cause] = [...state.querySelectorAll('.badge')].map((b) => b.getBoundingClientRect());
       return {
         agent: row.children[0].textContent?.trim(),
         cell: { left: Math.round(cell.left), right: Math.round(cell.right) },
-        reason: reason ? { left: Math.round(reason.left), lines: Math.round(reason.height / badge.height), right: Math.round(reason.right), text: state.querySelectorAll('.badge')[1].textContent?.trim() } : null,
+        more: Math.round(row.querySelector('.agents__more')?.getBoundingClientRect().right ?? 0),
+        // A line that cannot wrap runs past its box rather than widening it, which the box's own edge never shows.
+        overflows: [...row.querySelectorAll(':scope > span, .agents__more > *')].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.className || el.textContent?.trim().slice(0, 24)),
+        reason: cause ? { left: Math.round(cause.left), lines: Math.round(cause.height / badge.height), right: Math.round(cause.right), text: state.querySelectorAll('.badge')[1].textContent?.trim() } : null,
         stateRight: badge ? Math.round(badge.right) : null,
       };
     });
@@ -3444,8 +3447,15 @@ async function agentLines(theme) {
   for (const line of read.lines.filter((l) => read.edge === null || l.stateRight === null || l.stateRight > read.edge)) {
     say(`agent ${line.agent}'s state badge ends at ${line.stateRight}px, past the table's visible edge at ${read.edge}px`);
   }
+  // The lifecycle line and the cause's sentence under the columns wrap inside the line rather than past the table.
+  for (const line of read.lines.filter((l) => read.edge !== null && l.more > read.edge)) {
+    say(`agent ${line.agent}'s lifecycle and cause lines end at ${line.more}px, past the table's visible edge at ${read.edge}px`);
+  }
+  for (const line of read.lines.filter((l) => l.overflows.length > 0)) say(`agent ${line.agent}'s line runs past its cells: ${JSON.stringify(line.overflows)}`);
+  const head = await page.evaluate(() => [...(document.querySelector('.agents__row--head')?.children ?? [])].filter((el) => el.scrollWidth > el.clientWidth + 1).map((el) => el.textContent?.trim()));
+  if (head.length > 0) say(`the agent lines' head runs past its cells: ${JSON.stringify(head)}`);
   for (const line of reasons.filter((l) => l.reason.left < l.cell.left || l.reason.right > l.cell.right)) {
-    say(`agent ${line.agent}'s reason "${line.reason.text}" runs from ${line.reason.left}px to ${line.reason.right}px, outside its State cell's ${line.cell.left}px to ${line.cell.right}px`);
+    say(`agent ${line.agent}'s cause "${line.reason.text}" runs from ${line.reason.left}px to ${line.reason.right}px, outside its State cell's ${line.cell.left}px to ${line.cell.right}px`);
   }
   await page.getByRole('button', { name: 'Collapse all', exact: true }).click();
   await atRest();

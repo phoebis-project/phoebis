@@ -1,4 +1,4 @@
-import type { BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, RecipeReason, Session } from '@/api/types';
+import type { BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, RecipeCause, RecipeState, Session } from '@/api/types';
 import { anchorTier, ratesOf } from '@/lib/costs';
 import { accountById } from './accounts';
 import { FIXTURES } from './generated/fixtures';
@@ -15,7 +15,7 @@ const rng = createRng(2_024);
 // `companion` is independent of that: it says whether the keepalive mod ever
 // registered for the session and is still reporting. A silent
 // companion changes neither, because the retained prompts stay and are probed
-// under the pool's idle limits. `subagents` pins the agents below main, which may run another
+// under the idle window. `subagents` pins the agents below main, which may run another
 // model and, with that, land on another account. `idleMinutes` overrides the
 // random idle on the few sessions that exist to straddle the expiry presets:
 // without it every fixture is idle for under an hour and no preset in Settings
@@ -129,9 +129,13 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     keepalive: {
       state: spec.state,
       // Filled in from the recipes below, so a row and its agents cannot disagree.
+      cause: null,
       lastGuard: null,
       nextProbeAt: null,
     },
+    // Set from the row's index rather than drawn, so the rows after this one keep their rolls: a reporting mod saw the
+    // person seconds ago, a silent one when it last reported, and a session no mod registered has no presence.
+    presenceAgeSeconds: spec.companion === 'reporting' ? 4 + ((i * 17) % 50) : spec.companion === 'silent' ? 900 + i * 60 : null,
   };
 });
 
@@ -148,21 +152,22 @@ SESSIONS.push({
   forkDepth: null,
   forkedFrom: null,
   historical: false,
-  keepalive: { lastGuard: null, nextProbeAt: null, state: null },
+  keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
   keyGeneration: Date.parse(keyById.get('laptop')!.createdAt),
   keyId: 'laptop',
   lastRequestAt: null,
   lastUsedAt: null,
   model: null,
   pinned: false,
+  presenceAgeSeconds: 31,
   requests: 0,
   sessionId: '0f1d7c64-3b2a-4f58-9c7e-1a5b0e8d2f43',
 });
 
-// One recipe per agent on a pinned session, indexed by session. The reason
-// explains why the main agent's probe is held; `null` means the next probe is
-// scheduled.
-const RECIPE_REASONS: (RecipeReason | null)[] = [
+// One recipe per agent on a pinned session, indexed by session. The cause
+// explains why the main agent's probe is held or its recipe ended, and `null` means
+// the next probe is scheduled.
+const RECIPE_CAUSES: (RecipeCause | null)[] = [
   'awaiting_cache_evidence',
   'expired',
   null,
@@ -180,53 +185,86 @@ const RECIPE_REASONS: (RecipeReason | null)[] = [
   null,
 ];
 
-// A held subagent under a main agent that keeps probing, which is the case the
-// state hints describe.
-const SUBAGENT_HOLDS = new Map<number, RecipeReason>([
-  [0, 'cold_probes'],
+// A held or paused subagent under a main agent that keeps probing, which is the
+// case the state hints describe.
+const SUBAGENT_HOLDS = new Map<number, RecipeCause>([
+  [0, 'repeated_cold_probe'],
   // A subagent whose park ran past the pool's parked ceiling.
   [4, 'parked_limit'],
   [7, 'affinity_too_short'],
   // The last agent the story draws, so holding it moves no other roll.
-  [9, 'pool_exhausted'],
+  [9, 'probe_pool_exhausted'],
 ]);
 
 // A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
-// session's agent stays armed.
-const PARKED_HOLDS = new Map<number, RecipeReason>([[3, 'horizon']]);
+// session's agent stays retained, parked on a background command with its deadline.
+const PARKED_HOLDS = new Map<number, RecipeCause>([[3, 'horizon']]);
+
+// The state the engine reads each cause the story uses in, as `recipe_state` maps it with no pause.
+const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
+  affinity_too_short: 'held',
+  awaiting_cache_evidence: 'retained',
+  expired: 'ended',
+  horizon: 'held',
+  idle_limit: 'ended',
+  overage: 'held',
+  parked_limit: 'ended',
+  probe_pool_exhausted: 'paused',
+  probing: 'retained',
+  repeated_cold_probe: 'paused',
+  scheduled: 'retained',
+  unsupported_shape: 'not_retained',
+};
 
 export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
-  if (pin.keepalive.state === null) return [];
+  const mainState = pin.keepalive.state;
+  if (mainState === null) return [];
   const sub = sessionSpec[i].subagents;
   const agents = Array.from({ length: pin.agents }, (_, j) => (j === 0 ? 'main' : rng.uuid().slice(0, 4)));
   return agents.map((agentId, j) => {
     // A parked agent is probed like a busy one until one of the park's ceilings stops it.
-    const reason = pin.keepalive.state === 'parked' ? (j === 0 ? PARKED_HOLDS.get(i) ?? null : null) : j === 0 ? RECIPE_REASONS[i % RECIPE_REASONS.length] : j === 1 ? SUBAGENT_HOLDS.get(i) ?? null : null;
-    // Cache evidence arrives with the first stream event and the probe timer
-    // arms from it, so that agent is armed without a time rather than held.
-    const state: KeepaliveRecipe['state'] =
-      reason === 'awaiting_cache_evidence' ? 'armed' : reason ? 'held' : pin.keepalive.state === 'busy' && j === 0 ? 'probing' : 'armed';
+    const held = mainState === 'parked' ? (j === 0 ? PARKED_HOLDS.get(i) ?? null : null) : j === 0 ? RECIPE_CAUSES[i % RECIPE_CAUSES.length] : j === 1 ? SUBAGENT_HOLDS.get(i) ?? null : null;
+    // A busy main has its probe in flight, and every other agent nothing holds waits for its scheduled one.
+    const cause: RecipeCause = held ?? (mainState === 'busy' && j === 0 ? 'probing' : 'scheduled');
+    const state = STATE_OF[cause] ?? 'retained';
     const model = j === 0 ? sessionSpec[i].model : sub?.model ?? sessionSpec[i].model;
     // A subagent spawned in the last turn may not have sent a request yet.
     const lastRequestAt = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
+    // Main reads its session's lifecycle word, a subagent whose park ran out is still parked, and the others are busy.
+    const agentState: KeepaliveState = j === 0 ? mainState : cause === 'parked_limit' ? 'parked' : 'busy';
+    // The two parked mains: one on a background command with its deadline, one on a wakeup three days out. Neither
+    // time is drawn, so the rows after them keep their rolls.
+    const parkKind = agentState !== 'parked' ? null : cause === 'horizon' ? 'scheduled' : 'background';
+    const deadline = agentState === 'parked' && j === 0 && cause !== 'horizon' ? ahead(72 * MINUTE + 30_000) : null;
+    const wakeAt = parkKind === 'scheduled' ? ahead(3 * 24 * 60 * MINUTE + 30_000) : null;
+    // An agent whose request still awaits its evidence has not been probed since, and the rest were, minutes ago.
+    const lastProbeAt = lastRequestAt === null || cause === 'awaiting_cache_evidence' ? null : ago((((i * 3 + j) % 4) + 1) * MINUTE);
+    const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     return {
       ...RECIPE_SAMPLE,
       accountId,
       agentId,
+      agentState,
+      cause,
+      creditedToday: Math.floor(probesToday / 3),
+      deadline,
       keyId: pin.keyId,
       // The last real request re-armed this recipe; whatever else holds its next probe now is the gate's
-      // reason, not the guard's, which the mock has no event sequence to distinguish further.
+      // cause, not the guard's, which the mock has no event sequence to distinguish further.
       lastGuard: 'rearm',
+      lastProbeAt,
       lastRequestAt,
       model,
-      nextProbeAt: state === 'armed' && reason === null ? ahead(rng.int(20, 280) * 1000) : null,
+      nextProbeAt: cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : null,
+      parkKind,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
-      reason,
+      probesToday,
       sessionId: pin.sessionId,
       state,
       ttlSeconds,
+      wakeAt,
     };
   });
 });
@@ -239,9 +277,10 @@ for (const pin of SESSIONS) {
     .map((r) => r.nextProbeAt as string)
     .sort();
   pin.keepalive.nextProbeAt = scheduled[0] ?? null;
-  // The session's own summary reads the main agent's guard note, the way the admin route does.
+  // The session's own summary reads the main agent's guard note and cause, the way the admin route does.
   const main = RECIPES.find((r) => r.sessionId === pin.sessionId && r.agentId === 'main');
   pin.keepalive.lastGuard = main?.lastGuard ?? null;
+  pin.keepalive.cause = main?.cause ?? null;
 }
 
 // The earlier holder of the `desktop` key id, which the analytics story draws as `desktop (deleted, created ...
@@ -268,7 +307,7 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
     forkDepth: null,
     forkedFrom: null,
     historical: true,
-    keepalive: { lastGuard: null, nextProbeAt: null, state: null },
+    keepalive: { cause: null, lastGuard: null, nextProbeAt: null, state: null },
     keyGeneration: DELETED_HOLDER_GENERATION,
     keyId: 'desktop',
     lastInputTokens: null,
@@ -277,6 +316,7 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
     lastUsedAt: null,
     model: holderLast.canonicalModel,
     pinned: false,
+    presenceAgeSeconds: null,
     requests: holderRows.length,
     sessionId: SESSION_IDS[0],
     shedFrom: null,

@@ -194,6 +194,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         entry["companion_since"] = json!(view.companion_since);
         entry["agents"] = json!(view.agents);
         entry["keepalive"] = json!(view.keepalive);
+        entry["presence_age_seconds"] = json!(view.presence_age_seconds);
     }
     // A row whose generation no live key holds is read-only: the engine's sessions and recipes are keyed
     // under the live generation alone and cannot belong to it, so it carries no companion or recipe. A
@@ -207,7 +208,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             entry["companion_since"] = json!(null);
             entry["agents"] = json!(agents_by_session.get(key).map_or(0, |a| a.len()));
             entry["keepalive"] =
-                json!({ "last_guard": null, "next_probe_at": null, "state": null });
+                json!({ "cause": null, "last_guard": null, "next_probe_at": null, "state": null });
+            entry["presence_age_seconds"] = json!(null);
         }
     }
     // A session the engine knows only from a registration carries no pin and no ledger row, so its model and

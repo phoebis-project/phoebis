@@ -1179,9 +1179,13 @@ export interface RewritePoint {
   rewriteTokens: number;
 }
 
-export type KeepaliveState = 'busy' | 'idle' | 'parked';
+/** The keepalive mod's lifecycle word for an agent. */
+export type KeepaliveState = 'busy' | 'idle' | 'parked' | 'released' | 'unknown';
 
-/** Whether a cache-keepalive companion is registered for the session and still reporting. */
+/** What a parked agent waits on: a background command or a subagent, a scheduled wakeup, or both. */
+export type ParkKind = 'background' | 'both' | 'scheduled';
+
+/** Whether the keepalive mod registered the session and is still reporting. */
 export type CompanionState = 'none' | 'reporting' | 'silent';
 
 /** Which figure a pin's burn reads: the share of the account's own 5-hour window per hour on plan quota, dollars per hour off it. */
@@ -1214,8 +1218,9 @@ export interface Session {
   forkedFrom: string | null;
   /** A generation no live key holds: the ledger's memory of an earlier holder of this key id. Read-only, no recipe, no release. */
   historical: boolean;
-  /** `state` is null when the session carries no cache-warming recipe at all; the other two are null with it. */
+  /** Main's recipe: `state` is null when main holds none, and `cause` and `lastGuard` are null with it. */
   keepalive: {
+    cause: RecipeCause | null;
     lastGuard: GuardVerdict | null;
     nextProbeAt: string | null;
     state: KeepaliveState | null;
@@ -1234,6 +1239,8 @@ export interface Session {
   model: string | null;
   /** Whether the session is pinned to its account for as long as affinity holds. */
   pinned: boolean;
+  /** Seconds since main's last presence report, null before the first one. */
+  presenceAgeSeconds: number | null;
   /** Ledgered requests on this session; 0 means analytics and observe have nothing to show. */
   requests: number;
   sessionId: string;
@@ -1242,53 +1249,109 @@ export interface Session {
   shedFrom: string | null;
 }
 
-export type RecipeState = 'armed' | 'held' | 'probing';
-export type RecipeReason =
+/** The Sessions row's one word for an agent's recipe, read off the engine's cause and its pause. */
+export type RecipeState = 'ended' | 'held' | 'not_retained' | 'paused' | 'retained';
+/** The engine's own reason, every word it serializes. */
+export type RecipeCause =
   | 'affinity_too_short'
+  | 'agent_released'
+  | 'agent_unknown'
   | 'awaiting_cache_evidence'
+  | 'awaiting_request'
+  | 'awaiting_selection'
   | 'budget'
-  | 'cold_probes'
+  | 'bus_gap'
   | 'cooled'
   | 'evicted'
   | 'expired'
+  | 'expired_at_restart'
+  | 'fixed_thinking'
+  | 'forced_tool'
+  | 'headers_too_large'
   | 'horizon'
   | 'idle_limit'
+  | 'ineligible_credential'
+  | 'instance_replaced'
+  | 'invalid_cache_control'
+  | 'invalid_model'
+  | 'invalid_probe_usage'
+  | 'invalid_request'
+  | 'keepalive_off'
+  | 'key_opted_out'
+  | 'lease_expired'
   | 'ledger_behind'
+  | 'missing_account'
+  | 'no_cache_evidence'
+  | 'no_probe_cache_evidence'
+  | 'opted_out'
   | 'overage'
+  | 'owner_mismatch'
   | 'parked_limit'
+  | 'partial_cache_coverage'
   | 'paused'
-  | 'pool_exhausted'
-  | 'probe_error'
-  | 'quota_exhausted'
+  | 'pool_disabled'
+  | 'probe_authentication_error'
+  | 'probe_pool_exhausted'
+  | 'probe_quota_exhausted'
+  | 'probe_retry_limit'
+  | 'probe_transport_error'
+  | 'probing'
   | 'reauth'
-  | 'retrying'
+  | 'released'
+  | 'repeated_cold_probe'
+  | 'request_canceled'
+  | 'request_failed'
+  | 'request_limit'
+  | 'request_rejected'
+  | 'request_too_large'
+  | 'reset'
+  | 'retryable_probe_error'
+  | 'scheduled'
+  | 'session_ended'
+  | 'session_expired'
+  | 'slow_probe'
   | 'storage_limit'
+  | 'structured_output'
+  | 'unexpected_output'
+  | 'unsupported_probe'
   | 'unsupported_shape';
 
 /** What the last request the agent observed did to its recipe: `auxiliary` and `foreign` both left it alone,
- * `rearm` and `restart` both fed it. Never a hold; `reason` names that separately. */
+ * `rearm` and `restart` both fed it. Never a hold: `cause` names that separately. */
 export type GuardVerdict = 'auxiliary' | 'foreign' | 'rearm' | 'restart';
 
-/** One cache-warming recipe per agent: what the next probe replays and why it may be held. */
+/** One row per agent that has sent a real request: its recipe's state and cause, its lifecycle and its probes. */
 export interface KeepaliveRecipe {
+  /** The account the agent is pinned to. */
   accountId: string | null;
   agentId: string;
+  agentState: KeepaliveState;
+  cause: RecipeCause;
+  /** Requests credited as kept warm since midnight UTC. */
+  creditedToday: number;
+  /** When the harness stops the background command a park waits on, null off a park on one. */
+  deadline: string | null;
   keyId: string;
   /** Null only before the agent's first observation. */
   lastGuard: GuardVerdict | null;
-  /** This agent's last real request; null for an agent that has not sent one yet. */
+  lastProbeAt: string | null;
+  /** This agent's last real request. */
   lastRequestAt: string | null;
   model: string;
   nextProbeAt: string | null;
+  parkKind: ParkKind | null;
   poolId: string;
-  reason: RecipeReason | null;
+  /** Probes sent since midnight UTC. */
+  probesToday: number;
   sessionId: string;
   state: RecipeState;
   ttlSeconds: number;
+  /** When the scheduled wakeup a park waits on fires, null off a park on one. */
+  wakeAt: string | null;
 }
 
 export interface KeepaliveOverview {
-  agents: Record<KeepaliveState, number>;
+  agents: Record<'busy' | 'idle' | 'parked', number>;
   /** Times the keepalive engine found it had missed bus events; each gap discarded every observation still open. */
   busGaps: number;
   /** Requests whose prefix expired between turns in the last 24 hours. */

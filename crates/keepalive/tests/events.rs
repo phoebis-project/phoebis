@@ -7,7 +7,7 @@ use common::*;
 use phoebis_bus::{Phase, ResponseChunk, Usage};
 use phoebis_keepalive::{
     decode_json_event, AgentState, CompanionState, Event, EventError, KeepaliveLimits, ParkKind,
-    RecipeState,
+    Reason, RecipeState,
 };
 
 #[tokio::test]
@@ -633,8 +633,8 @@ async fn a_lapsed_lease_marks_the_session_unattended_and_a_same_instance_start_r
     let armed = r.engine.recipes();
     let reason = r.status("main").reason;
     assert_eq!(
-        (armed.len(), armed[0].state, armed[0].reason),
-        (1, RecipeState::Armed, None)
+        (armed.len(), armed[0].state, armed[0].cause),
+        (1, RecipeState::Retained, Reason::Scheduled)
     );
     r.advance(90_000);
     r.engine.expire();

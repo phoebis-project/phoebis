@@ -1,7 +1,7 @@
 import { useMemo, useState, type ReactNode } from 'react';
 import { Link } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, RequestLog, Session, SubscriptionCosts } from '@/api/types';
+import type { Account, KeepaliveState, RequestLog, Session, SubscriptionCosts } from '@/api/types';
 import { Donut } from '@/components/charts/Donut';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { accountColor } from '@/components/charts/theme';
@@ -318,7 +318,7 @@ export function StatusBadge({ status, attempts = 1 }: { attempts?: number; statu
  */
 function SessionsSummary({ activePins, sessions }: { activePins: number | null; sessions: Session[] | null }) {
   if (!sessions || activePins === null) return <Skeleton height={80} />;
-  const byState = { busy: 0, idle: 0, parked: 0 };
+  const byState: Record<KeepaliveState, number> = { busy: 0, idle: 0, parked: 0, released: 0, unknown: 0 };
   let agents = 0;
   for (const p of sessions) {
     if (p.keepalive.state) byState[p.keepalive.state] += 1;

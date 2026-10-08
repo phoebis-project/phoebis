@@ -9052,7 +9052,7 @@ m.unmount();
   const { listKeepaliveRecipes } = api;
   api.listKeepaliveRecipes = async () => {
     const [first, ...rest] = await listKeepaliveRecipes();
-    return [{ ...first, reason: 'expired', state: 'held' }, ...rest];
+    return [{ ...first, cause: 'expired', state: 'ended' }, ...rest];
   };
   const page = await mount('/sessions');
   await page.settle();
@@ -9063,8 +9063,8 @@ m.unmount();
   page.unmount();
   api.listKeepaliveRecipes = listKeepaliveRecipes;
   results.push({
-    name: '/sessions a recipe held under expired reads entry expired with its hint',
-    ok: hint === 'The cache entry expired before its probe was due, so no probe was sent; the next real request starts a new recipe.',
+    name: '/sessions a recipe ended under expired reads entry expired with its hint',
+    ok: hint === 'The cache entry expired before its probe was due, so no probe was sent. The next real request starts a new recipe.',
     missing: [hint ?? 'no entry expired badge'],
   });
 }
@@ -9170,12 +9170,12 @@ m.unmount();
 }
 
 m = await mount('/sessions');
-expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
+expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
   const lead = m.container.querySelector('.page-head__lead');
   const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
   const para = () => document.getElementById(how()?.getAttribute('aria-controls') ?? '');
-  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
+  const words = 'Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a keepalive mod registered it. A pin binds each model a session uses to one account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.';
   results.push({ name: '/sessions the head reads the lead sentence and the closed disclosure', ok: (lead?.firstElementChild?.textContent?.replace(/\s+/g, ' ').trim() ?? '').startsWith("Every session within the session expiry, with the account each model is pinned to and each agent's cache-warming recipe.") && how()?.getAttribute('aria-expanded') === 'false', missing: [lead?.textContent?.slice(0, 160) ?? 'no lead'] });
   // The page text keeps hidden words, so only a count of the head's paragraphs catches a leftover copy of the old one.
   const copies = [...m.container.querySelectorAll('.page-head p')].filter((p) => p.textContent?.includes('Every Claude Code session the router has seen'));
@@ -9281,13 +9281,31 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
   }
   const summaries = rows().map((r) => cell(r, 'Cache warming')?.textContent?.trim() ?? '');
-  results.push({ name: '/sessions collapsed rows summarise their recipes', ok: summaries.some((x) => /\d+ (armed|held|probing)/.test(x)), missing: summaries.slice(0, 3) });
+  results.push({ name: '/sessions collapsed rows summarise their recipes', ok: summaries.some((x) => /\d+ (retained|held|paused|not retained|ended)/.test(x)), missing: summaries.slice(0, 3) });
 
   // Companion state: every row carries one of the three, and the silent ones say since when.
   const companions = rows().map((r) => cell(r, 'Companion')?.textContent?.trim() ?? '');
   const silent = companions.filter((c) => c.startsWith('silent'));
-  results.push({ name: '/sessions shows all three companion states', ok: companions.some((c) => c === 'reporting') && silent.length === 2 && companions.some((c) => c === 'none'), missing: [...new Set(companions)] });
+  results.push({ name: '/sessions shows all three companion states', ok: companions.some((c) => c.startsWith('reporting')) && silent.length === 2 && companions.some((c) => c === 'none'), missing: [...new Set(companions)] });
   results.push({ name: '/sessions silent companions say since when', ok: silent.every((c) => /^silent ?since .+ ago$/.test(c)), missing: silent });
+  {
+    // A reporting mod's cell carries the seconds since the person was last seen, under the badge whose hint names what
+    // the mod reports.
+    const reporting = rows().map((r) => cell(r, 'Companion')).filter((c) => c?.querySelector('.badge')?.textContent?.trim() === 'reporting');
+    const ages = reporting.map((c) => c.querySelector('.sub')?.textContent?.trim() ?? '');
+    const hint = reporting[0]?.querySelector('.badge')?.getAttribute('title') ?? '';
+    const none = rows().map((r) => cell(r, 'Companion')).find((c) => c?.textContent?.trim() === 'none');
+    results.push({
+      name: '/sessions a reporting mod reads the presence age under its badge, and each companion word its hint',
+      ok:
+        ages.length > 0 &&
+        ages.some((a) => /^presence \d+s ago$/.test(a)) &&
+        ages.every((a) => a === '' || /^presence \d+[smh]( \d+[smh])? ago$/.test(a)) &&
+        hint === "The keepalive mod reports this session's agents, their parks and the person's presence." &&
+        none?.querySelector('[title]')?.getAttribute('title') === 'No keepalive mod has registered this session. The router still pins it and still sees its requests.',
+      missing: [...new Set(ages), hint, none?.querySelector('[title]')?.getAttribute('title') ?? 'no none cell'],
+    });
+  }
 
   // Expiry now rides under the last-used time rather than in a column of its own.
   const expiries = rows().map((r) => cell(r, 'Last used')?.querySelector('.sub')?.textContent?.trim() ?? '');
@@ -9344,7 +9362,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const silentBadge = [...(silentRows[0]?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'silent');
     results.push({
       name: '/sessions silent badge says the retained prompts stay',
-      ok: (silentBadge?.getAttribute('title') ?? '').includes("The retained prompts stay and are probed under the pool's idle limits, counted from the last real request") && !(silentBadge?.getAttribute('title') ?? '').includes('lease'),
+      ok: (silentBadge?.getAttribute('title') ?? '') === 'The mod stopped reporting at the time shown. The retained prompts stay and are probed under the idle window from the last real request until it reports again or the window runs out.',
       missing: [silentBadge?.getAttribute('title') ?? 'absent'],
     });
     const parkedRows = rows().filter((r) => (cell(r, 'Cache warming')?.textContent?.trim() ?? '').startsWith('parked'));
@@ -9357,12 +9375,16 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
     const mixedRow = rows()[0];
     results.push({
-      name: '/sessions an agent awaiting cache evidence counts as armed in the row summary',
-      ok: (cell(mixedRow, 'Cache warming')?.textContent ?? '').includes('2 armed, 1 held'),
+      name: '/sessions an agent awaiting cache evidence counts as retained in the row summary',
+      ok: (cell(mixedRow, 'Cache warming')?.textContent ?? '').includes('2 retained, 1 paused'),
       missing: [cell(mixedRow, 'Cache warming')?.textContent?.trim() ?? 'absent'],
     });
     const parkedBadge = [...(parkedRow?.querySelectorAll('.badge') ?? [])].find((b) => b.textContent?.trim() === 'parked');
-    results.push({ name: '/sessions parked badge says the idle limits do not apply', ok: (parkedBadge?.getAttribute('title') ?? '').includes('idle limits do not apply'), missing: [parkedBadge?.getAttribute('title') ?? 'absent'] });
+    results.push({
+      name: '/sessions the parked badge says the parked and horizon rules and the idle window apply',
+      ok: (parkedBadge?.getAttribute('title') ?? '') === 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
+      missing: [parkedBadge?.getAttribute('title') ?? 'absent'],
+    });
   }
 
   // A forked session's badge links to the row of the session it branched from.
@@ -9512,17 +9534,17 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   rows()[0]?.click();
   await m.settle(150);
   const detail = m.container.querySelector('.srow__detail');
-  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Next probe', 'Last request', 'State', 'main']);
+  expect('/sessions row expands into its agents', detail?.textContent ?? '', ['Created', ' ago', 'Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State', 'main']);
   {
     const head = [...(detail?.querySelectorAll('.agents__row--head > span') ?? [])].map((c) => c.textContent?.trim());
-    const want = ['Agent', 'Model', 'Account', 'TTL', 'Next probe', 'Last request', 'State'];
+    const want = ['Agent', 'Model', 'Account', 'TTL', 'Last request', 'Last probe', 'Next probe', 'Probes / credited', 'State'];
     results.push({ name: "/sessions an agent's line carries no net, and the page no net-saved tile", ok: JSON.stringify(head) === JSON.stringify(want) && !m.text().includes('Net saved'), missing: [...head, m.text().includes('Net saved') ? 'Net saved tile' : ''].filter(Boolean) });
   }
   {
     const mainAgent = [...(detail?.querySelectorAll('.agents__row') ?? [])].find((r) => r.textContent?.startsWith('main'))?.textContent ?? '';
     results.push({
-      name: '/sessions an agent awaiting cache evidence is armed on the first stream event',
-      ok: mainAgent.includes('on first stream event') && mainAgent.includes('armed') && mainAgent.includes('awaiting cache evidence') && !mainAgent.includes('not scheduled'),
+      name: '/sessions an agent awaiting cache evidence is retained with its probe on the first stream event',
+      ok: mainAgent.includes('on first stream event') && mainAgent.includes('retained') && mainAgent.includes('awaiting cache evidence') && !mainAgent.includes('not scheduled'),
       missing: [mainAgent || 'absent'],
     });
   }
@@ -9544,7 +9566,7 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
   const open = m.container.querySelectorAll('.srow__detail').length;
   results.push({ name: '/sessions Expand all opens every row', ok: open === 17, missing: [String(open)] });
   results.push({ name: '/sessions a session with no creation time says so', ok: m.text().includes('Created: unknown'), missing: [] });
-  expect('/sessions hold reasons', m.text(), ['armed', 'held', 'probing', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'paused: cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
+  expect('/sessions states and causes', m.text(), ['retained', 'held', 'paused', 'not retained', 'ended', 'probing', 'scheduled', 'affinity too short', 'awaiting cache evidence', 'entry expired', 'idle limit', 'cold probes', 'overage', 'pool exhausted', 'unsupported shape']);
   results.push({ name: '/sessions no reason reads session bound any more', ok: !m.text().includes('session bound'), missing: [m.text().includes('session bound') ? 'still there' : ''] });
   results.push({ name: '/sessions no reason reads net negative', ok: !m.text().includes('net negative'), missing: [m.text().includes('net negative') ? 'still there' : ''] });
   {
@@ -9553,22 +9575,37 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     const awaiting = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'awaiting cache evidence');
     results.push({
       name: '/sessions awaiting cache evidence says the timer arms from the first stream event',
-      ok: (awaiting?.getAttribute('title') ?? '').includes('the probe timer arms from that event and probes then run while the response is still streaming'),
+      ok: (awaiting?.getAttribute('title') ?? '').includes('The probe timer arms from that event and probes then run while the response is still streaming'),
       missing: [awaiting?.getAttribute('title') ?? 'absent'],
     });
     const badges = [...m.container.querySelectorAll('.badge')];
     const untitled = badges.filter((b) => !(b.getAttribute('title') ?? '').trim());
     results.push({ name: '/sessions every badge carries a hover hint', ok: badges.length > 20 && untitled.length === 0, missing: untitled.map((b) => b.textContent?.trim() ?? '') });
-    const stateBadge = badges.find((b) => b.textContent?.trim() === 'armed');
+    // The state badge's hover is the cause's sentence, which the line repeats in prose after the state's own sentence
+    // for a reader that never hovers.
+    const STATE_SENTENCE = {
+      ended: 'The recipe ended. The next real request starts a new one.',
+      held: 'The prompt is kept and no probe is sent while the cause holds.',
+      'not retained': 'The last request was not kept. The cause says why.',
+      paused: 'The engine paused this recipe until the next real request. The cause says why.',
+      retained: "The prompt is kept and its probe is scheduled or waiting for the request's first stream event.",
+    };
+    const stated = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')].map((l) => ({
+      cause: l.querySelector('.agents__state > .badge:nth-child(2)')?.getAttribute('title') ?? '',
+      hint: l.querySelector('.agents__state > .badge:first-child')?.getAttribute('title') ?? '',
+      sentence: l.querySelector('.agents__cause')?.textContent?.trim() ?? '',
+      state: l.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? '',
+    }));
+    const wrong = stated.filter((x) => x.hint === '' || x.cause !== x.hint || x.sentence !== `${STATE_SENTENCE[x.state]} ${x.hint}`);
     results.push({
-      name: '/sessions armed badge covers both the scheduled and the pending case',
-      ok: (stateBadge?.getAttribute('title') ?? '') === 'The next probe is scheduled, or arms from the first stream event of the request in flight.',
-      missing: [stateBadge?.getAttribute('title') ?? 'absent'],
+      name: "/sessions every state badge carries its cause's sentence on hover and the line repeats it after the state's",
+      ok: stated.length > 10 && new Set(stated.map((x) => x.state)).size === 5 && wrong.length === 0,
+      missing: [...new Set(stated.map((x) => x.state))].concat(wrong.map((x) => `${x.state}: ${x.hint} | ${x.sentence}`)),
     });
     const idle = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'idle limit');
     results.push({
       name: '/sessions idle limit reason says the retained prompt was discarded',
-      ok: idle !== undefined && (idle.getAttribute('title') ?? '').includes("The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded."),
+      ok: idle !== undefined && (idle.getAttribute('title') ?? '') === "The pool's idle window, capped at the recipe's break-even, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
       missing: [idle?.getAttribute('title') ?? 'absent'],
     });
     results.push({ name: '/sessions no companion lease copy is left', ok: !m.text().includes('lease lapsed'), missing: [m.text().includes('lease lapsed') ? 'still there' : ''] });
@@ -9578,21 +9615,57 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     // A parked session held while its wake is past the pool's horizon, and a subagent whose park ran past the parked
     // ceiling.
     const badge = (label) => [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === label);
-    const horizon = badge('held: wake too far');
+    const horizon = badge('wake too far');
     const parked = badge('parked limit');
     results.push({
-      name: "/sessions a parked agent's horizon hold and its parked limit render with their hints, the limit as a warning",
+      name: "/sessions a parked agent's horizon hold and its parked limit render with their hints, both as warnings",
       ok:
         (horizon?.getAttribute('title') ?? '') === "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held. Probing resumes once the wake is within the horizon while the entry is still warm, and the recipe ends as expired when the entry's TTL passes." &&
-        horizon?.classList.contains('badge--neutral') === true &&
+        horizon?.classList.contains('badge--warning') === true &&
         (parked?.getAttribute('title') ?? '') === "The pool's parked ceiling ran out while the session waited on a background command or a subagent, so the retained prompt was discarded. The next real request starts a new recipe." &&
         parked?.classList.contains('badge--warning') === true,
       missing: [horizon?.getAttribute('title') ?? 'no horizon badge', parked?.getAttribute('title') ?? 'no parked limit badge'],
     });
   }
   {
-    const cold = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'paused: cold probes');
+    const cold = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'cold probes');
     results.push({ name: '/sessions cold probe reason names the limit', ok: (cold?.getAttribute('title') ?? '').includes("cold probe limit"), missing: [cold?.getAttribute('title')] });
+  }
+  {
+    // The parked main inside its ceilings and the one held past its horizon, each line's state word, cause and park.
+    const lines = [...m.container.querySelectorAll('.agents__row:not(.agents__row--head)')];
+    const lineOf = (park) => lines.find((l) => park.test(l.querySelector('.agents__life')?.textContent?.trim() ?? ''));
+    const read = (line) => ({
+      cause: line?.querySelector('.agents__state > .badge:nth-child(2)')?.textContent?.trim() ?? null,
+      hint: line?.querySelector('.agents__state > .badge:first-child')?.getAttribute('title') ?? null,
+      life: line?.querySelector('.agents__life')?.textContent?.trim() ?? null,
+      lifeHint: line?.querySelector('.agents__life .badge')?.getAttribute('title') ?? null,
+      sentence: line?.querySelector('.agents__cause')?.textContent?.trim() ?? null,
+      state: line?.querySelector('.agents__state > .badge:first-child')?.textContent?.trim() ?? null,
+    });
+    const background = read(lineOf(/^parked · background · deadline in \d+h \d+m$/));
+    const scheduled = read(lineOf(/^parked · scheduled · wakes in \d+d \d+h$/));
+    const PARKED = 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.';
+    results.push({
+      name: '/sessions the agent line shows the state word with its cause and the park detail',
+      ok:
+        background.state === 'retained' &&
+        background.cause === 'scheduled' &&
+        background.hint === 'The next probe is scheduled before the cache entry expires.' &&
+        background.sentence === `The prompt is kept and its probe is scheduled or waiting for the request's first stream event. ${background.hint}` &&
+        background.lifeHint === PARKED &&
+        scheduled.state === 'held' &&
+        scheduled.cause === 'wake too far' &&
+        scheduled.sentence === `The prompt is kept and no probe is sent while the cause holds. ${scheduled.hint}` &&
+        (scheduled.hint ?? '').startsWith('The session is parked on a scheduled wakeup further away'),
+      missing: [JSON.stringify(background), JSON.stringify(scheduled)],
+    });
+    const counts = lines.map((l) => l.querySelector('.agents__counts')?.textContent?.trim() ?? '');
+    results.push({
+      name: "/sessions an agent line counts the day's probes and credits and names its last probe",
+      ok: counts.length > 0 && counts.every((c) => /^\d+ \/ \d+$/.test(c)) && counts.some((c) => c !== '0 / 0') && lines.some((l) => /ago$/.test(l.querySelector('.agents__probe')?.textContent?.trim() ?? '')),
+      missing: [...new Set(counts)],
+    });
   }
   expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool codex keeps no caches warm', 'key ci opts out']);
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');

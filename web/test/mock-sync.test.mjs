@@ -113,7 +113,7 @@ const CLOSED = {
   analytics_budgets: { '[].budgetPeriod': d.BUDGET_PERIOD_VALUES, '[].kind': d.ACCOUNT_KIND_VALUES },
   analytics_placements: { '[].rung': d.PLACEMENT_RUNG_VALUES },
   attention: { '[].kind': d.ATTENTION_KIND_VALUES, '[].link.page': [...d.ATTENTION_PAGE_VALUES, undefined], '[].subject.type': d.ATTENTION_SUBJECT_VALUES },
-  keepalive_recipes: { '[].reason': [...d.RECIPE_REASON_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
+  keepalive_recipes: { '[].agentState': d.AGENT_STATE_VALUES, '[].cause': d.RECIPE_CAUSE_VALUES, '[].parkKind': [...d.PARK_KIND_VALUES, null], '[].state': d.RECIPE_STATE_VALUES },
   live_messages: { '.recent[].attempts[].outcome': d.ATTEMPT_OUTCOME_VALUES, '.recent[].kind': d.REQUEST_KIND_VALUES },
   pools: {
     '[].members[].eligible': d.ELIGIBILITY_VALUES,
@@ -130,7 +130,7 @@ const CLOSED = {
     '.requests[].outcome': d.REQUEST_OUTCOME_VALUES,
     '.requests[].requestClass': REQUEST_CLASS_VALUES,
   },
-  sessions: { '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
+  sessions: { '[].keepalive.cause': [...d.RECIPE_CAUSE_VALUES, null], '[].keepalive.state': [...d.AGENT_STATE_VALUES, null] },
 };
 
 /** Every value `path` names in `value`, beside the concrete path it sits at; `[]` fans out over a list's rows. */

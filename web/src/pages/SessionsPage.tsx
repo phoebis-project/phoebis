@@ -10,7 +10,7 @@ import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
 import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
-import { REASON_HINT, REASON_LABEL, WARNING_REASONS } from '@/lib/keepalive';
+import { CAUSE_HINT, CAUSE_LABEL, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
@@ -36,17 +36,22 @@ const HIDDEN_BY_DEFAULT: readonly SessionColumnId[] = ['agents', 'lastRequest', 
 /** The id as sent on hover where the cell shows less of it. */
 const modelTitle = (model: string, shown: string) => (shown === model ? undefined : model);
 
-const PIN_TONE: Record<KeepaliveState, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral' };
+const PIN_TONE: Record<KeepaliveState, BadgeTone> = { busy: 'accent', idle: 'good', parked: 'neutral', released: 'neutral', unknown: 'neutral' };
 const PIN_HINT: Record<KeepaliveState, string> = {
-  busy: 'The agent is between model turns, running tools or streaming. Its recipe is probed like any other and the idle limits do not apply.',
-  idle: "The agent stopped and waits for the user. Probes continue until the pool's max idle time or idle probe budget runs out.",
-  parked: 'The agent stopped while background tasks it owns still run; they wake it when they finish, so probes continue and the idle limits do not apply.',
+  busy: 'Between model turns, running tools or streaming. Probed like any other agent, and the idle window of the main conversation keeps running.',
+  idle: "Stopped and waiting for the user. Probed until the pool's idle window, capped at the recipe's break-even, runs out.",
+  parked: 'Stopped while a background command, a subagent or a scheduled wakeup is open. Probed under the parked and horizon rules and the idle window.',
+  released: 'The subagent finished. Its recipe is gone.',
+  unknown: "The reporter could not tell this agent's state.",
 };
-const STATE_TONE: Record<RecipeState, BadgeTone> = { armed: 'good', held: 'neutral', probing: 'accent' };
+const STATE_TONE: Record<RecipeState, BadgeTone> = { ended: 'neutral', held: 'neutral', not_retained: 'neutral', paused: 'warning', retained: 'good' };
+const STATE_LABEL: Record<RecipeState, string> = { ended: 'ended', held: 'held', not_retained: 'not retained', paused: 'paused', retained: 'retained' };
 const STATE_HINT: Record<RecipeState, string> = {
-  armed: 'The next probe is scheduled, or arms from the first stream event of the request in flight.',
-  held: 'No probe is scheduled; the reason chip says why.',
-  probing: 'A probe is in flight right now.',
+  ended: 'The recipe ended. The next real request starts a new one.',
+  held: 'The prompt is kept and no probe is sent while the cause holds.',
+  not_retained: 'The last request was not kept. The cause says why.',
+  paused: 'The engine paused this recipe until the next real request. The cause says why.',
+  retained: "The prompt is kept and its probe is scheduled or waiting for the request's first stream event.",
 };
 const NO_RECIPE_HINT = 'Nothing probes this session, so its prompt cache expires on its own schedule.';
 const HISTORICAL_HINT = 'A holder of this key id that no longer exists; the ledger keeps its sessions until they expire';
@@ -57,11 +62,11 @@ const KIND_HINT: Record<Account['kind'], string> = {
   oauth: 'Subscription account: quota windows apply',
 };
 const COMPANION_HINT: Record<CompanionState, string> = {
-  none: 'No cache-keepalive companion ever registered for this session. The router still pins it and still sees its requests.',
-  reporting: 'A cache-keepalive companion is registered for this session and its agents are reporting their lifecycle.',
-  silent:
-    "The companion stopped reporting at the time shown. The retained prompts stay and are probed under the pool's idle limits, counted from the last real request, until the companion registers again or the limits run out.",
+  none: 'No keepalive mod has registered this session. The router still pins it and still sees its requests.',
+  reporting: "The keepalive mod reports this session's agents, their parks and the person's presence.",
+  silent: 'The mod stopped reporting at the time shown. The retained prompts stay and are probed under the idle window from the last real request until it reports again or the window runs out.',
 };
+const COUNTS_HINT = 'Probes sent and requests they kept warm since midnight UTC';
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
 interface Row {
   account: Account | null;
@@ -79,7 +84,7 @@ const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'
 const sessionLabel = (session: Session) =>
   shortId(session.sessionId, 13);
 
-/** When the pool stopped probing: the max idle time counted from the session's last activity. */
+/** When the pool stopped probing: its idle window counted from the session's last activity. */
 function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
   const seconds = pool?.keepalive.maxIdleSeconds ?? 0;
   return seconds > 0 && session.lastUsedAt !== null ? new Date(Date.parse(session.lastUsedAt) + seconds * 1000).toISOString() : null;
@@ -107,9 +112,9 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
     const agents = bySession.get(rowKey(session)) ?? [];
     const key = keyById.get(session.keyId) ?? null;
     const pool = key ? poolById.get(key.poolId) ?? null : null;
-    // Every agent held for the idle limit means the retained prompts are already
+    // Every agent ended at the idle limit means the retained prompts are already
     // gone, so the session reads as having no recipe even though the rows remain.
-    const idleLimitOnly = agents.length > 0 && agents.every((a) => a.reason === 'idle_limit');
+    const idleLimitOnly = agents.length > 0 && agents.every((a) => a.cause === 'idle_limit');
     const causes: string[] = [];
     // The live key's pool and opt-out say nothing about a session that no longer belongs to it, so an earlier
     // holder carries that reason alone.
@@ -129,16 +134,23 @@ function buildRows(sessions: Session[], recipes: KeepaliveRecipe[], accounts: Ac
 }
 
 /**
- * Reads as "2 armed, 1 held" for the collapsed row. An agent awaiting cache
- * evidence is armed with no time yet, and counts as armed here.
+ * Reads as "2 retained, 1 held" for the collapsed row, from the states still holding a prompt to the ones that ended. An
+ * agent awaiting cache evidence is retained with no time yet, and counts as retained here.
  */
 function stateSummary(agents: KeepaliveRecipe[]): string {
-  const states: RecipeState[] = ['armed', 'held', 'probing'];
+  const states: RecipeState[] = ['retained', 'held', 'paused', 'not_retained', 'ended'];
   return states
     .map((state) => ({ count: agents.filter((a) => a.state === state).length, state }))
     .filter((x) => x.count > 0)
-    .map((x) => `${x.count} ${x.state}`)
+    .map((x) => `${x.count} ${STATE_LABEL[x.state]}`)
     .join(', ');
+}
+
+/** The park's kind and the time it returns by, read after the lifecycle word: "background · deadline in 1h 12m". */
+function parkDetail(a: KeepaliveRecipe, now: number): string {
+  if (a.agentState !== 'parked' || a.parkKind === null) return '';
+  const times = [a.deadline && `deadline ${fmtRelative(a.deadline, now)}`, a.wakeAt && `wakes ${fmtRelative(a.wakeAt, now)}`].filter(Boolean);
+  return [a.parkKind, ...times].map((part) => ` · ${part}`).join('');
 }
 
 export function SessionsPage() {
@@ -226,7 +238,7 @@ export function SessionsPage() {
             </button>
           </p>
           <p id={howId} className="page-head__meta" hidden={!howOpen}>
-            Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a cache-keepalive companion registered for it. A pin binds each model a session uses to one
+            Every Claude Code session the router has seen within the session expiry, and every conversation it identified without a session id, whether or not a keepalive mod registered it. A pin binds each model a session uses to one
             account, so subagents on another model may sit on another account, and with affinity off every request picks again; where cache warming is on, each agent carries a recipe that replays its
             cacheable prefix just before the prompt cache expires, so the next real turn reads the cache instead of rewriting it.
           </p>
@@ -414,9 +426,9 @@ function SessionRows({
   const summary = stateSummary(agents);
   const otherModels = agents.filter((a) => a.model !== session.model);
   const otherAccounts = agents.filter((a) => a.accountId !== session.accountId);
-  // An armed agent with no time is waiting on its first stream event, which is
+  // A retained agent with no time is waiting on its first stream event, which is
   // a different thing from a session nothing probes.
-  const pendingProbe = agents.some((a) => a.state === 'armed' && a.nextProbeAt === null);
+  const pendingProbe = agents.some((a) => a.state === 'retained' && a.nextProbeAt === null);
   // A session known from the ledger or from a registration alone carries no activity of its own, so the last
   // ledgered request stands in for it and the expiry counts from there.
   const lastUsed = session.lastUsedAt ?? session.lastRequestAt;
@@ -527,9 +539,16 @@ function SessionRows({
         {visible.has('companion') && (
           <td>
             {session.companion === 'reporting' ? (
-              <Badge tone="good" dot title={COMPANION_HINT.reporting}>
-                reporting
-              </Badge>
+              <>
+                <Badge tone="good" dot title={COMPANION_HINT.reporting}>
+                  reporting
+                </Badge>
+                {session.presenceAgeSeconds !== null && (
+                  <span className="sub srow__presence" title="When the person was last seen at the terminal">
+                    presence {fmtDuration(session.presenceAgeSeconds * 1000)} ago
+                  </span>
+                )}
+              </>
             ) : session.companion === 'silent' ? (
               <>
                 <Badge tone="warning" dot title={COMPANION_HINT.silent}>
@@ -551,7 +570,7 @@ function SessionRows({
                 <Badge tone={PIN_TONE[session.keepalive.state]} dot title={PIN_HINT[session.keepalive.state]}>
                   {session.keepalive.state}
                 </Badge>
-                {summary && <span className="sub">{summary}</span>}
+                {summary && <span className="sub srow__summary">{summary}</span>}
               </>
             ) : (
               <span className="muted" title={session.historical ? HISTORICAL_NO_RECIPE_HINT : NO_RECIPE_HINT}>
@@ -591,8 +610,10 @@ function SessionRows({
                   <span>Model</span>
                   <span>Account</span>
                   <span>TTL</span>
-                  <span>Next probe</span>
                   <span>Last request</span>
+                  <span>Last probe</span>
+                  <span>Next probe</span>
+                  <span title={COUNTS_HINT}>Probes / credited</span>
                   <span>State</span>
                 </div>
                 {agents.map((a) => (
@@ -603,20 +624,36 @@ function SessionRows({
                     </span>
                     <span className="mono">{a.accountId}</span>
                     <span className="num">{fmtDuration(a.ttlSeconds * 1000)}</span>
-                    <span title={a.nextProbeAt ? fmtAbsolute(a.nextProbeAt) : undefined}>
-                      {a.nextProbeAt ? <span className="num">{fmtRelative(a.nextProbeAt, now)}</span> : <span className="muted">{a.state === 'armed' ? 'on first stream event' : 'not scheduled'}</span>}
-                    </span>
                     <span title={a.lastRequestAt ? fmtAbsolute(a.lastRequestAt) : undefined}>{a.lastRequestAt ? <span className="num">{fmtRelative(a.lastRequestAt, now)}</span> : <span className="muted">none</span>}</span>
-                    <span className="row" style={{ gap: 6 }}>
-                      <Badge tone={STATE_TONE[a.state]} dot title={STATE_HINT[a.state]}>
-                        {a.state}
-                      </Badge>
-                      {a.reason && (
-                        <Badge tone={WARNING_REASONS.includes(a.reason) ? 'warning' : 'neutral'} title={REASON_HINT[a.reason]}>
-                          {REASON_LABEL[a.reason]}
-                        </Badge>
-                      )}
+                    <span className="agents__probe" title={a.lastProbeAt ? fmtAbsolute(a.lastProbeAt) : undefined}>
+                      {a.lastProbeAt ? <span className="num">{fmtRelative(a.lastProbeAt, now)}</span> : <span className="muted">none</span>}
                     </span>
+                    <span title={a.nextProbeAt ? fmtAbsolute(a.nextProbeAt) : undefined}>
+                      {a.nextProbeAt ? <span className="num">{fmtRelative(a.nextProbeAt, now)}</span> : <span className="muted">{a.state === 'retained' ? 'on first stream event' : 'not scheduled'}</span>}
+                    </span>
+                    <span className="agents__counts num" title={COUNTS_HINT}>
+                      {a.probesToday} / {a.creditedToday}
+                    </span>
+                    {/* The state word carries its cause's sentence on hover, and the line below repeats it for a reader that never hovers. */}
+                    <span className="agents__state row" style={{ gap: 6 }}>
+                      <Badge tone={STATE_TONE[a.state]} dot title={CAUSE_HINT[a.cause]}>
+                        {STATE_LABEL[a.state]}
+                      </Badge>
+                      <Badge tone={WARNING_CAUSES.includes(a.cause) ? 'warning' : 'neutral'} title={CAUSE_HINT[a.cause]}>
+                        {CAUSE_LABEL[a.cause]}
+                      </Badge>
+                    </span>
+                    <div className="agents__more">
+                      <span className="agents__life">
+                        <Badge tone={PIN_TONE[a.agentState]} dot title={PIN_HINT[a.agentState]}>
+                          {a.agentState}
+                        </Badge>
+                        {parkDetail(a, now)}
+                      </span>
+                      <p className="agents__cause">
+                        {STATE_HINT[a.state]} {CAUSE_HINT[a.cause]}
+                      </p>
+                    </div>
                   </div>
                 ))}
               </div>

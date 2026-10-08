@@ -5,16 +5,23 @@
       {
         "account_id": "direct",
         "agent_id": "main",
+        "agent_state": "busy",
+        "cause": "scheduled",
+        "credited_today": 0,
+        "deadline": null,
         "key_id": "desktop",
         "last_guard": "rearm",
+        "last_probe_at": null,
         "last_request_at": 1000000,
         "model": "claude-sonnet-5",
-        "next_probe_at": 1239220,
+        "next_probe_at": 1238433,
+        "park_kind": null,
         "pool_id": "main",
-        "reason": null,
+        "probes_today": 0,
         "session_id": "s1",
-        "state": "armed",
-        "ttl_seconds": 300
+        "state": "retained",
+        "ttl_seconds": 300,
+        "wake_at": null
       }
     ]
   }

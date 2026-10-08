@@ -1034,29 +1034,52 @@ test('a session fold marks what request rows cannot supply and a sum carries the
   assert.ok(bucket.groups.every((g) => g.fromRequests === true && g.cost.cacheRead === null), 'every folded bucket marks the same gaps');
 });
 
-test('a recipe evicted at the byte cap or lapsed past its entry keeps that reason, and the wasted probes their labels', () => {
+test('a recipe evicted at the byte cap or lapsed past its entry keeps that cause, and the wasted probes their labels', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
-  for (const reason of ['evicted', 'expired']) {
-    const recipe = d.decodeRecipe({ ...wire, reason, state: 'held' });
-    assert.equal(recipe.reason, reason);
+  for (const cause of ['evicted', 'expired', 'expired_at_restart']) {
+    const recipe = d.decodeRecipe({ ...wire, cause, state: 'ended' });
+    assert.deepEqual([recipe.cause, recipe.state], [cause, 'ended']);
   }
   const row = fixture('analytics_breakdown').rows[0];
   const group = d.decodeAnalyticsGroup({ ...row, wasted_probe_reasons: { cold_return: 3, evicted: 2, expired: 1 }, wasted_probes: 6 });
   assert.deepEqual([group.wastedProbeReasons.cold_return, group.wastedProbeReasons.evicted, group.wastedProbeReasons.expired], [3, 2, 1]);
 });
 
-test('a recipe held because every account of its pool was exhausted keeps that reason', () => {
+test('a recipe paused because every account of its pool was exhausted keeps that cause', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
-  const recipe = d.decodeRecipe({ ...wire, reason: 'pool_exhausted', state: 'held' });
-  assert.equal(recipe.reason, 'pool_exhausted');
-  assert.equal(recipe.state, 'held');
+  const recipe = d.decodeRecipe({ ...wire, cause: 'probe_pool_exhausted', state: 'paused' });
+  assert.equal(recipe.cause, 'probe_pool_exhausted');
+  assert.equal(recipe.state, 'paused');
 });
 
-test('a recipe held under the horizon or ended at the parked limit keeps that reason, and the wasted probes their labels', () => {
+test('a recipe decodes every cause word the engine serializes, its five states, the park and the day counts', () => {
   const [wire] = fixture('keepalive_recipes').recipes;
-  for (const reason of ['horizon', 'parked_limit']) {
-    assert.equal(d.decodeRecipe({ ...wire, reason, state: 'held' }).reason, reason);
-  }
+  assert.equal(d.RECIPE_CAUSE_VALUES.length, 62);
+  assert.deepEqual([...d.RECIPE_CAUSE_VALUES], [...d.RECIPE_CAUSE_VALUES].sort(), 'the causes read alphabetically');
+  for (const cause of d.RECIPE_CAUSE_VALUES) assert.equal(d.decodeRecipe({ ...wire, cause }).cause, cause);
+  assert.deepEqual([...d.RECIPE_STATE_VALUES], ['ended', 'held', 'not_retained', 'paused', 'retained']);
+  for (const state of d.RECIPE_STATE_VALUES) assert.equal(d.decodeRecipe({ ...wire, state }).state, state);
+  assert.deepEqual([...d.AGENT_STATE_VALUES], ['busy', 'idle', 'parked', 'released', 'unknown'], 'the lifecycle word admits every state the engine serializes, unknown among them');
+  const parked = d.decodeRecipe({ ...wire, agent_state: 'parked', park_kind: 'both', deadline: 7_200_000, wake_at: 10_800_000, last_probe_at: 3_600_000, probes_today: 4, credited_today: 2 });
+  assert.deepEqual(
+    [parked.agentState, parked.parkKind, parked.deadline, parked.wakeAt, parked.lastProbeAt, parked.probesToday, parked.creditedToday],
+    ['parked', 'both', new Date(7_200_000).toISOString(), new Date(10_800_000).toISOString(), new Date(3_600_000).toISOString(), 4, 2],
+  );
+  assert.equal(d.decodeRecipe({ ...wire, agent_state: 'unknown' }).agentState, 'unknown');
+  assert.equal(d.decodeRecipe({ ...wire, park_kind: 'nap' }).parkKind, null, 'a park kind outside the three reads as none');
+});
+
+test('a session row carries the presence age and the cause of its main recipe', () => {
+  const row = fixture('sessions').sessions.find((s) => s.session_id === 's1');
+  assert.equal(d.decodeSession({ ...row, presence_age_seconds: 12 }).presenceAgeSeconds, 12);
+  assert.equal(d.decodeSession({ ...row, presence_age_seconds: null }).presenceAgeSeconds, null);
+  assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: 'cooled' } }).keepalive.cause, 'cooled');
+  assert.equal(d.decodeSession({ ...row, keepalive: { ...row.keepalive, cause: null } }).keepalive.cause, null);
+});
+
+test('a recipe held under the horizon or ended at the parked limit keeps that cause, and the wasted probes their labels', () => {
+  const [wire] = fixture('keepalive_recipes').recipes;
+  assert.deepEqual([d.decodeRecipe({ ...wire, cause: 'horizon', state: 'held' }).cause, d.decodeRecipe({ ...wire, cause: 'parked_limit', state: 'ended' }).cause], ['horizon', 'parked_limit']);
   const row = fixture('analytics_breakdown').rows[0];
   const group = d.decodeAnalyticsGroup({ ...row, wasted_probe_reasons: { horizon: 2, parked_limit: 1 }, wasted_probes: 3 });
   assert.deepEqual([group.wastedProbeReasons.horizon, group.wastedProbeReasons.parked_limit], [2, 1]);
@@ -1191,11 +1214,12 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.equal(s1.keyGeneration, fixture('sessions').sessions.find((s) => s.session_id === 's1').key_generation, 'the live holder names the generation its key row carries');
   assert.equal(s1.companion, 'reporting');
   assert.equal(s1.keepalive.state, 'busy');
+  assert.equal(s1.keepalive.cause, 'scheduled');
+  assert.equal(s1.presenceAgeSeconds, null, 'the captured mod reported no presence');
   assert.equal(s1.requests, 3);
   assert.ok(isIso(s1.lastUsedAt));
   const [recipe] = fixture('keepalive_recipes').recipes.map(d.decodeRecipe);
-  assert.equal(recipe.state, 'armed');
-  assert.equal(recipe.reason, null);
+  assert.deepEqual([recipe.state, recipe.cause, recipe.agentState, recipe.parkKind, recipe.probesToday, recipe.creditedToday], ['retained', 'scheduled', 'busy', null, 0, 0]);
   const ov = d.decodeKeepaliveOverview(fixture('keepalive_overview'));
   assert.deepEqual(Object.keys(ov).sort(), ['agents', 'busGaps', 'expiredBetweenTurns24h', 'probes24h'], 'the overview carries the tiles alone; the page counts its sessions over its rows');
   assert.equal(ov.busGaps, 0, 'the captured router saw no gap');
@@ -1541,7 +1565,7 @@ test('a session decodes its burn unit, and a pin the cost model cannot price rea
   assert.deepEqual([pinned.burnUnit, pinned.burn], ['window_share', 0], 'a pin never renewed with usage burns nothing, whatever its model');
   assert.deepEqual([d.decodeSession({ ...wire, burn: null }).burnUnit, d.decodeSession({ ...wire, burn: null }).burn], ['window_share', null], 'a burn the cost model cannot price reads null beside its unit');
   assert.equal(d.decodeSession({ ...rows[0], burn_unit: 'tokens' }).burnUnit, null, 'a unit outside the two reads as none');
-  assert.deepEqual(Object.keys(d.decodeSession(rows[0]).keepalive).sort(), ['lastGuard', 'nextProbeAt', 'state'], 'the keepalive summary carries no balance');
+  assert.deepEqual(Object.keys(d.decodeSession(rows[0]).keepalive).sort(), ['cause', 'lastGuard', 'nextProbeAt', 'state'], 'the keepalive summary carries no balance');
   assert.equal(Object.keys(d.decodeRecipe(fixture('keepalive_recipes').recipes[0])).some((k) => k.startsWith('net')), false, 'nor does a recipe');
 });
 

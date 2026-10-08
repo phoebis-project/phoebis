@@ -420,6 +420,7 @@ impl Inner {
                         // Presence restarts the window, so the one counted so far ends with no return, closed
                         // before the start moves so the new start clears the floor.
                         agent.close_idle_episode();
+                        agent.last_presence_at = Some(now);
                     }
                     agent.last_activity = now;
                     if !presence {

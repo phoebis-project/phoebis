@@ -110,6 +110,11 @@ pub(crate) struct PersistedAgent {
     pub covered_until: Option<i64>,
     pub last_real_at: Option<i64>,
     pub last_stop: Option<Wasted>,
+    pub last_presence_at: Option<i64>,
+    pub last_probe_at: Option<i64>,
+    pub probes_today: u64,
+    pub credited_today: u64,
+    pub counters_day: i64,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -391,6 +396,11 @@ impl PersistedAgent {
             covered_until: agent.covered_until,
             last_real_at: agent.last_real_at,
             last_stop: agent.last_stop,
+            last_presence_at: agent.last_presence_at,
+            last_probe_at: agent.last_probe_at,
+            probes_today: agent.probes_today,
+            credited_today: agent.credited_today,
+            counters_day: agent.counters_day,
         }
     }
 
@@ -476,6 +486,11 @@ impl PersistedAgent {
         agent.covered_until = self.covered_until;
         agent.last_real_at = self.last_real_at;
         agent.last_stop = self.last_stop;
+        agent.last_presence_at = self.last_presence_at;
+        agent.last_probe_at = self.last_probe_at;
+        agent.probes_today = self.probes_today;
+        agent.credited_today = self.credited_today;
+        agent.counters_day = self.counters_day;
         Some((agent, self.current))
     }
 }

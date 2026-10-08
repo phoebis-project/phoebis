@@ -211,6 +211,21 @@ reasons! {
     UnsupportedShape => "unsupported_shape",
 }
 
+/// A cause leaves the engine as its word, the one the counters and the stored payload already key it by.
+impl serde::Serialize for Reason {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+const DAY_MS: i64 = 86_400_000;
+
+/// The UTC day `ms` falls on, counted from the epoch. The day counters and their reader both go through it, so the
+/// two never disagree on where a day ends.
+pub(crate) fn utc_day(ms: i64) -> i64 {
+    ms.div_euclid(DAY_MS)
+}
+
 /// What an observation does to the agent's recipe.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -510,6 +525,14 @@ pub(crate) struct Agent {
     /// The label of the last discard that had one, so a probe result arriving after the recipe stopped settles
     /// under the stop that orphaned it.
     pub last_stop: Option<Wasted>,
+    /// Main's last presence report: when the person was last seen at the terminal.
+    pub last_presence_at: Option<i64>,
+    pub last_probe_at: Option<i64>,
+    /// The probes sent on `counters_day`, the UTC day both counts are for.
+    pub probes_today: u64,
+    /// The requests credited as kept warm on `counters_day`.
+    pub credited_today: u64,
+    pub counters_day: i64,
 }
 
 impl Agent {
@@ -568,6 +591,11 @@ impl Agent {
             covered_until: None,
             last_real_at: None,
             last_stop: None,
+            last_presence_at: None,
+            last_probe_at: None,
+            probes_today: 0,
+            credited_today: 0,
+            counters_day: utc_day(now),
         }
     }
 
@@ -616,6 +644,38 @@ impl Agent {
         self.paused = true;
         self.expires = None;
         self.retry_at = None;
+    }
+
+    /// Starts both day counts over when `now` falls on a later UTC day than the one they count. Only the two events
+    /// they count call it, so no tick resets them: `counts_today` reads a passed day as zero instead.
+    fn roll_counters_day(&mut self, now: i64) {
+        let day = utc_day(now);
+        if self.counters_day != day {
+            self.counters_day = day;
+            self.probes_today = 0;
+            self.credited_today = 0;
+        }
+    }
+
+    pub(crate) fn count_probe(&mut self, now: i64) {
+        self.roll_counters_day(now);
+        self.last_probe_at = Some(now);
+        self.probes_today += 1;
+    }
+
+    pub(crate) fn count_credit(&mut self, now: i64) {
+        self.roll_counters_day(now);
+        self.credited_today += 1;
+    }
+
+    /// The day's probes and credits as of `now`, zero once the UTC day they count has passed: a recipe that neither
+    /// probed nor earned a credit since midnight reads the new day without waiting for either event.
+    pub(crate) fn counts_today(&self, now: i64) -> (u64, u64) {
+        if self.counters_day == utc_day(now) {
+            (self.probes_today, self.credited_today)
+        } else {
+            (0, 0)
+        }
     }
 
     /// Every state write. A move to any state but `Parked` ends the park, so a stale park never outlives it.
@@ -1529,6 +1589,8 @@ pub struct AgentStatus {
     pub cache_ttl_ms: i64,
     pub canonical_model: String,
     pub cold: u32,
+    pub counters_day: i64,
+    pub credited_today: u64,
     pub deadline: Option<i64>,
     pub failures: u32,
     pub idle_ticks: u64,
@@ -1540,6 +1602,7 @@ pub struct AgentStatus {
     pub paused: bool,
     pub probe_usage: ProbeUsage,
     pub probes: u64,
+    pub probes_today: u64,
     pub reason: Reason,
     pub request_generation: u64,
     pub state: AgentState,
@@ -1636,6 +1699,8 @@ impl Engine {
             cache_ttl_ms: agent.ttl_ms,
             canonical_model: agent.canonical_model.clone(),
             cold: agent.cold,
+            counters_day: agent.counters_day,
+            credited_today: agent.credited_today,
             deadline: agent.deadline,
             failures: agent.failures,
             idle_ticks: agent.idle_ticks,
@@ -1647,6 +1712,7 @@ impl Engine {
             paused: agent.paused,
             probe_usage: agent.usage,
             probes: agent.probes,
+            probes_today: agent.probes_today,
             reason: agent.reason,
             request_generation: agent.generation,
             state: agent.state,
@@ -2147,6 +2213,15 @@ impl Engine {
                 }
             }
         }
+        if credited.is_some() {
+            if let Some(agent) = inner
+                .sessions
+                .get_mut(&key)
+                .and_then(|s| s.agents.get_mut(&agent_id))
+            {
+                agent.count_credit(now);
+            }
+        }
         drop(inner);
         if let Some((read, key_generation, pool_id, account, model, fast)) = credited {
             self.record_kept_warm(
@@ -2311,6 +2386,12 @@ impl Engine {
                     inner.hold(&key, &agent_id, reason, now);
                     continue;
                 }
+                // The refresh's own hold ends at the first tick that finds the pool enabled again, as the probe verdict
+                // below ends `horizon`: nothing else rewrites it before the next probe, and until then an armed recipe
+                // would read held with no next probe.
+                if inner.sessions[&key].agents[&agent_id].reason == Reason::PoolDisabled {
+                    inner.set_reason(&key, &agent_id, Reason::Scheduled);
+                }
                 let verdict = {
                     let session = &inner.sessions[&key];
                     let agent = &session.agents[&agent_id];
@@ -2439,6 +2520,7 @@ impl Engine {
                 agent.in_flight = true;
                 agent.hold_counted = false;
                 agent.probes += 1;
+                agent.count_probe(now);
                 if idle {
                     agent.idle_ticks += 1;
                 }

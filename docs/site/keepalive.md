@@ -21,10 +21,10 @@ pool or key set off drops the `dangerous-tool-use-2026-09-03` beta from a probe 
 the session's pin and renews it. A probe whose pinned member is at its spend budget, on an account the operator
 disabled, past its subscription's end, or already tried by this probe while a sibling could take it is answered rather
 than placed on a sibling, so a probe never moves the pin for those standings, and the agent reads `budget`, `paused` (a
-disabled account or an ended subscription) or `retrying` until the next real request lands. A probe whose pinned account
-was deleted is held as `paused` before it is sent, as one on a disabled account is. A 429 on the pinned account, a
-credits block, overage under `never`, an account that is disconnected or unpaired, and the pool's move rules move it as
-they move a real request.
+disabled account), `ineligible_credential` (an ended subscription) or `retryable_probe_error` until the next real
+request lands. A probe whose pinned account was deleted is held as `paused` before it is sent, as one on a disabled
+account is. A 429 on the pinned account, a credits block, overage under `never`, an account that is disconnected or
+unpaired, and the pool's move rules move it as they move a real request.
 
 A probe costs a cache read at list price, which its own row in the request ledger carries. A later request that read
 the entry a probe kept is counted as kept warm, per pool and per hour.
@@ -274,42 +274,52 @@ The eight shipped rows, all prices in USD per million tokens, read from `crates/
 `GET /admin/sessions/costs` adds a sixth figure per model, `reads_per_write_5m`, the 5-minute cache write price
 over the cache read price: 50 for the two Fable models, 25 for `claude-opus-5-5` and 12.5 for the other five.
 
-## Recipe states
+## The five states
 
-A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight, or `held`, with no probe scheduled and one of twenty reasons attached.
+The Sessions view reads each agent's recipe as one of five states, with the engine's own reason beside it as the
+cause. The cause's sentence shows on hover over the state word and again in the row's expanded detail. Every agent
+that has sent a real request keeps its row until its session leaves the engine, so a recipe that ended, or a request
+that was not kept, still shows with its cause.
+
+| State | What it means |
+| --- | --- |
+| `retained` | The prompt is kept and its probe is scheduled, in flight, or waiting for the first stream event. |
+| `held` | The prompt is kept and no probe is sent while a condition holds that clears by itself or by an operator. |
+| `paused` | The engine paused the recipe after a probe's answer or a failed request, until the next real request. |
+| `not_retained` | The last request was not kept, for its shape or size, the engine's limits, or no cache evidence. |
+| `ended` | The recipe was discarded and the agent's row stays: a ceiling, a lapse, an eviction, a release or an end. |
+
+Each state reads these causes:
+
+- `retained`: `awaiting_cache_evidence`, `awaiting_selection`, `lease_expired`, `probing`, `scheduled`.
+- `held`: `affinity_too_short`, `budget`, `cooled`, `horizon`, `ineligible_credential`, `keepalive_off`,
+  `ledger_behind`, `overage`, `paused`, `pool_disabled`, `reauth`, `retryable_probe_error`, `slow_probe`.
+- `paused`: `invalid_probe_usage`, `missing_account`, `partial_cache_coverage`, `probe_authentication_error`,
+  `probe_pool_exhausted`, `probe_quota_exhausted`, `probe_retry_limit`, `probe_transport_error`,
+  `repeated_cold_probe`, `request_canceled`, `request_failed`, `request_rejected`, `unexpected_output`,
+  `unsupported_probe`.
+- `not_retained`: `awaiting_request`, `fixed_thinking`, `forced_tool`, `headers_too_large`, `invalid_cache_control`,
+  `invalid_model`, `invalid_request`, `no_cache_evidence`, `no_probe_cache_evidence`, `owner_mismatch`,
+  `request_limit`, `request_too_large`, `storage_limit`, `structured_output`, `unsupported_shape`.
+- `ended`: `agent_released`, `agent_unknown`, `bus_gap`, `evicted`, `expired`, `expired_at_restart`, `idle_limit`,
+  `instance_replaced`, `key_opted_out`, `opted_out`, `parked_limit`, `released`, `reset`, `session_ended`,
+  `session_expired`.
+
+A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's error answer pauses the
+recipe and clears its schedule, and a gate's hold that lands on it at a later tick (`budget`, `cooled`,
+`ineligible_credential` or `paused`) re-arms nothing, so the row stays `paused` with the hold's cause until the next
+real request. The same hold on an armed recipe reads `held`, since the gate reads it again at every tick and probing
+resumes when it clears. A recipe held on a disabled pool reads `retained` again at the first tick after the pool is
+enabled.
 
 ### The guard field
 
 Every request the recipe observes also updates `last_guard`, `null` before the first one: `rearm` or `restart`
 for a request that continued or restarted the conversation, `auxiliary` or `foreign` for one the guard set aside
 (see [Which requests re-arm a recipe](#which-requests-re-arm-a-recipe)). `last_guard` never holds the recipe by
-itself; an auxiliary or a foreign request leaves `state` and the reason below exactly as they were, so a recipe
-`held` under `cooled` with `last_guard: rearm` is a real request that re-armed it, followed later by a cooldown on its
-account, not a contradiction.
-
-| Reason | Console label | What it means |
-| --- | --- | --- |
-| `affinity_too_short` | affinity too short | The pool's affinity ends before this recipe's probe is due (see below). |
-| `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
-| `budget` | at budget | The pinned member is at its spend budget until the period ends or the budget is raised. |
-| `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
-| `cooled` | cooled down | The pinned account is under a cooldown; the probe waits it out while the entry lasts. |
-| `evicted` | evicted | The engine reached its retained-bytes cap and this recipe was the oldest idle one. |
-| `expired` | entry expired | The cache entry expired before its probe was due; no probe was sent. |
-| `horizon` | held: wake too far | Parked on a wakeup past the pool's horizon: held while the entry lasts. |
-| `idle_limit` | idle limit | The idle window ran out (see [The ceilings](#the-ceilings)). |
-| `ledger_behind` | ledger behind | The router's ledger was behind; the probe is sent again after the answer's wait. |
-| `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
-| `parked_limit` | parked limit | The parked ceiling ran out, or a subagent's park ended by deadline, wake or `idle`. |
-| `paused` | paused | The account is paused or its subscription has ended, the pool is disabled, or the key opted out. |
-| `pool_exhausted` | pool exhausted | Every account of the pool was exhausted or cooled when the probe was selected. |
-| `probe_error` | probe error | The last probe failed on the transport or was refused. |
-| `quota_exhausted` | quota exhausted | The account's usage window is spent; probes resume when it resets. |
-| `reauth` | needs re-auth | The account needs re-pairing or funding before anything can be sent on it. |
-| `retrying` | retrying | The last probe failed with a retryable error; the next attempt has backoff. |
-| `storage_limit` | storage limit | The engine is at its retained-request or session limit. |
-| `unsupported_shape` | unsupported shape | The last request had no cacheable prefix the probe could replay. |
+itself. An auxiliary or a foreign request leaves `state` and `cause` exactly as they were, so a recipe `held` under
+`cooled` with `last_guard: rearm` is a real request that re-armed it, followed later by a cooldown on its account, not a
+contradiction.
 
 A recipe holds under `affinity_too_short` while the pool's affinity ends before its probe is due, the entry's TTL less
 the lead: the session could move away from the account the probe would warm, so raise `affinity_ttl_seconds` past
@@ -323,23 +333,23 @@ held under any other reason, a gate's hold among them (`affinity_too_short`, `bu
 under `horizon` or on a disabled pool leaves the same way, and one reopened or enabled again while its entry is warm
 probes on. While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes
 cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended
-sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe leaves the recipe list,
-as one stopped under `idle_limit` or `storage_limit` does, and shows on the wasted counter. A lapse also shows in that
-log line.
+sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe reads `ended`, as one
+stopped under `idle_limit` does, and shows on the wasted counter. A lapse also shows in that log line.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
-is spelled with a JSON escape, is not retained and holds the recipe under `unsupported_shape`: a probe built from it
+is spelled with a JSON escape, is not retained and reads `not_retained` under `invalid_request`: a probe built from it
 would travel with a stale stamp or a doubled member.
 
-A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is `retrying` rather than paused
-under `quota_exhausted`: its next attempt waits out that answer's `Retry-After` in place of the backoff, since a slot
-frees within seconds. A probe answered `503 accounts_unavailable` because its key moved to another pool while it was in
-flight is `retrying` rather than paused under `pool_exhausted`: its next attempt admits under the new pool.
+A probe answered `429 accounts_at_cap`, every account of its pool at the in-flight cap, is held under
+`retryable_probe_error` rather than paused under `probe_quota_exhausted`: its next attempt waits out that answer's
+`Retry-After` in place of the backoff, since a slot frees within seconds. A probe answered `503 accounts_unavailable`
+because its key moved to another pool while it was in flight is held under `retryable_probe_error` rather than paused
+under `probe_pool_exhausted`: its next attempt admits under the new pool.
 
 A probe the router refused with `503 ledger_behind`, its ledger catching up, holds under `ledger_behind` rather than
-`retrying`: its next attempt waits out that answer's `Retry-After`, or the 30-second retry wait without one, and
-counts no failure toward the failure limit, so a ledger that stays behind never pauses the recipe. The entry's expiry
-still bounds the re-sends: once it passes, the recipe ends under `expired`, as under any other hold.
+`retryable_probe_error`: its next attempt waits out that answer's `Retry-After`, or the 30-second retry wait without
+one, and counts no failure toward the failure limit, so a ledger that stays behind never pauses the recipe. The entry's
+expiry still bounds the re-sends: once it passes, the recipe ends under `expired`, as under any other hold.
 
 A wasted probe settles with one of nine reasons of its own: when the recipe stops with a probe unanswered or is held
 under `horizon`, when it lapses or is evicted, or when the next request after the probe reads nothing from the entry it
@@ -389,11 +399,17 @@ does for a failed account read. Its table lists one row per session, led by the 
 eight shown by default (last request, agents and next probe start hidden, and the Columns control turns
 any on): key, session, model, account, last used, requests, last request, agents, companion, cache
 warming, and next probe. The model column reads the family and version, with the whole id on hover, and the account cell
-names the account's kind on hover and to a screen reader. Opening a row expands into the recipe each of its agents
-carries. A session's menu offers "View in analytics" and "View in observe" once it has ledgered traffic, "View in
-routing log", which opens the log on that session's decisions, and Release. The
-analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions again every 15
-seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
+names the account's kind on hover and to a screen reader. The companion column reads `reporting`, `silent` or `none`,
+and under `reporting` how long ago the person was last seen at the terminal, as `presence 12s ago`. Opening a row
+expands into one line per agent that has sent a real request: its model, pinned account and TTL, the last request, the
+last and the next probe, and the probes sent today with the requests they kept warm, counted from midnight UTC. The line
+ends on its state word with the cause beside it, the cause's sentence on hover (see
+[The five states](#the-five-states)). Under the columns it reads the mod's lifecycle word for the agent, with a parked
+agent's park kind and its deadline or wake time (`parked · background · deadline in 1h 12m`), and repeats the state's
+and the cause's sentences. A session's menu offers "View in analytics" and "View in observe" once it has ledgered
+traffic, "View in routing log", which opens the log on that session's decisions,
+and Release. The analytics view opens on the requests of the key holder the row belongs to. The view reads its sessions
+again every 15 seconds, so a session that keeps sending requests stays on it, and its tiles once a minute.
 
 A session
 whose first request branched from another conversation carries a `fork at 3` badge beside its id, 3 being the depth

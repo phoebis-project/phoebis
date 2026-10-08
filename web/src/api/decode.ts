@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RecordCandidate, RecordOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
+  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
+  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
@@ -686,8 +686,8 @@ export function decodeDashboard(v: unknown): Overview {
 }
 
 const companion = (v: unknown): Session['companion'] => (str(v) === 'reporting' ? 'reporting' : str(v) === 'silent' ? 'silent' : 'none');
-export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked'] as const;
-const agentState = (v: unknown): Session['keepalive']['state'] => AGENT_STATE_VALUES.find((s) => s === str(v)) ?? null;
+export const AGENT_STATE_VALUES = ['busy', 'idle', 'parked', 'released', 'unknown'] as const satisfies readonly KeepaliveState[];
+const agentState = (v: unknown): KeepaliveState | null => AGENT_STATE_VALUES.find((s) => s === str(v)) ?? null;
 export const GUARD_VERDICT_VALUES = ['auxiliary', 'foreign', 'rearm', 'restart'] as const;
 const guardVerdict = (v: unknown): GuardVerdict | null => GUARD_VERDICT_VALUES.find((x) => x === str(v)) ?? null;
 
@@ -697,14 +697,37 @@ const burnUnit = (v: unknown): BurnUnit | null => BURN_UNIT_VALUES.find((u) => u
 export function decodeSession(v: unknown): Session {
   const s = rec(v);
   const k = rec(s.keepalive);
-  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
+  return { accountId: strOrNull(s.account_id), agentId: strOrNull(s.agent_id), agents: num(s.agents), burn: numOrNull(s.burn), burnAt: isoOrNull(s.burn_at), burnUnit: burnUnit(s.burn_unit), cacheTtlMs: numOrNull(s.cache_ttl_ms), companion: companion(s.companion), companionSince: isoOrNull(s.companion_since), createdAt: isoOrNull(s.created_at), epoch: numOrNull(s.epoch), forkDepth: numOrNull(s.fork_depth), forkedFrom: strOrNull(s.forked_from), historical: bool(s.historical), keepalive: { cause: recipeCause(k.cause), lastGuard: guardVerdict(k.last_guard), nextProbeAt: isoOrNull(k.next_probe_at), state: agentState(k.state) }, keyGeneration: num(s.key_generation), keyId: str(s.key_id), lastInputTokens: numOrNull(s.last_input_tokens), lastRefreshAt: isoOrNull(s.last_refresh_at), lastRequestAt: isoOrNull(s.last_request_at), lastUsedAt: isoOrNull(s.last_used_at) ?? isoOrNull(s.last_request_at), model: strOrNull(s.model), pinned: bool(s.pinned), presenceAgeSeconds: numOrNull(s.presence_age_seconds), requests: num(s.requests), sessionId: str(s.session_id), shedFrom: strOrNull(s.shed_from) };
 }
 
-export const RECIPE_REASON_VALUES = ['affinity_too_short', 'awaiting_cache_evidence', 'budget', 'cold_probes', 'cooled', 'evicted', 'expired', 'horizon', 'idle_limit', 'ledger_behind', 'overage', 'parked_limit', 'paused', 'pool_exhausted', 'probe_error', 'quota_exhausted', 'reauth', 'retrying', 'storage_limit', 'unsupported_shape'] as const;
-export const RECIPE_STATE_VALUES = ['armed', 'held', 'probing'] as const;
+/** Every cause word the engine serializes, so the decoder never reads one it sends as none. */
+export const RECIPE_CAUSE_VALUES = ['affinity_too_short', 'agent_released', 'agent_unknown', 'awaiting_cache_evidence', 'awaiting_request', 'awaiting_selection', 'budget', 'bus_gap', 'cooled', 'evicted', 'expired', 'expired_at_restart', 'fixed_thinking', 'forced_tool', 'headers_too_large', 'horizon', 'idle_limit', 'ineligible_credential', 'instance_replaced', 'invalid_cache_control', 'invalid_model', 'invalid_probe_usage', 'invalid_request', 'keepalive_off', 'key_opted_out', 'lease_expired', 'ledger_behind', 'missing_account', 'no_cache_evidence', 'no_probe_cache_evidence', 'opted_out', 'overage', 'owner_mismatch', 'parked_limit', 'partial_cache_coverage', 'paused', 'pool_disabled', 'probe_authentication_error', 'probe_pool_exhausted', 'probe_quota_exhausted', 'probe_retry_limit', 'probe_transport_error', 'probing', 'reauth', 'released', 'repeated_cold_probe', 'request_canceled', 'request_failed', 'request_limit', 'request_rejected', 'request_too_large', 'reset', 'retryable_probe_error', 'scheduled', 'session_ended', 'session_expired', 'slow_probe', 'storage_limit', 'structured_output', 'unexpected_output', 'unsupported_probe', 'unsupported_shape'] as const satisfies readonly RecipeCause[];
+const recipeCause = (v: unknown): RecipeCause | null => RECIPE_CAUSE_VALUES.find((x) => x === str(v)) ?? null;
+export const RECIPE_STATE_VALUES = ['ended', 'held', 'not_retained', 'paused', 'retained'] as const satisfies readonly RecipeState[];
+export const PARK_KIND_VALUES = ['background', 'both', 'scheduled'] as const satisfies readonly ParkKind[];
 export function decodeRecipe(v: unknown): KeepaliveRecipe {
   const r = rec(v);
-  return { accountId: strOrNull(r.account_id), agentId: str(r.agent_id), keyId: str(r.key_id), lastGuard: guardVerdict(r.last_guard), lastRequestAt: isoOrNull(r.last_request_at), model: str(r.model), nextProbeAt: isoOrNull(r.next_probe_at), poolId: str(r.pool_id), reason: RECIPE_REASON_VALUES.find((x) => x === str(r.reason)) ?? null, sessionId: str(r.session_id), state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'armed', ttlSeconds: num(r.ttl_seconds) };
+  return {
+    accountId: strOrNull(r.account_id),
+    agentId: str(r.agent_id),
+    agentState: agentState(r.agent_state) ?? 'unknown',
+    cause: recipeCause(r.cause) ?? 'scheduled',
+    creditedToday: num(r.credited_today),
+    deadline: isoOrNull(r.deadline),
+    keyId: str(r.key_id),
+    lastGuard: guardVerdict(r.last_guard),
+    lastProbeAt: isoOrNull(r.last_probe_at),
+    lastRequestAt: isoOrNull(r.last_request_at),
+    model: str(r.model),
+    nextProbeAt: isoOrNull(r.next_probe_at),
+    parkKind: PARK_KIND_VALUES.find((x) => x === str(r.park_kind)) ?? null,
+    poolId: str(r.pool_id),
+    probesToday: num(r.probes_today),
+    sessionId: str(r.session_id),
+    state: RECIPE_STATE_VALUES.find((x) => x === str(r.state)) ?? 'retained',
+    ttlSeconds: num(r.ttl_seconds),
+    wakeAt: isoOrNull(r.wake_at),
+  };
 }
 
 export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
