@@ -8,7 +8,7 @@ import { tokensTotal } from '@/lib/format';
 import { emptyHistogram, histogramOf } from '@/lib/histogram';
 import { ACCOUNTS, QUOTA_HISTORY } from './accounts';
 import type { HourlyRollup } from './analytics';
-import { priceFor } from './catalog';
+import { cellsFor, priceFor } from './catalog';
 import { keyById, poolById } from './pools';
 import { createRng, type Rng } from './rng';
 import { ACCOUNT_ROLLUP_SAMPLE, REQUEST_SAMPLE } from './samples';
@@ -160,11 +160,10 @@ function usageFor(model: string, kind: RequestKind): Usage {
   };
 }
 
-/** An answer served fast prices at the model's fast cells, and at its standard cells when it has none, as the ledger
- *  prices it. */
+/** An answer prices at the cells the ledger selects for it: the model's fast cells for a fast answer on a row that
+ *  has them, else the long-context cells when its prompt is over the threshold, else the standard cells. */
 export function costSplitOf(model: string, u: Usage, fast = false): CostSplit {
-  const standard = priceFor(model);
-  const p = fast ? (standard.fast ?? standard) : standard;
+  const p = cellsFor(model, u, fast);
   return {
     cacheRead: (u.cacheRead * p.cacheReadPerM) / 1_000_000,
     cacheWrite: (u.cacheWrite5m * p.cacheWrite5mPerM + u.cacheWrite1h * p.cacheWrite1hPerM) / 1_000_000,
