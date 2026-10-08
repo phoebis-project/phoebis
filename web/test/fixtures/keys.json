@@ -23,21 +23,21 @@
         "effective_body_capture_hours": 24,
         "auto_mode_server": null,
         "effective_auto_mode_server": true,
-        "prefix": "RkUUhsuA",
-        "created_at": 1791412789134,
-        "updated_at": 1791412789134,
-        "revision": 6189459300238,
+        "prefix": "DR2lCTP6",
+        "created_at": 1791465653858,
+        "updated_at": 1791465653858,
+        "revision": 6189512164962,
         "rotated_at": null,
         "last_used_at": null,
         "retired_secret_last_used_at": null,
         "sessions_on_retired_secret": 0,
         "usage_7d": {
-          "cost_usd": 0.0216,
+          "cost_usd": 0.02135,
           "requests": 5,
           "tokens": 9000
         },
         "lifetime": {
-          "cost_usd": 0.0216,
+          "cost_usd": 0.02135,
           "requests": 5
         }
       }

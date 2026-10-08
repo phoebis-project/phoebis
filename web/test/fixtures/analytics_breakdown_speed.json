@@ -32,12 +32,12 @@
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.0002,
+          "cache_read": 0.0001,
           "cache_write": 0.001,
           "input": 0.004,
           "output": 0.002
         },
-        "cost_usd": 0.0072,
+        "cost_usd": 0.0071,
         "errors": {},
         "cache_miss_reasons": {
           "none": 1
@@ -380,12 +380,12 @@
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.0005,
+          "cache_read": 0.00030000000000000003,
           "cache_write": 0.0025,
           "input": 0.01,
           "output": 0.005
         },
-        "cost_usd": 0.018,
+        "cost_usd": 0.0178,
         "errors": {
           "stream_incomplete": 1,
           "upstream_error": 1

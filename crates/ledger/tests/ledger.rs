@@ -3335,7 +3335,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
             attempts[0].pricing_version.as_deref(),
             unknown.load(Ordering::SeqCst)
         ),
-        (Some("2026-10-01"), 0)
+        (Some("2026-10-08"), 0)
     );
 }
 

@@ -69,9 +69,9 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1791419928210,
-        "updated_at": 1791419928210,
-        "revision": 6189466439314,
+        "created_at": 1791465653853,
+        "updated_at": 1791465653853,
+        "revision": 6189512164957,
         "members": [
           {
             "account_id": "business",
@@ -110,13 +110,13 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "sQmkyWI2",
+            "prefix": "DR2lCTP6",
             "enabled": true
           }
         ],
         "status": "active",
         "requests_24h": 6,
-        "cost_24h": 0.0252,
+        "cost_24h": 0.0249,
         "active_pins": 1,
         "traffic_24h": [
           {
@@ -285,14 +285,14 @@
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0144
+            "cost_usd": 0.0142
           },
           {
             "at": 0,
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0108
+            "cost_usd": 0.0107
           }
         ]
       }
