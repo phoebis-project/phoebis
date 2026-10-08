@@ -200,6 +200,9 @@ const SUBAGENT_HOLDS = new Map<number, RecipeCause>([
 // session's agent stays retained, parked on a background command with its deadline.
 const PARKED_HOLDS = new Map<number, RecipeCause>([[3, 'horizon']]);
 
+/** How long ago a probe still in flight went out. */
+const PROBE_IN_FLIGHT_MS = 20_000;
+
 // The state the engine reads each cause the story uses in, as `recipe_state` maps it with no pause.
 const STATE_OF: Partial<Record<RecipeCause, RecipeState>> = {
   affinity_too_short: 'held',
@@ -229,9 +232,10 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const state = STATE_OF[cause] ?? 'retained';
     const model = j === 0 ? sessionSpec[i].model : sub?.model ?? sessionSpec[i].model;
     // The engine lists an agent once it has sent a request. The roll is drawn whatever it gives, so the rows after this
-    // one keep theirs, and a subagent it leaves without one sent its request three minutes ago.
+    // one keep theirs, and a subagent it leaves without one sent its request three and a half minutes ago, off the
+    // whole minutes its last probe falls on.
     const rolled = j === 0 ? pin.lastRequestAt : rng.int(0, 4) === 0 ? null : ago(rng.int(1, 40) * MINUTE);
-    const lastRequestAt = rolled ?? ago(3 * MINUTE);
+    const lastRequestAt = rolled ?? ago(3 * MINUTE + 30_000);
     const accountId = j === 0 ? pin.accountId : sub?.accountId ?? pin.accountId;
     const ttlSeconds = model.includes('haiku') ? 300 : 3_600;
     // Main reads its session's lifecycle word, a subagent whose park ran out is still parked, and the others are busy.
@@ -241,8 +245,9 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
     const parkKind = agentState !== 'parked' ? null : cause === 'horizon' ? 'scheduled' : 'background';
     const deadline = agentState === 'parked' && j === 0 && cause !== 'horizon' ? ahead(72 * MINUTE + 30_000) : null;
     const wakeAt = parkKind === 'scheduled' ? ahead(3 * 24 * 60 * MINUTE + 30_000) : null;
-    // An agent whose request still awaits its evidence has not been probed since, and the rest were, minutes ago.
-    const lastProbeAt = cause === 'awaiting_cache_evidence' ? null : ago((((i * 3 + j) % 4) + 1) * MINUTE);
+    // An agent whose request still awaits its evidence has not been probed since, a probe in flight was dispatched at
+    // its due time, which the engine records as the last probe, and the rest were probed minutes ago.
+    const lastProbeAt = cause === 'awaiting_cache_evidence' ? null : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : ago((((i * 3 + j) % 4) + 1) * MINUTE);
     const probesToday = lastProbeAt === null ? 0 : ((i * 7 + j * 3) % 9) + 1;
     return {
       ...RECIPE_SAMPLE,
@@ -260,7 +265,7 @@ export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
       lastRequestAt,
       model,
       // A probe in flight leaves the due time it went out at, which the engine keeps showing until it lands.
-      nextProbeAt: cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : cause === 'probing' ? ago(20_000) : null,
+      nextProbeAt: cause === 'scheduled' ? ahead(rng.int(20, 280) * 1000) : cause === 'probing' ? ago(PROBE_IN_FLIGHT_MS) : null,
       parkKind,
       poolId: keyById.get(pin.keyId)?.poolId ?? 'all',
       probesToday,

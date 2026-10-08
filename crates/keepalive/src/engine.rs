@@ -13,14 +13,16 @@ use phoebis_bus::{
 };
 use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing};
 use phoebis_oauth::Clock;
-use phoebis_relay::Relay;
+use phoebis_relay::{CacheTtlPolicy, Relay};
 use phoebis_routing::{budget_deadline, MemberSpend, RegistrySnapshot, RouterHandle};
-use phoebis_store::{AccountKind, AccountState, OveragePolicy, Store};
+use phoebis_store::{AccountKind, AccountRow, AccountState, OveragePolicy, PoolRow, Store};
 use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
-use crate::breakeven::{resolve, shipped_tightest, Ceilings, FactorRows};
+use crate::breakeven::{
+    resolve, resolve_pool, shipped_tightest, Ceilings, FactorRows, ResolvedCeilings,
+};
 use crate::config::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
 };
@@ -977,6 +979,32 @@ impl Engine {
             running_probes: inner.running,
             sessions: inner.sessions.len(),
         }
+    }
+
+    /// The pool's ceilings resolved over its fundings, its main TTLs and its models, and `None` for a pool with no
+    /// member.
+    /// `accounts` are the pool's members' accounts: an OAuth member brings the plan's factors, an Anthropic-key
+    /// member the dollar rows.
+    pub fn resolve_pool_ceilings(
+        &self,
+        pool: &PoolRow,
+        accounts: &[AccountRow],
+    ) -> Option<ResolvedCeilings> {
+        let mut fundings: Vec<Funding> = Vec::new();
+        for account in accounts {
+            let funding = Funding::of(account.kind, false);
+            if !fundings.contains(&funding) {
+                fundings.push(funding);
+            }
+        }
+        resolve_pool(
+            &KeepalivePolicy::from_json(&pool.keepalive_json),
+            &CacheTtlPolicy::from_json(&pool.cache_ttl_json),
+            &pool.model_rules,
+            &fundings,
+            &FactorRows::of(&self.parts.pricing.current(), &self.parts.tables),
+            &self.parts.timing,
+        )
     }
 
     /// The lease and expiry sweep. Every entry point runs it first, so a session is never read as live past

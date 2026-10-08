@@ -5,7 +5,10 @@ use std::collections::HashMap;
 use std::sync::OnceLock;
 
 use phoebis_ledger::{PlanTables, PriceTable};
+use phoebis_relay::{CacheTtl, CacheTtlPolicy, TtlBranch};
+use phoebis_routing::rules::{allows, process, RulesMode};
 use phoebis_routing::{listing::row_for, Rates, FIVE_HOUR};
+use phoebis_store::ModelRule;
 
 use crate::config::{KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, ONE_HOUR_MS};
 use crate::engine::Funding;
@@ -173,4 +176,111 @@ pub fn resolve(
         break_even_ms: break_even,
         idle_share,
     })
+}
+
+/// The lowest and the highest figure a pool's combinations resolve to, equal when every combination agrees.
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize)]
+pub struct Range {
+    pub min: f64,
+    pub max: f64,
+}
+
+impl Range {
+    fn widen(range: Option<Range>, value: f64) -> Range {
+        range.map_or(
+            Range {
+                min: value,
+                max: value,
+            },
+            |r| Range {
+                min: r.min.min(value),
+                max: r.max.max(value),
+            },
+        )
+    }
+}
+
+/// A pool's ceilings in seconds and its idle window's share of one re-write, each as the range its members'
+/// fundings, the main agent's TTLs and the pool's models span. The console shows them beside the policy's fields,
+/// since it holds no price of its own.
+#[derive(Clone, Debug, PartialEq, serde::Serialize)]
+pub struct ResolvedCeilings {
+    pub break_even_seconds: Range,
+    pub horizon_seconds: Range,
+    pub idle_seconds: Range,
+    pub idle_share: Range,
+    pub parked_seconds: Range,
+}
+
+/// `resolve` over every combination of `fundings`, the main agent's TTL for each under `cache_ttl` (both TTLs when
+/// the policy leaves the markers as sent) and the models `rules` allow among the dollar table's rows (the tightest row
+/// when they allow none, as a recipe on a model priced nowhere reads). Tables that give no break-even fall back to the
+/// shipped tightest row, as `ceilings_for` does. `None` with no funding.
+pub(crate) fn resolve_pool(
+    policy: &KeepalivePolicy,
+    cache_ttl: &CacheTtlPolicy,
+    rules: &[ModelRule],
+    fundings: &[Funding],
+    rows: &FactorRows,
+    timing: &KeepaliveTiming,
+) -> Option<ResolvedCeilings> {
+    let processed = process(&[], RulesMode::Extend, rules);
+    let mut models: Vec<&str> = rows
+        .dollars
+        .keys()
+        .map(String::as_str)
+        .filter(|model| allows(&processed, model))
+        .collect();
+    models.sort_unstable();
+    let ttl_ms = |ttl: CacheTtl| match ttl {
+        CacheTtl::FiveMinutes => FIVE_MINUTES_MS,
+        CacheTtl::OneHour => ONE_HOUR_MS,
+    };
+    let mut resolved: Option<ResolvedCeilings> = None;
+    for &funding in fundings {
+        let metered = funding != Funding::Plan;
+        let picks: Vec<(Factors, &str)> = if models.is_empty() {
+            vec![(rows.tightest, "")]
+        } else {
+            models
+                .iter()
+                .map(|model| (rows.factors(funding, model), *model))
+                .collect()
+        };
+        for (factors, model) in picks {
+            let ttls = match cache_ttl.ttl_for(model, TtlBranch::Main, metered) {
+                Some(ttl) => vec![ttl_ms(ttl)],
+                None => vec![FIVE_MINUTES_MS, ONE_HOUR_MS],
+            };
+            for ttl in ttls {
+                let Some(ceilings) = resolve(policy, factors, ttl, timing)
+                    .or_else(|| resolve(policy, shipped_tightest(), ttl, timing))
+                else {
+                    continue;
+                };
+                let seconds = |ms: i64| ms as f64 / 1_000.0;
+                let previous = resolved.as_ref();
+                resolved = Some(ResolvedCeilings {
+                    break_even_seconds: Range::widen(
+                        previous.map(|r| r.break_even_seconds),
+                        seconds(ceilings.break_even_ms),
+                    ),
+                    horizon_seconds: Range::widen(
+                        previous.map(|r| r.horizon_seconds),
+                        seconds(ceilings.horizon_ms),
+                    ),
+                    idle_seconds: Range::widen(
+                        previous.map(|r| r.idle_seconds),
+                        seconds(ceilings.idle_ms),
+                    ),
+                    idle_share: Range::widen(previous.map(|r| r.idle_share), ceilings.idle_share),
+                    parked_seconds: Range::widen(
+                        previous.map(|r| r.parked_seconds),
+                        seconds(ceilings.parked_ms),
+                    ),
+                });
+            }
+        }
+    }
+    resolved
 }

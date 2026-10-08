@@ -6639,6 +6639,28 @@ export const FIXTURES: Record<string, Fixture> = {
             "max_parked_seconds": null,
             "scheduled_horizon_seconds": null
           },
+          "keepalive_resolved": {
+            "break_even_seconds": {
+              "min": 2760,
+              "max": 255960
+            },
+            "horizon_seconds": {
+              "min": 2760,
+              "max": 255960
+            },
+            "idle_seconds": {
+              "min": 2760,
+              "max": 3600
+            },
+            "idle_share": {
+              "min": 0.013888888888888886,
+              "max": 0.92
+            },
+            "parked_seconds": {
+              "min": 2760,
+              "max": 255960
+            }
+          },
           "cache_ttl": {
             "enabled": false,
             "inject_when_absent": false,
@@ -6656,8 +6678,8 @@ export const FIXTURES: Record<string, Fixture> = {
           "cache_diagnostics": false,
           "auto_mode_server": true,
           "body_capture_hours": 24,
-          "created_at": 1791413157230,
-          "updated_at": 1791413157230,
+          "created_at": 1791475953607,
+          "updated_at": 1791475953607,
           "members": [
             {
               "account_id": "business",
@@ -6696,7 +6718,7 @@ export const FIXTURES: Record<string, Fixture> = {
             {
               "id": "desktop",
               "label": "Desktop",
-              "prefix": "deSyK2JF",
+              "prefix": "x76OCOgS",
               "enabled": true
             }
           ],

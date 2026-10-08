@@ -1,10 +1,14 @@
 //! The break-even: the pause length at which a recipe's chain of probes costs one re-write of its prefix, by the
 //! model's factors under the account's funding and the entry's TTL, and the ceilings the policy resolves against it.
+mod common;
+
+use common::relay_common::test_account_row;
 use phoebis_keepalive::{
-    break_even_ms, factors_for, resolve, Factors, Funding, KeepalivePolicy, KeepaliveTiming,
+    break_even_ms, factors_for, resolve, Factors, Funding, KeepalivePolicy, KeepaliveTiming, Range,
     FIVE_MINUTES_MS, ONE_HOUR_MS,
 };
 use phoebis_ledger::{PlanTables, PriceTable, SubscriptionCosts};
+use phoebis_store::{ModelRule, PoolRow};
 
 fn factors(read: f64, write: f64) -> Factors {
     Factors {
@@ -288,5 +292,127 @@ fn a_model_priced_nowhere_takes_the_tightest_row_of_each_ttl() {
         ),
         (Some(240_000), Some(6_480_000)),
         "the early row on five minutes and the late row on an hour"
+    );
+}
+
+/// The rows `PRICES` and `COSTS` give at the production timing: Opus on the plan reads 0.025 against 1.25 on either
+/// TTL, Sonnet has no plan weight and reads its dollar row, and Sonnet's dollar row is the tightest.
+#[tokio::test]
+async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
+    let rig = common::rig(common::RigSpec {
+        pricing: PriceTable::from_yaml(PRICES, "test").unwrap(),
+        tables: PlanTables {
+            costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+            path: None,
+            source: "test".to_string(),
+        },
+        timing: KeepaliveTiming::default(),
+        ..common::RigSpec::default()
+    })
+    .await;
+    let plan = test_account_row(&common::oauth("o", "sk-ant-oat01-OOOO", 0));
+    let dollars = test_account_row(&common::api_key("k", common::A, 0));
+    // An allow list closes with a deny of every other name, since a name no entry matches is allowed.
+    let only = |models: &[&str]| -> Vec<ModelRule> {
+        models
+            .iter()
+            .map(|m| ModelRule {
+                pattern: m.to_string(),
+                not: false,
+            })
+            .chain([ModelRule {
+                pattern: "*".into(),
+                not: true,
+            }])
+            .collect()
+    };
+    let pool = |cache_ttl: &str, model_rules: Vec<ModelRule>| PoolRow {
+        cache_ttl_json: cache_ttl.into(),
+        keepalive_json: r#"{"enabled":true}"#.into(),
+        model_rules,
+        ..PoolRow::for_tests("p")
+    };
+    let between = |min: f64, max: f64| Range { min, max };
+    let one = |value: f64| between(value, value);
+    let rewritten = r#"{"enabled":true}"#;
+    let figures = |pool: &PoolRow, accounts: &[phoebis_store::AccountRow]| {
+        let resolved = rig.engine.resolve_pool_ceilings(pool, accounts).unwrap();
+        (
+            (
+                resolved.break_even_seconds,
+                resolved.idle_seconds,
+                resolved.parked_seconds,
+                resolved.horizon_seconds,
+            ),
+            resolved.idle_share,
+        )
+    };
+
+    let (seconds, share) = figures(
+        &pool(rewritten, only(&["claude-opus-5-5"])),
+        std::slice::from_ref(&plan),
+    );
+    assert_eq!(
+        seconds,
+        (one(158_760.0), one(3_600.0), one(158_760.0), one(158_760.0)),
+        "an OAuth pool whose policy writes one hour for main has one combination, so one figure each"
+    );
+    assert!(
+        share.min == share.max && (share.min - 0.0222).abs() < 5e-5,
+        "{share:?}"
+    );
+
+    let (seconds, share) = figures(
+        &pool(rewritten, only(&["claude-opus-5-5", "claude-sonnet-5-5"])),
+        &[plan.clone(), dollars.clone()],
+    );
+    assert_eq!(
+        seconds,
+        (
+            between(2_760.0, 158_760.0),
+            between(2_760.0, 3_600.0),
+            between(2_760.0, 158_760.0),
+            between(2_760.0, 158_760.0)
+        ),
+        "a mixed pool on two dollar models spans the plan's hour on Opus down to Sonnet's dollar row on five \
+         minutes, the tightest row, which also caps the idle window"
+    );
+    assert!(
+        (share.min - 0.0222).abs() < 5e-5 && (share.max - 0.92).abs() < 1e-9,
+        "the plan's hour costs least, Sonnet's window as long as its break-even a re-write less one read: {share:?}"
+    );
+
+    let (seconds, _) = figures(
+        &pool("{}", only(&["claude-opus-5-5"])),
+        std::slice::from_ref(&dollars),
+    );
+    assert_eq!(
+        seconds.0,
+        between(5_760.0, 126_360.0),
+        "a policy that leaves the markers as sent brings both TTLs"
+    );
+
+    let (seconds, _) = figures(&pool(rewritten, Vec::new()), std::slice::from_ref(&dollars));
+    assert_eq!(
+        seconds.0,
+        between(2_760.0, 11_760.0),
+        "no rule: every model the price table lists, Sonnet to Fable on five minutes"
+    );
+
+    let (seconds, _) = figures(
+        &pool(rewritten, only(&["claude-unlisted-9"])),
+        std::slice::from_ref(&dollars),
+    );
+    assert_eq!(
+        seconds.0,
+        one(2_760.0),
+        "rules that allow no priced model leave the tightest row, as a recipe on an unpriced model reads"
+    );
+
+    assert_eq!(
+        rig.engine
+            .resolve_pool_ceilings(&pool(rewritten, Vec::new()), &[]),
+        None,
+        "a pool with no member resolves nothing"
     );
 }

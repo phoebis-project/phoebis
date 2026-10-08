@@ -322,6 +322,28 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(d.decodePool({ ...fixture('pools').pools[0], members: [{ account_id: 'business', priority: 0 }] }).members[0].eligible, 'unavailable', 'a member row without the field reads as not servable');
 });
 
+test('a pool decodes the ceilings the router resolved for it, and a pool with no member reads null', () => {
+  const row = fixture('pools').pools[0];
+  const resolved = d.decodePool(row).keepaliveResolved;
+  const wire = row.keepalive_resolved;
+  assert.deepEqual(
+    resolved,
+    {
+      breakEvenSeconds: { max: wire.break_even_seconds.max, min: wire.break_even_seconds.min },
+      horizonSeconds: { max: wire.horizon_seconds.max, min: wire.horizon_seconds.min },
+      idleSeconds: { max: wire.idle_seconds.max, min: wire.idle_seconds.min },
+      idleShare: { max: wire.idle_share.max, min: wire.idle_share.min },
+      parkedSeconds: { max: wire.parked_seconds.max, min: wire.parked_seconds.min },
+    },
+    'the five ranges as the route answers them',
+  );
+  assert.ok(resolved.breakEvenSeconds.min < resolved.breakEvenSeconds.max, 'the captured pool mixes a plan member and an Anthropic-key member, so its break-even is a range');
+  assert.equal(d.decodePool({ ...row, keepalive_resolved: null }).keepaliveResolved, null, 'a pool with no member');
+  const bare = { ...row };
+  delete bare.keepalive_resolved;
+  assert.equal(d.decodePool(bare).keepaliveResolved, null, 'a row without the member resolves nothing');
+});
+
 test('a pool decodes its select-below threshold and encodes it back', () => {
   const row = fixture('pools').pools[0];
   assert.equal(d.decodePool(row).selectBelowUtilization, null, 'the captured pool sets none');

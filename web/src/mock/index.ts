@@ -16,7 +16,7 @@ import { ATTENTION } from './attention';
 import { CATALOG } from './catalog';
 import { liveFeed } from './live';
 import { KEEPALIVE_OVERVIEW, RECIPES, SESSIONS, SETTINGS_WIRE } from './operations';
-import { KEYS, POOLS } from './pools';
+import { KEYS, PLAN_HOUR_RESOLVED, POOLS, resolvedFor } from './pools';
 import { ACCOUNT_ROLLUPS, ALL_ROLLUPS, DAY_ROWS, REQUEST_EVENTS, REQUESTS, capturedBodiesFor, requestById } from './requests';
 import { createRng } from './rng';
 import { ROUTING_LOG_KINDS, getDecision, listRoutingLog } from './routingLog';
@@ -489,6 +489,8 @@ export class MockApi implements Api {
       activePins: 0,
       cost24h: 0,
       id,
+      // The route resolves nothing for a pool with no member.
+      keepaliveResolved: input.members.length === 0 ? null : resolvedFor(PLAN_HOUR_RESOLVED, input.keepalive),
       members: input.members.map((m) => {
         const account = this.accounts.find((a) => a.id === m.accountId);
         return writtenMember(m, account, (member) => eligibilityOf(account, input.overagePolicy, member));
@@ -507,7 +509,10 @@ export class MockApi implements Api {
   async deleteAccount(accountId: string) {
     this.buried.set(accountId, Math.floor(this.account(accountId).revision / INCARNATION));
     this.accounts = this.accounts.filter((a) => a.id !== accountId);
-    this.pools = this.pools.map((p) => ({ ...p, members: p.members.filter((m) => m.accountId !== accountId) }));
+    this.pools = this.pools.map((p) => {
+      const members = p.members.filter((m) => m.accountId !== accountId);
+      return { ...p, keepaliveResolved: members.length === 0 ? null : p.keepaliveResolved, members };
+    });
     return latency(undefined, 250);
   }
 
@@ -882,6 +887,7 @@ export class MockApi implements Api {
     const next: Omit<Pool, 'keys'> = {
       ...current,
       ...input,
+      keepaliveResolved: input.members.length === 0 ? null : resolvedFor(current.keepaliveResolved ?? PLAN_HOUR_RESOLVED, input.keepalive),
       // Eligibility is the router's reading of live cooldowns and overages, not something a save can set. A save
       // does rewrite the budget, and a write answers no spend here, so a budget verdict is read again.
       members: input.members.map((m) => {

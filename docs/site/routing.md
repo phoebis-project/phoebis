@@ -74,7 +74,7 @@ Every field, in the order the request body takes them:
 | `pace_floor` | `0.05` | 0 to 1; see Selection |
 | `select_below_utilization` | unset | 0 to 1: `select_below_utilization is between 0 and 1` |
 | `model_rules` | empty | an ordered list of `{pattern, not}` entries, at most 256; see Model rules |
-| `keepalive` | disabled | a policy object; its defaults are on the [Keepalive page](keepalive.md) |
+| `keepalive` | disabled | a policy object of four fields, on the [Keepalive page](keepalive.md#the-four-fields) |
 | `cache_ttl` | off | a policy object, `inject_when_absent` off by default; see below |
 | `cache_diagnostics` | `false` | `true` or `false`: `cache_diagnostics must be true or false` |
 | `auto_mode_server` | `true` | `true` or `false`: `auto_mode_server must be true or false` |

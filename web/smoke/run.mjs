@@ -2155,12 +2155,22 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   m = await mount('/pools');
 }
 {
+  // The card reads the router's figures in whole hours, floored, right after the keepalive chip, and a pool that keeps
+  // no caches warm draws no line.
+  const cards = [...m.container.querySelectorAll('.pool')];
+  const ceilingsOf = (id) => cards.find((c) => c.id === id)?.querySelector('.pool__ceilings') ?? null;
+  const all = ceilingsOf('all');
+  results.push({
+    name: '/pools the pool card reads the three resolved ceilings',
+    ok: all?.textContent === 'idle 1h · parked 44h · horizon 44h' && all.previousElementSibling?.textContent?.trim() === 'keepalive' && ceilingsOf('codex') === null && ceilingsOf('work') === null,
+    missing: [all?.textContent ?? 'no line on the all card', all?.previousElementSibling?.textContent ?? '', String(ceilingsOf('codex')?.textContent), String(ceilingsOf('work')?.textContent)],
+  });
   const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all');
   edit?.click();
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked', 'Scheduled horizon', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -2251,7 +2261,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const keepalive = group(dlg, 'Keepalive');
     results.push({ name: '/pools the Keepalive warning closes its group', ok: keepalive?.lastElementChild?.classList.contains('callout--warning') === true, missing: [keepalive?.lastElementChild?.className ?? 'no Keepalive group'] });
     const halves = [...(keepalive?.querySelectorAll('.cells > .cell--half') ?? [])].map((c) => c.querySelector('button[role="switch"]')?.getAttribute('aria-label'));
-    results.push({ name: '/pools the two switched ceilings share the last row of the Keepalive group', ok: JSON.stringify(halves) === '["Max parked","Scheduled horizon"]' && keepalive?.querySelector('.cells')?.lastElementChild?.querySelector('button[aria-label="Scheduled horizon"]') != null, missing: halves.map(String) });
+    results.push({ name: '/pools the two switched ceilings share the last row of the Keepalive group', ok: JSON.stringify(halves) === '["Max parked (s)","Scheduled horizon (s)"]' && keepalive?.querySelector('.cells')?.lastElementChild?.querySelector('button[aria-label="Scheduled horizon (s)"]') != null, missing: halves.map(String) });
     const legacy = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent === 'legacy');
     const legacyPriority = legacy?.querySelector('input[aria-label="Priority for legacy"]');
     results.push({ name: '/pools a non-member row renders its Priority input disabled', ok: legacy?.querySelector('input[type="checkbox"]')?.checked === false && legacyPriority?.disabled === true, missing: [legacyPriority ? String(legacyPriority.disabled) : 'no Priority input for legacy'] });
@@ -2262,8 +2272,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const switched = [
       ['Shed ahead of pace', 'Shed ahead of pace (%)'],
       ['Select below utilization', 'Select below utilization (%)'],
-      ['Max parked', 'Max parked (s)'],
-      ['Scheduled horizon', 'Scheduled horizon (s)'],
+      ['Max parked (s)', 'Max parked (s)'],
+      ['Scheduled horizon (s)', 'Scheduled horizon (s)'],
     ];
     const read = () => switched.map(([s, n]) => `${sw(s)?.getAttribute('aria-checked')}/${num(n) ? String(num(n).disabled) : 'absent'}`);
     const follows = (states) => states.every((x) => x === 'true/false' || x === 'false/true');
@@ -2284,7 +2294,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const idleOn = idle()?.disabled;
     warm?.click();
     await m.settle(120);
-    const warmOff = [warm?.getAttribute('aria-checked'), idle()?.disabled, sw('Max parked')?.disabled, num('Max parked (s)')?.disabled, sw('Scheduled horizon')?.disabled, num('Scheduled horizon (s)')?.disabled];
+    const warmOff = [warm?.getAttribute('aria-checked'), idle()?.disabled, sw('Max parked (s)')?.disabled, num('Max parked (s)')?.disabled, sw('Scheduled horizon (s)')?.disabled, num('Scheduled horizon (s)')?.disabled];
     warm?.click();
     await m.settle(120);
     results.push({
@@ -2293,8 +2303,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       missing: [...before, ...flipped, ...warmOff.map(String)],
     });
     results.push({
-      name: '/pools the Keepalive group lists its three fields, the idle window enabled while warming is on',
-      ok: JSON.stringify(labels) === '["Keep prompt caches warm","Max idle (s)","Max parked","Scheduled horizon"]' && idleOn === false,
+      name: '/pools the Keepalive group lists its three fields and the return rate, the idle window enabled while warming is on',
+      ok: JSON.stringify(labels) === '["Keep prompt caches warm","Max idle (s)","Max parked (s)","Scheduled horizon (s)","Return rate by idle age"]' && idleOn === false,
       missing: [...labels.map(String), String(idleOn)],
     });
   }
@@ -2512,11 +2522,46 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     expect('/pools the Keepalive group explains its three fields and their off words', keepalive?.textContent ?? '', [
       'Max idle (s)',
       "The idle window of the main conversation. 0 and anything above the recipe's break-even read as the break-even.",
-      'Max parked',
+      'Max parked (s)',
       "How long a park on a background command or a subagent is probed. Off is the recipe's break-even.",
-      'Scheduled horizon',
+      'Scheduled horizon (s)',
       "A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe's break-even.",
     ]);
+    // The story's pool all resolves to the plan's one-hour figures, its two ceilings left off and its idle window
+    // under the break-even, so each off ceiling reads the break-even and the idle window its share.
+    const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
+    const SHARE_HINT = "The idle window's probes against one re-write of the prefix, so the bet this window makes is visible per pool.";
+    const resolvedLines = () => [...(keepalive?.querySelectorAll('.keepalive-resolved') ?? [])].map((l) => l.textContent?.replace(/\s+/g, ' ').trim());
+    const breakEvens = [...(keepalive?.querySelectorAll('.keepalive-resolved[title]') ?? [])].map((l) => l.getAttribute('title'));
+    const shareTitle = keepalive?.querySelector('.keepalive-resolved > span[title]')?.getAttribute('title');
+    results.push({
+      name: '/pools the Keepalive group shows the break-even beside an unset ceiling and the share beside the idle window',
+      ok: JSON.stringify(resolvedLines()) === JSON.stringify(['Costs 2% of one re-write', 'Break-even: 1d 20h', 'Break-even: 1d 20h']) && breakEvens.every((h) => h === BREAK_EVEN_HINT) && breakEvens.length === 2 && shareTitle === SHARE_HINT,
+      missing: [...resolvedLines().map(String), ...breakEvens.map(String), String(shareTitle)],
+    });
+    const rows = [...(keepalive?.querySelectorAll('.return-rate__row') ?? [])].map((r) => [...r.children].map((c) => c.getAttribute('role') === 'meter' ? `meter ${c.getAttribute('aria-valuenow')}` : c.textContent?.trim()).join(' | '));
+    results.push({
+      name: '/pools the return rate block lists ten buckets',
+      ok: rows.length === 10 && rows[0] === '0 to 5m | 24 of 96 | meter 25' && rows[4] === '1h to 2h | 7 of 22 | meter 31.8' && rows[9] === 'over 32h | 0 of 1 | meter 0' && (keepalive?.textContent ?? '').includes('Return rate by idle age'),
+      missing: rows,
+    });
+    // The router's share is the saved window's, while the cap follows the field as typed, 0 reading as the break-even.
+    const idleField = keepalive?.querySelector('input[type="number"]');
+    const setIdle = async (value) => {
+      if (idleField) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(idleField, value);
+      idleField?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    await setIdle('200000');
+    const past = resolvedLines()[0];
+    await setIdle('0');
+    const zero = resolvedLines()[0];
+    await setIdle('3600');
+    results.push({
+      name: '/pools an idle window past the break-even, or 0, reads the break-even it runs to',
+      ok: past === 'Costs 2% of one re-write · capped at the break-even, 1d 20h' && zero === past && resolvedLines()[0] === 'Costs 2% of one re-write',
+      missing: [String(past), String(zero), String(resolvedLines()[0])],
+    });
     const gone = ['Also warm subagent caches', 'Daily probe cost cap', 'Grace probes after the net turns negative', 'Probe tuning', 'Stop when probes cost more than they save'].filter((w) => (dlg?.textContent ?? '').includes(w));
     results.push({ name: '/pools the dialog draws no subagent switch, cap, net stop, grace count or tuning group', ok: gone.length === 0, missing: gone });
     const inputs = [...(keepalive?.querySelectorAll('input[type="number"]') ?? [])];
@@ -2525,7 +2570,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools the keepalive numbers carry the defaults and the policy ranges', ok: JSON.stringify(values) === '["3600","3600","3600"]' && JSON.stringify(ranges) === '["0-31536000","60-604800","60-604800"]', missing: [...values, ...ranges] });
     const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    const parked = keepalive?.querySelector('button[role="switch"][aria-label="Max parked"]');
+    const parked = keepalive?.querySelector('button[role="switch"][aria-label="Max parked (s)"]');
     parked?.click();
     await m.settle(120);
     if (inputs[1]) setter.call(inputs[1], '59');
@@ -4073,7 +4118,7 @@ localStorage.removeItem('phoebis.expertView');
   const PARENTS = ['Pool', 'Routing', 'Load', 'Caching', 'Visibility'];
   const PLAIN_GROUPS = ['Identity', 'Members', 'Keys', 'Models', 'Selection', 'Pinning', 'Utilization thresholds', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture'];
   const EVERY_GROUP = ['Identity', 'Members', 'Keys', 'Models', 'Auto mode', 'Selection', 'Placement', 'Pinning', 'Utilization thresholds', 'Load shedding', 'Failover', 'Overage and plan end', 'Cache TTL', 'Keepalive', 'Body capture', 'Cache diagnostics'];
-  const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked', 'Scheduled horizon'];
+  const KEEPALIVE = ['Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Return rate by idle age'];
   // Each group's labels and line with the mode off, the Interfaces' plain fields; the line is null where none draws.
   const PLAIN_FIELDS = {
     Identity: [['Name', 'Status'], null],

@@ -84,9 +84,12 @@ const rowDomId = (session: Pick<Session, 'keyGeneration' | 'keyId' | 'sessionId'
 const sessionLabel = (session: Session) =>
   shortId(session.sessionId, 13);
 
-/** When the pool stopped probing: its idle window counted from the session's last activity. */
+/**
+ * When the pool stopped probing: the longest idle window the router resolves for the pool's recipes, counted from the
+ * session's last activity, so the time never reads earlier than the window could have run.
+ */
 function idleLimitRanOutAt(session: Session, pool: Pool | null): string | null {
-  const seconds = pool?.keepalive.maxIdleSeconds ?? 0;
+  const seconds = pool?.keepaliveResolved?.idleSeconds.max ?? 0;
   return seconds > 0 && session.lastUsedAt !== null ? new Date(Date.parse(session.lastUsedAt) + seconds * 1000).toISOString() : null;
 }
 
@@ -246,17 +249,17 @@ export function SessionsPage() {
         <CostReferenceLink tab="plan-rates" />
       </div>
 
-      <div className="stat-grid stat-grid--fit">
-        <Tile label="Sessions" value={o ? `${fmtInt(o.limits.sessions.count)} of ${fmtInt(o.limits.sessions.max)}` : null} note={sessionsNote} error={overviewError} />
+      <div className="stat-grid stat-grid--caps">
+        <Tile label="Sessions" value={o ? <span className="nowrap">{`${fmtInt(o.limits.sessions.count)} of ${fmtInt(o.limits.sessions.max)}`}</span> : null} note={sessionsNote} error={overviewError} />
         <Tile
           label="Agents"
-          value={o ? `${fmtInt(o.limits.agents.count)} of ${fmtInt(o.limits.agents.max)}` : null}
+          value={o ? <span className="nowrap">{`${fmtInt(o.limits.agents.count)} of ${fmtInt(o.limits.agents.max)}`}</span> : null}
           note={o ? `${fmtInt(o.agents.busy)} busy, ${fmtInt(o.agents.idle)} idle, ${fmtInt(o.agents.parked)} parked` : null}
           error={overviewError}
         />
         <Tile
           label="Retained"
-          value={o ? `${fmtMiB(o.limits.retainedBytes.count)} of ${fmtMiB(o.limits.retainedBytes.max)}` : null}
+          value={o ? <span className="nowrap">{`${fmtMiB(o.limits.retainedBytes.count)} of ${fmtMiB(o.limits.retainedBytes.max)}`}</span> : null}
           note="prompts kept for probes"
           error={overviewError}
         />

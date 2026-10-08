@@ -5,8 +5,8 @@ import { api, ApiError, CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, type PoolInput }
 import { POOL_AFFINITY_DEFAULTS, POOL_ENGINE_DEFAULTS, type PoolEngineFields } from '@/api/client';
 import { slug } from '@/api/http';
 import type {
-  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, Session, SessionPlacement,
-  SubagentPlacement, TtlRules, WarmSessions,
+  Account, AffinityMode, ApiKey, AttentionItem, CacheTtl, CreatedApiKey, KeepaliveOverview, KeyStatus, MemberEligibility, ModelRule, OveragePolicy, Pool, PoolCacheTtl, PoolMember, PoolStrategy, Range, Session,
+  SessionPlacement, SubagentPlacement, TtlRules, WarmSessions,
 } from '@/api/types';
 import { useSession } from '@/app/session';
 import { useAppSettings } from '@/app/settings';
@@ -19,10 +19,10 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { UtilizationBar } from '@/components/UtilizationBar';
 import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
-import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
+import { Badge, BadgeLink, Button, Card, ConfirmDialog, CopyButton, Dialog, ErrorState, Expert, Field, GroupedDialog, GroupLink, Input, Menu, Meter, PageLink, Select, Skeleton, SwitchedNumber, Toggle, type DialogGroup } from '@/components/ui/primitives';
 import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } from '@/lib/analytics';
 import { anchorOf } from '@/lib/attention';
-import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
+import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
@@ -48,6 +48,38 @@ const FEATURES: { group: PoolGroup; on: (pool: Pool) => boolean; word: string }[
   { group: 'cacheTtl', on: (p) => p.cacheTtl.enabled, word: 'cache TTL' },
   { group: 'keepalive', on: (p) => p.keepalive.enabled, word: 'keepalive' },
 ];
+type IdleReturnBucket = KeepaliveOverview['pools'][number]['idleReturns'][number];
+const BREAK_EVEN_HINT = "The pause length at which the recipe's probes cost one re-write of its prefix, for this pool's funding, cache TTL and models.";
+const SHARE_HINT = "The idle window's probes against one re-write of the prefix, so the bet this window makes is visible per pool.";
+/** A range of seconds through `format`, one figure when both ends read alike. */
+const rangeText = (range: Range, format: (ms: number) => string) => {
+  const [min, max] = [format(range.min * 1_000), format(range.max * 1_000)];
+  return min === max ? min : `${min} to ${max}`;
+};
+/** The same through `fmtDuration`, each figure kept whole on its line. */
+function RangeFigures({ range }: { range: Range }) {
+  const [min, max] = [fmtDuration(range.min * 1_000), fmtDuration(range.max * 1_000)];
+  return min === max ? <span className="nowrap">{min}</span> : <><span className="nowrap">{min}</span> to <span className="nowrap">{max}</span></>;
+}
+/** Beside a ceiling left off: the figure it resolves to, in the pattern of the key dialog's inherited values. */
+function BreakEven({ range }: { range: Range }) {
+  return (
+    <span className="keepalive-resolved" title={BREAK_EVEN_HINT}>
+      Break-even: <RangeFigures range={range} />
+    </span>
+  );
+}
+/** The card's line: the three ceilings the router resolves for the pool, in whole hours. */
+const ceilingsLine = (r: NonNullable<Pool['keepaliveResolved']>) => `idle ${rangeText(r.idleSeconds, fmtHours)} · parked ${rangeText(r.parkedSeconds, fmtHours)} · horizon ${rangeText(r.horizonSeconds, fmtHours)}`;
+const shareText = (share: Range) => {
+  const [min, max] = [fmtPct(share.min), fmtPct(share.max)];
+  return min === max ? min : `${min} to ${max}`;
+};
+/** A bucket's idle ages: `0 to 5m`, then `5m to 15m` and on to the open-ended `over 32h`. */
+const ageRange = (b: IdleReturnBucket) => {
+  const from = b.fromSeconds === 0 ? '0' : fmtHours(b.fromSeconds * 1_000);
+  return b.toSeconds === null ? `over ${from}` : `${from} to ${fmtHours(b.toSeconds * 1_000)}`;
+};
 const fmtAffinity = (seconds: number) => (seconds === 0 ? 'off' : seconds % 3_600 === 0 ? `${seconds / 3_600}h` : seconds % 60 === 0 ? `${seconds / 60}m` : `${seconds}s`);
 // A scale rather than an alphabetical list.
 const AFFINITY_PICKS = [
@@ -136,6 +168,8 @@ export function PoolsPage() {
   // Feeds the cache TTL per-model override picker's options.
   const catalog = useAsync(() => api.listCatalog(), []);
   const sessions = useAsync(() => api.listSessions(), []);
+  // Read once for the dialog's return rate, as the Sessions page reads it.
+  const overview = useAsync(() => api.getKeepaliveOverview(), []);
   const attention = useAttention();
   const now = useNow();
   const location = useLocation();
@@ -280,6 +314,11 @@ export function PoolsPage() {
         keys={keys.data ?? []}
         pools={pools.data ?? []}
         sessions={dialog?.pool ? (sessionsByPool.get(dialog.pool.id) ?? []) : []}
+        idleReturns={{
+          buckets: (dialog?.pool && overview.data?.pools.find((p) => p.poolId === dialog.pool?.id)?.idleReturns) || [],
+          error: overview.data === null ? overview.error : null,
+          loading: overview.data === null && overview.error === null,
+        }}
         models={(catalog.data ?? []).map((m) => ({ label: m.id, value: m.id }))}
         onSaved={(created) => {
           setDialog(null);
@@ -528,9 +567,12 @@ function PoolCard({
         {features.length > 0 && (
           <div className="pool__features chips">
             {features.map((f) => (
-              <BadgeLink key={f.group} to={`/pools?edit=${pool.id}&group=${f.group}`} title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
-                {f.word}
-              </BadgeLink>
+              <Fragment key={f.group}>
+                <BadgeLink to={`/pools?edit=${pool.id}&group=${f.group}`} title={`Opens the pool dialog on ${POOL_RAIL[f.group].label}`}>
+                  {f.word}
+                </BadgeLink>
+                {f.group === 'keepalive' && pool.keepaliveResolved && <span className="muted pool__ceilings">{ceilingsLine(pool.keepaliveResolved)}</span>}
+              </Fragment>
             ))}
           </div>
         )}
@@ -697,6 +739,38 @@ function PoolCard({
         </div>
       </dl>
     </Card>
+  );
+}
+
+/** The pool's idle-age counters: of the idle windows that reached each age, how many the next request continued. */
+function ReturnRate({ buckets, error, loading }: { buckets: IdleReturnBucket[]; error: string | null; loading: boolean }) {
+  return (
+    <div className="field return-rate">
+      <span className="field__label">Return rate by idle age</span>
+      <p className="field__hint">Of the idle windows that reached each age, the ones whose next request continued the same prefix within it.</p>
+      {error !== null ? (
+        <p className="muted">Could not load the return rate: {error}</p>
+      ) : loading ? (
+        <Skeleton height={28} />
+      ) : buckets.every((b) => b.reached === 0) ? (
+        <p className="muted">No idle windows recorded yet</p>
+      ) : (
+        <ul className="return-rate__rows">
+          {buckets.map((b) => {
+            const rate = b.reached > 0 ? b.returned / b.reached : 0;
+            return (
+              <li key={b.fromSeconds} className="return-rate__row">
+                <span className="return-rate__age">{ageRange(b)}</span>
+                <span className="num">
+                  {fmtInt(b.returned)} of {fmtInt(b.reached)}
+                </span>
+                <Meter thin tone="accent" value={rate} label={`${ageRange(b)}: ${fmtPct(rate)} returned`} />
+              </li>
+            );
+          })}
+        </ul>
+      )}
+    </div>
   );
 }
 
@@ -898,12 +972,15 @@ export function PoolDialog({
   pools,
   models,
   sessions,
+  idleReturns,
 }: {
   accounts: Account[];
   /** The accounts read's error while it has never answered; the Members group names it in place of the table. */
   accountsFailed: string | null;
   /** Whether the accounts read has answered or failed; before that no stored member is refused or marked as unlisted. */
   accountsLoaded: boolean;
+  /** The pool's idle-age counters from the keepalive overview, empty for a new pool or one the overview does not list. */
+  idleReturns: { buckets: IdleReturnBucket[]; error: string | null; loading: boolean };
   /** The group the address named; the reset opens on it, Identity otherwise. */
   initialGroup?: PoolGroup | null;
   keys: ApiKey[];
@@ -992,6 +1069,16 @@ export function PoolDialog({
   const keepaliveBlocked = form.affinity < 300;
   const shortAffinity = form.affinity >= 300 && form.affinity < 3_600;
   const warming = form.keepalive && !keepaliveBlocked;
+  // The router's figures for the saved pool. The console holds no price, so an unsaved edit moves none of them.
+  const resolved = pool?.keepaliveResolved ?? null;
+  // 0 and a field past the break-even both read as the break-even, which is then the window in effect.
+  const idleCapped: Range | null =
+    resolved && (form.maxIdleSeconds === 0 || form.maxIdleSeconds > resolved.breakEvenSeconds.min)
+      ? {
+          max: form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds.max : Math.min(form.maxIdleSeconds, resolved.breakEvenSeconds.max),
+          min: form.maxIdleSeconds === 0 ? resolved.breakEvenSeconds.min : Math.min(form.maxIdleSeconds, resolved.breakEvenSeconds.min),
+        }
+      : null;
   // Sessions by warm prefix and subagents by cohort both place by the shared prefix, so either one reads the threshold.
   const prefixEnabled = form.sessionPlacement === 'by_warm_prefix' || form.subagentPlacement === 'by_cohort';
   const budgetOf = (accountId: string) => form.budgets[accountId] ?? { daily: '', monthly: '' };
@@ -1873,7 +1960,24 @@ export function PoolDialog({
           >
             <Toggle checked={warming} onChange={(v) => set('keepalive', v)} label="Keep prompt caches warm" disabled={keepaliveBlocked} />
           </Field>
-          <Field label={KEEPALIVE_FIELD_LABELS.maxIdleSeconds} hint="The idle window of the main conversation. 0 and anything above the recipe's break-even read as the break-even.">
+          <Field
+            label={KEEPALIVE_FIELD_LABELS.maxIdleSeconds}
+            hint={
+              <>
+                The idle window of the main conversation. 0 and anything above the recipe&apos;s break-even read as the break-even.
+                {resolved && (
+                  <span className="keepalive-resolved">
+                    <span title={SHARE_HINT}>Costs {shareText(resolved.idleShare)} of one re-write</span>
+                    {idleCapped && (
+                      <>
+                        {' · '}capped at the break-even, <RangeFigures range={idleCapped} />
+                      </>
+                    )}
+                  </span>
+                )}
+              </>
+            }
+          >
             <Input
               type="number"
               min={KEEPALIVE_BOUNDS.maxIdleSeconds.min}
@@ -1886,25 +1990,36 @@ export function PoolDialog({
           </Field>
           <div className="cell--half">
             <SwitchedNumber
-              label="Max parked"
+              label={KEEPALIVE_FIELD_LABELS.maxParkedSeconds}
               disabled={!warming}
               checked={form.maxParkedOn}
               onChange={(v) => set('maxParkedOn', v)}
               input={{ min: KEEPALIVE_BOUNDS.maxParkedSeconds.min, max: KEEPALIVE_BOUNDS.maxParkedSeconds.max, value: form.maxParkedSeconds, onChange: (e) => set('maxParkedSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.maxParkedSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.maxParkedSeconds) }}
-              hint="How long a park on a background command or a subagent is probed. Off is the recipe's break-even."
+              hint={
+                <>
+                  How long a park on a background command or a subagent is probed. Off is the recipe&apos;s break-even.
+                  {resolved && !form.maxParkedOn && <BreakEven range={resolved.breakEvenSeconds} />}
+                </>
+              }
             />
           </div>
           <div className="cell--half">
             <SwitchedNumber
-              label="Scheduled horizon"
+              label={KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds}
               disabled={!warming}
               checked={form.horizonOn}
               onChange={(v) => set('horizonOn', v)}
               input={{ min: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.min, max: KEEPALIVE_BOUNDS.scheduledHorizonSeconds.max, value: form.horizonSeconds, onChange: (e) => set('horizonSeconds', Number(e.target.value)), 'aria-label': KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds, 'aria-invalid': invalid(KEEPALIVE_FIELD_LABELS.scheduledHorizonSeconds) }}
-              hint="A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe's break-even."
+              hint={
+                <>
+                  A park on a scheduled wakeup is probed while the wake is at most this far away. Off is the recipe&apos;s break-even.
+                  {resolved && !form.horizonOn && <BreakEven range={resolved.breakEvenSeconds} />}
+                </>
+              }
             />
           </div>
         </div>
+        <ReturnRate {...idleReturns} />
         {warming && shortAffinity && (
           <div className="callout callout--warning" role="status">
             <IconWarning size={16} />

@@ -287,6 +287,70 @@ async fn a_stored_policy_naming_a_removed_field_reads_as_its_four_fields() {
     );
 }
 
+#[tokio::test]
+async fn a_pool_answers_its_resolved_ceilings_and_a_pool_with_no_member_answers_null() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}],"cache_ttl":{"enabled":true},"model_rules":[{"pattern":"claude-opus-5-5"},{"pattern":"*","not":true}],"keepalive":{"enabled":true}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"empty","label":"Empty","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let pool = |id: &str| {
+        listed["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == id)
+            .unwrap()
+            .clone()
+    };
+    let resolved = pool("main")["keepalive_resolved"].clone();
+    let seconds = |member: &str| {
+        (
+            resolved[member]["min"].as_f64(),
+            resolved[member]["max"].as_f64(),
+        )
+    };
+    assert_eq!(
+        [
+            seconds("break_even_seconds"),
+            seconds("idle_seconds"),
+            seconds("parked_seconds"),
+            seconds("horizon_seconds")
+        ],
+        [
+            (Some(158_760.0), Some(158_760.0)),
+            (Some(3_600.0), Some(3_600.0)),
+            (Some(158_760.0), Some(158_760.0)),
+            (Some(158_760.0), Some(158_760.0))
+        ],
+        "an OAuth member, a one-hour main TTL and one model: the shipped plan's break-even, the hour the policy \
+         sets and the two null ceilings at the break-even"
+    );
+    let share = seconds("idle_share");
+    assert!(
+        share.0 == share.1 && (share.0.unwrap() - 0.0222).abs() < 5e-5,
+        "{share:?}"
+    );
+    assert!(
+        pool("empty")["keepalive_resolved"].is_null(),
+        "a pool with no member has nothing to resolve over"
+    );
+}
+
 use phoebis_keepalive::Event;
 
 #[tokio::test]

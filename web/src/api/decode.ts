@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
+  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
@@ -326,6 +326,24 @@ export function decodeCacheTtl(v: unknown): PoolCacheTtl {
   };
 }
 
+const decodeRange = (v: unknown): Range => {
+  const r = rec(v);
+  return { max: num(r.max), min: num(r.min) };
+};
+
+/** A pool with no member answers null, and so does a row from a router that resolves nothing. */
+export function decodeKeepaliveResolved(v: unknown): Pool['keepaliveResolved'] {
+  if (v === null || typeof v !== 'object' || Array.isArray(v)) return null;
+  const r = rec(v);
+  return {
+    breakEvenSeconds: decodeRange(r.break_even_seconds),
+    horizonSeconds: decodeRange(r.horizon_seconds),
+    idleSeconds: decodeRange(r.idle_seconds),
+    idleShare: decodeRange(r.idle_share),
+    parkedSeconds: decodeRange(r.parked_seconds),
+  };
+}
+
 export function decodePool(v: unknown): Pool {
   const p = rec(v);
   const k = rec(p.keepalive);
@@ -344,6 +362,7 @@ export function decodePool(v: unknown): Pool {
     keepalive: {
       enabled: bool(k.enabled), maxIdleSeconds: num(k.max_idle_seconds), maxParkedSeconds: numOrNull(k.max_parked_seconds), scheduledHorizonSeconds: numOrNull(k.scheduled_horizon_seconds),
     },
+    keepaliveResolved: decodeKeepaliveResolved(p.keepalive_resolved),
     // A row without the key fields reads as the store's defaults.
     keys: list(p.keys).map(rec).map((k) => ({ enabled: bool(k.enabled, true), id: str(k.id), label: str(k.label), prefix: str(k.prefix) })),
     members: list(p.members).map(rec).map((m) => ({

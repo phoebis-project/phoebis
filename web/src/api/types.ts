@@ -252,6 +252,12 @@ export interface AttentionItem {
 export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
 export type OveragePolicy = 'allow' | 'never' | 'prefer_plan';
 
+/** The lowest and the highest figure a pool's combinations resolve to, equal when every combination agrees. */
+export interface Range {
+  max: number;
+  min: number;
+}
+
 export interface PoolKeepalive {
   enabled: boolean;
   /** The idle window of the main conversation in seconds. 0 and any value above the recipe's break-even read as the break-even. */
@@ -346,6 +352,12 @@ export interface Pool {
   /** Requests in flight one member may hold before a fresh session skips it. */
   inFlightCap: number;
   keepalive: PoolKeepalive;
+  /**
+   * The ceilings the router resolves for the pool's recipes over its members' fundings, the main agent's TTLs and the
+   * pool's models, in seconds, with the idle window's cost as a share of one re-write, and null for a pool with no
+   * member.
+   */
+  keepaliveResolved: { breakEvenSeconds: Range; horizonSeconds: Range; idleSeconds: Range; idleShare: Range; parkedSeconds: Range } | null;
   keys: PoolKey[];
   members: PoolMember[];
   /** Whether a pin moves off a member whose window for its model is spent while a sibling has allowance left. */

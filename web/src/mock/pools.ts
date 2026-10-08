@@ -1,5 +1,5 @@
 import { CACHE_TTL_DEFAULTS, KEEPALIVE_DEFAULTS, POOL_AFFINITY_DEFAULTS } from '@/api/client';
-import type { ApiKey, BudgetPeriod, Pool, PoolMember } from '@/api/types';
+import type { ApiKey, BudgetPeriod, Pool, PoolKeepalive, PoolMember, Range } from '@/api/types';
 import { KEY_SAMPLE, POOL_SAMPLE } from './samples';
 import { DAY, DELETED_HOLDER_END, HOUR, MINUTE, NOW, ago, ahead, daysAgo, iso } from './time';
 
@@ -18,6 +18,35 @@ function periodEndAfter(period: BudgetPeriod, now: number): string {
 
 /** The instant the ci key was revoked, on the story's pinned day at 14:17:30. */
 export const KEY_REVOKED_AT = NOW - (12 * MINUTE + 30_000);
+
+const one = (value: number): Range => ({ max: value, min: value });
+
+/**
+ * The router's figures for a plan pool whose main turns write the one-hour entry: a break-even of 44.1 hours and the
+ * default hour of idle window at 2 percent of one re-write. The mock holds no price, so every pool's figures are
+ * fixed here rather than resolved from its members, and a pool created in the mock starts from these.
+ */
+export const PLAN_HOUR_RESOLVED: NonNullable<Pool['keepaliveResolved']> = {
+  breakEvenSeconds: one(158_760),
+  horizonSeconds: one(158_760),
+  idleSeconds: one(3_600),
+  idleShare: one(0.0222),
+  parkedSeconds: one(158_760),
+};
+
+/**
+ * What the route answers once a save sets `policy`: the three ceilings capped at the stored break-even, a null or a
+ * zero reading as the break-even, and the idle share moved with the window, since a window's probes cost in
+ * proportion to its length. The break-even itself depends on prices alone and stays as seeded.
+ */
+export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKeepalive): Pool['keepaliveResolved'] {
+  if (resolved === null) return null;
+  const be = resolved.breakEvenSeconds;
+  const capped = (seconds: number | null): Range => (seconds === null ? be : { max: Math.min(seconds, be.max), min: Math.min(seconds, be.min) });
+  const idle = capped(policy.maxIdleSeconds === 0 ? null : policy.maxIdleSeconds);
+  const share = (end: 'max' | 'min') => (resolved.idleSeconds[end] > 0 ? (resolved.idleShare[end] * idle[end]) / resolved.idleSeconds[end] : resolved.idleShare[end]);
+  return { breakEvenSeconds: be, horizonSeconds: capped(policy.scheduledHorizonSeconds), idleSeconds: idle, idleShare: { max: share('max'), min: share('min') }, parkedSeconds: capped(policy.maxParkedSeconds) };
+}
 
 /** The day's traffic, which `requests.ts` derives from the request rows once they are drawn. */
 const UNTIL_DRAWN: Pick<PoolSeed, 'cost24h' | 'requests24h' | 'traffic24h'> = { cost24h: 0, requests24h: 0, traffic24h: [] };
@@ -40,6 +69,7 @@ const POOL_ROWS: PoolSeed[] = [
     sessionPlacement: 'by_warm_prefix',
     subagentPlacement: 'by_cohort',
     keepalive: { ...KEEPALIVE_DEFAULTS, enabled: true },
+    keepaliveResolved: PLAN_HOUR_RESOLVED,
     autoModeServer: true,
     cacheDiagnostics: true,
     cacheTtl: {
@@ -110,6 +140,15 @@ const POOL_ROWS: PoolSeed[] = [
     movesPerHour: {},
     affinityTtlSeconds: 0,
     keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
+    // Haiku alone in dollars on both TTLs, since the cache TTL policy leaves the markers as sent: 46 minutes on five
+    // minutes, which also caps the hour of idle window, to 17.1 hours on the hour.
+    keepaliveResolved: {
+      breakEvenSeconds: { max: 61_560, min: 2_760 },
+      horizonSeconds: { max: 61_560, min: 2_760 },
+      idleSeconds: { max: 3_600, min: 2_760 },
+      idleShare: { max: 0.92, min: 0.0556 },
+      parkedSeconds: { max: 61_560, min: 2_760 },
+    },
     autoModeServer: true,
     cacheDiagnostics: false,
     cacheTtl: { ...CACHE_TTL_DEFAULTS },
@@ -136,6 +175,14 @@ const POOL_ROWS: PoolSeed[] = [
     affinityTtlSeconds: 3_600,
     movesPerHour: {},
     keepalive: { ...KEEPALIVE_DEFAULTS, enabled: false },
+    // The plan on both TTLs, the markers going as sent: 3 hours 16 minutes on five minutes to 44.1 hours on the hour.
+    keepaliveResolved: {
+      breakEvenSeconds: { max: 158_760, min: 11_760 },
+      horizonSeconds: { max: 158_760, min: 11_760 },
+      idleSeconds: one(3_600),
+      idleShare: { max: 0.3, min: 0.0222 },
+      parkedSeconds: { max: 158_760, min: 11_760 },
+    },
     // Off, so the pool card's badge and the key dialog's Inherit label each read both states in the story.
     autoModeServer: false,
     cacheDiagnostics: false,

@@ -758,7 +758,7 @@ async function poolCachingControls(theme) {
   // The parked ceiling's switch is drawn whatever keepalive reads, and keepalive is turned on so it is compared live.
   const keepalive = toggle('Keep prompt caches warm');
   if ((await keepalive.count()) === 1 && (await keepalive.getAttribute('aria-checked')) === 'false' && (await keepalive.isEnabled())) await keepalive.click();
-  if ((await toggle('Max parked').count()) !== 1) say('no parked ceiling toggle');
+  if ((await toggle('Max parked (s)').count()) !== 1) say('no parked ceiling toggle');
   const names = { capture: 'capture switch', diagnostics: 'cache diagnostics switch', main: 'metered main', marker: 'marker toggle', planMain: 'plan main', policy: 'policy toggle' };
   for (const [key, name] of Object.entries(names)) if (pair[key]) measurements.push(`${theme} /pools ${name} ${JSON.stringify(pair[key])}`);
   const compare = (a, b, keys) => {
@@ -1019,9 +1019,9 @@ const POOL_DEPENDENTS = {
     },
   ],
   Keepalive: [
-    { switch: 'Keep prompt caches warm', controls: ['input[type="number"]', 'button[role="switch"][aria-label="Max parked"]', 'button[role="switch"][aria-label="Scheduled horizon"]'] },
-    { switch: 'Max parked', controls: ['input[aria-label="Max parked (s)"]'] },
-    { switch: 'Scheduled horizon', controls: ['input[aria-label="Scheduled horizon (s)"]'] },
+    { switch: 'Keep prompt caches warm', controls: ['input[type="number"]', 'button[role="switch"][aria-label="Max parked (s)"]', 'button[role="switch"][aria-label="Scheduled horizon (s)"]'] },
+    { switch: 'Max parked (s)', controls: ['input[aria-label="Max parked (s)"]'] },
+    { switch: 'Scheduled horizon (s)', controls: ['input[aria-label="Scheduled horizon (s)"]'] },
   ],
   'Utilization thresholds': [
     { switch: 'Shed ahead of pace', controls: ['input[aria-label="Shed ahead of pace (%)"]'] },
@@ -1198,7 +1198,7 @@ async function poolDialogWalk(theme, mode) {
         const near = (a, b) => Math.abs(a - b) <= 1;
         const cells = section?.querySelector('.cells');
         const column = cells ? (cells.getBoundingClientRect().width - parseFloat(getComputedStyle(cells).columnGap)) / 2 : 0;
-        const [parked, horizon] = ['Max parked', 'Scheduled horizon'].map((label) => section?.querySelector(`button[role="switch"][aria-label="${label}"]`)?.closest('.switched'));
+        const [parked, horizon] = ['Max parked (s)', 'Scheduled horizon (s)'].map((label) => section?.querySelector(`button[role="switch"][aria-label="${label}"]`)?.closest('.switched'));
         const shaped = parked && horizon && cells?.lastElementChild === horizon.parentElement && near(parked.getBoundingClientRect().top, horizon.getBoundingClientRect().top);
         return !shaped || ![parked, horizon].every((s) => near(s.getBoundingClientRect().width, column)) ? `the two switched ceilings are not the last row, each one ${column} px column wide` : null;
       });

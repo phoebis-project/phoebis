@@ -2650,6 +2650,39 @@
   margin-left: auto;
 }
 
+.pool__ceilings {
+  font-size: 12.5px;
+}
+
+/* The resolved figure or the idle share under a keepalive field's hint, on a line of its own. */
+.keepalive-resolved {
+  display: block;
+  margin-top: 2px;
+}
+
+/* One line per idle-age bucket: the ages, the count and a bar of the rate, in columns wide enough for `16h to 32h`
+   and `999 of 999` so the bars line up down the list. */
+.return-rate__rows {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  padding: 0;
+  margin: 4px 0 0;
+  font-size: 12.5px;
+  list-style: none;
+}
+
+.return-rate__row {
+  display: grid;
+  grid-template-columns: 84px 84px minmax(80px, 1fr);
+  gap: 14px;
+  align-items: center;
+}
+
+.return-rate__age {
+  color: var(--ink-2);
+}
+
 /* The processed list of a saved key, one line per entry with the level it came from. */
 .effective-rules {
   display: flex;
@@ -2702,6 +2735,12 @@
 
 .stat__value.is-warning {
   color: var(--warning-ink);
+}
+
+/* The Sessions strip reads its counts beside their caps, "40 MiB of 256 MiB" the longest, which a sixth of the page at
+   1280 px breaks after "of": the tiles take three to a row there, and each value stays on its line. */
+.stat-grid--caps {
+  grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
 }
 
 /* A read that failed under the tiles or the table: one line between the two, 12px from each, its Try again inline. The
