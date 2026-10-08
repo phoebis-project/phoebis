@@ -484,7 +484,7 @@ pub struct ShedRoundFacts {
 }
 
 /// One of the pool's pins on the account its round ran on: those in the round in its order, then those it left out. A
-/// pin there under another pool's key belongs to that pool's round and is not listed here.
+/// pin there under a key of a pool the account left is in no round and is not listed here.
 #[derive(Clone, Debug, PartialEq, serde::Serialize)]
 pub struct ShedPinFacts {
     pub key_id: String,

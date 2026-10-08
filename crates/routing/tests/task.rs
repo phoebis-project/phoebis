@@ -6351,8 +6351,8 @@ async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
     pool.shedding.source_dwell_seconds = 600;
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     second_pool(&store, 1_800);
-    // p's round is past p's own dwell and inside q's, which can still read a's stamp from it after a restart, and q's
-    // round is past q's dwell, the longest.
+    // p's round is past p's own dwell and inside q's, the longest of the snapshot's pools, which sets the cut, and q's
+    // round is past q's dwell.
     store
         .replace_shed_round("p", "a", 1, AT - 900_000, &[shed_pin("s1", 1, true)])
         .unwrap();

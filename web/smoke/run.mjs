@@ -854,16 +854,16 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   // endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
   results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
-  // The story's nightly raised its spend cap at 11:30:12, so its extra usage carries no reason; a provider's reason is
-  // drawn when the account answers one.
+  // The story's nightly carries the provider's reason for its extra usage, drawn inside the Extra usage line and whole
+  // in its title. Mounted again with the reason cleared, the same card draws none.
   const nightly = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
-  results.push({ name: '/quota draws no extra usage reason for an account whose provider gave none', ok: nightly !== undefined && nightly.querySelector('.qcard__extra') !== null && nightly.querySelector('.qcard__extra .qcard__extra-reason') === null, missing: [nightly?.querySelector('.qcard__extra')?.outerHTML.slice(0, 200) ?? 'no nightly card'] });
+  results.push({ name: '/quota draws the reason the provider gave for its extra usage inside the Extra usage line, whole in its title', ok: nightly?.querySelector('.qcard__extra .qcard__extra-reason')?.textContent?.includes('Payment method declined') === true && nightly.querySelector('.qcard__extra')?.getAttribute('title')?.includes('Payment method declined') === true, missing: [nightly?.querySelector('.qcard__extra')?.outerHTML.slice(0, 200) ?? 'no nightly card'] });
   const { listAccounts } = api;
-  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'nightly' ? { ...a, extraUsage: { ...a.extraUsage, disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider' } } : a));
-  const declined = await mount('/quota');
-  const card = [...declined.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
-  results.push({ name: '/quota draws the reason the provider gave for its extra usage inside the Extra usage line, whole in its title', ok: card?.querySelector('.qcard__extra .qcard__extra-reason')?.textContent?.includes('Payment method declined') === true && card.querySelector('.qcard__extra')?.getAttribute('title')?.includes('Payment method declined') === true, missing: [card?.querySelector('.qcard__extra')?.outerHTML.slice(0, 200) ?? 'no nightly card'] });
-  declined.unmount();
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'nightly' ? { ...a, extraUsage: { ...a.extraUsage, disabledReason: null } } : a));
+  const cleared = await mount('/quota');
+  const card = [...cleared.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
+  results.push({ name: '/quota draws no extra usage reason for an account whose provider gave none', ok: card !== undefined && card.querySelector('.qcard__extra') !== null && card.querySelector('.qcard__extra .qcard__extra-reason') === null && card.querySelector('.qcard__extra')?.getAttribute('title') === null, missing: [card?.querySelector('.qcard__extra')?.outerHTML.slice(0, 200) ?? 'no nightly card'] });
+  cleared.unmount();
   api.listAccounts = listAccounts;
 }
 {
@@ -1551,7 +1551,7 @@ expect('/accounts/secondary', m.text(), [
 }
 await m.navigate('/accounts/nightly');
 // Overage started with nightly's head at 11:35:39, so the label reads 2h 54m or 2h 55m while the clock runs.
-expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
+expect('/accounts/nightly', m.text(), ['in use', 'Payment method declined', 'Overage since 2h 5']);
 {
   // The funding flag is an API key's state, so this OAuth account in overage reads ready and offers no clear.
   const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
