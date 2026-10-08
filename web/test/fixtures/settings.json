@@ -116,10 +116,10 @@
       "subscription_costs_path": null
     },
     "subscription_costs": {
-      "effective": "2026-10-05",
+      "effective": "2026-10-08",
       "source": "shipped",
       "content": {
-        "effective": "2026-10-05",
+        "effective": "2026-10-08",
         "unit": {
           "defined_by": {
             "band": "out_of_band",
@@ -163,6 +163,7 @@
           "claude-fable-5-1": 10.0,
           "claude-opus-5-5": 2.2,
           "claude-sonnet-5-5": 1.5,
+          "claude-haiku-5-5": 0.1,
           "claude-haiku-4-5": 1.0
         },
         "model_windows": {
