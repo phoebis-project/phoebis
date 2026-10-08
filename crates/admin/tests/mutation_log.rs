@@ -7,7 +7,9 @@ use std::sync::{Arc, Mutex};
 
 use axum::body::Body;
 use axum::http::Response;
-use common::{admin_app, admin_parts, delete, get, json, login, patch, post, put};
+use common::{
+    admin_app, admin_parts, delete, exchanged_session_for_new, get, json, login, patch, post, put,
+};
 
 /// The formatter's output, kept in memory so the test reads back exactly what the host's journal would hold.
 #[derive(Clone, Default)]
@@ -205,6 +207,96 @@ async fn a_create_refused_after_its_row_committed_logs_the_created_id() {
                 "method=POST route=/admin/accounts status=503 entity=account id=spare {admitted}"
             ),
         ]
+    );
+}
+
+/// The confirm of a pairing started with `new` creates the account, so its line names the row it made rather than the
+/// session its path carries. The start and the callback keep naming the session.
+#[tokio::test]
+async fn a_confirm_of_a_pairing_started_with_new_names_the_created_account() {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (app, _up) = admin_app().await;
+
+    let cookie = login(&app, "admin-secret").await;
+    let session = json(get(&app, "/admin/session", Some(&cookie)).await).await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pairing = exchanged_session_for_new(&app, &cookie, "fresh", "Fresh").await;
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{pairing}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status(&confirmed), 200);
+
+    let admitted = format!("credential=session session={session}");
+    assert_eq!(
+        captured.mutations(),
+        vec![
+            "method=POST route=/admin/session status=204 entity=admin_session id=- credential=none"
+                .to_string(),
+            format!(
+                "method=POST route=/admin/oauth/sessions status=201 entity=pairing id={pairing} {admitted}"
+            ),
+            format!(
+                "method=POST route=/admin/oauth/sessions/{{id}}/callback status=200 entity=pairing \
+                 id={pairing} {admitted}"
+            ),
+            format!(
+                "method=POST route=/admin/oauth/sessions/{{id}}/confirm status=200 entity=account id=fresh \
+                 {admitted}"
+            ),
+        ]
+    );
+}
+
+/// A confirm whose row committed but whose registry reload failed answers 503 and still names the account it created,
+/// as the create route does, so the trail never reads a session id for a row that exists.
+#[tokio::test]
+async fn a_confirm_refused_after_its_row_committed_logs_the_created_account() {
+    let captured = Captured::default();
+    let subscriber = tracing_subscriber::fmt()
+        .with_ansi(false)
+        .with_writer(captured.clone())
+        .finish();
+    let _guard = tracing::subscriber::set_default(subscriber);
+    let (app, _up, store, _router) = admin_parts().await;
+
+    let cookie = login(&app, "admin-secret").await;
+    let session = json(get(&app, "/admin/session", Some(&cookie)).await).await["session_id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let pairing = exchanged_session_for_new(&app, &cookie, "fresh", "Fresh").await;
+    store.debug_fail_next_load();
+    let refused = post(
+        &app,
+        &format!("/admin/oauth/sessions/{pairing}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(status(&refused), 503);
+    assert!(
+        store.account("fresh").unwrap().is_some(),
+        "the row was written before its reload failed"
+    );
+
+    let admitted = format!("credential=session session={session}");
+    assert_eq!(
+        captured.mutations().last(),
+        Some(&format!(
+            "method=POST route=/admin/oauth/sessions/{{id}}/confirm status=503 entity=account id=fresh \
+             {admitted}"
+        ))
     );
 }
 

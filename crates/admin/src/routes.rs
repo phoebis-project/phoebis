@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 
 use crate::{
     accounts, analytics, attention, dashboard, keepalive, keys, live, models, pools, pricing,
-    requests, sessions, settings, tls, AdminState, LoginError,
+    requests, sessions, settings, tls, AdminState, LoginError, NewAccount,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -155,6 +155,11 @@ pub(crate) const BEARER_SESSION_ID: &str = "bearer";
 #[derive(Clone)]
 pub(crate) struct CreatedId(pub String);
 
+/// The entity and id a handler names to the mutation log itself, ahead of what the route's path says: the confirm
+/// of a pairing started with `new` names the account it created, not the session its path carries.
+#[derive(Clone)]
+pub(crate) struct LoggedEntity(pub &'static str, pub String);
+
 /// Authentication, the origin check, `Cache-Control`, `X-Content-Type-Options` and the mutation log for every route
 /// at once, so no handler can be added that quietly skips one of them.
 async fn gate(State(state): State<Arc<AdminState>>, mut request: Request, next: Next) -> Response {
@@ -206,7 +211,10 @@ fn log_mutation(
     caller: Option<&Caller>,
     response: &Response,
 ) {
-    let (entity, id) = entity_of(route, path, response.extensions().get::<CreatedId>());
+    let (entity, id) = match response.extensions().get::<LoggedEntity>() {
+        Some(LoggedEntity(entity, id)) => (*entity, Some(id.clone())),
+        None => entity_of(route, path, response.extensions().get::<CreatedId>()),
+    };
     let status = response.status().as_u16();
     let id = id.as_deref().unwrap_or("-");
     match caller {
@@ -641,11 +649,33 @@ async fn pairing_start(
 ) -> Response {
     #[derive(serde::Deserialize)]
     struct Input {
-        account_id: String,
+        #[serde(default)]
+        account_id: Option<String>,
+        #[serde(default)]
         login: Option<String>,
+        /// A row that does not exist yet: the confirm writes it with the credential, so a pairing nobody confirms
+        /// leaves no row.
+        #[serde(default, rename = "new")]
+        new_account: Option<NewAccountInput>,
     }
+    #[derive(serde::Deserialize)]
+    struct NewAccountInput {
+        id: String,
+        label: String,
+    }
+    let malformed = || {
+        failure(
+            StatusCode::BAD_REQUEST,
+            "body must carry an account_id or a new account",
+        )
+    };
     let Ok(input) = serde_json::from_slice::<Input>(&body) else {
-        return failure(StatusCode::BAD_REQUEST, "body must carry an account_id");
+        return malformed();
+    };
+    let (account_id, new_account) = match (input.account_id, input.new_account) {
+        (Some(account_id), None) => (account_id, None),
+        (None, Some(new_account)) => (new_account.id.clone(), Some(new_account)),
+        _ => return malformed(),
     };
     let kind = match input.login.as_deref() {
         None | Some("claude_ai") => LoginKind::ClaudeAi,
@@ -657,18 +687,54 @@ async fn pairing_start(
             )
         }
     };
-    let row = match account(&state, &input.account_id) {
-        Ok(row) => row,
-        Err(refusal) => return refusal,
+    // The lifecycle the pairing starts from, and the row a start with `new` leaves for the confirm to write.
+    let (lifecycle_generation, new_account) = match new_account {
+        None => {
+            let row = match account(&state, &account_id) {
+                Ok(row) => row,
+                Err(refusal) => return refusal,
+            };
+            // An API-key slot has no login to run: committing an OAuth bundle onto it would leave a credential
+            // the relay never reaches for, since it picks the credential by the account's kind.
+            if row.kind != AccountKind::Oauth {
+                return failure(
+                    StatusCode::BAD_REQUEST,
+                    "only an OAuth account is paired this way",
+                );
+            }
+            (row.lifecycle_generation, None)
+        }
+        Some(new_account) => {
+            if !accounts::valid_slug(&new_account.id) {
+                return failure(
+                    StatusCode::BAD_REQUEST,
+                    "id must match [a-z0-9][a-z0-9-]{0,63}",
+                );
+            }
+            if let Err(refusal) = accounts::within_text_bound("label", Some(&new_account.label)) {
+                return refusal;
+            }
+            let label = new_account.label.trim().to_string();
+            if label.is_empty() {
+                return failure(StatusCode::BAD_REQUEST, "a new account needs a label");
+            }
+            // No row is written until the confirm, so a held id is refused here. A create that lands in between
+            // meets the store's constraint at the confirm instead.
+            match state.store.account(&new_account.id) {
+                Ok(None) => {}
+                Ok(Some(_)) => return failure(StatusCode::CONFLICT, accounts::DUPLICATE_ID),
+                Err(error) => return store_failure(error),
+            }
+            // A row born at the confirm starts its lifecycle at 1, as a created row does.
+            (
+                1,
+                Some(NewAccount {
+                    id: new_account.id,
+                    label,
+                }),
+            )
+        }
     };
-    // An API-key slot has no login to run: committing an OAuth bundle onto it would leave a credential
-    // the relay never reaches for, since it picks the credential by the account's kind.
-    if row.kind != AccountKind::Oauth {
-        return failure(
-            StatusCode::BAD_REQUEST,
-            "only an OAuth account is paired this way",
-        );
-    }
     // The provider knows two redirects for this client: a loopback URL on an OS-assigned port, and a page on
     // platform.claude.com that shows the code. The loopback one keeps the browser off the provider's page: the
     // navigation to localhost fails to load and the operator pastes the URL from the address bar, or the code.
@@ -679,7 +745,7 @@ async fn pairing_start(
         superseded,
     } = match state
         .pairing
-        .start(&row.id, &caller.session_id, &redirect_uri, now)
+        .start(&account_id, &caller.session_id, &redirect_uri, now)
     {
         Ok(started) => started,
         Err(error) => return pairing_failure(error),
@@ -690,11 +756,12 @@ async fn pairing_start(
     }
     state.vault.open(
         &session.id,
-        &row.id,
+        &account_id,
         &caller.session_id,
-        row.lifecycle_generation,
+        lifecycle_generation,
         session.deadline,
         now,
+        new_account,
     );
     let url = authorization_url(
         state.profile,
@@ -875,91 +942,137 @@ async fn pairing_confirm(
     let Some(pending) = state.vault.take_exchange(&id, now) else {
         return conflict(&state, "pairing session has no exchanged credential");
     };
-    let row = match account(&state, &pending.account_id) {
-        Ok(row) => row,
-        Err(refusal) => {
-            let _ = state
-                .pairing
-                .fail(&id, &caller.session_id, "account unavailable", now);
-            return refusal;
-        }
+    let identity = Identity {
+        account_uuid: pending.identity.account_uuid.clone(),
+        email: pending.identity.email.clone(),
+        organization_uuid: pending.identity.organization_uuid.clone(),
     };
-    // An identity is permanent: `bump_lifecycle` clears credentials but never the binding, so a slot
-    // stays with the upstream account it was first paired to. Moving a slot elsewhere means deleting it.
-    if row
-        .identity
-        .as_ref()
-        .is_some_and(|bound| bound.account_uuid != pending.identity.account_uuid)
-    {
-        return conflict(
-            &state,
-            "this slot is already paired to a different upstream account",
-        );
-    }
-    if row.identity.is_none() {
-        let identity = Identity {
-            account_uuid: pending.identity.account_uuid.clone(),
-            email: pending.identity.email.clone(),
-            organization_uuid: pending.identity.organization_uuid.clone(),
-        };
-        // The store's unique index over the bound account uuid is what refuses the second slot. A scan here
-        // would have to read every row and could still lose to a confirmation landing between the read and
-        // the write.
-        match state.store.set_identity(&row.id, &identity) {
-            Ok(()) => {}
-            Err(StoreError::IdentityTaken) => {
+    let (row, created) = match pending.new_account {
+        Some(new_account) => {
+            let row = AccountRow {
+                id: new_account.id,
+                kind: AccountKind::Oauth,
+                label: new_account.label,
+                enabled: true,
+                identity: Some(identity),
+                lifecycle_generation: 1,
+                incarnation: 1,
+                revision: 1,
+                state: AccountState::Ready,
+                state_cause: StateCause::Paired,
+            };
+            // One transaction for the row, its identity, its credential and its profile: a confirm that cannot
+            // write the row stores no credential, and one that cannot write the credential leaves no row.
+            if let Err(error) = state.store.create_paired_account(
+                &row,
+                &pending.bundle,
+                &pending.profile.raw.to_string(),
+                &pending.profile.subscription,
+                now,
+                accounts::ACTOR,
+            ) {
+                return match error {
+                    StoreError::IdentityTaken => conflict(
+                        &state,
+                        "that upstream account is already paired to another slot",
+                    ),
+                    // The start's read found no row and a create landed since, so a row standing under the id
+                    // belongs to that create, untouched and without a credential.
+                    other => match state.store.account(&row.id) {
+                        Ok(Some(_)) => conflict(&state, accounts::DUPLICATE_ID),
+                        _ => unstored(&state, other),
+                    },
+                };
+            }
+            (row, true)
+        }
+        None => {
+            let row = match account(&state, &pending.account_id) {
+                Ok(row) => row,
+                Err(refusal) => {
+                    let _ = state
+                        .pairing
+                        .fail(&id, &caller.session_id, "account unavailable", now);
+                    return refusal;
+                }
+            };
+            // An identity is permanent: `bump_lifecycle` clears credentials but never the binding, so a slot
+            // stays with the upstream account it was first paired to. Moving a slot elsewhere means deleting it.
+            if row
+                .identity
+                .as_ref()
+                .is_some_and(|bound| bound.account_uuid != pending.identity.account_uuid)
+            {
                 return conflict(
                     &state,
-                    "that upstream account is already paired to another slot",
-                )
+                    "this slot is already paired to a different upstream account",
+                );
             }
-            Err(error) => return unstored(&state, error),
+            if row.identity.is_none() {
+                // The store's unique index over the bound account uuid is what refuses the second slot. A scan
+                // here would have to read every row and could still lose to a confirmation landing between the
+                // read and the write.
+                match state.store.set_identity(&row.id, &identity) {
+                    Ok(()) => {}
+                    Err(StoreError::IdentityTaken) => {
+                        return conflict(
+                            &state,
+                            "that upstream account is already paired to another slot",
+                        )
+                    }
+                    Err(error) => return unstored(&state, error),
+                }
+            }
+            let expected = match state.store.credentials(&row.id) {
+                Ok(current) => current.map(|bundle| bundle.generation),
+                Err(error) => return unstored(&state, error),
+            };
+            // The lifecycle carried from the exchange, not `row`'s own read: the store's fence is the one that
+            // counts, and it has to be checked against what the pairing started from, not against a read this
+            // same request just took, or a disconnect that landed before this call would pass its own fresh
+            // state back to itself.
+            if let Err(error) = state.store.commit_pairing(
+                &row.id,
+                row.incarnation,
+                pending.lifecycle_generation,
+                expected,
+                &pending.bundle,
+            ) {
+                return match error {
+                    StoreError::Disconnected => {
+                        conflict(&state, "the account was disconnected while pairing")
+                    }
+                    StoreError::Stale => conflict(
+                        &state,
+                        "the credential changed while pairing; start the pairing again",
+                    ),
+                    other => unstored(&state, other),
+                };
+            }
+            (row, false)
         }
-    }
-    let expected = match state.store.credentials(&row.id) {
-        Ok(current) => current.map(|bundle| bundle.generation),
-        Err(error) => return unstored(&state, error),
     };
-    // The lifecycle carried from the exchange, not `row`'s own read: the store's fence is the one that
-    // counts, and it has to be checked against what the pairing started from, not against a read this same
-    // request just took, or a disconnect that landed before this call would pass its own fresh state back
-    // to itself.
-    if let Err(error) = state.store.commit_pairing(
-        &row.id,
-        row.incarnation,
-        pending.lifecycle_generation,
-        expected,
-        &pending.bundle,
-    ) {
-        return match error {
-            StoreError::Disconnected => {
-                conflict(&state, "the account was disconnected while pairing")
-            }
-            StoreError::Stale => conflict(
-                &state,
-                "the credential changed while pairing; start the pairing again",
-            ),
-            other => unstored(&state, other),
-        };
-    }
     // Committed outside the manager, which still keeps the replaced bundle: the usage service and the catalog
     // expect no generation, so they would be served it until it neared its expiry.
     state.manager.invalidate(&row.id);
-    // Stored now rather than left to the poll, so a freshly paired account shows its plan and start at once
-    // instead of waiting out the next interval; a failure here is not the confirm's to fail, since the poll
-    // rewrites the row regardless.
-    if let Err(error) = state.store.set_profile(
-        &row.id,
-        &pending.profile.raw.to_string(),
-        &pending.profile.subscription,
-    ) {
-        tracing::warn!(account = %row.id, %error, "the profile could not be stored after pairing");
-    }
-    if let Err(error) = state
-        .store
-        .set_state(&row.id, AccountState::Ready, StateCause::Paired)
-    {
-        return unstored(&state, error);
+    // A row born paired took its profile and state in the create's transaction.
+    if !created {
+        // Stored now rather than left to the poll, so a freshly paired account shows its plan and start at once
+        // instead of waiting out the next interval; a failure here is not the confirm's to fail, since the poll
+        // rewrites the row regardless.
+        if let Err(error) = state.store.set_profile(
+            &row.id,
+            &pending.profile.raw.to_string(),
+            &pending.profile.subscription,
+        ) {
+            tracing::warn!(account = %row.id, %error, "the profile could not be stored after pairing");
+        }
+        if let Err(error) = state
+            .store
+            .set_state(&row.id, AccountState::Ready, StateCause::Paired)
+        {
+            return unstored(&state, error);
+        }
     }
     state.usage.invalidate(&row.id);
     state.vault.mark_confirmed(&id, now);
@@ -972,10 +1085,17 @@ async fn pairing_confirm(
     if let Err(error) = state.pairing.confirm(&id, &caller.session_id, now) {
         tracing::warn!(%error, "a confirmed pairing session could not be closed");
     }
-    if let Err(refusal) = reload_or_refuse(&state).await {
-        return refusal;
+    let mut response = match reload_or_refuse(&state).await {
+        Err(refusal) => refusal,
+        Ok(()) => Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response(),
+    };
+    if created {
+        // The row exists from here on, so every answer, a reload refusal included, names it to the mutation log.
+        response
+            .extensions_mut()
+            .insert(LoggedEntity("account", row.id));
     }
-    Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response()
+    response
 }
 
 async fn system(State(state): State<Arc<AdminState>>) -> Response {

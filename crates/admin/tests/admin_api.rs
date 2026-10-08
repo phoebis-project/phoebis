@@ -1885,6 +1885,7 @@ fn a_record_discarded_twice_leaves_one_lifetime_after_its_first_discard() {
         0,
         common::NOW + 600_000,
         common::NOW,
+        None,
     );
     vault.discard("pairing", common::NOW);
     // A callback whose exchange returns after the owner cancelled discards the record a second time.
@@ -1959,6 +1960,270 @@ async fn a_start_by_another_admin_session_answers_409() {
         shown["status"], "pending",
         "the refused start left the owner's pairing alone"
     );
+}
+
+#[tokio::test]
+async fn a_start_with_new_confirms_into_a_ready_row_with_its_identity_plan_and_start() {
+    use common::{get, json, login, post};
+    let (app, up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let mut profile: serde_json::Value =
+        serde_json::from_slice(phoebis_profile::fixtures::control_response(
+            phoebis_profile::fixtures::ControlFixture::Profile,
+        ))
+        .unwrap();
+    profile["account"]["has_claude_max"] = serde_json::json!(true);
+    profile["organization"]["subscription_created_at"] = serde_json::json!("2026-03-14T10:00:00Z");
+    profile["organization"]["claude_code_trial_ends_at"] =
+        serde_json::json!("2026-10-02T00:00:00+00:00");
+    up.set_rule_after(
+        0,
+        "/api/oauth/profile",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: serde_json::to_vec(&profile).unwrap(),
+        },
+    );
+    let id = common::exchanged_session_for_new(&app, &cookie, "fresh", "Fresh").await;
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 200);
+    assert_eq!(
+        json(confirmed).await,
+        serde_json::json!({ "account_id": "fresh", "status": "confirmed" })
+    );
+    let acct = json(get(&app, "/admin/accounts/fresh", Some(&cookie)).await).await;
+    assert_eq!(
+        (
+            acct["state"].as_str(),
+            acct["kind"].as_str(),
+            acct["label"].as_str()
+        ),
+        (Some("ready"), Some("oauth"), Some("Fresh"))
+    );
+    assert_eq!(acct["identity"]["account_uuid"], common::ACCOUNT_UUID);
+    assert!(acct["credential"]["access_expires_at"].is_number());
+    let derived = phoebis_routing::term::derived_end(
+        &phoebis_store::SubscriptionTerm {
+            account_id: "fresh".into(),
+            since: Some(1_773_482_400_000),
+            trial_ends_at: Some(1_790_899_200_000),
+            cancelled: false,
+            ends_at: None,
+            tier: None,
+        },
+        common::NOW,
+    );
+    assert_eq!(
+        acct["subscription"],
+        serde_json::json!({
+            "plan": "max",
+            "tier": "default_claude_max_5x",
+            "since": 1_773_482_400_000_i64,
+            "trial_ends_at": 1_790_899_200_000_i64,
+            "ends_at": null,
+            "derived_ends_at": derived,
+        }),
+        "the one write stored the plan and the start with the row"
+    );
+    let listed = json(get(&app, "/admin/accounts", Some(&cookie)).await).await;
+    let fresh = listed["accounts"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|a| a["id"] == "fresh")
+        .count();
+    assert_eq!(fresh, 1, "the list carries the row once");
+}
+
+#[tokio::test]
+async fn a_cancel_after_a_start_with_new_leaves_no_row() {
+    use common::{delete, get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let owner = login(&app, "admin-secret").await;
+    let start = r#"{"new":{"id":"fresh","label":"Fresh"},"login":"claude_ai"}"#;
+    let started = post(&app, "/admin/oauth/sessions", start, Some(&owner)).await;
+    assert_eq!(started.status(), 201);
+    let id = json(started).await["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        delete(&app, &format!("/admin/oauth/sessions/{id}"), Some(&owner))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts/fresh", Some(&owner))
+            .await
+            .status(),
+        404
+    );
+    // The owner's own start would supersede a standing session whatever the cancel did. Another admin session's
+    // start is refused while one stands, so its 201 is what proves the id was freed.
+    let other = login(&app, "admin-secret").await;
+    assert_eq!(
+        post(&app, "/admin/oauth/sessions", start, Some(&other))
+            .await
+            .status(),
+        201
+    );
+}
+
+#[tokio::test]
+async fn an_expiry_after_a_start_with_new_leaves_no_row() {
+    use common::{get, json, login, post};
+    use std::sync::atomic::Ordering;
+    let parts = common::admin_parts_sweepable().await;
+    let owner = login(&parts.app, "admin-secret").await;
+    let start = r#"{"new":{"id":"fresh","label":"Fresh"},"login":"claude_ai"}"#;
+    let started = post(&parts.app, "/admin/oauth/sessions", start, Some(&owner)).await;
+    assert_eq!(started.status(), 201);
+    let deadline = json(started).await["expires_at"].as_i64().unwrap();
+    let at = deadline + 1;
+    parts.clock_cell.store(at, Ordering::SeqCst);
+    assert_eq!(
+        parts.vault.sweep(at),
+        1,
+        "the vault record left at the deadline"
+    );
+    parts.pairing.sweep(at);
+    assert_eq!(
+        get(&parts.app, "/admin/accounts/fresh", Some(&owner))
+            .await
+            .status(),
+        404
+    );
+    let other = login(&parts.app, "admin-secret").await;
+    assert_eq!(
+        post(&parts.app, "/admin/oauth/sessions", start, Some(&other))
+            .await
+            .status(),
+        201,
+        "the expired pairing holds the id no longer"
+    );
+}
+
+#[tokio::test]
+async fn a_confirm_whose_id_a_create_took_meanwhile_answers_409_and_leaves_the_row_untouched() {
+    use common::{get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let id = common::exchanged_session_for_new(&app, &cookie, "fresh", "Fresh").await;
+    let created = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"fresh","kind":"oauth","label":"Taken"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(created.status(), 201);
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        json(confirmed).await["error"],
+        "an account with this id exists"
+    );
+    let acct = json(get(&app, "/admin/accounts/fresh", Some(&cookie)).await).await;
+    assert_eq!(
+        (acct["label"].as_str(), acct["state"].as_str()),
+        (Some("Taken"), Some("unpaired")),
+        "the row belongs to the create that won"
+    );
+    assert!(
+        acct["credential"]["access_expires_at"].is_null(),
+        "no credential reached the winner's row"
+    );
+    let shown = json(get(&app, &format!("/admin/oauth/sessions/{id}"), Some(&cookie)).await).await;
+    assert_eq!(shown["status"], "failed");
+}
+
+#[tokio::test]
+async fn a_start_with_new_for_an_existing_id_answers_409() {
+    use common::{json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    let refused = post(
+        &app,
+        "/admin/oauth/sessions",
+        r#"{"new":{"id":"business","label":"Business"}}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 409);
+    assert_eq!(
+        json(refused).await["error"],
+        "an account with this id exists"
+    );
+}
+
+#[tokio::test]
+async fn a_start_with_both_members_or_neither_answers_400() {
+    use common::{json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    for (body, error) in [
+        (
+            r#"{"account_id":"business","new":{"id":"fresh","label":"Fresh"}}"#,
+            "body must carry an account_id or a new account",
+        ),
+        (
+            r#"{"login":"claude_ai"}"#,
+            "body must carry an account_id or a new account",
+        ),
+        (
+            r#"{"new":{"id":"Bad Id","label":"x"}}"#,
+            "id must match [a-z0-9][a-z0-9-]{0,63}",
+        ),
+        (
+            r#"{"new":{"id":"ok","label":""}}"#,
+            "a new account needs a label",
+        ),
+    ] {
+        let refused = post(&app, "/admin/oauth/sessions", body, Some(&cookie)).await;
+        assert_eq!(refused.status(), 400, "{body}");
+        assert_eq!(json(refused).await["error"], error, "{body}");
+    }
+}
+
+#[tokio::test]
+async fn a_start_with_new_whose_identity_another_slot_holds_leaves_no_row() {
+    use common::{get, json, login, post};
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    assert_eq!(pair_business(&app, &cookie).await.status(), 200);
+    let id = common::exchanged_session_for_new(&app, &cookie, "second", "Second").await;
+    let confirmed = post(
+        &app,
+        &format!("/admin/oauth/sessions/{id}/confirm"),
+        "",
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(confirmed.status(), 409);
+    assert_eq!(
+        json(confirmed).await["error"],
+        "that upstream account is already paired to another slot"
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts/second", Some(&cookie))
+            .await
+            .status(),
+        404,
+        "the refused confirm left no row"
+    );
+    let business = json(get(&app, "/admin/accounts/business", Some(&cookie)).await).await;
+    assert_eq!(business["state"], "ready");
 }
 
 #[tokio::test]
