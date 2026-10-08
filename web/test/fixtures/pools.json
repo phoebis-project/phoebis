@@ -69,9 +69,9 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1791493333655,
-        "updated_at": 1791493333655,
-        "revision": 6189539844759,
+        "created_at": 1791495953136,
+        "updated_at": 1791495953136,
+        "revision": 6189542464240,
         "members": [
           {
             "account_id": "business",
@@ -110,7 +110,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "HnSq276I",
+            "prefix": "hCXRUq11",
             "enabled": true
           }
         ],

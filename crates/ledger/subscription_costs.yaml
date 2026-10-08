@@ -3,7 +3,7 @@
 # the request completes inside the band. Unit: 1/150,000,000 of the Max 20x 5-hour window outside the peak band, so
 # one percent of that window, the step the usage header moves in, is 1,500,000 units. A model or tier left out, or
 # set to null, is unpriced. Written by the plan meter's table_fit.py; every value is a design constant it tested.
-effective: 2026-10-05
+effective: 2026-10-08
 
 unit:
   defined_by: {tier: default_claude_max_20x, window: five_hour, band: out_of_band}
@@ -27,7 +27,8 @@ model_weight:  # units per plain input token, by undated id; a dated id reads it
   claude-fable-5-1:   10    # 2026-09-30, Max 20x out of band, 6.647 +/- 0.012 percent per 1M input
   claude-opus-5-5:    2.2   # 2026-10-04, Max 20x out of band, 1.467 +/- 0.0027 percent per 1M input
   claude-sonnet-5-5:  1.5   # 2026-09-30, Max 20x out of band, 0.9998 +/- 0.0013 percent per 1M input
-  claude-haiku-4-5:   1     # 2026-10-04, Max 20x out of band, 0.6638 +/- 0.0024 percent per 1M input
+  claude-haiku-5-5:   0.1   # 2026-10-08, Max 20x out of band, 0.06654 +/- 0.00051 percent per 1M input
+  claude-haiku-4-5:   1     # 2026-10-05, Max 20x out of band, 0.6658 +/- 0.001 percent per 1M input
 
 model_windows:  # a window only some models carry, sized against a shared one
   seven_day_fable: {of: seven_day, capacity_factor: 0.5}

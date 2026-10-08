@@ -11,7 +11,7 @@
         "model": "claude-sonnet-5",
         "net_five_hour_share": 0.0,
         "net_usd": 0.0,
-        "next_probe_at": 1235563,
+        "next_probe_at": 1235261,
         "pool_id": "main",
         "reason": null,
         "session_id": "s1",
