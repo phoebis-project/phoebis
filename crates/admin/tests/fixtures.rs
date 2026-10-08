@@ -1008,7 +1008,6 @@ async fn every_route_is_captured_and_holds_its_shape() {
         ),
         ("attention", "/admin/attention"),
         ("dashboard", "/admin/dashboard"),
-        ("keepalive_overview", "/admin/keepalive/overview"),
         ("keepalive_recipes", "/admin/keepalive/recipes"),
         ("key_models", "/admin/keys/desktop/models"),
         ("keys", "/admin/keys"),
@@ -1034,6 +1033,39 @@ async fn every_route_is_captured_and_holds_its_shape() {
             json(response).await,
         );
     }
+    // Main goes idle and a tick opens its idle window, so the overview carries a pool's row with its ten buckets for
+    // the console to decode. It is read after the others, which show main busy.
+    let request_generation = parts
+        .keepalive
+        .agent_status("desktop", "s1", "main")
+        .unwrap()
+        .request_generation;
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            key_generation,
+            phoebis_keepalive::Event {
+                event: "state".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 2,
+                agent_id: Some("main".into()),
+                state: Some("idle".into()),
+                request_generation: Some(request_generation),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    parts.keepalive.step().await;
+    let response = get(app, "/admin/keepalive/overview", Some(&cookie)).await;
+    assert_eq!(response.status(), 200);
+    hold(
+        &planted,
+        "keepalive_overview",
+        "GET /admin/keepalive/overview",
+        json(response).await,
+    );
     // The web's arithmetic tests work their figures out by hand from the test tables' round numbers, so they read
     // the two envelopes as the settings echo carries them, rendered from the same loader the Rust tests use.
     hold(

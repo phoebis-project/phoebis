@@ -3241,6 +3241,14 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         overview["probes_24h"]["ok"].as_u64().unwrap() >= 1
             || overview["agents"]["busy"].as_u64() == Some(1)
     );
+    assert_eq!(
+        (
+            overview["limits"]["sessions"]["count"].as_u64(),
+            overview["limits"]["sessions"]["max"].as_u64()
+        ),
+        (Some(1), Some(64)),
+        "the session count beside the cap the file sets"
+    );
     let settings: serde_json::Value = client
         .get(admin("/settings"))
         .send()
@@ -3263,8 +3271,8 @@ async fn the_binary_retains_a_session_probes_it_and_serves_the_keepalive_views()
         "{text}"
     );
     assert!(
-        text.contains(r#"phoebis_keepalive_probes_total{account="console",outcome="ok"}"#),
-        "{text}"
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"}"#),
+        "the probe read part of the request's prefix back, so it counts cold under its pool: {text}"
     );
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();

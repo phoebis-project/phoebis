@@ -8991,21 +8991,16 @@ m.unmount();
       title: t.getAttribute('title'),
       value: t.querySelector('.stat__value')?.textContent?.trim() ?? '',
     }));
-  const fed = tiles().filter((t) => t.label !== 'Sessions');
+  // Every tile reads the overview, the Sessions tile's count of its cap among them.
+  const fed = tiles();
   const retries = [...page.container.querySelectorAll('button')].filter((b) => b.textContent?.trim() === 'Try again');
   const line = page.container.querySelector('.stat-grid + .sessions__notice');
-  // The Sessions tile reads the rows, which the overview does not feed, so its count and note stand.
-  const companions = [...page.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(page, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
-  const sessionsTile = tiles().find((t) => t.label === 'Sessions');
   results.push({
     name: '/sessions a failed overview read draws dashes, could not load and one Try again',
     ok:
       page.container.querySelector('.stat-grid .skeleton') === null &&
-      fed.length === 4 &&
+      fed.length === 6 &&
       fed.every((t) => t.value === '-' && t.note === 'could not load' && t.title === 'ledger locked') &&
-      sessionsTile?.value !== '-' &&
-      companions > 0 &&
-      sessionsTile?.note === `${companions} with a companion, 10 with a recipe` &&
       retries.length === 1 &&
       line !== null &&
       line.contains(retries[0]) &&
@@ -9194,7 +9189,7 @@ m.unmount();
 }
 
 m = await mount('/sessions');
-expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agents', 'busy', 'idle', 'parked', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
+expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 'of 1,024', 'busy', 'idle', 'parked', 'Retained', 'of 256 MiB', 'prompts kept for probes', 'presence ', 's ago', 'Cache probes, 24h', 'ok (', 'migrated', 'skipped', 'failed', 'Expired between turns, 24h', 'misses cache warming exists to prevent', 'Cost reference', 'Key', 'Session', 'Model', 'Account', 'Last used', 'expires in', 'Requests', 'Companion', 'Cache warming', 'Expand all', 'epoch 2', 'reporting', 'silent', 'since ', 'none', 'no recipe', 'fable-5-1']);
 {
   const lead = m.container.querySelector('.page-head__lead');
   const how = () => [...(lead?.querySelectorAll('button.link-btn') ?? [])].find((b) => b.textContent?.trim() === 'How pins and recipes work');
@@ -9225,6 +9220,27 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with a companion,`), missing: [`${companions} rows`, note || 'no note'] });
     // Ten of the story's seventeen rows hold a recipe; the overview's own count is every session row.
     results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 10 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
+  }
+  {
+    // The keepalive engine's three bounded counts read from the overview, each as a count of the cap the bootstrap
+    // file sets, so an operator sees how close the router runs to refusing a session or dropping a recipe.
+    const ov = await api.getKeepaliveOverview();
+    const strip = [...m.container.querySelectorAll('.stat-grid > .stat')].map((t) => [t.querySelector('.stat__label')?.textContent?.trim(), t.querySelector('.stat__value')?.textContent?.trim(), t.querySelector(':scope > .stat__note')?.textContent?.trim()]);
+    const read = (label) => strip.find(([l]) => l === label) ?? [];
+    const want = [
+      ['Sessions', `${ov.limits?.sessions.count} of 128`],
+      ['Agents', `${ov.limits?.agents.count} of 1,024`, `${ov.agents.busy} busy, ${ov.agents.idle} idle, ${ov.agents.parked} parked`],
+      ['Retained', '40 MiB of 256 MiB', 'prompts kept for probes'],
+    ];
+    results.push({
+      name: '/sessions the strip reads the sessions, the agents and the retained bytes each as a count of its cap',
+      ok:
+        JSON.stringify(strip.map(([l]) => l)) === JSON.stringify(['Sessions', 'Agents', 'Retained', 'Cache probes, 24h', 'Expired between turns, 24h', 'Bus gaps']) &&
+        ov.limits?.sessions.count > 0 &&
+        ov.limits?.agents.count > 0 &&
+        want.every(([label, value, note]) => read(label)[1] === value && (note === undefined || read(label)[2] === note)),
+      missing: strip.map((t) => t.join(' | ')),
+    });
   }
   const rows = () => [...m.container.querySelectorAll('tbody tr.srow')];
   const cell = (tr, header) => sessionCell(m, tr, header);
@@ -10411,7 +10427,7 @@ m.unmount();
   const rows = [...(about()?.querySelectorAll('.kv__row dt') ?? [])].map((dt) => dt.textContent?.trim());
   results.push({
     name: '/settings Try again reads the settings into About and the hint beside the block',
-    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Keepalive sessions', 'Keepalive agents', 'Keepalive retained bytes', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
+    ok: JSON.stringify(rows) === JSON.stringify(['Version', 'Profile', 'Metrics listener', 'Ledger path', 'API prices path', 'Subscription costs path', 'Storage path', 'Admin secret']) && about()?.querySelector('.empty--error') === null && failed.container.querySelector('pre.snippet + p.snippet__hint') !== null,
     missing: rows,
   });
   failed.unmount();
@@ -10508,17 +10524,16 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   results.push({ name: "/settings the client block's subtitle names the settings file and the shell", ok: subtitle === "Put it in the env block of the client's settings file or export it in the shell that launches the client, and replace the token with a key from the Keys page.", missing: [subtitle ?? 'no subtitle'] });
   const about = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'About');
   const rows = [...(about?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  // The mock stores 268435456 retained bytes, which is 256 MiB. Each cost file's row carries its table's date, read
-  // from the captured envelope through the page's own label.
+  // Each cost file's row carries its table's date, read from the captured envelope through the page's own label. The
+  // three keepalive limits read on the Sessions page beside their counts, so About carries none of them.
   const wired = decodeSettings(SETTINGS_WIRE);
   const priceRow = `API prices path=./api_prices.yaml, effective ${effectiveLabel(wired.apiPrices.effective)}`;
   const costRow = `Subscription costs path=./subscription_costs.yaml, effective ${effectiveLabel(wired.subscriptionCosts.effective)}`;
-  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates, the three keepalive limits and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Keepalive sessions=128', 'Keepalive agents=1024', 'Keepalive retained bytes=256 MiB', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
+  results.push({ name: "/settings About lists the version, the profile, the metrics listener, the four paths with the two cost files' dates and the admin secret, then the installation sentence", ok: JSON.stringify(rows) === JSON.stringify([`Version=${MOCK_VERSION}`, 'Profile=claude-code-2.1.269-linux-x64', 'Metrics listener=127.0.0.1:9464', 'Ledger path=./data/ledger.sqlite', priceRow, costRow, 'Storage path=./data/router.sqlite', 'Admin secret=configured']) && (about?.textContent ?? '').includes("The values the configuration file sets are on the installation page; phoebis check-config prints this router's.") && !(about?.textContent ?? '').includes('Public URL'), missing: rows });
   const titled = [...(about?.querySelectorAll('.kv__row') ?? [])].slice(3).map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.getAttribute('title')}`);
-  const restart = 'Set in the configuration file; a change takes a restart.';
   results.push({
-    name: '/settings each path and keepalive line names its key in the configuration file, each keepalive line the restart, and the admin secret line its variable',
-    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', `Keepalive sessions=keepalive.max_sessions\n${restart}`, `Keepalive agents=keepalive.max_agents\n${restart}`, `Keepalive retained bytes=keepalive.max_retained_bytes\n${restart}`, 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
+    name: '/settings each path line names its key in the configuration file and the admin secret line its variable',
+    ok: JSON.stringify(titled) === JSON.stringify(['Ledger path=Set by stats.ledger_path in the configuration file', 'API prices path=Set by stats.api_prices_path in the configuration file', 'Subscription costs path=Set by stats.subscription_costs_path in the configuration file', 'Storage path=Set by storage.path in the configuration file', 'Admin secret=The secret the variable admin.secret_env names; it reaches every route.']) && about?.querySelector('.kv__row:last-child dd .badge.badge--good') !== null,
     missing: titled,
   });
   const mirrored = ['Body capture, max hours', 'Cache TTL (seconds)', 'Catalog refresh (seconds)', 'Max workers', 'Sample retention (days)'].filter((w) => m.text().includes(w));
@@ -10570,10 +10585,10 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   expect('/settings variable definitions', m.text(), [
     "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine. The address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
     'Holds the router key. Claude Code treats it as a subscription credential',
-    'an ANTHROPIC_API_KEY would switch those off.',
+    'the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
     'Makes Claude Code send its first-party request shape to the router',
     'It also switches off gateway model discovery, and being an internal variable a future build may drop it.',
-    'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read; under the first-party flag above they arrive anyway.',
+    'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',
     "Stops the client's telemetry batches, which it posts to api.anthropic.com with the credential it holds, behind the router the key's secret.",
     'Lets fast mode work behind the router: without it the client asks api.anthropic.com whether the organization has fast mode, the check fails with a router key, and fast mode stays off.',
     'Worth setting for Fable 5.1 sessions in a pool with cache warming on',

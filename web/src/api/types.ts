@@ -1356,6 +1356,13 @@ export interface KeepaliveOverview {
   busGaps: number;
   /** Requests whose prefix expired between turns in the last 24 hours. */
   expiredBetweenTurns24h: number;
+  /** The engine's live sessions, agent records and retained bytes, each beside the cap the bootstrap file sets. */
+  limits: Record<'agents' | 'retainedBytes' | 'sessions', { count: number; max: number }>;
+  /**
+   * Per pool, the last 24 hours' probes, credits and wasted probes, and the idle-age counters' ten buckets, the last
+   * open-ended. An account outside every pool lists under its own id.
+   */
+  pools: { credited24h: number; idleReturns: { fromSeconds: number; toSeconds: number | null; reached: number; returned: number }[]; poolId: string; probes24h: number; wasted24h: number; wastedReasons24h: Record<WastedProbeReason, number> }[];
   probes24h: { failed: number; migrated: number; ok: number; skipped: number };
 }
 
@@ -1394,7 +1401,6 @@ export interface Settings {
    * it, `effectiveDate` the instant it parses to, or null when it is not a date.
    */
   apiPrices: { effective: string; effectiveDate: string | null; models: ModelPrice[]; source: string };
-  keepalive: { maxAgents: number; maxRetainedBytes: number; maxSessions: number };
   listeners: { metrics: string; proxy: string };
   retention: { bodyCaptureMaxHours: number };
   /** How long a session stays listed after its last activity. */

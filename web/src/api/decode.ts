@@ -733,7 +733,24 @@ export function decodeRecipe(v: unknown): KeepaliveRecipe {
 export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
   const o = rec(v);
   const p = rec(o.probes_24h);
-  return { agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) }, busGaps: num(o.bus_gaps), expiredBetweenTurns24h: num(o.expired_between_turns_24h), probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) } };
+  const l = rec(o.limits);
+  const limit = (x: unknown) => ({ count: num(rec(x).count), max: num(rec(x).max) });
+  const pools = Array.isArray(o.pools) ? o.pools.map(rec) : [];
+  return {
+    agents: { busy: num(rec(o.agents).busy), idle: num(rec(o.agents).idle), parked: num(rec(o.agents).parked) },
+    busGaps: num(o.bus_gaps),
+    expiredBetweenTurns24h: num(o.expired_between_turns_24h),
+    limits: { agents: limit(l.agents), retainedBytes: limit(l.retained_bytes), sessions: limit(l.sessions) },
+    pools: pools.map((q) => ({
+      credited24h: num(q.credited_24h),
+      idleReturns: (Array.isArray(q.idle_returns) ? q.idle_returns.map(rec) : []).map((b) => ({ fromSeconds: num(b.from_seconds), reached: num(b.reached), returned: num(b.returned), toSeconds: numOrNull(b.to_seconds) })),
+      poolId: str(q.pool_id),
+      probes24h: num(q.probes_24h),
+      wasted24h: num(q.wasted_24h),
+      wastedReasons24h: record(WASTED_PROBE_REASONS, q.wasted_reasons_24h, emptyWastedProbeReasons),
+    })),
+    probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) },
+  };
 }
 
 export const WINDOW_ID_VALUES = ['5h', '7d', '7d_oi'] as const;
@@ -850,14 +867,12 @@ const decodeCostsEnvelope = (envelope: unknown): Settings['subscriptionCosts'] =
 
 export function decodeSettings(v: unknown): Settings {
   const s = rec(v);
-  const k = rec(s.keepalive);
   const l = rec(s.listeners);
   const store = rec(s.storage);
   return {
     about: { profile: str(rec(s.about).profile), version: str(rec(s.about).version) },
     access: { adminConfigured: bool(rec(s.access).admin_configured, true) },
     apiPrices: decodePricing(s.api_prices),
-    keepalive: { maxAgents: num(k.max_agents), maxRetainedBytes: num(k.max_retained_bytes), maxSessions: num(k.max_sessions) },
     listeners: { metrics: str(l.metrics), proxy: str(l.proxy) },
     retention: { bodyCaptureMaxHours: num(rec(s.retention).body_capture_max_hours) },
     sessions: { expireAfterSeconds: num(rec(s.sessions).expire_after_seconds) },

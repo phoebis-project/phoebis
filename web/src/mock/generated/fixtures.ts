@@ -5412,12 +5412,107 @@ export const FIXTURES: Record<string, Fixture> = {
     "route": "GET /admin/keepalive/overview",
     "body": {
       "agents": {
-        "busy": 1,
-        "idle": 0,
+        "busy": 0,
+        "idle": 1,
         "parked": 0
       },
       "bus_gaps": 0,
       "expired_between_turns_24h": 0,
+      "limits": {
+        "agents": {
+          "count": 1,
+          "max": 1024
+        },
+        "retained_bytes": {
+          "count": 116,
+          "max": 268435456
+        },
+        "sessions": {
+          "count": 1,
+          "max": 128
+        }
+      },
+      "pools": [
+        {
+          "credited_24h": 0,
+          "idle_returns": [
+            {
+              "from_seconds": 0,
+              "reached": 1,
+              "returned": 0,
+              "to_seconds": 300
+            },
+            {
+              "from_seconds": 300,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 900
+            },
+            {
+              "from_seconds": 900,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 1800
+            },
+            {
+              "from_seconds": 1800,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 3600
+            },
+            {
+              "from_seconds": 3600,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 7200
+            },
+            {
+              "from_seconds": 7200,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 14400
+            },
+            {
+              "from_seconds": 14400,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 28800
+            },
+            {
+              "from_seconds": 28800,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 57600
+            },
+            {
+              "from_seconds": 57600,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": 115200
+            },
+            {
+              "from_seconds": 115200,
+              "reached": 0,
+              "returned": 0,
+              "to_seconds": null
+            }
+          ],
+          "pool_id": "main",
+          "probes_24h": 0,
+          "wasted_24h": 0,
+          "wasted_reasons_24h": {
+            "cold_return": 0,
+            "evicted": 0,
+            "expired": 0,
+            "horizon": 0,
+            "idle_limit": 0,
+            "parked_limit": 0,
+            "released": 0,
+            "replaced": 0,
+            "session_ended": 0
+          }
+        }
+      ],
       "probes_24h": {
         "failed": 0,
         "migrated": 0,

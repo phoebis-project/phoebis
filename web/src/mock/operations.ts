@@ -333,6 +333,18 @@ const WARMED = SESSIONS.filter((pin) => pin.keepalive.state !== null);
 // analytics Cache section agree on what "expired between turns" counts.
 const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.usage.cacheRead === 0 && r.attempts[r.attempts.length - 1].cacheMissReason === 'none').length;
 
+// The keepalive engine holds a session once the mod registered it or a request retained a recipe for it.
+const ENGINE_SESSIONS = SESSIONS.filter((s) => s.companion !== 'none' || s.keepalive.state !== null);
+
+// Router-wide, so every probe counted here belongs to a pool that keeps caches
+// warm, and `codex` has warming off and contributes none. Hand-set at a busier
+// scale than the logged rows.
+const PROBES_24H = { ok: 225, migrated: 18, skipped: 45, failed: 3 };
+
+// Each bucket reaches fewer windows than the one before it left unreturned.
+const IDLE_REACHED = [96, 70, 50, 36, 22, 13, 8, 5, 2, 1];
+const IDLE_RETURNED = [24, 16, 11, 12, 7, 4, 2, 2, 1, 0];
+
 export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   ...KEEPALIVE_OVERVIEW_SAMPLE,
   agents: {
@@ -342,10 +354,25 @@ export const KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   },
   busGaps: 0,
   expiredBetweenTurns24h: EXPIRED_BETWEEN_TURNS_24H,
-  // Router-wide, so every probe counted here belongs to a pool that keeps caches
-  // warm; `codex` has warming off and contributes none. Hand-set at a busier
-  // scale than the logged rows.
-  probes24h: { ok: 225, migrated: 18, skipped: 45, failed: 3 },
+  // The caps are the bootstrap file's defaults, and the retained bytes are hand-set like the probe counts.
+  limits: {
+    agents: { count: ENGINE_SESSIONS.reduce((n, s) => n + s.agents, 0), max: 1_024 },
+    retainedBytes: { count: 40 * 1_048_576, max: 256 * 1_048_576 },
+    sessions: { count: ENGINE_SESSIONS.length, max: 128 },
+  },
+  // `all` is the one pool that keeps caches warm, so its probes are the router-wide count. Its buckets keep the bounds
+  // the router answered in the capture.
+  pools: [
+    {
+      credited24h: 162,
+      idleReturns: KEEPALIVE_OVERVIEW_SAMPLE.pools[0].idleReturns.map((b, i) => ({ ...b, reached: IDLE_REACHED[i], returned: IDLE_RETURNED[i] })),
+      poolId: 'all',
+      probes24h: PROBES_24H.ok,
+      wasted24h: 31,
+      wastedReasons24h: { cold_return: 7, evicted: 0, expired: 4, horizon: 2, idle_limit: 12, parked_limit: 3, released: 1, replaced: 0, session_ended: 2 },
+    },
+  ],
+  probes24h: PROBES_24H,
 };
 
 const settingsFixture = FIXTURES.settings.body as Record<string, Record<string, unknown>>;

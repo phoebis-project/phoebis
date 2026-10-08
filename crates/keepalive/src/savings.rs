@@ -9,6 +9,19 @@ use phoebis_routing::{PinUsage, FIVE_HOUR};
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
+use crate::view::{recipe_state, RecipeState};
+
+/// A withheld probe's skip row keys, read off its agent under the lock: the session, the key generation, the pool, the
+/// account, the model, the speed and the recipe state.
+type QueuedSkip = (
+    SessionKey,
+    i64,
+    String,
+    Option<String>,
+    String,
+    bool,
+    RecipeState,
+);
 
 /// A probe's estimated cost in `unit`: `probe_dollars`, or the share of the `tier`'s 5-hour window at `at` (the band
 /// inside the price). `None` on the share side alone, for a model the subscription cost model has no weight for, or a
@@ -212,6 +225,7 @@ impl Engine {
         account: Option<&str>,
         canonical_model: &str,
         fast: bool,
+        state: RecipeState,
     ) {
         let mut d = delta(
             at,
@@ -225,6 +239,7 @@ impl Engine {
         );
         d.probes_skipped = 1;
         self.parts.ledger.record(Record::Keepalive(d));
+        self.parts.metrics.observe_skipped(pool_id, state.as_str());
     }
 
     /// Drains what the last locked section queued: the settlements of stopped recipes and the probes a gate
@@ -234,8 +249,7 @@ impl Engine {
         let (settlements, skipped) = {
             let mut inner = self.lock();
             let queued = std::mem::take(&mut inner.skipped);
-            let mut skipped: Vec<(SessionKey, i64, String, Option<String>, String, bool)> =
-                Vec::new();
+            let mut skipped: Vec<QueuedSkip> = Vec::new();
             for (key, agent_id) in queued {
                 let Some(agent) = inner
                     .sessions
@@ -251,6 +265,7 @@ impl Engine {
                     agent.account.clone(),
                     agent.canonical_model.clone(),
                     agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+                    recipe_state(agent.reason, agent.paused),
                 ));
             }
             (std::mem::take(&mut inner.settlements), skipped)
@@ -258,7 +273,7 @@ impl Engine {
         for settlement in settlements {
             self.record_settlement(now, settlement);
         }
-        for (key, key_generation, pool_id, account, model, fast) in skipped {
+        for (key, key_generation, pool_id, account, model, fast, state) in skipped {
             self.record_skipped(
                 now,
                 &key,
@@ -267,6 +282,7 @@ impl Engine {
                 account.as_deref(),
                 &model,
                 fast,
+                state,
             );
         }
     }

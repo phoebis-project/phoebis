@@ -69,8 +69,9 @@ under the pool's idle limits, counted from the last real request, until the comp
 limits run out. A session the router saw but no companion ever reported for shows none: the router still pins it
 and still sees its requests.
 
-The bootstrap file's `keepalive` block holds the process-wide record and byte bounds alone and is read once at start;
-changing it takes a restart. The lease and the four probe workers are fixed. See
+The bootstrap file's `keepalive` block holds the process-wide bounds alone: `max_sessions`, `max_agents` and
+`max_retained_bytes`. It is read once at start, so changing it takes a restart, and the Sessions page shows each bound
+beside the count it bounds (see [In the console](#in-the-console)). The lease and the four probe workers are fixed. See
 [the bootstrap file](installation.md#the-bootstrap-file).
 
 ## Turning it on
@@ -382,8 +383,11 @@ reason. `probes_skipped` counts a due probe a gate or a lapsed entry withheld ra
 cooldown already held the recipe.
 
 `GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`ok`, `failed`, `migrated`,
-`skipped`). Its `bus_gaps` counts the times the engine found it had missed bus events; each gap discarded every
-observation still open, so those agents wait for their next request while an armed recipe keeps its schedule.
+`skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the
+pool's [idle-age counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and
+retained bytes, each beside its cap. Its `bus_gaps` counts the times the engine found it had missed bus events. Each gap
+discarded every observation still open, so those agents wait for their next request while an armed recipe keeps its
+schedule.
 
 ## In the console
 
@@ -392,8 +396,11 @@ session's fork badge](assets/sessions-light.png#only-light)
 ![The Sessions view: summary tiles, the cost reference link, and the session table with its Columns control and a forked
 session's fork badge](assets/sessions-dark.png#only-dark)
 
-The Sessions view opens with tiles for the session count, the cache-warming agents by state, cache probes in the last 24
-hours by outcome, sessions whose cache expired between turns, and the keepalive engine's bus gaps. A tile whose read
+The Sessions view opens with a strip of tiles. Sessions, Agents and Retained read the keepalive engine's sessions, agent
+records and retained prompt bytes, each as a count of the cap the bootstrap file sets (`3 of 128`, `12 of 1,024`,
+`40 MiB of 256 MiB`). The Sessions tile's note counts the listed rows with a companion and with a recipe, and the Agents
+tile's note the agents holding a recipe by state. Then come cache probes in the last 24 hours by outcome, sessions whose
+cache expired between turns, and the keepalive engine's bus gaps, the times it missed bus events. A tile whose read
 failed draws a dash with the reason on hover, and Try again under the tiles reads them again, as a line above the table
 does for a failed account read. Its table lists one row per session, led by the row's menu, and offers eleven columns,
 eight shown by default (last request, agents and next probe start hidden, and the Columns control turns
@@ -423,4 +430,5 @@ requests](assets/analytics-cache-warming-dark.png#only-dark)
 
 The Analytics view's Cache warming section draws the probe cost and the kept-warm count, probes by outcome, wasted
 probes by reason, kept-warm requests and tokens, and cache warming by pool. Prometheus carries
-`phoebis_keepalive_agents` and `phoebis_keepalive_probes_total` (see [Statistics](statistics.md)).
+`phoebis_keepalive_agents`, `phoebis_keepalive_probes_total` by pool and outcome, and `phoebis_keepalive_skipped_total`
+by pool and recipe state (see [Statistics](statistics.md#metrics)).

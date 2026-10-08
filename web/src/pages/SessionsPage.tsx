@@ -9,7 +9,7 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
 import { IconChevron } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, EmptyState, ErrorState, Menu, Skeleton, useDescription } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtDuration, fmtInt, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
+import { fmtAbsolute, fmtDuration, fmtInt, fmtMiB, fmtPct, fmtRelative, shortId, shortModel, undatedModel } from '@/lib/format';
 import { CAUSE_HINT, CAUSE_LABEL, WARNING_CAUSES } from '@/lib/keepalive';
 import { useAsync, useNow } from '@/lib/hooks';
 import type { BadgeTone } from '@/lib/quota';
@@ -247,8 +247,19 @@ export function SessionsPage() {
       </div>
 
       <div className="stat-grid stat-grid--fit">
-        <Tile label="Sessions" value={rows ? fmtInt(rows.length) : null} note={sessionsNote} />
-        <Tile label="Cache-warming agents" value={o ? `${o.agents.busy} busy` : null} note={o ? `${o.agents.idle} idle, ${o.agents.parked} parked` : null} error={overviewError} />
+        <Tile label="Sessions" value={o ? `${fmtInt(o.limits.sessions.count)} of ${fmtInt(o.limits.sessions.max)}` : null} note={sessionsNote} error={overviewError} />
+        <Tile
+          label="Agents"
+          value={o ? `${fmtInt(o.limits.agents.count)} of ${fmtInt(o.limits.agents.max)}` : null}
+          note={o ? `${fmtInt(o.agents.busy)} busy, ${fmtInt(o.agents.idle)} idle, ${fmtInt(o.agents.parked)} parked` : null}
+          error={overviewError}
+        />
+        <Tile
+          label="Retained"
+          value={o ? `${fmtMiB(o.limits.retainedBytes.count)} of ${fmtMiB(o.limits.retainedBytes.max)}` : null}
+          note="prompts kept for probes"
+          error={overviewError}
+        />
         <ProbeTile overview={o} error={overviewError} />
         {/* The count is router-wide, so a warm tone means at least one pool is paying for probes that did not land. */}
         <Tile

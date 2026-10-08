@@ -185,6 +185,8 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
   busGaps: 0,
   expiredBetweenTurns24h: 0,
+  limits: { agents: { count: 0, max: 1_024 }, retainedBytes: { count: 0, max: 256 * 1_048_576 }, sessions: { count: 0, max: 128 } },
+  pools: [],
   probes24h: { failed: 0, migrated: 0, ok: 0, skipped: 0 },
 };
 

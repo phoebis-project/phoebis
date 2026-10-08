@@ -253,7 +253,8 @@ rendered:
 | `phoebis_bus_dropped_total` | counter | `subscriber` |
 | `phoebis_bus_subscriber_panics_total` | counter | `subscriber` |
 | `phoebis_keepalive_agents` | gauge | `state` |
-| `phoebis_keepalive_probes_total` | counter | `account`, `outcome` |
+| `phoebis_keepalive_probes_total` | counter | `outcome`, `pool` |
+| `phoebis_keepalive_skipped_total` | counter | `pool`, `state` |
 | `phoebis_ledger_behind_refusals_total` | counter | none |
 | `phoebis_ledger_degraded` | gauge | none |
 | `phoebis_ledger_dropped_total` | counter | `table` |
@@ -271,8 +272,12 @@ rendered:
 The `model` label is bounded by the price table: a model reads as the table entry that prices it, its own id or, for a
 dated id priced under its undated base, that base; every other model is reported as `other`, so a downstream caller
 cannot grow the label set by naming models it likes.
-`phoebis_keepalive_probes_total`'s `account` label reads `-` for a probe cancelled before any account was
-attributed, the same reserved id a request row with no account reads under.
+`phoebis_keepalive_probes_total` counts each probe under its pool and one of four outcomes: `landed` when it read the
+whole prefix back, or wrote it on the account a migration moved it to, `cold` when the upstream served it without that
+read, `failed` when the upstream did not serve it, and `held` when the router refused it while its ledger was behind.
+`phoebis_keepalive_skipped_total` counts a due probe the engine withheld, under its pool and the recipe's state, one of
+[the five states](keepalive.md#the-five-states): `held` or `paused` for a gate that held it, `ended` for an entry that
+lapsed before it.
 `phoebis_account_cooldown_seconds`, `phoebis_account_overage_in_use`, `phoebis_keepalive_agents`, and
 `phoebis_pins_active` are the four routing-state gauges; each is computed fresh from the router's own snapshot on every
 scrape rather than accumulated between them. `phoebis_pins_active` is counted per pool by the routing loop itself, so
@@ -601,12 +606,11 @@ its subtitle says so.
 ### Settings
 
 Settings opens on the downstream client configuration, the six-line environment block that points Claude Code at the
-router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and
-the address the listener binds shows beside the block. Then come the appearance and time-format choices, and an About
-card with the version, the profile, the metrics listener, the four storage paths (the price table's and the cost model's
-each with its effective date), the three keepalive limits the file sets and the admin secret's standing. About closes on
-a pointer: the values the configuration file sets are on the [installation page](installation.md), and
-`phoebis check-config` prints them.
+router with a reason under each line. Its base URL is a placeholder for the URL that reaches the proxy listener, and the
+address the listener binds shows beside the block. Then come the appearance and time-format choices, and an About card
+with the version, the profile, the metrics listener, the four storage paths (the price table's and the cost model's each
+with its effective date) and the admin secret's standing. About closes on a pointer: the values the configuration file
+sets are on the [installation page](installation.md), and `phoebis check-config` prints them.
 
 ## Conditions and gauges
 

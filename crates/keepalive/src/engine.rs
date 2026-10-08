@@ -28,6 +28,7 @@ use crate::persist::Dirty;
 use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
 use crate::usage::ProbeUsage;
+use crate::view::{recipe_state, RecipeState};
 
 const LOCK_POISONED: &str = "keepalive engine poisoned by a prior panic";
 
@@ -116,6 +117,19 @@ pub enum Wasted {
 }
 
 impl Wasted {
+    /// Every label, so a reader lists the ones no probe carried at zero rather than leaving them out.
+    pub const ALL: [Wasted; 9] = [
+        Wasted::ColdReturn,
+        Wasted::Evicted,
+        Wasted::Expired,
+        Wasted::Horizon,
+        Wasted::IdleLimit,
+        Wasted::ParkedLimit,
+        Wasted::Released,
+        Wasted::Replaced,
+        Wasted::SessionEnded,
+    ];
+
     pub fn as_str(self) -> &'static str {
         match self {
             Wasted::ColdReturn => "cold_return",
@@ -404,6 +418,8 @@ pub struct EngineStats {
     /// The request events (a selection, a head, a chunk, a completion, a new request) and the reports refused because
     /// they arrived after the shutdown's quiesce, so the state the last save holds is the state at the quiesce.
     pub late_updates: u64,
+    /// The sessions `max_sessions` bounds: an ended session keeps its entry until the expiry and holds no slot.
+    pub live_sessions: usize,
     pub retained_bytes: usize,
     pub running_probes: usize,
     pub sessions: usize,
@@ -785,6 +801,7 @@ struct Skipped {
     account: Option<String>,
     canonical_model: String,
     fast: bool,
+    state: RecipeState,
 }
 
 /// Unanswered probes with the rollup keys they were paid under, which their settlement files under.
@@ -955,6 +972,7 @@ impl Engine {
             agents: inner.agents,
             bus_gaps: inner.bus_gaps,
             late_updates: inner.late_updates,
+            live_sessions: inner.sessions.values().filter(|s| !s.ended).count(),
             retained_bytes: inner.retained,
             running_probes: inner.running,
             sessions: inner.sessions.len(),
@@ -1240,6 +1258,8 @@ impl Inner {
                 account: agent.account.clone(),
                 canonical_model: agent.canonical_model.clone(),
                 fast: agent.current.as_ref().is_some_and(|o| o.recipe.fast),
+                // The lapse is what withholds the probe, so it counts under the state the discard below leaves.
+                state: recipe_state(Reason::Expired, agent.paused),
             });
         }
         self.discard(key, agent_id, Reason::Expired, Some(Wasted::Expired));
@@ -2553,6 +2573,7 @@ impl Engine {
                 skip.account.as_deref(),
                 &skip.canonical_model,
                 skip.fast,
+                skip.state,
             );
         }
         for (job, token) in jobs {

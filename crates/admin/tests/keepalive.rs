@@ -546,7 +546,6 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
         (row["companion"].as_str(), row["companion_since"].as_i64()),
         (Some("silent"), Some(now))
     );
-    // The view counts its sessions over the rows it lists, so the overview answers the tiles' figures alone.
     let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
     assert_eq!(
         overview
@@ -559,15 +558,19 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             "agents",
             "bus_gaps",
             "expired_between_turns_24h",
+            "limits",
+            "pools",
             "probes_24h"
         ]
     );
     assert_eq!(
         (
             overview["agents"]["busy"].as_u64(),
-            overview["bus_gaps"].as_u64()
+            overview["bus_gaps"].as_u64(),
+            overview["limits"]["sessions"]["count"].as_u64(),
+            overview["limits"]["agents"]["count"].as_u64()
         ),
-        (Some(1), Some(0))
+        (Some(1), Some(0), Some(1), Some(1))
     );
     // Release discards the recipes; with no pin the router releases nothing, and the route still answers 204.
     let released = post(
@@ -613,6 +616,295 @@ async fn the_sessions_view_carries_the_companion_and_the_recipes_and_release_dis
             system["keepalive"]["running_probes"].as_u64()
         ),
         (Some(1), Some(0))
+    );
+}
+
+/// The ten idle-age buckets as the overview answers them, `reached` raised in the buckets `reached` names.
+fn idle_returns(reached: &[usize]) -> serde_json::Value {
+    let bounds = phoebis_keepalive::IDLE_AGE_BOUNDS_SECONDS;
+    serde_json::Value::Array(
+        bounds
+            .iter()
+            .enumerate()
+            .map(|(i, from)| {
+                serde_json::json!({
+                    "from_seconds": from,
+                    "reached": u64::from(reached.contains(&i)),
+                    "returned": 0,
+                    "to_seconds": bounds.get(i + 1),
+                })
+            })
+            .collect(),
+    )
+}
+
+/// Every wasted reason word at zero but the ones `counts` names.
+fn wasted_reasons(counts: &[(&str, u64)]) -> serde_json::Value {
+    let mut reasons = serde_json::Map::new();
+    for word in [
+        "cold_return",
+        "evicted",
+        "expired",
+        "horizon",
+        "idle_limit",
+        "parked_limit",
+        "released",
+        "replaced",
+        "session_ended",
+    ] {
+        let count = counts
+            .iter()
+            .find(|(w, _)| *w == word)
+            .map_or(0, |(_, n)| *n);
+        reasons.insert(word.into(), count.into());
+    }
+    serde_json::Value::Object(reasons)
+}
+
+/// The overview answers the session count, the agent count and the retained bytes each beside its cap, and per pool the
+/// last 24 hours' probes, credits and wasted probes joined by pool id with the idle-age counters: a pool one source
+/// alone names lists with zeros for the other, and a row filed under no pool lists under its account, as the counters
+/// key it.
+#[tokio::test]
+async fn the_overview_answers_the_counts_beside_their_caps_and_each_pools_day_and_idle_returns() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    post(
+        &parts.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&cookie),
+    )
+    .await;
+    let generation = common::generation(&parts.store, "desktop");
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            generation,
+            Event {
+                event: "session_start".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    let now = common::NOW;
+    parts.keepalive.observe(phoebis_bus::Event::RequestObserved(phoebis_bus::RequestObserved { request_id: "r1".into(), origin: phoebis_bus::Origin::Client, kind: phoebis_bus::Kind::Inference, key_id: Some("desktop".into()), key_generation: generation, pool_id: Some("main".into()), session_id: Some("s1".into()), agent_id: Some("main".into()), parent_agent_id: None, owner_id: None, model: "claude-sonnet-5".into(), canonical_model: "claude-sonnet-5".into(), wire_model: "claude-sonnet-5".into(), stream: false, headers: vec![], body: bytes::Bytes::from(r#"{"model":"claude-sonnet-5","max_tokens":10,"messages":[{"role":"user","content":"hi"}]}"#), body_capture_hours: 0, shape: phoebis_bus::RequestShape::default(), static_hash: None, boundaries: Vec::new(), client: phoebis_bus::ClientFacts::default(), auto_mode: None, fork: phoebis_bus::Fork::default(), presented_retired: false, rotation_at: None, received_at: now }));
+    parts.keepalive.observe(phoebis_bus::Event::AccountSelected(
+        phoebis_bus::AccountSelected {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: "direct".into(),
+            account_kind: "api_key".into(),
+            pin_epoch: Some(1),
+            started_at: now,
+            cache_ttl_ms: None,
+            selection: None,
+        },
+    ));
+    parts.keepalive.observe(phoebis_bus::Event::RequestComplete(
+        phoebis_bus::RequestComplete {
+            request_id: "r1".into(),
+            attempt: 1,
+            account_id: Some("direct".into()),
+            outcome: phoebis_bus::Outcome::Succeeded,
+            status: 200,
+            usage: Some(phoebis_bus::Usage {
+                cache_write_5m_tokens: Some(2_000),
+                ..Default::default()
+            }),
+            response: phoebis_bus::ResponseFacts::default(),
+            ttfb_ms: None,
+            ttfc_ms: None,
+            error_code: None,
+            client_drift: None,
+            client_version: None,
+            response_bytes: None,
+            response_chunks: None,
+            held: None,
+            message_id: None,
+            finished_at: now,
+        },
+    ));
+    // Main goes idle, and the next tick opens its idle window in the first bucket.
+    let request_generation = parts
+        .keepalive
+        .agent_status("desktop", "s1", "main")
+        .unwrap()
+        .request_generation;
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            generation,
+            Event {
+                event: "state".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 2,
+                agent_id: Some("main".into()),
+                state: Some("idle".into()),
+                request_generation: Some(request_generation),
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    parts.keepalive.step().await;
+    let retained = parts.keepalive.stats().retained_bytes;
+    assert!(retained > 0, "the request's recipe is retained");
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    assert_eq!(
+        overview["limits"],
+        serde_json::json!({
+            "agents": { "count": 1, "max": 1_024 },
+            "retained_bytes": { "count": retained, "max": 268_435_456 },
+            "sessions": { "count": 1, "max": 128 },
+        }),
+        "each count beside the cap the bootstrap file sets"
+    );
+    assert_eq!(
+        overview["pools"],
+        serde_json::json!([{
+            "credited_24h": 0,
+            "idle_returns": idle_returns(&[0]),
+            "pool_id": "main",
+            "probes_24h": 0,
+            "wasted_24h": 0,
+            "wasted_reasons_24h": wasted_reasons(&[]),
+        }]),
+        "a pool with idle-age counters and no ledger rows lists with zeros"
+    );
+    // Two probes in the day, one on a pool the engine holds no counters for, one a day ago, a credit, wasted probes
+    // with their reasons, and one wasted probe filed under no pool.
+    parts
+        .db
+        .write(|c| {
+            let tx = c.transaction()?;
+            for (id, pool, at) in [
+                ("p1", "main", now),
+                ("p2", "night", now),
+                ("p0", "main", now - 25 * 3_600_000),
+            ] {
+                phoebis_ledger::fold_request(
+                    &tx,
+                    &phoebis_ledger::RequestRecord {
+                        id: id.into(),
+                        received_at: at,
+                        key_id: Some("desktop".into()),
+                        pool_id: Some(pool.into()),
+                        canonical_model: "claude-sonnet-5".into(),
+                        kind: "probe".into(),
+                        outcome: "succeeded".into(),
+                        status: Some(200),
+                        ..Default::default()
+                    },
+                    &[],
+                    None,
+                )?;
+            }
+            let delta = |pool: &str, account: &str, kind: &str| phoebis_ledger::KeepaliveDelta {
+                at: now,
+                key_id: "desktop".into(),
+                pool_id: pool.into(),
+                account_id: account.into(),
+                canonical_model: "claude-sonnet-5".into(),
+                kind: kind.into(),
+                ..Default::default()
+            };
+            phoebis_ledger::fold_keepalive(
+                &tx,
+                &phoebis_ledger::KeepaliveDelta {
+                    kept_warm_requests: 1,
+                    kept_warm_tokens: 2_000,
+                    ..delta("main", "direct", "inference")
+                },
+            )?;
+            phoebis_ledger::fold_keepalive(
+                &tx,
+                &phoebis_ledger::KeepaliveDelta {
+                    wasted_probes: 3,
+                    wasted_probe_reasons: [
+                        ("horizon".to_string(), 1),
+                        ("idle_limit".to_string(), 2),
+                    ]
+                    .into(),
+                    ..delta("main", "direct", "probe")
+                },
+            )?;
+            phoebis_ledger::fold_keepalive(
+                &tx,
+                &phoebis_ledger::KeepaliveDelta {
+                    wasted_probes: 1,
+                    wasted_probe_reasons: [("expired".to_string(), 1)].into(),
+                    ..delta("", "solo", "probe")
+                },
+            )?;
+            tx.commit()?;
+            Ok(())
+        })
+        .unwrap();
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    assert_eq!(
+        overview["pools"],
+        serde_json::json!([
+            {
+                "credited_24h": 1,
+                "idle_returns": idle_returns(&[0]),
+                "pool_id": "main",
+                "probes_24h": 1,
+                "wasted_24h": 3,
+                "wasted_reasons_24h": wasted_reasons(&[("horizon", 1), ("idle_limit", 2)]),
+            },
+            {
+                "credited_24h": 0,
+                "idle_returns": idle_returns(&[]),
+                "pool_id": "night",
+                "probes_24h": 1,
+                "wasted_24h": 0,
+                "wasted_reasons_24h": wasted_reasons(&[]),
+            },
+            {
+                "credited_24h": 0,
+                "idle_returns": idle_returns(&[]),
+                "pool_id": "solo",
+                "probes_24h": 0,
+                "wasted_24h": 1,
+                "wasted_reasons_24h": wasted_reasons(&[("expired", 1)]),
+            },
+        ]),
+        "the day's rows join the counters by pool id, the day-old probe outside the window"
+    );
+    assert_eq!(
+        overview["probes_24h"]["ok"].as_u64(),
+        Some(2),
+        "the router-wide count reads the same window"
+    );
+    // An ended session keeps its entry until the expiry and holds no slot, so the count beside the cap leaves it out.
+    for (event, sequence) in [("session_start", 1), ("session_end", 2)] {
+        parts
+            .keepalive
+            .apply_event(
+                "desktop",
+                generation,
+                Event {
+                    event: event.into(),
+                    session_id: "s2".into(),
+                    instance_id: "i2".into(),
+                    sequence,
+                    ..Default::default()
+                },
+            )
+            .unwrap();
+    }
+    assert_eq!(parts.keepalive.stats().sessions, 2, "the ended entry stays");
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    assert_eq!(
+        overview["limits"]["sessions"],
+        serde_json::json!({ "count": 1, "max": 128 })
     );
 }
 

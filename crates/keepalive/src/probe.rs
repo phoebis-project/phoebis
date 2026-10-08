@@ -100,6 +100,31 @@ impl ProbeOutcome {
     }
 }
 
+/// The word the probe counter files a probe under: a served probe landed when it read its prefix back and was cold
+/// otherwise, and every other outcome is one the upstream did not serve. Every outcome is named, so one added later
+/// fails to build here rather than counting as `failed` unread.
+pub fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'static str {
+    match outcome {
+        ProbeOutcome::Migrated | ProbeOutcome::Ok if cache_read => "landed",
+        ProbeOutcome::Migrated | ProbeOutcome::Ok => "cold",
+        ProbeOutcome::Cancelled
+        | ProbeOutcome::Exhausted
+        | ProbeOutcome::Failed
+        | ProbeOutcome::RateLimited
+        | ProbeOutcome::Rejected
+        | ProbeOutcome::TimedOut => "failed",
+    }
+}
+
+/// The cold judgment `apply_probe` makes, shared with the probe counter so the counter's `cold` is the streak's.
+pub(crate) fn covers(migrated: bool, usage: &ProbeUsage, expected: u64) -> bool {
+    if migrated {
+        usage.evidence() >= expected
+    } else {
+        usage.read >= expected
+    }
+}
+
 /// What one probe cost and how it ended, from the job and the exchange alone. Whether the recipe it ran for
 /// still exists changes nothing here: the upstream served it, so the pool's spend, the metrics, and the ledger
 /// carry it either way.
@@ -306,10 +331,17 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         (record, applied)
     };
     engine.record_probe(&record, applied, now);
-    engine
-        .parts
-        .metrics
-        .observe_probe(&record.account, record.outcome.as_str());
+    // Read off the answer rather than off what the fenced half did with it, so a probe whose recipe moved on while it
+    // was in flight, or paused on its answer, still counts as the upstream served it.
+    let cache_read = covers(
+        record.outcome == ProbeOutcome::Migrated,
+        &record.usage,
+        job.expected,
+    );
+    engine.parts.metrics.observe_probe(
+        &record.pool_id,
+        probe_outcome_label(record.outcome, cache_read),
+    );
     engine.flush();
     // The worker slot comes back only after both sends: `wait_idle` returns on a zero count, and a caller that
     // asserts on the ledger right after it would otherwise race the records this probe owes.
@@ -542,11 +574,7 @@ impl Inner {
         // write beside it is the prefix rebuilt rather than kept. A migrated probe wrote the prefix on its
         // new account instead, and that write is the coverage the next request reads there; it does not count
         // toward the cold streak.
-        let covered = if migrated {
-            usage.evidence() >= job.expected
-        } else {
-            usage.read >= job.expected
-        };
+        let covered = covers(migrated, &usage, job.expected);
         if !migrated {
             if covered {
                 agent.cold = 0;
@@ -1234,5 +1262,56 @@ mod tests {
             "Opus 5 has no weight, so the share is unpriced and the dollar unit governs"
         );
         assert!(dollars > 0.0);
+    }
+
+    #[test]
+    fn a_probe_reads_landed_cold_or_failed_by_its_outcome_and_its_cache_read() {
+        for outcome in [ProbeOutcome::Migrated, ProbeOutcome::Ok] {
+            assert_eq!(
+                (
+                    probe_outcome_label(outcome, true),
+                    probe_outcome_label(outcome, false)
+                ),
+                ("landed", "cold"),
+                "{outcome:?}"
+            );
+        }
+        for outcome in [
+            ProbeOutcome::Cancelled,
+            ProbeOutcome::Exhausted,
+            ProbeOutcome::Failed,
+            ProbeOutcome::RateLimited,
+            ProbeOutcome::Rejected,
+            ProbeOutcome::TimedOut,
+        ] {
+            assert_eq!(
+                (
+                    probe_outcome_label(outcome, true),
+                    probe_outcome_label(outcome, false)
+                ),
+                ("failed", "failed"),
+                "{outcome:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_probe_covers_its_prefix_by_reading_it_back_or_by_writing_it_after_a_migration() {
+        let usage = |read, write| ProbeUsage {
+            read,
+            write,
+            ..ProbeUsage::default()
+        };
+        assert_eq!(
+            [
+                covers(false, &usage(2_000, 0), 2_000),
+                covers(false, &usage(1_999, 1), 2_000),
+                covers(false, &usage(0, 2_000), 2_000),
+                covers(true, &usage(0, 2_000), 2_000),
+                covers(true, &usage(0, 1_999), 2_000),
+            ],
+            [true, false, false, true, false],
+            "a whole read, a partial read, a rebuild, a migrated write, a migrated short write"
+        );
     }
 }

@@ -733,8 +733,8 @@ async fn an_oversized_or_stalled_probe_body_releases_the_worker_and_shutdown_fin
         .metrics
         .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
     assert!(
-        text.contains(r#"phoebis_keepalive_probes_total{account="a",outcome="timed_out"} 1"#),
-        "{text}"
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="failed",pool="main"} 1"#),
+        "a probe that never answered counts as failed under its pool: {text}"
     );
     r.up.release();
     // Shutdown with a stalled probe in flight ends inside the drain window: the cancellation wins the select.
@@ -853,18 +853,13 @@ async fn a_migration_does_not_accumulate_a_cold_streak() {
     let text = r
         .metrics
         .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
-    let other_id = if first == "a" { "b" } else { "a" };
     assert!(
-        text.contains(&format!(
-            r#"phoebis_keepalive_probes_total{{account="{other_id}",outcome="migrated"}} 1"#
-        )),
-        "{text}"
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="landed",pool="main"} 1"#),
+        "the migrated probe's write covers the prefix on its new account: {text}"
     );
     assert!(
-        text.contains(&format!(
-            r#"phoebis_keepalive_probes_total{{account="{other_id}",outcome="ok"}} 2"#
-        )),
-        "{text}"
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"} 2"#),
+        "the two probes after it read nothing back: {text}"
     );
     assert_eq!(
         status.account_id.as_deref(),
@@ -880,6 +875,90 @@ async fn a_migration_does_not_accumulate_a_cold_streak() {
             r.status("main").next_probe_at
         ),
         (3, Reason::RepeatedColdProbe, None)
+    );
+}
+
+/// The series of one family in a scrape of the rig's metrics, in the order the scrape renders them.
+fn series(r: &Rig, family: &str) -> Vec<String> {
+    r.metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0)
+        .lines()
+        .filter(|line| line.starts_with(&format!("{family}{{")))
+        .map(str::to_string)
+        .collect()
+}
+
+/// A probe counts once under its pool: `landed` when it read the prefix back, `cold` when the upstream served it
+/// without that read, and `failed` when the upstream did not serve it.
+#[tokio::test]
+async fn each_probe_counts_once_under_its_pool_as_landed_cold_or_failed() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    // The standing answer reads the whole prefix back.
+    r.advance(270_000);
+    r.step().await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.advance(270_000);
+    r.step().await;
+    r.up.push_credential_rule(
+        A,
+        "/v1/messages",
+        json(
+            503,
+            r#"{"type":"error","error":{"type":"api_error","message":"x"}}"#,
+        ),
+    );
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").probes, r.status("main").reason),
+        (3, Reason::RetryableProbeError)
+    );
+    assert_eq!(
+        series(&r, "phoebis_keepalive_probes_total"),
+        [
+            r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"} 1"#,
+            r#"phoebis_keepalive_probes_total{outcome="failed",pool="main"} 1"#,
+            r#"phoebis_keepalive_probes_total{outcome="landed",pool="main"} 1"#,
+        ]
+    );
+}
+
+/// A probe a gate withholds counts once under its pool and the state the hold leaves the recipe in, however many ticks
+/// the hold spans, and a probe a lapsed entry withholds counts under `ended`, the state the lapse ends the recipe in.
+#[tokio::test]
+async fn a_withheld_probe_counts_under_its_pool_and_the_state_that_withheld_it() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    over_budget(&r).await;
+    r.advance(270_000);
+    r.step().await;
+    r.advance(1_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").reason, r.status("main").probes),
+        (Reason::Budget, 0)
+    );
+    assert_eq!(
+        series(&r, "phoebis_keepalive_skipped_total"),
+        [r#"phoebis_keepalive_skipped_total{pool="main",state="held"} 1"#]
+    );
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    r.advance(20 * MINUTE);
+    r.step().await;
+    assert_eq!(r.status("main").reason, Reason::Expired);
+    assert_eq!(
+        series(&r, "phoebis_keepalive_skipped_total"),
+        [r#"phoebis_keepalive_skipped_total{pool="main",state="ended"} 1"#]
     );
 }
 

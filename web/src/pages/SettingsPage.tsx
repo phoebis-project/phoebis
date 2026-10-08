@@ -3,7 +3,6 @@ import { effectiveLabel } from '@/api/decode';
 import { useAppSettings, type ThemeChoice } from '@/app/settings';
 import { IconMonitor, IconMoon, IconSun } from '@/components/ui/icons';
 import { Badge, Button, Card, CopyButton, ErrorState, KeyValue, Segmented, Skeleton } from '@/components/ui/primitives';
-import { fmtMiB } from '@/lib/format';
 import type { TimeFormat } from '@/lib/format';
 import { useAsync } from '@/lib/hooks';
 import { snippetFor } from '@/lib/snippet';
@@ -15,7 +14,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
   {
     term: 'CLAUDE_CODE_OAUTH_TOKEN',
-    body: 'Holds the router key. Claude Code treats it as a subscription credential, which keeps the one-hour cache TTL, the unified rate-limit headers, and the automatic continue after a usage window resets; an ANTHROPIC_API_KEY would switch those off.',
+    body: 'Holds the router key. Claude Code treats it as a subscription credential, which keeps the one-hour cache TTL, the unified rate-limit headers, and the automatic continue after a usage window resets. An ANTHROPIC_API_KEY would switch those off.',
   },
   {
     term: '_CLAUDE_CODE_ASSUME_FIRST_PARTY_BASE_URL=1',
@@ -23,7 +22,7 @@ const ENV_TERMS: { body: string; term: string }[] = [
   },
   {
     term: 'CLAUDE_CODE_GATEWAY_HINT_HEADERS=1',
-    body: 'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read; under the first-party flag above they arrive anyway.',
+    body: 'Makes the client send its gateway hint headers (the agent type, the compaction marks and the tool durations), which the request log and the analytics read. Under the first-party flag above they arrive anyway.',
   },
   {
     term: 'DISABLE_TELEMETRY=1',
@@ -41,7 +40,6 @@ const ENV_TERMS: { body: string; term: string }[] = [
 
 /** These come from the configuration file and the admin API only reads them, so each says where it is set. */
 const bootstrapNote = (setting: string) => `Set by ${setting} in the configuration file`;
-const restartNote = (key: string) => `${key}\nSet in the configuration file; a change takes a restart.`;
 
 function SecretBadge({ configured }: { configured: boolean }) {
   return <Badge tone={configured ? 'good' : 'warning'}>{configured ? 'configured' : 'not configured'}</Badge>;
@@ -126,9 +124,6 @@ export function SettingsPage() {
                 { label: 'API prices path', value: `${s.storage.apiPricesPath ?? 'not configured'}, effective ${effectiveLabel(s.apiPrices.effective)}`, mono: s.storage.apiPricesPath !== null, title: bootstrapNote('stats.api_prices_path') },
                 { label: 'Subscription costs path', value: `${s.storage.subscriptionCostsPath ?? 'not configured'}${s.subscriptionCosts.problem === null ? `, effective ${effectiveLabel(s.subscriptionCosts.effective)}` : `. ${s.subscriptionCosts.problem}`}`, mono: s.subscriptionCosts.problem === null && s.storage.subscriptionCostsPath !== null, title: bootstrapNote('stats.subscription_costs_path') },
                 { label: 'Storage path', value: s.storage.path, mono: true, title: bootstrapNote('storage.path') },
-                { label: 'Keepalive sessions', value: String(s.keepalive.maxSessions), mono: true, title: restartNote('keepalive.max_sessions') },
-                { label: 'Keepalive agents', value: String(s.keepalive.maxAgents), mono: true, title: restartNote('keepalive.max_agents') },
-                { label: 'Keepalive retained bytes', value: fmtMiB(s.keepalive.maxRetainedBytes), mono: true, title: restartNote('keepalive.max_retained_bytes') },
                 { label: 'Admin secret', value: <SecretBadge configured={s.access.adminConfigured} />, title: 'The secret the variable admin.secret_env names; it reaches every route.' },
               ]}
             />
