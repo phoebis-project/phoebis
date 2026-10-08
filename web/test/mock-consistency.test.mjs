@@ -133,7 +133,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         const [id, generation] = g.key.split('@');
         named(labels, id, `the ${groupBy} grouping`);
         // The route labels a group by its key in every dimension, and a key group by the key's name, which is its id;
-        // an earlier holder of a reused key id is its own group, labelled with the id and its creation time.
+        // an earlier holder of a reused key id is its own group, labeled with the id and its creation time.
         if (generation === undefined) assert.equal(g.label, groupBy === 'key' ? labels.get(id) : id, `the ${groupBy} grouping labels ${id}`);
         else assert.ok(id === desktop.id && g.label.startsWith(`${id} (deleted, created `), `the ${groupBy} grouping labels ${g.key} as an earlier holder`);
       }

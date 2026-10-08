@@ -287,7 +287,7 @@ fn raw_request(addr: SocketAddr, trace: &str) -> Vec<u8> {
 }
 
 /// Reads one whole response off the socket, so the connection is ready for the next request. A relayed body
-/// reaches the caller in hyper's chunked framing, so both endings have to be recognised.
+/// reaches the caller in hyper's chunked framing, so both endings have to be recognized.
 async fn read_response(socket: &mut (impl AsyncRead + Unpin)) -> String {
     let mut buffer = Vec::new();
     loop {

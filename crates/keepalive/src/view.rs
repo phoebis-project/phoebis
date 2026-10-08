@@ -243,7 +243,7 @@ impl Engine {
         counts
     }
 
-    /// The operator's release: every recipe of the session goes, labelled `released`, and the session stays
+    /// The operator's release: every recipe of the session goes, labeled `released`, and the session stays
     /// registered so its companion keeps reporting.
     pub fn release(&self, key_id: &str, session_id: &str) -> usize {
         let key = (key_id.to_string(), session_id.to_string());

@@ -536,7 +536,7 @@ function MetricStrip({ tick }: { tick: LiveTick | null }) {
 // A stream can commit its 200 head and fail after it, so a finished 200 reads as a success only without an error.
 const statusDot = (r: LiveRequest) => (r.state === 'in_flight' ? 'ldot--inflight' : r.status === 200 && r.errorCode === null ? 'ldot--ok' : r.status === 429 ? 'ldot--warn' : 'ldot--bad');
 const statusTone = (r: LiveRequest) => (r.status === 200 && r.errorCode === null ? 'good' : r.status === 429 ? 'warning' : r.status === 529 ? 'serious' : 'critical');
-// The Status badge is the readable signal; the dot only repeats it in colour, so its name is for a pointer's hover.
+// The Status badge is the readable signal; the dot only repeats it in color, so its name is for a pointer's hover.
 const DOT_TITLE = { 'ldot--bad': 'failed', 'ldot--inflight': 'in flight', 'ldot--ok': 'succeeded', 'ldot--warn': 'rate limited' };
 
 const LiveRow = memo(function LiveRow({ r, selected, onSelect, frozenAt }: { frozenAt: number | null; onSelect: (id: string, opener: HTMLElement | null) => void; r: LiveRequest; selected: boolean }) {

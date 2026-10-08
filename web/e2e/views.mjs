@@ -28,7 +28,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 /**
  * Every tree a screenshot must stay out of. A checkout is several trees at once, and the walk up to the
  * nearest Cargo.toml only ever finds the one this script runs from, so git names the rest; the walk is the
- * fallback for a host without git, or a tree git does not recognise.
+ * fallback for a host without git, or a tree git does not recognize.
  */
 function repositoryRoots() {
   try {
@@ -39,7 +39,7 @@ function repositoryRoots() {
       .map((line) => resolve(line.slice('worktree '.length).trim()));
     if (roots.length) return roots;
   } catch {
-    // No git on the path, or nothing it recognises here.
+    // No git on the path, or nothing it recognizes here.
   }
   let root = here;
   while (!existsSync(join(root, 'Cargo.toml')) && dirname(root) !== root) root = dirname(root);
@@ -210,14 +210,14 @@ async function atRest() {
  * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
  * with and without the refusals, the rail's two levels are read: every group 10 px right of its parent's label, the
- * runs 14 px apart with a hairline of the split's colour between them, and a parent in --ink-2 at rest and under the
+ * runs 14 px apart with a hairline of the split's color between them, and a parent in --ink-2 at rest and under the
  * pointer alike. On create the marked rail keeps that fit with and without the refusals, and its levels; the marks of
  * Identity and Keys read 11 px at weight 400 in a resting parent's ink, 6 px after their label on its line and clear
  * of the refusal dot, at the pass's viewport and in the 720 px strip. With expert fields and the mode off, a group's
  * discovery line sits below its last field in the hint's size and a parent's ink, and the cell grid reaches a field
  * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with eight more groups at
  * 800 px: it scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in the
- * rail's own colour, over the groups that pass under it.
+ * rail's own color, over the groups that pass under it.
  */
 async function groupedDialogFixture(theme) {
   const say = (what) => failures.push(`${theme} /fixtures/grouped-dialog: ${what}`);
@@ -392,7 +392,7 @@ async function groupedDialogFixture(theme) {
     if (read.rail.scrollHeight <= read.rail.clientHeight) sayIn(`the rail does not scroll: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
     if (!read.heading) return sayIn('no run passes the rail\'s top once it is scrolled to its end');
     if (Math.abs(read.heading.offset) > 0.5) sayIn(`the ${read.heading.label} heading sits ${read.heading.offset} px from the rail's top, not at it`);
-    if (!read.heading.covers) sayIn(`the ${read.heading.label} heading is covered at its centre`);
+    if (!read.heading.covers) sayIn(`the ${read.heading.label} heading is covered at its center`);
     if (read.heading.background !== read.rail.background) sayIn(`the ${read.heading.label} heading is drawn in ${read.heading.background}, not the rail's ${read.rail.background}`);
     if (read.heading.radius !== '0px') sayIn(`the ${read.heading.label} heading rounds its corners by ${read.heading.radius}, so the groups show past them`);
   };
@@ -695,7 +695,7 @@ async function expertView(on) {
  * policy toggle, the marker toggle under it, the grid's two main selects, the diagnostics switch, the capture switch
  * and the subagent switch, each reached the way an operator reaches it and measured while its group shows. The
  * metered main select is measured against the plan one beside it, the marker toggle against the policy toggle and the
- * diagnostics switch against the capture switch, since a control that reads a size smaller than its neighbours is the
+ * diagnostics switch against the capture switch, since a control that reads a size smaller than its neighbors is the
  * defect this dialog would show first.
  */
 async function poolCachingControls(theme) {
@@ -735,7 +735,7 @@ async function poolCachingControls(theme) {
         padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
       };
     };
-    // A switch's track colour follows its state and the two may differ, so only its shape is compared.
+    // A switch's track color follows its state and the two may differ, so only its shape is compared.
     const readSwitch = (node) => {
       if (!shown(node)) return null;
       const style = getComputedStyle(node);
@@ -1116,7 +1116,7 @@ const groupGeometry = (dialog, label, maxWindows) =>
     [label, maxWindows],
   );
 
-/** Each selector's controls in the labelled group, drawn and disabled; null for a selector that holds, else why not. */
+/** Each selector's controls in the labeled group, drawn and disabled; null for a selector that holds, else why not. */
 const disabledIn = (dialog, label, selectors) =>
   dialog.evaluate(
     (el, [label, list]) => {
@@ -1401,7 +1401,7 @@ async function poolCostReference(theme) {
 
 /**
  * Every pool's Keys group at the pass's viewport: the last key's Actions menu opens below the table, and each of its
- * items takes a pointer at its centre where it is drawn, with nothing scrolled, so no wrapper clips it. The mock's
+ * items takes a pointer at its center where it is drawn, with nothing scrolled, so no wrapper clips it. The mock's
  * story holds a pool with several keys and one with a single key; a seed without keys has no menu to open.
  */
 async function poolKeyMenus(theme) {
@@ -1437,7 +1437,7 @@ async function poolKeyMenus(theme) {
         );
         measurements.push(`${theme} /pools dialog Keys of ${pool} last menu ${JSON.stringify(items)}`);
         if (items.length !== 2) say(`${pool}'s last key menu draws ${items.length} items, not Move to and Revoke`);
-        for (const item of items.filter((it) => !it.hit)) say(`${pool}'s last key menu item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+        for (const item of items.filter((it) => !it.hit)) say(`${pool}'s last key menu item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
         // Escape with the menu open, in the browser whose dialog turns the same key into a close request: the menu
         // closes, focus returns to its trigger, and the dialog stays.
         await page.keyboard.press('Escape');
@@ -1467,7 +1467,7 @@ async function poolKeyMenus(theme) {
  * side has the room. On the table filtered to its last key's name through the search field, the one short row leaves
  * the list less room than it needs on both sides inside the clipping wrap, so the list leaves the table for a layer
  * of its own, which a scroll that moves its trigger and a resize each close. Whatever the side, each item takes a
- * pointer at its centre and the list lies inside the viewport.
+ * pointer at its center and the list lies inside the viewport.
  */
 async function keysPageMenus(theme) {
   const say = (what) => failures.push(`${theme} /keys menu: ${what}`);
@@ -1520,7 +1520,7 @@ async function keysPageMenus(theme) {
     const sayIn = (what) => say(`at ${width} px, ${state}: ${what}`);
     if (found.lists !== 1) return sayIn(`${found.lists} lists are open, not one`);
     if (found.items.length === 0) sayIn('the list draws no item');
-    for (const item of found.items.filter((it) => !it.hit)) sayIn(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+    for (const item of found.items.filter((it) => !it.hit)) sayIn(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
     if (!found.inside) sayIn(`the list's edges ${JSON.stringify(found.edges)} leave the ${found.viewport.width} by ${found.viewport.height} viewport`);
     if (found.room && found.room.below >= found.room.need && found.placement !== 'down') sayIn(`the list takes ${found.placement} though ${found.room.below} px below hold its ${found.room.need}`);
     return found;
@@ -1914,8 +1914,8 @@ async function errorStateBox(theme) {
   if (differs.length) failures.push(`${theme} /: the error state's ${differs.join(', ')} differs from the empty state's`);
   if (measured.empty.ink === measured.error.ink) failures.push(`${theme} /: the error state's title reads in the empty state's ink (${measured.error.ink})`);
   // An undefined custom property leaves border-color at its initial `currentcolor`, which is the box's own ink.
-  if (measured.error.borderColor === measured.error.color) failures.push(`${theme} /: the error state's border is the text colour, so --critical-border resolved to nothing`);
-  if (measured.error.borderColor === measured.empty.borderColor) failures.push(`${theme} /: the error state's border colour equals the empty state's`);
+  if (measured.error.borderColor === measured.error.color) failures.push(`${theme} /: the error state's border is the text color, so --critical-border resolved to nothing`);
+  if (measured.error.borderColor === measured.empty.borderColor) failures.push(`${theme} /: the error state's border color equals the empty state's`);
 }
 
 /**
@@ -2157,7 +2157,7 @@ async function wastedProbeRows(theme) {
       });
     });
     for (const row of rows.filter((r) => r.middle < r.line.top || r.middle > r.line.bottom)) {
-      failures.push(`${theme} /analytics: the "${row.label}" bar is centred on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
+      failures.push(`${theme} /analytics: the "${row.label}" bar is centered on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
     }
   } finally {
     await tabTo(theme, 'Traffic');
@@ -2209,9 +2209,9 @@ async function burnCards(theme) {
 }
 
 /**
- * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned account's
+ * The Plan per hour legend's model unlisted entry against its neighbors: the entry before it, a planned account's
  * 7-day entry, on type and swatch size, and, where an account whose tier the cost model does not size draws a tier
- * unknown entry beside it, that muted entry on type, swatch size and colour too. In the mock's story the entry draws
+ * unknown entry beside it, that muted entry on type, swatch size and color too. In the mock's story the entry draws
  * for `secondary`, whose Sonnet 5 traffic the cost model has no weight for; the router's seed bills no subscription
  * traffic, so there the pass records that the entry is not drawn.
  */
@@ -2444,7 +2444,7 @@ async function speedFilter(theme) {
 
 /**
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
- * neighbour it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
+ * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
  * type and its track), Fast mode spend against Estimated cost (the tile box and its figure's type). The cards are
  * read on the Traffic tab and the tiles on Cost.
@@ -2927,7 +2927,7 @@ async function catalogDialog(theme) {
   await atRest();
 }
 
-/** The box a labelled select draws in the open dialog: the control itself, never the label around it. */
+/** The box a labeled select draws in the open dialog: the control itself, never the label around it. */
 const measureSelect = (label) =>
   page.locator('dialog[open]').evaluate((el, text) => {
     const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
@@ -3398,7 +3398,7 @@ async function sessionsTableFits(theme) {
 /**
  * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
  * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
- * item takes a pointer at its centre, and the four entries draw a list 160 px wide and 141 px tall.
+ * item takes a pointer at its center, and the four entries draw a list 160 px wide and 141 px tall.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3439,7 +3439,7 @@ async function sessionRowMenu(theme) {
   if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
   if (read.items.length === 0) say('the list draws no item');
   if (read.list.width !== 160 || read.list.height !== 141) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 141px`);
-  for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+  for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
 }
 
 /**
@@ -3506,7 +3506,7 @@ async function sessionForkMark(theme) {
     const warming = heads.indexOf('Cache warming');
     const rows = [...document.querySelectorAll('.sessions-table tbody tr.srow')];
     const fork = document.querySelector('.sessions-table .srow__fork');
-    // The badge is centred on the id's line when the two share it, and sits below it when the cell wrapped.
+    // The badge is centered on the id's line when the two share it, and sits below it when the cell wrapped.
     const beside = (() => {
       const label = fork?.closest('td')?.firstChild;
       if (!fork || !label) return null;

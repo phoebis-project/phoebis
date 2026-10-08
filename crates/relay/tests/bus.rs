@@ -971,7 +971,7 @@ async fn a_rejection_body_that_cannot_be_read_still_completes_the_request() {
     up.shutdown().await;
 }
 
-/// Chunks keep the drop-and-count behaviour a subscriber that never reads cannot hold up; the completion is a
+/// Chunks keep the drop-and-count behavior a subscriber that never reads cannot hold up; the completion is a
 /// fact rather than a chunk, so it waits for the room the same subscriber has to give back before the stream
 /// the client reads can close.
 #[tokio::test]

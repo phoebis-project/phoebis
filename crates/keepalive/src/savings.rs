@@ -105,7 +105,7 @@ pub(crate) fn probe_dollars(table: &PriceTable, canonical_model: &str, usage: Pr
 
 /// A probe answer's tokens by type. An answer that reports the aggregate `cache_creation_input_tokens` and no TTL
 /// breakdown is priced as five-minute writes, which is how the relay's own usage parser reads the same answer; the
-/// estimate would otherwise miss a charge the request ledger recognises.
+/// estimate would otherwise miss a charge the request ledger recognizes.
 fn typed(usage: ProbeUsage) -> PinUsage {
     let (write_5m, write_1h) = match (usage.five_minutes, usage.one_hour) {
         (0, 0) => (usage.write, 0),

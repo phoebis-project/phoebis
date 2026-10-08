@@ -760,7 +760,7 @@ fn open_request_with(r: &Rig, id: &str, body: &str, read: u64, write: u64) {
 }
 
 /// The probes a bus gap leaves keep the speed of the recipe that sent them: a fast recipe's warm return reads them
-/// on the fast lane they kept, though the gap took the recipe before the next request batched them.
+/// on the fast lane they kept, though the gap took the recipe before the next request answered them.
 #[tokio::test]
 async fn the_probes_a_bus_gap_leaves_keep_their_recipes_speed() {
     let mut r = rig(RigSpec {
@@ -978,7 +978,7 @@ async fn a_credit_on_the_standard_lane_leaves_the_fast_probe_kept_beside_it_to_s
     r.engine.observe(r.observed("second", "main", &standard));
     r.engine.observe(r.selected("second", "a"));
     r.engine.observe(failed(&r, "second", None));
-    assert_eq!(r.status("main").unanswered, 1, "the fast batch stays kept");
+    assert_eq!(r.status("main").unanswered, 1, "the fast probe stays kept");
     r.advance_attended(10_000);
     open_request_with(&r, "third", &standard, 0, 2_000);
     r.advance_attended(270_000);
@@ -1107,9 +1107,9 @@ async fn a_kept_warm_credit_needs_the_covering_entry_alive_when_the_request_arri
 /// The lane check refuses a credit on its own. A fast recipe on a one-hour write is covered by a fast probe, and a
 /// standard request on the same model and account arrives past the hour since the last real request, while the
 /// entry the probe refreshed is still there, and reads the cache: the fast probe kept nothing on the standard lane,
-/// so nothing is credited and its batch settles as a cold return.
+/// so nothing is credited and the probe settles as a cold return.
 #[tokio::test]
-async fn a_fast_batch_inside_its_entry_earns_no_credit_on_the_standard_lane() {
+async fn a_fast_probe_inside_its_entry_earns_no_credit_on_the_standard_lane() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
         ..RigSpec::default()
@@ -1164,7 +1164,7 @@ async fn a_fast_batch_inside_its_entry_earns_no_credit_on_the_standard_lane() {
 
 /// The account check refuses a credit on its own. A probe warms the recipe's entry on `a`, and the next request on
 /// the same model and speed arrives past the TTL since the last real request, while that entry is still there, and is
-/// served on `b`: what it read there ordinary traffic cached, not the probe, so nothing is credited and the batch
+/// served on `b`: what it read there ordinary traffic cached, not the probe, so nothing is credited and the probe
 /// settles as a cold return.
 #[tokio::test]
 async fn a_credit_binds_to_the_account_the_probe_warmed() {

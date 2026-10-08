@@ -1771,7 +1771,7 @@ fn a_deleted_keys_id_is_created_again_at_once_on_a_fresh_store_and_on_an_upgrade
             "test",
         )
         .unwrap();
-    // The name holds the incarnations a deleted id leaves behind now, which never retire an id.
+    // The name holds the incarnations a deleted id leaves behind, which never retire an id.
     assert_eq!(
         columns_of(&path, "api_key_tombstones"),
         ["id", "incarnation"].map(String::from).into(),

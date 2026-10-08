@@ -440,16 +440,13 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
             delay_between: Duration::from_millis(600),
         },
     );
-    let bus = Bus::new();
-    let mut sub = bus.subscribe("test", Delivery::Durable);
-    let h = harness_with_bus(
+    let h = harness(
         &up,
         &[oauth("a", A, 0), oauth("b", B, 1)],
         PoolSpec {
             failover: account_cap(1, 1),
             ..PoolSpec::default()
         },
-        bus,
     )
     .await;
     let on_a = h
@@ -494,22 +491,15 @@ async fn past_the_bound_a_held_request_re_selects_with_the_account_attempted() {
         1,
         "a's stream is still open"
     );
-    let third_id = outcome(&third).request_id;
-    drain(third).await;
-    let complete = completion_of(&mut sub, &third_id).await;
-    let held: serde_json::Value = serde_json::from_str(
-        complete
-            .held
-            .as_deref()
-            .expect("the completion names the hold"),
-    )
-    .unwrap();
+    let held = outcome(&third)
+        .held
+        .expect("the outcome names the hold it waited through");
     assert_eq!(
-        held["waited_on"],
-        serde_json::json!(["a"]),
+        held.waited_on,
+        ["a"],
         "the request waited on a alone, and b's slot freed inside the bound took it with no hold of its own"
     );
-    drop((on_a, on_b));
+    drop((on_a, on_b, third));
     up.release();
     up.shutdown().await;
 }

@@ -67,8 +67,7 @@ fn rows_outlive_a_reopen_of_the_on_disk_store() {
 // The reverse of the registry's member budgets migration, so a store stamped back below it can run it again. One
 // line with the marker last; the trailing `\n` ends the marker's comment.
 const UNDO_V41: &str = "ALTER TABLE pool_members ADD COLUMN budget_usd REAL; ALTER TABLE pool_members ADD COLUMN budget_period TEXT NOT NULL DEFAULT 'month'; UPDATE pool_members SET budget_usd = COALESCE(budget_monthly_usd, budget_daily_usd), budget_period = CASE WHEN budget_monthly_usd IS NULL AND budget_daily_usd IS NOT NULL THEN 'day' ELSE 'month' END; ALTER TABLE pool_members DROP COLUMN budget_monthly_usd; ALTER TABLE pool_members DROP COLUMN budget_daily_usd; -- rollback\n";
-// The reverse of the registry's version 48, one statement per line, the key tombstones dropped so a replay that
-// reaches version 14 creates that version's table of the same name.
+// The reverse of the registry's version 48, so a store stamped back below it can run it again.
 const UNDO_V48: &str = r#"
 ALTER TABLE pools DROP COLUMN incarnation;
 ALTER TABLE api_keys DROP COLUMN incarnation;
@@ -148,6 +147,6 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     assert_eq!(
         payload("session:s1"),
         Some(r#"{"prompt_id":"p2"}"#.into()),
-        "and its neighbour keeps its own row"
+        "and its neighbor keeps its own row"
     );
 }

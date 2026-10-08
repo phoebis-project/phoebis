@@ -229,7 +229,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
         ) : (
           <span className="chip chip--empty" aria-hidden />
         )}
-        {/* Unlabelled: the phrase itself says what ends, where a label would read "Ends ends in 12 days". */}
+        {/* Unlabeled: the phrase itself says what ends, where a label would read "Ends ends in 12 days". */}
         {endsAt && (
           <span className={`chip ${soon(endsAt) ? 'chip--serious' : ''}`} title={fmtAbsolute(endsAt)}>
             {upperFirst(fmtEndsIn(endsAt, now))}
@@ -533,7 +533,7 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
         <span>
           <i className="lane__swatch lane__swatch--end" /> plan ends
         </span>
-        <span className="timeline__note muted">Each bar is one full quota window, drawn from when it opened to when it resets, and labelled with the instant it resets. Lanes ending together compete for the same days.</span>
+        <span className="timeline__note muted">Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the instant it resets. Lanes ending together compete for the same days.</span>
       </footer>
     </section>
   );

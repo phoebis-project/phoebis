@@ -1,4 +1,4 @@
-//! The metric tile: per-second counters over the last minute, each labelled with how it was obtained.
+//! The metric tile: per-second counters over the last minute, each labeled with how it was obtained.
 
 use std::collections::VecDeque;
 

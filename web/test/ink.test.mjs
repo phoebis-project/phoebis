@@ -4,7 +4,9 @@ import { test } from 'node:test';
 
 const sheet = (name) => readFileSync(new URL(`../src/styles/${name}.css`, import.meta.url), 'utf8');
 
-/** The rules whose `--ink-3` draws no word the operator reads: placeholders, disabled controls and decorative strokes. */
+/**
+ * The rules whose `--ink-3` draws no word the operator reads: placeholders, disabled controls and decorative strokes.
+ */
 const INK3_ALLOWED = new Set([
   '.chip--removable button',
   '.dialog__close',
@@ -59,7 +61,7 @@ function tokens(selector) {
 
 function luminance(hex) {
   const m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex);
-  assert.ok(m, `${hex} is a six-digit hex colour`);
+  assert.ok(m, `${hex} is a six-digit hex color`);
   const [r, g, b] = m.slice(1).map((h) => {
     const s = parseInt(h, 16) / 255;
     return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;

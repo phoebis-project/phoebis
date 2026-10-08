@@ -718,7 +718,7 @@ mod tests {
         assert_eq!(
             i64::from(EXPIRY_WARNING_DAYS),
             phoebis_attention::CERTIFICATE_WARNING_DAYS,
-            "the dashboard warns from the day check-config and status do"
+            "the dashboard's item holds from exactly 30 days before not_after"
         );
         let dir = tempfile::tempdir().unwrap();
         let not_after = jiff::Timestamp::now().as_second() + 90 * 86_400;

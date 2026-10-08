@@ -1793,10 +1793,11 @@ function accountRollups(): AccountRollup[] {
     let driftF = h.float(0.05, 0.4);
     // An hour holds facts from the one the plan started in to the one of the newest window reading, since a peak needs
     // a reading behind it. Every hour is still drawn, so cutting one account's hours moves no other account's values.
+    // With no reading `Math.max` answers -Infinity, so such an account holds no hour.
     const since = account.subscription?.since;
     const from = since ? startOfHour(Date.parse(since)) : start;
     const readings = [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
-    const until = readings.length > 0 ? Math.max(...readings) : end;
+    const until = Math.max(...readings);
     for (let t = start; t < end; t += HOUR) {
       const sampled5 = sampleIndex.get(`${account.id}|5h`)?.get(t);
       const sampled7 = sampleIndex.get(`${account.id}|7d`)?.get(t);

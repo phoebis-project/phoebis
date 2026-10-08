@@ -113,7 +113,8 @@ test('a peak zone the browser cannot read leaves the band state unknown, so a sh
 
 test("a band day's interval is its hours in the band's own zone, read through that day's clock change", () => {
   const span = (peak, date) => d.bandSpan({ ...costs, peak: { ...costs.peak, ...peak } }, date);
-  // Los Angeles leaves summer time on Sunday 1 November 2026 at 02:00: 5 to 11 there reads at UTC-8, 13:00 to 19:00 UTC.
+  // Los Angeles leaves summer time on Sunday 1 November 2026 at 02:00: 5 to 11 there reads at UTC-8,
+  // 13:00 to 19:00 UTC.
   assert.deepEqual(span({ weekdays: false }, '2026-11-01'), { end: Date.parse('2026-11-01T19:00:00Z'), start: Date.parse('2026-11-01T13:00:00Z') });
   // It enters summer time on Sunday 14 March 2027, 02:00 becoming 03:00 at 10:00 UTC: 5 to 11 reads at UTC-7.
   assert.deepEqual(span({ weekdays: false }, '2027-03-14'), { end: Date.parse('2027-03-14T18:00:00Z'), start: Date.parse('2027-03-14T12:00:00Z') });

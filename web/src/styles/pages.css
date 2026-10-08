@@ -178,7 +178,7 @@
   min-width: 0;
 }
 
-/* One line, never two: a head that wraps drops its meter below the neighbours'. */
+/* One line, never two: a head that wraps drops its meter below the neighbors'. */
 .wbar__head {
   display: flex;
   gap: 8px;
@@ -617,7 +617,7 @@
 /*
  * One line per window: chip, meter, reset. Both outer columns are fixed rather
  * than content-sized, so the three meters start and end on one vertical line
- * whatever the numbers say, and so neighbouring cards agree with each other.
+ * whatever the numbers say, and so neighboring cards agree with each other.
  * The widths are the widest content each column holds in DejaVu Sans, the
  * widest fallback the console meets ("Fable 100% left" at 121px, "resets in
  * 23h 59m" at 109px, "expired 2d 0h ago," at 113px). The meter takes what is
@@ -911,7 +911,7 @@
 }
 
 /*
- * Neutral pill, tone on the number only: the row's colour belongs to its lane.
+ * Neutral pill, tone on the number only: the row's color belongs to its lane.
  * One width for every chip in the column, so the labels start and the numbers
  * end on two straight lines whatever the window is called.
  */
@@ -3588,7 +3588,7 @@
   height: 10px;
 }
 
-/* "Replaced by a new registration" wraps in this column, and a centred row floats its bar and count away
+/* "Replaced by a new registration" wraps in this column, and a centered row floats its bar and count away
    from the label they belong to. */
 .hbars--reasons li.hbars__row--top {
   align-items: start;
@@ -3723,7 +3723,7 @@
   inset: 0;
 }
 
-/* Placed by clock time, so the 1px inset that separates neighbours is padding
+/* Placed by clock time, so the 1px inset that separates neighbors is padding
    the background does not paint rather than a flex gap. */
 .range__bar {
   position: absolute;

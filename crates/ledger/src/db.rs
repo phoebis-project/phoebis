@@ -175,7 +175,7 @@ impl LedgerDb {
     }
 
     /// Runs `f` on a blocking worker under the shared reader connection, so a slow read never parks the runtime
-    /// thread that serves proxy traffic; the reader mutex still serialises the reads themselves.
+    /// thread that serves proxy traffic; the reader mutex still serializes the reads themselves.
     pub async fn read<T: Send + 'static>(
         self: &Arc<Self>,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,

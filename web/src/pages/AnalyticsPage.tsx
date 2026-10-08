@@ -1413,9 +1413,9 @@ const isolatedDot = (values: (number | null)[], color: string) => {
 };
 
 /**
- * The burn route's three views of one grouping. A line's colour follows its group within the answer rather than
+ * The burn route's three views of one grouping. A line's color follows its group within the answer rather than
  * its rank, so a range that reorders the groups does not repaint them; the account grouping keeps each account's
- * page-wide colour.
+ * page-wide color.
  */
 function BurnCharts({
   answer,

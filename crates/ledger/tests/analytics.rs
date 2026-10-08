@@ -451,7 +451,7 @@ fn a_reused_id_is_two_key_groups_and_a_bare_selector_names_the_live_generation()
         .expect("the agent's product token is its own group");
     assert_eq!(
         ops.label, "my-client/1.0",
-        "an agent is labelled by its token verbatim: only a key group is parsed for a generation, and the \
+        "an agent is labeled by its token verbatim: only a key group is parsed for a generation, and the \
          comment carrying `@` stays on the request row"
     );
     let clients = breakdown(

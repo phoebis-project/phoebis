@@ -49,7 +49,7 @@ export function useCatalogSuggestions(accountIds: readonly string[], enabled: bo
 }
 
 export function PatternEditor({ inherited = [], label, onChange, suggestions, value }: {
-  /** The pool's entries a key under `extend` inherits, shown read-only in grey after the own entries. */
+  /** The pool's entries a key under `extend` inherits, shown read-only in gray after the own entries. */
   inherited?: ModelRule[];
   label: string;
   onChange: (rules: ModelRule[]) => void;

@@ -213,7 +213,7 @@ async fn analytics_series_breakdown_and_accounts_read_the_rollups_with_percentil
     assert_eq!(
         labels,
         ["business", "direct", "unattributed"],
-        "sorted by label; the reserved id is labelled"
+        "sorted by label; the reserved id is labeled"
     );
     let business = &rows[0];
     assert_eq!(

@@ -1036,7 +1036,7 @@ textarea.input {
   gap: 2px;
 }
 
-/* A hairline centred in the gap above every run after the first, so the parents read as headings; absolute, so it
+/* A hairline centered in the gap above every run after the first, so the parents read as headings; absolute, so it
    adds no height to the rail's fit. */
 .dialog-rail__run + .dialog-rail__run::before {
   position: absolute;

@@ -342,14 +342,14 @@ file at `--config` must load.
 consistent snapshot while the router serves or while it is stopped, and writes `manifest.json` last
 ([Operations](operations.md#backup) shows the container line and the restore). `--to` names the directory, which
 `backup` creates with every missing parent at `0700`, or an existing empty one that only its owner can write. It refuses
-one that group or other can write or that another user owns, and warns when group or other can only read it. Without
-`--to` the directory is `./phoebis-backup-<YYYYMMDD>T<HHMMSS>Z`, stamped in UTC. Inside go `router.sqlite`,
-`ledger.sqlite` and `manifest.json`, each at `0600`. The manifest names the key file at `storage.encryption_key_file`,
-which `backup` never reads; a key file that does not exist earns a warning and the backup proceeds. `backup` loads the
-file the way `check-config` does, without the admin secret, and takes no lock and opens no socket. Stderr carries one
-`wrote {path} ({n} bytes)` line per file, the two `quick_check` results, the manifest's path, and last
-`the key file {path} is not in this backup; keep it apart, the registry copy is sealed under it`; stdout stays empty
-unless `--json` prints the manifest there.
+one that group or other can write or that another user owns, and warns when its mode is wider than `0700` without giving
+group or other write access. Without `--to` the directory is `./phoebis-backup-<YYYYMMDD>T<HHMMSS>Z`, stamped in UTC.
+Inside go `router.sqlite`, `ledger.sqlite` and `manifest.json`, each at `0600`. The manifest names the key file at
+`storage.encryption_key_file`, which `backup` never reads; a key file that does not exist earns a warning and the backup
+proceeds. `backup` loads the file the way `check-config` does, without the admin secret, and takes no lock and opens no
+socket. Stderr carries one `wrote {path} ({n} bytes)` line per file, the two `quick_check` results, the manifest's path,
+and last `the key file {path} is not in this backup; keep it apart, the registry copy is sealed under it`; stdout stays
+empty unless `--json` prints the manifest there.
 
 `backup` exits 1 with one `Error:` line and nothing written when the file does not load, when `--to` names a file or a
 directory that is not empty (`{path} is not an empty directory`), when it names a directory that group or other can
@@ -596,13 +596,12 @@ the service user cannot read) keeps the pair the router was serving and the comm
 next reload clears it. A reload that lands between the two writes meets a key mismatch and is retried once both files
 are in place. The service user reads the pair at reload as it did at start, so a new pair keeps the modes above.
 
-`phoebis tls reload` takes the shared flags, `--ca`, `--config`, `--json`, `--secret-env`, `--timeout` and `--url`
-([the shared flags](#commands)), and posts [the reload route](api.md#post-admintlsreload). It prints one line per
-listener on stdout: `proxy: reloaded, certificate {path} expires {date}`, `proxy: not reloaded, {the loader's line}.
-The router keeps the pair it was serving.`, or `proxy: plain HTTP, nothing to reload`, and the same for `admin`.
-`--json` prints the route's body instead. It exits 0 once every pair reloaded, a plain listener aside, 1 when any pair
-was refused, the secret was refused, the admin listener did not answer or the file does not load, and 2 for a usage
-error.
+`phoebis tls reload` takes `--config` and [the shared flags](#commands), `--ca`, `--json`, `--secret-env`, `--timeout`
+and `--url`, and posts [the reload route](api.md#post-admintlsreload). It prints one line per listener on stdout:
+`proxy: reloaded, certificate {path} expires {date}`, `proxy: not reloaded, {the loader's line}. The router keeps the
+pair it was serving.`, or `proxy: plain HTTP, nothing to reload`, and the same for `admin`. `--json` prints the route's
+body instead. It exits 0 once every pair reloaded, a plain listener aside, 1 when any pair was refused, the secret was
+refused, the admin listener did not answer or the file does not load, and 2 for a usage error.
 
 The dashboard raises two attention items for a listener's pair: `certificate_expiring` while the loaded leaf is within
 30 days of its end (past it included), and `certificate_reload_failed` from a reload the loader refused until a later

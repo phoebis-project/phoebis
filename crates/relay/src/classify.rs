@@ -740,7 +740,7 @@ mod tests {
 
     #[test]
     fn a_spend_cap_rejection_of_the_overage_window_cools_only_the_model() {
-        // The header set an organisation at its spend cap answers, as observed: no 5h status, a 5h utilization
+        // The header set an organization at its spend cap answers, as observed: no 5h status, a 5h utilization
         // of zero, no reset header, `Retry-After` alone.
         let h = head(
             429,

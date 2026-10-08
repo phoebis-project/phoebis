@@ -16,7 +16,7 @@ test("the plan chip names the tier with its multiple and falls back to the profi
   assert.equal(chip('Max', 'default_claude_max_20x'), 'Max 20x');
   assert.equal(chip('Max', 'claude_max_5x'), 'Max 5x');
   assert.equal(chip('Max', 'anything_else'), 'Max', 'a tier the console does not parse reads the flag');
-  assert.equal(chip('Pro', 'default_claude_ai'), 'Pro', 'the tier the profile reports for Pro');
+  assert.equal(chip(null, 'default_claude_ai'), 'Pro', 'the tier the profile reports for Pro, with no flag to fall back on');
   assert.equal(d.planChip({ plan: null, subscription: null }), null, 'no plan at all');
 });
 

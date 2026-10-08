@@ -465,7 +465,7 @@ pub(crate) fn conditions(
     }
     if let Some(parked) = parked {
         // The snapshot's pools, then the pools the parked rows name that the snapshot no longer holds: a pool deleted
-        // under a parked record keeps the condition, labelled by its id and opening nothing, until the next start or
+        // under a parked record keeps the condition, labeled by its id and opening nothing, until the next start or
         // a replay lands the row.
         let mut pools: Vec<(String, String, bool)> = snapshot
             .pools()

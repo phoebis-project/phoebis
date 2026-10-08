@@ -3195,7 +3195,7 @@ impl Task {
                 phoebis_store::Shedding::default().burn_window_seconds,
                 |pool| pool.shedding.burn_window_seconds,
             );
-        crate::select::seconds_ms(seconds)
+        seconds_ms(seconds)
     }
 
     fn token(&mut self, account_id: &str) -> &CancellationToken {

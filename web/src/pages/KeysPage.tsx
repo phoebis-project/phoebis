@@ -619,7 +619,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         <Expert>
           {/* Field's frame without its label element: a label forwards a click on its text to the first control
               inside, which here would flip the mode. */}
-          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone.">
+          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in gray, after this key's own; Replace applies this key's rules alone.">
             {/* Its own block, so the segmented control keeps its content width. */}
             <div>
               <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />

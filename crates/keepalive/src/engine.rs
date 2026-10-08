@@ -575,7 +575,7 @@ impl Kept {
 /// What ending an observation does with the probes the recipe leaves unanswered.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Unanswered {
-    /// A labelled stop settles them and the kept ones under its label; a stop with no label drops them and leaves
+    /// A labeled stop settles them and the kept ones under its label; a stop with no label drops them and leaves
     /// the kept ones for whatever decides them.
     Settle,
     /// A real request supersedes the recipe and keeps them until its completion decides them.
@@ -787,7 +787,7 @@ impl Inner {
     /// for that request, so it keeps them until the first of these decides them: its completion, once it reached
     /// the upstream (each probe on its own: a warm return on its lineage inside its entry clears it, one past its
     /// entry settles it under `expired`, and any other return, on another lineage or with no read, under
-    /// `cold_return`), a labelled discard (under its label), or the agent's lapse or eviction. A request the engine
+    /// `cold_return`), a labeled discard (under its label), or the agent's lapse or eviction. A request the engine
     /// takes no observation of, or one refused or cancelled before the upstream answered, leaves them kept for
     /// whichever comes next.
     pub(crate) fn discard_keeping_unanswered(

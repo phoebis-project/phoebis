@@ -288,9 +288,9 @@ counts no failure toward `cold_probe_limit`, so a ledger that stays behind never
 counts no tick toward `max_idle_ticks`. The entry's expiry and `max_idle_seconds` still bound the hold. Past the expiry
 the recipe ends under `expired`, as under any other hold.
 
-A wasted probe settles on its own, by the end of the entry it wrote and never by the batch it was sent in, with one of
-seven reasons: when the recipe stops with a probe unanswered, when it lapses or is evicted, or when the next request
-after the probe reads nothing from the entry it kept:
+A wasted probe settles on its own, by the end of the entry it wrote, with one of seven reasons: when the recipe stops
+with a probe unanswered, when it lapses or is evicted, or when the next request after the probe reads nothing from the
+entry it kept:
 
 | Reason | What settles it |
 | --- | --- |

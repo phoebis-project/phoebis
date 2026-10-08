@@ -208,7 +208,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
   expect('login screen without a session', login.text(), ['Admin secret', 'Log in']);
-  // Counted by fill, so a cell drawn in a fixed colour (which the theme toggle would not reach) or a dropped body
+  // Counted by fill, so a cell drawn in a fixed color (which the theme toggle would not reach) or a dropped body
   // square fails the check.
   const markCells = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-cell)"]').length;
   const markBody = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-body)"]').length;
@@ -484,7 +484,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     const f = figures[id];
     const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} ${f.anchor} windows, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
     const legend = [...(rings[id]?.querySelectorAll('.remaining__list li') ?? [])];
-    // The grey remainder is the spent arc, which carries its own title.
+    // The gray remainder is the spent arc, which carries its own title.
     const slices = [...(rings[id]?.querySelectorAll('svg.donut circle > title') ?? [])].map((t) => t.textContent ?? '').filter((t) => !t.startsWith('Spent: '));
     return { id, legend: legend.map((li) => li.getAttribute('title')), shares: legend.map((li) => li.querySelector('.num')?.textContent ?? ''), slices, want, wantShares: f.rows.map((r) => fmtPct(r.remaining)) };
   };
@@ -521,7 +521,7 @@ m = await mount('/observe');
   }
   {
     // The dot is drawn hidden from a screen reader beside the Status badge, so its title is for a pointer alone; each
-    // one names the state its colour stands for.
+    // one names the state its color stands for.
     const dots = [...m.container.querySelectorAll('.live-table .ldot')];
     const wrong = dots.filter((d) => {
       const state = [...d.classList].find((c) => c in DOT_TITLES);
@@ -5164,8 +5164,8 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     await m.settle(120);
     const labels = [...(models?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
-      name: "/keys the pool's rules show in grey under extend and go under replace",
-      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint === "Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone." && grey().length === 1,
+      name: "/keys the pool's rules show in gray under extend and go under replace",
+      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint === "Extend applies the pool's rules, in gray, after this key's own; Replace applies this key's rules alone." && grey().length === 1,
       missing: [JSON.stringify(extended), String(twins), JSON.stringify(replaced), hint],
     });
     results.push({
@@ -5371,7 +5371,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
 }
 {
-  // The pool checks moved laptop to jobs. Its own dialog moves it back, drawing the grey rows of the pool the
+  // The pool checks moved laptop to jobs. Its own dialog moves it back, drawing the gray rows of the pool the
   // select names before the save; reopened, the list the route processes puts its own rows ahead of the pool's.
   const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
@@ -5397,7 +5397,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   }
   const after = greyOf(dlg);
   results.push({
-    name: '/keys the grey rows follow the pool the dialog names',
+    name: '/keys the gray rows follow the pool the dialog names',
     ok: from === 'jobs' && JSON.stringify(before) === JSON.stringify(greyRules(await poolRules('jobs'))) && JSON.stringify(after) === JSON.stringify(greyRules(await poolRules('all'))),
     missing: [from, JSON.stringify(before), JSON.stringify(after)],
   });
@@ -5641,7 +5641,7 @@ await readsAgain('/keys', 'listKeys');
 
 // A helper that cannot find the control a check needs fails that check by name, so a control that disappears
 // fails the run rather than leaving the check to read a page nothing narrowed.
-const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labelled ${label}`] });
+const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labeled ${label}`] });
 
 m = await mount('/models');
 {
@@ -9058,7 +9058,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
     const unfiltered = trafficRows();
     const earlierLabel = [...unfiltered.keys()].find((k) => k.startsWith('desktop (deleted, created ')) ?? '';
-    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labelled with its creation time', ok: /^desktop \(deleted, created \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labeled with its creation time', ok: /^desktop \(deleted, created \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
     {
       // The mock's raw rows rather than the page's sums of them: an hour both generations filled would still
       // split into two key groups, so only the rows show it. The runner's zone is UTC, so the holder's day reads

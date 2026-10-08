@@ -408,7 +408,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
     assert_eq!(
         gauges.cooldowns,
         vec![("a".into(), "model:other".into(), 120)],
-        "one sample per normalised label set, the maximum remaining"
+        "one sample per normalized label set, the maximum remaining"
     );
     let text = Metrics::new().render(&gauges, &[], 0);
     assert_eq!(
