@@ -283,6 +283,7 @@ pub(crate) async fn costs(State(state): State<Arc<AdminState>>) -> Response {
             "model": m, "input_per_m": p.input, "cache_write_5m_per_m": p.cache_write_5m, "cache_write_1h_per_m": p.cache_write_1h, "cache_read_per_m": p.cache_read, "output_per_m": p.output,
             "reads_per_write_5m": if p.cache_read > 0.0 { Some(p.cache_write_5m / p.cache_read) } else { None },
             "fast": crate::pricing::fast_json(row),
+            "long_context": crate::pricing::long_context_json(row),
         })).collect::<Vec<_>>(),
     }))
     .into_response()

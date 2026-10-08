@@ -69,9 +69,9 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1791465653853,
-        "updated_at": 1791465653853,
-        "revision": 6189512164957,
+        "created_at": 1791486451446,
+        "updated_at": 1791486451446,
+        "revision": 6189532962550,
         "members": [
           {
             "account_id": "business",
@@ -110,7 +110,7 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "DR2lCTP6",
+            "prefix": "bCs0Z6BW",
             "enabled": true
           }
         ],

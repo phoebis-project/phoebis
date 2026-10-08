@@ -693,7 +693,9 @@ Defaults whole.
 Refused with:
 
 - `api_prices_path`: `loading the price table from {path}` with the rule under it, `pricing table: {rule}`, for a
-  malformed file or a repeated key, and with the read error under it for a file that is there and cannot be read
+  malformed file, a repeated key, a cell that is not a finite non-negative number or a `long_context.over` that is
+  not a whole number of tokens above zero, and with the read error under it for a file that is there and cannot be
+  read
 - `body_capture_max_hours`: `stats.body_capture_max_hours must be between 1 and 168, not {value}`
 - `ledger_path`: `stats.ledger_path {path} must name a database file inside a directory`; and
   `stats.ledger_path and storage.path must name different files, not {path}` when the two paths match
