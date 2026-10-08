@@ -1,8 +1,8 @@
 //! `phoebis backup` copies both databases into a private directory with a manifest that names the key file, while the
 //! router's writes go on, and the copies open under the key. It refuses a destination that is not an empty directory
-//! or that someone besides its owner could write into, and a database that does not exist, and a copy that fails
-//! leaves nothing behind. A lock on a source is waited out within the bound and fails the run past it, with nothing
-//! written.
+//! or that someone besides the run's user could write into, and a database that does not exist, and a copy that
+//! fails leaves nothing behind. A lock on a source is waited out within the bound and fails the run past it, with
+//! nothing written.
 
 use std::io::Read;
 use std::os::unix::fs::PermissionsExt;
@@ -380,7 +380,7 @@ fn a_ledger_path_that_names_a_directory_fails_the_second_copy_and_leaves_nothing
     assert!(!out.exists(), "the parent this run created");
 }
 
-/// The refusal `backup` prints for an existing destination someone besides its owner could write into.
+/// The refusal `backup` prints for an existing destination someone besides the run's user could write into.
 fn refused_line(target: &Path) -> String {
     format!(
         "{}: group or other can write it, or another user owns it. Nothing was written.",

@@ -330,20 +330,23 @@ file at `--config` must load.
 `backup` copies the registry and the ledger into a directory, each through SQLite's online backup API as one
 consistent snapshot while the router serves or while it is stopped, and writes `manifest.json` last
 ([Operations](operations.md#backup) shows the container line and the restore). `--to` names the directory, which
-`backup` creates with every missing parent at `0700`, or an existing empty one, with a warning when its mode is wider;
-without it the directory is `./phoebis-backup-<YYYYMMDD>T<HHMMSS>Z`, stamped in UTC. Inside go `router.sqlite`,
+`backup` creates with every missing parent at `0700`, or an existing empty one that only its owner can write. It refuses
+one that group or other can write or that another user owns, and warns when group or other can only read it. Without
+`--to` the directory is `./phoebis-backup-<YYYYMMDD>T<HHMMSS>Z`, stamped in UTC. Inside go `router.sqlite`,
 `ledger.sqlite` and `manifest.json`, each at `0600`. The manifest names the key file at `storage.encryption_key_file`,
 which `backup` never reads; a key file that does not exist earns a warning and the backup proceeds. `backup` loads the
 file the way `check-config` does, without the admin secret, and takes no lock and opens no socket. Stderr carries one
-`wrote {path} ({n} bytes)` line per file, the two `quick_check` results, the manifest's path, and last `the key file
-{path} is not in this backup; keep it apart, the registry copy is sealed under it`; stdout stays empty unless `--json`
-prints the manifest there.
+`wrote {path} ({n} bytes)` line per file, the two `quick_check` results, the manifest's path, and last
+`the key file {path} is not in this backup; keep it apart, the registry copy is sealed under it`; stdout stays empty
+unless `--json` prints the manifest there.
 
 `backup` exits 1 with one `Error:` line and nothing written when the file does not load, when `--to` names a file or a
-directory that is not empty (`{path} is not an empty directory`), or when either database does not exist (`a backup
-carries both databases; {path} does not exist`). A copy that fails, a database another connection holds locked for ten
-seconds among them, removes every file and directory the run created and exits 1 with `backup failed: {reason};
-nothing was written to {dir}`. It exits 0 once the manifest is written, and 2 for a usage error.
+directory that is not empty (`{path} is not an empty directory`), when it names a directory that group or other can
+write or that another user owns (`{dir}: group or other can write it, or another user owns it. Nothing was written.`),
+or when either database does not exist (`a backup carries both databases; {path} does not exist`). A copy that fails, a
+database another connection holds locked for ten seconds among them, removes every file and directory the run created
+and exits 1 with `backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest is written, and 2
+for a usage error.
 
 ## Environment variables
 

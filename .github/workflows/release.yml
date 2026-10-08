@@ -291,8 +291,8 @@ jobs:
           asset=$(printf '%s' "$shell" | grep -o '/assets/[^"'"'"' ]*' | head -1)
           [ -n "$asset" ] || { echo "the console page references no /assets/ path"; exit 1; }
           curl -fsSo /dev/null "http://127.0.0.1:18081$asset" || { echo "console asset $asset was not served"; exit 1; }
-          # The container's environment carries the secret, so this smokes the bearer path, the five reads and the
-          # screen.
+          # The container's environment carries the secret, so this smokes the bearer
+          # path, the five reads and the screen.
           docker exec phoebis-smoke phoebis status > "$tmp/status.txt" \
             || { cat "$tmp/status.txt"; echo "status exited non-zero"; exit 1; }
           head -n 1 "$tmp/status.txt" | grep -q ', ready$' \

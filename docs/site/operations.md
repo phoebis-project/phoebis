@@ -230,11 +230,12 @@ A read that fails prints one line in its section, such as `pools: the admin list
 or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is down, the
 screen is the header with the binary's version and `proxy down: proxy does not answer on <addr>: <error>`, the
 listeners, and one such line per read. A label column is as wide as its widest label where the line has the room. A
-member's reset or cooldown and a shedding pin's state through its age keep their width ahead of the labels, so a long
-label is cut before them. A cut label ends in `…`, and `--json` carries every label and id whole. A table line past 80
-columns is cut and ends in `…`, and a line of text past 80 columns wraps. The pins and the accounts in no pool print
-20 lines each and then `and N more`; `--all` prints every one. `--json` prints the same reads as one object for a
-script, each answer verbatim ([commands](installation.md#commands)).
+member's reset or cooldown word and a shedding pin's age keep their width ahead of the labels, so a long account label
+is cut before them, and once it reaches its floor of 12 columns the label a shedding pin moves from is cut too. A cut
+label ends in `…`, and `--json` carries every label and id whole. A table line past 80 columns is cut and ends in
+`…`, and a line of text past 80 columns wraps. The pins and the accounts in no pool print 20 lines each and then
+`and N more`; `--all` prints every one. `--json` prints the same reads as one object for a script, each answer verbatim
+([commands](installation.md#commands)).
 
 With `--url` and `--secret-env` standing in for the file, as for a router on another machine, `status` has no proxy
 listener to probe: it prints `proxy: not probed, no configuration file names the listener` under the listeners and
