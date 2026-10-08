@@ -691,6 +691,22 @@ async function expertView(on) {
 }
 
 /**
+ * Closes the open dialog by Escape and answers the discard question where one comes up. The question is counted
+ * after a settle rather than waited for: a dialog whose form the measure left unchanged closes at once, and Chromium
+ * answers an Escape without a fresh activation with an uncancelable cancel, which closes without asking. The
+ * measurement names which way the dialog left.
+ */
+async function closeByEscape(dialog, label, say) {
+  await page.keyboard.press('Escape');
+  await settle();
+  const question = page.getByRole('dialog', { name: 'Discard changes?' });
+  const asked = (await question.count()) === 1;
+  if (asked) await question.getByRole('button', { name: 'Discard', exact: true }).click();
+  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  measurements.push(`${label} ${asked ? 'discarded its changes on Escape' : 'closed unchanged on Escape'}`);
+}
+
+/**
  * The Cache TTL, Cache diagnostics, Body capture and Keepalive groups of a served pool in the expert view: the TTL
  * policy toggle, the marker toggle under it, the grid's two main selects, the diagnostics switch, the capture switch
  * and the subagent switch, each reached the way an operator reaches it and measured while its group shows. The
@@ -777,8 +793,7 @@ async function poolCachingControls(theme) {
   compare('main', 'planMain', ['border', 'font', 'height', 'padding']);
   compare('marker', 'policy', ['border', 'height', 'radius', 'width']);
   compare('diagnostics', 'capture', ['border', 'height', 'radius', 'width']);
-  await page.keyboard.press('Escape');
-  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await closeByEscape(dialog, `${theme} /pools caching controls dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
@@ -835,8 +850,7 @@ async function poolSelectBelow(theme) {
     const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.shedAhead[key]);
     if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the shed-ahead control's`);
   }
-  await page.keyboard.press('Escape');
-  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await closeByEscape(dialog, `${theme} /pools select below dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
@@ -931,8 +945,7 @@ async function poolRoutingCards(theme) {
   if (!read.handle) say('the utilization bar draws no select-below handle with select-below on');
   else if (!read.handle.inside || read.handle.value === null) say(`the select-below handle sits off its track (${JSON.stringify(read.handle)})`);
   if (!read.preview || !/^(Would (move|mark)|No member is ahead of pace by the margin)/.test(read.preview)) say(`the shedding preview reads ${JSON.stringify(read.preview)}`);
-  await page.keyboard.press('Escape');
-  await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
+  await closeByEscape(dialog, `${theme} /pools routing groups dialog`, say);
   await expertView(false).catch(() => {});
   await atRest();
 }
@@ -1159,10 +1172,7 @@ async function poolDialogWalk(theme, mode) {
     await dialog.waitFor({ state: 'visible', timeout: 15_000 });
     await settle();
   };
-  const close = async () => {
-    await page.keyboard.press('Escape');
-    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => sayIn(null, 'the dialog stayed open after Escape'));
-  };
+  const close = () => closeByEscape(dialog, `${theme} /pools ${mode} dialog`, (what) => sayIn(null, what));
   try {
     await open();
   } catch (error) {
@@ -1326,7 +1336,8 @@ async function poolDialogWalk(theme, mode) {
     measurements.push(`${theme} /pools ${mode} dialog at 720 px Routing parent ${JSON.stringify({ ...hover, rest })}`);
     if (hover.routing === rest || hover.routing !== hover.chosen) sayIn(null, `at 720 px the Routing parent reads ${hover.routing} under the pointer and ${rest} at rest, not the chosen parent's ${hover.chosen}`);
     // A strip's entry shrinks to its words, so its refusal dot follows them as on the flat rail rather than sitting in
-    // the right padding. An empty name refuses Identity, which dots Identity and its parent; Escape below discards it.
+    // the right padding. An empty name refuses Identity, which dots Identity and its parent, and the close below
+    // discards it through the question it raises.
     await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="research"]').fill('');
     await settle();
     const dots = await dialog.evaluate((el) =>
@@ -2993,7 +3004,7 @@ const KEY_GROUP_LABELS = ['Key', 'Access', 'Models', 'Sessions', 'Capture'];
  * label on its line, each group inside one window of the body with the layout `groupGeometry` reads, the derived id
  * under a new key's typed Name, the moving warning leading Key on an edit that changes the pool, the bodies warning
  * leading Capture while capture is on, and a revoked key's Enabled switch drawn and disabled. Nothing is saved: every
- * dialog leaves by Escape.
+ * dialog leaves by Escape, through the discard question where the walk changed it.
  */
 async function keyDialogGeometry(theme) {
   const sayIn = (where, what) => failures.push(`${theme} /keys dialog${where ? ` ${where}` : ''}: ${what}`);
@@ -3008,10 +3019,7 @@ async function keyDialogGeometry(theme) {
     await row.locator('.menu__trigger').click();
     await page.getByRole('menuitem', { name: 'Edit', exact: true }).click();
   };
-  const close = async (mode) => {
-    await page.keyboard.press('Escape');
-    await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => sayIn(mode, 'the dialog stayed open after Escape'));
-  };
+  const close = (mode) => closeByEscape(dialog, `${theme} /keys dialog ${mode}`, (what) => sayIn(mode, what));
   const walk = async (mode, view) => {
     const frame = await dialog.evaluate((el) => {
       const box = el.getBoundingClientRect();
@@ -3099,7 +3107,7 @@ async function keyDialogGeometry(theme) {
       await close('edit');
     } catch (error) {
       sayIn(`${view} view`, error instanceof Error ? error.message : String(error));
-      await page.keyboard.press('Escape').catch(() => {});
+      await close(`${view} view`).catch(() => {});
     }
   }
   await expertView(false).catch(() => {});
@@ -3119,7 +3127,7 @@ async function keyDialogGeometry(theme) {
     await close('revoked');
   } catch (error) {
     sayIn('revoked', error instanceof Error ? error.message : String(error));
-    await page.keyboard.press('Escape').catch(() => {});
+    await close('revoked').catch(() => {});
   }
   await atRest();
 }

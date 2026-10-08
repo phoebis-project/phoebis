@@ -18,6 +18,9 @@ import { scrollToElement } from '@/lib/scroll';
 
 const STATUS_TONE: Record<KeyStatus, 'critical' | 'good' | 'neutral' | 'warning'> = { active: 'good', disabled: 'warning', expired: 'neutral', revoked: 'critical' };
 const isKeyGroup = (value: string | null): value is KeyGroup => value !== null && (KEY_GROUPS as readonly string[]).includes(value);
+// Key order is dropped so the discard question's compare reads values alone.
+const sortKeys = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(sortKeys) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value as object).sort().map((k) => [k, sortKeys((value as Record<string, unknown>)[k])])) : value;
 /** A key with no override of its own captures for as long as its pool says. */
 export const effectiveCaptureHours = (key: Pick<ApiKey, 'bodyCaptureHours'>, pool: Pick<Pool, 'bodyCaptureHours'> | null): number => key.bodyCaptureHours ?? pool?.bodyCaptureHours ?? 0;
 const captureLabel = (hours: number) => (hours > 0 ? `bodies captured, ${hours}h` : 'bodies not captured');
@@ -456,6 +459,8 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
   const first = refusals[0] ?? null;
   const rulesRefusal = refusalOf('Model rules');
   const processed = useAsync(() => (open && existing ? api.getKeyModels(existing.id) : Promise.resolve(null)), [open, existing?.id]);
+  // The values the dialog opened with, which the discard question compares the fields against.
+  const opened = useRef(keyFormOf(null, ''));
 
   // Once per opening: the address can open the dialog before the pool list lands, and a reset on its arrival would
   // discard every edit made meanwhile and put back the group the dialog opened on, the focus left in a hidden one.
@@ -463,6 +468,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     if (!open) return;
     // A key cannot exist without a pool, so the first pool stands in until one is picked.
     const form = keyFormOf(existing, initialPoolId ?? pools[0]?.id ?? '');
+    opened.current = form;
     setChosen(initialGroup ?? 'key');
     setName(form.name);
     setPoolId(form.poolId);
@@ -480,22 +486,26 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     setError(null);
     setStale(null);
   }, [open, existing, initialPoolId, initialGroup]);
-  // A new key opened before the pools landed has no pool yet; the first one fills it once they do.
+  // A new key opened before the pools landed has no pool yet, so the first one fills it once they do. The fill is no
+  // edit of the operator's, so the opening values take it too.
   useEffect(() => {
-    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId(pools[0].id);
+    if (open && existing === null && poolId === '' && pools.length > 0) {
+      setPoolId(pools[0].id);
+      opened.current = { ...opened.current, poolId: pools[0].id };
+    }
   }, [existing, open, poolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
   useEffect(() => setError(null), [autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId]);
 
   const moving = existing !== null && poolId !== existing.poolId;
+  const current = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
 
   const submit = async () => {
     setBusy(true);
     setError(null);
     setStale(null);
-    const form = { autoModeServer, captureHours, captureMode, enabled, expiry, longContextTwins, modelRules, modelRulesMode, name, notes, optOut, poolId };
-    const input = keyInputOf(form, clock.now());
+    const input = keyInputOf(current, clock.now());
     try {
       if (existing) {
         const updated = await api.updateKey(existing.id, input, existing.revision);
@@ -708,6 +718,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       open={open}
       onClose={onClose}
       title={existing ? `Edit ${existing.name}` : 'Create key'}
+      unsaved={JSON.stringify(sortKeys(current)) !== JSON.stringify(sortKeys(opened.current))}
       railLabel="Key settings"
       groups={groups}
       chosen={chosen}

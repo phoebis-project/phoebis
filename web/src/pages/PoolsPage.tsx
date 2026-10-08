@@ -843,6 +843,13 @@ const blankForm = (): PoolForm => ({
   warmSubagents: true,
 });
 
+// The compare the discard question reads. Key order is dropped on purpose: `members` is rebuilt in tick order, so a
+// member unticked and ticked again at its old priority reads as no change (`budgets` keeps an unticked member's
+// entry, so it is not rebuilt).
+const sameForm = (a: PoolForm, b: PoolForm): boolean => JSON.stringify(sortKeys(a)) === JSON.stringify(sortKeys(b));
+const sortKeys = (value: unknown): unknown =>
+  Array.isArray(value) ? value.map(sortKeys) : value !== null && typeof value === 'object' ? Object.fromEntries(Object.keys(value as object).sort().map((k) => [k, sortKeys((value as Record<string, unknown>)[k])])) : value;
+
 const formFrom = (pool: Pool): PoolForm => ({
   affinity: pool.affinityTtlSeconds,
   affinityMode: pool.affinityMode,
@@ -950,6 +957,8 @@ export function PoolDialog({
   const now = useNow();
   const { expertView } = useAppSettings();
   const [form, setForm] = useState<PoolForm>(blankForm);
+  // The values the dialog opened with, which the discard question compares the form against.
+  const opened = useRef(form);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [attempted, setAttempted] = useState(false);
@@ -965,6 +974,7 @@ export function PoolDialog({
   const [moveBusy, setMoveBusy] = useState(false);
   const [moveError, setMoveError] = useState<string | null>(null);
   const [moveTo, setMoveTo] = useState('');
+  const openedMoveTo = useRef('');
   const [moving, setMoving] = useState<ApiKey | null>(null);
   const [revoked, setRevoked] = useState<Set<string>>(new Set());
   const [revoking, setRevoking] = useState<ApiKey | null>(null);
@@ -974,6 +984,7 @@ export function PoolDialog({
     if (!open) return;
     const next = pool ? formFrom(pool) : blankForm();
     setForm(next);
+    opened.current = next;
     setMemberOrder(orderedAccountIds(accounts, next.members));
     setLocalKeys([]);
     setMoveError(null);
@@ -1107,7 +1118,9 @@ export function PoolDialog({
   const setCacheTtl = <K extends keyof PoolCacheTtl>(key: K, value: PoolCacheTtl[K]) => setForm((f) => ({ ...f, cacheTtl: { ...f.cacheTtl, [key]: value } }));
 
   const startMove = (k: ApiKey) => {
-    setMoveTo(otherPools[0]?.id ?? '');
+    const to = otherPools[0]?.id ?? '';
+    openedMoveTo.current = to;
+    setMoveTo(to);
     setMoveError(null);
     setMoving(k);
   };
@@ -2067,6 +2080,7 @@ export function PoolDialog({
         open={open}
         onClose={() => onClose(attempted)}
         title={pool ? `Edit pool ${pool.name}` : 'Create pool'}
+        unsaved={!sameForm(form, opened.current)}
         railLabel="Pool settings"
         groups={groups}
         chosen={chosen}
@@ -2120,6 +2134,8 @@ export function PoolDialog({
           if (!moveBusy) setMoving(null);
         }}
         title={moving ? `Move key ${moving.name}` : 'Move key'}
+        // False while the move is out, so an outside click or Escape reaches the hold above rather than a question.
+        unsaved={!moveBusy && moving !== null && moveTo !== openedMoveTo.current}
         subtitle="A key reaches only its own pool's members, so moving it ends its current session pins."
         width={440}
         footer={

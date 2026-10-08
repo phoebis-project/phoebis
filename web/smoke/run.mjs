@@ -93,6 +93,15 @@ function expect(name, text, needles) {
 const group = (dlg, label) => [...(dlg?.querySelectorAll('section.dialog-group') ?? [])].find((s) => s.getAttribute('aria-label') === label);
 /** A rail entry by its group's id, never its text, so a refused entry's annotation cannot hide it. */
 const rail = (dlg, id) => dlg?.querySelector(`.dialog-rail__group[data-group="${id}"]`);
+/** A dialog's button by its label. */
+const buttonIn = (dlg, label) => [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === label);
+/** The outside path of a modal dialog: a click whose target is the dialog element itself is a click on the backdrop. */
+const clickOutside = (dlg) => dlg?.dispatchEvent(new window.MouseEvent('click', { bubbles: true }));
+/** The discard question while it is up: the topmost open dialog, which the question's own modal makes it; null otherwise. */
+const discardQuestion = (root) => {
+  const last = [...root.querySelectorAll('dialog[open]')].pop();
+  return last && (last.textContent ?? '').includes('Discard changes?') ? last : null;
+};
 
 /**
  * `rows` pairs an account id with the line drawn under its name, or null where no line is drawn: the line is the
@@ -3237,6 +3246,62 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools reopening the Move dialog drops the last refusal', ok: !!reopened && reopened.querySelector('[role="alert"]') === null, missing: [reopened?.querySelector('[role="alert"]')?.textContent ?? (reopened ? '' : 'no dialog')] });
     footButton(reopened, 'Cancel')?.click();
     await m.settle(200);
+
+    // The Move dialog's outside path, over the pool dialog, which stays open under it: unchanged, a backdrop click
+    // closes the Move dialog alone; after another pool is picked it asks, Keep editing keeps the pick, and Discard
+    // closes the Move dialog and leaves the pool dialog open.
+    const open = () => [...m.container.querySelectorAll('dialog[open]')];
+    const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+    const destination = (dialog) => dialog?.querySelector('select[aria-label="Destination pool"]');
+    const selectSetter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
+    const pick = async (dialog, value) => {
+      selectSetter.call(destination(dialog), value);
+      destination(dialog)?.dispatchEvent(new window.Event('change', { bubbles: true }));
+      await m.settle(120);
+    };
+    const outside = async (dialog) => {
+      clickOutside(dialog);
+      await m.settle(200);
+    };
+    const escape = async () => {
+      document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+      await m.settle(200);
+    };
+    let move = await openMove();
+    await outside(move);
+    results.push({ name: '/pools the Move key dialog closes on an outside click while unchanged, the pool dialog still open', ok: open().length === 1 && dlg?.hasAttribute('open') === true && move?.hasAttribute('open') === false, missing: titles() });
+    move = await openMove();
+    const openedOn = destination(move)?.value;
+    const second = destination(move)?.options[1]?.value;
+    await pick(move, second);
+    await outside(move);
+    const asked = discardQuestion(m.container);
+    results.push({
+      name: '/pools the Move key dialog asks before an outside click discards a changed pick',
+      ok: openedOn === 'jobs' && second === 'work' && open().length === 3 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
+      missing: [`opened on ${openedOn}, picked ${second}`, `${open().length} open: ${titles().join(', ')}`],
+    });
+    buttonIn(asked, 'Keep editing')?.click();
+    await m.settle(200);
+    results.push({ name: '/pools Keep editing returns to the Move key dialog with the pick kept', ok: open().length === 2 && move?.hasAttribute('open') === true && destination(move)?.value === second, missing: [`${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'] });
+    await outside(move);
+    const askedAgain = discardQuestion(m.container);
+    buttonIn(askedAgain, 'Discard')?.click();
+    await m.settle(200);
+    results.push({ name: '/pools Discard closes the Move key dialog and leaves the pool dialog open', ok: askedAgain !== null && open().length === 1 && dlg?.hasAttribute('open') === true, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+    // Once for the plain dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
+    move = await openMove();
+    await pick(move, second);
+    await escape();
+    const askedByEscape = open().length === 3 && discardQuestion(m.container) !== null;
+    await escape();
+    results.push({
+      name: '/pools Escape on an unsaved Move key dialog asks, and Escape on the question keeps editing',
+      ok: askedByEscape && open().length === 2 && move?.hasAttribute('open') === true && discardQuestion(m.container) === null && destination(move)?.value === second,
+      missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, destination(move)?.value ?? 'no select'],
+    });
+    footButton(move, 'Cancel')?.click();
+    await m.settle(200);
   }
 
   const laptopIdx = keyRows().map((tr) => tr.children[0]?.textContent?.trim()).indexOf('laptop');
@@ -3398,6 +3463,66 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const pickedBeforeClose = picker()?.value;
     [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
     await m.settle(200);
+    {
+      // The pool dialog's outside path: unchanged, a backdrop click closes it at once; after an edit it asks, Keep
+      // editing returns to the edit, and Discard closes. Every close reopens Edit pool all, so the checks after this
+      // one read the open dialog they expect.
+      const open = () => [...m.container.querySelectorAll('dialog[open]')];
+      const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+      const reopen = async () => {
+        [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+        await m.settle(300);
+      };
+      const outside = async () => {
+        clickOutside(dlg);
+        await m.settle(200);
+      };
+      const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+      const name = () => group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
+      const typeName = async (value) => {
+        setter.call(name(), value);
+        name()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+        await m.settle(120);
+      };
+      const escape = async () => {
+        document.activeElement?.dispatchEvent(new window.KeyboardEvent('keydown', { bubbles: true, cancelable: true, key: 'Escape' }));
+        await m.settle(200);
+      };
+      await reopen();
+      await outside();
+      results.push({ name: '/pools the pool dialog closes on an outside click while unchanged', ok: open().length === 0, missing: titles() });
+      await reopen();
+      await typeName('all2');
+      await outside();
+      const asked = discardQuestion(m.container);
+      const askedText = asked?.textContent ?? '';
+      results.push({
+        name: '/pools the pool dialog asks before an outside click discards a change',
+        ok: open().length === 2 && asked !== null && askedText.includes('Keep editing') && askedText.includes('Discard') && document.activeElement === buttonIn(asked, 'Keep editing'),
+        missing: [`${open().length} open: ${titles().join(', ')}`, `focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
+      });
+      buttonIn(asked, 'Keep editing')?.click();
+      await m.settle(200);
+      results.push({ name: '/pools Keep editing returns to the pool dialog with the typed value', ok: open().length === 1 && dlg?.hasAttribute('open') === true && name()?.value === 'all2', missing: [`${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'] });
+      await outside();
+      const askedAgain = discardQuestion(m.container);
+      buttonIn(askedAgain, 'Discard')?.click();
+      await m.settle(200);
+      results.push({ name: '/pools Discard closes the pool dialog', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+      // Once for the grouped dialog: the Escape reaches the run's shim, which asks the topmost open dialog to cancel.
+      await reopen();
+      await typeName('all2');
+      await escape();
+      const askedByEscape = open().length === 2 && discardQuestion(m.container) !== null;
+      await escape();
+      results.push({
+        name: '/pools Escape on an unsaved pool dialog asks, and Escape on the question keeps editing',
+        ok: askedByEscape && open().length === 1 && dlg?.hasAttribute('open') === true && discardQuestion(m.container) === null && name()?.value === 'all2',
+        missing: [`asked ${askedByEscape}`, `${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'],
+      });
+      [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+      await m.settle(200);
+    }
     [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
     await m.settle(300);
     rail(dlg, 'cacheTtl')?.click();
@@ -5394,6 +5519,51 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   await m.settle(300);
   const editDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   expect('/keys edit dialog', editDlg?.textContent ?? '', ['Edit ', 'Cache warming opt-out', 'Save', 'Enabled', 'Off refuses the key and keeps it, so it can come back on without a new secret; a revoked key cannot.']);
+  {
+    // The edit dialog's outside path: unchanged, a backdrop click closes it at once; after a typed change it asks,
+    // Keep editing returns to the edit, and Discard closes. Every close reopens the edit through the row menu, so
+    // the checks after this one read the open dialog they expect.
+    const open = () => [...m.container.querySelectorAll('dialog[open]')];
+    const titles = () => open().map((d) => d.querySelector('.dialog__title')?.textContent?.trim() ?? '');
+    const reopen = async () => {
+      m.container.querySelector('.menu__trigger')?.click();
+      await m.settle(100);
+      [...m.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+      await m.settle(300);
+    };
+    const outside = async () => {
+      clickOutside(editDlg);
+      await m.settle(200);
+    };
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+    const name = () => group(editDlg, 'Key')?.querySelector('input[placeholder="workstation"]');
+    const typeName = async (value) => {
+      setter.call(name(), value);
+      name()?.dispatchEvent(new window.Event('input', { bubbles: true }));
+      await m.settle(120);
+    };
+    const openedAs = name()?.value ?? '';
+    await outside();
+    results.push({ name: '/keys the key dialog closes on an outside click while unchanged', ok: open().length === 0, missing: titles() });
+    await reopen();
+    await typeName(`${openedAs}2`);
+    await outside();
+    const asked = discardQuestion(m.container);
+    results.push({
+      name: '/keys the key dialog asks before an outside click discards a change',
+      ok: open().length === 2 && asked !== null && document.activeElement === buttonIn(asked, 'Keep editing'),
+      missing: [`${open().length} open: ${titles().join(', ')}`, `focus on ${document.activeElement?.tagName.toLowerCase()} ${document.activeElement?.textContent?.trim().slice(0, 30) ?? ''}`],
+    });
+    buttonIn(asked, 'Keep editing')?.click();
+    await m.settle(200);
+    results.push({ name: '/keys Keep editing returns to the key dialog with the typed value', ok: open().length === 1 && editDlg?.hasAttribute('open') === true && name()?.value === `${openedAs}2`, missing: [`${open().length} open: ${titles().join(', ')}`, name()?.value ?? 'no name input'] });
+    await outside();
+    const askedAgain = discardQuestion(m.container);
+    buttonIn(askedAgain, 'Discard')?.click();
+    await m.settle(200);
+    results.push({ name: '/keys Discard closes the key dialog', ok: askedAgain !== null && open().length === 0, missing: [askedAgain ? 'asked' : 'no question', `${open().length} open: ${titles().join(', ')}`] });
+    await reopen();
+  }
   {
     const expiry = editDlg?.querySelector('select[aria-label="Expiry"]');
     const toggle = editDlg?.querySelector('button[role="switch"][aria-label="Enabled"]');
