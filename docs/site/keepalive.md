@@ -168,6 +168,27 @@ foreground tool call on a five-minute entry stays covered, and the lease and the
 At a ceiling the recipe ends with the reason `idle_limit` or `parked_limit`, or is held with `horizon`, and its
 unanswered probes count as wasted under that reason. The next real request re-arms it.
 
+### The return rate by idle age
+
+The idle window is a bet whose right size differs by pool, so the router records, per pool, how long the main
+conversation stays idle and whether it comes back to the same conversation. A window opens once the main conversation
+reports idle or parked, from the idle window's start above, and two counters per idle-age bucket record it:
+
+- `reached`, the windows that lasted to the bucket's start.
+- `returned`, the windows whose next request from the main conversation continued the conversation inside the bucket:
+  one of the request's message boundaries is the last one the retained recipe held when the window opened.
+
+The ten buckets run 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32
+hours, and above. Windows are counted whether or not their recipe is still retained, so one that outlives the idle
+window still records when the user came back. With no recipe retained when it opens, on a pool with keepalive off or a
+key that opted out, a window has no conversation to compare against and counts no return. A return's age is read at the
+prompt that announced it, however long the request takes to follow. A lapsed lease, a park that ends without a request,
+a presence report, a request on a new conversation and the session's end close a window with no return. A busy report
+pauses the count without closing the window, and a subagent or a silent session opens none.
+
+No rule reads the counters yet: the idle window is still the pool's `max_idle_seconds`, capped at the break-even. The
+pool dialog shows them by bucket.
+
 ## The cost reference
 
 The Cost reference dialog shows what a million tokens costs, in dollars at list price and as a share of a subscription

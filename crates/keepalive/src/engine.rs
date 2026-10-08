@@ -252,6 +252,71 @@ pub fn guard(
     Guard::Foreign
 }
 
+/// The lower bounds of the ten idle-age buckets, in seconds: 0 to 5, 5 to 15, 15 to 30 and 30 to 60 minutes, then
+/// 1 to 2, 2 to 4, 4 to 8, 8 to 16 and 16 to 32 hours, and above.
+pub const IDLE_AGE_BOUNDS_SECONDS: [u64; 10] = [
+    0, 300, 900, 1_800, 3_600, 7_200, 14_400, 28_800, 57_600, 115_200,
+];
+
+/// The bucket of an idle window `age_ms` old. An age below zero, from a clock that stepped back, reads as the first.
+pub fn idle_age_bucket(age_ms: i64) -> usize {
+    IDLE_AGE_BOUNDS_SECONDS
+        .iter()
+        .rposition(|&bound| age_ms >= bound as i64 * 1_000)
+        .unwrap_or(0)
+}
+
+/// One idle-age bucket of a pool: the idle windows of main that reached the bucket's start, and those whose next
+/// request from main continued the same prefix inside the bucket.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IdleReturnBucket {
+    pub reached: u64,
+    pub returned: u64,
+}
+
+/// One pool's counters, a bucket per bound of `IDLE_AGE_BOUNDS_SECONDS`.
+#[derive(Clone, Debug, Default, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+pub struct IdleReturns {
+    pub buckets: [IdleReturnBucket; 10],
+}
+
+/// One open idle window of main: when it began, the highest bucket `reached` has been raised for, the prefix the
+/// window's recipe held when it opened (kept after the recipe's disposal, so a late return is still judged against
+/// it), and the moment a prompt announced the return, when one has.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct IdleEpisode {
+    pub started: i64,
+    pub bucket: Option<usize>,
+    pub anchor: Option<(String, String)>,
+    pub prompt_at: Option<i64>,
+}
+
+/// Whether a request continues the prefix `anchor` names: one of its message boundaries equals the anchor's tail hash.
+/// The chain is the only evidence, and the request's class is none: a refreshing class whose chain lacks the tail
+/// hash answers false where `guard` re-arms it, as do a request with no chain and an absent anchor.
+pub fn continues_prefix(anchor: Option<(&str, &str)>, boundaries: &[String]) -> bool {
+    anchor.is_some_and(|(_, tail)| boundaries.iter().any(|boundary| boundary == tail))
+}
+
+/// Raises `reached` in the buckets after `counted` up to `bucket`. A tick and the request that ends a window both
+/// count through here, and `counted` is the fence that keeps them from raising one bucket twice for one window.
+fn raise_reached(counters: &mut IdleReturns, counted: Option<usize>, bucket: usize) {
+    for counter in &mut counters.buckets[counted.map_or(0, |c| c + 1)..=bucket] {
+        counter.reached += 1;
+    }
+}
+
+/// The counters' key for an agent no request or tick has given a pool yet: the pool of the session's key, read as
+/// `refresh_policy` reads it, else the pinned account's own id for an account outside every pool, so no window counts
+/// under the empty key, which no pool row reads.
+fn idle_returns_key(snapshot: &RegistrySnapshot, agent: &Agent) -> Option<String> {
+    snapshot
+        .key(&agent.key_id)
+        .and_then(|key| snapshot.pool(&key.pool_id))
+        .map(|pool| pool.id.clone())
+        .or_else(|| agent.account.clone())
+}
+
 /// The routing crate's unit selector, so the keepalive and the shedding round never disagree on a pin's unit.
 pub type SavingsUnit = phoebis_routing::BurnUnit;
 
@@ -386,6 +451,8 @@ pub(crate) struct Agent {
     /// since the window starts at the later of it and `last_activity` and an older end never outranks a newer
     /// request.
     pub park_ended_at: Option<i64>,
+    /// The open idle window of main, `None` while none is counted.
+    pub idle_episode: Option<IdleEpisode>,
     pub generation: u64,
     pub current: Option<Observation>,
     /// When the entry the recipe keeps warm expires; the due time is this less the timing's lead and jitter.
@@ -473,6 +540,7 @@ impl Agent {
             wake_at: None,
             park_began: None,
             park_ended_at: None,
+            idle_episode: None,
             generation: 0,
             current: None,
             expires: None,
@@ -733,6 +801,9 @@ pub(crate) struct Inner {
     pub next_incarnation: u64,
     /// The engine's timing, copied onto every agent it creates.
     pub timing: KeepaliveTiming,
+    /// The idle-age counters by pool id. Never pruned while the engine runs, so a pool that leaves keeps the counts
+    /// it already took until the restart.
+    pub idle_returns: BTreeMap<String, IdleReturns>,
 }
 
 pub struct Engine {
@@ -790,6 +861,11 @@ impl Engine {
 
     pub fn reasons(&self) -> BTreeMap<Reason, u64> {
         self.lock().reasons.clone()
+    }
+
+    /// The counters per pool id, for the overview and the flush.
+    pub fn idle_returns(&self) -> BTreeMap<String, IdleReturns> {
+        self.lock().idle_returns.clone()
     }
 
     pub fn stats(&self) -> EngineStats {
@@ -866,6 +942,7 @@ impl Inner {
             gap_backlog: 0,
             next_incarnation: 0,
             timing,
+            idle_returns: BTreeMap::new(),
         }
     }
 
@@ -1113,6 +1190,8 @@ impl Inner {
             return;
         }
         agent.park_ended_at = Some(now);
+        // The window restarts here, so the one counted so far ends with no return.
+        agent.idle_episode = None;
         if agent.id != MAIN_AGENT {
             agent.park_began = None;
             return;
@@ -1122,6 +1201,87 @@ impl Inner {
             key_id: key.0.clone(),
             session_id: key.1.clone(),
         });
+    }
+
+    /// Opens main's idle window on every attended session and raises `reached` up to the window's current bucket.
+    /// It reads the sessions, never the retained recipes, so a session whose recipe a ceiling discarded, or that never
+    /// sent a request, still reaches the later buckets. A busy main keeps its window and counts nothing, and a window
+    /// whose return a prompt announced waits for the request.
+    pub(crate) fn advance_idle_episodes(&mut self, snapshot: &RegistrySnapshot, now: i64) {
+        for session in self.sessions.values_mut() {
+            if session.ended || !session.attended {
+                continue;
+            }
+            let Some(main) = session.agents.get_mut(MAIN_AGENT) else {
+                continue;
+            };
+            if matches!(
+                main.state,
+                AgentState::Busy | AgentState::Released | AgentState::Unknown
+            ) {
+                continue;
+            }
+            if main.pool_id.is_empty() {
+                let Some(pool) = idle_returns_key(snapshot, main) else {
+                    continue;
+                };
+                main.pool_id = pool;
+            }
+            let episode = main.idle_episode.get_or_insert_with(|| IdleEpisode {
+                started: main
+                    .park_ended_at
+                    .map_or(main.last_activity, |ended| ended.max(main.last_activity)),
+                bucket: None,
+                anchor: main.current.as_ref().and_then(|observation| {
+                    let recipe = &observation.recipe;
+                    recipe
+                        .tail_hash
+                        .clone()
+                        .map(|tail| (recipe.static_hash.clone().unwrap_or_default(), tail))
+                }),
+                prompt_at: None,
+            });
+            if episode.prompt_at.is_some() {
+                continue;
+            }
+            let bucket = idle_age_bucket(now - episode.started);
+            raise_reached(
+                self.idle_returns.entry(main.pool_id.clone()).or_default(),
+                episode.bucket,
+                bucket,
+            );
+            episode.bucket = Some(bucket);
+        }
+    }
+
+    /// Main's request ends its open idle window: the buckets the window crossed since the last tick count as reached,
+    /// and the bucket of its age counts a return when the request continues the prefix the window opened on. The age
+    /// runs to the prompt that announced the request, when one did, since the user came back then however many ticks
+    /// pass before the request arrives.
+    pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
+        let Some(main) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(MAIN_AGENT))
+        else {
+            return;
+        };
+        let Some(episode) = main.idle_episode.take() else {
+            return;
+        };
+        if main.pool_id.is_empty() {
+            return;
+        }
+        let bucket = idle_age_bucket(episode.prompt_at.unwrap_or(now) - episode.started);
+        let counters = self.idle_returns.entry(main.pool_id.clone()).or_default();
+        raise_reached(counters, episode.bucket, bucket);
+        let anchor = episode
+            .anchor
+            .as_ref()
+            .map(|(static_hash, tail)| (static_hash.as_str(), tail.as_str()));
+        if continues_prefix(anchor, boundaries) {
+            counters.buckets[bucket].returned += 1;
+        }
     }
 
     pub(crate) fn incarnation(&mut self) -> u64 {
@@ -1270,6 +1430,10 @@ impl Inner {
             *self.reasons.entry(Reason::LeaseExpired).or_default() += agents;
             if let Some(session) = self.sessions.get_mut(&key) {
                 session.attended = false;
+                // A lapse is no return, so main's window ends here.
+                if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
+                    main.idle_episode = None;
+                }
             }
         }
         let expired: Vec<SessionKey> = self
@@ -1565,6 +1729,12 @@ impl Engine {
             .get_mut(&agent_id)
             .unwrap()
             .last_guard = Some(verdict);
+        // Ahead of the return below, so a foreign request on a new prefix ends the window too. The return is judged
+        // against the prefix the window opened on, never on the verdict, which re-arms on any chain once a ceiling
+        // has discarded the recipe.
+        if agent_id == MAIN_AGENT && verdict != Guard::Auxiliary {
+            inner.end_idle_episode(&key, &observed.boundaries, now);
+        }
         if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;
         }
@@ -2071,7 +2241,9 @@ impl Engine {
                 return;
             }
             inner.expire(now, expiry);
-            inner.drop_sessions_of_dead_keys(&self.parts.router.snapshot());
+            let snapshot = self.parts.router.snapshot();
+            inner.drop_sessions_of_dead_keys(&snapshot);
+            inner.advance_idle_episodes(&snapshot, now);
             let rolled = inner.roll_day(now);
             (
                 inner.anything_retained().then(|| inner.retained_models()),

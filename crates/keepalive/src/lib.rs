@@ -19,8 +19,9 @@ pub use config::{
     LEASE_MS, LEASE_SECONDS, MAX_WORKERS, MIN_AFFINITY_SECONDS, ONE_HOUR_MS,
 };
 pub use engine::{
-    guard, spawn_observer, AgentState, AgentStatus, Engine, EngineParts, EngineStats, Funding,
-    Guard, Net, ParkKind, Reason, SavingsUnit, SessionKey, Wasted, MAIN_AGENT,
+    continues_prefix, guard, idle_age_bucket, spawn_observer, AgentState, AgentStatus, Engine,
+    EngineParts, EngineStats, Funding, Guard, IdleReturnBucket, IdleReturns, Net, ParkKind, Reason,
+    SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
 };
 pub use events::{decode_json_event, Ack, AckAgent, Event, EventError, PROTOCOL};
 pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};

@@ -340,13 +340,16 @@ impl Inner {
                         Reason::SessionEnded,
                         Some(Wasted::SessionEnded),
                     );
-                    self.sessions
+                    let agent = self
+                        .sessions
                         .get_mut(&key)
                         .unwrap()
                         .agents
                         .get_mut(agent)
-                        .unwrap()
-                        .set_state(AgentState::Released);
+                        .unwrap();
+                    agent.set_state(AgentState::Released);
+                    // A session's end is no return, so main's window ends with it.
+                    agent.idle_episode = None;
                 }
                 let session = self.sessions.get_mut(&key).unwrap();
                 session.ended = true;
@@ -429,7 +432,15 @@ impl Inner {
                     agent.last_activity = now;
                     // A person at the terminal says nothing about the agent's work, so presence moves the idle
                     // clock alone. Only the decoder requires the kind, so one a direct caller left out is a prompt.
-                    if ev.kind.as_deref() != Some("presence") {
+                    if ev.kind.as_deref() == Some("presence") {
+                        // Presence restarts the window, so the one counted so far ends with no return.
+                        agent.idle_episode = None;
+                    } else {
+                        // The request this prompt announces is judged at the window's age now, however many ticks
+                        // pass before it arrives. The window's start stays where it is.
+                        if let Some(episode) = agent.idle_episode.as_mut() {
+                            episode.prompt_at = Some(now);
+                        }
                         agent.idle_ticks = 0;
                         agent.set_state(AgentState::Busy);
                         if agent_id == MAIN_AGENT && was == AgentState::Parked {
@@ -473,6 +484,12 @@ impl Inner {
                         // restarts the idle window. A request behind a busy report moves the window itself.
                         if was == AgentState::Parked && state == AgentState::Idle {
                             agent.park_ended_at = Some(now);
+                            agent.idle_episode = None;
+                        } else if state == AgentState::Idle {
+                            // A prompt that sent no request, such as a local command: the window goes on.
+                            if let Some(episode) = agent.idle_episode.as_mut() {
+                                episode.prompt_at = None;
+                            }
                         }
                         agent.set_state(state);
                     }
