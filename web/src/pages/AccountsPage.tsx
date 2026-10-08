@@ -783,10 +783,10 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
       </div>
       <div className="form-row">
         <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the account in every log and URL">
-          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'work'} className="mono" />
+          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder={kind === 'oauth' ? 'home' : 'office'} className="mono" />
         </Field>
         <Field label="Label" hint="Short name used in pools and logs.">
-          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'Console workspace'} />
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'home' : 'Office workspace'} />
         </Field>
       </div>
       {kind === 'api_key' && (

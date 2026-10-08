@@ -1377,7 +1377,7 @@ async function poolDialogWalk(theme, mode) {
     if (hover.routing === rest || hover.routing !== hover.chosen) sayIn(null, `at 720 px the Routing parent reads ${hover.routing} under the pointer and ${rest} at rest, not the chosen parent's ${hover.chosen}`);
     // A strip's entry shrinks to its words, so its refusal dot follows them as on the flat rail rather than sitting in
     // the right padding. An empty name refuses Identity, which dots Identity and its parent; Escape below discards it.
-    await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="research"]').fill('');
+    await dialog.locator('section.dialog-group[aria-label="Identity"] input[placeholder="shared"]').fill('');
     await settle();
     const dots = await dialog.evaluate((el) =>
       [...el.querySelectorAll('.dialog-rail__parent[data-parent="Pool"], .dialog-rail__group[data-group="identity"]')].map((entry) => {

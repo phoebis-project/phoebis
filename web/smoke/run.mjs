@@ -1415,8 +1415,8 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
   results.push({
-    name: "/accounts Add account suggests personal for an OAuth account's id and label, and Console workspace for an API key's label",
-    ok: JSON.stringify(oauthHints) === '["personal","personal"]' && hints()[1] === 'Console workspace',
+    name: "/accounts Add account suggests home for an OAuth account's id and label, and office and Office workspace for an API key's id and label",
+    ok: JSON.stringify(oauthHints) === '["home","home"]' && JSON.stringify(hints()) === '["office","Office workspace"]',
     missing: [JSON.stringify(oauthHints), JSON.stringify(hints())],
   });
   const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
@@ -2651,7 +2651,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
   expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Daily probe cost cap ($)', 'Per UTC day, for probes paid in dollars: on API-key accounts, on subscription accounts in overage, and on models whose 5-hour share the cost model cannot price. Plan-funded probes do not count here.', 'Cost reference', 'Probe tuning', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
-  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
+  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
   results.push({ name: '/pools keys section is not a multi-select', ok: keysMulti.length === 0, missing: keysMulti });
@@ -3727,7 +3727,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const status = () => dlg?.querySelector('.dialog__status');
   const goTo = () => [...(status()?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim());
   const unnamed = [status()?.textContent ?? '', JSON.stringify(goTo())];
-  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
+  const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="shared"]');
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   setter.call(nameInput, 'draft');
   nameInput?.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -3967,7 +3967,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: held,
   });
   // A local refusal typed after the stale one leaves the line on the stale sentence, with no Go to beside it.
-  const blank = dlg?.querySelector('input[placeholder="research"]');
+  const blank = dlg?.querySelector('input[placeholder="shared"]');
   if (blank) {
     Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(blank, '');
     blank.dispatchEvent(new window.Event('input', { bubbles: true }));
@@ -4625,7 +4625,7 @@ localStorage.removeItem('phoebis.expertView');
     missing: [...marks.map(String), ...described('identity'), ...described('keys')],
   });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-  const name = dlg?.querySelector('input[placeholder="research"]');
+  const name = dlg?.querySelector('input[placeholder="shared"]');
   if (name) {
     setter.call(name, 'first');
     name.dispatchEvent(new window.Event('input', { bubbles: true }));

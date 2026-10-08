@@ -1217,7 +1217,7 @@ export function PoolDialog({
             </>
           }
         >
-          <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="research" className="mono" aria-invalid={invalid('Name')} />
+          <Input value={form.name} onChange={(e) => set('name', e.target.value)} placeholder="shared" className="mono" aria-invalid={invalid('Name')} />
         </Field>
         <Field label="Status" className="cell--half" hint="A disabled pool keeps its keys and members but stops accepting requests.">
           <Select value={form.status} onChange={(e) => set('status', e.target.value as 'active' | 'disabled')}>

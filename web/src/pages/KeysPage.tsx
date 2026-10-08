@@ -75,7 +75,7 @@ export function KeysPage() {
   // match it during the read and after a failed one, and the select holds an option for the id: without one it would
   // read All pools beside the filtered rows, and choosing All pools would change nothing. An id no pool carries reads
   // as All pools and leaves the address once the pools have loaded; while a dialog query is still in the address, its
-  // own effect goes first. All pools is the empty string, which no pool id can be, since `all` is a real pool's id.
+  // own effect goes first. All pools is the empty string, which no pool id can be, since a pool may be named `all`.
   const poolParam = useMemo(() => new URLSearchParams(location.search).get('pool'), [location.search]);
   const poolFilter = poolParam !== null && (pools.data === null || poolById.has(poolParam)) ? poolParam : '';
   const writePool = (id: string) => {
@@ -427,7 +427,7 @@ const KEY_GROUP_LABEL: Record<KeyGroup, string> = { access: 'Access', capture: '
 export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools, existing = null, existingIds, initialGroup = null, initialPoolId, lockPool = false }: { existing?: ApiKey | null; existingIds: ReadonlySet<string>; initialGroup?: KeyGroup | null; initialPoolId?: string; lockPool?: boolean; onClose: () => void; onCreated: (c: CreatedApiKey) => void; /** The stale save's Reload: closes the dialog and reads the keys again. */ onReload?: () => void; onUpdated?: (k: ApiKey) => void; open: boolean; pools: KeyDialogPool[] }) {
   const [chosen, setChosen] = useState<KeyGroup>('key');
   const [name, setName] = useState('');
-  const [poolId, setPoolId] = useState('all');
+  const [poolId, setPoolId] = useState('');
   const [longContextTwins, setLongContextTwins] = useState(true);
   const [modelRules, setModelRules] = useState<ModelRule[]>([]);
   const [modelRulesMode, setModelRulesMode] = useState<ModelRulesMode>('extend');
@@ -480,9 +480,10 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     setError(null);
     setStale(null);
   }, [open, existing, initialPoolId, initialGroup]);
-  // A new key opened before the pools landed has no pool yet; the first one fills it once they do.
+  // A new key opened before the pools landed has no pool yet, so the first pool fills it once they do. An updater,
+  // so it never replaces the pool the reset above queued in the same render.
   useEffect(() => {
-    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId(pools[0].id);
+    if (open && existing === null && poolId === '' && pools.length > 0) setPoolId((current) => (current === '' ? pools[0].id : current));
   }, [existing, open, poolId, pools]);
 
   // The server's words leave with the next edit to any field; a failed save changes none, so they stand until then.
