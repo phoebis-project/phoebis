@@ -3988,3 +3988,20 @@ impl Readings<'_> {
         (score, runner_up)
     }
 }
+
+#[cfg(all(test, debug_assertions))]
+mod tests {
+    use super::Recorder;
+
+    #[test]
+    #[should_panic(expected = "the walk step x/match is not in WALK_STEPS")]
+    fn the_recorder_refuses_a_step_id_the_table_does_not_list() {
+        Recorder::default().step("x", "match", Vec::new());
+    }
+
+    #[test]
+    #[should_panic(expected = "the walk step pin/fired is not in WALK_STEPS")]
+    fn the_recorder_refuses_a_verdict_the_table_does_not_list_for_its_step() {
+        Recorder::default().step("pin", "fired", Vec::new());
+    }
+}

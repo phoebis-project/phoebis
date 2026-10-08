@@ -1,6 +1,6 @@
-//! Writes the console's copy of the walk's step ids and verdict words under `PHOEBIS_WRITE_FIXTURES`, and otherwise
-//! holds the committed file to the engine's table, so a step the router adds or drops fails here until the console's
-//! station table follows. The admin fixtures test is the precedent for the variable and the path.
+//! Writes the walk's step ids and verdict words to the console's fixture under `PHOEBIS_WRITE_FIXTURES`, and without
+//! the variable fails when the committed file differs from the engine's table. The admin fixtures test is the
+//! precedent for the variable and the path.
 use std::path::PathBuf;
 
 use phoebis_routing::{
