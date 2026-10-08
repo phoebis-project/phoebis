@@ -231,6 +231,32 @@ async fn a_request_at_its_prompts_instant_starts_the_next_window() {
 }
 
 #[tokio::test]
+async fn a_request_on_an_unknown_main_moves_no_start() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    r.state("main", "unknown");
+    r.advance_attended(MINUTE);
+    r.observe_with("main", &next_turn()).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "the request ends the window"
+    );
+    r.advance_attended(MINUTE);
+    r.state("main", "idle");
+    tick_to(&mut r, start, 15).await;
+    assert_eq!(
+        reached(&r),
+        [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+        "the request moved no start, so no window opens from the old one"
+    );
+}
+
+#[tokio::test]
 async fn a_clock_that_steps_back_counts_no_bucket_twice() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;
@@ -408,6 +434,31 @@ async fn a_key_that_moves_pools_keeps_the_open_window_in_its_first_pool() {
             "the next window, keepalive {keepalive}"
         );
     }
+    // Keepalive on, with the recipe the idle ceiling discarded before the move: nothing refreshes the agent's pool any
+    // more, and the next window still finds the key's new one.
+    let mut r = rig(RigSpec {
+        policy: with_idle_window(600),
+        ..RigSpec::default()
+    })
+    .await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 10).await;
+    assert_eq!(
+        (r.status("main").reason, retained(&r)),
+        (Reason::IdleLimit, false)
+    );
+    move_key_to_warm(&r).await;
+    tick_to(&mut r, start, 12).await;
+    activity(&mut r, "presence");
+    tick_to(&mut r, start, 13).await;
+    assert_eq!(
+        (reached_in(&r, "main"), reached_in(&r, "warm")),
+        (
+            [1, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [1, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "the next window after the ceiling's discard"
+    );
 }
 
 #[tokio::test]

@@ -312,14 +312,16 @@ fn raise_reached(counters: &mut IdleReturns, counted: Option<usize>, bucket: usi
     }
 }
 
-/// The counters' key for a window of an agent no admitted selection or retained recipe has given a pool: the pool of
-/// the session's key, read as `refresh_policy` reads it, else the pinned account's own id for an account outside every
-/// pool, so no window counts under the empty key, which no pool row reads.
+/// The pool a window counts under, read once at its open: the pool the session's key is in now, read as
+/// `refresh_policy` reads it, else the agent's own pool id, else the pinned account's own id for an account outside
+/// every pool, so no window counts under the empty key, which no pool row reads. The key comes first because the
+/// agent's pool id is a copy only an admitted selection or a retained recipe's tick refreshes.
 fn idle_returns_key(snapshot: &RegistrySnapshot, agent: &Agent) -> Option<String> {
     snapshot
         .key(&agent.key_id)
         .and_then(|key| snapshot.pool(&key.pool_id))
         .map(|pool| pool.id.clone())
+        .or_else(|| (!agent.pool_id.is_empty()).then(|| agent.pool_id.clone()))
         .or_else(|| agent.account.clone())
 }
 
@@ -1255,15 +1257,9 @@ impl Inner {
                 if main.idle_window_floor.is_some_and(|floor| start <= floor) {
                     continue;
                 }
-                // One lookup per window, and only for an agent no admitted selection or retained recipe has given
-                // a pool: a session on a pool with keepalive off counts under the pool its key is in at each open.
-                let pool_key = if main.pool_id.is_empty() {
-                    let Some(pool) = idle_returns_key(snapshot, main) else {
-                        continue;
-                    };
-                    pool
-                } else {
-                    main.pool_id.clone()
+                // One lookup per window, so a key that moves pools takes its next window with it.
+                let Some(pool_key) = idle_returns_key(snapshot, main) else {
+                    continue;
                 };
                 main.idle_episode = Some(IdleEpisode {
                     started: start,
@@ -1295,13 +1291,7 @@ impl Inner {
     /// and the bucket of its age counts a return when the request continues the prefix the window opened on. The age
     /// runs to the prompt that announced the request, when one did, since the user came back then however many ticks
     /// pass before the request arrives.
-    pub(crate) fn end_idle_episode(
-        &mut self,
-        key: &SessionKey,
-        verdict: Guard,
-        boundaries: &[String],
-        now: i64,
-    ) {
+    pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
         let Some(main) = self
             .sessions
             .get_mut(key)
@@ -1309,13 +1299,7 @@ impl Inner {
         else {
             return;
         };
-        let episode = main.close_idle_episode();
-        // A real request restarts the window at its own instant, which can be the instant of the prompt that moved the
-        // start in force at the close. A foreign request leaves the start where it was, so its floor stands.
-        if verdict != Guard::Foreign {
-            main.idle_window_floor = None;
-        }
-        let Some(episode) = episode else {
+        let Some(episode) = main.close_idle_episode() else {
             return;
         };
         // Never below the fence: the window already counted as reaching it, so its return is read there.
@@ -1781,7 +1765,7 @@ impl Engine {
         // against the prefix the window opened on, never on the verdict, which re-arms on any chain once a ceiling
         // has discarded the recipe.
         if agent_id == MAIN_AGENT && verdict != Guard::Auxiliary {
-            inner.end_idle_episode(&key, verdict, &observed.boundaries, now);
+            inner.end_idle_episode(&key, &observed.boundaries, now);
         }
         if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;
@@ -1833,6 +1817,10 @@ impl Engine {
         let was = agent.state;
         agent.set_state(AgentState::Busy);
         agent.last_activity = now;
+        // The request restarts main's idle window at its own instant, which can be the instant of the prompt that set
+        // the floor at the close, so the floor goes with it. A foreign request, an auxiliary one and one on an
+        // `unknown` main returned above and move no start, so their floor stands.
+        agent.idle_window_floor = None;
         agent.cache_started = now;
         agent.idle_ticks = 0;
         agent.cold = 0;
