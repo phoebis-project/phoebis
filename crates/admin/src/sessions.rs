@@ -68,8 +68,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
-    // in force, or the share of the account's own 5-hour window through the model's anchor rates over its tier's
-    // capacity ratio. Each account's tier is read once per request.
+    // in force at the set the pin's last prompt length selects, or the share of the account's own 5-hour window
+    // through the model's anchor rates over its tier's capacity ratio. Each account's tier is read once per request.
     let dollar_rates = state.pricing.current().rate_table();
     let share_rates = state.tables.rate_table(FIVE_HOUR);
     let mut tiers: std::collections::HashMap<String, Option<String>> =
@@ -117,7 +117,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         let burn = match unit {
             None => None,
             Some(BurnUnit::Usd) => dollar_rates
-                .price_burn(&p.model, &p.burn)
+                .price_burn(&p.model, &p.burn, p.last_input_tokens)
                 .map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {
@@ -134,7 +134,7 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR))
                     .and_then(|factor| {
                         share_rates
-                            .price_burn(&p.model, &p.burn_banded)
+                            .price_burn(&p.model, &p.burn_banded, p.last_input_tokens)
                             .map(|b| b * 3_600.0 / factor)
                     })
             }

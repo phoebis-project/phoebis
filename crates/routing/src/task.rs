@@ -296,21 +296,27 @@ impl Default for BurnRates {
     }
 }
 
-/// Per token type, the fast cell over the standard cell of `model`: 1 where the standard rate is 0, since no
-/// weight can carry a charge the standard table prices at nothing, and 1 where either table has no rate for the
-/// type, as for a model with no fast price.
-fn fast_over_standard(rates: &BurnRates, model: &str) -> PinBurn {
-    let (fast, standard) = (rates.fast.rates_for(model), rates.dollars.rates_for(model));
-    let weight = |fast: Option<f64>, standard: Option<f64>| match (fast, standard) {
-        (Some(fast), Some(standard)) if standard != 0.0 => fast / standard,
+/// Per token type, the fast cell over the cell of the set `prompt_tokens` selects on `model`: 1 where that cell
+/// is 0, since no weight can carry a charge the dollar table prices at nothing, and 1 where either table has no
+/// rate for the type. A row without fast cells reads its own standard and long-context rates in the fast table,
+/// so the weight is 1 there whatever the prompt; a row with them keeps its fast cells whatever the prompt, so a
+/// fast renewal over the threshold weighs fast over long-context, and the burn priced later at the set the pin's
+/// last prompt selects reads the fast dollars, over the threshold as under it.
+fn fast_over(rates: &BurnRates, model: &str, prompt_tokens: u64) -> PinBurn {
+    let (fast, set) = (
+        rates.fast.rates_for(model, prompt_tokens),
+        rates.dollars.rates_for(model, prompt_tokens),
+    );
+    let weight = |fast: Option<f64>, set: Option<f64>| match (fast, set) {
+        (Some(fast), Some(set)) if set != 0.0 => fast / set,
         _ => 1.0,
     };
     PinBurn {
-        cache_read: weight(fast.cache_read, standard.cache_read),
-        input: weight(fast.input, standard.input),
-        output: weight(fast.output, standard.output),
-        write_1h: weight(fast.write_1h, standard.write_1h),
-        write_5m: weight(fast.write_5m, standard.write_5m),
+        cache_read: weight(fast.cache_read, set.cache_read),
+        input: weight(fast.input, set.input),
+        output: weight(fast.output, set.output),
+        write_1h: weight(fast.write_1h, set.write_1h),
+        write_5m: weight(fast.write_5m, set.write_5m),
     }
 }
 
@@ -2867,6 +2873,8 @@ impl Task {
                             // it by the band at the renewal; dollars cost the same at every hour.
                             let band = self.config.band.at(FIVE_HOUR, now);
                             let at = renewed.burn_at;
+                            let prompt =
+                                usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
                             let fold = |rate: f64, tokens: u64, weight: f64| {
                                 burn_folded(rate, at, now, window_ms, tokens as f64 * weight)
                             };
@@ -2885,10 +2893,10 @@ impl Task {
                                 write_5m: w,
                             };
                             // A fast answer is usage credits at the fast cells: the plain copy carries each type
-                            // weighed by fast over standard, so pricing it at the standard table reads the fast
-                            // dollars, and the banded copy, the plan share, only decays.
+                            // weighed by fast over the set this prompt selects, so pricing it at that set reads
+                            // the fast dollars, and the plan-share copy only decays.
                             let plain = if fast {
-                                fast_over_standard(&self.config.rates, &pin.model)
+                                fast_over(&self.config.rates, &pin.model, prompt)
                             } else {
                                 uniform(1.0)
                             };
@@ -2896,8 +2904,7 @@ impl Task {
                             renewed.burn_banded =
                                 folded(renewed.burn_banded, uniform(if fast { 0.0 } else { band }));
                             renewed.burn_at = Some(now);
-                            renewed.last_input_tokens =
-                                usage.input + usage.cache_read + usage.write_5m + usage.write_1h;
+                            renewed.last_input_tokens = prompt;
                         }
                         self.state.put_pin(renewed.clone());
                         self.state.mark_renewed(&key);

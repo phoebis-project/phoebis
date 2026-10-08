@@ -188,8 +188,9 @@ impl PriceTable {
         self.entry(canonical_model).map_or("other", |(key, _)| key)
     }
 
-    /// Dollars per token, the routing task's api_key burn unit. A model the table lacks prices at the dearest
-    /// listed rate of each type, so a model the table has not learned never looks cheap to the shedding order.
+    /// Dollars per token, the routing task's api_key burn unit: the standard cells per row and the long-context
+    /// cells of every row that carries them. A model the table lacks prices at the dearest listed standard rate of
+    /// each type, so a model the table has not learned never looks cheap to the shedding order.
     pub fn rate_table(&self) -> phoebis_routing::RateTable {
         let rows = self.per_token_rows(|row| &row.standard);
         let dearest = |of: fn(&phoebis_routing::Rates) -> Option<f64>| {
@@ -202,15 +203,42 @@ impl PriceTable {
             write_1h: Some(dearest(|r| r.write_1h)),
             output: Some(dearest(|r| r.output)),
         };
-        phoebis_routing::RateTable { rows, fallback }
+        let long_context = self
+            .models
+            .iter()
+            .filter_map(|(model, row)| {
+                let long = row.long_context.as_ref()?;
+                Some((
+                    model.clone(),
+                    phoebis_routing::LongContextRates {
+                        over: long.over,
+                        rates: per_token(&long.cells),
+                    },
+                ))
+            })
+            .collect();
+        phoebis_routing::RateTable {
+            rows,
+            long_context,
+            fallback,
+        }
     }
 
-    /// Dollars per token at the fast cells; a model without a `fast` block reads its standard cells, and the
-    /// fallback is `rate_table`'s, so a weight of fast over standard reads 1 wherever no fast price is known.
+    /// Dollars per token at the fast cells, which a fast answer reads whatever its prompt, so a row with a `fast`
+    /// block carries no long-context set here. A row without one reads its standard and long-context rates as
+    /// `rate_table` carries them, the cells `price_at` selects for a fast answer on it, and the fallback is
+    /// `rate_table`'s, so a weight of fast over the selected set reads 1 wherever no fast price is known.
     pub fn fast_rate_table(&self) -> phoebis_routing::RateTable {
+        let dollars = self.rate_table();
+        let long_context = dollars
+            .long_context
+            .into_iter()
+            .filter(|(model, _)| self.models[model].fast.is_none())
+            .collect();
         phoebis_routing::RateTable {
             rows: self.per_token_rows(|row| row.fast.as_ref().unwrap_or(&row.standard)),
-            fallback: self.rate_table().fallback,
+            long_context,
+            fallback: dollars.fallback,
         }
     }
 
@@ -634,18 +662,20 @@ mod tests {
             input: 1,
             ..phoebis_routing::PinUsage::default()
         };
+        let prompt =
+            |u: &phoebis_routing::PinUsage| u.input + u.cache_read + u.write_5m + u.write_1h;
         assert_eq!(
-            fast.price("claude-opus-5-5", one_input),
+            fast.price("claude-opus-5-5", one_input, prompt(&one_input)),
             Some(20.0 / 1_000_000.0)
         );
         assert_eq!(
-            fast.price("claude-sonnet-5-5", one_input),
-            standard.price("claude-sonnet-5-5", one_input),
+            fast.price("claude-sonnet-5-5", one_input, prompt(&one_input)),
+            standard.price("claude-sonnet-5-5", one_input, prompt(&one_input)),
             "the fast table prices a model without fast cells as the standard table does"
         );
         assert_eq!(
-            fast.price("gpt-5", one_input),
-            standard.price("gpt-5", one_input),
+            fast.price("gpt-5", one_input, prompt(&one_input)),
+            standard.price("gpt-5", one_input, prompt(&one_input)),
             "and an unlisted model at the standard table's fallback, so its weight reads 1"
         );
     }
@@ -694,6 +724,22 @@ mod tests {
         assert_eq!(both.price_at("m", Speed::Fast, 11).unwrap().input, 2.0);
         assert_eq!(both.price_at("m", Speed::Standard, 11).unwrap().input, 3.0);
         assert_eq!(both.price_at("m", Speed::Standard, 10).unwrap().input, 1.0);
+        let fast = both.fast_rate_table();
+        assert_eq!(
+            (
+                fast.price(
+                    "m",
+                    phoebis_routing::PinUsage {
+                        input: 1,
+                        ..phoebis_routing::PinUsage::default()
+                    },
+                    11
+                ),
+                fast.long_context.is_empty()
+            ),
+            (Some(2.0 / 1_000_000.0), true),
+            "the fast table keeps a row's fast cells with no long-context set beside them"
+        );
     }
 
     #[test]
@@ -751,32 +797,61 @@ mod tests {
 
     #[test]
     fn the_rate_table_prices_one_token_at_the_list_price_over_a_million() {
-        // The test table: Sonnet 5.5 at 3, 0.3, 3.75, 6 and 15 per million; Haiku's input at 1; Opus 5.5 the
-        // dearest row, at 10 input and 50 output.
+        // The test table: Sonnet 5.5 at 3, 0.3, 3.75, 6 and 15 per million; Haiku 4.5's input at 1; Haiku 5.5's
+        // input at 1 up to 1,000 prompt tokens and 5 over them, with no fast cells; Opus 5.5 the dearest row, at
+        // 10 input and 50 output, its fast input at 20.
         let rates = crate::test_tables::api_prices().rate_table();
         let one = |pick: fn(&mut phoebis_routing::PinUsage)| {
             let mut usage = phoebis_routing::PinUsage::default();
             pick(&mut usage);
             usage
         };
-        let sonnet = |usage| rates.price("claude-sonnet-5-5", usage);
+        let prompt =
+            |u: &phoebis_routing::PinUsage| u.input + u.cache_read + u.write_5m + u.write_1h;
+        let priced = |model: &str, usage: phoebis_routing::PinUsage| {
+            rates.price(model, usage, prompt(&usage))
+        };
+        let sonnet = |usage| priced("claude-sonnet-5-5", usage);
         assert_eq!(sonnet(one(|u| u.input = 1)), Some(3.0 / 1_000_000.0));
         assert_eq!(sonnet(one(|u| u.cache_read = 1)), Some(0.3 / 1_000_000.0));
         assert_eq!(sonnet(one(|u| u.write_5m = 1)), Some(3.75 / 1_000_000.0));
         assert_eq!(sonnet(one(|u| u.write_1h = 1)), Some(6.0 / 1_000_000.0));
         assert_eq!(sonnet(one(|u| u.output = 1)), Some(15.0 / 1_000_000.0));
         assert_eq!(
-            rates.price("claude-haiku-4-5-20251001", one(|u| u.input = 1)),
+            priced("claude-haiku-4-5-20251001", one(|u| u.input = 1)),
             Some(1.0 / 1_000_000.0),
             "a dated row prices as itself"
         );
+        let haiku = |prompt| rates.price("claude-haiku-5-5", one(|u| u.input = 1), prompt);
         assert_eq!(
-            rates.price("gpt-5", one(|u| u.input = 1)),
+            haiku(1_000),
+            Some(1.0 / 1_000_000.0),
+            "a prompt of exactly `over` prices at the standard cells"
+        );
+        assert_eq!(
+            haiku(1_001),
+            Some(5.0 / 1_000_000.0),
+            "one token more at the long-context cells"
+        );
+        let fast = crate::test_tables::api_prices().fast_rate_table();
+        assert_eq!(
+            fast.price("claude-haiku-5-5", one(|u| u.input = 1), 1_001),
+            Some(5.0 / 1_000_000.0),
+            "a row without fast cells carries its long-context set in the fast table, so a fast answer on it \
+             prices by its prompt as `price_at` does"
+        );
+        assert_eq!(
+            fast.price("claude-opus-5-5", one(|u| u.input = 1), u64::MAX),
+            Some(20.0 / 1_000_000.0),
+            "a row with fast cells prices at them whatever the prompt"
+        );
+        assert_eq!(
+            priced("gpt-5", one(|u| u.input = 1)),
             Some(10.0 / 1_000_000.0),
             "a model the table lacks prices at the dearest listed rate of each type"
         );
         assert_eq!(
-            rates.price("gpt-5", one(|u| u.output = 1)),
+            priced("gpt-5", one(|u| u.output = 1)),
             Some(50.0 / 1_000_000.0),
             "a model the table lacks prices at the dearest listed rate of each type"
         );

@@ -7,11 +7,11 @@ use phoebis_oauth::{Clock, ExtraUsage, UsageSnapshot, UsageWindow};
 use phoebis_routing::{
     credits_from_usage, lane_key, resolve, sample_from_usage, spawn, AffinityReport, BandWeight,
     BurnRates, ClientClass, CreditsState, DecisionRecord, DecisionSummary, Exhaustion,
-    KeyRefusal, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates, Refusal, RefusalFacts,
-    RefusedRequest, ReloadError, Report, ResolveError, RouterConfig, RouterHandle, RoutingState,
-    SelectRequest, SelectResult, SharePricer, UtilizationSample, WindowReading, WindowSource,
-    WriterStatus, COMMANDS, FAST_CREDITS_REASON, FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY,
-    SEVEN_DAY_FABLE, WRITER_DEPTH,
+    KeyRefusal, LongContextRates, MemberSpend, PinRef, PinUsage, Presented, RateTable, Rates,
+    Refusal, RefusalFacts, RefusedRequest, ReloadError, Report, ResolveError, RouterConfig,
+    RouterHandle, RoutingState, SelectRequest, SelectResult, SharePricer, UtilizationSample,
+    WindowReading, WindowSource, WriterStatus, COMMANDS, FAST_CREDITS_REASON,
+    FAST_RATE_LIMIT_REASON, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE, WRITER_DEPTH,
 };
 use phoebis_store::{
     key_prefix, AccountKind, AccountRow, AccountState, ApiKeyRow, CooldownRow,
@@ -5197,6 +5197,122 @@ async fn a_fast_renewal_weighs_the_plain_copy_by_the_fast_cells_and_lets_the_ban
         (s2.burn.input, s2.burn_banded.input),
         (1_000.0 / window, 1_000.0 / window),
         "a standard renewal folds its tokens unweighed into both copies"
+    );
+}
+
+/// Every token of every model at `rate`, with Sonnet 5's own row at `rate` and its long-context rates at `long`
+/// over 1,000 prompt tokens.
+fn long_context_rates(rate: f64, long: f64) -> RateTable {
+    let flat = |r: f64| Rates {
+        input: Some(r),
+        cache_read: Some(r),
+        write_5m: Some(r),
+        write_1h: Some(r),
+        output: Some(r),
+    };
+    let mut table = flat_rates(rate);
+    table.rows.insert("claude-sonnet-5".into(), flat(rate));
+    table.long_context.insert(
+        "claude-sonnet-5".into(),
+        LongContextRates {
+            over: 1_000,
+            rates: flat(long),
+        },
+    );
+    table
+}
+
+/// Session "s1" pinned at 1,000 and renewed fast at 2,000 with a prompt one token over the threshold, under
+/// `rates`: its pin as the task holds it after the fold.
+async fn fast_renewed_over_the_threshold(rates: &BurnRates) -> PinRow {
+    let store = seeded(&["a"]);
+    let now = Arc::new(AtomicI64::new(1_000));
+    let config = RouterConfig {
+        rates: rates.clone(),
+        ..RouterConfig::default()
+    };
+    let handle = spawn(store, clock(&now), config).unwrap();
+    let pin = selected_pin(
+        handle
+            .select(request(&handle, Some("s1"), 1_000))
+            .await
+            .unwrap(),
+    );
+    handle
+        .report(Report::PinRenewed {
+            pin,
+            now: 2_000,
+            usage: Some(PinUsage {
+                input: 1_001,
+                ..PinUsage::default()
+            }),
+            origin: "client",
+            cache_ttl_ms: 300_000,
+            fast: true,
+        })
+        .await;
+    let pins = handle.pins().await.unwrap();
+    pins.into_iter()
+        .find(|p| p.session_id == "s1")
+        .expect("the session holds a pin")
+}
+
+#[tokio::test]
+async fn a_fast_renewal_over_the_threshold_folds_at_fast_over_long_context_and_its_burn_reads_the_fast_dollars(
+) {
+    // Sonnet 5 at a quarter a token, 1 over 1,000 prompt tokens and a half at the fast cells: a fast token over the
+    // threshold weighs half a long-context token, so the burn priced at the long-context rates reads the fast
+    // dollars.
+    let rates = BurnRates {
+        dollars: long_context_rates(0.25, 1.0),
+        five_hour: RateTable::unit(),
+        fast: flat_rates(0.5),
+    };
+    let s1 = fast_renewed_over_the_threshold(&rates).await;
+    // The pool's burn window is the default 600 s.
+    let window = 600.0_f64;
+    assert!(
+        (s1.burn.input - 1_001.0 * 0.5 / window).abs() < 1e-9,
+        "the plain copy folds the fast tokens at fast over long-context, a half: {:?}",
+        s1.burn
+    );
+    assert_eq!(s1.last_input_tokens, 1_001);
+    let priced = rates
+        .dollars
+        .price_burn(&s1.model, &s1.burn, s1.last_input_tokens)
+        .unwrap();
+    assert!(
+        (priced - 1_001.0 * 0.5 / window).abs() < 1e-9,
+        "priced at the set the pin's last prompt selects, the burn reads the fast dollars: {priced}"
+    );
+}
+
+#[tokio::test]
+async fn a_fast_renewal_over_the_threshold_on_a_row_without_fast_cells_weighs_one_and_prices_at_the_long_context_dollars(
+) {
+    // A row without fast cells reads its own standard and long-context rates in the fast table, as the ledger
+    // builds it, so a fast token over the threshold weighs one long-context token and the burn priced at the
+    // long-context rates reads them, as a fast answer on that row prices in the ledger.
+    let dollars = long_context_rates(0.25, 1.0);
+    let rates = BurnRates {
+        fast: dollars.clone(),
+        dollars,
+        five_hour: RateTable::unit(),
+    };
+    let s1 = fast_renewed_over_the_threshold(&rates).await;
+    let window = 600.0_f64;
+    assert!(
+        (s1.burn.input - 1_001.0 / window).abs() < 1e-9,
+        "the plain copy folds the fast tokens unweighed: {:?}",
+        s1.burn
+    );
+    let priced = rates
+        .dollars
+        .price_burn(&s1.model, &s1.burn, s1.last_input_tokens)
+        .unwrap();
+    assert!(
+        (priced - 1_001.0 / window).abs() < 1e-9,
+        "priced at the long-context rates the pin's last prompt selects: {priced}"
     );
 }
 
