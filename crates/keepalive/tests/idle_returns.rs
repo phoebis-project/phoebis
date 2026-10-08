@@ -211,6 +211,26 @@ async fn a_return_on_the_same_prefix_raises_returned_in_its_bucket() {
 }
 
 #[tokio::test]
+async fn a_request_at_its_prompts_instant_starts_the_next_window() {
+    let mut r = rig(RigSpec::default()).await;
+    let start = idle_after_request(&mut r).await;
+    tick_to(&mut r, start, 12).await;
+    // The prompt report and its request read the same clock instant.
+    activity(&mut r, "prompt");
+    r.observe_with("main", &next_turn()).await;
+    r.state("main", "idle");
+    tick_to(&mut r, start, 13).await;
+    assert_eq!(
+        (reached(&r), returned(&r)),
+        (
+            [2, 1, 0, 0, 0, 0, 0, 0, 0, 0],
+            [0, 1, 0, 0, 0, 0, 0, 0, 0, 0]
+        ),
+        "the next window starts at the request"
+    );
+}
+
+#[tokio::test]
 async fn a_clock_that_steps_back_counts_no_bucket_twice() {
     let mut r = rig(RigSpec::default()).await;
     let start = idle_after_request(&mut r).await;

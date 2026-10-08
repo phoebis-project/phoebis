@@ -1295,7 +1295,13 @@ impl Inner {
     /// and the bucket of its age counts a return when the request continues the prefix the window opened on. The age
     /// runs to the prompt that announced the request, when one did, since the user came back then however many ticks
     /// pass before the request arrives.
-    pub(crate) fn end_idle_episode(&mut self, key: &SessionKey, boundaries: &[String], now: i64) {
+    pub(crate) fn end_idle_episode(
+        &mut self,
+        key: &SessionKey,
+        verdict: Guard,
+        boundaries: &[String],
+        now: i64,
+    ) {
         let Some(main) = self
             .sessions
             .get_mut(key)
@@ -1303,7 +1309,13 @@ impl Inner {
         else {
             return;
         };
-        let Some(episode) = main.close_idle_episode() else {
+        let episode = main.close_idle_episode();
+        // A real request restarts the window at its own instant, which can be the instant of the prompt that moved the
+        // start in force at the close. A foreign request leaves the start where it was, so its floor stands.
+        if verdict != Guard::Foreign {
+            main.idle_window_floor = None;
+        }
+        let Some(episode) = episode else {
             return;
         };
         // Never below the fence: the window already counted as reaching it, so its return is read there.
@@ -1769,7 +1781,7 @@ impl Engine {
         // against the prefix the window opened on, never on the verdict, which re-arms on any chain once a ceiling
         // has discarded the recipe.
         if agent_id == MAIN_AGENT && verdict != Guard::Auxiliary {
-            inner.end_idle_episode(&key, &observed.boundaries, now);
+            inner.end_idle_episode(&key, verdict, &observed.boundaries, now);
         }
         if matches!(verdict, Guard::Auxiliary | Guard::Foreign) {
             return;

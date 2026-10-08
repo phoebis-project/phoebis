@@ -184,9 +184,11 @@ records when the user came back, and a pool with keepalive off or a key that opt
 that opens before the session's first request has no conversation to compare against and counts no return. A window
 counts under the pool its key was in when it opened. A return's age is read at the prompt that announced it, however
 long the request takes to follow. A lapsed lease, a park that ends without a request, a presence report, a request on a
-new conversation and the session's end close a window with no return. The next window opens only once its start moves
-past the one in force at that close, at a park's end, a presence report, a prompt, a request or the session's revival. A
-busy report pauses the count without closing the window, and a subagent or a silent session opens none.
+new conversation and the session's end close a window with no return. After a request the guard does not read as
+foreign, the next window starts at the request's own instant. After any other close, the next window opens only once its
+start moves past the one in force at that close, at a park's end, a presence report, a prompt, a request or the
+session's revival. A busy report pauses the count without closing the window, and a subagent or a silent session opens
+none.
 
 No rule reads the counters yet: the idle window is still the pool's `max_idle_seconds`, capped at the break-even. The
 pool dialog shows them by bucket.
