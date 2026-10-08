@@ -1970,6 +1970,160 @@ m.unmount();
   page.unmount();
 }
 {
+  // The detail is left for another account while a save there is held, so the save answers once the other account's
+  // editor is open on the same token. That editor keeps the token it opened with: its save lands at that token, and a
+  // write by another operator in between still meets the fence. Both directions run, a label save under the other
+  // account's end editor and an end save under its label editor.
+  const [first, second] = ['nightly', 'studio'];
+  const sentence = 'the account changed while the edit was being saved';
+  const stored = async (id) => (await api.listAccounts()).find((a) => a.id === id);
+  // The rule needs both rows on one token, so the row behind takes unfenced writes of the label it holds until the two
+  // match. Null when they never do, as across two incarnations of an id.
+  const level = async () => {
+    for (let n = 0; n < 64; n++) {
+      const [a, b] = [await stored(first), await stored(second)];
+      if (a.revision === b.revision) return a.revision;
+      const behind = a.revision < b.revision ? a : b;
+      await api.renameAccount(behind.id, behind.label);
+    }
+    return null;
+  };
+  const page = await mount(`/accounts/${first}`, { now: CLOCK_ORIGIN });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const typeInto = async (input, value) => {
+    setter.call(input, value);
+    input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await page.settle(100);
+  };
+  const title = () => page.container.querySelector('.detail__title');
+  const labelInput = () => title()?.querySelector('input') ?? null;
+  const titleButton = (text) => [...(title()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+  const labelCallout = () => page.container.querySelector('.detail__ident [role="alert"]')?.textContent ?? null;
+  const editLabel = async () => {
+    page.container.querySelector('button[aria-label="Edit label"]')?.click();
+    await page.settle(150);
+  };
+  const identity = () => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const identityButton = (text) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+  const box = () => identity()?.querySelector('label.row input[type="checkbox"]') ?? null;
+  const field = () => identity()?.querySelector('input[type="datetime-local"]') ?? null;
+  const endCallout = () => identity()?.querySelector('[role="alert"]')?.textContent ?? null;
+  const editEnd = async () => {
+    identityButton('Edit end')?.click();
+    await page.settle(100);
+  };
+  const markCancelled = async () => {
+    if (box()?.checked === false) box()?.click();
+    await page.settle(100);
+    await typeInto(field(), '2027-03-01T10:00');
+  };
+  const goTo = async (id) => {
+    page.container.querySelector(`a.account-row[href="/accounts/${id}"]`)?.click();
+    await page.settle(400);
+  };
+  // Closes whatever editor a run left open and puts both rows back on one token, which the list's own 30-second read
+  // takes in, so the next run's editors open on the stored rows.
+  const reset = async () => {
+    titleButton('Cancel')?.click();
+    identityButton('Cancel')?.click();
+    await page.settle(400);
+    for (const id of [first, second]) {
+      await api.renameAccount(id, id);
+      await api.updateAccount(id, { cancelled: false, subscriptionEndsAt: null });
+    }
+    const token = await level();
+    tick(30_000);
+    await page.settle(400);
+    return token;
+  };
+
+  const labelOpened = await reset();
+  await editLabel();
+  await typeInto(labelInput(), `${first} 2`);
+  let held = deferNextCall('renameAccount');
+  titleButton('Save')?.click();
+  await page.settle(100);
+  await goTo(second);
+  await editEnd();
+  held.release();
+  await page.settle(600);
+  held.restore();
+  await markCancelled();
+  const endSends = countCalls('updateAccount');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  endSends.restore();
+  const endLanded = { alert: endCallout(), first: await stored(first), path: page.location().pathname, second: await stored(second), sent: endSends.calls[0]?.[2] ?? null };
+
+  const fenceOpened = await reset();
+  await goTo(first);
+  await editLabel();
+  await typeInto(labelInput(), `${first} 3`);
+  held = deferNextCall('renameAccount');
+  titleButton('Save')?.click();
+  await page.settle(100);
+  await goTo(second);
+  await editEnd();
+  await api.renameAccount(second, `${second} (written)`);
+  held.release();
+  await page.settle(600);
+  held.restore();
+  await markCancelled();
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const fenced = { callout: endCallout() ?? '', second: await stored(second) };
+  results.push({
+    name: "/accounts a label save that answers after the detail moved to another account leaves that account's end editor on its own token, and a write in between still meets the fence",
+    ok:
+      labelOpened !== null &&
+      endLanded.path === `/accounts/${second}` &&
+      endLanded.sent === labelOpened &&
+      endLanded.alert === null &&
+      endLanded.second?.cancelled === true &&
+      endLanded.second?.revision === labelOpened + 1 &&
+      endLanded.first?.label === `${first} 2` &&
+      fenceOpened !== null &&
+      fenced.callout === `${sentence} Reload` &&
+      fenced.second?.cancelled === false &&
+      fenced.second?.label === `${second} (written)`,
+    missing: [`opened ${labelOpened}, sent ${endLanded.sent}`, `path ${endLanded.path}`, endLanded.alert ?? 'no callout', `${second} cancelled ${endLanded.second?.cancelled}, revision ${endLanded.second?.revision}`, `${first} label ${endLanded.first?.label}`, `fence opened ${fenceOpened}`, fenced.callout || 'no fence callout', `${second} after the fence: cancelled ${fenced.second?.cancelled}, label ${fenced.second?.label}`],
+  });
+
+  const endOpened = await reset();
+  await goTo(first);
+  await editEnd();
+  await markCancelled();
+  held = deferNextCall('updateAccount');
+  identityButton('Save')?.click();
+  await page.settle(100);
+  await goTo(second);
+  await editLabel();
+  held.release();
+  await page.settle(600);
+  held.restore();
+  await typeInto(labelInput(), `${second} 2`);
+  const labelSends = countCalls('renameAccount');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  labelSends.restore();
+  const labelLanded = { alert: labelCallout(), first: await stored(first), input: labelInput() !== null, path: page.location().pathname, second: await stored(second), sent: labelSends.calls[0]?.[2] ?? null };
+  results.push({
+    name: "/accounts an end save that answers after the detail moved to another account leaves that account's label editor on its own token",
+    ok:
+      endOpened !== null &&
+      labelLanded.path === `/accounts/${second}` &&
+      labelLanded.sent === endOpened &&
+      labelLanded.alert === null &&
+      !labelLanded.input &&
+      labelLanded.second?.label === `${second} 2` &&
+      labelLanded.second?.revision === endOpened + 1 &&
+      labelLanded.first?.cancelled === true,
+    missing: [`opened ${endOpened}, sent ${labelLanded.sent}`, `path ${labelLanded.path}`, labelLanded.alert ?? 'no callout', `input ${labelLanded.input}`, `${second} label ${labelLanded.second?.label}, revision ${labelLanded.second?.revision}`, `${first} cancelled ${labelLanded.first?.cancelled}`],
+  });
+  await reset();
+  page.unmount();
+}
+{
   // A mount of its own, whose provider holds the shell's toast: a refused create reads in the Add account dialog's own
   // callout and raises no toast.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });

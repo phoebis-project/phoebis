@@ -123,7 +123,9 @@ export function AccountsPage() {
         {/* Accounts with none selected is a bare or stale URL the redirect above is about to replace, so nothing draws. */}
         {selected ? (
           <Descriptions>
-            <AccountDetail account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
+            {/* Keyed by the account, so a save still running when the operator moves on answers into its own
+                unmounted detail and never moves the token of an editor another account opened. */}
+            <AccountDetail key={selected.id} account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
           </Descriptions>
         ) : accounts.data === null ? (
           <Skeleton height={400} />
@@ -196,17 +198,10 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const [labelRefused, setLabelRefused] = useState<EditorRefusal | null>(null);
   const [endRefused, setEndRefused] = useState<EditorRefusal | null>(null);
   // A save's answer until `onChanged`'s reload replaces the row, so an editor opened in between opens on the row the
-  // save wrote rather than the one it replaced. The detail outlives a change of account, so a save that answers after
-  // the operator moved on is not this account's.
+  // save wrote rather than the one it replaced.
   const [answered, setAnswered] = useState<Account | null>(null);
   useEffect(() => setAnswered(null), [account]);
-  const current = answered?.id === account.id ? answered : account;
-  useEffect(() => {
-    setEditing(false);
-    setEndForm(null);
-    setLabelRefused(null);
-    setEndRefused(null);
-  }, [account.id]);
+  const current = answered ?? account;
   // The list holds its refresh while anything here is open or running. The cleanup reports false too: Delete account
   // navigates away inside its action, so the detail can unmount before `busy` clears.
   const held = busy || catalogOpen || confirm !== null || editing || endForm !== null;
