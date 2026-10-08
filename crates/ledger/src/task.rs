@@ -131,8 +131,17 @@ pub struct Replayed {
 
 /// What a caller asks the writer to do on its own turn, between two batches.
 enum Control {
+    /// `deadline` is the caller's bound on the ledger's clock, and `claimed` is who owns the replay: the writer
+    /// takes it (`compare_exchange(false, true)`) at its turn before it runs `land_parked`, the caller takes it at
+    /// the deadline instead, and whoever loses the exchange stands down. A message the caller claimed is dropped
+    /// unanswered with a `debug` line naming the deadline. A message the writer claims at or past its deadline is
+    /// answered `WriterHeld` unrun, which covers a caller that went away before its deadline and so never took the
+    /// claim. A caller that gave up never has its replay run behind its back, and a message the writer claimed before
+    /// the deadline answers its real result however long the landing takes.
     ReplayParked {
         now: i64,
+        deadline: i64,
+        claimed: Arc<AtomicBool>,
         reply: oneshot::Sender<Result<Replayed, LedgerError>>,
     },
 }
@@ -153,6 +162,8 @@ pub struct Ledger {
     tasks: Arc<std::sync::Mutex<Vec<tokio::task::JoinHandle<()>>>>,
     /// The writer's control channel: a replay asks for the writer's own turn through it.
     control: mpsc::Sender<Control>,
+    /// The writer's clock, which a replay's deadline is read on.
+    clock: Clock,
 }
 
 impl Ledger {
@@ -249,13 +260,40 @@ impl Ledger {
     /// The writer's turn is the serialization: no row is landed twice by two passes, or by a pass and a batch, at
     /// once. `remaining` is the table's count after the pass; `Err` when the writer has stopped or the count cannot be
     /// read.
-    pub async fn replay_parked(&self, now: i64) -> Result<Replayed, LedgerError> {
+    ///
+    /// Within `bound` on the ledger's clock. One absolute deadline, `clock() + bound`, governs the `send` into the
+    /// capacity-one control channel and the wait for the reply alike: `Err(LedgerError::WriterHeld)` once it passes
+    /// with the message unsent or unclaimed, and nothing replayed then or later; a message the writer claimed before it
+    /// answers the landing's result, past the bound included (the reply arm of the `select!` reads first, `biased`, so
+    /// a ready answer is never thrown away).
+    pub async fn replay_parked(&self, now: i64, bound: Duration) -> Result<Replayed, LedgerError> {
         let stopped = || LedgerError::Io(std::io::Error::other("the ledger task has stopped"));
-        let (reply, answer) = oneshot::channel();
-        self.control
-            .send(Control::ReplayParked { now, reply })
-            .await
-            .map_err(|_| stopped())?;
+        let deadline = (self.clock)() + bound.as_millis() as i64;
+        let claimed = Arc::new(AtomicBool::new(false));
+        let (reply, mut answer) = oneshot::channel();
+        let message = Control::ReplayParked {
+            now,
+            deadline,
+            claimed: claimed.clone(),
+            reply,
+        };
+        tokio::select! {
+            biased;
+            sent = self.control.send(message) => sent.map_err(|_| stopped())?,
+            // The message is dropped with the send, so no writer turn can run it.
+            () = sleep_until(Some(deadline), &self.clock) => return Err(LedgerError::WriterHeld),
+        }
+        tokio::select! {
+            biased;
+            answered = &mut answer => return answered.map_err(|_| stopped())?,
+            () = sleep_until(Some(deadline), &self.clock) => {}
+        }
+        if claimed
+            .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+            .is_ok()
+        {
+            return Err(LedgerError::WriterHeld);
+        }
         answer.await.map_err(|_| stopped())?
     }
 
@@ -297,6 +335,7 @@ pub fn spawn(
         done: Arc::new(Mutex::new(Some(done_rx))),
         tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
         control,
+        clock: clock.clone(),
     };
     let purge_store = store.clone();
     // Into the empty channel before the mirror exists, so the mirror's first tick lands behind it and the gap the
@@ -533,7 +572,18 @@ async fn writer(
             // replay or a batch: two passes that read the table at once would each land the same row, and the landed
             // counts and the metrics would take it twice. The start-up pass ran on this task before the loop, under
             // the same rule.
-            Some(Control::ReplayParked { now, reply }) = control.recv() => {
+            Some(Control::ReplayParked { now, deadline, claimed, reply }) = control.recv() => {
+                if claimed
+                    .compare_exchange(false, true, Ordering::AcqRel, Ordering::Acquire)
+                    .is_err()
+                {
+                    tracing::debug!(deadline, "a replay whose caller gave up at its deadline is dropped unrun");
+                    continue;
+                }
+                if clock() >= deadline {
+                    let _ = reply.send(Err(LedgerError::WriterHeld));
+                    continue;
+                }
                 let replayed = match land_parked(&db, &pricing, &stats, &metrics, now).await {
                     Ok((landed, _)) => {
                         // The refresh the start runs after its own pass: the landed money reaches the routing table
@@ -833,7 +883,7 @@ async fn park(
                 pool = request.pool_id.as_deref().unwrap_or(crate::rollup::UNATTRIBUTED),
                 %error,
                 capture_dropped = captured,
-                "a priced record could not be written; it is parked and tried again at the next start"
+                "a priced record could not be written. It is parked and tried again at the next start or on a replay"
             );
         }
         Err(park_error) => tracing::error!(
@@ -1639,6 +1689,7 @@ mod tests {
             done: Arc::new(Mutex::new(None)),
             tasks: Arc::new(std::sync::Mutex::new(Vec::new())),
             control: mpsc::channel::<Control>(1).0,
+            clock: Arc::new(|| 0),
         };
         (ledger, rx)
     }

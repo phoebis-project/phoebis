@@ -41,9 +41,11 @@ phoebis-profile = { path = "../profile" }
 # The test builders of the registry's rows, kept off the dependency above so a release build carries none.
 phoebis-store = { path = "../store", features = ["test-support"] }
 phoebis-transport = { path = "../transport" }
-# The restart tests reach the rig's registry file past the store: they damage a sealed prompt, hold the file's write
-# lock while a save waits, and make a save fail, as an operator's `sqlite3` or a failing disk would.
+# The restart tests and the tier read test reach the rig's registry file past the store: they damage a sealed prompt,
+# hold the file's write lock while a save waits, make a save fail, and rename a column a read names, as an operator's
+# `sqlite3` or a failing disk would.
 rusqlite = { workspace = true }
 # The probe deadline is five minutes, so the test that waits it out moves tokio's clock instead of the wall's.
 tokio = { workspace = true, features = ["test-util"] }
 tower = { workspace = true }
+tracing-subscriber = { workspace = true }

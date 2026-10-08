@@ -971,7 +971,7 @@ async fn a_rejection_body_that_cannot_be_read_still_completes_the_request() {
     up.shutdown().await;
 }
 
-/// Chunks keep the drop-and-count behaviour a subscriber that never reads cannot hold up; the completion is a
+/// Chunks keep the drop-and-count behavior a subscriber that never reads cannot hold up; the completion is a
 /// fact rather than a chunk, so it waits for the room the same subscriber has to give back before the stream
 /// the client reads can close.
 #[tokio::test]
@@ -1508,6 +1508,63 @@ async fn a_probe_held_on_its_pinned_members_pause_completes_rejected_beside_a_si
         credentials_seen(&up),
         vec!["sk-ant-api03-AAAA".to_string()],
         "the probe never reached b"
+    );
+    up.shutdown().await;
+}
+
+/// A streamed answer written at the 1-hour tier: the start names the split, the final delta repeats the write as one
+/// total with no tier, and the completion keeps the split rather than filing the total as a second write.
+#[tokio::test]
+async fn a_deltas_bare_write_total_does_not_double_the_starts_split() {
+    let events = vec![
+        ev(
+            "message_start",
+            r#"{"type":"message_start","message":{"id":"msg_1","usage":{"input_tokens":2,"cache_read_input_tokens":50363,"cache_creation_input_tokens":11285,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":11285},"output_tokens":1}}}"#,
+        ),
+        ev(
+            "content_block_delta",
+            r#"{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"hi"}}"#,
+        ),
+        ev(
+            "message_delta",
+            r#"{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"input_tokens":2,"cache_read_input_tokens":50363,"cache_creation_input_tokens":11285,"output_tokens":90}}"#,
+        ),
+        ev("message_stop", r#"{"type":"message_stop"}"#),
+    ];
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: Respond::Sse {
+            status: 200,
+            headers: vec![],
+            events,
+            delay_between: Duration::from_millis(2),
+        },
+    }])
+    .await;
+    let bus = Bus::new();
+    let mut sub = bus.subscribe("test", Delivery::Durable);
+    let h = harness_with_bus(&up, &[oauth("a", A, 0)], PoolSpec::default(), bus).await;
+    let resp = h.app.clone().oneshot(stream_request(KEY)).await.unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await.unwrap().to_bytes();
+    let (events, _) = drain_until_complete(&mut sub).await;
+    let Some(Event::RequestComplete(complete)) = events
+        .iter()
+        .find(|e| matches!(e, Event::RequestComplete(_)))
+    else {
+        panic!("no completion")
+    };
+    let usage = complete.usage.as_ref().unwrap();
+    assert_eq!(
+        (
+            usage.input_tokens,
+            usage.cache_read_tokens,
+            usage.cache_write_5m_tokens,
+            usage.cache_write_1h_tokens,
+            usage.output_tokens
+        ),
+        (Some(2), Some(50_363), Some(0), Some(11_285), Some(90)),
+        "the 1-hour write is not copied into the 5-minute column"
     );
     up.shutdown().await;
 }

@@ -899,7 +899,7 @@ const tierOf = (value: unknown): number[] | null => {
   const parts = Array.isArray(value) ? value.map(Number) : typeof value === 'string' ? value.split('/').map(Number) : [];
   return parts.length === 3 && parts.every((n) => Number.isFinite(n)) ? parts : null;
 };
-/** The kind tier's word: an Anthropic key, overage, or the plan's own quota. */
+/** The kind tier's word: an API key, overage, or the plan's own quota. */
 const tierWord = (tier: readonly number[], kind: RecordCandidate['kind'] | null, plan: string) => (kind === 'api_key' || tier[0] === 2 ? 'keys' : tier[0] === 1 || tier[2] === 1 ? 'overage' : plan);
 
 /** A pin's lane is `model|speed|thinking|effort`. The model is the request's own, so the chips name the other three. */
@@ -1093,8 +1093,8 @@ const ordinal = (n: number) => `${n}${n % 100 >= 11 && n % 100 <= 13 ? 'th' : ([
 const VERDICT_BADGE: Record<string, string> = { held_on: 'held on', not_needed: 'not needed' };
 const PARTITION_WORD: Record<string, string> = { above_ceiling: 'above the ceiling', at_cap: 'at its cap', floor: 'at the Pace floor', spent: 'window spent', winding_down: 'winding down' };
 
-/** The plan beneath a member's account: `Max 20x`, `Pro`, `Anthropic key`. */
-const planWord = (c: RecordCandidate) => (c.kind === 'api_key' ? 'Anthropic key' : c.planTier === null ? 'OAuth' : planLabel(c.planTier));
+/** The plan beneath a member's account: `Max 20x`, `Pro`, `API key`. */
+const planWord = (c: RecordCandidate) => (c.kind === 'api_key' ? 'API key' : c.planTier === null ? 'OAuth' : planLabel(c.planTier));
 
 /** The member's prefix entry: the match on the rung the outcome names, else the deepest entry a gate refused. */
 function prefixEntryOf(c: RecordCandidate, record: DecisionRecord): PrefixEntry | null {

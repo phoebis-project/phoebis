@@ -1154,8 +1154,7 @@ async fn the_usage_get_says_no_credential_is_stored_for_a_disconnected_or_unpair
 }
 
 #[tokio::test]
-async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an_anthropic_key_account(
-) {
+async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an_api_key_account() {
     use common::{get, json, login, post, NOW};
     let h = common::admin_parts_polled(std::time::Duration::from_secs(60)).await;
     let cookie = login(&h.app, "admin-secret").await;
@@ -1209,7 +1208,7 @@ async fn the_accounts_list_carries_each_oauth_rows_poll_standing_and_null_for_an
     assert_eq!(row("spare"), no_credential);
     assert!(
         row("direct").is_null(),
-        "the poll never reads an Anthropic-key account"
+        "the poll never reads an API-key account"
     );
     assert_eq!(
         json(get(&h.app, "/admin/accounts/business", Some(&cookie)).await).await["usage"],
@@ -1448,7 +1447,7 @@ async fn disconnect_bumps_the_lifecycle_and_a_late_confirm_is_rejected() {
 
 #[tokio::test]
 async fn verifying_an_api_key_account_reports_the_upstream_status() {
-    use common::{json, login, post, API_KEY};
+    use common::{delete, json, login, post, API_KEY};
     let (app, up) = common::admin_app().await;
     let cookie = login(&app, "admin-secret").await;
     let verified = post(&app, "/admin/accounts/direct/verify", "", Some(&cookie)).await;
@@ -1466,13 +1465,21 @@ async fn verifying_an_api_key_account_reports_the_upstream_status() {
             .any(|(name, value)| name.eq_ignore_ascii_case("x-api-key") && value == API_KEY),
         "the stored key is what the probe presents"
     );
+    let oauth = post(&app, "/admin/accounts/business/verify", "", Some(&cookie)).await;
+    assert_eq!(oauth.status(), 400, "an OAuth account has no key to verify");
     assert_eq!(
-        post(&app, "/admin/accounts/business/verify", "", Some(&cookie))
+        json(oauth).await["error"],
+        "only an API-key account is verified this way"
+    );
+    assert_eq!(
+        delete(&app, "/admin/accounts/direct/credentials", Some(&cookie))
             .await
             .status(),
-        400,
-        "an OAuth account has no key to verify"
+        204
     );
+    let keyless = post(&app, "/admin/accounts/direct/verify", "", Some(&cookie)).await;
+    assert_eq!(keyless.status(), 409, "the slot's key is gone");
+    assert_eq!(json(keyless).await["error"], "account holds no API key");
 }
 
 #[tokio::test]
@@ -2850,4 +2857,19 @@ async fn deleting_either_fast_cooldown_clears_its_own_row_and_leaves_the_others(
         json(refused).await["error"],
         "scope is account, fast, fast_credits or model:<canonical>"
     );
+}
+
+#[tokio::test]
+async fn the_tls_reload_route_answers_401_without_a_session_and_an_empty_list_where_no_listener_is_known(
+) {
+    use common::{json, login, post};
+    let (app, _up) = common::admin_app().await;
+    assert_eq!(
+        post(&app, "/admin/tls/reload", "", None).await.status(),
+        401
+    );
+    let cookie = login(&app, "admin-secret").await;
+    let reloaded = post(&app, "/admin/tls/reload", "", Some(&cookie)).await;
+    assert_eq!(reloaded.status(), 200);
+    assert_eq!(json(reloaded).await, serde_json::json!({"listeners": []}));
 }

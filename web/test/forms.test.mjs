@@ -341,15 +341,15 @@ test('a retention while capture is on must be a whole number of hours inside the
 });
 
 test("a new pool's name is refused when its id is taken, by case or by punctuation, or holds no letter or digit", () => {
-  const named = (name, isNew = true) => d.poolRefusals({ ...input, name }, accounts, { identity: { isNew, poolIds: new Set(['codex', 'main']) } });
-  const taken = [{ field: 'Name', group: 'identity', text: 'Another pool already has the id codex.' }];
-  assert.deepEqual(named('Codex'), taken, 'by case');
-  assert.deepEqual(named('codex!'), taken, 'by punctuation');
+  const named = (name, isNew = true) => d.poolRefusals({ ...input, name }, accounts, { identity: { isNew, poolIds: new Set(['jobs', 'main']) } });
+  const taken = [{ field: 'Name', group: 'identity', text: 'Another pool already has the id jobs.' }];
+  assert.deepEqual(named('Jobs'), taken, 'by case');
+  assert.deepEqual(named('jobs!'), taken, 'by punctuation');
   assert.deepEqual(named('研究'), [{ field: 'Name', group: 'identity', text: 'The pool needs a name with a letter or a digit.' }], 'no ASCII letter or digit');
-  assert.deepEqual(named('Codex 2'), [], 'codex-2 is free');
+  assert.deepEqual(named('Jobs 2'), [], 'jobs-2 is free');
   assert.deepEqual(named(''), [{ field: 'Name', group: 'identity', text: 'the pool needs a name.' }], 'an empty name draws its own sentence alone');
-  assert.deepEqual(named('Codex', false), [], 'a rename keeps its id and is never held for it');
-  assert.equal(d.slug('codex!'), 'codex', 'the id is the one the create call derives');
+  assert.deepEqual(named('Jobs', false), [], 'a rename keeps its id and is never held for it');
+  assert.equal(d.slug('jobs!'), 'jobs', 'the id is the one the create call derives');
 });
 
 test('the Keepalive group refuses its three numbers in the order it draws them', () => {

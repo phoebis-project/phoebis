@@ -11,7 +11,7 @@ import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Badge, Button, Card, EmptyState, ErrorState, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCompact, fmtInt, fmtMs, fmtPct, fmtRelative, fmtTime, fmtUsd, shortId, shortModel, tokensTotal } from '@/lib/format';
-import { useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
+import { refreshAttention, useAsync, useAttention, useNow, type Loaded } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { fmtWindows, ringFigures, type RingFigures, type RingLeftOut, type RingRow } from '@/lib/rings';
 
@@ -50,7 +50,7 @@ export function DashboardPage() {
 
   return (
     <div className="stack">
-      <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} />
+      <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />
       {failedFirst(overview) ? (
         <ReadFailed title="Could not load the 24-hour figures" error={overview.error} retry={overview.reload} />
       ) : (
@@ -146,7 +146,7 @@ function RemainingCard({ title, subtitle, windowId, accounts, costs, now, failur
       ) : figures === null ? (
         <Skeleton height={148} />
       ) : figures.rows.length === 0 && figures.leftOut.length === 0 ? (
-        // A registry of Anthropic-key accounts alone has no window to draw, and an empty ring reads as exhausted.
+        // A registry of API-key accounts alone has no window to draw, and an empty ring reads as exhausted.
         <EmptyState title="No subscription accounts" body="A subscription account reports the window this card draws." />
       ) : figures.rows.length === 0 ? (
         <>
@@ -224,7 +224,7 @@ function AccountMini({ account, now }: { account: Account; now: number }) {
             cooldown ends {fmtRelative(cooldown.until, now)}
           </span>
         )}
-        {account.kind === 'api_key' && <span className="muted">Anthropic key</span>}
+        {account.kind === 'api_key' && <span className="muted">API key</span>}
       </div>
     </Link>
   );

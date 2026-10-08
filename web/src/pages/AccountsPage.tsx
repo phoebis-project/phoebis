@@ -13,13 +13,15 @@ import { IconPencil, IconPlus, IconWarning } from '@/components/ui/icons';
 import { Badge, Button, Card, ConfirmDialog, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, Field, Input, KeyValue, Meter, SearchInput, Segmented, Select, Skeleton } from '@/components/ui/primitives';
 import { WindowTriple } from '@/components/ui/QuotaBars';
 import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtDuration, fmtEndsIn, fmtInt, fmtRelative } from '@/lib/format';
-import { accountPatchOf, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
+import { accountPatchOf, advancesOwnToken, subscriptionEndFormOf, subscriptionEndRefusal, tickCancelled, type SubscriptionEndForm } from '@/lib/forms';
 import { useAsync, useNow } from '@/lib/hooks';
 import { STATUS_LABEL, STATUS_TONE, isFastScope } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { joinTrend } from '@/lib/trend';
 
 type SortKey = 'name' | 'reset' | 'status' | 'usage';
+/** A save the router refused, as the editor's callout draws it. `stale` marks a row that moved under the editor. */
+type EditorRefusal = { message: string; stale: boolean };
 const END_HINT = "Prefilled from the plan's start and its monthly renewal; correct it from the date the plan's billing settings show. An annual plan is marked cancelled in its final month only.";
 
 export function AccountsPage() {
@@ -121,7 +123,9 @@ export function AccountsPage() {
         {/* Accounts with none selected is a bare or stale URL the redirect above is about to replace, so nothing draws. */}
         {selected ? (
           <Descriptions>
-            <AccountDetail account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
+            {/* Keyed by the account, so a save still running when the operator moves on answers into its own
+                unmounted detail and never moves the token of an editor another account opened. */}
+            <AccountDetail key={selected.id} account={selected} now={now} onBusyChange={setDetailBusy} onToast={notify} onPair={(repair) => setPairing({ accountId: selected.id, label: selected.label, repair })} onChanged={accounts.reload} />
           </Descriptions>
         ) : accounts.data === null ? (
           <Skeleton height={400} />
@@ -136,7 +140,7 @@ export function AccountsPage() {
           setAddOpen(false);
           accounts.reload();
           if (kind === 'oauth') setPairing({ accountId: created.id, label: created.label, repair: false });
-          else notify('Anthropic key added');
+          else notify('API key added');
         }}
       />
       <PairingDialog
@@ -169,9 +173,7 @@ function AccountRow({ account, active, now }: { account: Account; active: boolea
         {account.email && <div className="account-row__sub mono muted">{account.email}</div>}
         <WindowTriple account={account} now={now} compact />
         <div className="account-row__foot">
-          <span className="muted">
-            {account.pools.length} {account.pools.length === 1 ? 'pool' : 'pools'}
-          </span>
+          <span className="muted">{account.pool ? `pool ${account.pool.poolId}` : 'no pool'}</span>
           {account.extraUsage?.inUse && <Badge tone="serious">Overage</Badge>}
           {account.extraUsage?.enabled && !account.extraUsage.inUse && <span className="muted">extra usage on</span>}
         </div>
@@ -192,15 +194,14 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const [labelRevision, setLabelRevision] = useState(0);
   // Null while the subscription end is not being edited.
   const [endForm, setEndForm] = useState<SubscriptionEndForm | null>(null);
-  // One stale refusal per editor, so neither shows the other's.
-  const [labelStale, setLabelStale] = useState<string | null>(null);
-  const [endStale, setEndStale] = useState<string | null>(null);
-  useEffect(() => {
-    setEditing(false);
-    setEndForm(null);
-    setLabelStale(null);
-    setEndStale(null);
-  }, [account.id]);
+  // One refusal per editor, so neither shows the other's.
+  const [labelRefused, setLabelRefused] = useState<EditorRefusal | null>(null);
+  const [endRefused, setEndRefused] = useState<EditorRefusal | null>(null);
+  // A save's answer until `onChanged`'s reload replaces the row, so an editor opened in between opens on the row the
+  // save wrote rather than the one it replaced.
+  const [answered, setAnswered] = useState<Account | null>(null);
+  useEffect(() => setAnswered(null), [account]);
+  const current = answered ?? account;
   // The list holds its refresh while anything here is open or running. The cleanup reports false too: Delete account
   // navigates away inside its action, so the detail can unmount before `busy` clears.
   const held = busy || catalogOpen || confirm !== null || editing || endForm !== null;
@@ -219,32 +220,66 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
   const cooldown = account.cooldowns.find((c) => !isFastScope(c.scope)) ?? null;
   const extra = account.extraUsage;
   const overage = account.overage;
-  /** True once the router took the change. */
-  const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string), onStale?: (message: string) => void): Promise<boolean> => {
+  /** The router's answer once it took the change, null once it refused. An editor's refusal reaches its own callout. */
+  const run = async <T,>(action: () => Promise<T>, done: string | ((result: T) => string), onRefused?: (refusal: EditorRefusal) => void): Promise<{ answer: T } | null> => {
     setBusy(true);
     try {
-      const result = await action();
-      onToast(typeof done === 'string' ? done : done(result));
+      const answer = await action();
+      onToast(typeof done === 'string' ? done : done(answer));
       onChanged();
-      return true;
+      return { answer };
     } catch (e) {
-      // The row moved under the editor: the edit is about values that are gone, so the operator reloads and
-      // re-applies it rather than saving over what someone else wrote.
-      if (onStale && e instanceof ApiError && e.status === 409 && e.code === 'stale_edit') onStale(e.message);
-      else onToast(e instanceof Error ? e.message : String(e));
-      return false;
+      const message = e instanceof Error ? e.message : String(e);
+      // A stale refusal says the row moved under the editor: the edit is about values that are gone, so the operator
+      // reloads and re-applies it rather than saving over what someone else wrote.
+      if (onRefused) onRefused({ message, stale: e instanceof ApiError && e.status === 409 && e.code === 'stale_edit' });
+      else onToast(message);
+      return null;
     } finally {
       setBusy(false);
     }
   };
   const act = (title: string, body: string, label: string, action: () => Promise<unknown>, done: string, danger = false) => setConfirm({ title, body, label, danger, onConfirm: () => void run(action, done) });
   // The editors close only once the router took the change, so a refusal leaves what was typed in front of the operator.
+  // A save the router took moves the row's token one past the one it sent, which the other open editor holds too when
+  // both opened on the same row, so that editor takes the answer's token rather than meet the fence over the operator's
+  // own write.
   const save = async () => {
-    if (await run(() => api.renameAccount(account.id, draft.trim(), labelRevision), 'Label saved', setLabelStale)) setEditing(false);
+    const sent = labelRevision;
+    setLabelRefused(null);
+    const saved = await run(() => api.renameAccount(account.id, draft.trim(), sent), 'Label saved', setLabelRefused);
+    if (!saved) return;
+    const { revision } = saved.answer;
+    setAnswered(saved.answer);
+    setEndForm((form) => (form && advancesOwnToken(sent, revision, form.revision) ? { ...form, revision } : form));
+    setEditing(false);
   };
   const saveEnd = async (form: SubscriptionEndForm) => {
-    if (await run(() => api.updateAccount(account.id, accountPatchOf(form), form.revision), 'Subscription end saved', setEndStale)) setEndForm(null);
+    setEndRefused(null);
+    const saved = await run(() => api.updateAccount(account.id, accountPatchOf(form), form.revision), 'Subscription end saved', setEndRefused);
+    if (!saved) return;
+    const { revision } = saved.answer;
+    setAnswered(saved.answer);
+    setLabelRevision((held) => (advancesOwnToken(form.revision, revision, held) ? revision : held));
+    setEndForm(null);
   };
+  // The two editors' refusal callouts. A stale one offers Reload, which closes the editor and reads the lists again.
+  const staleCallout = (message: string, onReload: (() => void) | null) => (
+    <div className="callout callout--critical" role="alert">
+      <IconWarning size={16} />
+      <div>
+        {message}
+        {onReload && (
+          <>
+            {' '}
+            <Button size="sm" variant="ghost" onClick={onReload}>
+              Reload
+            </Button>
+          </>
+        )}
+      </div>
+    </div>
+  );
 
   return (
     <div className="detail">
@@ -264,8 +299,8 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   disabled={busy}
                   onClick={() => {
                     setEditing(false);
-                    if (labelStale) onChanged();
-                    setLabelStale(null);
+                    if (labelRefused?.stale) onChanged();
+                    setLabelRefused(null);
                   }}
                 >
                   Cancel
@@ -279,9 +314,9 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   className="icon-btn"
                   aria-label="Edit label"
                   onClick={() => {
-                    setDraft(account.label);
-                    setLabelRevision(account.revision);
-                    setLabelStale(null);
+                    setDraft(current.label);
+                    setLabelRevision(current.revision);
+                    setLabelRefused(null);
                     setEditing(true);
                   }}
                 >
@@ -291,25 +326,18 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
             )}
           </h2>
           {/* Under the title rather than in it: an h2 holds inline content alone. */}
-          {editing && labelStale && (
-            <div className="callout callout--critical" role="alert">
-              <IconWarning size={16} />
-              <div>
-                {labelStale}{' '}
-                <Button
-                  size="sm"
-                  variant="ghost"
-                  onClick={() => {
+          {editing &&
+            labelRefused &&
+            staleCallout(
+              labelRefused.message,
+              labelRefused.stale
+                ? () => {
                     setEditing(false);
-                    setLabelStale(null);
+                    setLabelRefused(null);
                     onChanged();
-                  }}
-                >
-                  Reload
-                </Button>
-              </div>
-            </div>
-          )}
+                  }
+                : null,
+            )}
           {account.email && <p className="detail__sub mono">{account.email}</p>}
           <div className="detail__badges">
             <Badge tone={STATUS_TONE[account.status]} dot>
@@ -365,7 +393,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
             onClick={() =>
               act(
                 paused ? 'Resume account' : 'Pause account',
-                'Paused accounts stay in their pools but receive no new sessions. Pinned sessions migrate on their next request.',
+                'Paused accounts stay in their pool but receive no new sessions. Pinned sessions migrate on their next request.',
                 paused ? 'Resume' : 'Pause',
                 paused ? () => api.resumeAccount(account.id) : () => api.pauseAccount(account.id),
                 paused ? 'Resumed' : 'Paused',
@@ -413,7 +441,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
             onClick={() =>
               act(
                 'Delete account',
-                `Removes ${account.label} from every pool it is in and deletes it; request history stays in the ledger.`,
+                `Removes ${account.label} from its pool and deletes it. Request history stays in the ledger.`,
                 'Delete',
                 async () => {
                   await api.deleteAccount(account.id);
@@ -449,8 +477,8 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                 size="sm"
                 disabled={endForm !== null}
                 onClick={() => {
-                  setEndStale(null);
-                  setEndForm(subscriptionEndFormOf(account));
+                  setEndRefused(null);
+                  setEndForm(subscriptionEndFormOf(current));
                 }}
               >
                 Edit end
@@ -477,7 +505,7 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                     { label: 'Billing type', value: account.subscription?.billingType ?? '-' },
                   ]
                 : [
-                    { label: 'Type', value: 'Anthropic key' },
+                    { label: 'Type', value: 'API key' },
                     { label: 'Windows', value: 'None reported; billed per token' },
                   ]
             }
@@ -497,25 +525,17 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   <div>{endRefusal}</div>
                 </div>
               )}
-              {endStale && (
-                <div className="callout callout--critical" role="alert">
-                  <IconWarning size={16} />
-                  <div>
-                    {endStale}{' '}
-                    <Button
-                      size="sm"
-                      variant="ghost"
-                      onClick={() => {
+              {endRefused &&
+                staleCallout(
+                  endRefused.message,
+                  endRefused.stale
+                    ? () => {
                         setEndForm(null);
-                        setEndStale(null);
+                        setEndRefused(null);
                         onChanged();
-                      }}
-                    >
-                      Reload
-                    </Button>
-                  </div>
-                </div>
-              )}
+                      }
+                    : null,
+                )}
               <span className="row">
                 <Button size="sm" variant="primary" disabled={busy || endRefusal !== null} onClick={() => void saveEnd(endForm)}>
                   Save
@@ -526,8 +546,8 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
                   disabled={busy}
                   onClick={() => {
                     setEndForm(null);
-                    if (endStale) onChanged();
-                    setEndStale(null);
+                    if (endRefused?.stale) onChanged();
+                    setEndRefused(null);
                   }}
                 >
                   Cancel
@@ -601,19 +621,17 @@ function AccountDetail({ account, now, onBusyChange, onToast, onPair, onChanged 
           }
         />
         <div className="stack">
-          <Card title="Pools">
-            {account.pools.length === 0 ? (
-              <p className="muted">Not a member of any pool.</p>
+          <Card title="Pool">
+            {account.pool === null ? (
+              <p className="muted">Not a member of a pool.</p>
             ) : (
               <ul className="plain-list">
-                {account.pools.map((p) => (
-                  <li key={p.poolId} className="row">
-                    <Link to="/pools" className="mono">
-                      {p.poolId}
-                    </Link>
-                    <span className="muted">priority {p.priority}</span>
-                  </li>
-                ))}
+                <li className="row">
+                  <Link to="/pools" className="mono">
+                    {account.pool.poolId}
+                  </Link>
+                  <span className="muted">priority {account.pool.priority}</span>
+                </li>
               </ul>
             )}
           </Card>
@@ -739,14 +757,14 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
       open={open}
       onClose={onClose}
       title="Add account"
-      subtitle="Subscription logins share your Claude.ai quota. Anthropic keys bill per token against a Console workspace."
+      subtitle="Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace."
       footer={
         <>
           <Button variant="ghost" onClick={onClose}>
             Cancel
           </Button>
           <Button variant="primary" disabled={busy || !id.trim() || !label.trim() || (kind === 'api_key' && !secret)} onClick={() => void create()}>
-            {kind === 'oauth' ? 'Start pairing' : 'Add Anthropic key'}
+            {kind === 'oauth' ? 'Start pairing' : 'Add API key'}
           </Button>
         </>
       }
@@ -759,20 +777,20 @@ function AddAccountDialog({ open, onClose, onDone }: { onClose: () => void; onDo
           onChange={setKind}
           options={[
             { value: 'oauth', label: 'OAuth login' },
-            { value: 'api_key', label: 'Anthropic key' },
+            { value: 'api_key', label: 'API key' },
           ]}
         />
       </div>
       <div className="form-row">
         <Field label="Id" hint="Lowercase letters, digits, and dashes; it names the account in every log and URL">
-          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder="work" className="mono" />
+          <Input value={id} onChange={(e) => setId(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'work'} className="mono" />
         </Field>
         <Field label="Label" hint="Short name used in pools and logs.">
-          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'work' : 'Console workspace'} />
+          <Input value={label} onChange={(e) => setLabel(e.target.value)} placeholder={kind === 'oauth' ? 'personal' : 'Console workspace'} />
         </Field>
       </div>
       {kind === 'api_key' && (
-        <Field label="Anthropic key">
+        <Field label="API key">
           <Input type="password" autoComplete="off" value={secret} onChange={(e) => setSecret(e.target.value)} placeholder="sk-ant-…" className="mono" />
         </Field>
       )}

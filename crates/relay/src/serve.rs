@@ -6,7 +6,7 @@
 
 use std::io;
 use std::pin::Pin;
-use std::sync::Arc;
+use std::sync::{Arc, PoisonError, RwLock};
 use std::task::{Context, Poll};
 use std::time::Duration;
 
@@ -37,6 +37,27 @@ pub struct Limits {
     pub drain_timeout: Duration,
     pub header_read_timeout: Duration,
     pub max_connections: usize,
+}
+
+/// A TLS listener's acceptor, replaceable while the router runs. Each accepted connection takes the current one
+/// and finishes its handshake on it, so a reload never touches a connection in flight.
+pub struct LiveAcceptor(RwLock<Arc<SslAcceptor>>);
+
+impl LiveAcceptor {
+    pub fn new(acceptor: SslAcceptor) -> Self {
+        LiveAcceptor(RwLock::new(Arc::new(acceptor)))
+    }
+
+    /// The acceptor the next connection's handshake runs on.
+    pub fn current(&self) -> Arc<SslAcceptor> {
+        // The lock guards one `Arc` swap, which leaves no half-written state for a panic to poison.
+        Arc::clone(&self.0.read().unwrap_or_else(PoisonError::into_inner))
+    }
+
+    /// Puts `acceptor` in front of every connection accepted from here on.
+    pub fn replace(&self, acceptor: SslAcceptor) {
+        *self.0.write().unwrap_or_else(PoisonError::into_inner) = Arc::new(acceptor);
+    }
 }
 
 /// An accepted connection after its handshake, one type for both loops so hyper is built once per listener.
@@ -135,14 +156,14 @@ pub async fn handshake(
 /// Serves the relayed routes, and whatever `extra` adds beside them, until `stop` flips, then waits for the
 /// connections already accepted. `extra` is merged rather than nested so a route on it keeps its full path;
 /// the relay's own fallback still answers everything neither names. With `acceptor` set, every connection
-/// completes a TLS handshake before hyper reads it.
+/// completes a TLS handshake before hyper reads it, on the acceptor current when it was accepted.
 pub async fn serve(
     listener: TcpListener,
     relay: Arc<Relay>,
     extra: Router,
     mut stop: watch::Receiver<bool>,
     limits: Limits,
-    acceptor: Option<Arc<SslAcceptor>>,
+    acceptor: Option<Arc<LiveAcceptor>>,
 ) -> std::io::Result<()> {
     let app = router(relay).merge(extra);
     // HTTP/1 only. An h2c caller's head reaches the relay through hyper's own map, in hyper's own spelling,
@@ -184,7 +205,7 @@ pub async fn serve(
         let _ = stream.set_nodelay(true);
         let watcher = graceful.watcher();
         let builder = builder.clone();
-        let acceptor = acceptor.clone();
+        let acceptor = acceptor.as_ref().map(|live| live.current());
         let app = app.clone();
         let mut drain = stop.clone();
         // The handshake runs here rather than in the accept loop, so a slow peer holds its own slot and not the

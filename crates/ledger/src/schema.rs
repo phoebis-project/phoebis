@@ -871,4 +871,5 @@ CREATE INDEX events_account ON events (account_id, at);
 CREATE INDEX events_session ON events (session_id, at);
 CREATE INDEX events_request ON events (request_id);",
     ),
+    (30, "ALTER TABLE rollups_hourly ADD COLUMN probes_held INTEGER NOT NULL DEFAULT 0;"),
 ];

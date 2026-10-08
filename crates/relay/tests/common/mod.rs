@@ -575,10 +575,11 @@ pub async fn harness_with_catalog(
     .await
 }
 
-/// `harness_with_bus`, with the caller's own catalog fake in place of `catalog_rules()`'s: for a suite (like
+/// `harness_on_with_bus`, with the caller's own catalog fake in place of `catalog_rules()`'s: for a suite (like
 /// keepalive's) built around a session's pin and account continuity, where a spelling resolving to a dated id
 /// mid-test is not what the suite is about. `accounting`, when named, is the ledger's standing admission reads.
-pub async fn harness_with_bus_and_catalog(
+pub async fn harness_on_with_bus_and_catalog(
+    store: Arc<Store>,
     up: &FakeUpstream,
     accounts: &[TestAccount],
     pool: PoolSpec,
@@ -586,7 +587,6 @@ pub async fn harness_with_bus_and_catalog(
     catalog_up: FakeUpstream,
     accounting: Option<AccountingSource>,
 ) -> Harness {
-    let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
     build(
         store,
         up,
@@ -752,6 +752,7 @@ async fn build(
                     body_capture_hours: None,
                     secret_digest: store.api_key_digest(KEY).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY),
+                    incarnation: 1,
                     created_at: NOW,
                     updated_at: 0,
                     rotated_at: None,

@@ -211,6 +211,7 @@ pub async fn harness_on(
                     body_capture_hours: capture.1,
                     secret_digest: store.api_key_digest(KEY).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY),
+                    incarnation: 1,
                     created_at: NOW,
                     updated_at: 0,
                     rotated_at: None,

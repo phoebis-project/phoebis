@@ -902,6 +902,7 @@ async fn a_key_created_again_under_a_used_id_reads_none_of_the_previous_holders_
                 body_capture_hours: None,
                 secret_digest: h.store.api_key_digest(KEY).to_vec(),
                 prefix: phoebis_store::key_prefix(KEY),
+                incarnation: 1,
                 created_at: NOW,
                 updated_at: 0,
                 rotated_at: None,

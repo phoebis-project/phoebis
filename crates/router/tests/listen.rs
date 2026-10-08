@@ -6,7 +6,7 @@ use std::time::Duration;
 
 use axum::extract::ws::WebSocketUpgrade;
 use axum::routing::get;
-use boring::ssl::SslAcceptor;
+use phoebis_relay::LiveAcceptor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 fn app() -> axum::Router {
@@ -23,7 +23,7 @@ fn app() -> axum::Router {
 async fn listening(
     limits: phoebis_router::listen::ListenLimits,
     upgrades: bool,
-    acceptor: Option<Arc<SslAcceptor>>,
+    acceptor: Option<Arc<LiveAcceptor>>,
 ) -> (std::net::SocketAddr, tokio::sync::watch::Sender<bool>) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -63,7 +63,7 @@ async fn a_connection_that_sends_no_head_is_closed_at_the_header_read_timeout() 
 #[tokio::test]
 async fn a_tls_listener_drops_a_silent_peer_at_the_bound_and_serves_a_finished_handshake() {
     let pair = fake_upstream::generate_pair(&["localhost", "127.0.0.1"]);
-    let acceptor = Arc::new(fake_upstream::acceptor_for(&pair));
+    let acceptor = Arc::new(LiveAcceptor::new(fake_upstream::acceptor_for(&pair)));
     let limits = phoebis_router::listen::ListenLimits {
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_millis(200),
@@ -206,7 +206,7 @@ async fn the_upgrade_path_hands_a_websocket_handshake_to_its_route() {
 #[tokio::test]
 async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
     let pair = fake_upstream::generate_pair(&["localhost"]);
-    let acceptor = Arc::new(fake_upstream::acceptor_for(&pair));
+    let acceptor = Arc::new(LiveAcceptor::new(fake_upstream::acceptor_for(&pair)));
     let limits = phoebis_router::listen::ListenLimits {
         drain_timeout: Duration::from_secs(30),
         header_read_timeout: Duration::from_secs(30),

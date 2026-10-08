@@ -178,7 +178,7 @@
   min-width: 0;
 }
 
-/* One line, never two: a head that wraps drops its meter below the neighbours'. */
+/* One line, never two: a head that wraps drops its meter below the neighbors'. */
 .wbar__head {
   display: flex;
   gap: 8px;
@@ -411,24 +411,39 @@
   color: var(--critical-ink);
 }
 
-.quota-toolbar {
+.quota-section {
   display: flex;
-  align-items: flex-end;
-  justify-content: space-between;
+  flex-direction: column;
   gap: 12px;
 }
 
+/* The Sort select orders the cards alone, so it sits inside their section at the grid's right edge. */
+.quota-sort {
+  display: flex;
+  justify-content: flex-end;
+}
+
 /* At 316px the narrowest card still leaves its meter the 36px floor, so the grid reflows before a meter shrinks
-   past it. */
+   past it. Every row takes the tallest card's height, so a card that holds more than the rest (an expired window's
+   wrapped reset, a longer error) moves no delimiter against its neighbors in any row. */
 .quota-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(316px, 1fr));
+  grid-auto-rows: 1fr;
   gap: 14px;
 }
 
+/*
+ * One slot per row, drawn on every card in the same order: the head, the windows (or the error in their room), the
+ * Extra usage line, the chips and the foot. The windows' slot takes what the card's row leaves, so the slots under it
+ * sit at one offset from the card's foot and the head's and the foot's rules at one offset from its top.
+ */
 .qcard {
-  display: flex;
-  flex-direction: column;
+  --qcard-windows: 85px;
+
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr) auto auto auto;
   overflow: hidden;
   background: var(--surface);
   border: 1px solid var(--hairline);
@@ -461,11 +476,6 @@
   background: var(--ink);
 }
 
-.qcard__icon--api_key {
-  color: var(--ink-2);
-  background: var(--surface-3);
-}
-
 .qcard__name {
   flex: 1;
   min-width: 0;
@@ -475,20 +485,61 @@
   white-space: nowrap;
 }
 
+/* Three window rows of about 22.1px and their two 9px gaps, rounded up, held when the card draws a note or an error in
+   their place. */
 .qcard__body {
   display: flex;
-  flex: 1;
   flex-direction: column;
   gap: 12px;
+  min-height: calc(var(--qcard-windows) + 28px);
   padding: 14px;
 }
 
-/* Plan and extra usage sit against the footer, so the window chips keep the top of every card. */
+/* One line the height of a chip whatever the state, so the chips row under it never moves. */
+.qcard__extra {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  min-width: 0;
+  min-height: 26px;
+  margin: 0 14px 10px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.qcard__extra .chip {
+  flex: none;
+}
+
+.qcard__extra-quiet {
+  color: var(--ink-2);
+}
+
+/* The provider's words, in the warning ink the account page's callout gives them. */
+.qcard__extra-reason {
+  font-size: 12.5px;
+  color: var(--warning-ink);
+}
+
+/* One line led by the Plan chip on every card, so the plan sits at one place and a chip past the width is cut rather
+   than wrapped. */
 .qcard__chips {
   display: flex;
-  flex-wrap: wrap;
   gap: 6px;
+  align-items: center;
+  min-height: 38px;
   padding: 0 14px 12px;
+  overflow: hidden;
+  white-space: nowrap;
+}
+
+.qcard__chips .chip {
+  flex: none;
+}
+
+/* A card whose account reports no plan keeps the Plan chip's place. */
+.qcard__chips .chip--empty {
+  visibility: hidden;
 }
 
 .qcard__skel {
@@ -497,8 +548,10 @@
   gap: 8px;
 }
 
+/* The error fills the windows' room, so its box ends where a neighbor's rows do. */
 .qcard__error {
   display: flex;
+  flex: 1;
   flex-direction: column;
   gap: 10px;
   padding: 10px 12px;
@@ -520,12 +573,6 @@
   font-size: 13px;
 }
 
-/* Inset to the edge of the chips above it. */
-.qcard__flag {
-  margin: 0 14px 12px;
-  font-size: 12.5px;
-}
-
 .qcard__foot {
   display: flex;
   gap: 8px 10px;
@@ -536,27 +583,32 @@
   border-top: 1px solid var(--hairline);
 }
 
+/* Room for the reading's two lines on every card, so a one-line reading moves no rule. */
 .qcard__status {
   display: flex;
   flex-direction: column;
   gap: 2px;
+  justify-content: center;
   min-width: 0;
+  min-height: calc(2em * var(--body-leading) + 2px);
 }
 
 .qcard__backoff {
   color: var(--serious-ink);
 }
 
-/* A failed poll's line: the reason gives way to the line's width, so the line never wraps and never reaches the
-   Refresh pill; the gap stands in for the space the flex row drops after "failed:". */
+/* A poll line: a failed poll's reason gives way to the line's width, so the line never wraps and never reaches the
+   Refresh pill. The gap stands in for the space the flex row drops after "failed:". */
 .qcard__poll {
   display: flex;
   gap: 0.25em;
   min-width: 0;
+  overflow: hidden;
   white-space: nowrap;
 }
 
-.qcard__reason {
+.qcard__reason,
+.qcard__extra-reason {
   min-width: 0;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -565,7 +617,7 @@
 /*
  * One line per window: chip, meter, reset. Both outer columns are fixed rather
  * than content-sized, so the three meters start and end on one vertical line
- * whatever the numbers say, and so neighbouring cards agree with each other.
+ * whatever the numbers say, and so neighboring cards agree with each other.
  * The widths are the widest content each column holds in DejaVu Sans, the
  * widest fallback the console meets ("Fable 100% left" at 121px, "resets in
  * 23h 59m" at 109px, "expired 2d 0h ago," at 113px). The meter takes what is
@@ -859,7 +911,7 @@
 }
 
 /*
- * Neutral pill, tone on the number only: the row's colour belongs to its lane.
+ * Neutral pill, tone on the number only: the row's color belongs to its lane.
  * One width for every chip in the column, so the labels start and the numbers
  * end on two straight lines whatever the window is called.
  */
@@ -942,6 +994,17 @@
   border-radius: var(--radius-pill);
 }
 
+/* A cancelled account's saved end: a 2px rule across the track, centered in a wider box so its title can be hovered. */
+.lane__end {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  z-index: 2;
+  width: 8px;
+  background: linear-gradient(var(--serious), var(--serious)) center / 2px 100% no-repeat;
+  transform: translateX(-50%);
+}
+
 .lane__label {
   position: relative;
   z-index: 1;
@@ -1000,6 +1063,13 @@
   width: 2px;
   height: 12px;
   background: var(--accent);
+  border-radius: 0;
+}
+
+.lane__swatch--end {
+  width: 2px;
+  height: 12px;
+  background: var(--serious);
   border-radius: 0;
 }
 
@@ -1369,6 +1439,20 @@
   display: flex;
   gap: 10px;
   align-items: center;
+}
+
+/* A held row draws no checkbox and no Priority field, so blanks of their size keep its name in line with the names
+   around it and the row as tall as theirs. The checkbox's box is the browser's own, 13 px inside 3 px and 4 px
+   margins. */
+.members-table__check {
+  flex: none;
+  width: 13px;
+  height: 13px;
+  margin: 3px 3px 3px 4px;
+}
+
+.members-table__blank {
+  visibility: hidden;
 }
 
 .members-table th:nth-child(2),
@@ -2392,8 +2476,14 @@
   background: var(--series-3);
 }
 
-.probe-bar__seg--skipped {
+/* Matches the held slice of the analytics probe chart, --series-muted. */
+.probe-bar__seg--held {
   background: var(--series-muted);
+}
+
+/* Matches the skipped slice of the analytics probe chart, --series-4. */
+.probe-bar__seg--skipped {
+  background: var(--series-4);
 }
 
 .probe-bar__seg--failed {
@@ -3525,7 +3615,7 @@
   height: 10px;
 }
 
-/* "Replaced by a new registration" wraps in this column, and a centred row floats its bar and count away
+/* "Replaced by a new registration" wraps in this column, and a centered row floats its bar and count away
    from the label they belong to. */
 .hbars--reasons li.hbars__row--top {
   align-items: start;
@@ -3656,7 +3746,7 @@
   inset: 0;
 }
 
-/* Placed by clock time, so the 1px inset that separates neighbours is padding
+/* Placed by clock time, so the 1px inset that separates neighbors is padding
    the background does not paint rather than a flex gap. */
 .range__bar {
   position: absolute;

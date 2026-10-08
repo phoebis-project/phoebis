@@ -3,6 +3,7 @@
 
 mod reader;
 
+use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 
 use phoebis_bus::{spawn_subscriber, Bus, Delivery, Event};
@@ -16,10 +17,32 @@ use tokio_util::sync::CancellationToken;
 use crate::reader::ReaderState;
 
 pub use reader::{
-    Condition, Kind, Link, Subject, SubjectKind, BACKOFF_ATTENTION_AFTER_MS, REFRESH_RUN_READ,
+    Condition, Kind, Link, Subject, SubjectKind, BACKOFF_ATTENTION_AFTER_MS,
+    CERTIFICATE_WARNING_DAYS, REFRESH_RUN_READ,
 };
 
 const STATE_POISONED: &str = "attention state mutex poisoned by a prior panic";
+
+/// One listener's pair as the running router serves it: what the two certificate conditions read. Declared here
+/// so the reader never names the router crate. The days left are the reader's to compute at each read.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PairFacts {
+    /// The listener key, `proxy.tls` or `admin.tls`.
+    pub key: String,
+    pub cert_file: PathBuf,
+    pub key_file: PathBuf,
+    /// The loaded leaf's `not_after`, in Unix milliseconds.
+    pub not_after_ms: i64,
+    /// When the pair the listener serves was loaded, at the start or by the last reload that landed.
+    pub loaded_at: i64,
+    /// The last reload the loader refused, its instant and the loader's line, until a reload lands.
+    pub failed: Option<(i64, String)>,
+}
+
+/// The router's loaded pairs, in the listeners' order, a listener serving plain HTTP left out.
+pub trait TlsPairs: Send + Sync {
+    fn pairs(&self) -> Vec<PairFacts>;
+}
 
 pub struct AttentionParts {
     pub bus: Bus,
@@ -29,6 +52,9 @@ pub struct AttentionParts {
     pub ledger: Option<Ledger>,
     pub router: RouterHandle,
     pub store: Arc<Store>,
+    /// The router's loaded pairs; `None` where a harness builds no listeners, and then neither certificate kind has
+    /// a series.
+    pub tls: Option<Arc<dyn TlsPairs>>,
     /// Where the poll's standing per account is read; `None` where a harness builds no usage service, and no account
     /// then reads a backoff.
     pub usage: Option<Arc<UsageService>>,
@@ -51,6 +77,7 @@ pub struct Attention {
     router: RouterHandle,
     state: Mutex<ReaderState>,
     store: Arc<Store>,
+    tls: Option<Arc<dyn TlsPairs>>,
     usage: Option<Arc<UsageService>>,
 }
 
@@ -58,9 +85,10 @@ impl Attention {
     /// Every subject of every kind, holding or clear; a failed store or ledger read fails the whole read.
     pub fn conditions(&self, now: i64) -> Result<Vec<Condition>, AttentionError> {
         // Read from the file on every call, as `refresh_failed` reads the registry, so the condition holds across a
-        // restart and clears on its own when the start lands the rows. A read that fails fails the whole answer, as
-        // the refresh read's does: a scrape never reports clear what it could not read. Read before the state lock,
-        // so a read waiting on the ledger's reader connection never holds the bus arm's `observe` behind it.
+        // restart and clears on its own when the next start or a replay lands the rows. A read that fails fails the
+        // whole answer, as the refresh read's does: a scrape never reports clear what it could not read. Read before
+        // the state lock, so a read waiting on the ledger's reader connection never holds the bus arm's `observe`
+        // behind it.
         let parked = self
             .ledger
             .as_ref()
@@ -70,6 +98,9 @@ impl Attention {
         // connection mutex, and `observe` waits on this lock.
         let accounts = self.store.accounts()?;
         let refresh_runs = reader::refresh_runs(&self.store, &accounts)?;
+        // The pairs before the lock too: their lock is the router's, which a reload holds across a whole load from
+        // disk.
+        let pairs = self.tls.as_ref().map(|tls| tls.pairs());
         let mut state = self.state.lock().expect(STATE_POISONED);
         reader::conditions(
             &mut state,
@@ -78,6 +109,7 @@ impl Attention {
             &self.router,
             self.ledger.as_ref().is_some_and(Ledger::degraded),
             parked.as_deref(),
+            pairs.as_deref(),
             self.usage.as_deref(),
             now,
         )
@@ -136,6 +168,7 @@ pub fn spawn(parts: AttentionParts) -> (Arc<Attention>, AttentionHandles) {
         router: parts.router,
         state: Mutex::new(ReaderState::default()),
         store: parts.store,
+        tls: parts.tls,
         usage: parts.usage,
     });
     let cancel = CancellationToken::new();

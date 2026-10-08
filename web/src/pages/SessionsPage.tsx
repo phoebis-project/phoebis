@@ -3,7 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useSession } from '@/app/session';
-import { MIGRATED_PROBE_HINT } from '@/components/charts/theme';
+import { HELD_PROBE_HINT, MIGRATED_PROBE_HINT } from '@/components/charts/theme';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
@@ -58,7 +58,7 @@ const HISTORICAL_HINT = 'A holder of this key id that no longer exists; the ledg
 const HISTORICAL_NO_RECIPE_HINT = 'Belongs to an earlier holder of this key id; nothing is scheduled for it';
 const HISTORICAL_CAUSE = 'this key id was created again and the session belongs to the earlier holder';
 const KIND_HINT: Record<Account['kind'], string> = {
-  api_key: 'Anthropic key account: billed per token, no quota windows',
+  api_key: 'API-key account: billed per token, no quota windows',
   oauth: 'Subscription account: quota windows apply',
 };
 const COMPANION_HINT: Record<CompanionState, string> = {
@@ -721,7 +721,7 @@ function OtherPins({ agents }: { agents: KeepaliveRecipe[] }) {
 }
 
 function ProbeTile({ error, overview: o }: { error: string | null; overview: KeepaliveOverview | null }) {
-  const total = o ? o.probes24h.ok + o.probes24h.migrated + o.probes24h.skipped + o.probes24h.failed : 0;
+  const total = o ? o.probes24h.ok + o.probes24h.migrated + o.probes24h.held + o.probes24h.skipped + o.probes24h.failed : 0;
   return (
     <Tile
       label="Cache probes, 24h"
@@ -730,14 +730,16 @@ function ProbeTile({ error, overview: o }: { error: string | null; overview: Kee
       note={
         o ? (
           <>
-            <div className="probe-bar" role="img" aria-label={`Probes in the last 24h: ${o.probes24h.ok} ok, ${o.probes24h.migrated} migrated, ${o.probes24h.skipped} skipped, ${o.probes24h.failed} failed`}>
+            <div className="probe-bar" role="img" aria-label={`Probes in the last 24h: ${o.probes24h.ok} ok, ${o.probes24h.migrated} migrated, ${o.probes24h.held} held, ${o.probes24h.skipped} skipped, ${o.probes24h.failed} failed`}>
               <span className="probe-bar__seg probe-bar__seg--ok" style={{ flex: o.probes24h.ok }} />
               <span className="probe-bar__seg probe-bar__seg--migrated" style={{ flex: o.probes24h.migrated }} title={MIGRATED_PROBE_HINT} />
+              <span className="probe-bar__seg probe-bar__seg--held" style={{ flex: o.probes24h.held }} title={HELD_PROBE_HINT} />
               <span className="probe-bar__seg probe-bar__seg--skipped" style={{ flex: o.probes24h.skipped }} />
               <span className="probe-bar__seg probe-bar__seg--failed" style={{ flex: o.probes24h.failed }} />
             </div>
             <span className="stat__note">
-              {fmtInt(o.probes24h.ok)} ok ({fmtPct(total ? o.probes24h.ok / total : 0)}), <span title={MIGRATED_PROBE_HINT}>{fmtInt(o.probes24h.migrated)} migrated</span>, {fmtInt(o.probes24h.skipped)} skipped,{' '}
+              {fmtInt(o.probes24h.ok)} ok ({fmtPct(total ? o.probes24h.ok / total : 0)}), <span title={MIGRATED_PROBE_HINT}>{fmtInt(o.probes24h.migrated)} migrated</span>, <span title={HELD_PROBE_HINT}>{fmtInt(o.probes24h.held)} held</span>,{' '}
+              {fmtInt(o.probes24h.skipped)} skipped,{' '}
               {fmtInt(o.probes24h.failed)} failed
             </span>
           </>

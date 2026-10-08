@@ -4,7 +4,7 @@
     "requests_24h": 6,
     "tokens_24h": 10800,
     "tokens_cached_24h": 3000,
-    "cost_24h": 0.0252,
+    "cost_24h": 0.0249,
     "error_rate_24h": 0.3333333333333333,
     "top_error_code": "upstream_error",
     "hourly": [
@@ -164,14 +164,14 @@
       },
       {
         "at": -3600000,
-        "cost": 0.0144,
+        "cost": 0.0142,
         "errors": 1,
         "requests": 3,
         "tokens": 5400
       },
       {
         "at": 0,
-        "cost": 0.0108,
+        "cost": 0.0107,
         "errors": 1,
         "requests": 3,
         "tokens": 5400
@@ -183,7 +183,7 @@
         "at": 970000,
         "finished_at": 970900,
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791465653858,
         "pool_id": "main",
         "account_id": "direct",
         "session_id": "s3",
@@ -270,7 +270,7 @@
             ],
             "overage_in_use": null,
             "estimated_usd": 0.0036,
-            "pricing_version": "2026-10-01",
+            "pricing_version": "2026-10-08",
             "selection": {
               "placement": {
                 "rung": "content",
@@ -297,7 +297,7 @@
         "at": 940000,
         "finished_at": 940900,
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791465653858,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -357,7 +357,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0036,
+        "cost_usd": 0.00355,
         "attempts": [
           {
             "index": 1,
@@ -383,8 +383,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-10-01",
+            "estimated_usd": 0.00355,
+            "pricing_version": "2026-10-08",
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -405,7 +405,7 @@
         "at": 880000,
         "finished_at": 880900,
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791465653858,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s2",
@@ -465,7 +465,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0036,
+        "cost_usd": 0.00355,
         "attempts": [
           {
             "index": 1,
@@ -491,8 +491,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-10-01",
+            "estimated_usd": 0.00355,
+            "pricing_version": "2026-10-08",
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -513,7 +513,7 @@
         "at": -2599400,
         "finished_at": -2598500,
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791465653858,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -577,7 +577,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0036,
+        "cost_usd": 0.00355,
         "attempts": [
           {
             "index": 1,
@@ -603,8 +603,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-10-01",
+            "estimated_usd": 0.00355,
+            "pricing_version": "2026-10-08",
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -685,7 +685,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0036,
+        "cost_usd": 0.00355,
         "attempts": [
           {
             "index": 1,
@@ -711,8 +711,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-10-01",
+            "estimated_usd": 0.00355,
+            "pricing_version": "2026-10-08",
             "selection": null,
             "response": {
               "cleared_input_tokens": null,
@@ -733,7 +733,7 @@
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1791413157235,
+        "key_generation": 1791465653858,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -793,7 +793,7 @@
           "web_fetch": 0,
           "web_search": 0
         },
-        "cost_usd": 0.0072,
+        "cost_usd": 0.0071,
         "attempts": [
           {
             "index": 1,
@@ -822,8 +822,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-10-01",
+            "estimated_usd": 0.00355,
+            "pricing_version": "2026-10-08",
             "selection": {
               "strategy": "pace",
               "tier": null,
@@ -878,8 +878,8 @@
               }
             ],
             "overage_in_use": null,
-            "estimated_usd": 0.0036,
-            "pricing_version": "2026-10-01",
+            "estimated_usd": 0.00355,
+            "pricing_version": "2026-10-08",
             "selection": {
               "strategy": "pace",
               "tier": [

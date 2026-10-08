@@ -7,7 +7,6 @@ pub mod config;
 pub mod health;
 pub mod init;
 pub mod listen;
-pub mod selfsigned;
 pub mod status;
-pub mod subcommands;
 pub mod tls;
+pub mod tls_reload;

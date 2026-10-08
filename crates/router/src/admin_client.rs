@@ -1,5 +1,5 @@
 //! The admin API as a scripted caller reaches it: the admin secret as a bearer, one HTTP/1 connection per call,
-//! plain or TLS by the base URL's scheme, and the whole call under one deadline. The subcommands share it.
+//! plain or TLS by the base URL's scheme, and the whole call under one deadline. `status` and `tls reload` share it.
 
 use std::error::Error;
 use std::path::{Path, PathBuf};

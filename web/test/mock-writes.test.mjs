@@ -30,14 +30,36 @@ test('a key or a pool whose id is taken is refused with the route\'s 409', async
 
 test('the mock derives an id from a name the way the client does, which the slug rule always admits', async () => {
   const api = await signedIn();
-  const pool = await api.createPool({ ...(await storyPool(api)), name: '  Nightly batch!  ' });
-  const long = await api.createPool({ ...(await storyPool(api)), name: 'x'.repeat(80) });
+  const pool = await api.createPool({ ...(await storyPool(api)), members: [], name: '  Nightly batch!  ' });
+  const long = await api.createPool({ ...(await storyPool(api)), members: [], name: 'x'.repeat(80) });
   const { key } = await api.createKey({ ...keyInput, name: 'Build box' });
   assert.deepEqual([pool.id, long.id, key.id], [d.slug('  Nightly batch!  '), 'x'.repeat(64), 'build-box']);
   for (const id of [pool.id, long.id, key.id]) assert.match(id, /^[a-z0-9][a-z0-9-]{0,63}$/);
 });
 
-test('a pool create refuses the values a pool edit refuses', async () => {
+test("the first replay lands the story's parked record, whose item leaves the attention answer, and a second finds nothing", async () => {
+  const api = await signedIn();
+  const parked = async () => (await api.getAttention()).filter((i) => i.kind === 'ledger_record_parked').length;
+  assert.equal(await parked(), 1);
+  assert.deepEqual(await api.replayParked(), { landed: 1, remaining: 0 });
+  assert.equal(await parked(), 0);
+  assert.deepEqual(await api.replayParked(), { landed: 0, remaining: 0 });
+});
+
+test("a held writer's replay answers the route's 503 and lands nothing", async () => {
+  const api = await signedIn();
+  // The story's switches live in the browser's storage, which Node lacks, so the case lends the mock a stand-in.
+  const stored = new Map([['phoebis.mockHeldWriter', '1']]);
+  globalThis.localStorage = { getItem: (key) => stored.get(key) ?? null };
+  try {
+    await assert.rejects(() => api.replayParked(), refusedAs(503, 'the ledger writer is held, try again'));
+  } finally {
+    delete globalThis.localStorage;
+  }
+  assert.equal((await api.getAttention()).filter((i) => i.kind === 'ledger_record_parked').length, 1, 'the parked record is still the story\'s');
+});
+
+test('a pool creation refuses the values a pool edit refuses', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
   await assert.rejects(() => api.createPool({ ...all, affinityTtlSeconds: 30, keepalive: { ...all.keepalive, enabled: false }, name: 'short' }), refusedAs(400, 'affinity_ttl_seconds is 0 or at least 60'));
@@ -48,8 +70,14 @@ test('a pool create refuses the values a pool edit refuses', async () => {
 
 test('a new pool reads each member the way the pool route does', async () => {
   const api = await signedIn();
+  // An account belongs to one pool, so the story's pools let every account go and each probing pool leaves once read.
+  for (const p of await api.listPools()) await api.updatePool(p.id, { ...poolInputOf(p), members: [] });
   const members = (await api.listAccounts()).map((a) => ({ accountId: a.id, priority: 0 }));
-  const verdicts = async (name, overagePolicy) => Object.fromEntries((await api.createPool({ ...(await storyPool(api)), members, name, overagePolicy })).members.map((m) => [m.accountId, m.eligible]));
+  const verdicts = async (name, overagePolicy) => {
+    const pool = await api.createPool({ ...(await storyPool(api)), members, name, overagePolicy });
+    await api.deletePool(pool.id);
+    return Object.fromEntries(pool.members.map((m) => [m.accountId, m.eligible]));
+  };
   assert.deepEqual(await verdicts('first', 'never'), {
     legacy: 'unavailable',
     nightly: 'overage',
@@ -58,6 +86,7 @@ test('a new pool reads each member the way the pool route does', async () => {
     research: 'eligible',
     secondary: 'cooldown',
     spare: 'unavailable',
+    studio: 'eligible',
   });
   // Funded again, the flagged account serves; the account the router reads in overage is an obstacle only under a
   // policy that admits none.
@@ -72,7 +101,7 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
   const api = await signedIn();
   const all = await storyPool(api);
   const overflow = all.members.find((m) => m.accountId === 'overflow');
-  assert.deepEqual([overflow.budgetDailyUsd, overflow.budgetMonthlyUsd], [5, 50], 'the story budgets its Anthropic-key member by the day and the month');
+  assert.deepEqual([overflow.budgetDailyUsd, overflow.budgetMonthlyUsd], [5, 50], 'the story budgets its API-key member by the day and the month');
   const edit = {
     ...all,
     affinityMode: 'always',
@@ -89,12 +118,16 @@ test('a pool write round-trips the pin and placement fields and the members\' bu
     assert.deepEqual([member.budgetDailyUsd, member.budgetMonthlyUsd, member.kind, member.spends, member.budgetUntil], [7.5, null, 'api_key', [], null], 'the mock keeps no ledger, so a write answers no spend');
   }
   assert.deepEqual(poolInputOf(stored).members, edit.members, 'the members read back as they were written');
+  // An account belongs to one pool, so all lets its members go before a new pool takes them, and that pool leaves
+  // before the next.
+  await api.updatePool('all', { ...edit, members: [] });
   const created = await api.createPool({ ...edit, name: 'budgeted' });
   assert.deepEqual(
     created.members.map((m) => [m.accountId, m.kind, m.budgetDailyUsd, m.budgetMonthlyUsd]),
     edit.members.map((m) => [m.accountId, m.accountId === 'overflow' ? 'api_key' : 'oauth', m.budgetDailyUsd, m.budgetMonthlyUsd]),
     'a create derives each member\'s kind from its account',
   );
+  await api.deletePool(created.id);
   const bare = await api.createPool({ ...edit, members: [{ accountId: 'overflow', priority: 0 }], name: 'bare' });
   assert.deepEqual([bare.members[0].budgetDailyUsd, bare.members[0].budgetMonthlyUsd], [null, null], 'a member written without a budget field has no budget over that period');
 });
@@ -121,11 +154,11 @@ test('the story reads a member at its budget as the route does, and a member hal
   } finally {
     seed.status = flagged;
   }
-  const spent = member('codex', 'research');
+  const spent = member('jobs', 'research');
   const [day] = spent.spends;
   assert.ok(day.spentUsd >= spent.budgetDailyUsd && Date.parse(day.periodEnd) > Date.now(), 'the story spends one member past its daily budget inside the day');
   assert.deepEqual([spent.budgetUntil, spent.eligible], [day.periodEnd, 'budget'], 'the route holds it to the day\'s end, the one budget it reached');
-  assert.equal(pools.find((p) => p.id === 'codex').status, 'exhausted', 'its only member at its budget leaves the pool nothing to route to');
+  assert.equal(pools.find((p) => p.id === 'jobs').status, 'exhausted', 'its only member at its budget leaves the pool nothing to route to');
 });
 
 test('a pool answers its keys from the key registry', async () => {
@@ -145,21 +178,50 @@ const POOL_STALE = 'the pool changed while it was being edited; reload and try a
 const KEY_STALE = 'the key changed while it was being edited; reload and try again';
 const storyKey = async (api, id) => (await api.listKeys()).find((k) => k.id === id);
 
-test('a pool or key save over a stamp the row no longer carries is refused as stale and stores nothing, and one over its own stamp moves it', async () => {
+/** The route's token: the row's incarnation above the 42 bits of its stamp. */
+const tokenOf = (incarnation, updatedAt) => incarnation * 2 ** 42 + Date.parse(updatedAt);
+
+test('a pool or key save over a revision the row no longer carries is refused as stale and stores nothing, and one over its own revision moves it', async () => {
   const api = await signedIn();
   const pool = (await api.listPools()).find((p) => p.id === 'all');
-  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, '2020-01-01T00:00:00.000Z'), staleAs(POOL_STALE));
+  assert.equal(pool.revision, tokenOf(1, pool.updatedAt), "the story's pool carries the token of its stamp");
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.revision - 1), staleAs(POOL_STALE));
   assert.deepEqual((await api.listPools()).find((p) => p.id === 'all'), pool);
-  const savedPool = await api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.updatedAt);
+  const savedPool = await api.updatePool('all', { ...poolInputOf(pool), name: 'moved' }, pool.revision);
   assert.equal(savedPool.name, 'moved');
   assert.ok(Date.parse(savedPool.updatedAt) > Date.parse(pool.updatedAt), 'the save moves the stamp past the one it was read at');
+  assert.equal(savedPool.revision, tokenOf(1, savedPool.updatedAt), 'the token moves with the stamp');
+  await assert.rejects(() => api.updatePool('all', { ...poolInputOf(pool), name: 'again' }, pool.revision), staleAs(POOL_STALE), 'the stamp moved past the sent token');
   const key = await storyKey(api, 'laptop');
+  assert.equal(key.revision, tokenOf(1, key.updatedAt), "the story's key carries the token of its stamp");
   const edit = { ...keyInput, expiresAt: undefined, name: 'moved', poolId: key.poolId };
-  await assert.rejects(() => api.updateKey('laptop', edit, '2020-01-01T00:00:00.000Z'), staleAs(KEY_STALE));
+  await assert.rejects(() => api.updateKey('laptop', edit, key.revision + 1), staleAs(KEY_STALE));
   assert.deepEqual(await storyKey(api, 'laptop'), key);
-  const savedKey = await api.updateKey('laptop', edit, key.updatedAt);
+  const savedKey = await api.updateKey('laptop', edit, key.revision);
   assert.equal(savedKey.name, 'moved');
   assert.ok(Date.parse(savedKey.updatedAt) > Date.parse(key.updatedAt), 'the save moves the stamp past the one it was read at');
+  assert.equal(savedKey.revision, tokenOf(1, savedKey.updatedAt), 'the token moves with the stamp');
+  await assert.rejects(() => api.updateKey('laptop', edit, key.revision), staleAs(KEY_STALE), 'the stamp moved past the sent token');
+});
+
+test('an editor opened before its pool or key was deleted and created again is refused as stale and stores nothing', async () => {
+  const api = await signedIn();
+  const fresh = { ...(await storyPool(api)), members: [], name: 'fresh' };
+  const spare = { ...keyInput, name: 'spare', poolId: 'fresh' };
+  const first = await api.createPool(fresh);
+  const { key: firstKey } = await api.createKey(spare);
+  await api.deleteKey('spare');
+  await api.deletePool('fresh');
+  const pool = await api.createPool(fresh);
+  const { key } = await api.createKey(spare);
+  assert.deepEqual([pool.updatedAt, key.updatedAt], [first.updatedAt, firstKey.updatedAt], 'each replacement lands in its predecessor\'s millisecond');
+  assert.deepEqual([pool.revision, key.revision], [tokenOf(2, pool.updatedAt), tokenOf(2, key.updatedAt)], 'each replacement takes the next incarnation');
+  await assert.rejects(() => api.updatePool('fresh', { ...poolInputOf(pool), name: 'stale' }, first.revision), staleAs(POOL_STALE));
+  await assert.rejects(() => api.updateKey('spare', { ...spare, expiresAt: undefined, name: 'stale' }, firstKey.revision), staleAs(KEY_STALE));
+  assert.deepEqual([(await api.listPools()).find((p) => p.id === 'fresh').name, (await storyKey(api, 'spare')).name], ['fresh', 'spare'], 'the stale saves stored nothing');
+  const landedPool = await api.updatePool('fresh', { ...poolInputOf(pool), name: 'landed' }, pool.revision);
+  const landedKey = await api.updateKey('spare', { ...spare, expiresAt: undefined, name: 'landed' }, key.revision);
+  assert.deepEqual([landedPool.name, landedKey.name], ['landed', 'landed'], "the replacement's own token lands");
 });
 
 test('a rotation or a revocation moves the key\'s stamp, so an edit read before it is refused as stale', async () => {
@@ -169,8 +231,9 @@ test('a rotation or a revocation moves the key\'s stamp, so an edit read before 
     await write(api);
     const after = await storyKey(api, id);
     assert.ok(Date.parse(after.updatedAt) > Date.parse(before.updatedAt), id);
+    assert.equal(after.revision, tokenOf(1, after.updatedAt), id);
     // The key's own switch, since the route refuses re-enabling a revoked key ahead of the fence.
-    await assert.rejects(() => api.updateKey(id, { ...keyInput, enabled: before.enabled, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.updatedAt), staleAs(KEY_STALE), id);
+    await assert.rejects(() => api.updateKey(id, { ...keyInput, enabled: before.enabled, expiresAt: undefined, name: 'moved', poolId: before.poolId }, before.revision), staleAs(KEY_STALE), id);
     assert.equal((await storyKey(api, id)).name, before.name, id);
   }
 });
@@ -190,7 +253,7 @@ test("a key write stores the server-side auto mode override and a pool write sto
   await api.updatePool('all', { ...pool, autoModeServer: false });
   assert.equal((await api.listPools()).find((p) => p.id === 'all').autoModeServer, false);
   const { autoModeServer: _dropped, ...unset } = pool;
-  const created = await api.createPool({ ...unset, name: 'fresh' });
+  const created = await api.createPool({ ...unset, members: [], name: 'fresh' });
   assert.equal(created.autoModeServer, true, "a new pool without the field takes the route's default");
 });
 
@@ -242,6 +305,50 @@ test('a pool save naming an account twice answers the route\'s 409 ahead of ever
   assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
 });
 
+test("a stale pool save answers the route's member-list refusals first, then 409 stale_edit ahead of the member lookups, and stores nothing", async () => {
+  const api = await signedIn();
+  const before = await api.listPools();
+  const all = before.find((p) => p.id === 'all');
+  const input = poolInputOf(all);
+  const member = (accountId, budgetDailyUsd = null) => ({ accountId, budgetDailyUsd, budgetMonthlyUsd: null, priority: 0 });
+  const stale = all.revision - 1;
+  // The route reads the list's own shape, a repeat and a budget, before it compares the stamp.
+  await assert.rejects(() => api.updatePool('all', { ...input, members: [member('overflow'), member('overflow')] }, stale), refusedAs(409, 'members name account overflow twice'), 'a repeat');
+  await assert.rejects(() => api.updatePool('all', { ...input, members: [member('overflow', 0)] }, stale), refusedAs(400, 'budget_daily_usd is above 0'), 'a budget');
+  // The store looks a member up only once the stamp has passed: an unknown member and an account the work pool holds.
+  const lookups = [[...input.members, member('ghost')], [...input.members, member('studio')]];
+  for (const members of lookups) {
+    await assert.rejects(() => api.updatePool('all', { ...input, members }, stale), staleAs(POOL_STALE), members.map((m) => m.accountId).join());
+  }
+  assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
+  await assert.rejects(() => api.updatePool('all', { ...input, members: lookups[0] }, all.revision), refusedAs(404, 'account ghost not found'), 'over its own revision the member refusal answers');
+  await assert.rejects(() => api.updatePool('all', { ...input, members: lookups[1] }, all.revision), refusedAs(409, 'account studio is a member of pool work'), 'over its own revision the held member answers');
+});
+
+test("a pool save naming an account another pool holds answers the route's 409 and stores nothing", async () => {
+  const api = await signedIn();
+  const before = await api.listPools();
+  const work = poolInputOf(before.find((p) => p.id === 'work'));
+  const primary = { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 };
+  const held = refusedAs(409, 'account primary is a member of pool all');
+  await assert.rejects(() => api.createPool({ ...work, members: [primary], name: 'third' }), held, 'on create');
+  await assert.rejects(() => api.updatePool('work', { ...work, members: [...work.members, primary] }), held, 'on edit');
+  assert.deepEqual(await api.listPools(), before, 'neither the settings nor the members were stored');
+});
+
+test('an account answers the pool a member write left it in', async () => {
+  const api = await signedIn();
+  const pools = await api.listPools();
+  const all = poolInputOf(pools.find((p) => p.id === 'all'));
+  const work = poolInputOf(pools.find((p) => p.id === 'work'));
+  const poolOf = async (id) => (await api.listAccounts()).find((a) => a.id === id).pool;
+  assert.deepEqual(await poolOf('primary'), { poolId: 'all', priority: 0 });
+  await api.updatePool('all', { ...all, members: all.members.filter((m) => m.accountId !== 'primary') });
+  assert.equal(await poolOf('primary'), null, 'out of all, primary is in no pool');
+  await api.updatePool('work', { ...work, members: [...work.members, { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 3 }] });
+  assert.deepEqual(await poolOf('primary'), { poolId: 'work', priority: 3 });
+});
+
 test('a model rule list the route refuses is refused on every pool and key write, with the route\'s text', async () => {
   const api = await signedIn();
   const all = await storyPool(api);
@@ -276,7 +383,7 @@ test('a key write without the model fields takes the route\'s defaults on create
   const edited = await api.updateKey('laptop', { ...bare, name: 'laptop' });
   assert.deepEqual([edited.modelRules, edited.modelRulesMode, edited.longContextTwins], [laptop.modelRules, laptop.modelRulesMode, laptop.longContextTwins]);
   const { modelRules: _p, ...unruled } = await storyPool(api);
-  const pool = await api.createPool({ ...unruled, name: 'unruled' });
+  const pool = await api.createPool({ ...unruled, members: [], name: 'unruled' });
   assert.deepEqual(pool.modelRules, [], 'a pool created without a list starts with none');
 });
 
@@ -401,7 +508,7 @@ test('the quota snapshots never answer a status or a poll outcome the decoder ca
   const api = await signedIn();
   for (let read = 0; read < 2; read += 1) {
     const accounts = await api.listAccounts();
-    assert.deepEqual(accounts.filter((a) => (a.kind === 'api_key') !== (a.usage === null)).map((a) => a.id), [], `read ${read + 1}: a block on every subscription row and none on an Anthropic-key row`);
+    assert.deepEqual(accounts.filter((a) => (a.kind === 'api_key') !== (a.usage === null)).map((a) => a.id), [], `read ${read + 1}: a block on every subscription row and none on an API-key row`);
     const snapshots = accounts.flatMap((a) => (a.usage ? [a.usage] : []));
     assert.deepEqual(snapshots.map((s) => s.status).filter((s) => s !== 'error' && s !== 'success'), [], `read ${read + 1}`);
     const polls = snapshots.map((s) => s.poll);

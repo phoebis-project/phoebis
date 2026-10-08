@@ -41,9 +41,10 @@ docker compose cp phoebis:/var/lib/phoebis/backups/<name> .
 the router serves or while it is stopped; it takes no lock, opens no socket and needs no admin secret. It runs as the
 user that owns the databases (`phoebis` on the host, uid 65532 in the container, which `exec` already is), since the
 files and their `-shm` files are `0600`. The directory it writes holds `router.sqlite`, `ledger.sqlite` and
-`manifest.json`, each at `0600`, and nothing else. `backup` creates the directory and every missing parent at `0700`,
-or takes an existing empty directory and warns when its mode is wider, since the ledger copy holds the prompts and
-tool results its captured bodies contain, in plain text.
+`manifest.json`, each at `0600`, and nothing else. `backup` creates the directory and every missing parent at `0700`, or
+takes an existing empty directory that only its owner can write, and refuses one that group or other can write or that
+another user owns, since the ledger copy holds the prompts and tool results its captured bodies contain, in plain text.
+A mode wider than `0700` that gives group or other no write access is taken with a warning.
 
 `manifest.json` is written last, once both copies have answered `PRAGMA quick_check` with `ok` and every file and the
 directory are synced, so a directory that holds a manifest holds two complete copies. It carries `format` (1),
@@ -52,11 +53,13 @@ names, and nothing derived from the key), and under `registry` and `ledger` each
 `bytes` and `sha256`.
 
 `backup` exits 1 with nothing written when the file does not load, when `--to` names a file or a directory that is not
-empty, or when either database does not exist (`a backup carries both databases; {path} does not exist`). A copy that
-fails, such as one whose database another connection holds locked for ten seconds, removes every file and directory
-the run created and exits 1 with `backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest
-is written ([commands](installation.md#commands)). Where the binary is not at hand, `sqlite3`'s `.backup` produces the
-same snapshot, one database at a time.
+empty, when it names a directory that group or other can write or that another user owns
+(`{dir}: group or other can write it, or another user owns it. Nothing was written.`), or when either database does not
+exist (`a backup carries both databases; {path} does not exist`). A copy that fails, such as one whose database another
+connection holds locked for ten seconds, removes every file and directory the run created and exits 1 with
+`backup failed: {reason}; nothing was written to {dir}`. It exits 0 once the manifest is written
+([commands](installation.md#commands)). Where the binary is not at hand, `sqlite3`'s `.backup` produces the same
+snapshot, one database at a time.
 
 A backup taken before an upgrade needs both snapshots to succeed: the registry and the ledger migrate together,
 and a restore built from only one of them leaves the two databases at different points in the request history.
@@ -79,10 +82,7 @@ A restore puts both databases back with the key that sealed the registry, in thi
 4. Put the key file that sealed the registry at `storage.encryption_key_file`; the manifest's `key_file` says where it
    lived. A wrong key is refused at start and by `check-config` with `the storage key does not match the registry at
    {path}`.
-5. On a new host, put the certificate pair where the file names it: the backup carries neither the pair nor the key. A
-   pair `init` generated lives under `tls/` beside the configuration (`/etc/phoebis/tls/` under the unit, `tls/` beside
-   `compose.yaml` in the container shape) with the `ca.pem` the clients trust; copy that directory with the
-   configuration, keeping its links, since a new CA would need every client to trust it again.
+5. On a new host, put the certificate pair where the file names it: the backup carries neither the pair nor the key.
 6. Run `phoebis check-config`.
 7. Start the router: `sudo systemctl start phoebis`, or `docker compose up -d`.
 8. Confirm with `phoebis status`, which reads `ready`.
@@ -117,12 +117,12 @@ The registry carries a canary sealed under the key at its first open, and every 
 any credential is read: a restore onto a host whose key file differs, or a key regenerated after the file was moved,
 is refused at start and by `check-config` with `the storage key does not match the registry at {path}`. A registry
 from before the canary existed is proved against its sealed rows instead, up to the first 32 of each kind (credentials
-and Anthropic-key secrets), passing when any of them opens, by `check-config` and at start, and is sealed at that
+and API-key secrets), passing when any of them opens, by `check-config` and at start, and is sealed at that
 start.
 
 `init` refuses a data directory that already holds a registry, so a lost key is never papered over by a new one.
 
-The key seals OAuth credential bundles and Anthropic-key secrets. `Store::digest_key` also derives, from this same key,
+The key seals OAuth credential bundles and API-key secrets. `Store::digest_key` also derives, from this same key,
 the digest every downstream key authenticates against: the secrets the admin API mints and hands to the clients.
 
 There is no re-key command. Under a lost or replaced key no sealed row opens again and the canary refuses the start,
@@ -150,7 +150,7 @@ compose run --rm phoebis backup --to /var/lib/phoebis/backups/<name>` once it is
 as uid 65532, either from the host against `router.sqlite` on the `phoebis-data` volume or from a one-off container that
 carries `sqlite3` and mounts that volume.
 
-The sequence discards every secret the registry holds, and nothing else: the Anthropic-key secrets, the canary and the
+The sequence discards every secret the registry holds, and nothing else: the API-key secrets, the canary and the
 OAuth credential bundles go, and each account rests where the Accounts view's Disconnect leaves it, with its open
 refresh attempts settled. The accounts, downstream keys, pins, pools and session memory stay. `-bail` stops at the
 first statement that fails, and the transaction it leaves open rolls back, so the file is either wholly changed or
@@ -184,9 +184,9 @@ pools
   home  disabled  1 member, 0 keys, 0 pins, 0 requests/24h
     erin@example.com  ready  unavailable  5h -  7d -
   work  active    3 members, 2 keys, 2 pins, 41 requests/24h
-    alice@example.com  ready   eligible     5h 42%   7d 18%  resets 14:00
-    bob@example.com    ready   cooldown     5h 100%  7d 61%  until 15:30 rate_l…
-    carol@example.com  paused  unavailable  5h -     7d -
+    alice@example…  ready   eligible     5h 42%   7d 18%  resets 14:00
+    bob@example.c…  ready   cooldown     5h 100%  7d 61%  until 15:30 rate_limit
+    carol@example…  paused  unavailable  5h -     7d -
 
 accounts in no pool
   dave@example.com  unpaired
@@ -202,13 +202,13 @@ with each dead component (`ledger`, `router`, `store`); or `proxy down:` with th
 did not answer `200`, which wins over the other two. When the admin API could not be read, the header carries the
 binary's own version and `readiness unknown`, unless the proxy is down. The listeners follow with their schemes as the
 file names them. Under them, a listener's certificate whose leaf expires within 30 days prints
-`proxy.tls.cert_file {path} expires in {n} days ({date})`, and a certificate the next start would refuse prints the
-start's line for it ([TLS on the listeners](installation.md#tls-on-the-listeners)); the running router keeps the pair it
-read at start. `ledger:` prints only when a figure needs a look, and names each one: records `queued` in the writer
-channel, `behind` while admission refuses, `degraded` after a failed batch, priced records `parked` in the ledger file,
-a batch `retrying`, and after `writer:` the state writer's `deferred` writes and its `degraded` flag.
-`attention:` lists every attention item as `<kind> <subject> since <HH:MM>`, or reads
-`none`.
+`proxy.tls.cert_file {path} expires in {n} days ({date})`, and a certificate file the loader refuses when the operator
+reads it prints the loader's line for it ([TLS on the listeners](installation.md#tls-on-the-listeners)). The running
+router keeps the pair it loaded until `phoebis tls reload`. `ledger:` prints only when a figure needs a look, and names
+each one: records `queued` in the writer channel, `behind` while admission refuses, `degraded` after a failed batch,
+priced records `parked` in the ledger file, a batch `retrying`, and after `writer:` the state writer's `deferred` writes
+and its `degraded` flag ([api](api.md#get-adminsystem)). `attention:` lists every attention item as
+`<kind> <subject> since <HH:MM>`, or reads `none`.
 
 Under `pools` each pool prints by id with its status, its member, key and pin counts and its requests in the last 24
 hours, then one line per member by priority, then account id: the account's label, its state (`paused` when routing is
@@ -229,11 +229,13 @@ the local zone as `HH:MM`, with the date in front as `MM-DD` when it is not toda
 A read that fails prints one line in its section, such as `pools: the admin listener did not answer on <url>: <reason>`
 or `sessions: the admin secret was refused`, and the rest of the screen still prints. When the router is down, the
 screen is the header with the binary's version and `proxy down: proxy does not answer on <addr>: <error>`, the
-listeners, and one such line per read. A label column is as wide as its widest label where the line has the room; a
-label cut there ends in `…`, and `--json` carries every label and id whole. A table line past 80 columns is cut and
-ends in `…`, and a line of text past 80 columns wraps. The pins and the accounts in no pool print 20 lines each and
-then `and N more`; `--all` prints every one. `--json` prints the same reads as one object for a script, each answer
-verbatim ([commands](installation.md#commands)).
+listeners, and one such line per read. A label column is as wide as its widest label where the line has the room. A
+member's reset or cooldown word and a shedding pin's age keep their width ahead of the labels, so a long account label
+is cut before them, and once it reaches its floor of 12 columns the label a shedding pin moves from is cut too. A cut
+label ends in `…`, and `--json` carries every label and id whole. A table line past 80 columns is cut and ends in
+`…`, and a line of text past 80 columns wraps. The pins and the accounts in no pool print 20 lines each and then
+`and N more`; `--all` prints every one. `--json` prints the same reads as one object for a script, each answer verbatim
+([commands](installation.md#commands)).
 
 With `--url` and `--secret-env` standing in for the file, as for a router on another machine, `status` has no proxy
 listener to probe: it prints `proxy: not probed, no configuration file names the listener` under the listeners and
@@ -274,14 +276,20 @@ grace period that covers the drain, and the new binary migrates both databases o
 compose ps` reads `healthy` once `phoebis health` has read the router as ready, and `GET /admin/system` confirms the
 version.
 
-A certificate pair is read at start and never watched: a renewal is stop, replace, start, and the 30-second drain,
-inside the 40-second stop grace, bounds the gap. For a pair `init` generated, the replace step is
-`phoebis init --tls self-signed --config <path>`, which writes new leaves under the same CA
-([installation](installation.md#commands)); in the container shape it runs from the compose directory under `sudo`,
-since the leaf keys belong to uid 65532. Each generated pair sits in its own generation directory under `tls/` behind
-the link `tls/<listener>` the configuration names it through, so the renewal switches certificate and key together in
-one step and a renewal that stops part way leaves the previous pair live. The renewal holds an exclusive lock on
-`tls/renewal.lock` while it runs, and a second renewal started meanwhile refuses rather than writing beside it.
+A listener's pair is read at start and re-read on `phoebis tls reload`. Write the certificate and the key, then reload.
+`certbot` and `acme.sh` do so in their deploy hooks, here for the service unit's paths and its environment file:
+
+```sh
+sudo certbot certonly -d phoebis.example.com --deploy-hook '
+  install -m 0644 "$RENEWED_LINEAGE/fullchain.pem" /etc/phoebis/proxy.pem &&
+  install -m 0640 -g phoebis "$RENEWED_LINEAGE/privkey.pem" /etc/phoebis/proxy.key &&
+  set -a && . /etc/phoebis/phoebis.env && set +a &&
+  phoebis tls reload --config /etc/phoebis/config.yaml'
+```
+
+A pair that fails to load keeps the old pair live and the command exits 1 with the loader's line. The dashboard shows
+the failure as `certificate_reload_failed` until the next reload clears it, and `certificate_expiring` 30 days before a
+loaded leaf's end.
 
 Schema migrations run when the new binary opens each database, in order above the stored version, each inside its
 own transaction. The registry's migrations may drop or rebuild a table, and a ledger migration can rebuild a table
@@ -305,7 +313,7 @@ agents, the Stainless headers, the three beta lists, the control-plane URLs and 
 list, checked against the fixtures under `crates/profile/fixtures/`.
 A newer client build is not relayed in its own shape automatically: headers travel as the
 client sends them, with the `anthropic-beta` line copied as sent and edited for three betas only: the OAuth beta,
-claimed for a subscription credential and stripped for an Anthropic key on every request that carries the line; the
+claimed for a subscription credential and stripped for an API key on every request that carries the line; the
 cache-diagnosis beta under the pool's `cache_diagnostics` switch; and the extended-TTL beta the cache TTL rewrite adds
 or drops. The profile's beta lists record what the measured client sends, as the fixtures show, and the fields the
 router restores for a Claude Code request are the ones on the [client page](client.md#the-environment-block), not what a

@@ -1,6 +1,6 @@
-//! The subcommands' admin client against routers started in-process: the bearer on a plain listener, the CA `--ca`
-//! names trusted and no other, the system roots left unconsulted once `--ca` names a bundle, a refused secret, a port
-//! nothing listens on, a route's own refusal, and a body that stalls past the deadline.
+//! The admin client of `status` and `tls reload` against routers started in-process: the bearer on a plain listener,
+//! the CA `--ca` names trusted and no other, the system roots left unconsulted once `--ca` names a bundle, a refused
+//! secret, a port nothing listens on, a route's own refusal, and a body that stalls past the deadline.
 
 use std::path::{Path, PathBuf};
 use std::sync::Mutex;
@@ -66,8 +66,8 @@ struct Running {
     stop: tokio::sync::oneshot::Sender<()>,
     server: tokio::task::JoinHandle<anyhow::Result<()>>,
     admin: u16,
-    /// The CA that signed the admin listener's pair, when the router was started with one.
-    admin_ca: PathBuf,
+    /// The CA that signed the admin listener's pair, written by `start` only when it was given one.
+    admin_ca: Option<PathBuf>,
     config: PathBuf,
     dir: tempfile::TempDir,
     _up: FakeUpstream,
@@ -87,11 +87,14 @@ async fn start(admin_pair: Option<&GeneratedPair>, secret_env: &str) -> Running 
     let up = FakeUpstream::start(vec![]).await;
     let dir = tempfile::tempdir().unwrap();
     std::fs::write(dir.path().join("upstream-ca.pem"), up.ca_pem()).unwrap();
-    let admin_ca = dir.path().join("admin-ca.pem");
+    let admin_ca = admin_pair.map(|pair| {
+        let path = dir.path().join("admin-ca.pem");
+        std::fs::write(&path, &pair.ca_pem).unwrap();
+        path
+    });
     let admin_tls = match admin_pair {
         Some(pair) => {
             let (cert, key) = pair.write_to(dir.path(), "admin");
-            std::fs::write(&admin_ca, &pair.ca_pem).unwrap();
             format!(
                 "  tls:\n    cert_file: {}\n    key_file: {}\n",
                 cert.display(),
@@ -202,39 +205,48 @@ async fn the_client_calls_a_plain_listener_with_the_bearer() {
     running.stop().await;
 }
 
+/// Every client of this test is built and called under the lock: a call over TLS builds its connector through
+/// `SslConnector::builder`, which reads `SSL_CERT_FILE` through C `getenv`, so a test that sets the variable meanwhile
+/// would change the roots the call reads. Each test runs on its own current-thread runtime, so no task of this test
+/// waits on the lock it holds.
 #[tokio::test]
+#[allow(clippy::await_holding_lock)]
 async fn the_client_trusts_the_ca_named_by_ca_and_no_other() {
     let pair = generate_pair(&["localhost", "127.0.0.1"]);
     let running = start(Some(&pair), "TEST_CLIENT_NAMED_CA").await;
+    let admin_ca = running
+        .admin_ca
+        .clone()
+        .expect("the router was started with an admin pair");
+    // Called with the lock held, which `client_with` would take a second time.
     let client = |ca: Option<PathBuf>| {
         let mut common = flags(None, None);
         common.ca = ca;
-        client_with(
-            &common,
-            &running.config,
-            "TEST_CLIENT_NAMED_CA",
-            ADMIN_SECRET,
-        )
-        .unwrap()
+        std::env::set_var("TEST_CLIENT_NAMED_CA", ADMIN_SECRET);
+        AdminClient::from_flags(&common, &running.config).unwrap()
     };
-    let named = client(Some(running.admin_ca.clone()));
+    let env = env_lock();
+    let named = client(Some(admin_ca));
     let base = named.base();
     assert_eq!(
         (base.scheme_str(), base.host(), base.port_u16()),
         (Some("https"), Some("127.0.0.1"), Some(running.admin))
     );
     let answer = answered(named.expect(Method::GET, "/admin/system", None).await);
+    drop(env);
     assert_eq!(answer.status, 200);
     assert!(answer.body["version"].is_string(), "{}", answer.body);
 
     // The system roots never hold the test's CA and the upstream's CA did not sign the leaf, so neither call is
     // admitted: the client verifies the leaf rather than trusting every certificate.
     for ca in [None, Some(running.dir.path().join("upstream-ca.pem"))] {
+        let env = env_lock();
         let error = refused(
             client(ca.clone())
                 .expect(Method::GET, "/admin/system", None)
                 .await,
         );
+        drop(env);
         let line = error.to_string();
         assert!(
             matches!(error, ClientError::Transport { .. }),
@@ -261,10 +273,14 @@ async fn a_named_ca_replaces_the_system_roots() {
     .await;
     let url = format!("https://127.0.0.1:{}", running.admin);
     let absent = running.dir.path().join("absent.yaml");
+    let admin_ca = running
+        .admin_ca
+        .clone()
+        .expect("the router was started with an admin pair");
     let env = env_lock();
     let previous = std::env::var_os("SSL_CERT_FILE");
     // The default roots become the admin pair's CA, so a call that still consulted them would be admitted.
-    std::env::set_var("SSL_CERT_FILE", &running.admin_ca);
+    std::env::set_var("SSL_CERT_FILE", &admin_ca);
     std::env::set_var("TEST_CLIENT_PINNED", ADMIN_SECRET);
     let roots = AdminClient::from_flags(
         &flags(Some(url.clone()), Some("TEST_CLIENT_PINNED")),

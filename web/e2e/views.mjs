@@ -1,14 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readlinkSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const base = process.env.PHOEBIS_E2E_BASE ?? 'http://127.0.0.1:8081';
 const secret = process.env.PHOEBIS_E2E_SECRET;
-const dir = process.env.PHOEBIS_SCREENSHOT_DIR;
-if (!secret || !dir) {
-  console.error('set PHOEBIS_E2E_SECRET and PHOEBIS_SCREENSHOT_DIR');
+const dir = process.env.PHOEBIS_SCREENSHOT_DIR ?? join(tmpdir(), 'phoebis-screenshots');
+if (!secret) {
+  console.error('set PHOEBIS_E2E_SECRET');
   process.exit(2);
 }
 // A router seeds its registry at real time, so its pass starts the page's clock at the launch instant; the mock
@@ -18,7 +19,7 @@ if (Number.isNaN(clockOrigin)) {
   console.error('PHOEBIS_E2E_CLOCK is not an instant');
   process.exit(2);
 }
-// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one Anthropic-key
+// The dashboard's remaining cards and its empty state are read against the router's seeded registry (one API-key
 // account, a list with nothing in it); the mock's story has subscription accounts and no empty list there.
 const mock = process.env.PHOEBIS_E2E_MOCK === '1';
 
@@ -27,7 +28,7 @@ const here = dirname(fileURLToPath(import.meta.url));
 /**
  * Every tree a screenshot must stay out of. A checkout is several trees at once, and the walk up to the
  * nearest Cargo.toml only ever finds the one this script runs from, so git names the rest; the walk is the
- * fallback for a host without git, or a tree git does not recognise.
+ * fallback for a host without git, or a tree git does not recognize.
  */
 function repositoryRoots() {
   try {
@@ -38,7 +39,7 @@ function repositoryRoots() {
       .map((line) => resolve(line.slice('worktree '.length).trim()));
     if (roots.length) return roots;
   } catch {
-    // No git on the path, or nothing it recognises here.
+    // No git on the path, or nothing it recognizes here.
   }
   let root = here;
   while (!existsSync(join(root, 'Cargo.toml')) && dirname(root) !== root) root = dirname(root);
@@ -88,7 +89,11 @@ if (inside) {
 const VIEWS = [
   { path: '/', title: 'Dashboard', wait: '.stat-grid', slug: 'dashboard' },
   { path: '/observe', title: 'Observe', wait: '.mchip', slug: 'observe' },
-  { path: '/quota', title: 'Quota', wait: '.qcard', slug: 'quota' },
+  // The router's seed holds no subscription account, so its Quota view draws no card and the wait is on the section.
+  { path: '/quota', title: 'Quota', wait: '.quota-section#accounts', slug: 'quota' },
+  // The page shows one section at a time, so the timeline's shot is a view of its own, and the mock pass's alone,
+  // since the router's seed has no window to draw.
+  { path: '/quota#quota-windows', title: 'Quota', wait: '.timeline', slug: 'quota-windows', mockOnly: true },
   // Without an account id the page lands on the first account, and the detail head arrives with it.
   { path: '/accounts', title: 'Accounts', wait: '.detail__head', slug: 'accounts' },
   { path: '/pools', title: 'Pools', wait: '.pool .serving', slug: 'pools' },
@@ -205,14 +210,14 @@ async function atRest() {
  * chosen weight widens a label and the refusal dot takes the row's right padding. The numbers go to the measurements
  * whatever the outcome, since the rail's fit rests on text widths the browser's font decides. With Identity chosen,
  * with and without the refusals, the rail's two levels are read: every group 10 px right of its parent's label, the
- * runs 14 px apart with a hairline of the split's colour between them, and a parent in --ink-2 at rest and under the
+ * runs 14 px apart with a hairline of the split's color between them, and a parent in --ink-2 at rest and under the
  * pointer alike. On create the marked rail keeps that fit with and without the refusals, and its levels; the marks of
  * Identity and Keys read 11 px at weight 400 in a resting parent's ink, 6 px after their label on its line and clear
  * of the refusal dot, at the pass's viewport and in the 720 px strip. With expert fields and the mode off, a group's
  * discovery line sits below its last field in the hint's size and a parent's ink, and the cell grid reaches a field
  * through its wrapper. Then the rail outgrows its height twice, on a 700 px viewport and with eight more groups at
  * 800 px: it scrolls, and once scrolled to its end the parent heading of the run passing its top holds there in the
- * rail's own colour, over the groups that pass under it.
+ * rail's own color, over the groups that pass under it.
  */
 async function groupedDialogFixture(theme) {
   const say = (what) => failures.push(`${theme} /fixtures/grouped-dialog: ${what}`);
@@ -387,7 +392,7 @@ async function groupedDialogFixture(theme) {
     if (read.rail.scrollHeight <= read.rail.clientHeight) sayIn(`the rail does not scroll: ${read.rail.scrollHeight} px of entries in ${read.rail.clientHeight} px`);
     if (!read.heading) return sayIn('no run passes the rail\'s top once it is scrolled to its end');
     if (Math.abs(read.heading.offset) > 0.5) sayIn(`the ${read.heading.label} heading sits ${read.heading.offset} px from the rail's top, not at it`);
-    if (!read.heading.covers) sayIn(`the ${read.heading.label} heading is covered at its centre`);
+    if (!read.heading.covers) sayIn(`the ${read.heading.label} heading is covered at its center`);
     if (read.heading.background !== read.rail.background) sayIn(`the ${read.heading.label} heading is drawn in ${read.heading.background}, not the rail's ${read.rail.background}`);
     if (read.heading.radius !== '0px') sayIn(`the ${read.heading.label} heading rounds its corners by ${read.heading.radius}, so the groups show past them`);
   };
@@ -537,7 +542,7 @@ async function sidebarBrand(theme) {
 /**
  * The dashboard's attention line above the tiles: one 22 px row per line of badges with the lead on the first and a
  * 6 px gap between rows, every badge the 22 px and the 12 px type at weight 500 of the pool card's strip badges, the
- * line inside the content box and clear of the tiles. The mock pass draws the story's eight items. The router pass
+ * line inside the content box and clear of the tiles. The mock pass draws the story's nine items. The router pass
  * seeds an exhaustion of its main pool, which any request the pool serves later in the run (a keepalive probe among
  * them) clears: the light pass, which reaches the dashboard first, requires that item, so a route answering an empty
  * list fails it, and the dark pass draws that item or the quiet line, never the unavailable one.
@@ -567,7 +572,7 @@ async function attentionLine(theme) {
   if (read.bottom > read.gridTop) say('reaches into the tiles');
   const texts = read.badges.map((b) => b.text);
   if (mock) {
-    if (read.lead !== '8 need attention' || texts.length !== 8) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's eight items`);
+    if (read.lead !== '9 need attention' || texts.length !== 9) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the story's nine items`);
   } else if (theme === 'light') {
     if (read.lead === null || !texts.includes('Pool exhausted: Main')) say(`reads ${read.lead} over ${JSON.stringify(texts)}, not the seeded exhaustion`);
   } else if (read.lead === null ? JSON.stringify(texts) !== '["Nothing needs attention"]' : !texts.includes('Pool exhausted: Main')) {
@@ -690,7 +695,7 @@ async function expertView(on) {
  * policy toggle, the marker toggle under it, the grid's two main selects, the diagnostics switch, the capture switch
  * and the subagent switch, each reached the way an operator reaches it and measured while its group shows. The
  * metered main select is measured against the plan one beside it, the marker toggle against the policy toggle and the
- * diagnostics switch against the capture switch, since a control that reads a size smaller than its neighbours is the
+ * diagnostics switch against the capture switch, since a control that reads a size smaller than its neighbors is the
  * defect this dialog would show first.
  */
 async function poolCachingControls(theme) {
@@ -730,7 +735,7 @@ async function poolCachingControls(theme) {
         padding: `${style.paddingTop} ${style.paddingRight} ${style.paddingBottom} ${style.paddingLeft}`,
       };
     };
-    // A switch's track colour follows its state and the two may differ, so only its shape is compared.
+    // A switch's track color follows its state and the two may differ, so only its shape is compared.
     const readSwitch = (node) => {
       if (!shown(node)) return null;
       const style = getComputedStyle(node);
@@ -779,9 +784,9 @@ async function poolCachingControls(theme) {
 }
 
 /**
- * The Utilization thresholds group's select-below switch, drawn in the expert view, against the migrate switch beside
- * it: the same switch, the same percent field and the same label, so either reading smaller or lighter than the other
- * is the defect to catch.
+ * The Utilization thresholds group's select-below switch, drawn in the expert view, against the shed-ahead switch
+ * beside it: the same switch, the same percent field and the same label, so either reading smaller or lighter than the
+ * other is the defect to catch.
  */
 async function poolSelectBelow(theme) {
   const say = (what) => failures.push(`${theme} /pools: ${what}`);
@@ -818,17 +823,17 @@ async function poolSelectBelow(theme) {
         switch: `${box.width} ${box.height}`,
       };
     };
-    const migrate = read('Shed ahead of pace');
+    const shedAhead = read('Shed ahead of pace');
     const select = read('Select below utilization');
-    return migrate && select ? { migrate, select } : null;
+    return shedAhead && select ? { select, shedAhead } : null;
   });
   if (!pair) {
-    say('the migration and select-below switches are not both drawn to compare');
+    say('the shed-ahead and select-below switches are not both drawn to compare');
   } else {
-    measurements.push(`${theme} /pools shed ahead of pace ${JSON.stringify(pair.migrate)}`);
+    measurements.push(`${theme} /pools shed ahead of pace ${JSON.stringify(pair.shedAhead)}`);
     measurements.push(`${theme} /pools select below ${JSON.stringify(pair.select)}`);
-    const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.migrate[key]);
-    if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the migration control's`);
+    const differs = ['input', 'label', 'switch'].filter((key) => pair.select[key] === null || pair.select[key] !== pair.shedAhead[key]);
+    if (differs.length) say(`the select-below control's ${differs.join(', ')} differs from the shed-ahead control's`);
   }
   await page.keyboard.press('Escape');
   await dialog.waitFor({ state: 'detached', timeout: 5_000 }).catch(() => say('the dialog stayed open after Escape'));
@@ -1109,7 +1114,7 @@ const groupGeometry = (dialog, label, maxWindows) =>
     [label, maxWindows],
   );
 
-/** Each selector's controls in the labelled group, drawn and disabled; null for a selector that holds, else why not. */
+/** Each selector's controls in the labeled group, drawn and disabled; null for a selector that holds, else why not. */
 const disabledIn = (dialog, label, selectors) =>
   dialog.evaluate(
     (el, [label, list]) => {
@@ -1395,7 +1400,7 @@ async function poolCostReference(theme) {
 
 /**
  * Every pool's Keys group at the pass's viewport: the last key's Actions menu opens below the table, and each of its
- * items takes a pointer at its centre where it is drawn, with nothing scrolled, so no wrapper clips it. The mock's
+ * items takes a pointer at its center where it is drawn, with nothing scrolled, so no wrapper clips it. The mock's
  * story holds a pool with several keys and one with a single key; a seed without keys has no menu to open.
  */
 async function poolKeyMenus(theme) {
@@ -1431,7 +1436,7 @@ async function poolKeyMenus(theme) {
         );
         measurements.push(`${theme} /pools dialog Keys of ${pool} last menu ${JSON.stringify(items)}`);
         if (items.length !== 2) say(`${pool}'s last key menu draws ${items.length} items, not Move to and Revoke`);
-        for (const item of items.filter((it) => !it.hit)) say(`${pool}'s last key menu item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+        for (const item of items.filter((it) => !it.hit)) say(`${pool}'s last key menu item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
         // Escape with the menu open, in the browser whose dialog turns the same key into a close request: the menu
         // closes, focus returns to its trigger, and the dialog stays.
         await page.keyboard.press('Escape');
@@ -1461,7 +1466,7 @@ async function poolKeyMenus(theme) {
  * side has the room. On the table filtered to its last key's name through the search field, the one short row leaves
  * the list less room than it needs on both sides inside the clipping wrap, so the list leaves the table for a layer
  * of its own, which a scroll that moves its trigger and a resize each close. Whatever the side, each item takes a
- * pointer at its centre and the list lies inside the viewport.
+ * pointer at its center and the list lies inside the viewport.
  */
 async function keysPageMenus(theme) {
   const say = (what) => failures.push(`${theme} /keys menu: ${what}`);
@@ -1514,7 +1519,7 @@ async function keysPageMenus(theme) {
     const sayIn = (what) => say(`at ${width} px, ${state}: ${what}`);
     if (found.lists !== 1) return sayIn(`${found.lists} lists are open, not one`);
     if (found.items.length === 0) sayIn('the list draws no item');
-    for (const item of found.items.filter((it) => !it.hit)) sayIn(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+    for (const item of found.items.filter((it) => !it.hit)) sayIn(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
     if (!found.inside) sayIn(`the list's edges ${JSON.stringify(found.edges)} leave the ${found.viewport.width} by ${found.viewport.height} viewport`);
     if (found.room && found.room.below >= found.room.need && found.placement !== 'down') sayIn(`the list takes ${found.placement} though ${found.room.below} px below hold its ${found.room.need}`);
     return found;
@@ -1688,7 +1693,7 @@ async function deleteAccountButton(theme) {
 /**
  * The line under an account's name on the dashboard, in the Accounts list and head, and in the pool dialog's
  * members table is its email, and an account without one draws no line: its label a second time says nothing,
- * and an empty line reads as a value that failed to load. The router's seed has one Anthropic-key account and no
+ * and an empty line reads as a value that failed to load. The router's seed has one API-key account and no
  * email, so every line is absent there; the mock's story has both kinds, so each view draws both.
  */
 async function accountLines(theme, path) {
@@ -1729,16 +1734,15 @@ async function accountLines(theme, path) {
 
 /**
  * Each Quota card's poll lines against the Refresh pill beside them: the lines end before the pill starts and
- * inside the card, the backoff line reads in the serious ink rather than the muted ink of the lines above it, and
+ * inside the card, the backoff line reads in the serious ink rather than the muted ink of the line above it, and
  * no line wraps. The router's seed has no subscription account, so only the story's pass has lines to read.
  */
 async function quotaPollLines(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
   const cards = await page.evaluate(() =>
     [...document.querySelectorAll('.qcard')].map((card) => {
-      const status = card.querySelector('.qcard__status');
       const pill = card.querySelector('.qcard__foot .pill');
-      const lines = [...(status?.children ?? [])].map((line) => {
+      const lines = [...card.querySelectorAll('.qcard__poll')].map((line) => {
         const box = line.getBoundingClientRect();
         return { color: getComputedStyle(line).color, height: Math.round(box.height), lineHeight: parseFloat(getComputedStyle(line).lineHeight), right: Math.round(box.right), serious: line.classList.contains('qcard__backoff'), text: line.textContent?.trim() ?? '' };
       });
@@ -1760,9 +1764,10 @@ async function quotaPollLines(theme) {
     }
   }
   if (mock && !polled.some((c) => c.lines.some((l) => l.serious))) say('the story backs one account off, yet no card draws a backoff line');
-  // A failed poll's reason is cut inside its line, and the line's title carries it whole.
+  // A failed poll's reason is cut inside its line, and the line's title carries it whole among the facts the lines
+  // leave to it.
   const reasons = await page.evaluate(() =>
-    [...document.querySelectorAll('.qcard__reason')].map((reason) => {
+    [...document.querySelectorAll('.qcard__poll .qcard__reason')].map((reason) => {
       const line = reason.closest('.qcard__poll');
       return { cut: reason.scrollWidth > reason.clientWidth, inside: !!line && reason.getBoundingClientRect().right <= line.getBoundingClientRect().right + 0.5, text: reason.textContent ?? '', title: line?.getAttribute('title') ?? '' };
     }),
@@ -1771,15 +1776,15 @@ async function quotaPollLines(theme) {
   if (mock && reasons.length === 0) say('the story fails one poll, yet no card names its reason');
   for (const r of reasons) {
     if (!r.inside) say(`the reason ${JSON.stringify(r.text)} runs past its line`);
-    if (!r.title.endsWith(`\n${r.text}`)) say(`the failed line's title does not carry the reason ${JSON.stringify(r.text)} whole`);
+    if (!r.title.split('\n').includes(r.text)) say(`the failed line's title does not carry the reason ${JSON.stringify(r.text)} whole`);
   }
 }
 
 /**
- * The Quota chips with their shares read "left" against the fixed columns that hold them: every card's window chip and
- * reset cell and every timeline chip fits its column on one line, the window grid stays inside its card, and an expired
- * window's longer reset cell may wrap but never runs past its column. The router's seed has no subscription account,
- * so only the story's pass has chips to read.
+ * The Quota cards' chips with their shares read "left" against the fixed columns that hold them: every card's window
+ * chip and reset cell fits its column on one line, the window grid stays inside its card, and an expired window's
+ * longer reset cell may wrap but never runs past its column. The router's seed has no subscription account, so only
+ * the story's pass has chips to read.
  */
 async function quotaChips(theme) {
   const say = (what) => failures.push(`${theme} /quota: ${what}`);
@@ -1793,13 +1798,12 @@ async function quotaChips(theme) {
     return {
       chips: [...document.querySelectorAll('.qcard__windows .qchip')].map((chip) => ({ ...cell(chip), parts: [...chip.children].map(lines) })),
       grids: [...document.querySelectorAll('.qcard')].filter((c) => c.querySelector('.qcard__windows')).map((c) => ({ card: Math.round(c.getBoundingClientRect().right), grid: Math.round(c.querySelector('.qcard__windows').getBoundingClientRect().right), name: c.querySelector('.qcard__name')?.textContent?.trim() ?? '' })),
-      lanes: [...document.querySelectorAll('.tl-chip')].map(cell),
       resets: [...document.querySelectorAll('.qcard__windows .qwin__reset')].map(cell),
     };
   });
-  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), lanes: read.lanes.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines]) })}`);
-  if (mock && (read.chips.length === 0 || read.lanes.length === 0)) say('the story has subscription windows, yet no chip is drawn');
-  for (const chip of [...read.chips, ...read.lanes]) {
+  measurements.push(`${theme} /quota chips ${JSON.stringify({ chips: read.chips.map((c) => [c.text, c.client]), resets: read.resets.map((c) => [c.text, c.client, c.lines]) })}`);
+  if (mock && read.chips.length === 0) say('the story has subscription windows, yet no card chip is drawn');
+  for (const chip of read.chips) {
     if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
   }
   for (const chip of read.chips) {
@@ -1816,7 +1820,44 @@ async function quotaChips(theme) {
 }
 
 /**
- * Both quota donuts against a registry with no subscription account: the seed has one Anthropic-key account, so
+ * The timeline's chips on the Quota windows section against the fixed column that holds them: every lane chip fits
+ * it on one line. Only the mock pass draws the section.
+ */
+async function quotaLaneChips(theme) {
+  const say = (what) => failures.push(`${theme} /quota#quota-windows: ${what}`);
+  const lanes = await page.evaluate(() => [...document.querySelectorAll('.tl-chip')].map((el) => ({ client: el.clientWidth, scroll: el.scrollWidth, text: el.textContent?.trim() ?? '' })));
+  measurements.push(`${theme} /quota#quota-windows lane chips ${JSON.stringify(lanes.map((c) => [c.text, c.client]))}`);
+  if (mock && lanes.length === 0) say('the story has subscription windows, yet no lane chip is drawn');
+  for (const chip of lanes) {
+    if (chip.scroll > chip.client) say(`the chip ${JSON.stringify(chip.text)} needs ${chip.scroll}px of its ${chip.client}px`);
+  }
+}
+
+/**
+ * Every Quota card against the others, in either theme: one height, and the head's bottom rule and the foot's top rule
+ * each at one offset from the card's top, whatever the card holds. Sub-pixel layout noise is not a difference, so the
+ * values compare within half a pixel. The router's seed has no subscription account, so only the story's pass has
+ * cards to compare.
+ */
+async function quotaCardHeights(theme) {
+  const say = (what) => failures.push(`${theme} /quota: ${what}`);
+  const cards = await page.evaluate(() =>
+    [...document.querySelectorAll('.qcard')].map((card) => {
+      const box = card.getBoundingClientRect();
+      const at = (el, edge) => (el ? Math.round((el.getBoundingClientRect()[edge] - box.top) * 10) / 10 : null);
+      return { foot: at(card.querySelector('.qcard__foot'), 'top'), head: at(card.querySelector('.qcard__head'), 'bottom'), height: Math.round(box.height * 10) / 10, name: card.querySelector('.qcard__name')?.textContent?.trim() ?? '' };
+    }),
+  );
+  measurements.push(`${theme} /quota card heights ${JSON.stringify(cards)}`);
+  if (mock && cards.length < 2) say('the story has several subscription accounts, yet fewer than two cards are drawn');
+  for (const key of ['foot', 'head', 'height']) {
+    const values = cards.map((c) => c[key]);
+    if (values.some((v) => v === null) || Math.max(...values) - Math.min(...values) > 0.5) say(`the cards' ${key} differs: ${cards.map((c) => `${c.name} ${c[key]}`).join(', ')}`);
+  }
+}
+
+/**
+ * Both quota donuts against a registry with no subscription account: the seed has one API-key account, so
  * the cards have no window to draw and must say so instead of drawing a ring that reads as exhausted.
  */
 async function remainingCards(theme) {
@@ -1873,8 +1914,8 @@ async function errorStateBox(theme) {
   if (differs.length) failures.push(`${theme} /: the error state's ${differs.join(', ')} differs from the empty state's`);
   if (measured.empty.ink === measured.error.ink) failures.push(`${theme} /: the error state's title reads in the empty state's ink (${measured.error.ink})`);
   // An undefined custom property leaves border-color at its initial `currentcolor`, which is the box's own ink.
-  if (measured.error.borderColor === measured.error.color) failures.push(`${theme} /: the error state's border is the text colour, so --critical-border resolved to nothing`);
-  if (measured.error.borderColor === measured.empty.borderColor) failures.push(`${theme} /: the error state's border colour equals the empty state's`);
+  if (measured.error.borderColor === measured.error.color) failures.push(`${theme} /: the error state's border is the text color, so --critical-border resolved to nothing`);
+  if (measured.error.borderColor === measured.empty.borderColor) failures.push(`${theme} /: the error state's border color equals the empty state's`);
 }
 
 /**
@@ -2095,7 +2136,7 @@ async function wastedProbeRows(theme) {
       });
     });
     for (const row of rows.filter((r) => r.middle < r.line.top || r.middle > r.line.bottom)) {
-      failures.push(`${theme} /analytics: the "${row.label}" bar is centred on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
+      failures.push(`${theme} /analytics: the "${row.label}" bar is centered on ${row.middle.toFixed(1)}, outside its label's first line from ${row.line.top.toFixed(1)} to ${row.line.bottom.toFixed(1)}`);
     }
   } finally {
     await tabTo(theme, 'Traffic');
@@ -2147,9 +2188,9 @@ async function burnCards(theme) {
 }
 
 /**
- * The Plan per hour legend's model unlisted entry against its neighbours: the entry before it, a planned account's
+ * The Plan per hour legend's model unlisted entry against its neighbors: the entry before it, a planned account's
  * 7-day entry, on type and swatch size, and, where an account whose tier the cost model does not size draws a tier
- * unknown entry beside it, that muted entry on type, swatch size and colour too. In the mock's story the entry draws
+ * unknown entry beside it, that muted entry on type, swatch size and color too. In the mock's story the entry draws
  * for `secondary`, whose Sonnet 5 traffic the cost model has no weight for; the router's seed bills no subscription
  * traffic, so there the pass records that the entry is not drawn.
  */
@@ -2382,7 +2423,7 @@ async function speedFilter(theme) {
 
 /**
  * The Traffic section's speed chart and effort bars and the Cost section's fast-mode tile, each against the
- * neighbour it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
+ * neighbor it copies: Requests by speed against Requests by outcome (title type, card width, chart height),
  * Effort levels against Errors by code (title type, card width, and where both draw bars, the bar row, its label
  * type and its track), Fast mode spend against Estimated cost (the tile box and its figure's type). The cards are
  * read on the Traffic tab and the tiles on Cost.
@@ -2477,58 +2518,31 @@ async function stickyStrip(theme) {
 }
 
 /**
- * An account's fast lane against the card it sits in: on the Quota view the Fast mode line takes the Plan chip's
- * type and label colour, and a cooldown chip is the Plan chip's box (type, height, padding, corners); on the
- * account page the lane is a section of the Usage card as extra usage is, with the same rule and spacing. Only a
- * subscription card draws a Plan chip and only an account with extra usage draws its section, so the check measures
- * a lane on a card with a Plan chip, compares each part where drawn, and stands down where the neighbour is missing,
- * as it does against the router's seed, which answers no fast request; the mock's story draws every part.
+ * An account's fast lane against the card it sits in: on the account page the lane is a section of the Usage card as
+ * extra usage is, with the same rule and spacing. Only an account with extra usage draws its section, so the check
+ * compares where both are drawn and stands down where the neighbor is missing, as it does against the router's seed,
+ * which answers no fast request. The mock's story draws both.
  */
 async function fastLane(theme, path) {
   const read = await page.evaluate(() => {
-    const chip = (el) => {
-      if (!el) return null;
-      const s = getComputedStyle(el);
-      return { font: `${s.fontFamily}/${s.fontSize}`, height: Math.round(el.getBoundingClientRect().height), padding: `${s.paddingTop} ${s.paddingLeft}`, radius: s.borderRadius };
-    };
     const section = (el) => {
       if (!el) return null;
       const s = getComputedStyle(el);
       return { border: `${s.borderTopWidth} ${s.borderTopStyle} ${s.borderTopColor}`, margin: s.marginTop, padding: s.paddingTop };
     };
-    const text = (el, label) => {
-      if (!el || !label) return null;
-      const s = getComputedStyle(el);
-      return { font: `${s.fontFamily}/${s.fontSize}`, label: getComputedStyle(label).color };
-    };
-    const planOf = (lane) => [...(lane.closest('.qcard, .card')?.querySelectorAll('.qcard__chips .chip') ?? [])].find((c) => c.querySelector('.chip__label')?.textContent?.trim() === 'Plan') ?? null;
-    const lanes = [...document.querySelectorAll('.fast-lane')];
-    const lane = lanes.find((l) => planOf(l) !== null) ?? lanes[0] ?? null;
-    const card = lane?.closest('.qcard, .card');
-    const plan = lane ? planOf(lane) : null;
-    const line = lane?.querySelector('.fast-lane__line');
-    return { cooldown: chip(lane?.querySelector('.fast-lane__cooldown')), drawn: lane !== null, extra: section(card?.querySelector('.extra-usage')), lane: section(lane), line: text(line, line?.querySelector('.fast-lane__label')), plan: chip(plan), planText: text(plan, plan?.querySelector('.chip__label')) };
+    const lane = document.querySelector('.fast-lane');
+    return { drawn: lane !== null, extra: section(lane?.closest('.card')?.querySelector('.extra-usage')), lane: section(lane) };
   });
   measurements.push(`${theme} ${path} fast lane ${JSON.stringify(read)}`);
   if (!read.drawn) {
     if (mock) failures.push(`${theme} ${path}: the story's first account holds a fast lane, yet none is drawn`);
     return;
   }
-  if (path === '/quota') {
-    if (read.plan === null) {
-      if (mock) failures.push(`${theme} /quota: the story's primary holds a fast lane beside its Plan chip, yet no drawn lane sits on a card with one`);
-      return;
-    }
-    if (read.line) failures.push(...compare(read.line, read.planText, ['font', 'label'], `${theme} /quota: the Fast mode line against the Plan chip`));
-    if (read.cooldown) failures.push(...compare(read.cooldown, read.plan, ['font', 'height', 'padding', 'radius'], `${theme} /quota: the fast cooldown chip against the Plan chip`));
-    if (mock && !read.cooldown) failures.push(`${theme} /quota: the story's primary cools on its fast lane, yet no cooldown chip is drawn`);
-  } else {
-    if (read.extra === null) {
-      if (mock) failures.push(`${theme} ${path}: the story's primary draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
-      return;
-    }
-    failures.push(...compare(read.lane, read.extra, ['border', 'margin', 'padding'], `${theme} ${path}: the fast lane section against the extra-usage section`));
+  if (read.extra === null) {
+    if (mock) failures.push(`${theme} ${path}: the story's primary draws extra usage beside its fast lane, yet no extra-usage section is drawn`);
+    return;
   }
+  failures.push(...compare(read.lane, read.extra, ['border', 'margin', 'padding'], `${theme} ${path}: the fast lane section against the extra-usage section`));
 }
 
 /**
@@ -2732,7 +2746,7 @@ const compare = (mine, neighbour, keys, what) => {
  * The identity card's subscription end editor on an OAuth account: its date field is the box of the status filter
  * beside the list (the page's other plain control; the label editor's field takes the heading's type), its checkbox
  * label the field label's type, its Save the size of the Edit end button it opened from, and opening it moves no row
- * of the card. Ticking the box prefills a date. The router's seed has only an Anthropic-key account, which has no
+ * of the card. Ticking the box prefills a date. The router's seed has only an API-key account, which has no
  * editor, so there the check stands down; the mock's first account is an OAuth one.
  */
 async function subscriptionEndForm(theme) {
@@ -2892,7 +2906,7 @@ async function catalogDialog(theme) {
   await atRest();
 }
 
-/** The box a labelled select draws in the open dialog: the control itself, never the label around it. */
+/** The box a labeled select draws in the open dialog: the control itself, never the label around it. */
 const measureSelect = (label) =>
   page.locator('dialog[open]').evaluate((el, text) => {
     const field = [...el.querySelectorAll('.field')].find((f) => f.querySelector('.field__label')?.textContent?.trim() === text);
@@ -3363,7 +3377,7 @@ async function sessionsTableFits(theme) {
 /**
  * A Sessions row's menu leads the row, so its list opens rightward from the trigger: aligned to the trigger's right
  * edge it would start left of the table wrap, which clips it. The list's left edge lies at or right of the wrap's, each
- * item takes a pointer at its centre, and the four entries draw a list 160 px wide and 141 px tall.
+ * item takes a pointer at its center, and the four entries draw a list 160 px wide and 141 px tall.
  */
 async function sessionRowMenu(theme) {
   const say = (what) => failures.push(`${theme} /sessions row menu: ${what}`);
@@ -3404,7 +3418,7 @@ async function sessionRowMenu(theme) {
   if (read.list.left < read.wrap.left) say(`the list starts at ${read.list.left}px, left of the table wrap's edge at ${read.wrap.left}px`);
   if (read.items.length === 0) say('the list draws no item');
   if (read.list.width !== 160 || read.list.height !== 141) say(`the list is ${read.list.width} by ${read.list.height}px, not 160 by 141px`);
-  for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its centre (${item.x}, ${item.y}): ${item.at} lies there`);
+  for (const item of read.items.filter((it) => !it.hit)) say(`item ${item.label} takes no pointer at its center (${item.x}, ${item.y}): ${item.at} lies there`);
 }
 
 /**
@@ -3481,7 +3495,7 @@ async function sessionForkMark(theme) {
     const warming = heads.indexOf('Cache warming');
     const rows = [...document.querySelectorAll('.sessions-table tbody tr.srow')];
     const fork = document.querySelector('.sessions-table .srow__fork');
-    // The badge is centred on the id's line when the two share it, and sits below it when the cell wrapped.
+    // The badge is centered on the id's line when the two share it, and sits below it when the cell wrapped.
     const beside = (() => {
       const label = fork?.closest('td')?.firstChild;
       if (!fork || !label) return null;
@@ -3505,6 +3519,37 @@ async function sessionForkMark(theme) {
     if (read.forkBadge !== read.rowBadge) say(`the fork badge measures ${read.forkBadge} against the row badge's ${read.rowBadge}`);
     if (read.beside !== true) say('the fork badge wraps under the session id rather than sitting beside it');
   }
+}
+
+/**
+ * The Sessions tile's probe bar draws the outcomes the Analytics probe chart also draws in that chart's slots
+ * (`PROBE_SERIES` in `web/src/components/charts/theme.ts`), so one color reads one outcome on both pages. The ok and
+ * failed segments keep the status colors.
+ */
+async function probeBarSlots(theme) {
+  const say = (what) => failures.push(`${theme} /sessions: the probe bar ${what}`);
+  const read = await page.evaluate((slots) => {
+    const bar = document.querySelector('.probe-bar');
+    if (!bar) return null;
+    // A computed color holds the value, never the token's name, so each token is resolved on a probe of its own.
+    const resolve = (token) => {
+      const probe = document.body.appendChild(document.createElement('span'));
+      probe.style.backgroundColor = `var(${token})`;
+      const color = getComputedStyle(probe).backgroundColor;
+      probe.remove();
+      return color;
+    };
+    return Object.entries(slots).map(([outcome, token]) => {
+      const segment = bar.querySelector(`.probe-bar__seg--${outcome}`);
+      return { drawn: segment ? getComputedStyle(segment).backgroundColor : null, outcome, slot: resolve(token) };
+    });
+  }, { held: '--series-muted', migrated: '--series-3', skipped: '--series-4' });
+  measurements.push(`${theme} /sessions probe bar slots ${JSON.stringify(read)}`);
+  if (read === null) {
+    if (mock) say('is missing, though the story counts probes');
+    return;
+  }
+  for (const r of read) if (r.drawn !== r.slot) say(`draws ${r.outcome} in ${r.drawn}, not the ${r.slot} the chart draws it in`);
 }
 
 /**
@@ -3595,6 +3640,7 @@ try {
         await sessionRowMenu(theme);
         await agentLines(theme);
         await sessionForkMark(theme);
+        await probeBarSlots(theme);
       }
       if (view.path === '/pools') {
         await expertRow(theme);
@@ -3641,8 +3687,9 @@ try {
       if (view.path === '/quota') {
         await quotaChips(theme);
         await quotaPollLines(theme);
-        await fastLane(theme, view.path);
+        await quotaCardHeights(theme);
       }
+      if (view.path === '/quota#quota-windows') await quotaLaneChips(theme);
       // A shot of a placeholder reviews nothing, so the page is given a moment to replace them; a view that
       // keeps one is still worth the shot, which is why the wait is capped and its expiry ignored.
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});

@@ -68,7 +68,13 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     let app = &parts.app;
     let cookie = login(app, "admin-secret").await;
     post(app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#, Some(&cookie)).await;
-    post(app, "/admin/pools", r#"{"id":"spare","label":"Spare","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#, Some(&cookie)).await;
+    post(
+        app,
+        "/admin/pools",
+        r#"{"id":"spare","label":"Spare","strategy":"priority"}"#,
+        Some(&cookie),
+    )
+    .await;
     post(
         app,
         "/admin/keys",
@@ -186,8 +192,8 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
     );
     assert_eq!(
         items[4]["pools"],
-        j!(["main", "spare"]),
-        "an account item lists every pool the account is a member of"
+        j!(["main"]),
+        "an account item lists the pool the account is a member of"
     );
     assert_eq!(
         (&items[5]["since"], &items[5]["detail"]),
@@ -212,7 +218,7 @@ async fn the_held_conditions_come_worst_first_then_oldest_first_in_their_shape()
 }
 
 #[tokio::test]
-async fn an_anthropic_key_the_upstream_refused_reads_as_an_account_to_reauthorize() {
+async fn an_api_key_the_upstream_refused_reads_as_an_account_to_reauthorize() {
     let parts = common::admin_parts_full().await;
     let app = &parts.app;
     let cookie = login(app, "admin-secret").await;

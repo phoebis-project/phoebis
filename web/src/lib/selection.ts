@@ -3,7 +3,7 @@ import { fmtPeriodEnd, fmtRelative } from './format';
 
 export const STRATEGY_LABEL: Record<PoolStrategy, string> = { pace: 'Pace', priority: 'Priority, then random', round_robin: 'Round robin' };
 /** The kind tiers, in the order selection walks them. */
-export const GROUP_LABEL = ['plan', 'overage', 'Anthropic keys'] as const;
+export const GROUP_LABEL = ['plan', 'overage', 'API keys'] as const;
 
 /** Whether selection walks the kind tiers for this pool: the operator's answer alone. */
 export const kindOrdered = (pool: Pool) => pool.preferSubscription;
@@ -50,8 +50,8 @@ function endOf(account: Account, now: number): number | null {
 
 /**
  * Remaining allowance and the reset that refills it: a subscription account reads the shared 7-day window, an
- * Anthropic-key account the worst window its row reports, with no reset. A window whose reset has passed, or none at
- * all, reads as untouched. The router ranks an Anthropic-key account by its per-model buckets, which the account row
+ * API-key account the worst window its row reports, with no reset. A window whose reset has passed, or none at
+ * all, reads as untouched. The router ranks an API-key account by its per-model buckets, which the account row
  * does not carry, so for one this order is a preview; the request drawer's trace shows the order the router took.
  */
 function remainingOf(account: Account, now: number): { remaining: number; reset: number | null } {
@@ -65,7 +65,7 @@ function remainingOf(account: Account, now: number): { remaining: number; reset:
 /**
  * Remaining allowance over the hours to the earlier of the window's reset and the account's end, so an account that
  * runs out sooner is spent first; an unsampled account counts as untouched, the full week's worth of it. An
- * Anthropic-key account scores by its remaining allowance alone, since its buckets refill within a minute.
+ * API-key account scores by its remaining allowance alone, since its buckets refill within a minute.
  */
 function paceScore(account: Account, now: number): number {
   const { remaining, reset } = remainingOf(account, now);

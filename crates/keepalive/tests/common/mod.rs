@@ -121,8 +121,7 @@ pub struct RigSpec {
     /// What the catalog fake answers; nothing by default, so a spelling never resolves to a dated id mid-test.
     pub catalog: Vec<Rule>,
     pub limits: KeepaliveLimits,
-    /// The registry in a file of its own rather than in memory, for a test that reaches it past the store. The
-    /// relay's harness then answers the catalog from its default fake, and the ledger's standing is not read.
+    /// The registry in a file of its own rather than in memory, for a test that reaches it past the store.
     pub on_disk: bool,
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
@@ -185,26 +184,25 @@ pub async fn rig(spec: RigSpec) -> Rig {
     // Most of this suite is about a session's pin and account continuity, where a spelling resolving to a dated id
     // mid-test is not what it is testing; the cases that are about a resolution name the rules that answer one.
     let catalog_up = FakeUpstream::start(spec.catalog).await;
-    let (h, store_path, scratch) = if spec.on_disk {
+    let (store, store_path, scratch) = if spec.on_disk {
         let scratch = Scratch::new();
         let path = scratch.0.join("router.sqlite");
         let store = Arc::new(Store::open(&path, &StorageKey::generate()).unwrap());
-        let h =
-            relay_common::harness_on_with_bus(store, &up, &spec.accounts, spec.pool, bus.clone())
-                .await;
-        (h, Some(path), Some(scratch))
+        (store, Some(path), Some(scratch))
     } else {
-        let h = relay_common::harness_with_bus_and_catalog(
-            &up,
-            &spec.accounts,
-            spec.pool,
-            bus.clone(),
-            catalog_up,
-            spec.accounting,
-        )
-        .await;
-        (h, None, None)
+        let store = Arc::new(Store::open_in_memory(&StorageKey::generate()).unwrap());
+        (store, None, None)
     };
+    let h = relay_common::harness_on_with_bus_and_catalog(
+        store,
+        &up,
+        &spec.accounts,
+        spec.pool,
+        bus.clone(),
+        catalog_up,
+        spec.accounting,
+    )
+    .await;
     let mut pool = h.store.pool("main").unwrap().unwrap();
     pool.keepalive_json = serde_json::to_string(&spec.policy).unwrap();
     h.store.update_pool(&pool, pool.updated_at, "test").unwrap();
@@ -818,4 +816,44 @@ pub async fn plant_spend(r: &Rig, id: &str, usd: f64) {
             .any(|row| row.account_id == "a" && row.spent_usd >= usd - 0.01)
     })
     .await;
+}
+
+/// The formatter's output, kept in memory so a case reads back exactly what the host's journal would hold.
+#[derive(Clone, Default)]
+pub struct Captured(Arc<std::sync::Mutex<Vec<u8>>>);
+
+impl std::io::Write for Captured {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        self.0.lock().unwrap().extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
+    }
+}
+
+impl<'a> tracing_subscriber::fmt::MakeWriter<'a> for Captured {
+    type Writer = Captured;
+
+    fn make_writer(&'a self) -> Self::Writer {
+        self.clone()
+    }
+}
+
+impl Captured {
+    /// Makes the capture this thread's subscriber until the guard drops. A `#[tokio::test]` polls the engine, the
+    /// relay and the probes on the case's own thread, so every line the case drives lands here.
+    pub fn install(&self) -> tracing::subscriber::DefaultGuard {
+        tracing::subscriber::set_default(
+            tracing_subscriber::fmt()
+                .with_ansi(false)
+                .with_writer(self.clone())
+                .finish(),
+        )
+    }
+
+    pub fn text(&self) -> String {
+        String::from_utf8(self.0.lock().unwrap().clone()).unwrap()
+    }
 }

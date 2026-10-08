@@ -18,7 +18,8 @@ const own = (map: object, key: string): boolean => Object.prototype.hasOwnProper
 
 export const anchorTier = (costs: SubscriptionCosts): string => costs.unit.definedBy.tier;
 
-/** The tier's capacity row as stored, then with `default_` taken off or put on; undefined for a tier the model lacks. */
+/** The tier's capacity row as stored, then with `default_` taken off or put on; undefined for a tier the model
+ *  lacks. */
 export const tierRow = (costs: SubscriptionCosts, tier: string): SubscriptionCosts['capacity'][string] | undefined => {
   const bare = tier.startsWith('default_') ? tier.slice('default_'.length) : null;
   const key = [tier, bare, `default_${tier}`].find((k): k is string => k !== null && own(costs.capacity, k));
@@ -311,16 +312,23 @@ const todayOf = (peak: SubscriptionCosts['peak'], at: number): { date: string; s
  *  the hours here read from the band day of `at`. */
 export const bandCaption = (costs: SubscriptionCosts, at: number, zone: string, clock: (minutes: number) => string): string => {
   const { fromHour, toHour, weekdays, zone: own } = costs.peak;
-  const defined = `${weekdays ? 'Mon to Fri' : 'Every day'}, ${clock(fromHour * 60)} to ${clock(toHour * 60)}`;
+  const wholeDays = weekdays && fromHour === 0 && toHour === 24;
+  const defined = `${weekdays ? 'Mon to Fri' : 'Every day'}, ${wholeDays ? 'all day' : `${clock(fromHour * 60)} to ${clock(toHour * 60)}`}`;
   // A zone this browser cannot read has no hours here, so the band reads in its own zone alone.
   if (zone === own || !readable(own)) return `${defined} in ${zoneCity(own)} (${own}), the zone the cost model names.`;
   if (everyHour(costs.peak)) return `Every day, at every hour here (${zone}). In ${zoneCity(own)}: ${defined}.`;
   const today = todayOf(costs.peak, at);
   if (today === null) return `Never here (${zone}). In ${zoneCity(own)}: ${defined}.`;
   const here = hereOf(today.span, today.date, zone);
+  // Whole days read all day only where they start at midnight here. Elsewhere the week's two ends are what the now
+  // line and the change beside the caption move against, so the caption names them.
+  if (wholeDays && here.start !== 0) {
+    const ends = daysBetween(here.startDate, partsIn(today.span.end, zone).date);
+    return `${WEEKDAYS[(7 + here.shift) % 7]} ${clock(here.start)} to ${WEEKDAYS[(11 + here.shift + ends) % 7]} ${clock(here.end)} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
+  }
   // The days follow the band's weekdays as they fall here: in Auckland a Monday's band starts on a Tuesday.
   const days = weekdays ? `${WEEKDAYS[(7 + here.shift) % 7]} to ${WEEKDAYS[(11 + here.shift) % 7]}` : 'Every day';
-  return `${days}, ${hoursText(here, clock)} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
+  return `${days}, ${wholeDays ? 'all day' : hoursText(here, clock)} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
 };
 
 /** The band's state at `at`, or the peak zone when this browser cannot read it, which leaves the state unknown. */
@@ -424,7 +432,8 @@ export const familyOrder = (models: string[]): string[] =>
     return a.localeCompare(b);
   });
 
-/** The tier whose window is smallest among the sized tiers (Pro on the shipped file), the one the multiples are against. */
+/** The tier whose window is smallest among the sized tiers (Pro on the shipped file), the one the multiples are
+ *  against. */
 export const smallestTier = (costs: SubscriptionCosts, window: CostWindow): string | null => {
   let smallest: string | null = null;
   let least = Infinity;

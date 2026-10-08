@@ -22,7 +22,7 @@ services:
     volumes:
       - ./config.yaml:/etc/phoebis/config.yaml:ro
       - phoebis-data:/var/lib/phoebis
-      # A pair init --tls self-signed wrote beside this file; the clients trust tls/ca.pem.
+      # A certificate pair you hold, mounted read-only and named under tls in config.yaml.
       # - ./tls:/etc/phoebis/tls:ro
 volumes:
   phoebis-data:

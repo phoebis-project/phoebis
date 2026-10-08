@@ -172,14 +172,14 @@
         "requests": 3,
         "failed": 1,
         "tokens": 5400,
-        "cost_usd": 0.0144
+        "cost_usd": 0.0142
       },
       {
         "at": 0,
         "requests": 3,
         "failed": 1,
         "tokens": 5400,
-        "cost_usd": 0.0108
+        "cost_usd": 0.0107
       }
     ]
   }

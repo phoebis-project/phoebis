@@ -8,7 +8,7 @@ afterwards.
 ## Two kinds of account
 
 An `oauth` account is a Claude.ai or Console login, paired through the dialog or the API below. An `api_key`
-account, an Anthropic key in the console, holds an Anthropic API key toward `api.anthropic.com`.
+account, shown as "API key" in the console, holds an Anthropic API key toward `api.anthropic.com`.
 Creating an `api_key` account verifies the key against its host at once: a rejected key answers
 `400 credential rejected by the upstream`, while a host that serves no model list leaves the account ready with the
 error recorded and no models.
@@ -16,7 +16,7 @@ error recorded and no models.
 ## Through the console
 
 Open Accounts and choose Add account. The dialog's subtitle names the choice: subscription logins share your Claude.ai
-quota, while Anthropic keys bill per token against a Console workspace. Pick OAuth login, give the account an id
+quota, while API keys bill per token against a Console workspace. Pick OAuth login, give the account an id
 (lowercase letters, digits, and dashes; it names the account in every log and URL) and a label, then choose Start
 pairing.
 
@@ -49,8 +49,7 @@ and credential on the right](assets/accounts-dark.png#only-dark)
 
 ## With `curl`
 
-`phoebis account pair <id>` runs the same three calls from a shell: it prints the authorization URL, reads the callback
-URL you paste, and confirms ([commands](installation.md#commands)); the `curl` lines below are the same flow by hand.
+The `curl` lines below are the same flow by hand.
 
 Every admin mutation that carries an `Origin` header must name the request's own `Host` with it, with the `https://`
 scheme where the admin listener terminates TLS or a front sends `X-Forwarded-Proto: https` ([access](api.md#access)),

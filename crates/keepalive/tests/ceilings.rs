@@ -80,7 +80,7 @@ fn tables() -> PlanTables {
     }
 }
 
-/// An Anthropic-key account: the recipe's break-even reads the dollar row.
+/// An API-key account: the recipe's break-even reads the dollar row.
 fn dollars(policy: KeepalivePolicy) -> RigSpec {
     RigSpec {
         accounts: vec![api_key("a", A, 0)],

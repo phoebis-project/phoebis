@@ -1,18 +1,25 @@
 //! Both public listeners terminate TLS from an operator's certificate pair: the router started in-process with a
 //! pair the test generates and trusts from its own clients alone, `phoebis health` probing its proxy listener over
-//! TLS, a pair the start cannot serve refused before any port is taken, and a pair `phoebis init --tls self-signed`
-//! wrote served to a client that trusts the `ca.pem` beside it.
+//! TLS, a pair the start cannot serve refused before any port is taken, and `POST /admin/tls/reload` putting a new pair
+//! in front of the next connection or keeping the old one when the new one does not load, with an attention item until
+//! a reload lands.
 
 use std::path::Path;
 use std::sync::Mutex;
 use std::time::Duration;
 
-use boring::ssl::{ConnectConfiguration, SslConnector, SslMethod};
 use boring::x509::X509;
-use fake_upstream::{connector_trusting, generate_pair, FakeUpstream};
+use fake_upstream::{
+    connector_trusting, generate_pair, generate_pair_valid_between, FakeUpstream, GeneratedPair,
+};
+use hyper::Method;
+use phoebis_router::admin_client::{AdminClient, Answer, Common};
 use phoebis_router::config::Config;
+use phoebis_router::status;
+use serde_json::json;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 use tokio::net::TcpStream;
+use tokio_boring::SslStream;
 
 /// `load` reads the admin secret from the process environment, so each test holds this across its set-then-load
 /// sequence.
@@ -44,16 +51,27 @@ fn configured(
     cert_file: &Path,
     key_file: &Path,
 ) -> Config {
-    let tls = format!(
+    let tls = tls_block(cert_file, key_file);
+    configured_with(dir, up, ports, &tls, &tls)
+}
+
+/// A listener's `tls` block naming the pair.
+fn tls_block(cert_file: &Path, key_file: &Path) -> String {
+    format!(
         "  tls:\n    cert_file: {}\n    key_file: {}\n",
         cert_file.display(),
         key_file.display()
-    );
-    configured_with(dir, up, ports, &tls)
+    )
 }
 
-/// Both listeners on loopback under the one `tls` block `tls` spells.
-fn configured_with(dir: &Path, up: &FakeUpstream, ports: (u16, u16), tls: &str) -> Config {
+/// Both listeners on loopback, each under the `tls` block its argument spells, an empty one serving plain HTTP.
+fn configured_with(
+    dir: &Path,
+    up: &FakeUpstream,
+    ports: (u16, u16),
+    admin_tls: &str,
+    proxy_tls: &str,
+) -> Config {
     let (proxy_port, admin_port) = ports;
     std::fs::write(dir.join("ca.pem"), up.ca_pem()).unwrap();
     std::fs::write(
@@ -65,9 +83,9 @@ fn configured_with(dir: &Path, up: &FakeUpstream, ports: (u16, u16), tls: &str) 
         r#"admin:
   listen: 127.0.0.1:{admin_port}
   secret_env: TEST_ADMIN_SECRET
-{tls}proxy:
+{admin_tls}proxy:
   listen: 127.0.0.1:{proxy_port}
-{tls}stats:
+{proxy_tls}stats:
   ledger_path: {ledger}
   metrics_listen: 127.0.0.1:{metrics_port}
 storage:
@@ -233,6 +251,9 @@ async fn a_key_that_does_not_match_the_certificate_refuses_the_start_naming_the_
     let (_, other_key) = generate_pair(&["localhost"]).write_to(dir.path(), "other");
     let (proxy_port, admin_port) = (free_port(), free_port());
     let config = configured(dir.path(), &up, (proxy_port, admin_port), &cert, &other_key);
+    // Held across the start: a start that bound before it judged the pair would refuse with `binding proxy.listen`
+    // rather than with the key's line.
+    let _held = std::net::TcpListener::bind(("127.0.0.1", proxy_port)).unwrap();
     let refused = tokio::time::timeout(
         SETTLE,
         phoebis_router::app::run(config, std::future::pending()),
@@ -245,101 +266,259 @@ async fn a_key_that_does_not_match_the_certificate_refuses_the_start_naming_the_
         line.starts_with("proxy.tls.key_file") && line.contains("does not match"),
         "{line}"
     );
-    assert!(
-        std::net::TcpListener::bind(("127.0.0.1", proxy_port)).is_ok(),
-        "the refused start took no port"
-    );
     up.shutdown().await;
 }
 
-/// A client that trusts the one CA `ca_pem` holds, offering HTTP/1.1.
-fn connector_trusting_pem(ca_pem: &[u8]) -> ConnectConfiguration {
-    let mut builder = SslConnector::builder(SslMethod::tls()).unwrap();
-    builder
-        .cert_store_mut()
-        .add_cert(X509::from_pem(ca_pem).unwrap())
+/// The admin client of `status` and `tls reload` under the bearer, on the plain admin listener.
+fn admin_client(admin_port: u16, config: &Path) -> AdminClient {
+    let common = Common {
+        ca: None,
+        json: false,
+        secret_env: Some("TEST_ADMIN_SECRET".to_owned()),
+        timeout: 10,
+        url: Some(format!("http://127.0.0.1:{admin_port}")),
+    };
+    let _env = ENV.lock().unwrap_or_else(|poisoned| poisoned.into_inner());
+    AdminClient::from_flags(&common, config).unwrap()
+}
+
+/// `POST /admin/tls/reload` through the admin client.
+async fn reload(admin_port: u16, config: &Path) -> Answer {
+    admin_client(admin_port, config)
+        .call(Method::POST, "/admin/tls/reload", None)
+        .await
+        .unwrap_or_else(|error| panic!("the reload call failed: {error}"))
+}
+
+/// The items `GET /admin/attention` answers, and the `attention:` line of the `status` screen over the same router.
+async fn attention(admin_port: u16, config: &Path) -> (Vec<serde_json::Value>, String) {
+    let client = admin_client(admin_port, config);
+    let answer = client
+        .call(Method::GET, "/admin/attention", None)
+        .await
+        .unwrap_or_else(|error| panic!("the attention call failed: {error}"));
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let reads = status::read(&client, None, SETTLE).await;
+    let listeners = status::Listeners {
+        admin: format!("http://127.0.0.1:{admin_port}"),
+        certificates: Vec::new(),
+        metrics: None,
+        proxy: None,
+    };
+    let screen = status::render(
+        &reads,
+        &listeners,
+        "0.1.0",
+        jiff::Timestamp::now(),
+        &jiff::tz::TimeZone::UTC,
+        false,
+    );
+    let line = screen
+        .lines()
+        .find(|line| line.starts_with("  attention: "))
+        .unwrap_or_else(|| panic!("no attention line:\n{screen}"))
+        .to_owned();
+    (answer.body["items"].as_array().unwrap().clone(), line)
+}
+
+/// A connection to the proxy listener whose handshake finished under a client trusting `pair`'s CA alone.
+async fn handshaken(proxy_port: u16, pair: &GeneratedPair) -> SslStream<TcpStream> {
+    let socket = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
+    tokio::time::timeout(
+        SETTLE,
+        tokio_boring::connect(connector_trusting(pair), "localhost", socket),
+    )
+    .await
+    .expect("the handshake finished")
+    .unwrap()
+}
+
+/// The `not_after` of the leaf the listener served on `stream`, as BoringSSL prints it.
+fn served_not_after(stream: &SslStream<TcpStream>) -> String {
+    stream
+        .ssl()
+        .peer_certificate()
+        .expect("the listener served a leaf")
+        .not_after()
+        .to_string()
+}
+
+/// The `not_after` of `pair`'s leaf, as BoringSSL prints it.
+fn not_after(pair: &GeneratedPair) -> String {
+    X509::from_pem(pair.cert_pem.as_bytes())
+        .unwrap()
+        .not_after()
+        .to_string()
+}
+
+/// `GET /api/ready` on `stream`, answered `200`.
+async fn assert_ready(stream: &mut SslStream<TcpStream>) {
+    stream
+        .write_all(b"GET /api/ready HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
+        .await
         .unwrap();
-    builder.set_alpn_protos(b"\x08http/1.1").unwrap();
-    builder.build().configure().unwrap()
+    let mut answer = Vec::new();
+    let _ = tokio::time::timeout(SETTLE, stream.read_to_end(&mut answer)).await;
+    let answer = String::from_utf8_lossy(&answer);
+    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
 }
 
 #[tokio::test]
-async fn a_pair_init_generated_serves_the_proxy_to_a_client_trusting_ca_pem() {
+async fn a_reload_with_a_new_pair_at_the_same_paths_serves_the_new_leaf_to_the_next_connection() {
     let up = FakeUpstream::start(vec![]).await;
-    let scratch = tempfile::tempdir().unwrap();
-    let init = tokio::process::Command::new(env!("CARGO_BIN_EXE_phoebis"))
-        .args([
-            "init",
-            "--tls",
-            "self-signed",
-            "--proxy-listen",
-            "0.0.0.0:0",
-            "--non-interactive",
-            "--config",
-        ])
-        .arg(scratch.path().join("config.yaml"))
-        .current_dir(scratch.path())
-        .env_remove("PHOEBIS_ADMIN_SECRET")
-        .env_remove("PHOEBIS_CONFIG")
-        .output()
-        .await
-        .unwrap();
-    assert_eq!(
-        init.status.code(),
-        Some(0),
-        "{}",
-        String::from_utf8_lossy(&init.stderr)
-    );
-    let tls = scratch.path().join("tls");
     let dir = tempfile::tempdir().unwrap();
+    let hosts = ["localhost", "127.0.0.1"];
+    let old = generate_pair_valid_between(&hosts, (2020, 1, 1), (2098, 1, 1));
+    let new = generate_pair_valid_between(&hosts, (2020, 1, 1), (2099, 1, 1));
+    let (cert, key) = old.write_to(dir.path(), "proxy");
     let (proxy_port, admin_port) = (free_port(), free_port());
-    let config = configured(
+    let config = configured_with(
         dir.path(),
         &up,
         (proxy_port, admin_port),
-        &tls.join("proxy").join("cert.pem"),
-        &tls.join("proxy").join("key.pem"),
+        "",
+        &tls_block(&cert, &key),
     );
     let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
     let server = tokio::spawn(phoebis_router::app::run(config, async {
         let _ = stop_rx.await;
     }));
-
-    let ca_pem = std::fs::read(tls.join("ca.pem")).unwrap();
-    let socket = fake_upstream::wait_for_async(SETTLE, || async {
-        TcpStream::connect(("127.0.0.1", proxy_port)).await.ok()
+    fake_upstream::wait_for_async(SETTLE, || async {
+        TcpStream::connect(("127.0.0.1", admin_port)).await.ok()
     })
     .await;
-    let mut ready = tokio::time::timeout(
-        SETTLE,
-        tokio_boring::connect(connector_trusting_pem(&ca_pem), "localhost", socket),
-    )
-    .await
-    .expect("the handshake finished")
-    .unwrap();
-    ready
-        .write_all(b"GET /api/ready HTTP/1.1\r\nhost: localhost\r\nconnection: close\r\n\r\n")
-        .await
-        .unwrap();
-    let mut answer = Vec::new();
-    let _ = tokio::time::timeout(SETTLE, ready.read_to_end(&mut answer)).await;
-    let answer = String::from_utf8_lossy(&answer);
-    assert!(answer.starts_with("HTTP/1.1 200"), "{answer}");
 
-    // The trust is `ca.pem`'s alone: a client that trusts another CA is refused at the handshake.
-    let socket = TcpStream::connect(("127.0.0.1", proxy_port)).await.unwrap();
-    let refused = tokio::time::timeout(
-        SETTLE,
-        tokio_boring::connect(
-            connector_trusting_pem(up.ca_pem().as_bytes()),
-            "localhost",
-            socket,
+    let mut held = handshaken(proxy_port, &old).await;
+    assert_eq!(served_not_after(&held), not_after(&old));
+    new.write_to(dir.path(), "proxy");
+    let answer = reload(admin_port, &dir.path().join("config.yaml")).await;
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let listeners = answer.body["listeners"].as_array().unwrap();
+    assert_eq!(listeners.len(), 2, "{}", answer.body);
+    let proxy = &listeners[0];
+    assert_eq!(
+        (
+            &proxy["listener"],
+            &proxy["serving"],
+            &proxy["reloaded"],
+            &proxy["cert_file"],
+            &proxy["expires"],
         ),
-    )
-    .await
-    .expect("the handshake ended")
-    .expect_err("a client trusting another CA is refused");
-    assert!(refused.to_string().contains("verif"), "{refused}");
+        (
+            &json!("proxy"),
+            &json!("tls"),
+            &json!(true),
+            &json!(cert.display().to_string()),
+            &json!("2099-01-01T00:00:00Z"),
+        ),
+        "{}",
+        answer.body
+    );
+    assert!(
+        proxy["days_left"].as_i64().is_some_and(|days| days > 0),
+        "{proxy}"
+    );
+    assert_eq!(
+        listeners[1],
+        json!({"listener": "admin", "serving": "plain"})
+    );
+
+    let mut next = handshaken(proxy_port, &new).await;
+    assert_eq!(served_not_after(&next), not_after(&new));
+    assert_ready(&mut next).await;
+    // The connection handshaken before the reload finishes its request on the leaf it took.
+    assert_ready(&mut held).await;
+
+    let _ = stop_tx.send(());
+    server.await.unwrap().unwrap();
+    up.shutdown().await;
+}
+
+#[tokio::test]
+async fn a_reload_with_a_mismatched_key_keeps_the_old_pair_serving() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let old = generate_pair(&["localhost", "127.0.0.1"]);
+    let (cert, key) = old.write_to(dir.path(), "proxy");
+    let (proxy_port, admin_port) = (free_port(), free_port());
+    let config = configured_with(
+        dir.path(),
+        &up,
+        (proxy_port, admin_port),
+        "",
+        &tls_block(&cert, &key),
+    );
+    let (stop_tx, stop_rx) = tokio::sync::oneshot::channel::<()>();
+    let server = tokio::spawn(phoebis_router::app::run(config, async {
+        let _ = stop_rx.await;
+    }));
+    fake_upstream::wait_for_async(SETTLE, || async {
+        TcpStream::connect(("127.0.0.1", admin_port)).await.ok()
+    })
+    .await;
+
+    std::fs::write(&key, generate_pair(&["localhost"]).key_pem).unwrap();
+    let answer = reload(admin_port, &dir.path().join("config.yaml")).await;
+    assert_eq!(answer.status, 200, "{}", answer.body);
+    let listeners = answer.body["listeners"].as_array().unwrap();
+    assert_eq!(listeners.len(), 2, "{}", answer.body);
+    let proxy = &listeners[0];
+    assert_eq!(
+        (&proxy["listener"], &proxy["serving"], &proxy["reloaded"]),
+        (&json!("proxy"), &json!("tls"), &json!(false)),
+        "{proxy}"
+    );
+    let error = proxy["error"].as_str().unwrap_or_default();
+    assert!(
+        error.starts_with("proxy.tls.key_file") && error.contains("does not match"),
+        "{proxy}"
+    );
+    assert_eq!(
+        listeners[1],
+        json!({"listener": "admin", "serving": "plain"})
+    );
+    let (items, line) = attention(admin_port, &dir.path().join("config.yaml")).await;
+    assert_eq!(items.len(), 1, "{items:?}");
+    assert_eq!(
+        (
+            &items[0]["kind"],
+            &items[0]["subject"],
+            &items[0]["link"],
+            &items[0]["pools"],
+            &items[0]["detail"]["error"],
+        ),
+        (
+            &json!("certificate_reload_failed"),
+            &json!({"type": "router", "id": "proxy.tls", "label": "proxy.tls"}),
+            &json!(null),
+            &json!([]),
+            &json!(error),
+        ),
+        "the refused reload raises the item on the listener's subject"
+    );
+    assert!(
+        line.starts_with("  attention: certificate_reload_failed proxy.tls since "),
+        "{line}"
+    );
+
+    let mut next = handshaken(proxy_port, &old).await;
+    assert_eq!(served_not_after(&next), not_after(&old));
+    assert_ready(&mut next).await;
+
+    std::fs::write(&key, &old.key_pem).unwrap();
+    let answer = reload(admin_port, &dir.path().join("config.yaml")).await;
+    assert_eq!(
+        answer.body["listeners"][0]["reloaded"],
+        json!(true),
+        "{}",
+        answer.body
+    );
+    let (items, line) = attention(admin_port, &dir.path().join("config.yaml")).await;
+    assert_eq!(
+        (items.len(), line.as_str()),
+        (0, "  attention: none"),
+        "a reload that lands clears the item: {items:?}"
+    );
 
     let _ = stop_tx.send(());
     server.await.unwrap().unwrap();

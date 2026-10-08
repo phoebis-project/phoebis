@@ -175,7 +175,7 @@ impl LedgerDb {
     }
 
     /// Runs `f` on a blocking worker under the shared reader connection, so a slow read never parks the runtime
-    /// thread that serves proxy traffic; the reader mutex still serialises the reads themselves.
+    /// thread that serves proxy traffic; the reader mutex still serializes the reads themselves.
     pub async fn read<T: Send + 'static>(
         self: &Arc<Self>,
         f: impl FnOnce(&Connection) -> Result<T, LedgerError> + Send + 'static,
@@ -233,6 +233,29 @@ impl LedgerDb {
     #[doc(hidden)]
     pub fn debug_fail_next_read(&self) {
         self.fail_next_read.store(true, Ordering::SeqCst);
+    }
+
+    /// Caps the writer connection's file at the pages it holds once a vacuum has left none free, so the next insert
+    /// that needs a page meets `SQLITE_FULL` and the writer holds its batch under retry.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn fill_the_disk(&self) {
+        self.write(|c| {
+            c.execute_batch("VACUUM;")?;
+            let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0))?;
+            c.pragma_update(None, "max_page_count", pages)?;
+            Ok(())
+        })
+        .expect("the test's cap on the ledger file applies");
+    }
+
+    /// Lifts the cap, so the held batch lands on its next retry.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn free_the_disk(&self) {
+        self.write(|c| {
+            c.pragma_update(None, "max_page_count", 1_073_741_823)?;
+            Ok(())
+        })
+        .expect("the test's cap on the ledger file lifts");
     }
 
     /// Parks one priced record the writer could not land, `parked_at` and `last_tried_at` both `at`.
@@ -876,7 +899,7 @@ mod tests {
     async fn the_schema_opens_in_wal_mode_with_a_version_and_rows_round_trip() {
         let dir = tempfile::tempdir().unwrap();
         let db = Arc::new(LedgerDb::open(&dir.path().join("data").join("ledger.sqlite")).unwrap());
-        assert_eq!(db.read_blocking(read_version).unwrap(), 29);
+        assert_eq!(db.read_blocking(read_version).unwrap(), 30);
         let mode: String = db
             .read_blocking(|c| Ok(c.query_row("PRAGMA journal_mode", [], |r| r.get(0))?))
             .unwrap();
@@ -962,7 +985,7 @@ mod tests {
             .await
             .unwrap();
         assert_ne!(worker, caller, "the closure ran on a blocking worker");
-        assert_eq!(version, 29, "and answered what the connection holds");
+        assert_eq!(version, 30, "and answered what the connection holds");
     }
 
     #[tokio::test]
@@ -977,7 +1000,7 @@ mod tests {
         assert!(matches!(panicked, Err(LedgerError::ReadCancelled)));
         assert_eq!(
             db.read_blocking(read_version).unwrap(),
-            29,
+            30,
             "the poisoned guard recovered rather than turning every later read into ReadCancelled too"
         );
     }
@@ -1018,7 +1041,7 @@ mod tests {
                 refused,
                 LedgerError::SchemaTooNew {
                     found: 99,
-                    supported: 29,
+                    supported: 30,
                     ..
                 }
             ),

@@ -95,6 +95,28 @@ async fn pools_are_created_edited_and_deleted_with_their_members_and_validation(
             .status(),
         204
     );
+    for bound in ["0", "1"] {
+        assert_eq!(
+            post(
+                &app,
+                "/admin/pools",
+                &format!(
+                    r#"{{"id":"p5","label":"x","strategy":"pace","shed_ahead_of_pace":{bound}}}"#
+                ),
+                Some(&cookie)
+            )
+            .await
+            .status(),
+            201,
+            "shed_ahead_of_pace takes its bound {bound}"
+        );
+        assert_eq!(
+            delete(&app, "/admin/pools/p5", Some(&cookie))
+                .await
+                .status(),
+            204
+        );
+    }
     assert_eq!(
         post(
             &app,
@@ -969,6 +991,7 @@ async fn sessions_list_live_pins_and_a_release_expires_them() {
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest(secret).to_vec(),
                 prefix: phoebis_store::key_prefix(secret),
+                incarnation: 1,
                 created_at: common::NOW,
                 updated_at: 0,
                 rotated_at: None,
@@ -1079,7 +1102,7 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     .await;
     // The store stamps the key from the wall clock, so the live generation is read back rather than assumed.
     let key_generation = parts.store.api_key("desktop").unwrap().unwrap().created_at;
-    for (id, at) in [("r1", now - 60_000), ("r2", now - 2 * 86_400_000)] {
+    let land = |id: &str, at: i64| {
         parts.ledger.record(Record::Request {
             request: RequestRecord {
                 id: id.into(),
@@ -1113,6 +1136,9 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
             }],
             bodies: None,
         });
+    };
+    for (id, at) in [("r1", now - 60_000), ("r2", now - 2 * 86_400_000)] {
+        land(id, at);
     }
     let keys = common::wait_json(&parts.app, "/admin/keys", &cookie, |v| {
         v["keys"][0]["lifetime"]["requests"].as_u64() == Some(2)
@@ -1140,14 +1166,31 @@ async fn keys_and_pools_carry_their_ledger_totals_status_and_traffic() {
     );
     // Only r1 falls in the last 24h; r2 is two days old. One request costs 0.0007, per the note above.
     assert!((pool["cost_24h"].as_f64().unwrap() - 0.0007).abs() < 1e-9);
-    let traffic = pool["traffic_24h"].as_array().unwrap();
-    assert_eq!(traffic.len(), 24);
-    assert_eq!(
+    let hour = phoebis_ledger::hour_of(now);
+    let requests = |traffic: &[serde_json::Value]| {
         traffic
             .iter()
             .map(|b| b["requests"].as_u64().unwrap())
-            .sum::<u64>(),
-        1
+            .sum::<u64>()
+    };
+    let traffic = pool["traffic_24h"].as_array().unwrap();
+    assert_eq!(
+        (traffic.len(), traffic[0]["at"].as_i64()),
+        (25, Some((hour - 24 * 3_600) * 1_000)),
+        "the series starts where the day total does and ends with the current partial hour"
+    );
+    assert_eq!(Some(requests(traffic)), pool["requests_24h"].as_u64());
+    // Older than 24 hours, yet inside the hour a day back that the day total counts from.
+    land("r3", (hour - 24 * 3_600) * 1_000 + 60_000);
+    let pools = common::wait_json(&parts.app, "/admin/pools", &cookie, |v| {
+        v["pools"][0]["requests_24h"].as_u64() == Some(2)
+    })
+    .await;
+    let traffic = pools["pools"][0]["traffic_24h"].as_array().unwrap();
+    assert_eq!(
+        (requests(traffic), traffic[0]["requests"].as_u64()),
+        (2, Some(1)),
+        "the card's head figure equals its bars"
     );
     assert_eq!(
         post(
@@ -2342,33 +2385,6 @@ async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted
         "{member}"
     );
     assert!(unspent(&member), "{member}");
-    let accepted = post(
-        &app,
-        "/admin/pools",
-        r#"{"id":"aux","label":"Aux","strategy":"priority",
-            "members":[{"account_id":"business","priority":0,"budget_monthly_usd":null},
-                       {"account_id":"direct","priority":1,"budget_monthly_usd":5.0}]}"#,
-        Some(&cookie),
-    )
-    .await;
-    assert_eq!(
-        accepted.status(),
-        201,
-        "a null budget on the OAuth member and a budget on the API-key member are accepted"
-    );
-    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
-    let budgets = |account: &str| {
-        let member = member_of(&pools, "aux", account);
-        (
-            member["budget_daily_usd"].as_f64(),
-            member["budget_monthly_usd"].as_f64(),
-        )
-    };
-    assert_eq!(
-        (budgets("business"), budgets("direct")),
-        ((None, None), (None, Some(5.0))),
-        "the aux pool stores no budget on the subscription member and 5.0 on the API-key member: {pools}"
-    );
     for (method, path, body, expected) in [
         (
             "PATCH",
@@ -2400,6 +2416,45 @@ async fn a_budget_on_a_subscription_member_is_kept_and_a_null_budget_is_accepted
         );
         assert!(unspent(&member), "{method} {path}: {member}");
     }
+    // An account belongs to one pool, so main lets business go before aux takes it.
+    assert_eq!(
+        put(
+            &app,
+            "/admin/pools/main/members",
+            r#"{"members":[]}"#,
+            Some(&cookie)
+        )
+        .await
+        .status(),
+        200
+    );
+    let accepted = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"aux","label":"Aux","strategy":"priority",
+            "members":[{"account_id":"business","priority":0,"budget_monthly_usd":null},
+                       {"account_id":"direct","priority":1,"budget_monthly_usd":5.0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        accepted.status(),
+        201,
+        "a null budget on the OAuth member and a budget on the API-key member are accepted"
+    );
+    let pools = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    let budgets = |account: &str| {
+        let member = member_of(&pools, "aux", account);
+        (
+            member["budget_daily_usd"].as_f64(),
+            member["budget_monthly_usd"].as_f64(),
+        )
+    };
+    assert_eq!(
+        (budgets("business"), budgets("direct")),
+        ((None, None), (None, Some(5.0))),
+        "the aux pool stores no budget on the subscription member and 5.0 on the API-key member: {pools}"
+    );
 }
 
 #[tokio::test]
@@ -2650,6 +2705,154 @@ async fn a_member_list_naming_an_account_twice_is_refused_before_any_write_on_po
     );
 }
 
+/// Pool `main` holding `direct` and pool `other` holding `business`, both created through the route.
+async fn direct_in_main(app: &axum::Router, cookie: &str) {
+    for body in [
+        r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#,
+        r#"{"id":"other","label":"Other","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#,
+    ] {
+        assert_eq!(
+            post(app, "/admin/pools", body, Some(cookie)).await.status(),
+            201
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_member_in_another_pool_is_refused_on_create_patch_and_put_naming_both() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    direct_in_main(&app, &cookie).await;
+    let other = |listed: serde_json::Value| {
+        listed["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "other")
+            .unwrap()
+            .clone()
+    };
+    let before = other(json(get(&app, "/admin/pools", Some(&cookie)).await).await);
+    let refusal = (
+        409,
+        serde_json::json!("account direct is a member of pool main"),
+    );
+    let created = post(
+        &app,
+        "/admin/pools",
+        r#"{"id":"third","label":"Third","strategy":"priority","members":[{"account_id":"direct","priority":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            created.status().as_u16(),
+            json(created).await["error"].clone()
+        ),
+        refusal,
+        "the create"
+    );
+    let patched = patch(
+        &app,
+        "/admin/pools/other",
+        r#"{"label":"Renamed","members":[{"account_id":"business","priority":0},{"account_id":"direct","priority":1}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            patched.status().as_u16(),
+            json(patched).await["error"].clone()
+        ),
+        refusal,
+        "the edit"
+    );
+    let put_refused = put(
+        &app,
+        "/admin/pools/other/members",
+        r#"{"members":[{"account_id":"direct","priority":0}]}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            put_refused.status().as_u16(),
+            json(put_refused).await["error"].clone()
+        ),
+        refusal,
+        "the member list's own route"
+    );
+    let listed = json(get(&app, "/admin/pools", Some(&cookie)).await).await;
+    assert!(
+        listed["pools"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["id"] != "third"),
+        "the refused create left no pool row: {listed}"
+    );
+    let after = other(listed);
+    assert_eq!(
+        (&after["label"], &after["members"], &after["updated_at"]),
+        (&before["label"], &before["members"], &before["updated_at"]),
+        "neither the members, the label nor the stamp moved"
+    );
+}
+
+#[tokio::test]
+async fn a_list_with_a_repeat_and_a_foreign_member_is_refused_for_the_repeat() {
+    let (app, _up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    direct_in_main(&app, &cookie).await;
+    let members = r#"[{"account_id":"direct","priority":0},{"account_id":"business","priority":1},{"account_id":"business","priority":2}]"#;
+    let refusal = (
+        409,
+        serde_json::json!("members name account business twice"),
+    );
+    let created = post(
+        &app,
+        "/admin/pools",
+        &format!(r#"{{"id":"third","label":"Third","strategy":"priority","members":{members}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            created.status().as_u16(),
+            json(created).await["error"].clone()
+        ),
+        refusal
+    );
+    let patched = patch(
+        &app,
+        "/admin/pools/other",
+        &format!(r#"{{"members":{members}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            patched.status().as_u16(),
+            json(patched).await["error"].clone()
+        ),
+        refusal
+    );
+    let put_refused = put(
+        &app,
+        "/admin/pools/other/members",
+        &format!(r#"{{"members":{members}}}"#),
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        (
+            put_refused.status().as_u16(),
+            json(put_refused).await["error"].clone()
+        ),
+        refusal
+    );
+}
+
 #[tokio::test]
 async fn a_label_or_notes_past_256_bytes_is_refused_naming_the_field() {
     let (app, _up, store, _router) = common::admin_parts().await;
@@ -2744,11 +2947,13 @@ async fn a_label_or_notes_past_256_bytes_is_refused_naming_the_field() {
 async fn listing_three_pools_reads_the_registry_once() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
-    let create = |id: &'static str| {
+    // An account belongs to one pool, so the harness's two accounts go to the first two pools and the third holds
+    // none.
+    let create = |id: &'static str, members: &'static str| {
         let (app, cookie) = (app.clone(), cookie.clone());
         async move {
             let body = format!(
-                r#"{{"id":"{id}","label":"{id}","strategy":"priority","members":[{{"account_id":"direct","priority":0}},{{"account_id":"business","priority":1}}]}}"#
+                r#"{{"id":"{id}","label":"{id}","strategy":"priority","members":{members}}}"#
             );
             assert_eq!(
                 post(&app, "/admin/pools", &body, Some(&cookie))
@@ -2773,10 +2978,10 @@ async fn listing_three_pools_reads_the_registry_once() {
             fewest
         }
     };
-    create("one").await;
+    create("one", r#"[{"account_id":"direct","priority":0}]"#).await;
     let one = takes_per_list().await;
-    create("two").await;
-    create("three").await;
+    create("two", r#"[{"account_id":"business","priority":1}]"#).await;
+    create("three", "[]").await;
     let three = takes_per_list().await;
     assert_eq!(
         three, one,
@@ -2914,16 +3119,16 @@ async fn two_key_edits_from_one_read_answer_409_on_the_second() {
     );
 }
 
-/// The `updated_at` a console read the row at, from the list it reads the rows from.
-async fn listed_stamp(app: &axum::Router, cookie: &str, list: &str, id: &str) -> i64 {
+/// The `revision` a console read the row at, from the list it reads the rows from.
+async fn listed_revision(app: &axum::Router, cookie: &str, list: &str, id: &str) -> u64 {
     let rows = json(get(app, &format!("/admin/{list}"), Some(cookie)).await).await;
     rows[list]
         .as_array()
         .unwrap()
         .iter()
         .find(|row| row["id"] == id)
-        .unwrap()["updated_at"]
-        .as_i64()
+        .unwrap()["revision"]
+        .as_u64()
         .unwrap()
 }
 
@@ -2958,10 +3163,10 @@ async fn a_pool_edit_with_a_stale_expected_revision_answers_409_and_writes_nothi
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "pools", "main").await;
-    // Behind the row's stamp, or ahead of it by up to the day the fence admits: a view the row no longer matches,
-    // refused as stale rather than as a malformed stamp.
-    for sent in [read_at - 1, read_at + 1, read_at + 86_400_000] {
+    let read = listed_revision(&app, &cookie, "pools", "main").await;
+    // A stamp behind or ahead of the row's, the row's stamp under the next incarnation, and an incarnation past the
+    // token's share: a view the row no longer matches, refused as stale rather than as a malformed token.
+    for sent in [read - 1, read + 1, read + (1 << 42), i64::MAX as u64] {
         let stale = patch(
             &app,
             "/admin/pools/main",
@@ -2989,11 +3194,11 @@ async fn a_pool_edit_with_the_fresh_stamp_lands_and_the_stamp_moves() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "pools", "main").await;
-    let body = format!(r#"{{"label":"Moved","expected_revision":{read_at}}}"#);
+    let read = listed_revision(&app, &cookie, "pools", "main").await;
+    let body = format!(r#"{{"label":"Moved","expected_revision":{read}}}"#);
     let fresh = patch(&app, "/admin/pools/main", &body, Some(&cookie)).await;
     assert_eq!(fresh.status(), 200);
-    assert!(json(fresh).await["updated_at"].as_i64().unwrap() > read_at);
+    assert!(json(fresh).await["revision"].as_u64().unwrap() > read);
     assert_eq!(store.pool("main").unwrap().unwrap().label, "Moved");
     let again = patch(&app, "/admin/pools/main", &body, Some(&cookie)).await;
     assert_eq!(
@@ -3008,15 +3213,7 @@ async fn a_malformed_expected_revision_answers_400_and_writes_nothing() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "pools", "main").await;
-    let past_a_day = (read_at + 86_400_001).to_string();
-    for value in [
-        "null",
-        r#""later""#,
-        "1.5",
-        "9223372036854775807",
-        &past_a_day,
-    ] {
+    for value in ["null", r#""later""#, "1.5", "-1"] {
         let refused = patch(
             &app,
             "/admin/pools/main",
@@ -3027,7 +3224,7 @@ async fn a_malformed_expected_revision_answers_400_and_writes_nothing() {
         assert_eq!(refused.status(), 400, "{value}");
         assert_eq!(
             json(refused).await["error"],
-            "expected_revision is the updated_at the row was read at",
+            "expected_revision is the revision the row was read at",
             "{value}"
         );
         assert_eq!(
@@ -3059,10 +3256,10 @@ async fn a_key_edit_with_a_stale_expected_revision_answers_409_and_writes_nothin
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "keys", "desktop").await;
-    // Behind the row's stamp, or ahead of it by up to the day the fence admits: a view the row no longer matches,
-    // refused as stale rather than as a malformed stamp.
-    for sent in [read_at - 1, read_at + 1, read_at + 86_400_000] {
+    let read = listed_revision(&app, &cookie, "keys", "desktop").await;
+    // A stamp behind or ahead of the row's, the row's stamp under the next incarnation, and an incarnation past the
+    // token's share: a view the row no longer matches, refused as stale rather than as a malformed token.
+    for sent in [read - 1, read + 1, read + (1 << 42), i64::MAX as u64] {
         let stale = patch(
             &app,
             "/admin/keys/desktop",
@@ -3090,11 +3287,11 @@ async fn a_key_edit_with_the_fresh_stamp_lands_and_the_stamp_moves() {
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "keys", "desktop").await;
-    let body = format!(r#"{{"label":"Moved","expected_revision":{read_at}}}"#);
+    let read = listed_revision(&app, &cookie, "keys", "desktop").await;
+    let body = format!(r#"{{"label":"Moved","expected_revision":{read}}}"#);
     let fresh = patch(&app, "/admin/keys/desktop", &body, Some(&cookie)).await;
     assert_eq!(fresh.status(), 200);
-    assert!(json(fresh).await["updated_at"].as_i64().unwrap() > read_at);
+    assert!(json(fresh).await["revision"].as_u64().unwrap() > read);
     assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Moved");
     let again = patch(&app, "/admin/keys/desktop", &body, Some(&cookie)).await;
     assert_eq!(
@@ -3109,15 +3306,7 @@ async fn a_malformed_expected_revision_on_a_key_answers_400_and_writes_nothing()
     let (app, _up, store, _router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
     pool_and_key(&app, &cookie).await;
-    let read_at = listed_stamp(&app, &cookie, "keys", "desktop").await;
-    let past_a_day = (read_at + 86_400_001).to_string();
-    for value in [
-        "null",
-        r#""later""#,
-        "1.5",
-        "9223372036854775807",
-        &past_a_day,
-    ] {
+    for value in ["null", r#""later""#, "1.5", "-1"] {
         let refused = patch(
             &app,
             "/admin/keys/desktop",
@@ -3128,7 +3317,7 @@ async fn a_malformed_expected_revision_on_a_key_answers_400_and_writes_nothing()
         assert_eq!(refused.status(), 400, "{value}");
         assert_eq!(
             json(refused).await["error"],
-            "expected_revision is the updated_at the row was read at",
+            "expected_revision is the revision the row was read at",
             "{value}"
         );
         assert_eq!(
@@ -3139,7 +3328,7 @@ async fn a_malformed_expected_revision_on_a_key_answers_400_and_writes_nothing()
     }
 }
 
-// A stamp no row carries, which an edit would refuse as stale: a create has no row to fence on, so it lands.
+// A token no row carries, which an edit would refuse as stale: a create has no row to fence on, so it lands.
 #[tokio::test]
 async fn a_pool_create_accepts_expected_revision_and_ignores_it() {
     let (app, _up, store, _router) = common::admin_parts().await;
@@ -3195,6 +3384,176 @@ async fn a_key_edit_without_expected_revision_lands_as_today() {
     .await;
     assert_eq!(plain.status(), 200);
     assert_eq!(store.api_key("desktop").unwrap().unwrap().label, "Plain");
+}
+
+/// The `revision` a pool or key answer carried.
+async fn answered_revision(response: axum::response::Response) -> u64 {
+    json(response).await["revision"].as_u64().unwrap()
+}
+
+/// A pool and a key read, deleted and created again under their ids: the predecessor's `revision` is refused, and so
+/// is the predecessor's incarnation at the replacement's own stamp, which an editor would hold had both writes landed
+/// in one millisecond. The replacement's `revision` lands.
+#[tokio::test]
+async fn a_stale_token_across_a_recreation_answers_stale_edit_for_a_pool_and_a_key() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pool_body = r#"{"id":"spare","label":"Spare","strategy":"priority"}"#;
+    let key_body = r#"{"id":"laptop","label":"Laptop","pool_id":"spare"}"#;
+    assert_eq!(
+        post(&app, "/admin/pools", pool_body, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    let old_pool = listed_revision(&app, &cookie, "pools", "spare").await;
+    assert_eq!(
+        post(&app, "/admin/keys", key_body, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    let old_key = listed_revision(&app, &cookie, "keys", "laptop").await;
+    assert_eq!(
+        delete(&app, "/admin/keys/laptop", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        delete(&app, "/admin/pools/spare", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        post(&app, "/admin/pools", pool_body, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    assert_eq!(
+        post(&app, "/admin/keys", key_body, Some(&cookie))
+            .await
+            .status(),
+        201
+    );
+    let pool_row = store.pool("spare").unwrap().unwrap();
+    let key_row = store.api_key("laptop").unwrap().unwrap();
+    for (path, sent, stale) in [
+        (
+            "/admin/pools/spare",
+            old_pool,
+            "the pool changed while it was being edited; reload and try again",
+        ),
+        (
+            "/admin/pools/spare",
+            phoebis_store::stamp_token(1, pool_row.updated_at),
+            "the pool changed while it was being edited; reload and try again",
+        ),
+        (
+            "/admin/keys/laptop",
+            old_key,
+            "the key changed while it was being edited; reload and try again",
+        ),
+        (
+            "/admin/keys/laptop",
+            phoebis_store::stamp_token(1, key_row.updated_at),
+            "the key changed while it was being edited; reload and try again",
+        ),
+    ] {
+        let refused = patch(
+            &app,
+            path,
+            &format!(r#"{{"label":"Stale","expected_revision":{sent}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(refused.status(), 409, "{path} {sent}");
+        assert_eq!(
+            refused.headers().get("x-phoebis-error-code").unwrap(),
+            "stale_edit",
+            "{path} {sent}"
+        );
+        assert_eq!(json(refused).await["error"], stale, "{path} {sent}");
+    }
+    assert_eq!(
+        (
+            store.pool("spare").unwrap().unwrap().label,
+            store.api_key("laptop").unwrap().unwrap().label
+        ),
+        ("Spare".to_string(), "Laptop".to_string()),
+        "the stale edits wrote nothing"
+    );
+    for (list, id, path) in [
+        ("pools", "spare", "/admin/pools/spare"),
+        ("keys", "laptop", "/admin/keys/laptop"),
+    ] {
+        let fresh = listed_revision(&app, &cookie, list, id).await;
+        let landed = patch(
+            &app,
+            path,
+            &format!(r#"{{"label":"Fresh","expected_revision":{fresh}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(landed.status(), 200, "{path}");
+    }
+}
+
+/// A pool and a key created, deleted and created again: the second `POST` answers the incarnation the store took, so
+/// a console that edits straight from that answer sends a `revision` the row carries.
+#[tokio::test]
+async fn a_patch_with_the_revision_the_post_answered_lands_on_a_recreated_pool_and_key() {
+    let (app, _up, store, _router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    let pool_body = r#"{"id":"spare","label":"Spare","strategy":"priority"}"#;
+    let key_body = r#"{"id":"laptop","label":"Laptop","pool_id":"spare"}"#;
+    let first_pool =
+        answered_revision(post(&app, "/admin/pools", pool_body, Some(&cookie)).await).await;
+    let first_key =
+        answered_revision(post(&app, "/admin/keys", key_body, Some(&cookie)).await).await;
+    assert_eq!(
+        (first_pool >> 42, first_key >> 42),
+        (1, 1),
+        "a new id answers the first incarnation"
+    );
+    assert_eq!(
+        delete(&app, "/admin/keys/laptop", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    assert_eq!(
+        delete(&app, "/admin/pools/spare", Some(&cookie))
+            .await
+            .status(),
+        204
+    );
+    let pool = answered_revision(post(&app, "/admin/pools", pool_body, Some(&cookie)).await).await;
+    let key = answered_revision(post(&app, "/admin/keys", key_body, Some(&cookie)).await).await;
+    assert_eq!(
+        (pool >> 42, key >> 42),
+        (2, 2),
+        "each answer decodes to the incarnation the store took"
+    );
+    for (path, sent) in [("/admin/pools/spare", pool), ("/admin/keys/laptop", key)] {
+        let landed = patch(
+            &app,
+            path,
+            &format!(r#"{{"label":"Edited","expected_revision":{sent}}}"#),
+            Some(&cookie),
+        )
+        .await;
+        assert_eq!(landed.status(), 200, "{path}");
+    }
+    assert_eq!(
+        (
+            store.pool("spare").unwrap().unwrap().label,
+            store.api_key("laptop").unwrap().unwrap().label
+        ),
+        ("Edited".to_string(), "Edited".to_string())
+    );
 }
 
 /// Each pool write answers the stamp it wrote, the one the next fenced edit reads back; a pool created from an id

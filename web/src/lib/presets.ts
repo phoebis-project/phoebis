@@ -23,7 +23,7 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
 
 /**
  * The hysteresis band under the shedding margin: a shed session lands only on a subscription member below
- * `margin - MIGRATE_BAND`; an Anthropic-key member's bucket reads against 1.0.
+ * `margin - MIGRATE_BAND`; an API-key member's bucket reads against 1.0.
  */
 export const MIGRATE_BAND = 0.05;
 
@@ -92,7 +92,7 @@ export interface ShedPreview {
   /** The marked burn over the burn of the members that ran a round; 0 when they burn nothing. */
   burnShare: number;
   /**
-   * Whether an eligible member reads cool (a subscription member under the band, an Anthropic-key member with room in
+   * Whether an eligible member reads cool (a subscription member under the band, an API-key member with room in
    * its bucket), where the router lands a marked session; without one the marks stand and nothing moves. The router
    * also passes over a member at its in-flight cap or one any pool shed from within the dwell, which the pool view
    * does not carry.
@@ -134,11 +134,12 @@ export function shedPreview(
     return w === null ? null : aheadOf(w, WINDOW_HOURS[id] * 3_600_000, now);
   };
   // The router's destination readings: a subscription account's two shared windows by their lead over pace against the
-  // band, an Anthropic-key account's worst live bucket against 1.0 (a bucket refills within its minute); a window the
-  // row does not carry reads as under.
+  // band, an API-key account's worst live bucket against 1.0 (a bucket refills within its minute); a window the
+  // row does not carry reads as under. An API-key account's live buckets are its `rpm:`, `itpm:` and `otpm:` ones whose
+  // reset is ahead, or which carry none and were read within the minute, as the router's `worst_bucket` reads them.
   const under = (a: Account) =>
     a.kind === 'api_key'
-      ? Math.max(0, ...a.windows.filter((w) => w.resetsAt === null || Date.parse(w.resetsAt) > now).map((w) => w.utilization)) < 1
+      ? Math.max(0, ...a.windows.filter((w) => /^(rpm|itpm|otpm):/.test(w.id) && (w.resetsAt === null ? now - Date.parse(w.observedAt) < 60_000 : Date.parse(w.resetsAt) > now)).map((w) => w.utilization)) < 1
       : (['5h', '7d'] as const).every((id) => (lead(a, id) ?? Number.NEGATIVE_INFINITY) < band);
   const cool = pool.members.some((m) => {
     const account = byId.get(m.accountId);

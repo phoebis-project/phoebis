@@ -24,7 +24,9 @@ function fastLane(input: number, output: number, resetsInMs: number): Account['f
 
 // Each plan label derives from the entry's subscription by the decoder's own rule, so the mock and the served
 // console draw one name. The day's and the week's request counts derive from the request rows and the rollups in
-// `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold.
+// `requests.ts`; a lifetime reaches past both, so it is the story's own, raised there to what the rollups hold. The
+// pools' member lists hold every membership and the mock reads an account's pool off them at each answer, so no
+// entry seeds one and a member write moves it.
 export const ACCOUNTS: Account[] = ([
   {
     ...ACCOUNT_SAMPLE,
@@ -34,10 +36,6 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator@example.com',
     status: 'cooldown',
     routingEnabled: true,
-    pools: [
-      { poolId: 'all', priority: 0 },
-      { poolId: 'work', priority: 0 },
-    ],
     // The poll's week for a model the family table has no row for: kept and shown under its key, read by no rule.
     windows: [win('5h', 0.62, 2 * HOUR + 14 * MINUTE), win('7d', 0.41, 3 * DAY + 5 * HOUR + 40 * MINUTE), win('seven_day_opus', 0.08, 3 * DAY + 5 * HOUR + 40 * MINUTE)],
     fableWindow: win('7d_fable', 0.12, 3 * DAY + 5 * HOUR + 40 * MINUTE),
@@ -84,7 +82,6 @@ export const ACCOUNTS: Account[] = ([
     // Cancelled, with both ends set: the stored one the operator saved, the derived one the form would
     // otherwise have prefilled.
     cancelled: true,
-    pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 1, 1 * HOUR + 12 * MINUTE), win('7d', 0.88, 5 * DAY + 2 * HOUR + 5 * MINUTE)],
     fableWindow: null,
     extraUsage: null,
@@ -96,7 +93,7 @@ export const ACCOUNTS: Account[] = ([
       quarantined: false,
       refreshTokenExpiresAt: ahead(31 * DAY),
     },
-    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(20 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
+    subscription: { billingType: 'monthly', organizationType: 'claude_pro', plan: 'pro', rateLimitTier: 'default_claude_ai', since: ago(30 * DAY), trialEndsAt: ahead(8 * DAY), endsAt: ahead(5 * DAY), derivedEndsAt: ahead(35 * DAY) },
     requests: { last24h: 0, last7d: 0, lifetime: 1_140 },
     cooldowns: [
       {
@@ -125,7 +122,6 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+nightly@example.com',
     status: 'ready',
     routingEnabled: true,
-    pools: [{ poolId: 'all', priority: 0 }],
     windows: [win('5h', 0.97, 3 * HOUR + 41 * MINUTE), win('7d', 0.35, 1 * DAY + 18 * HOUR + 12 * MINUTE)],
     fableWindow: win('7d_fable', 0.41, 1 * DAY + 18 * HOUR + 12 * MINUTE),
     extraUsage: { disabledReason: null, enabled: true, inUse: true, monthlyLimitCredits: 2000, usedCredits: 612 },
@@ -144,6 +140,30 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 7_420 },
     cooldowns: [],
   },
+  // The work pool's one member, a Max 5x login paired a fortnight ago.
+  {
+    ...ACCOUNT_SAMPLE,
+    id: 'studio',
+    kind: 'oauth',
+    label: 'studio',
+    email: 'operator+studio@example.com',
+    status: 'ready',
+    routingEnabled: true,
+    windows: [win('5h', 0.34, 2 * HOUR + 51 * MINUTE), win('7d', 0.27, 4 * DAY + 9 * HOUR + 20 * MINUTE)],
+    fableWindow: win('7d_fable', 0.19, 4 * DAY + 9 * HOUR + 20 * MINUTE),
+    extraUsage: null,
+    fastLane: null,
+    credential: {
+      accessTokenExpiresAt: ahead(4 * HOUR + 35 * MINUTE),
+      lastError: null,
+      lastRefreshAt: ago(3 * HOUR + 25 * MINUTE),
+      quarantined: false,
+      refreshTokenExpiresAt: ahead(64 * DAY),
+    },
+    subscription: { billingType: 'monthly', organizationType: 'claude_max', plan: 'max', rateLimitTier: 'default_claude_max_5x', since: ago(16 * DAY), trialEndsAt: null, endsAt: null, derivedEndsAt: ahead(14 * DAY) },
+    requests: { last24h: 0, last7d: 0, lifetime: 48 },
+    cooldowns: [],
+  },
   {
     ...ACCOUNT_SAMPLE,
     id: 'overflow',
@@ -152,7 +172,6 @@ export const ACCOUNTS: Account[] = ([
     email: null,
     status: 'funding_required',
     routingEnabled: true,
-    pools: [{ poolId: 'all', priority: 1 }],
     windows: [],
     fableWindow: null,
     extraUsage: null,
@@ -170,14 +189,13 @@ export const ACCOUNTS: Account[] = ([
     email: null,
     status: 'ready',
     routingEnabled: true,
-    pools: [{ poolId: 'codex', priority: 0 }],
     windows: [],
     fableWindow: null,
     extraUsage: null,
     fastLane: null,
     credential: { accessTokenExpiresAt: null, lastError: null, lastRefreshAt: null, quarantined: false, refreshTokenExpiresAt: null },
     subscription: null,
-    // The codex pool's one member, so its lifetime holds what both of that pool's keys sent.
+    // The jobs pool's one member, so its lifetime holds what both of that pool's keys sent.
     requests: { last24h: 0, last7d: 0, lifetime: 3_400 },
     cooldowns: [],
   },
@@ -189,10 +207,10 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+old@example.com',
     status: 'reauth_required',
     routingEnabled: false,
-    pools: [],
     windows: [win('5h', 0.18, -2 * DAY, 2 * DAY + 3 * HOUR), win('7d', 0.52, 2 * DAY, 2 * DAY + 3 * HOUR)],
     fableWindow: null,
-    extraUsage: null,
+    // Off since the provider stopped funding it, as the last clean poll read it.
+    extraUsage: { disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider', enabled: false, inUse: false, monthlyLimitCredits: 0, usedCredits: 0 },
     fastLane: null,
     credential: {
       accessTokenExpiresAt: ago(2 * DAY + 2 * HOUR),
@@ -215,7 +233,6 @@ export const ACCOUNTS: Account[] = ([
     email: 'operator+spare@example.com',
     status: 'unpaired',
     routingEnabled: true,
-    pools: [],
     windows: [],
     fableWindow: null,
     extraUsage: null,
@@ -225,11 +242,11 @@ export const ACCOUNTS: Account[] = ([
     requests: { last24h: 0, last7d: 0, lifetime: 0 },
     cooldowns: [],
   },
-] satisfies Account[]).map((a) => ({ ...a, plan: planName(a.subscription), usage: usageOf(a) }));
+] satisfies Account[]).map((a) => ({ ...a, plan: planName(a.subscription), pool: null, usage: usageOf(a) }));
 
 export const accountById = new Map(ACCOUNTS.map((a) => [a.id, a]));
 
-/** The poll block the route answers on a row: none for an Anthropic-key account, which the poll never reads. */
+/** The poll block the route answers on a row: none for an API-key account, which the poll never reads. */
 export function usageOf(a: Pick<Account, 'id' | 'kind' | 'status'>): QuotaSnapshot | null {
   if (a.kind === 'api_key') return null;
   if (a.status === 'unpaired') return { ...QUOTA_SNAPSHOT_SAMPLE, accountId: a.id, error: 'no credential is stored for this account; pair it to load quota', fetchedAt: null, poll: null, status: 'error' };

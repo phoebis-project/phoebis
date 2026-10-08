@@ -10,7 +10,8 @@ version.workspace = true
 # on for a test build, so a release build carries no way to fail a ledger read on purpose.
 debug-hooks = []
 # The analytics folds only the tests call (`apply_filter`, `breakdown`, `burn_rows`, `burn_series`, `series` and
-# `LiveKeys::selects`), turned on by the dev-dependency below so a release build carries none of them.
+# `LiveKeys::selects`) and the disk cap a held batch is built on (`LedgerDb::fill_the_disk` and `free_the_disk`), turned
+# on by the dev-dependency below and the admin crate's, so a release build carries none of them.
 test-support = []
 
 [dependencies]

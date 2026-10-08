@@ -1,13 +1,13 @@
-//! A store with an OAuth account, an Anthropic-key account, a pool holding both and a key on it, the router over
+//! A store with an OAuth account, an API-key account, a pool holding both and a key on it, the router over
 //! them, a ledger over an in-memory file, and a clock the test moves; the reader spawns on the rig's bus.
 #![allow(dead_code)]
 use std::sync::atomic::{AtomicI64, Ordering};
-use std::sync::Arc;
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use bytes::Bytes;
 use fake_upstream::FakeUpstream;
-use phoebis_attention::{Attention, AttentionHandles, AttentionParts};
+use phoebis_attention::{Attention, AttentionHandles, AttentionParts, PairFacts, TlsPairs};
 use phoebis_bus::{
     Bus, Event, Kind as RequestKind, Origin, Outcome, RequestComplete, RequestObserved,
     RequestShape, ResponseFacts,
@@ -46,18 +46,44 @@ impl Rig {
         &self,
         usage: Option<Arc<UsageService>>,
     ) -> (Arc<Attention>, AttentionHandles) {
+        self.attention_with_pairs(usage, None)
+    }
+
+    /// The same reader over a listener set the case holds, in place of the router's loaded pairs.
+    pub fn attention_with_pairs(
+        &self,
+        usage: Option<Arc<UsageService>>,
+        tls: Option<Arc<dyn TlsPairs>>,
+    ) -> (Arc<Attention>, AttentionHandles) {
         phoebis_attention::spawn(AttentionParts {
             bus: self.bus.clone(),
             clock: self.clock(),
             ledger: Some(self.ledger.clone()),
             router: self.router.clone(),
             store: self.store.clone(),
+            tls,
             usage,
         })
     }
 
     pub fn at(&self, ms: i64) {
         self.clock.store(ms, Ordering::SeqCst);
+    }
+}
+
+/// The listeners' pairs as a case sets them, read whole on every call as the router's set is.
+#[derive(Default)]
+pub struct Pairs(pub Mutex<Vec<PairFacts>>);
+
+impl Pairs {
+    pub fn set(&self, pairs: Vec<PairFacts>) {
+        *self.0.lock().unwrap() = pairs;
+    }
+}
+
+impl TlsPairs for Pairs {
+    fn pairs(&self) -> Vec<PairFacts> {
+        self.0.lock().unwrap().clone()
     }
 }
 
@@ -174,6 +200,7 @@ fn seed(store: &Store) {
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-desktop").to_vec(),
                 prefix: "phoebis-desk".into(),
+                incarnation: 1,
                 created_at: NOW,
                 updated_at: 0,
                 rotated_at: None,

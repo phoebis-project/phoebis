@@ -1,9 +1,9 @@
 # Pools, keys, routing, and overage
 
-A pool holds one or more accounts, each with a priority; a key routes into exactly one pool; every request a key
-presents is placed on one account of that pool by a selection that honours the session's pin, the pool's strategy,
-and each account's quota. This page describes every field of an account, a pool, and a key, then the selection
-itself, and the answers a client gets when nothing can serve it.
+A pool holds one or more accounts, each with a priority, an account belongs to one pool, and a key routes into exactly
+one pool. Every request a key presents is placed on one account of that pool by a selection that honors the session's
+pin, the pool's strategy, and each account's quota. This page describes every field of an account, a pool, and a key,
+then the selection itself, and the answers a client gets when nothing can serve it.
 
 ## Catalogs
 
@@ -46,6 +46,8 @@ curl -sS -b jar.txt -X POST https://phoebis.example/admin/pools \
   -H 'content-type: application/json' -H 'origin: https://phoebis.example' \
   -d '{"id":"main","label":"Main","members":[{"account_id":"vendor","priority":0}]}'
 ```
+
+An account belongs to one pool.
 
 Every field, in the order the request body takes them:
 
@@ -100,7 +102,7 @@ A member's `priority` is a number; lower sorts first. Naming an unknown account 
 account {id} not found`, and the pool is not created.
 
 Every member carries a daily and a monthly spend budget, `budget_daily_usd` and `budget_monthly_usd`, each unset by
-default (no cap) and measured over the UTC calendar day or month. An Anthropic-key member's whole spend counts; a
+default (no cap) and measured over the UTC calendar day or month. An API-key member's whole spend counts; a
 subscription member's metered spend alone does, its overage traffic and its fast answers (a fast answer draws usage
 credits whatever the overage state), priced at API list rates from the rollups filed under `overage` and `fast`, so a
 budget on one bounds its extra spend in dollars from the router's side while its plan-funded traffic is never counted. A
@@ -114,7 +116,7 @@ pool whose members all carry budgets answers `accounts_unavailable` until the wr
 afresh. No operator action is needed; the state clears on the next landed batch.
 
 `prefer_subscription` orders the set by kind (subscription accounts with plan quota, then those in overage, then
-Anthropic keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
+API keys) before priority; it is the operator's answer alone, on by default, and no strategy overrides it. A pool
 with keys cannot be deleted: `409 pool still has keys`.
 
 Each strategy's rule, as the pool dialog's Strategy hint states it (the pool dialog's "Prioritize subscription accounts"
@@ -136,10 +138,10 @@ own exhausted row opens the [routing log](statistics.md#routing-log) on the pool
 condition began. The card's other rows keep their targets, and a row that points at the pool's own card stays unlinked.
 
 ![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
-the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+the status means, what needs attention and a table of who serves next; the jobs pool reads exhausted because its one
 member is at its daily budget][pl]
 ![The Pools view: one card per pool with its status badge and key count, the features it has on, one sentence on what
-the status means, what needs attention and a table of who serves next; the codex pool reads exhausted because its one
+the status means, what needs attention and a table of who serves next; the jobs pool reads exhausted because its one
 member is at its daily budget][pd]
 
 [pl]: assets/pools-light.png#only-light
@@ -149,7 +151,7 @@ member is at its daily budget][pd]
 
 A pool can set the prompt cache TTL of every request it serves toward `api.anthropic.com`. The policy object carries
 `enabled` (default `false`), `inject_when_absent` (default `false`), and two rule sets, `plan` and `metered`: `plan`
-prices a subscription account on plan quota, `metered` an Anthropic-key account or a subscription account in overage.
+prices a subscription account on plan quota, `metered` an API-key account or a subscription account in overage.
 Each set carries `main` and `subagent` in `5m` or `1h` and `models`, a list of `{model, main, subagent}` overrides on
 canonical ids. `plan` defaults to one hour throughout and `metered` to five minutes throughout: a one-hour write costs a
 metered account 2x base input against 1.25x for five minutes, and a plan-funded account the same window share either
@@ -162,7 +164,7 @@ policy could not enforce never travels unreported. On every other body the clien
 has no effect through the pool. A body that carries no marker is left as it came unless `inject_when_absent` is on, in
 which case the top-level `cache_control` member is added with the TTL, before `stream`; a token count is never edited by
 the policy: its markers travel as the client sent them and no beta follows it. The metered set applies while the write
-costs money: the serving account is in overage, or is an Anthropic-key account. Every request, a keepalive probe's
+costs money: the serving account is in overage, or is an API-key account. Every request, a keepalive probe's
 replay included, reads `main` or `subagent` by its agent, and one without an agent id reads as the main conversation.
 The TTL is priced per attempt, so a request that fails over reads its destination's state. Mixed TTLs across a session's
 requests are fine: the cache is keyed on the prefix, and the TTL sets an entry's lifetime and price alone. The cost of
@@ -288,7 +290,7 @@ deepest static boundary places a subagent under `by_cohort` or a main conversati
 shared prefix, sized by the relay's estimate from the request's bytes, is at least `min_shared_prefix_tokens`, the
 request carries or receives a cache marker, and the account is not at its cap, at or above the ceiling
 (`select_below_utilization`), at or above the shedding margin less its 0.05 band on its windows ahead of their pace
-(`shed_ahead_of_pace`, a subscription account), without room in its worst live rate-limit bucket (an Anthropic-key
+(`shed_ahead_of_pace`, a subscription account), without room in its worst live rate-limit bucket (an API-key
 account while a margin is set: a reading at or above 1.0, whatever its value), under the Pace floor, or winding down. A
 cooling account never reaches either rung, since the eligible set excludes it; a spent account is in the eligible set,
 and both rungs refuse it through the allowance check. A subagent under `with_main` lands its first request on its parent
@@ -307,7 +309,7 @@ both TTLs keeps each marker's.
 The eligible set starts from every account that can serve the canonical model: enabled, paired or keyed, not
 `reauth_required` or `funding_required`, off cooldown, and not already tried by this request. A request sent fast is
 judged for the fast lane instead: it passes an account cooldown whose window is a plan window, and an account whose fast
-lane is cooling or whose usage credits the poll reads as unavailable cannot serve it; an Anthropic-key account serves
+lane is cooling or whose usage credits the poll reads as unavailable cannot serve it; an API-key account serves
 it whenever it can serve at all.
 
 A pin is held per agent of a conversation, where a conversation is the session id or the conversation's own messages. It
@@ -326,7 +328,7 @@ that threshold in 5-hour utilization, and an account winding down toward its sub
 below) is skipped for a fresh placement too.
 
 What remains is ordered in tiers. With `prefer_subscription` on, the set splits into three kind groups walked in order,
-plan quota, overage, then Anthropic key; within a group, or across the whole set with the flag off, tiers order by
+plan quota, overage, then API key; within a group, or across the whole set with the flag off, tiers order by
 priority ascending, then, under `prefer_plan`, an account not in overage before one in overage. An account kept under
 `allow` with the model's week spent joins the overage group with the flag on, and with it off sorts behind every account
 that is not, whatever the priorities. The strategy picks inside the first non-empty tier. `pace` reads each account's
@@ -363,7 +365,7 @@ stands until its window's reset, plus the share of the window the router's own r
 (priced through the subscription cost model on the account's tier); a window the cost model cannot price for the request
 adds nothing and holds its reading; at the reset it reads zero and counts the requests since, a weekly window's reset
 advanced by whole weeks, the 5-hour window's next reset named by the next reading. A reading that names no reset stands
-until the next reading; an Anthropic-key account's rate-limit buckets stand until their reset or, without one, for a
+until the next reading; an API-key account's rate-limit buckets stand until their reset or, without one, for a
 minute. The share is priced through the account's stored tier: a tier change is read at the next profile refresh, within
 the hour, and applied when the router reloads; a tier changed while the router was down is read at start. The newest
 reading per account and window is kept in the registry and loaded at startup, so a restart, and an account whose first
@@ -386,8 +388,8 @@ fast takes neither the spent nor the overage rule, since it draws usage credits 
 With `shed_ahead_of_pace` set, every rule prefers a cool destination, so a moved session does not land where the next
 round would shed it again. A cool sibling reads under the margin minus 0.05 (`MIGRATE_BAND`) on how far the 5-hour and
 7-day windows of a subscription account run ahead of their pace, or holds room (under 1.0) in the worst live rate-limit
-bucket of an Anthropic-key account, whatever the margin, since a bucket refills within its minute; an unsampled account
-reads as under. No pool has run a shedding round on it within `source_dwell_seconds`, and it has room under the pool's
+bucket of an API-key account, whatever the margin, since a bucket refills within its minute; an unsampled account
+reads as under. The account has run no shedding round within `source_dwell_seconds`, and it has room under the pool's
 `in_flight_cap`. When no destination of a rule is cool, the rule still moves the pin to one of them, so a full cool
 sibling never keeps a free hot one from the session; only the shed rule insists on a cool one.
 
@@ -397,41 +399,40 @@ that reading stands (until its reset; a reading that names none stands until the
 (the default), the pin moves on this request to a sibling that holds allowance in those windows, without waiting for the
 upstream's 429. The shedding budget does not apply, and the band and the dwell only order the siblings: one ahead of its
 pace by the band's line that still holds allowance still receives the session when no cool one can. The router has to
-know the sibling's allowance: an Anthropic-key account has no plan window to spend, and any other sibling needs a
+know the sibling's allowance: an API-key account has no plan window to spend, and any other sibling needs a
 reading of each of those windows, from a head, the poll or the windows kept across restarts, carried forward as the
 windows passage says; a sibling with none stays out of the choice. Under `prefer_plan` a sibling in overage does not
 receive a spent pin, since the overage move would hand the session straight back. With the toggle off, or no sibling
 holding allowance, the session stays.
 
 **Overage** Under `prefer_plan`, a pin on a subscription account in overage returns to plan quota: warm or cold, it
-moves to a subscription sibling that is not in overage, never to an Anthropic-key account. The sibling has to hold
+moves to a subscription sibling that is not in overage, never to an API-key account. The sibling has to hold
 allowance too, since a spent one would move the session again on its next request. It waits while the reset the overage
 evidence names falls within `overage_move_grace_minutes` (default 30, `0` for no wait), so a session whose account gets
 its plan back soon keeps its cache and moves at most once. Evidence that names no reset moves the pin at once.
 
-**Return to plan** A pin on an Anthropic-key account moves to a subscription sibling that holds allowance and is not
+**Return to plan** A pin on an API-key account moves to a subscription sibling that holds allowance and is not
 in overage once its cache is cold, or once it has sat on the account for `source_dwell_seconds` since it landed there.
-An Anthropic key names no reset, so no grace applies.
+An API key names no reset, so no grace applies.
 
 **Drain** A cold pin on an account winding down toward its subscription end moves to an eligible sibling that is
 not winding down. A warm one stays (see **Subscription end**, below).
 
 **Shed** With `shed_ahead_of_pace` set, a request pinned to an account whose 5-hour or 7-day window runs ahead of its
 pace by at least the margin (the prediction less the share of the window already elapsed; a 5-hour window past its reset
-reads the router's own use since) starts a shedding round there, at most once per pool per `source_dwell_seconds`. The
-round orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the
-pin's last prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share` (default 0.5)
-of the pool's burn on the account over `burn_window_seconds` (default 600). It never marks the pool's last unmarked pin
-there, so a pool with one session on the account sheds nothing, whatever the account's other pools hold, and no round
-takes all of an account's burn. An account shared by pools runs one round per pool: each pool marks its own pins under
-its own share, dwell and bounds, and a pool's round leaves another pool's marks in place. A pin whose burn carries the
-total past the share stays marked, and the round stops there. A pin whose burn the cost model cannot price ranks after
-every priced pin of its group, counts nothing toward the share, and is never marked, so a session is never shed on a
-guess. `warm_sessions` bounds the order: `never` stops after the cold pins, `when_needed` (the default) goes on to the
-warm ones, and `always` orders every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a
-pin whose last refreshing request was sent in fast mode is out of the round: fast mode draws usage credits and no plan
-window, so the pin has no share to shed. In dollars, on an Anthropic-key account or one in overage, it stays in the
-round. A session that returns to standard requests brings its pin back with the plan burn it still carries.
+reads the router's own use since) starts a shedding round there, at most once per `source_dwell_seconds`. The round
+orders the pool's pins on the account, cold ones first by burn, then warm ones by burn over rewrite cost (the pin's last
+prompt size in tokens), and marks them in that order until the marked burn reaches `shed_share` (default 0.5) of the
+burn on the account over `burn_window_seconds` (default 600). It never marks the pool's last unmarked pin there, so a
+pool with one session on the account sheds nothing, and no round takes all of an account's burn. A pin a former pool
+left on the account is outside the round until it ends. A pin whose burn carries the total past the share stays marked,
+and the round stops there. A pin whose burn the cost model cannot price ranks after every priced pin of its group,
+counts nothing toward the share, and is never marked, so a session is never shed on a guess. `warm_sessions` bounds the
+order: `never` stops after the cold pins, `when_needed` (the default) goes on to the warm ones, and `always` orders
+every pin by burn over rewrite cost, cold or warm. While the account runs on its plan, a pin whose last refreshing
+request was sent in fast mode is out of the round: fast mode draws usage credits and no plan window, so the pin has no
+share to shed. In dollars, on an API-key account or one in overage, it stays in the round. A session that returns to
+standard requests brings its pin back with the plan burn it still carries.
 
 The console's Pools form offers, in its expert view, `shed_share`, `burn_window_seconds`, and `source_dwell_seconds`
 together as three presets beside custom: balanced (0.5, 600 s, 900 s, the default), fast (0.5, 300 s, 600 s), and
@@ -445,10 +446,10 @@ A marked session moves at its next request, onto a cool sibling (see above) that
 marked session stays where it is. A marked pin whose account is cooling for the session's model is released instead,
 with `cooldown` among its reasons, and its mark goes with it; the round on the account still runs, since a cooldown can
 hold one model alone. An unmarked pin never moves for utilization. The marks last for the dwell: a marked session that
-stays idle never moves, and no new round of the pool runs on the account until its dwell passes. The round's marks and
-its dwell are written to the registry and survive a restart, so a restart neither forgets a mark nor starts a fresh
-round inside the dwell; a held request does not survive one (the relay's open connection closes and the client retries),
-and the routing log's router started row says so.
+stays idle never moves, and no new round runs on the account until its dwell passes. The round's marks and its dwell are
+written to the registry and survive a restart, so a restart neither forgets a mark nor starts a fresh round inside the
+dwell; a held request does not survive one (the relay's open connection closes and the client retries), and the routing
+log's router started row says so.
 
 **Warmth** A pin stays warm while its last refresh is younger than the cache TTL in force for it. A `main`, `subagent`
 or `compaction` request ([`x-claude-code-request-class`](client.md#claude_code_gateway_hint_headers)) refreshes it, and
@@ -471,7 +472,7 @@ the pin and leaves its cache TTL as it was.
 **Burn** Each pin keeps its usage over `burn_window_seconds` as typed tokens per hour (input, cache read, 5-minute and
 1-hour cache writes, output) for the pin's one model, in two copies: one plain and one weighed by the peak band at each
 renewal. Nothing is priced until it is read: the round prices the banded copy as a share of the account's 5-hour window
-while a subscription account runs on its plan, and the plain copy in dollars on an Anthropic-key account or a
+while a subscription account runs on its plan, and the plain copy in dollars on an API-key account or a
 subscription account in overage, so leaving overage switches the reading without a reset and a session that moves
 between tiers reads the right share on both. A keepalive probe's usage never counts. A burn the model cannot price, for
 a model it has no weight for or a tier it has no capacity for, reads as none.
@@ -585,7 +586,7 @@ account-wide fallback duration instead. An HTTP date is read against the upstrea
 is present, to reduce clock-skew error. A valid long delay is never shortened, and every deadline is an absolute
 time with a one-second margin that survives a restart.
 
-An Anthropic-key account whose monthly spend cap is reached answers a 429 naming `enforced_spend_limit_reached`; the
+An API-key account whose monthly spend cap is reached answers a 429 naming `enforced_spend_limit_reached`; the
 account is cooled as a whole until the first of the next month, reason `spend_cap`, and an exhaustion it causes
 claims `overage`.
 
@@ -631,7 +632,7 @@ after a token endpoint's `5xx` or a lost answer the request is held on the same 
 refreshed a second time, so a session keeps its warm account through the endpoint's bad minute, which is waited out once
 per request; a refusal whose `Retry-After` is over five seconds and within the minute counts as that minute, so a
 request that already held its minute on another account fails over at once. A `Retry-After` past that minute, a second
-failure, or an Anthropic-key account's failure fails the request over to the next eligible account, and a request bound
+failure, or an API-key account's failure fails the request over to the next eligible account, and a request bound
 to its account, or one with no account left, is answered the router's own `503 accounts_unavailable` with no account
 named. An account the failover marks, or finds disconnected, keeps its pin until the reselect expires it and places a
 fresh one; any other failover moves the pin. The failover, its waits included, starts no new leg past the request's own
@@ -680,17 +681,18 @@ retry on the same account is charged at its dispatch. The count is kept by the r
 token count is not counted: it occupies no slot, is never passed over at the cap and is never held for one. An account
 at the pool's `in_flight_cap` (default 16) is passed over while a sibling is under it, even a sibling above
 `select_below_utilization`: the cap is a bound, the ceiling a preference. Only when every account that could serve is at
-its cap is the request held: it waits up to `retry_in_place_seconds` for a slot on the account it would have chosen and
-lands there when one frees; past the bound it is selected again with that account passed over, and with every account
+its cap is the request held: it waits for a slot on the account it would have chosen, and every hold of one request
+shares one bound of `retry_in_place_seconds` from the first hold, whatever the pool's size. A slot that frees inside it
+lands the request there, and past it the request is selected again with that account passed over, and with every account
 passed over it is answered `429` with the error type `rate_limit_error`, the error code `accounts_at_cap`, the message
 `every account in this pool is at its in-flight cap`, and a `Retry-After` of the pool's `retry_in_place_seconds` held
 between 1 and 19 seconds: the client waits out a `Retry-After` under 20 seconds and treats a longer one as a block it
-does not retry. A request is held at most once per account: a hold that runs out, or whose freed slot another request
-takes first, adds the account to the request's attempted set and the selection runs again; with every account held for
-and passed over, the answer is the `429` above. A request that dialled an account before its holds ran out, and a pool
-with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session already holds a pin
-under any agent is never held, and a move whose every destination is at its cap is not made: the pin renews in place and
-the next request judges the move again; a held subagent waits where its cohort is.
+does not retry. A request is held at most once per account and never past the request's one bound: a hold that runs out,
+or whose freed slot another request takes first, adds the account to the request's attempted set and the selection runs
+again. With every account passed over, the answer is the `429` above. A request that dialled an account before its holds
+ran out, and a pool with no account to hold for, keep the `503 accounts_unavailable` below. A request whose session
+already holds a pin under any agent is never held, and a move whose every destination is at its cap is not made: the pin
+renews in place and the next request judges the move again; a held subagent waits where its cohort is.
 
 ### When nothing can serve
 
@@ -757,9 +759,9 @@ A pool's `overage_policy` chooses what happens once an account starts billing ex
 
 - **Prefer plan quota** (`prefer_plan`): a pinned session on this account moves to a plan-funded subscription
   sibling with allowance, warm or cold, once the reset the overage evidence names is further away than
-  `overage_move_grace_minutes` (default 30); an Anthropic-key sibling is never its destination, since a move onto an
-  Anthropic-key account is kept for a hard reason. A hard reason on the account instead, such as a spent window or a
-  cooldown, takes the move it already has, which may land on an Anthropic-key sibling. An Anthropic-key member returns
+  `overage_move_grace_minutes` (default 30); an API-key sibling is never its destination, since a move onto an
+  API-key account is kept for a hard reason. A hard reason on the account instead, such as a spent window or a
+  cooldown, takes the move it already has, which may land on an API-key sibling. An API-key member returns
   to plan quota the same way, independent of this policy, once its pin is cold or has sat on the account for
   `source_dwell_seconds` (see [Moves](#moves)).
 - **Allow** (`allow`): ignore extra usage.
@@ -776,7 +778,7 @@ it when the header is present and false, or absent while the shared window heade
 the flag when `extra_usage.is_enabled` is true and the 5-hour or 7-day utilization has reached 1.0, and clears it when
 both shared windows are below 1.0. An account with extra usage enabled keeps serving with the flag set once its plan
 quota empties, so `prefer_plan` and `never` act through this flag rather than through a cooldown. Once the
-organisation's spend cap is reached it answers `429` with the overage window rejected and the claim
+organization's spend cap is reached it answers `429` with the overage window rejected and the claim
 `seven_day_overage_included`; both shared windows still read healthy, so the cooldown path scopes that rejection to the
 requested model on its own week when it has one (the Fable-scoped week today) and to the account otherwise.
 

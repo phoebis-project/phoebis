@@ -23,6 +23,7 @@ mod rules;
 mod session;
 mod sessions;
 mod settings;
+mod tls;
 
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex};
@@ -45,6 +46,7 @@ pub use pricing::table_envelopes;
 pub use readiness::{Readiness, ReadinessSource};
 pub use routes::router;
 pub use session::{AdminSecrets, LoginError, Sessions};
+pub use tls::{Reloaded, TlsReload};
 
 // A poisoned vault mutex means a prior panic happened while a pending bundle was being moved, so what
 // is still held, and what was already committed, can no longer be told apart.
@@ -63,6 +65,9 @@ pub struct AdminState {
     /// Whether the admin listener terminates TLS, which decides the session cookie's `Secure` flag and makes a
     /// presented `Origin` need `https://`.
     pub tls: bool,
+    /// The router's pairs, for the reload route; `None` where a harness builds no listeners, which answers an
+    /// empty list.
+    pub tls_reload: Option<Arc<dyn TlsReload>>,
     pub vault: Arc<PairingVault>,
     /// Unix milliseconds this state was built, which `GET /system` reports as uptime.
     pub started_at: i64,

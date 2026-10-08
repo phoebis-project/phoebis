@@ -73,6 +73,16 @@ const UNDO_V50: &str = "CREATE TABLE keepalive_budgets (day TEXT NOT NULL, scope
 // The reverse of the registry's version 49: the keepalive engine's three tables.
 const UNDO_V49: &str =
     "DROP TABLE keepalive_idle_returns; DROP TABLE keepalive_agents; DROP TABLE keepalive_sessions;";
+// The reverse of the registry's version 48, so a store stamped back below it can run it again.
+const UNDO_V48: &str = r#"
+ALTER TABLE pools DROP COLUMN incarnation;
+ALTER TABLE api_keys DROP COLUMN incarnation;
+DROP TABLE pool_tombstones;
+DROP TABLE api_key_tombstones;
+"#;
+// The reverse of the registry's version 47, so a store stamped back below it can run it again. One line with the
+// marker last, and the trailing `\n` ends the marker's comment.
+const UNDO_V47: &str = "DROP INDEX pool_members_one_pool; -- rollback\n";
 // The reverse of the registry's version 46, one statement per line.
 const UNDO_V46: &str = r#"
 DROP TABLE shed_rounds;
@@ -115,7 +125,7 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     // `session:s1`, both valid ids, each with its own payload.
     let conn = rusqlite::Connection::open(&path).unwrap();
     conn.execute_batch(&format!(
-        "{UNDO_V50} {UNDO_V49} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V41}"
+        "{UNDO_V50} {UNDO_V49} {UNDO_V48} {UNDO_V47} {UNDO_V46} {UNDO_V45} {UNDO_V44} {UNDO_V43} {UNDO_V41}"
     ))
     .unwrap();
     conn.execute_batch(
@@ -143,6 +153,6 @@ fn rows_keyed_s1_and_session_s1_both_survive_the_kind_prefix() {
     assert_eq!(
         payload("session:s1"),
         Some(r#"{"prompt_id":"p2"}"#.into()),
-        "and its neighbour keeps its own row"
+        "and its neighbor keeps its own row"
     );
 }

@@ -28,7 +28,7 @@ account is. A 429 on the pinned account, a credits block, overage under `never`,
 unpaired, and the pool's move rules move it as they move a real request.
 
 A probe costs a cache read at list price, which its own row in the request ledger carries. A later request that read
-the entry a probe kept is counted as kept warm, per pool and per hour.
+the entry a probe kept, a probe that rewrote the entry included, is counted as kept warm, per pool and per hour.
 
 A probe of a request sent fast runs fast too, since the replay keeps the body as sent: it draws usage credits at the
 fast rates, and its ledger row is priced at the fast cells. A probe the upstream served at standard speed is priced at
@@ -130,7 +130,7 @@ beside the count it bounds (see [In the console](#in-the-console)). The lease an
 Enabling `keepalive.enabled` on a pool needs `affinity_ttl_seconds` of at least 300 seconds, refused otherwise with
 "keepalive.enabled requires affinity_ttl_seconds of at least 300: a probe follows the session pin, and a pin shorter
 than the shortest cache TTL cannot keep the session on the account it warmed." A probe follows the session's pin to a
-subscription account as to an Anthropic-key one. A key with `keepalive_opt_out` is never retained.
+subscription account as to an API-key one. A key with `keepalive_opt_out` is never retained.
 
 In the console: Pools, Edit, the Keepalive group under Caching for "Keep prompt caches warm" and the policy's three
 numbers.
@@ -149,8 +149,9 @@ body the way a compaction does. A request matching neither the chain nor the pre
 and its recipe is left alone the same way an auxiliary one is. A body carrying no chain at all re-arms on every
 request, the fallback the router's own warmth check applies for a client that sends none.
 
-The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it. An auxiliary or a
-foreign request may still read a warm cache, but it never resets the recipe's schedule and settles nothing.
+The kept-warm credit follows the same rule: only a request that re-armed the recipe earns it, and it goes to the
+probe whose entry that request read, a probe that rewrote the entry included. An auxiliary or a foreign request may
+still read a warm cache, but it never resets the recipe's schedule and settles nothing.
 
 ## The four fields
 
@@ -180,7 +181,7 @@ any unknown field, `keepalive is not a policy object: unknown field ...`.
 
 For the console, `GET /admin/pools` also answers each pool's `keepalive_resolved`: the break-even and the three ceilings
 in seconds and the idle window's cost as a share of one re-write, each as the lowest and the highest figure over the
-pool's combinations. An OAuth member brings the cost model's factors and an Anthropic-key member the price table's. The
+pool's combinations. An OAuth member brings the cost model's factors and an API-key member the price table's. The
 pool's cache TTL policy gives the main conversation's TTL under each, and a policy that leaves the markers as sent
 brings both TTLs. The models are the price table's and those the cache TTL policy's per-model rows and the model rules'
 entries without a wildcard name, which carry the catalog's dated ids, each kept where the pool's model rules allow it.
@@ -329,15 +330,15 @@ A probe the router refused with `503 ledger_behind`, its ledger catching up, hol
 one, and counts no failure toward the failure limit, so a ledger that stays behind never pauses the recipe. The entry's
 expiry still bounds the re-sends: once it passes, the recipe ends under `expired`, as under any other hold.
 
-A wasted probe settles with one of nine reasons of its own: when the recipe stops with a probe unanswered or is held
+A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered or is held
 under `horizon`, when it lapses or is evicted, or when the next request after the probe reads nothing from the entry it
 kept:
 
 | Reason | What settles it |
 | --- | --- |
-| `cold_return` | The next request read no cache, or on another account, model or speed, or after the entry lapsed. |
+| `cold_return` | The next request read no cache, or on another account, model or speed, inside the probe's entry. |
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
-| `expired` | The recipe's cache entry expired before its probe was due. |
+| `expired` | The probe's entry expired before the next request arrived, or the recipe's before its probe was due. |
 | `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
 | `idle_limit` | The idle window ran out before a real request answered the probe. |
 | `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
@@ -357,9 +358,10 @@ probes cost, at the dearest listed cells for a model the price table does not kn
 that landed on a different account than the recipe's. `wasted_probes` and `wasted_probe_usd` are the probes settled
 wasted by one of the reasons above and what they cost, and `wasted_probe_reasons` counts those wasted probes by the
 reason. `probes_skipped` counts a due probe a gate or a lapsed entry withheld rather than sending, for example because a
-cooldown already held the recipe.
+cooldown already held the recipe. `probes_held` counts a probe the router refused with `503 ledger_behind` while its
+ledger caught up and sent again, outside the failed probes since no account answered it.
 
-`GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`ok`, `failed`, `migrated`,
+`GET /admin/keepalive/overview` sums the last 24 hours of these into `probes_24h` (`ok`, `failed`, `held`, `migrated`,
 `skipped`), and per pool into the probes served, the requests they kept warm and the wasted probes by reason, beside the
 pool's [idle-age counters](#the-return-rate-by-idle-age). It also answers the engine's session count, agent count and
 retained bytes, each beside its cap. Its `bus_gaps` counts the times the engine found it had missed bus events. Each gap
@@ -441,13 +443,14 @@ file exists, and the subscription cost model (`crates/ledger/subscription_costs.
 profile reports, with the 5-hour and the 7-day window each as a bar labeled as a multiple of the smallest tier's window
 (Pro's in the shipped model), and the week counted in full 5-hour windows. A Peak band switch, outside the band until
 turned, redraws the bars and the count for a request completing inside the band, where each window holds its capacity
-factor of its capacity. Peak band draws this week, Monday to Sunday in the browser's time zone (on a day the band is
-off, the week of the next day it covers), the band's hours on each day it covers and a marker at now when that week
-holds it, under a caption that names this week's hours here and in the zone the cost model defines them in. Beside the
-grid it says whether the band runs now and until when, names the next change of the local hours that opens within ten
-weeks, from its first day to the last before the hours return, or as lasting when they have not returned 26 weeks on,
-and draws each window's capacity factor. A zone the browser's time zone data lacks leaves the band's state unknown: the
-card gives the band's hours in that zone alone, says the browser cannot read it, and draws no grid and no change.
+factor of its capacity. Peak band draws a week, Monday to Sunday in the browser's time zone: this week, or next week
+when the start of today's band (the next band day's on a day the band is off) falls in it. It draws the band's hours on
+each day it covers and a marker at now when that week holds it, under a caption that names this week's hours here and
+in the zone the cost model defines them in. Beside the grid it says whether the band runs now and until when, names the
+next change of the local hours that opens within ten weeks, from its first day to the last before the hours return, or
+as lasting when they have not returned 26 weeks on, and draws each window's capacity factor. A zone the browser's time
+zone data lacks leaves the band's state unknown: the card gives the band's hours in that zone alone, says the browser
+cannot read it, and draws no grid and no change.
 
 **Plan rates.** The share of a tier's 5-hour and 7-day window that a token count of each type spends, per model, for a
 request completing outside or inside the band. The tab opens on the cost model's anchor tier, Max 20x, outside the band,
@@ -469,7 +472,7 @@ shipped files keep, and a file kept in another order lists the same. Plan rates 
 others under the divider. The dialog's footer names each table's date and source, `shipped` or `file`, with the key and
 the path that set or would replace it in the title.
 
-API prices carries the caption "USD per million tokens at list price. An Anthropic-key account pays these. A
+API prices carries the caption "USD per million tokens at list price. An API-key account pays these. A
 subscription account pays them in overage and for fast-mode answers." A probe's own row in the request ledger is priced
 from it in dollars, whatever the account's funding, and a probe on a model the price table does not list prices at the
 table's dearest cell of each type, never at zero. The two tables also set a recipe's break-even, which the pool's

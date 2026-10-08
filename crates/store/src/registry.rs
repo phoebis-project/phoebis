@@ -406,6 +406,9 @@ pub struct PoolRow {
     /// falls back to its own classifier requests.
     pub auto_mode_server: bool,
     pub affinity: Affinity,
+    /// How many times this id has held a pool. A deletion leaves the count behind in a tombstone and a pool created
+    /// again under the id starts one above it, so an edit read from the deleted pool cannot land on its replacement.
+    pub incarnation: u64,
     pub created_at: i64,
     pub updated_at: i64,
 }
@@ -440,6 +443,7 @@ impl PoolRow {
             cache_diagnostics: false,
             auto_mode_server: true,
             affinity: Affinity::default(),
+            incarnation: 1,
             created_at: 0,
             updated_at: 0,
         }
@@ -504,6 +508,9 @@ pub struct ApiKeyRow {
     pub body_capture_hours: Option<u32>,
     pub secret_digest: Vec<u8>,
     pub prefix: String,
+    /// How many times this id has held a key. A deletion leaves the count behind in a tombstone and a key created
+    /// again under the id starts one above it, so an edit read from the deleted key cannot land on its replacement.
+    pub incarnation: u64,
     pub created_at: i64,
     /// The row's last write: the create, an edit, a rotation or a revocation, never a use's `last_used_at`. The
     /// create stamps `created_at`; every later write stamps the clock or one past the stored stamp, whichever is
@@ -749,24 +756,26 @@ impl Store {
         .map_err(StoreError::from)
     }
 
-    pub fn insert_pool(&self, row: &PoolRow, actor: &str) -> Result<i64, StoreError> {
+    pub fn insert_pool(&self, row: &PoolRow, actor: &str) -> Result<PoolRow, StoreError> {
         self.insert_pool_with_members(row, None, actor)
     }
 
     /// The pool row and its members under one `BEGIN IMMEDIATE`: a refused member (a duplicate, an unknown
-    /// account) leaves no row. Answers the stamp the row was created and last updated at.
+    /// account, an account in another pool) leaves no row. Answers the committed row: the incarnation is taken inside
+    /// the transaction, so the caller's row cannot know it, and the stamps are the store's own.
     pub fn insert_pool_with_members(
         &self,
         row: &PoolRow,
         members: Option<&[MemberWrite]>,
         actor: &str,
-    ) -> Result<i64, StoreError> {
+    ) -> Result<PoolRow, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let now = now_ms();
+        let incarnation = crate::accounts::next_incarnation_in(&tx, "pool_tombstones", &row.id)?;
         tx.execute(
-            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, shed_ahead_of_pace, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, created_at, updated_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?30)",
+            "INSERT INTO pools (id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, shed_ahead_of_pace, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, created_at, updated_at, incarnation) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?30, ?31)",
             params![
                 row.id,
                 row.label,
@@ -797,15 +806,21 @@ impl Store {
                 row.affinity.session_placement,
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.auto_mode_server,
-                now
+                now,
+                incarnation as i64
             ],
         )?;
         record_change(&tx, now, actor, "pool_created", &row.id, &pool_diff(row))?;
         if let Some(members) = members {
             set_pool_members_in(&tx, &row.id, members, now, actor)?;
         }
+        let written = tx.query_row(
+            &format!("{POOL_SELECT} WHERE id = ?1"),
+            params![row.id],
+            row_to_pool,
+        )?;
         tx.commit()?;
-        Ok(now)
+        Ok(written)
     }
 
     /// The policy write fenced on the `updated_at` the caller read: `Stale` when another write moved the row since.
@@ -818,7 +833,8 @@ impl Store {
         self.update_pool_with_members(row, expected_updated_at, None, actor)
     }
 
-    /// The policy and the members under one transaction, fenced on the `updated_at` the handler read. Answers the
+    /// The policy and the members under one transaction, fenced on the `updated_at` the handler read and on `row`'s
+    /// incarnation, so an edit read from a deleted pool never lands on one created again under its id. Answers the
     /// stamp written, which the next fenced edit reads.
     pub fn update_pool_with_members(
         &self,
@@ -833,7 +849,7 @@ impl Store {
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         let at = stamp_past(expected_updated_at);
         let updated = tx.execute(
-            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, shed_ahead_of_pace = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, auto_mode_server = ?29, updated_at = ?30 WHERE id = ?1 AND updated_at = ?31",
+            "UPDATE pools SET label = ?2, enabled = ?3, strategy = ?4, affinity_ttl_seconds = ?5, overage_policy = ?6, shed_ahead_of_pace = ?7, select_below_utilization = ?8, model_rules_json = ?9, keepalive_json = ?10, body_capture_hours = ?11, prefer_subscription = ?12, shed_share = ?13, burn_window_seconds = ?14, source_dwell_seconds = ?15, migrate_when_spent = ?16, warm_sessions = ?17, retry_in_place_seconds = ?18, in_flight_cap = ?19, pace_floor = ?20, overage_move_grace_minutes = ?21, wind_down_minutes = ?22, cache_ttl_json = ?23, cache_diagnostics = ?24, affinity_mode = ?25, subagent_placement = ?26, session_placement = ?27, min_shared_prefix_tokens = ?28, auto_mode_server = ?29, updated_at = ?30 WHERE id = ?1 AND updated_at = ?31 AND incarnation = ?32",
             params![
                 row.id,
                 row.label,
@@ -865,7 +881,8 @@ impl Store {
                 row.affinity.min_shared_prefix_tokens as i64,
                 row.auto_mode_server,
                 at,
-                expected_updated_at
+                expected_updated_at,
+                row.incarnation as i64
             ],
         )?;
         if updated == 0 {
@@ -900,9 +917,20 @@ impl Store {
         if keys > 0 {
             return Err(StoreError::PoolInUse(id.to_string()));
         }
-        if tx.execute("DELETE FROM pools WHERE id = ?1", params![id])? == 0 {
-            return Err(StoreError::PoolNotFound(id.to_string()));
-        }
+        let incarnation: Option<i64> = tx
+            .query_row(
+                "SELECT incarnation FROM pools WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let incarnation = incarnation.ok_or_else(|| StoreError::PoolNotFound(id.to_string()))?;
+        tx.execute("DELETE FROM pools WHERE id = ?1", params![id])?;
+        tx.execute(
+            "INSERT INTO pool_tombstones (id, incarnation) VALUES (?1, ?2) \
+             ON CONFLICT(id) DO UPDATE SET incarnation = max(pool_tombstones.incarnation, excluded.incarnation)",
+            params![id, incarnation],
+        )?;
         record_change(&tx, now_ms(), actor, "pool_deleted", id, "{}")?;
         tx.commit()?;
         Ok(())
@@ -966,9 +994,10 @@ impl Store {
         .map_err(StoreError::from)
     }
 
-    /// Answers the `created_at` it stamped, which is the row's `updated_at` too: a caller's own clock is not the
-    /// generation, and a selector or a response built from the row would name the wrong holder after a re-create.
-    pub fn insert_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<i64, StoreError> {
+    /// Answers the committed row, with the `created_at` it stamped (the row's `updated_at` too) and the incarnation it
+    /// took: a caller's own clock is not the generation, and a selector or a response built from the caller's row
+    /// would name the wrong holder after a re-create.
+    pub fn insert_api_key(&self, row: &ApiKeyRow, actor: &str) -> Result<ApiKeyRow, StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
         if tx.query_row(
@@ -989,9 +1018,10 @@ impl Store {
             |r| r.get(0),
         )?;
         let now = previous.map_or(now_ms(), |p| now_ms().max(p + 1));
+        let incarnation = crate::accounts::next_incarnation_in(&tx, "api_key_tombstones", &row.id)?;
         tx.execute(
-            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at) \
-             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, NULL, NULL, NULL)",
+            "INSERT INTO api_keys (id, label, notes, pool_id, enabled, revoked_at, expires_at, model_rules_json, model_rules_mode, long_context_twins, keepalive_opt_out, body_capture_hours, secret_digest, prefix, auto_mode_server, created_at, updated_at, rotated_at, last_used_at, retired_secret_last_used_at, incarnation) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?16, NULL, NULL, NULL, ?17)",
             params![
                 row.id,
                 row.label,
@@ -1008,16 +1038,23 @@ impl Store {
                 row.secret_digest,
                 row.prefix,
                 row.auto_mode_server,
-                now
+                now,
+                incarnation as i64
             ],
         )?;
         record_change(&tx, now, actor, "key_created", &row.id, &key_diff(row))?;
+        let written = tx.query_row(
+            &format!("{KEY_SELECT} WHERE id = ?1"),
+            params![row.id],
+            row_to_key,
+        )?;
         tx.commit()?;
-        Ok(now)
+        Ok(written)
     }
 
-    /// The edit fenced on the `updated_at` the caller read: `Stale` when another write moved the row since.
-    /// Answers the `updated_at` it stamped, which a response built from `row` carries.
+    /// The edit fenced on the `updated_at` the caller read and on `row`'s incarnation: `Stale` when another write moved
+    /// the row since, or the key was deleted and created again. Answers the `updated_at` it stamped, which a response
+    /// built from `row` carries.
     pub fn update_api_key(
         &self,
         row: &ApiKeyRow,
@@ -1038,7 +1075,7 @@ impl Store {
         }
         let at = stamp_past(expected_updated_at);
         let updated = tx.execute(
-            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14",
+            "UPDATE api_keys SET label = ?2, notes = ?3, pool_id = ?4, enabled = ?5, expires_at = ?6, model_rules_json = ?7, model_rules_mode = ?8, long_context_twins = ?9, keepalive_opt_out = ?10, body_capture_hours = ?11, auto_mode_server = ?12, updated_at = ?13 WHERE id = ?1 AND updated_at = ?14 AND incarnation = ?15",
             params![
                 row.id,
                 row.label,
@@ -1053,7 +1090,8 @@ impl Store {
                 row.body_capture_hours.map(|h| h as i64),
                 row.auto_mode_server,
                 at,
-                expected_updated_at
+                expected_updated_at,
+                row.incarnation as i64
             ],
         )?;
         if updated == 0 {
@@ -1144,9 +1182,20 @@ impl Store {
     pub fn delete_api_key(&self, id: &str, actor: &str) -> Result<(), StoreError> {
         let mut conn = self.conn.lock().expect(LOCK_POISONED);
         let tx = conn.transaction_with_behavior(rusqlite::TransactionBehavior::Immediate)?;
-        if tx.execute("DELETE FROM api_keys WHERE id = ?1", params![id])? == 0 {
-            return Err(StoreError::KeyNotFound(id.to_string()));
-        }
+        let incarnation: Option<i64> = tx
+            .query_row(
+                "SELECT incarnation FROM api_keys WHERE id = ?1",
+                params![id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        let incarnation = incarnation.ok_or_else(|| StoreError::KeyNotFound(id.to_string()))?;
+        tx.execute("DELETE FROM api_keys WHERE id = ?1", params![id])?;
+        tx.execute(
+            "INSERT INTO api_key_tombstones (id, incarnation) VALUES (?1, ?2) \
+             ON CONFLICT(id) DO UPDATE SET incarnation = max(api_key_tombstones.incarnation, excluded.incarnation)",
+            params![id, incarnation],
+        )?;
         tx.execute("DELETE FROM pins WHERE key_id = ?1", params![id])?;
         // Nothing reads these rows again, since a key created under the id next takes a later generation;
         // dropping them here spares the retention purge a table of dead entries.
@@ -1353,6 +1402,22 @@ fn set_pool_members_in(
             return Err(StoreError::AccountNotFound(member.account_id.clone()));
         }
     }
+    // An account belongs to one pool. A member of the pool being written is fine, since the list replaces it.
+    for member in members {
+        let held: Option<String> = tx
+            .query_row(
+                "SELECT pool_id FROM pool_members WHERE account_id = ?1 AND pool_id != ?2",
+                params![member.account_id, pool_id],
+                |r| r.get(0),
+            )
+            .optional()?;
+        if let Some(held) = held {
+            return Err(StoreError::AccountInPool {
+                account_id: member.account_id.clone(),
+                pool_id: held,
+            });
+        }
+    }
     tx.execute(
         "DELETE FROM pool_members WHERE pool_id = ?1",
         params![pool_id],
@@ -1372,8 +1437,8 @@ fn set_pool_members_in(
     Ok(())
 }
 
-const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, shed_ahead_of_pace, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server FROM pools";
-const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at FROM api_keys";
+const POOL_SELECT: &str = "SELECT id, label, enabled, strategy, affinity_ttl_seconds, overage_policy, shed_ahead_of_pace, select_below_utilization, model_rules_json, keepalive_json, body_capture_hours, created_at, updated_at, prefer_subscription, shed_share, burn_window_seconds, source_dwell_seconds, migrate_when_spent, warm_sessions, retry_in_place_seconds, in_flight_cap, pace_floor, overage_move_grace_minutes, wind_down_minutes, cache_ttl_json, cache_diagnostics, affinity_mode, subagent_placement, session_placement, min_shared_prefix_tokens, auto_mode_server, incarnation FROM pools";
+const KEY_SELECT: &str = "SELECT id, label, notes, pool_id, enabled, revoked_at, expires_at, keepalive_opt_out, body_capture_hours, secret_digest, prefix, created_at, rotated_at, last_used_at, retired_secret_last_used_at, model_rules_json, model_rules_mode, long_context_twins, auto_mode_server, updated_at, incarnation FROM api_keys";
 
 fn all_pools(conn: &rusqlite::Connection) -> Result<Vec<PoolRow>, StoreError> {
     let mut stmt = conn.prepare(&format!("{POOL_SELECT} ORDER BY label, id"))?;
@@ -1431,6 +1496,7 @@ fn row_to_pool(r: &rusqlite::Row<'_>) -> rusqlite::Result<PoolRow> {
             min_shared_prefix_tokens: r.get::<_, i64>(29)? as u64,
         },
         auto_mode_server: r.get(30)?,
+        incarnation: r.get::<_, i64>(31)? as u64,
     })
 }
 
@@ -1453,6 +1519,7 @@ fn row_to_key(r: &rusqlite::Row<'_>) -> rusqlite::Result<ApiKeyRow> {
         body_capture_hours: r.get::<_, Option<i64>>(8)?.map(|h| h as u32),
         secret_digest: r.get(9)?,
         prefix: r.get(10)?,
+        incarnation: r.get::<_, i64>(20)? as u64,
         created_at: r.get(11)?,
         updated_at: r.get(19)?,
         rotated_at: r.get(12)?,

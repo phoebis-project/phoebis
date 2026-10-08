@@ -117,7 +117,7 @@ test('dollar ticks step as fmtUsd does, with one precision for every tick of an 
   assert.deepEqual(axis([0]), ['$0.00'], 'an axis at zero reads cents');
   assert.deepEqual(axis([0, 10, 20, 30]), ['$0', '$10', '$20', '$30']);
   assert.deepEqual(axis([0, 2.5, 5, 7.5]), ['$0.00', '$2.50', '$5.00', '$7.50']);
-  // Labelled one by one, these would read $0.00, $0.0040, $0.0080, $0.01 and $0.02, with two ticks at $0.01.
+  // Labeled one by one, these would read $0.00, $0.0040, $0.0080, $0.01 and $0.02, with two ticks at $0.01.
   assert.deepEqual(axis([0, 0.004, 0.008, 0.012, 0.016]), ['$0.000', '$0.004', '$0.008', '$0.012', '$0.016'], 'a sub-dime axis keeps every tick apart');
   assert.deepEqual(axis([0, 0.0015, 0.003, 0.0045, 0.006]), ['$0.0000', '$0.0015', '$0.0030', '$0.0045', '$0.0060']);
   assert.equal(usdTickDigits([]), 2, 'an axis with nothing drawn reads cents');

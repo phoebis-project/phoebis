@@ -54,7 +54,8 @@ export interface HourlyRollup {
   probeCostUsd: number;
   /** Probes served by another account than the recipe's; they do not count toward the cold streak. */
   probeMigrated: number;
-  probes: { failed: number; ok: number; skipped: number };
+  /** `held` counts the probes the router refused with `503 ledger_behind` while its ledger caught up, outside `failed`. */
+  probes: { failed: number; held: number; ok: number; skipped: number };
   /** The class the lane's requests sent; the rollups file a row with none, a probe's among them, under `-`. */
   requestClass: string;
   requests: { incomplete: number; ok: number; overloaded: number; rate_limited: number; upstream_error: number };
@@ -173,7 +174,7 @@ function groupOf(key: string, label: string, rows: HourlyRollup[], includeProbes
     label,
     percentiles: { durationMs: quartet(histograms.durationMs), outputTps: quartet(histograms.outputTps), ttfbMs: quartet(histograms.ttfbMs), ttftMs: quartet(histograms.ttftMs) },
     probeCostUsd: sum(probeRows, (r) => r.probeCostUsd),
-    probes: { failed: sum(probeRows, (r) => r.probes.failed), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
+    probes: { failed: sum(probeRows, (r) => r.probes.failed), held: sum(probeRows, (r) => r.probes.held), migrated: sum(probeRows, (r) => r.probeMigrated), ok: sum(probeRows, (r) => r.probes.ok), skipped: sum(probeRows, (r) => r.probes.skipped) },
     rateLimited,
     rejected: 0,
     requests,

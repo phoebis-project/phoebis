@@ -498,7 +498,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
     const input = keyInputOf(form, clock.now());
     try {
       if (existing) {
-        const updated = await api.updateKey(existing.id, input, existing.updatedAt);
+        const updated = await api.updateKey(existing.id, input, existing.revision);
         setBusy(false);
         onUpdated?.(updated);
         return;
@@ -619,7 +619,7 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
         <Expert>
           {/* Field's frame without its label element: a label forwards a click on its text to the first control
               inside, which here would flip the mode. */}
-          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone.">
+          <Field label="Pool rules" plain hint="Extend applies the pool's rules, in gray, after this key's own; Replace applies this key's rules alone.">
             {/* Its own block, so the segmented control keeps its content width. */}
             <div>
               <Segmented<ModelRulesMode> ariaLabel="How this key's rules meet the pool's" value={modelRulesMode} options={MODES} onChange={setModelRulesMode} />
@@ -713,10 +713,10 @@ export function KeyDialog({ open, onClose, onCreated, onReload, onUpdated, pools
       chosen={chosen}
       initialGroup={initialGroup}
       onChoose={(id) => setChosen(id as KeyGroup)}
-      // The line always explains the current hold: a refusal of the form's own beats a server message left from
-      // before the edit.
-      status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
-      hold={first?.group ?? null}
+      // The line always explains the current hold: a row that moved under the dialog first, since only Reload clears
+      // it, then a refusal of the form's own, which beats a server message left from before the edit.
+      status={stale && existing ? `Save is held: the key ${existing.name} changed since you opened it. Reload to edit the current version.` : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
+      hold={stale ? null : (first?.group ?? null)}
       held={first !== null || error !== null || stale !== null}
       notice={
         stale &&

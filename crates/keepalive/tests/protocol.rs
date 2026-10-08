@@ -105,6 +105,7 @@ fn other_key_row(r: &Rig, id: &str) -> ApiKeyRow {
         body_capture_hours: None,
         secret_digest: r.h.store.api_key_digest(OTHER_KEY).to_vec(),
         prefix: phoebis_store::key_prefix(OTHER_KEY),
+        incarnation: 1,
         created_at: NOW,
         updated_at: 0,
         rotated_at: None,

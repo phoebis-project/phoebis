@@ -1210,6 +1210,21 @@ pub fn generate_pair_valid_between(
     signed_pair(params)
 }
 
+/// The same pair with the leaf's `not_after` at an exact instant, for a test that pins a day count.
+pub fn generate_pair_valid_until(hosts: &[&str], not_after_unix_seconds: i64) -> GeneratedPair {
+    let mut params = leaf_params(hosts);
+    // rcgen's dates are `time`'s, which this crate does not name: the epoch from rcgen's own constructor, moved by a
+    // std duration, is the same instant.
+    let epoch = date_time_ymd(1970, 1, 1);
+    let offset = Duration::from_secs(not_after_unix_seconds.unsigned_abs());
+    params.not_after = if not_after_unix_seconds < 0 {
+        epoch - offset
+    } else {
+        epoch + offset
+    };
+    signed_pair(params)
+}
+
 /// The acceptor shape the router's listeners build: the Mozilla intermediate profile with ALPN fixed to
 /// `http/1.1`, so a loop test negotiates what a listener negotiates.
 pub fn acceptor_for(pair: &GeneratedPair) -> SslAcceptor {

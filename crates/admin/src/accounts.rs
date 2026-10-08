@@ -267,9 +267,6 @@ pub(crate) async fn patch(
         || input.enabled.is_some()
         || cancellation.is_some();
     if edits {
-        // One commit for every field, fenced on the incarnation and the revision the route read, which a sent token
-        // has matched here: an edit built from a stale read, or from an account since deleted and created again under
-        // its id, lands nothing, and a combined edit never fences against its own earlier write.
         if sent_token.is_some_and(|token| !row.answers_edit_token(token)) {
             return failure_with_code(
                 StatusCode::CONFLICT,
@@ -277,6 +274,9 @@ pub(crate) async fn patch(
                 "the account changed while the edit was being saved",
             );
         }
+        // Any token sent matched here, so every field's commit below is fenced on the incarnation and the revision the
+        // route read: an edit built from a stale read, or from an account since deleted and created again under its
+        // id, lands nothing, and a combined edit never fences against its own earlier write.
         let update = AccountUpdate {
             id: &id,
             expected_revision: row.revision,

@@ -81,9 +81,10 @@ export const emitLive = (event: LiveEvent) => {
  * through `call`. The override puts the original method back as it fires, so a retry reads the mock again.
  * `network` fails it as a router that never answered, with status 0; otherwise the refusal carries `status`, 503
  * unless one is given. Every status reaches the toast as a route failure, where the transport takes three apart: a
- * 401 returns to the login, a 403 shows the router's own sentence, and a 404 reports nothing.
+ * 401 returns to the login, a 403 shows the router's own sentence, and a 404 reports nothing. `quiet` fails one of the
+ * dialogs' writes, which the transport sends quiet, so its refusal reaches no toast.
  */
-export const failNextCall = (name: string, path: string, message: string, options: { network?: boolean; status?: number } = {}) => {
+export const failNextCall = (name: string, path: string, message: string, options: { network?: boolean; quiet?: boolean; status?: number } = {}) => {
   const mock = api as unknown as Record<string, () => unknown>;
   const original = mock[name].bind(api);
   const status = options.network ? 0 : (options.status ?? 503);
@@ -91,7 +92,7 @@ export const failNextCall = (name: string, path: string, message: string, option
     mock[name] = original;
     // The transport reads the session straight through and keeps the login's refusals to the login screen, so
     // neither one reaches the shell.
-    if (name !== 'getSession' && name !== 'login') reportFailure({ message, path, status });
+    if (name !== 'getSession' && name !== 'login' && !options.quiet) reportFailure({ message, path, status });
     return Promise.reject(new ApiError(status, message, null, path));
   };
 };

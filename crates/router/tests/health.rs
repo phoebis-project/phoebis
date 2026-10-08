@@ -156,6 +156,29 @@ fn a_listener_that_accepts_and_never_writes_fails_within_the_budget() {
 }
 
 #[test]
+fn a_listener_that_accepts_and_whose_budget_is_spent_before_the_first_read_fails_naming_the_deadline(
+) {
+    let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+    listener.set_nonblocking(true).unwrap();
+    let addr = listener.local_addr().unwrap();
+    // The smallest budget the probe's check before the connect passes: the connect alone outlasts it, so the
+    // handshake's first socket call finds it spent and answers `TimedOut` without touching the socket. A preemption
+    // between the probe's two clock reads spends it before the connect instead, with the same line, so the probe runs
+    // again until an attempt has connected.
+    let budget = Duration::from_micros(1);
+    let connected = (0..10).any(|_| {
+        let reason = phoebis_router::health::probe(addr, true, budget).unwrap_err();
+        assert_eq!(
+            reason,
+            format!("proxy on {addr} sent no status line within {budget:?}")
+        );
+        // The probe has returned, so a connection it made waits in the backlog though the probe has closed it.
+        listener.accept().is_ok()
+    });
+    assert!(connected, "no probe connected in ten attempts");
+}
+
+#[test]
 fn a_listener_that_trickles_the_status_line_fails_within_the_budget() {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let addr = listener.local_addr().unwrap();

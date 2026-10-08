@@ -62,7 +62,7 @@ export interface BurnLine {
   tokensPerMinute: number;
   /**
    * The unit the line is charted in: under the account grouping a subscription account burns window share and an
-   * Anthropic-key one dollars; every other grouping mixes both, so it charts dollars.
+   * API-key one dollars; every other grouping mixes both, so it charts dollars.
    */
   unit: BurnLineUnit;
   /**
@@ -177,7 +177,7 @@ const LEGEND_ORDER: ClassLegend[] = ['conversation', 'overhead'];
  * The burn route's points as chart lines and rows. The request-class grouping folds into its two legend entries;
  * every other grouping keeps the groups with the most tokens and sums the rest as other, whose shares stay empty
  * since shares of different windows do not add up. Under the account grouping the rest folds once per unit, since
- * a subscription account's window share and an Anthropic-key account's dollars chart on different axes. `sized` names
+ * a subscription account's window share and an API-key account's dollars chart on different axes. `sized` names
  * the accounts whose tier the cost model sizes, which chart in window share whatever their buckets priced.
  *
  * `rangeEndMs` is the end of the range the points were read for and `nowMs` the instant of that read, the end when

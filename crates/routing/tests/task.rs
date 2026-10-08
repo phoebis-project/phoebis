@@ -97,6 +97,7 @@ fn seed(store: Arc<Store>, kind: AccountKind, ids: &[&str]) -> Arc<Store> {
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-secret").to_vec(),
                 prefix: "secret00".into(),
+                incarnation: 1,
                 created_at: 0,
                 updated_at: 0,
                 rotated_at: None,
@@ -2114,6 +2115,7 @@ fn insert_key_k(store: &Store) {
                 body_capture_hours: None,
                 secret_digest: store.api_key_digest("phoebis-reissued").to_vec(),
                 prefix: key_prefix("phoebis-reissued"),
+                incarnation: 1,
                 created_at: 0,
                 updated_at: 0,
                 rotated_at: None,
@@ -2273,7 +2275,7 @@ async fn one_reload_over_a_delete_and_a_recreate_keeps_none_of_the_previous_hold
     assert_eq!(handle.overages().await.unwrap().len(), 1);
     assert_eq!(handle.samples().await.unwrap().len(), 1);
 
-    // A key delete and a key create under the same id, and an account delete and recreate under the same id,
+    // A key deleted and created again under the same id, and an account delete and recreate under the same id,
     // all committed before the one reload.
     store.delete_api_key("k", "test").unwrap();
     insert_key_k(&store);
@@ -6061,7 +6063,8 @@ fn shedding_store(ids: &[&str]) -> Arc<Store> {
     store
 }
 
-/// A second pool `q` holding `a` alone, on its own dwell.
+/// A second pool `q` on its own dwell, holding no member: the pool `a` left for `p`, since an account belongs to one
+/// pool, whose rounds on `a` stay on file.
 fn second_pool(store: &Store, dwell_seconds: u64) {
     store
         .insert_pool(
@@ -6072,18 +6075,6 @@ fn second_pool(store: &Store, dwell_seconds: u64) {
                 },
                 ..PoolRow::for_tests("q")
             },
-            "test",
-        )
-        .unwrap();
-    store
-        .set_pool_members(
-            "q",
-            &[MemberWrite {
-                account_id: "a".into(),
-                priority: 0,
-                budget_daily_usd: None,
-                budget_monthly_usd: None,
-            }],
             "test",
         )
         .unwrap();
@@ -6360,8 +6351,8 @@ async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
     pool.shedding.source_dwell_seconds = 600;
     store.update_pool(&pool, pool.updated_at, "test").unwrap();
     second_pool(&store, 1_800);
-    // p's round is past p's own dwell and inside q's, which can still read a's stamp from it after a restart, and q's
-    // round is past q's dwell, the longest.
+    // p's round is past p's own dwell and inside q's, the longest of the snapshot's pools, which sets the cut, and q's
+    // round is past q's dwell.
     store
         .replace_shed_round("p", "a", 1, AT - 900_000, &[shed_pin("s1", 1, true)])
         .unwrap();
@@ -6390,7 +6381,7 @@ async fn the_purge_tick_writes_the_round_cut_past_the_longest_dwell() {
 }
 
 #[tokio::test]
-async fn after_a_restart_a_shared_account_reads_as_shed_by_another_pool_s_round() {
+async fn after_a_restart_an_account_reads_as_shed_by_its_former_pool_s_round() {
     use phoebis_routing::{FactValue, MigrateReason};
     let store = seeded(&["x", "a"]);
     store
@@ -6415,7 +6406,7 @@ async fn after_a_restart_a_shared_account_reads_as_shed_by_another_pool_s_round(
     store
         .upsert_pin(&stored_pin(&store, "s1", "x", 1, 0.0))
         .unwrap();
-    // q's round on the shared account a minute before the restart, and p never ran one there.
+    // q's round on a a minute before the restart, run while a was q's member, and p never ran one there.
     store
         .replace_shed_round("q", "a", 1, AT - 60_000, &[shed_pin("s9", 9, true)])
         .unwrap();
@@ -6453,7 +6444,7 @@ async fn after_a_restart_a_shared_account_reads_as_shed_by_another_pool_s_round(
             Some(FactValue::Int(60_000)),
             Some(FactValue::Bool(false))
         ),
-        "a reads as just shed by q's round, which p never ran"
+        "a reads as just shed by its former pool's round, which p never ran"
     );
 }
 

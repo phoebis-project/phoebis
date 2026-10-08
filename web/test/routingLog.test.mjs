@@ -157,8 +157,8 @@ const EVENTS = [
   ['warm prefix expired', event('warm_prefix_expired', { cause: 'ttl', deepest: { depth: 1, prefix_tokens: 18_400, tier: 'message', ttl_ms: 300_000 }, entries: 2, root: 's0' }), '5 min tier', ['prefix 18.4K', 'depth 1']],
   ['poll backoff started', event('poll_backoff_started', { attempts: 1, endpoint: 'usage', last_clean_poll_at: ms(13, 40), next_attempt_at: ms(13, 53), reason: 'the usage endpoint rate-limited the account; next attempt at 2026-09-16 13:53:00 UTC' }, { at: iso(ms(13, 52, 30)) }), 'rate limited', ['next 13:53']],
   ['poll backoff ended', event('poll_backoff_ended', { attempts: 3, duration_ms: 25 * MINUTE, resumed_at: at }), 'clean poll', ['lasted 25 min']],
-  ['budget reached', event('budget_reached', { budget_usd: 20, period: 'day', period_end: MIDNIGHT, spent_usd: 20.4 }, { poolId: 'codex' }), 'daily budget', ['spent $20.40 of $20.00']],
-  ['budget period ended', event('budget_period_ended', { period: 'month', period_start: at, previous_spent_usd: 18.2 }, { poolId: 'codex' }), 'monthly budget', ['spent $18.20']],
+  ['budget reached', event('budget_reached', { budget_usd: 20, period: 'day', period_end: MIDNIGHT, spent_usd: 20.4 }, { poolId: 'jobs' }), 'daily budget', ['spent $20.40 of $20.00']],
+  ['budget period ended', event('budget_period_ended', { period: 'month', period_start: at, previous_spent_usd: 18.2 }, { poolId: 'jobs' }), 'monthly budget', ['spent $18.20']],
   ['wind-down started', event('wind_down_started', { end_source: 'cancelled', ends_at: ms(15, 0), wind_down_minutes: 60 }, { poolId: 'all' }), 'subscription ends', ['until 15:00']],
   ['catalog changed, a model added', event('catalog_changed', { added: ['claude-opus-5-5'], count: 12, removed: [] }), 'model added', ['models 12']],
   ['catalog changed, a model removed', event('catalog_changed', { added: [], count: 11, removed: ['claude-sonnet-4-5'] }), 'model removed', ['models 11']],
@@ -526,7 +526,7 @@ test('the candidate cells word every verdict and its chip', () => {
   assert.deepEqual(chosen.verdict, { badge: 'chosen', chip: null });
   assert.deepEqual(cell({ windows: { five_hour: window5h(1, ms(15, 42), 'poll', 120_000), seven_day: window5h(0.88, null, 'poll', 120_000) } }).windows, [['100%', '15:42', 'poll 2 min'], ['88%', 'no reset', 'poll 2 min'], ['not reported']]);
   const key = cell({ accountId: 'overflow', kind: 'api_key', pace: { deadline: null, end: null, hours: null, remaining: 0.96, reset: null, score: 0.96 }, planTier: null, priority: 1, tier: [2, 1, 0], windows: { worst_bucket: window5h(0.04, ms(14, 28, 8)) } });
-  assert.deepEqual([key.plan, key.tier, key.windows, key.pace], ['Anthropic key', 'keys P1', [['worst bucket 4%']], '96% left']);
+  assert.deepEqual([key.plan, key.tier, key.windows, key.pace], ['API key', 'keys P1', [['worst bucket 4%']], '96% left']);
   assert.equal(cell({ inOverage: true, tier: [1, 0, 1] }).tier, 'overage P0');
   assert.equal(cell({ pace: null }).pace, '-');
   const until = (h, m) => iso(ms(h, m));
@@ -724,7 +724,7 @@ test('the verdict line words the kind with its accounts and its pool as entities
   assert.equal(words(failover, attempt), 'Attempt 3 of 3: placed on [account primary]');
   assert.deepEqual(texts(d.verdictChips(failover, attempt)), ['tier plan quota P0', 'static rung', 'depth 2', 'cache hit 31K of 31.2K promised']);
   assert.equal(words(record({ outcome: { hold: { accountId: 'primary', boundMs: 10_000, cohort: 'primary' }, kind: 'held' } }), decision({ kind: 'held' })), 'Held on [account primary]');
-  assert.equal(words(record({ outcome: { accountId: null, kind: 'exhausted' }, request: { poolId: 'codex' } }), decision({ kind: 'exhausted' })), 'Exhausted in [pool codex]');
+  assert.equal(words(record({ outcome: { accountId: null, kind: 'exhausted' }, request: { poolId: 'jobs' } }), decision({ kind: 'exhausted' })), 'Exhausted in [pool jobs]');
   assert.equal(words(record({ outcome: { accountId: null, kind: 'refused' } }), decision({ kind: 'refused' })), 'Refused before selection');
   const pending = record({ outcome: { completion: completion({}) } });
   assert.deepEqual(texts(d.verdictChips(pending, decision({ by: strategy('pace', [0, 0, 0]) }))).slice(-1), ['cache pending']);

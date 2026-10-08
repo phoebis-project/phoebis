@@ -113,7 +113,8 @@ test('a peak zone the browser cannot read leaves the band state unknown, so a sh
 
 test("a band day's interval is its hours in the band's own zone, read through that day's clock change", () => {
   const span = (peak, date) => d.bandSpan({ ...costs, peak: { ...costs.peak, ...peak } }, date);
-  // Los Angeles leaves summer time on Sunday 1 November 2026 at 02:00: 5 to 11 there reads at UTC-8, 13:00 to 19:00 UTC.
+  // Los Angeles leaves summer time on Sunday 1 November 2026 at 02:00: 5 to 11 there reads at UTC-8,
+  // 13:00 to 19:00 UTC.
   assert.deepEqual(span({ weekdays: false }, '2026-11-01'), { end: Date.parse('2026-11-01T19:00:00Z'), start: Date.parse('2026-11-01T13:00:00Z') });
   // It enters summer time on Sunday 14 March 2027, 02:00 becoming 03:00 at 10:00 UTC: 5 to 11 reads at UTC-7.
   assert.deepEqual(span({ weekdays: false }, '2027-03-14'), { end: Date.parse('2027-03-14T18:00:00Z'), start: Date.parse('2027-03-14T12:00:00Z') });
@@ -273,6 +274,31 @@ test("the caption names the band in the viewing zone beside the zone the file de
   assert.equal(d.bandCaption(costs, NOW, 'America/Los_Angeles', clock24), 'Mon to Fri, 05:00 to 11:00 in Los Angeles (America/Los_Angeles), the zone the cost model names.');
   // Monday 26 October 2026, the week after Berlin leaves summer time and before Los Angeles does: 12:00 to 18:00 UTC.
   assert.equal(d.bandCaption(costs, Date.parse('2026-10-26T08:00:00Z'), 'Europe/Berlin', clock24), 'Mon to Fri, 13:00 to 19:00 here (Europe/Berlin). In Los Angeles: Mon to Fri, 05:00 to 11:00.');
+});
+
+// The test table's band on weekdays from 0 to 24 in Los Angeles: its days start at 07:00 UTC and 09:00 in Berlin while
+// both keep summer time.
+const wholeDays = { ...costs, peak: { ...costs.peak, fromHour: 0, toHour: 24 } };
+
+test("a weekday band of whole days reads all day where its days start at midnight here, else its week's ends", () => {
+  assert.equal(d.bandCaption(wholeDays, NOW, 'UTC', clock24), 'Mon 07:00 to Sat 07:00 here (UTC). In Los Angeles: Mon to Fri, all day.');
+  assert.equal(d.bandCaption(wholeDays, NOW, 'Europe/Berlin', clock24), 'Mon 09:00 to Sat 09:00 here (Europe/Berlin). In Los Angeles: Mon to Fri, all day.');
+  // Berlin's band at UTC+2 starts its week at 22:00 UTC on the Sunday before and ends it at 22:00 on Friday.
+  const berlin = { ...wholeDays, peak: { ...wholeDays.peak, zone: 'Europe/Berlin' } };
+  assert.equal(d.bandCaption(berlin, NOW, 'UTC', clock24), 'Sun 22:00 to Fri 22:00 here (UTC). In Berlin: Mon to Fri, all day.');
+  // In Auckland at UTC+12 a band day starts at 12:00 UTC on the day before, 05:00 in Los Angeles, so its week falls a
+  // day earlier there.
+  const auckland = { ...wholeDays, peak: { ...wholeDays.peak, zone: 'Pacific/Auckland' } };
+  assert.equal(d.bandCaption(auckland, NOW, 'America/Los_Angeles', clock24), 'Sun 05:00 to Fri 05:00 here (America/Los_Angeles). In Auckland: Mon to Fri, all day.');
+  // Its own zone and Paris, on Berlin's clocks, start each band day at midnight.
+  assert.equal(d.bandCaption(wholeDays, NOW, 'America/Los_Angeles', clock24), 'Mon to Fri, all day in Los Angeles (America/Los_Angeles), the zone the cost model names.');
+  assert.equal(d.bandCaption(berlin, NOW, 'Europe/Paris', clock24), 'Mon to Fri, all day here (Europe/Paris). In Berlin: Mon to Fri, all day.');
+});
+
+test('a weekday band of whole days still names the next change of the hour its days start at here', () => {
+  // Berlin leaves summer time on 25 October and Los Angeles on 1 November: for that one week the band's days start at
+  // 08:00 in Berlin, and the Monday after reads as today.
+  assert.deepEqual(d.nextLocalChange(wholeDays, NOW, 'Europe/Berlin'), { from: 'Mon 26 Oct', lasting: false, moved: false, text: '08:00 to 08:00 the next day', to: 'Fri 30 Oct' });
 });
 
 test("a tier's window reads as a multiple of the smallest sized tier's on that window", () => {

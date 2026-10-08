@@ -76,6 +76,8 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (44, V44),
     (45, V45),
     (46, V46),
+    (47, V47),
+    (48, V48),
     (49, V49),
     (50, V50),
 ];
@@ -83,6 +85,9 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
 pub const SCHEMA_VERSION: u32 = 50;
+
+/// The version that bounds an account to one pool; a file below it is read for overlaps before it migrates.
+pub const ONE_POOL_VERSION: u32 = 47;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -687,6 +692,18 @@ CREATE TABLE IF NOT EXISTS shed_rounds (
 );
 ALTER TABLE affinity ADD COLUMN depth INTEGER NOT NULL DEFAULT 0;
 ALTER TABLE accounts ADD COLUMN state_cause TEXT NOT NULL DEFAULT 'unrecorded';
+"#;
+
+// An account's one membership, enforced below the member write's own check.
+const V47: &str = "CREATE UNIQUE INDEX pool_members_one_pool ON pool_members (account_id);";
+
+// A pool or key created again under a deleted id must not answer its predecessor's edit token; the tombstones
+// outlive the rows as the accounts' do.
+const V48: &str = r#"
+ALTER TABLE pools ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 1;
+ALTER TABLE api_keys ADD COLUMN incarnation INTEGER NOT NULL DEFAULT 1;
+CREATE TABLE IF NOT EXISTS pool_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
+CREATE TABLE IF NOT EXISTS api_key_tombstones (id TEXT PRIMARY KEY, incarnation INTEGER NOT NULL);
 "#;
 
 // The keepalive engine's state, so a restart keeps its sessions, its agents with their retained prompts and the

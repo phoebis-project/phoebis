@@ -3,11 +3,14 @@ mod common;
 use std::time::Duration;
 
 use common::{delete, get, json, login, post, wait_json};
+use fake_upstream::{stays_for, wait_for};
 use futures::StreamExt;
 use phoebis_bus::{
     Delivery, Event, Kind, Origin, Phase, RequestObserved, RequestShape, ResponseChunk,
 };
-use phoebis_ledger::{AttemptRecord, EventRecord, Record, RequestRecord};
+use phoebis_ledger::{
+    AttemptRecord, EventRecord, ParkedRecord, Record, RequestRecord, BATCH_RETRY_HOLD,
+};
 
 const HOUR: i64 = 3_600_000;
 
@@ -231,8 +234,8 @@ async fn settings_and_system_show_effective_values_ledger_health_and_gaps_withou
             system["ledger"]["dropped"].as_u64(),
             system["ledger"]["channel_depth"].as_u64()
         ),
-        (Some(29), Some(0), Some(4_096)),
-        "the ledger schema is at the migration that adds the decisions table"
+        (Some(30), Some(0), Some(4_096)),
+        "the ledger schema is at the migration that counts the held probes"
     );
     assert_eq!(
         (
@@ -369,7 +372,7 @@ async fn the_system_document_reads_a_degraded_ledger_its_retry_and_its_parked_re
     );
 }
 
-/// `POST` with the admin secret as a bearer and no cookie, the subcommands' own call.
+/// `POST` with the admin secret as a bearer and no cookie, the admin client's own call.
 async fn post_bearer(
     app: &axum::Router,
     path: &str,
@@ -476,6 +479,171 @@ async fn the_replay_route_answers_500_once_the_ledger_writer_has_stopped() {
     assert_eq!(
         json(replayed).await,
         serde_json::json!({"error": "ledger failure"})
+    );
+}
+
+/// Steps the harness clock, which the ledger's waits read.
+fn step(parts: &common::Full, by: Duration) {
+    parts
+        .clock_cell
+        .fetch_add(by.as_millis() as i64, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn retrying(parts: &common::Full) -> u64 {
+    parts
+        .ledger
+        .stats()
+        .retrying
+        .load(std::sync::atomic::Ordering::SeqCst)
+}
+
+/// Parks a priced record the writer can land, once its start-up pass is behind it: a replay answers from the writer's
+/// loop alone, which starts after the pass, so the pass cannot take the row before the case asks.
+async fn park_landable(parts: &common::Full, cookie: &str) {
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(cookie)).await;
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"landed": 0, "remaining": 0})
+    );
+    let Record::Request {
+        request, attempts, ..
+    } = record("parked", common::NOW, "claude-sonnet-5", "s1")
+    else {
+        unreachable!("`record` builds a request")
+    };
+    let parked = serde_json::to_string(&ParkedRecord { request, attempts }).unwrap();
+    parts
+        .db
+        .write(|c| {
+            c.execute(
+                "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+                 VALUES (?1, ?1, 'parked', 'main', 'business', ?2, 'refused by test')",
+                rusqlite::params![common::NOW, parked],
+            )?;
+            Ok(())
+        })
+        .unwrap();
+}
+
+/// A request row too wide for the capped file, so the writer holds its batch under retry and takes no turn between
+/// batches until the disk is freed.
+async fn hold_the_writer(parts: &common::Full) {
+    parts.db.fill_the_disk();
+    let Record::Request {
+        request, attempts, ..
+    } = record("held", common::NOW, "claude-sonnet-5", "s1")
+    else {
+        unreachable!("`record` builds a request")
+    };
+    parts
+        .ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..request
+            },
+            attempts,
+            bodies: None,
+        })
+        .await;
+    wait_for(Duration::from_secs(5), || {
+        (retrying(parts) == 1).then_some(())
+    })
+    .await;
+}
+
+/// Frees the disk and steps the clock a hold at a time until the held batch lands: the writer waits on an in-place
+/// retry or on its hold, and reads the clock every 250 ms, so each step gets a second to be seen.
+async fn free_the_writer(parts: &common::Full) {
+    parts.db.free_the_disk();
+    for _ in 0..10 {
+        step(parts, BATCH_RETRY_HOLD);
+        let until = std::time::Instant::now() + Duration::from_secs(1);
+        while std::time::Instant::now() < until {
+            if retrying(parts) == 0 {
+                return;
+            }
+            tokio::time::sleep(Duration::from_millis(5)).await;
+        }
+    }
+    panic!("the held batch never landed");
+}
+
+/// The replay route called on a task, so the case can step the clock while it waits.
+fn replay_on_a_task(
+    parts: &common::Full,
+    cookie: &str,
+) -> tokio::task::JoinHandle<axum::http::Response<axum::body::Body>> {
+    let (app, cookie) = (parts.app.clone(), cookie.to_string());
+    tokio::spawn(async move { post(&app, "/admin/ledger/parked/replay", "", Some(&cookie)).await })
+}
+
+/// The route waits its bound on the ledger's clock for the writer's turn. A writer still holding a batch past it is
+/// answered `503`, and the replay the route gave up on never runs, so the replay after the writer is freed lands the
+/// row.
+#[tokio::test]
+async fn the_replay_route_answers_503_after_its_bound_while_the_writer_is_held_and_replays_nothing()
+{
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    park_landable(&parts, &cookie).await;
+    hold_the_writer(&parts).await;
+    let asked = replay_on_a_task(&parts, &cookie);
+    stays_for(Duration::from_millis(400), || !asked.is_finished()).await;
+    step(&parts, Duration::from_secs(31));
+    let refused = tokio::time::timeout(Duration::from_secs(5), asked)
+        .await
+        .expect("the route answers once its bound passed")
+        .unwrap();
+    assert_eq!(refused.status(), 503);
+    assert_eq!(
+        json(refused).await,
+        serde_json::json!({"error": "the ledger writer is held, try again"})
+    );
+    free_the_writer(&parts).await;
+    // The control channel is read in order, so the message given up on reaches the writer ahead of this one: a landed
+    // row here means the first never ran.
+    let replayed = post(&parts.app, "/admin/ledger/parked/replay", "", Some(&cookie)).await;
+    assert_eq!(replayed.status(), 200);
+    assert_eq!(
+        json(replayed).await,
+        serde_json::json!({"landed": 1, "remaining": 0})
+    );
+}
+
+/// A replay the writer took inside the bound answers its counts, even when the clock passed the bound before the
+/// route's answer is read.
+#[tokio::test]
+async fn the_replay_route_answers_200_for_a_replay_the_writer_claimed_inside_the_bound() {
+    let parts = common::admin_parts_full().await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    park_landable(&parts, &cookie).await;
+    hold_the_writer(&parts).await;
+    let asked = replay_on_a_task(&parts, &cookie);
+    stays_for(Duration::from_millis(400), || !asked.is_finished()).await;
+    parts.db.free_the_disk();
+    step(&parts, Duration::from_secs(15));
+    let landed = || {
+        parts
+            .db
+            .write(|c| {
+                Ok(c.query_row("SELECT COUNT(*) FROM parked_records", [], |r| {
+                    r.get::<_, i64>(0)
+                })?)
+            })
+            .unwrap()
+            == 0
+    };
+    wait_for(Duration::from_secs(5), || landed().then_some(())).await;
+    step(&parts, Duration::from_secs(16));
+    let answered = tokio::time::timeout(Duration::from_secs(5), asked)
+        .await
+        .expect("the claimed replay answers")
+        .unwrap();
+    assert_eq!(answered.status(), 200);
+    assert_eq!(
+        json(answered).await,
+        serde_json::json!({"landed": 1, "remaining": 0})
     );
 }
 
@@ -868,6 +1036,92 @@ async fn a_pin_the_ledger_has_no_row_for_reports_no_request_count() {
     assert_eq!(row("silent")["pinned"].as_bool(), Some(true));
 }
 
+/// A pin on plan quota is priced in its account's window, so a tier the store cannot read fails the route rather
+/// than reading as a tier the table does not size.
+#[tokio::test]
+async fn the_sessions_route_answers_500_when_an_accounts_tier_cannot_be_read() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = std::sync::Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    // The router loads the pins at spawn, so the pool, the key and the pin are written through one harness and
+    // the store is handed to the one under test.
+    let seed = common::admin_parts_full_on(store.clone()).await;
+    let seeding = login(&seed.app, "admin-secret").await;
+    post(&seed.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"business","priority":0}]}"#, Some(&seeding)).await;
+    post(
+        &seed.app,
+        "/admin/keys",
+        r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+        Some(&seeding),
+    )
+    .await;
+    let now = common::NOW;
+    store
+        .upsert_pin(&phoebis_store::PinRow {
+            key_id: "desktop".into(),
+            session_id: "planned".into(),
+            agent_id: "main".into(),
+            model: "claude-sonnet-5".into(),
+            account_id: "business".into(),
+            epoch: 1,
+            created_at: now - 10,
+            last_used_at: now - 5,
+            key_generation: common::generation(&store, "desktop"),
+            incarnation: 1,
+            burn: phoebis_store::PinBurn::default(),
+            burn_at: None,
+            burn_banded: phoebis_store::PinBurn::default(),
+            last_input_tokens: 0,
+            last_refresh_at: 0,
+            cache_ttl_ms: 300_000,
+            shed_from: None,
+            shed_at: None,
+            static_hash: None,
+            tail_hash: None,
+            lane: phoebis_routing::lane_key("claude-sonnet-5", "standard", "none", "-"),
+        })
+        .unwrap();
+    let parts = common::admin_parts_full_on(store).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    // The tier read names the column, and no other read the route makes does.
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    )
+    .unwrap();
+    drop(conn);
+    let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
+    assert_eq!(listed.status(), 500);
+    assert_eq!(
+        json(listed).await,
+        serde_json::json!({"error": "storage failure"})
+    );
+}
+
+/// Only a row priced in the window share reads a tier, so a subscription account with no pin in the window costs the
+/// route no read and cannot fail it.
+#[tokio::test]
+async fn a_failed_tier_read_on_an_account_no_row_prices_leaves_the_sessions_route_at_200() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("router.sqlite");
+    let store = std::sync::Arc::new(
+        phoebis_store::Store::open(&path, &phoebis_store::StorageKey::generate()).unwrap(),
+    );
+    let parts = common::admin_parts_full_on(store).await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    let conn = rusqlite::Connection::open(&path).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    )
+    .unwrap();
+    drop(conn);
+    let listed = get(&parts.app, "/admin/sessions", Some(&cookie)).await;
+    assert_eq!(listed.status(), 200);
+    assert_eq!(json(listed).await, serde_json::json!({"sessions": []}));
+}
+
 #[tokio::test]
 async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
     let parts = common::admin_parts_full().await;
@@ -889,17 +1143,17 @@ async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
     assert!(connect(None).await.is_err(), "no session, no upgrade");
     // Over a real socket the client sets `Host` to the served address: an authenticated handshake whose origin
     // names another authority is refused by the gate, and one naming the served address is admitted.
-    let pinned = common::admin_parts_full().await;
-    let pinned_addr = common::serve(pinned.app.clone()).await;
-    let pinned_cookie = common::login(&pinned.app, "admin-secret").await;
+    let served = common::admin_parts_full().await;
+    let served_addr = common::serve(served.app.clone()).await;
+    let served_cookie = common::login(&served.app, "admin-secret").await;
     let mut foreign =
         tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(format!(
-            "ws://{pinned_addr}/admin/live"
+            "ws://{served_addr}/admin/live"
         ))
         .unwrap();
     foreign.headers_mut().insert(
         "cookie",
-        format!("phoebis_admin={pinned_cookie}").parse().unwrap(),
+        format!("phoebis_admin={served_cookie}").parse().unwrap(),
     );
     foreign
         .headers_mut()
@@ -910,15 +1164,15 @@ async fn the_live_route_is_gated_and_every_session_receives_the_preview() {
         "a foreign origin is refused before the upgrade: {refused:?}"
     );
     let mut same = tokio_tungstenite::tungstenite::client::IntoClientRequest::into_client_request(
-        format!("ws://{pinned_addr}/admin/live"),
+        format!("ws://{served_addr}/admin/live"),
     )
     .unwrap();
     same.headers_mut().insert(
         "cookie",
-        format!("phoebis_admin={pinned_cookie}").parse().unwrap(),
+        format!("phoebis_admin={served_cookie}").parse().unwrap(),
     );
     same.headers_mut()
-        .insert("origin", format!("http://{pinned_addr}").parse().unwrap());
+        .insert("origin", format!("http://{served_addr}").parse().unwrap());
     let (mut same_ws, _) = tokio_tungstenite::connect_async(same).await.unwrap();
     assert_eq!(
         common::next_text(&mut same_ws).await["kind"],
@@ -1973,8 +2227,23 @@ async fn a_request_answers_its_class_and_each_attempts_trace_with_skipped_as_nam
 async fn budgets_route_answers_a_members_spend_against_its_budget() {
     let parts = common::admin_parts_full().await;
     let cookie = login(&parts.app, "admin-secret").await;
-    // "direct" carries a budget in both pools (proving a second row sorts by pool ahead of "main") while
-    // "business" rides "main" unbudgeted (proving the route excludes it).
+    // "metered" carries a budget in "aux" (proving its row sorts by pool ahead of "main") while "business" rides
+    // "main" unbudgeted (proving the route excludes it).
+    parts
+        .store
+        .insert_account(&phoebis_store::AccountRow {
+            id: "metered".into(),
+            kind: phoebis_store::AccountKind::ApiKey,
+            label: "Metered".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: phoebis_store::AccountState::Ready,
+            state_cause: phoebis_store::StateCause::Operator,
+        })
+        .unwrap();
     post(
         &parts.app,
         "/admin/pools",
@@ -1988,7 +2257,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
         &parts.app,
         "/admin/pools",
         r#"{"id":"aux","label":"Aux","strategy":"priority",
-        "members":[{"account_id":"direct","priority":0,"budget_daily_usd":5.0}]}"#,
+        "members":[{"account_id":"metered","priority":0,"budget_daily_usd":5.0}]}"#,
         Some(&cookie),
     )
     .await;
@@ -2024,7 +2293,7 @@ async fn budgets_route_answers_a_members_spend_against_its_budget() {
         ),
         (
             Some("aux"),
-            Some("direct"),
+            Some("metered"),
             Some(5.0),
             Some("day"),
             Some("api_key")
@@ -2248,6 +2517,198 @@ async fn placements_route_answers_the_seeded_ledgers_rows_by_rung() {
         row(&filtered, "content").as_ref().unwrap()["placements"].as_u64(),
         Some(2),
         "desktop's own rows still answer under the filter"
+    );
+}
+
+/// One probe the harness's relay refused at admission with its own `503 ledger_behind`, sent by the harness's
+/// keepalive engine: the pool `main` warming `direct`, the key `desktop`, and one client request that arms the recipe
+/// while the reading is clear, the probe going out once the reading is behind. Answers when the ledger holds the
+/// probe's row.
+async fn one_held_probe() -> (common::Full, String) {
+    use http_body_util::BodyExt;
+    use std::sync::atomic::{AtomicBool, Ordering};
+    use tower::ServiceExt;
+    let behind = std::sync::Arc::new(AtomicBool::new(false));
+    let reading = behind.clone();
+    let parts = common::admin_parts_full_with_accounting(std::sync::Arc::new(move |_| {
+        phoebis_relay::Accounting {
+            behind: reading.load(Ordering::SeqCst),
+        }
+    }))
+    .await;
+    let cookie = login(&parts.app, "admin-secret").await;
+    post(&parts.app, "/admin/pools", r#"{"id":"main","label":"Main","strategy":"priority","members":[{"account_id":"direct","priority":0}],"keepalive":{"enabled":true}}"#, Some(&cookie)).await;
+    parts.router.reload().await.unwrap();
+    let created = json(
+        post(
+            &parts.app,
+            "/admin/keys",
+            r#"{"id":"desktop","label":"Desktop","pool_id":"main"}"#,
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let secret = created["secret"].as_str().unwrap().to_string();
+    let generation = common::generation(&parts.store, "desktop");
+    parts
+        .keepalive
+        .apply_event(
+            "desktop",
+            generation,
+            phoebis_keepalive::Event {
+                event: "session_start".into(),
+                session_id: "s1".into(),
+                instance_id: "i1".into(),
+                sequence: 1,
+                ..Default::default()
+            },
+        )
+        .unwrap();
+    phoebis_keepalive::spawn_observer(parts.keepalive.clone());
+    parts.up.add_credential_rule(
+        common::API_KEY,
+        "/v1/messages",
+        fake_upstream::Respond::Json {
+            status: 200,
+            headers: vec![],
+            body: br#"{"id":"m","type":"message","content":[],"usage":{"input_tokens":10,"cache_creation_input_tokens":2000,"cache_creation":{"ephemeral_5m_input_tokens":2000,"ephemeral_1h_input_tokens":0},"output_tokens":10}}"#.to_vec(),
+        },
+    );
+    let request = axum::http::Request::builder()
+        .method("POST")
+        .uri("/v1/messages")
+        .header("x-api-key", &secret)
+        .header("content-type", "application/json")
+        .header("x-claude-code-session-id", "s1")
+        .header("x-claude-code-agent-id", "main")
+        .body(axum::body::Body::from(
+            r#"{"model":"claude-sonnet-4-5","max_tokens":1,"messages":[{"role":"user","content":"hi"}]}"#,
+        ))
+        .unwrap();
+    let resp = phoebis_relay::router(parts.relay.clone())
+        .oneshot(request)
+        .await
+        .unwrap();
+    assert_eq!(resp.status(), 200);
+    let _ = resp.into_body().collect().await.unwrap();
+    let due = wait_for(Duration::from_secs(5), || {
+        parts
+            .keepalive
+            .agent_status("desktop", "s1", "main")
+            .and_then(|s| s.next_probe_at)
+    })
+    .await;
+    behind.store(true, Ordering::SeqCst);
+    parts.clock_cell.store(due + 1_000, Ordering::SeqCst);
+    parts.keepalive.step().await;
+    parts.keepalive.wait_idle().await;
+    let status = parts
+        .keepalive
+        .agent_status("desktop", "s1", "main")
+        .unwrap();
+    assert_eq!(
+        (status.probes, status.reason),
+        (1, phoebis_keepalive::Reason::LedgerBehind),
+        "the relay's admission refused the one probe"
+    );
+    wait_for(Duration::from_secs(5), || {
+        parts
+            .db
+            .read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    0,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap()
+            .iter()
+            .any(|r| r.kind == "probe")
+            .then_some(())
+    })
+    .await;
+    (parts, cookie)
+}
+
+/// The router's own `503 ledger_behind` is no answer from the account, so the overview's day counts the probe under
+/// `held` and leaves it out of `failed`.
+#[tokio::test]
+async fn the_overview_counts_a_probe_the_router_held_under_held_and_not_as_failed() {
+    let (parts, cookie) = one_held_probe().await;
+    let overview = json(get(&parts.app, "/admin/keepalive/overview", Some(&cookie)).await).await;
+    let probes = &overview["probes_24h"];
+    assert_eq!(
+        (
+            probes["held"].as_u64(),
+            probes["failed"].as_u64(),
+            probes["ok"].as_u64(),
+            probes["migrated"].as_u64(),
+            probes["skipped"].as_u64()
+        ),
+        (Some(1), Some(0), Some(0), Some(0), Some(0)),
+        "{overview}"
+    );
+}
+
+/// The analytics groups count the same held probe under `probes.held`, and with probes counted as requests its row
+/// counts under no failure and no rejection, on the breakdown and on the series alike.
+#[tokio::test]
+async fn an_analytics_group_counts_a_probe_the_router_held_under_held_and_not_as_failed_or_rejected(
+) {
+    let (parts, cookie) = one_held_probe().await;
+    let breakdown = json(
+        get(
+            &parts.app,
+            "/admin/analytics/breakdown?range=24h&group_by=key&include_probes=true",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let row = breakdown["rows"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["key"] == "desktop")
+        .unwrap_or_else(|| panic!("no desktop group: {breakdown}"));
+    let counts = |g: &serde_json::Value| {
+        (
+            g["probes"]["held"].as_u64(),
+            g["probes"]["failed"].as_u64(),
+            g["requests"].as_u64(),
+            g["succeeded"].as_u64(),
+            g["failed"].as_u64(),
+            g["rejected"].as_u64(),
+        )
+    };
+    assert_eq!(
+        counts(row),
+        (Some(1), Some(0), Some(2), Some(1), Some(0), Some(0)),
+        "the client request and the held probe: {row}"
+    );
+    let series = json(
+        get(
+            &parts.app,
+            "/admin/analytics/series?range=24h&group_by=key&include_probes=true",
+            Some(&cookie),
+        )
+        .await,
+    )
+    .await;
+    let groups: Vec<&serde_json::Value> = series["points"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|p| p["groups"].as_array().unwrap())
+        .filter(|g| g["key"] == "desktop")
+        .collect();
+    assert_eq!(groups.len(), 1, "one bucket holds both rows: {series}");
+    assert_eq!(
+        counts(groups[0]),
+        (Some(1), Some(0), Some(2), Some(1), Some(0), Some(0)),
+        "{series}"
     );
 }
 

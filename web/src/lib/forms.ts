@@ -324,3 +324,13 @@ export function subscriptionEndRefusal(form: SubscriptionEndForm): string | null
 export function accountPatchOf(form: SubscriptionEndForm): AccountPatch {
   return { cancelled: form.cancelled, subscriptionEndsAt: form.endsAt === '' ? null : new Date(form.endsAt).toISOString() };
 }
+
+/** An account's edit token carries its revision in the low 32 bits and its incarnation above them. */
+const ACCOUNT_INCARNATION = 2 ** 32;
+
+/** Whether the editor holding `other` advances to `answered` after a save that sent `sent`: `other` equals `sent`
+ *  (both editors opened on the same row state) and `answered` is the token an operator's own write produces from
+ *  it, the same incarnation and the revision one higher. An editor whose token differs keeps it, since the row it
+ *  opened on is not the row the save moved, and its own save meets the fence as before. */
+export const advancesOwnToken = (sent: number, answered: number, other: number): boolean =>
+  other === sent && answered === sent + 1 && Math.floor(answered / ACCOUNT_INCARNATION) === Math.floor(sent / ACCOUNT_INCARNATION);

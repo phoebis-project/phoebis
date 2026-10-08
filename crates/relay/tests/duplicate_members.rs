@@ -259,3 +259,27 @@ async fn a_stamp_bearing_member_spelled_with_an_escape_is_refused_as_a_repeat_is
     assert_eq!(up.requests().len(), 1);
     up.shutdown().await;
 }
+
+#[tokio::test]
+async fn a_lone_surrogate_beside_an_escaped_stamp_token_is_refused_before_anything_is_sent() {
+    let up = FakeUpstream::start(vec![ok_rule()]).await;
+    let h = harness_restricted_to(&up, "claude-sonnet-4-5").await;
+    // A strict decoder refuses each line for its lone surrogate, and the raw walk finds no stamp in it.
+    for line in [
+        r"x-anthropic-billing-header: v=1 \udc00 cch\u003d01234;",
+        r"x-anthropic-billing-header\u003a v=1 \udc00 cch=01234;",
+    ] {
+        let body = format!(
+            r#"{{"model":"claude-sonnet-4-5","system":[{{"type":"text","text":"{line}"}}],"messages":[],"max_tokens":8}}"#
+        );
+        let (status, code, text) = send(&h, "/v1/messages", &body).await;
+        assert_eq!(status, 400, "{body}");
+        assert_eq!(code, "body_shape", "{text}");
+        assert!(
+            text.contains("billing stamp the relay can neither check nor restamp"),
+            "{text}"
+        );
+    }
+    assert!(up.requests().is_empty(), "nothing reached the upstream");
+    up.shutdown().await;
+}

@@ -1,44 +1,62 @@
 import { useMemo, useState } from 'react';
+import { useLocation, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
-import type { Account, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
+import type { Account, ExtraUsage, QuotaPoll, QuotaSnapshot, RateLimitWindow } from '@/api/types';
 import { accountColor } from '@/components/charts/theme';
-import { FastLane } from '@/components/FastLane';
+import { SectionBar } from '@/components/SectionBar';
 import { useChartInk } from '@/components/charts/useChartInk';
-import { IconChevronLeft, IconChevronRight, IconRefresh, IconServer, IconUser, IconWarning } from '@/components/ui/icons';
-import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton, Tabs } from '@/components/ui/primitives';
-import { fmtAbsolute, fmtCredits, fmtDate, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
+import { IconChevronLeft, IconChevronRight, IconRefresh, IconUser } from '@/components/ui/icons';
+import { Badge, ErrorState, Meter, Pill, Segmented, Select, Skeleton } from '@/components/ui/primitives';
+import { fmtAbsolute, fmtCredits, fmtDayShort, fmtEndsIn, fmtPct, fmtRelative, fmtShortTime, upperFirst } from '@/lib/format';
 import { useAsync, useNow } from '@/lib/hooks';
-import { POLL_OUTCOME_LABEL, STATUS_LABEL, STATUS_TONE, isExpired, isSubscription, meterTone, remainingOf, soonestReset, windowOf } from '@/lib/quota';
+import { STATUS_LABEL, STATUS_TONE, extraUsageState, isExpired, isSubscription, meterTone, planChip, pollReading, remainingOf, soonestReset, windowOf, type ExtraUsageState } from '@/lib/quota';
 
-type Tab = 'all' | 'api_key' | 'oauth';
 type Sort = 'default' | 'soonest';
+
+const QUOTA_SECTIONS = [
+  { id: 'accounts', label: 'Accounts' },
+  { id: 'quota-windows', label: 'Quota windows' },
+] as const;
+type QuotaSectionId = (typeof QUOTA_SECTIONS)[number]['id'];
 
 export function QuotaPage() {
   const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
   const settings = useAsync(() => api.getSettings(), [], { refreshMs: 30_000 });
   const now = useNow();
-  const [tab, setTab] = useState<Tab>('all');
   const [sort, setSort] = useState<Sort>('default');
   const [refreshing, setRefreshing] = useState(false);
+  const location = useLocation();
+  const navigate = useNavigate();
+  // The hash is the section, as on the Analytics page: a link or a reload lands on the one it names, and a choice
+  // replaces the entry with the search kept, so Back leaves the page rather than walking the sections.
+  const shown = useMemo<QuotaSectionId>(() => {
+    const id = location.hash.slice(1);
+    return QUOTA_SECTIONS.some((s) => s.id === id) ? (id as QuotaSectionId) : 'accounts';
+  }, [location.hash]);
+  const choose = (id: QuotaSectionId) => {
+    navigate({ hash: `#${id}`, pathname: location.pathname, search: location.search }, { replace: true });
+    // jsdom implements no `scrollTo`, so the call is guarded.
+    document.scrollingElement?.scrollTo?.({ top: 0 });
+  };
 
+  // An API-key account carries no quota window, so the page reads the subscription accounts alone.
+  const subscriptions = useMemo(() => (accounts.data ?? []).filter(isSubscription), [accounts.data]);
   // Each subscription row carries its poll block, so the list read is the one read of every card's standing.
-  const snapById = useMemo(() => new Map((accounts.data ?? []).filter(isSubscription).flatMap((a) => (a.usage ? [[a.id, a.usage] as const] : []))), [accounts.data]);
+  const snapById = useMemo(() => new Map(subscriptions.flatMap((a) => (a.usage ? [[a.id, a.usage] as const] : []))), [subscriptions]);
 
   const visible = useMemo(() => {
-    const list = (accounts.data ?? []).filter((a) => tab === 'all' || a.kind === tab);
     if (sort === 'soonest') {
       const nextReset = (a: Account) => {
         const future = a.windows.flatMap((w) => (w.resetsAt === null ? [] : [Date.parse(w.resetsAt)])).filter((t) => t > now);
         return future.length ? Math.min(...future) : Number.POSITIVE_INFINITY;
       };
-      return [...list].sort((a, b) => nextReset(a) - nextReset(b));
+      return [...subscriptions].sort((a, b) => nextReset(a) - nextReset(b));
     }
-    return list;
-  }, [accounts.data, tab, sort, now]);
+    return subscriptions;
+  }, [subscriptions, sort, now]);
 
-  const total = accounts.data?.length ?? 0;
+  const total = subscriptions.length;
   const attention = [...snapById.values()].filter((s) => s.status === 'error' || needsAttention(s.poll)).length;
-  const counts = { all: total, api_key: (accounts.data ?? []).filter((a) => a.kind === 'api_key').length, oauth: (accounts.data ?? []).filter((a) => a.kind === 'oauth').length };
 
   const reload = () => accounts.reload();
   // The route answers from the account's hold or its cache while either lasts, which is why a refresh can change nothing.
@@ -46,10 +64,12 @@ export function QuotaPage() {
   const refreshAll = async () => {
     setRefreshing(true);
     // A credential the route refuses still reports through its snapshot, so one failure does not hold up the rest.
-    await Promise.all((accounts.data ?? []).filter((a) => a.kind === 'oauth').map((a) => api.refreshUsage(a.id).catch(() => undefined)));
+    await Promise.all(subscriptions.map((a) => api.refreshUsage(a.id).catch(() => undefined)));
     reload();
     setRefreshing(false);
   };
+
+  const failure = accounts.error && !accounts.data ? <ErrorState title="Could not load the accounts" body={accounts.error} action={<Pill onClick={reload}>Try again</Pill>} /> : null;
 
   return (
     <div className="stack">
@@ -70,33 +90,29 @@ export function QuotaPage() {
         </Pill>
       </div>
 
-      <div className="quota-toolbar">
-        <Tabs<Tab>
-          value={tab}
-          onChange={setTab}
-          tabs={[
-            { value: 'all', label: 'All', count: counts.all },
-            { value: 'oauth', label: 'OAuth', count: counts.oauth },
-            { value: 'api_key', label: 'Anthropic key', count: counts.api_key },
-          ]}
-        />
-        <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
-          <option value="default">Default order</option>
-          <option value="soonest">Soonest recovery</option>
-        </Select>
-      </div>
+      <SectionBar sections={QUOTA_SECTIONS} shown={shown} onChoose={choose} />
 
-      {accounts.error && !accounts.data ? (
-        <ErrorState title="Could not load the accounts" body={accounts.error} action={<Pill onClick={reload}>Try again</Pill>} />
+      {shown === 'accounts' ? (
+        <section className="quota-section" id="accounts" role="tabpanel" aria-labelledby="tab-accounts">
+          <div className="quota-sort">
+            <Select value={sort} onChange={(e) => setSort(e.target.value as Sort)} aria-label="Sort">
+              <option value="default">Default order</option>
+              <option value="soonest">Soonest recovery</option>
+            </Select>
+          </div>
+          {failure ?? (
+            <div className="quota-grid">
+              {!accounts.data
+                ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
+                : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} />)}
+            </div>
+          )}
+        </section>
       ) : (
-        <div className="quota-grid">
-          {!accounts.data
-            ? [0, 1, 2].map((i) => <QuotaCardSkeleton key={i} />)
-            : visible.map((a) => <QuotaCard key={a.id} account={a} snapshot={snapById.get(a.id)} now={now} refreshing={refreshing} refreshHint={refreshHint} onRefreshed={reload} />)}
-        </div>
+        <section className="quota-section" id="quota-windows" role="tabpanel" aria-labelledby="tab-quota-windows">
+          {failure ?? (accounts.data && <ResetTimeline accounts={subscriptions.filter((a) => a.windows.length > 0)} now={now} />)}
+        </section>
       )}
-
-      {accounts.data && <ResetTimeline accounts={accounts.data.filter((a) => a.kind === 'oauth' && a.windows.length > 0)} now={now} />}
     </div>
   );
 }
@@ -125,42 +141,26 @@ function QuotaCardSkeleton() {
 /** A poll that last failed or is backing off wants a look even while the card still draws the windows it had. */
 const needsAttention = (poll: QuotaPoll | null) => poll !== null && (poll.lastOutcome !== 'clean' || poll.backoffSince !== null);
 
-/**
- * When the poll last asked the endpoint and how it answered; "not yet polled" until it first asks. A failed poll names
- * its reason, cut to the line's width so the line never wraps, the whole message under the time in the title.
- */
-function PollLine({ poll, now }: { now: number; poll: QuotaPoll | null }) {
-  if (!poll) return <span className="muted">not yet polled</span>;
-  const at = poll.lastAttemptAt ? fmtAbsolute(poll.lastAttemptAt) : undefined;
-  if (poll.lastOutcome === 'failed' && poll.lastError) {
-    return (
-      <span className="muted qcard__poll" title={at ? `${at}\n${poll.lastError}` : poll.lastError}>
-        polled {fmtRelative(poll.lastAttemptAt, now)}: failed: <span className="qcard__reason">{poll.lastError}</span>
-      </span>
-    );
-  }
-  return (
-    <span className="muted" title={at}>
-      polled {fmtRelative(poll.lastAttemptAt, now)}: {POLL_OUTCOME_LABEL[poll.lastOutcome]}
-    </span>
-  );
-}
+/** What the Extra usage line says after its figures: the in-use flag's word, or a quiet state's phrase in its place. */
+const EXTRA_USAGE_WORD: Record<ExtraUsageState, string> = { disabled: 'off', enabled: 'not in use', in_use: 'in use', unreported: 'not reported' };
 
-/** Since when the account has been answered 429, and when the poll may ask it again: two lines, so neither wraps. */
-function BackoffLines({ poll, since, now }: { now: number; poll: QuotaPoll; since: string }) {
-  const n = poll.rateLimitedInARow;
-  const run = `${n} rate-limited ${n === 1 ? 'answer' : 'answers'} in a row`;
+/**
+ * The Extra usage line, drawn on every card in one slot under the Fable row: in use reads in the serious tone with its
+ * flag, and the quiet states read in the muted ink in the same box. The provider's reason sits inside the line, cut to
+ * its width so it never grows the card, and the line's title carries it whole.
+ */
+function ExtraUsageLine({ extra }: { extra: ExtraUsage | null }) {
+  const state = extraUsageState(extra);
+  const reason = extra?.disabledReason ?? null;
   return (
-    <>
-      <span className="qcard__backoff" title={run}>
-        backing off since {fmtRelative(since, now)}
+    <div className="qcard__extra" title={reason ?? undefined}>
+      <span className={`chip ${state === 'in_use' ? 'chip--serious' : 'qcard__extra-quiet'}`}>
+        <span className="chip__label">Extra usage</span>
+        {extra && extra.enabled && `${fmtCredits(extra.usedCredits)} / ${fmtCredits(extra.monthlyLimitCredits)}`}
+        {state === 'in_use' ? <span className="chip__flag">{EXTRA_USAGE_WORD.in_use}</span> : <span>{EXTRA_USAGE_WORD[state]}</span>}
       </span>
-      {poll.nextAttemptAt && (
-        <span className="qcard__backoff" title={fmtAbsolute(poll.nextAttemptAt)}>
-          next attempt {fmtRelative(poll.nextAttemptAt, now)}
-        </span>
-      )}
-    </>
+      {reason && <span className="qcard__extra-reason">{reason}</span>}
+    </div>
   );
 }
 
@@ -178,18 +178,18 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
   };
   const w5 = windowOf(account, '5h');
   const w7 = windowOf(account, '7d');
-  const extra = account.extraUsage;
-  const since = account.subscription?.since ?? null;
+  const plan = planChip(account);
   const trialEndsAt = account.subscription?.trialEndsAt ?? null;
   const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
   const soon = (at: string) => Date.parse(at) - now < 7 * DAY;
+  const reading = pollReading(snapshot?.poll ?? null, snapshot?.fetchedAt ?? null, now);
   // Windows the card holds are drawn whatever the last read said; the error takes their place only with none.
   const failed = status === 'error' && !w5 && !w7 && !account.fableWindow;
   return (
     <article className={`qcard ${failed ? 'is-error' : ''}`}>
       <header className="qcard__head">
-        <span className={`qcard__icon qcard__icon--${account.kind}`} title={account.kind === 'oauth' ? 'Claude.ai subscription' : 'Anthropic key'}>
-          {account.kind === 'oauth' ? <IconUser size={15} /> : <IconServer size={15} />}
+        <span className="qcard__icon qcard__icon--oauth" title="Claude.ai subscription">
+          <IconUser size={15} />
         </span>
         <span className="qcard__name mono" title={account.email ?? undefined}>
           {account.label}
@@ -208,7 +208,7 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             </Pill>
           </div>
         ) : !w5 && !w7 && !account.fableWindow ? (
-          <p className="qcard__note muted">No quota windows. Anthropic-key accounts bill per token and are limited only by the workspace tier.</p>
+          <p className="qcard__note muted">No quota windows reported yet.</p>
         ) : (
           <div className="qcard__windows">
             <QuotaWindow name="5h" window={w5} now={now} soon={soonest === '5h'} />
@@ -216,57 +216,41 @@ function QuotaCard({ account, snapshot, now, refreshing, refreshHint, onRefreshe
             <QuotaWindow name="Fable" window={account.fableWindow} now={now} soon={soonest === '7d_fable'} />
           </div>
         )}
-        {/* Outside the ternary, so an Anthropic-key card, which has no windows, shows its fast lane too. */}
-        <FastLane account={account} now={now} />
       </div>
 
-      {(account.plan || endsAt || trialEndsAt || extra?.enabled) && (
-        <div className="qcard__chips">
-          {account.plan && (
-            <span className="chip" title={account.subscription?.rateLimitTier || undefined}>
-              <span className="chip__label">Plan</span>
-              {account.plan}
-              {since && ` since ${fmtDate(since)}`}
-            </span>
-          )}
-          {/* Unlabelled: the phrase itself says what ends, where a label would read "Ends ends in 12 days". */}
-          {endsAt && (
-            <span className={`chip ${soon(endsAt) ? 'chip--serious' : ''}`} title={fmtAbsolute(endsAt)}>
-              {upperFirst(fmtEndsIn(endsAt, now))}
-            </span>
-          )}
-          {trialEndsAt && (
-            <span className={`chip ${soon(trialEndsAt) ? 'chip--serious' : ''}`} title={fmtAbsolute(trialEndsAt)}>
-              <span className="chip__label">Trial</span>
-              {fmtEndsIn(trialEndsAt, now)}
-            </span>
-          )}
-          {extra?.enabled && (
-            <span className={`chip ${extra.inUse ? 'chip--serious' : ''}`} title={extra.disabledReason ?? undefined}>
-              <span className="chip__label">Extra usage</span>
-              {fmtCredits(extra.usedCredits)} / {fmtCredits(extra.monthlyLimitCredits)}
-              {extra.inUse && <span className="chip__flag">in use</span>}
-            </span>
-          )}
-        </div>
-      )}
+      <ExtraUsageLine extra={account.extraUsage} />
 
-      {extra?.disabledReason && (
-        <div className="callout callout--warning qcard__flag">
-          <IconWarning size={14} />
-          <div>{extra.disabledReason}</div>
-        </div>
-      )}
+      <div className="qcard__chips">
+        {plan ? (
+          <span className="chip" title={account.subscription?.rateLimitTier || undefined}>
+            <span className="chip__label">Plan</span>
+            {plan}
+          </span>
+        ) : (
+          <span className="chip chip--empty" aria-hidden />
+        )}
+        {/* Unlabeled: the phrase itself says what ends, where a label would read "Ends ends in 12 days". */}
+        {endsAt && (
+          <span className={`chip ${soon(endsAt) ? 'chip--serious' : ''}`} title={fmtAbsolute(endsAt)}>
+            {upperFirst(fmtEndsIn(endsAt, now))}
+          </span>
+        )}
+        {trialEndsAt && (
+          <span className={`chip ${soon(trialEndsAt) ? 'chip--serious' : ''}`} title={fmtAbsolute(trialEndsAt)}>
+            <span className="chip__label">Trial</span>
+            {fmtEndsIn(trialEndsAt, now)}
+          </span>
+        )}
+      </div>
 
       <footer className="qcard__foot">
         <div className="qcard__status">
-          {snapshot && account.kind === 'oauth' && <PollLine poll={snapshot.poll} now={now} />}
-          {snapshot?.fetchedAt && (
-            <span className="muted" title={fmtAbsolute(snapshot.fetchedAt)}>
-              checked {fmtRelative(snapshot.fetchedAt, now)}
+          {reading.lines.map((line, i) => (
+            <span key={i} className={`qcard__poll ${line.tone === 'serious' ? 'qcard__backoff' : 'muted'}`} title={i === 0 && reading.title ? reading.title : undefined}>
+              {line.text}
+              {line.reason !== undefined && <span className="qcard__reason">{line.reason}</span>}
             </span>
-          )}
-          {snapshot?.poll?.backoffSince && <BackoffLines poll={snapshot.poll} since={snapshot.poll.backoffSince} now={now} />}
+          ))}
         </div>
         <Pill onClick={() => void onRefresh()} disabled={busy} title={refreshHint} icon={<IconRefresh size={13} className={busy ? 'spin' : ''} />}>
           Refresh
@@ -471,13 +455,21 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
             const share = isExpired(w, now) ? null : `${fmtPct(remainingOf(w))} left`;
             const period = w.periodHours * HOUR;
             const resetAt = Date.parse(w.resetsAt ?? '');
-            const bars: { end: number; start: number; state: 'live' | 'next' | 'past' }[] = [];
+            // A cancelled account's saved end: no window opens after it, and the one that spans it stops there.
+            const endsAt = account.cancelled ? (account.subscription?.endsAt ?? null) : null;
+            const endMs = endsAt ? Date.parse(endsAt) : Number.POSITIVE_INFINITY;
+            const endPct = endMs >= span.startMs && endMs < span.endMs ? ((endMs - span.startMs) / width) * 100 : null;
+            const bars: { end: number; start: number; state: 'live' | 'next' | 'past'; stop: number }[] = [];
             let start = resetAt - period;
             while (start > span.startMs) start -= period;
             for (; start < span.endMs; start += period) {
               const end = start + period;
-              if (end < span.startMs) continue;
-              bars.push({ start, end, state: now >= start && now < end ? 'live' : end <= now ? 'past' : 'next' });
+              const stop = Math.min(end, endMs);
+              // The drawn end decides, so a window that spans the period's start draws nothing once the plan ended
+              // before that start.
+              if (stop < span.startMs) continue;
+              if (start >= endMs) continue;
+              bars.push({ start, end, state: now >= start && now < stop ? 'live' : stop <= now ? 'past' : 'next', stop });
             }
             return (
               <div key={account.id} className="lane" style={{ ['--lane-color' as string]: accountColor(ink, account.id) }}>
@@ -498,7 +490,7 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
                 <div className="lane__track">
                   {bars.map((b) => {
                     const from = Math.max(b.start, span.startMs);
-                    const to = Math.min(b.end, span.endMs);
+                    const to = Math.min(b.stop, span.endMs);
                     const wPct = ((to - from) / width) * 100;
                     const showLabel = wPct > (mode === 'session' ? 5 : 9);
                     // The elapsed share is of the drawn bar, which the range may
@@ -509,14 +501,15 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
                         key={b.start}
                         className={`lane__bar lane__bar--${b.state}`}
                         style={{ left: `${((from - span.startMs) / width) * 100}%`, width: `${wPct}%` }}
-                        title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${b.state === 'live' && share ? `\n${share}` : ''}`}
+                        title={`${account.label}\n${fmtAbsolute(new Date(b.start).toISOString())} to ${fmtAbsolute(new Date(b.end).toISOString())}${b.state === 'live' && share ? `\n${share}` : ''}${b.stop < b.end ? `\nends ${fmtAbsolute(endsAt)}` : ''}`}
                       >
                         {b.state === 'live' && <span className="lane__elapsed" style={{ width: `${elapsed}%` }} />}
-                        {b.end <= span.endMs && <span className="lane__reset-mark" aria-hidden />}
+                        {b.stop === b.end && b.end <= span.endMs && <span className="lane__reset-mark" aria-hidden />}
                         {showLabel && <span className="lane__label">{b.state === 'live' && share ? `${share} · ${stamp(b.end)}` : stamp(b.end)}</span>}
                       </div>
                     );
                   })}
+                  {endPct !== null && <span className="lane__end" style={{ left: `${endPct}%` }} title={`${account.label} ends ${fmtAbsolute(endsAt)}`} aria-hidden />}
                 </div>
               </div>
             );
@@ -537,7 +530,10 @@ function ResetTimeline({ accounts, now }: { accounts: Account[]; now: number }) 
         <span>
           <i className="lane__swatch lane__swatch--now" /> now
         </span>
-        <span className="timeline__note muted">Each bar is one full quota window, drawn from when it opened to when it resets, and labelled with the instant it resets. Lanes ending together compete for the same days.</span>
+        <span>
+          <i className="lane__swatch lane__swatch--end" /> plan ends
+        </span>
+        <span className="timeline__note muted">Each bar is one full quota window, drawn from when it opened to when it resets, and labeled with the instant it resets. Lanes ending together compete for the same days.</span>
       </footer>
     </section>
   );

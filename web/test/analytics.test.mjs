@@ -163,7 +163,7 @@ test('the burn fold keeps the groups that burn the most tokens and sums the rest
 
 test('under the account grouping the rest folds into one other per unit, so no dollars hide behind a window share', () => {
   // Seven accounts burn the most; the three smallest are a priced subscription, a tier-unknown one and an
-  // Anthropic key.
+  // API key.
   const kept = Array.from({ length: 7 }, (_, i) => point(0, `u${i}`, { cachedTokens: 1_000 * (i + 2), fiveHourShare: 0.001, unit: 'window_share' }));
   const answered = [
     ...kept,
@@ -177,7 +177,7 @@ test('under the account grouping the rest folds into one other per unit, so no d
   assert.deepEqual(rest.map((l) => [l.label, l.unit, l.other]), [['Other (plan)', 'window_share', true], ['Other (tier unknown)', 'unknown', true], ['Other (dollars)', 'usd', true]]);
   assert.equal(new Set(lines.map((l) => l.key)).size, lines.length, 'each line keeps a key of its own');
   assert.deepEqual([rows[0].cached[7], rows[0].cached[8], rows[0].cached[9]], [120, 90, 60], 'each rest carries its own unit\'s accounts');
-  assert.deepEqual([rows[0].usd[7], rows[0].usd[8], rows[0].usd[9]], [0, 0, 0.6], 'the dollar side keeps the Anthropic-key account\'s dollars');
+  assert.deepEqual([rows[0].usd[7], rows[0].usd[8], rows[0].usd[9]], [0, 0, 0.6], 'the dollar side keeps the API-key account\'s dollars');
   assert.deepEqual([rows[0].fiveHour[7], rows[0].sevenDay[7]], [null, null], 'a folded rest draws no share');
   const oneUnit = d.foldBurn([...kept, point(0, 'small-key', { cachedTokens: 60, unit: 'usd', usd: 0.6 }), point(0, 'tiny-key', { cachedTokens: 30, unit: 'usd', usd: 0.3 })], 'account', 60, sized);
   assert.deepEqual(oneUnit.lines.slice(7).map((l) => l.label), ['Other (dollars)'], 'a rest of one unit folds into that unit alone');
@@ -316,7 +316,7 @@ test('a priced bucket between unpriced ones, or at an end beside one, is an isol
   assert.deepEqual(fiveHour, [null, 0.05, null], 'a priced hour between two whose traffic went unpriced');
   assert.deepEqual(d.isolatedSlots(fiveHour), [false, true, false], 'the line draws no segment through it, so it takes a dot');
   assert.deepEqual(d.isolatedSlots(rows.map((r) => r.sevenDay[0])), [false, false, false], 'a window that priced nothing has no slot to mark');
-  assert.deepEqual(d.isolatedSlots([0.02, null, 0.03, 0]), [true, false, false, false], "an end beside a null is isolated; a slot with a priced neighbour is part of a segment");
+  assert.deepEqual(d.isolatedSlots([0.02, null, 0.03, 0]), [true, false, false, false], "an end beside a null is isolated; a slot with a priced neighbor is part of a segment");
   assert.deepEqual(d.isolatedSlots([0]), [true], 'a lone bucket draws no segment either');
 });
 
@@ -354,6 +354,21 @@ test("the mock files its hourly rows under the speed each hour's answers reporte
   assert.ok(fast.length > 0 && fast.every((r) => r.keyId === 'desktop' && r.model.includes('opus') && r.kind === 'inference'));
   const served = (rows) => rows.filter((r) => r.kind !== 'probe').reduce((n, r) => n + r.requests.incomplete + r.requests.ok + r.requests.rate_limited + r.requests.overloaded + r.requests.upstream_error, 0);
   assert.deepEqual(groups.map((g) => g.requests), [served(fast), served(d.ALL_ROLLUPS.filter((r) => r.speed === 'standard'))]);
+});
+
+test('the probe totals sum each group\'s held probes, and the mock holds a few on its probe rows', () => {
+  const row = fixture('analytics_breakdown').rows[0];
+  const group = (held) => d.decodeAnalyticsGroup({ ...row, probes: { ...row.probes, held } });
+  assert.equal(d.sumGroups([group(2), group(3)]).probes.held, 5, 'the chart and the tiles draw the sum');
+  const probeRows = d.ALL_ROLLUPS.filter((r) => r.kind === 'probe');
+  const held = probeRows.reduce((n, r) => n + r.probes.held, 0);
+  assert.ok(held > 0 && held < probeRows.reduce((n, r) => n + r.probes.ok, 0) / 20, `a small held count: ${held}`);
+  // The default range's first hour is the dashboard's, 23 hours before the current one, which is where the pick draws.
+  const lastHour = Date.parse(d.ALL_ROLLUPS.at(-1).hour);
+  const lastDay = probeRows.filter((r) => Date.parse(r.hour) >= lastHour - 23 * HOUR);
+  assert.equal(lastDay.reduce((n, r) => n + r.probes.held, 0), 1, 'the last day holds one, so the default range draws the slice');
+  const [all] = d.groupsOf(d.ALL_ROLLUPS, { from: d.ALL_ROLLUPS[0].hour, groupBy: 'all', to: d.ALL_ROLLUPS.at(-1).hour });
+  assert.equal(all.probes.held, held, 'the mock route sums the probe rows it groups');
 });
 
 test("the mock prices a fast hour and a fast answer at the model's fast cells", async () => {

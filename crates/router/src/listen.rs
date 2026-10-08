@@ -7,7 +7,6 @@ use std::sync::Arc;
 use std::time::Duration;
 
 use axum::Router;
-use boring::ssl::SslAcceptor;
 use hyper::server::conn::http1;
 use hyper_util::rt::{TokioExecutor, TokioIo, TokioTimer};
 use hyper_util::server::conn::auto;
@@ -16,8 +15,8 @@ use tokio::net::TcpListener;
 use tokio::sync::{watch, Semaphore};
 use tokio::task::JoinSet;
 
-use phoebis_relay::handshake;
 pub use phoebis_relay::ListenLimits;
+use phoebis_relay::{handshake, LiveAcceptor};
 
 /// How long the loop waits out a listener error. An accept that fails for a reason the process cannot fix,
 /// such as a descriptor limit, fails again immediately, so the pause is what keeps the loop off the CPU.
@@ -26,14 +25,14 @@ const ACCEPT_BACKOFF: Duration = Duration::from_millis(50);
 /// Serves `app` until `stop` flips, then waits for the connections already accepted. `upgrades` carries the
 /// admin listener's live WebSocket through hyper's upgrade path; the metrics listener, which never upgrades a
 /// connection, runs without it. With `acceptor` set, every connection completes a TLS handshake before hyper
-/// reads it.
+/// reads it, on the acceptor current when it was accepted.
 pub async fn serve(
     listener: TcpListener,
     app: Router,
     mut stop: watch::Receiver<bool>,
     limits: ListenLimits,
     upgrades: bool,
-    acceptor: Option<Arc<SslAcceptor>>,
+    acceptor: Option<Arc<LiveAcceptor>>,
 ) -> std::io::Result<()> {
     // The admin listener's live WebSocket goes through hyper's own HTTP/1 builder: the auto builder's upgrade
     // path runs its HTTP/2 preface sniff whatever `http1_only` says, and that read has no timeout of its own
@@ -81,7 +80,7 @@ pub async fn serve(
         let upgrading = upgrading.clone();
         let plain = Arc::clone(&plain);
         let mut drain = stop.clone();
-        let acceptor = acceptor.clone();
+        let acceptor = acceptor.as_ref().map(|live| live.current());
         // The permit is released once the connection future itself ends: for an upgraded socket that is when
         // hyper hands it to its `on_upgrade` task, not when the socket later closes, so the live crate's own
         // cap is what bounds those sockets from here on. The auto builder's `serve_connection` is called

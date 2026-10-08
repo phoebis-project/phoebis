@@ -69,7 +69,7 @@ export const LANES: Lane[] = [
   },
   {
     keyId: 'ci',
-    poolId: 'codex',
+    poolId: 'jobs',
     accountIds: ['research'],
     models: [
       { value: 'claude-haiku-4-5-20251001', weight: 6 },
@@ -192,7 +192,7 @@ const missRng = createRng(1_517);
 function diagnosed(attempts: Attempt[], kind: RequestKind): Attempt[] {
   return attempts.map((a) => {
     if (a.upstreamStatus !== 200 || kind === 'count_tokens') return a;
-    // An Anthropic-key account in this fixture answers without the beta, so the client never sees a comparison.
+    // An API-key account in this fixture answers without the beta, so the client never sees a comparison.
     if (ACCOUNTS.find((x) => x.id === a.accountId)?.kind !== 'oauth') return { ...a, cacheMissReason: 'not_requested' as const };
     // A failover lands on an account that never saw the turn before this one.
     if (a.index > 0) return { ...a, cacheMissReason: 'previous_message_not_found' as const };
@@ -352,7 +352,7 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
   }
   // A 429 fails over until no member of the pool is left that could serve, so a request that answered one tried each
   // member the draw left, on no draw, in the order the reselect takes them: the pool's tiers, which its order follows
-  // (the plan-funded subscriptions, nightly once in overage, the Anthropic key). They answer 429 too, but secondary,
+  // (the plan-funded subscriptions, nightly once in overage, the API key). They answer 429 too, but secondary,
   // which serves Sonnet 5 alone: it refuses any other model, as the rejection story's account does, and its plan draws
   // no usage credits for a fast request.
   const tail = attempts[attempts.length - 1];
@@ -498,14 +498,14 @@ function buildRequests(): RequestLog[] {
       // The pool's one member takes the request once: the answering attempt is the request's only one.
       const answered = moved.attempts[moved.attempts.length - 1];
       Object.assign(moved, {
-        accountId: 'primary',
+        accountId: 'studio',
         attempts: [
           {
             ...answered,
-            accountId: 'primary',
+            accountId: 'studio',
             cacheMissReason: answered.cacheMissReason === 'previous_message_not_found' ? 'none' : answered.cacheMissReason,
             index: 0,
-            windows: oauthWindows('primary', Date.parse(answered.startedAt), () => SERVED_FACTOR),
+            windows: oauthWindows('studio', Date.parse(answered.startedAt), () => SERVED_FACTOR),
           },
         ],
         durationMs: answered.durationMs,
@@ -730,7 +730,7 @@ export const STORY_IDS = new Set([
 ]);
 /** The four-attempt failover whose first account refused the model the client spelled without its date. */
 export const REJECTION_STORY_ID = 'req_7015b657-290';
-/** The codex request whose completion crossed research's daily budget. */
+/** The jobs request whose completion crossed research's daily budget. */
 export const BUDGET_CROSSING_ID = 'req_7c19e4a0-2f3';
 
 const sessionOf = (prefix: string) => SESSION_IDS.find((id) => id.startsWith(prefix)) ?? prefix;
@@ -812,7 +812,7 @@ function storyRow(seed: StorySeed): RequestLog {
 
 /**
  * The story's requests at their clock times: the hour before the pinned instant written by hand so every card the
- * routing log draws is on the page, the morning's shedding round and its move, the codex request whose completion
+ * routing log draws is on the page, the morning's shedding round and its move, the jobs request whose completion
  * crossed the budget, and the four-attempt failover whose first account refused the model.
  */
 function storyRequests(): RequestLog[] {
@@ -945,6 +945,10 @@ function storyRequests(): RequestLog[] {
 export const REQUESTS: RequestLog[] = buildRequests();
 export const requestById = new Map(REQUESTS.map((r) => [r.id, r]));
 
+// The ci key's last use is its newest request the key check let through: a send after the revocation is refused as an
+// unknown key and uses nothing.
+keyById.get('ci')!.lastUsedAt = REQUESTS.find((r) => r.keyId === 'ci' && r.errorCode !== 'auth_unknown')?.at ?? null;
+
 /**
  * The head that first read nightly in plan overage: the first attempt the day sent it after its spend cap was raised
  * at 11:30:12, or a minute past the raise where the draws sent none. The account's own overage reads from it.
@@ -990,7 +994,7 @@ const serves = (accountId: string, model: string) => accountId !== UNPRICED_ACCO
  * The move rule that takes a pin on `from` to the row's account in the engine's order, or null where none would. The
  * pin must be live on `from`, where an earlier request of the day left it. A spent window moves a standard request to
  * an account holding allowance outside plan overage, nightly's overage hands a standard request back to a plan-funded
- * subscription, and an Anthropic key's pin returns to one once it has sat its dwell there. The first rule whose reason
+ * subscription, and an API key's pin returns to one once it has sat its dwell there. The first rule whose reason
  * holds decides, so a move to an account
  * that rule would not take is no move. A drain needs a cold pin and a shed a mark, which no drawn pin carries, and a
  * token count follows its pin without walking the rules.
@@ -1217,7 +1221,7 @@ function traceRequests() {
       const strategy = pool?.strategy ?? 'pace';
       const account = accountOf.get(a.accountId);
       const overage = account?.overage?.inUse === true ? 1 : 0;
-      // The kind order walks the plan-funded subscriptions, the ones in overage, then the Anthropic keys.
+      // The kind order walks the plan-funded subscriptions, the ones in overage, then the API keys.
       const group = pool?.preferSubscription ? (account?.kind === 'api_key' ? 2 : overage) : 0;
       const priority = pool?.members.find((m) => m.accountId === a.accountId)?.priority ?? 0;
       // A request renews the pin its first selection finds live on the account it went to, and only then. The renewal
@@ -1429,6 +1433,18 @@ function classOfHour(seed: string): string {
   return 'main';
 }
 
+/**
+ * The first hour the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total,
+ * and a pool's 25 hourly buckets, start an hour earlier, on the hour a full day back, and the week on the hour seven
+ * days back, as the routes total their rollups.
+ */
+export const DAY_FROM = startOfHour(NOW) - 23 * HOUR;
+const TOTALS_FROM = startOfHour(NOW) - 24 * HOUR;
+const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
+
+// The probes the router held while its ledger caught up draw from a stream of their own, so they shift no other draw.
+const heldRng = createRng(6_133);
+
 function rollups(): HourlyRollup[] {
   const h = createRng(4_242);
   const groups = new Map<string, RequestLog[]>();
@@ -1499,12 +1515,16 @@ function rollups(): HourlyRollup[] {
       cost: sumSplit(list.map((r) => costSplitOf(r.model, r.usage, r.attempts[r.attempts.length - 1]?.response.speed === 'fast'))),
       histograms: histogramsOf(list),
       keptWarm: { requests: kept.length, tokens: kept.reduce((s, r) => s + r.usage.cacheRead, 0) },
-      probes: isProbe ? { ok: okRows.length, failed: list.length - okRows.length, skipped: h.int(0, 2) } : { ok: 0, failed: 0, skipped: 0 },
+      probes: isProbe ? { ok: okRows.length, failed: list.length - okRows.length, held: 0, skipped: h.int(0, 2) } : { ok: 0, failed: 0, held: 0, skipped: 0 },
       probeMigrated: isProbe && h.chance(0.35) ? Math.min(okRows.length, h.int(1, 2)) : 0,
       probeCostUsd,
       ...(isProbe ? wastedProbes(h, okRows.length, probeCostUsd) : ZERO_WASTE),
     });
   }
+  // The day holds one probe the router held while its ledger caught up, from the default range's first hour on, so the
+  // default range draws the slice.
+  const probeRows = out.filter((r) => r.kind === 'probe' && Date.parse(r.hour) >= DAY_FROM);
+  if (probeRows.length > 0) heldRng.pick(probeRows).probes.held = 1;
   return out.sort((a, b) => Date.parse(a.hour) - Date.parse(b.hour));
 }
 
@@ -1633,7 +1653,7 @@ function historicalRollups(): HourlyRollup[] {
           ttftMs: histogramOf(ttft),
         },
         keptWarm: { requests: keptRequests, tokens: keptTokens },
-        probes: { ok: 0, failed: 0, skipped: 0 },
+        probes: { ok: 0, failed: 0, held: 0, skipped: 0 },
         probeMigrated: 0,
         probeCostUsd: 0,
         ...ZERO_WASTE,
@@ -1676,7 +1696,7 @@ function historicalRollups(): HourlyRollup[] {
           cost: costSplitOf(model, probeUsage),
           histograms: { durationMs: histogramOf(sampled(h, probes, 600, 0.3)), outputTps: emptyHistogram(), ttfbMs: histogramOf(sampled(h, probes, 320, 0.3)), ttftMs: emptyHistogram() },
           keptWarm: { requests: 0, tokens: 0 },
-          probes: { ok: probes, failed, skipped: h.int(0, 2) },
+          probes: { ok: probes, failed, held: heldRng.chance(0.04) ? 1 : 0, skipped: h.int(0, 2) },
           probeMigrated: h.chance(0.3) ? 1 : 0,
           probeCostUsd: probeCost,
           ...wastedProbes(h, probes, probeCost),
@@ -1689,19 +1709,10 @@ function historicalRollups(): HourlyRollup[] {
 
 export const ALL_ROLLUPS: HourlyRollup[] = [...historicalRollups(), ...ROLLUPS];
 
-/**
- * The first hour the dashboard and the pools' traffic charts draw: 24 hourly buckets, the current hour last. An
- * account's or a pool's day total starts an hour earlier, on the hour a full day back, and the week on the hour seven
- * days back, as the routes total their rollups.
- */
-export const DAY_FROM = startOfHour(NOW) - 23 * HOUR;
-const TOTALS_FROM = startOfHour(NOW) - 24 * HOUR;
-const WEEK_FROM = startOfHour(NOW) - 7 * DAY;
-
 const counted = (from: number) => REQUESTS.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= from);
-/** The rows the dashboard and the charts count. A probe is the router's own traffic, which the routes leave out. */
+/** The rows the dashboard counts. A probe is the router's own traffic, which the routes leave out. */
 export const DAY_ROWS: RequestLog[] = counted(DAY_FROM);
-/** The rows an account's or a pool's day total counts. */
+/** The rows an account's or a pool's day total counts, and a pool's hourly buckets. */
 const TOTAL_ROWS: RequestLog[] = counted(TOTALS_FROM);
 const COUNTED_ROLLUPS = ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
 
@@ -1737,9 +1748,9 @@ function deriveFigures() {
   }
   for (const p of poolById.values()) {
     const mine = TOTAL_ROWS.filter((r) => r.poolId === p.id);
-    const traffic24h: TrafficBucket[] = Array.from({ length: 24 }, (_, i) => ({ at: iso(DAY_FROM + i * HOUR), costUsd: 0, failed: 0, requests: 0, tokens: 0 }));
-    for (const r of DAY_ROWS.filter((row) => row.poolId === p.id)) {
-      const bucket = traffic24h[Math.floor((Date.parse(r.at) - DAY_FROM) / HOUR)];
+    const traffic24h: TrafficBucket[] = Array.from({ length: 25 }, (_, i) => ({ at: iso(TOTALS_FROM + i * HOUR), costUsd: 0, failed: 0, requests: 0, tokens: 0 }));
+    for (const r of mine) {
+      const bucket = traffic24h[Math.floor((Date.parse(r.at) - TOTALS_FROM) / HOUR)];
       bucket.costUsd += r.costUsd;
       bucket.failed += r.outcome === 'succeeded' ? 0 : 1;
       bucket.requests += 1;
@@ -1774,6 +1785,13 @@ function accountRollups(): AccountRollup[] {
     let drift5 = h.float(0.2, 0.7);
     let drift7 = h.float(0.3, 0.8);
     let driftF = h.float(0.05, 0.4);
+    // An hour holds facts from the one the plan started in to the one of the newest window reading, since a peak needs
+    // a reading behind it. Every hour is still drawn, so cutting one account's hours moves no other account's values.
+    // With no reading `Math.max` answers -Infinity, so such an account holds no hour.
+    const since = account.subscription?.since;
+    const from = since ? startOfHour(Date.parse(since)) : start;
+    const readings = [...account.windows, ...(account.fableWindow ? [account.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+    const until = Math.max(...readings);
     for (let t = start; t < end; t += HOUR) {
       const sampled5 = sampleIndex.get(`${account.id}|5h`)?.get(t);
       const sampled7 = sampleIndex.get(`${account.id}|7d`)?.get(t);
@@ -1787,7 +1805,7 @@ function accountRollups(): AccountRollup[] {
       const cooldown = peak5 >= 0.97 ? h.int(600, 3_600) : 0;
       const overage = account.extraUsage?.enabled && peak5 >= 0.9 ? h.int(300, 3_600) : 0;
       const busy = new Date(t).getHours() >= 8 && new Date(t).getHours() <= 19;
-      out.push({
+      const row: AccountRollup = {
         ...ACCOUNT_ROLLUP_SAMPLE,
         accountId: account.id,
         hour: iso(t),
@@ -1795,7 +1813,8 @@ function accountRollups(): AccountRollup[] {
         cooldownSeconds: cooldown,
         overageSeconds: overage,
         pins: { created: busy ? h.int(0, 3) : h.chance(0.2) ? 1 : 0, migratedIn: busy && h.chance(0.25) ? 1 : 0, migratedOut: cooldown > 0 ? h.int(1, 3) : 0 },
-      });
+      };
+      if (t >= from && t <= until) out.push(row);
     }
   }
   return out;

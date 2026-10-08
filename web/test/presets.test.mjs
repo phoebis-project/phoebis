@@ -210,6 +210,16 @@ test('an api_key member reads cool while its worst live bucket holds room, whate
   assert.equal(read(keyed(1)), false, 'an exhausted bucket is no destination');
 });
 
+test("an api_key member's cool reading counts its standing rpm, itpm and otpm buckets alone, as the router's", () => {
+  const bucket = (id, utilization, over = {}) => ({ id, label: id, observedAt: at(NOW), periodHours: 1 / 60, resetsAt: at(NOW + MINUTE), utilization, ...over });
+  const keyed = (...windows) => ({ id: 'key', kind: 'api_key', label: 'key', windows });
+  const read = (key) => d.shedPreview(pool({ members: [member('hot'), member('key')], shedAheadOfPace: 0.2 }), [hot, key], [pin('cold-3', 3, false)], NOW, SIZED).cool;
+  assert.equal(read(keyed(bucket('fast_input', 1), bucket('itpm:claude-sonnet-5', 0.4))), true, "an exhausted fast-lane bucket leaves the member cool");
+  assert.equal(read(keyed(bucket('itpm:claude-sonnet-5', 1, { observedAt: at(NOW - 61_000), resetsAt: null }))), true, 'a reading without a reset, observed 61 s ago, says nothing about the account now');
+  assert.equal(read(keyed(bucket('rpm:claude-sonnet-5', 1))), false, 'a standing rpm bucket at 1.0 is no destination');
+  assert.equal(read(keyed(bucket('otpm:claude-sonnet-5', 1, { observedAt: at(NOW - 59_000), resetsAt: null }))), false, 'a reading without a reset, observed 59 s ago, still stands');
+});
+
 test('with no member under the band the preview marks sessions it cannot move', () => {
   // Under the threshold of 80 %, so it runs no round of its own, but above the 75 % a shed session has to land under.
   const near = account('near', 0.78);

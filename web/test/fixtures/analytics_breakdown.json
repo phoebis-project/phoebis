@@ -32,12 +32,12 @@
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.0006000000000000001,
+          "cache_read": 0.00035,
           "cache_write": 0.003,
           "input": 0.012,
           "output": 0.006
         },
-        "cost_usd": 0.0216,
+        "cost_usd": 0.02135,
         "errors": {
           "stream_incomplete": 1,
           "upstream_error": 1
@@ -343,6 +343,7 @@
         },
         "probes": {
           "failed": 0,
+          "held": 0,
           "migrated": 0,
           "ok": 0,
           "skipped": 0
@@ -379,12 +380,12 @@
           "web_search": 0
         },
         "cost": {
-          "cache_read": 0.0001,
+          "cache_read": 0.00005,
           "cache_write": 0.0005,
           "input": 0.002,
           "output": 0.001
         },
-        "cost_usd": 0.0036,
+        "cost_usd": 0.00355,
         "errors": {},
         "cache_miss_reasons": {
           "none": 1
@@ -687,6 +688,7 @@
         },
         "probes": {
           "failed": 0,
+          "held": 0,
           "migrated": 0,
           "ok": 0,
           "skipped": 0

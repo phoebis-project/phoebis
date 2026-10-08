@@ -1,6 +1,7 @@
 // Chart colors are read from the CSS custom properties so both themes stay in
 // one place. Recharts needs literal values, so they are resolved at render time.
-export const SERIES_VARS = ['--series-1', '--series-2', '--series-3', '--series-4', '--series-5', '--series-6', '--series-7', '--series-8'] as const;
+// The ninth slot, `--series-muted`, draws a series no account answered, so the eye passes over it.
+export const SERIES_VARS = ['--series-1', '--series-2', '--series-3', '--series-4', '--series-5', '--series-6', '--series-7', '--series-8', '--series-muted'] as const;
 /** One-hue ordinal ramp, light to dark, for ordered series such as percentiles and request phases. */
 export const RAMP_VARS = ['--ramp-1', '--ramp-2', '--ramp-3', '--ramp-4', '--ramp-5'] as const;
 
@@ -75,11 +76,13 @@ export const TOKEN_SERIES = [
 
 export const MIGRATED_PROBE_HINT =
   "The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows it or when the request after it reads no cache.";
+export const HELD_PROBE_HINT = 'The router refused the probe while its ledger caught up. It was sent again and never adds to the cold streak.';
 
 /** Ordered best outcome first rather than alphabetically, so the stack reads top to bottom as it degrades. */
-export const PROBE_SERIES: { hint?: string; key: 'failed' | 'migrated' | 'ok' | 'skipped'; label: string; slot: number }[] = [
+export const PROBE_SERIES: { hint?: string; key: 'failed' | 'held' | 'migrated' | 'ok' | 'skipped'; label: string; slot: number }[] = [
   { key: 'ok', label: 'OK', slot: 0 },
   { key: 'migrated', label: 'Migrated', slot: 2, hint: MIGRATED_PROBE_HINT },
+  { key: 'held', label: 'Held', slot: 8, hint: HELD_PROBE_HINT },
   { key: 'skipped', label: 'Skipped', slot: 3 },
   { key: 'failed', label: 'Failed', slot: 7 },
 ];

@@ -134,21 +134,13 @@ export const catalogUnion = (catalogs: (AccountCatalog | null)[]): CatalogModel[
   return [...out.values()].sort((x, y) => x.id.localeCompare(y.id));
 };
 
-/** The fence the edit routes read: the millisecond stamp of the row the dialog opened with, when one was given. */
-function fenced(body: Record<string, unknown>, updatedAt?: string): Record<string, unknown> {
-  if (updatedAt === undefined) return body;
-  const stamp = Date.parse(updatedAt);
-  // A stamp the dialog cannot read is a view it cannot vouch for: refused as the route refuses a stale one, so the
-  // dialog offers Reload rather than sending null, which the route refuses with a sentence about the stamp.
-  if (Number.isNaN(stamp)) {
-    throw new ApiError(409, "the row's stamp could not be read; reload and try again", 'stale_edit');
-  }
-  return { ...body, expected_revision: stamp };
-}
-
-// The account fence is a number the decoder read, so there is nothing to parse and nothing to refuse.
+// The fence is a number the decoder read, so there is nothing to parse and nothing to refuse.
 const withRevision = (body: Record<string, unknown>, revision?: number) =>
   revision === undefined ? body : { ...body, expected_revision: revision };
+
+// The writes of the pool, key and account dialogs and the account's two inline editors: each shows a refusal in its
+// own callout or footer, so the shell's toast would only repeat it.
+const DIALOG_WRITE = { quiet: true };
 
 export class HttpApi implements Api {
   analyticsBudgets = async () => (await call<{ members: unknown[] }>('GET', '/admin/analytics/budgets')).members.map(d.decodeMemberBudget);
@@ -161,13 +153,13 @@ export class HttpApi implements Api {
     return { email: r.pending.email, organization: r.pending.organization_name ?? 'Personal', state: pairingId };
   };
   confirmPairing = (pairingId: string) => call<void>('POST', `/admin/oauth/sessions/${enc(pairingId)}/confirm`);
-  createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }));
+  createAccount = async (input: AccountInput): Promise<Account> => d.decodeAccount(await call('POST', '/admin/accounts', { id: input.id, kind: input.kind, label: input.label, secret: input.secret }, false, DIALOG_WRITE));
   createKey = async (input: CreateKeyInput): Promise<CreatedApiKey> => {
     const expires_at = input.expiresInDays === null ? null : Date.now() + input.expiresInDays * 86_400_000;
-    const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) });
+    const r = await call<Record<string, unknown>>('POST', '/admin/keys', { ...d.encodeKey(input), expires_at, id: slug(input.name) }, false, DIALOG_WRITE);
     return { key: d.decodeKey(r), secret: String(r.secret) };
   };
-  createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }));
+  createPool = async (input: PoolInput) => d.decodePool(await call('POST', '/admin/pools', { ...d.encodePool(input), id: slug(input.name) }, false, DIALOG_WRITE));
   deleteAccount = (accountId: string) => call<void>('DELETE', `/admin/accounts/${enc(accountId)}`);
   deleteKey = (id: string) => call<void>('DELETE', `/admin/keys/${enc(id)}`);
   deletePool = (id: string) => call<void>('DELETE', `/admin/pools/${enc(id)}`);
@@ -256,7 +248,9 @@ export class HttpApi implements Api {
   };
   releaseSession = (keyId: string, sessionId: string) => call<void>('POST', `/admin/sessions/${enc(keyId)}/${enc(sessionId)}/release`);
   renameAccount = async (accountId: string, label: string, revision?: number) =>
-    d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision({ label }, revision)));
+    d.decodeAccount(await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision({ label }, revision), false, DIALOG_WRITE));
+  // Quiet: the dashboard's line draws a refusal, the held writer's `503` among them, in its own slot.
+  replayParked = async () => d.decodeReplay(await call('POST', '/admin/ledger/parked/replay', undefined, false, { quiet: true }));
   resumeAccount = (accountId: string) => call<void>('POST', `/admin/accounts/${enc(accountId)}/resume`);
   revokeKey = (id: string) => call<void>('POST', `/admin/keys/${enc(id)}/revoke`);
   rotateKey = async (id: string): Promise<CreatedApiKey> => {
@@ -328,12 +322,12 @@ export class HttpApi implements Api {
   };
   updateAccount = async (accountId: string, patch: AccountPatch, revision?: number) =>
     d.decodeAccount(
-      await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision)),
+      await call('PATCH', `/admin/accounts/${enc(accountId)}`, withRevision(d.encodeAccountPatch(patch), revision), false, DIALOG_WRITE),
     );
-  updateKey = async (id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, fenced(d.encodeKey(input), updatedAt)));
+  updateKey = async (id: string, input: KeyInput, revision?: number): Promise<ApiKey> => d.decodeKey(await call('PATCH', `/admin/keys/${enc(id)}`, withRevision(d.encodeKey(input), revision), false, DIALOG_WRITE));
   // The route writes the settings and the members in one transaction, so a refusal stores nothing; a 409
   // `stale_edit` means the row moved since the dialog read it, which the dialog answers with Reload.
-  updatePool = async (id: string, input: PoolInput, updatedAt?: string) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, fenced(d.encodePool(input), updatedAt)));
+  updatePool = async (id: string, input: PoolInput, revision?: number) => d.decodePool(await call('PATCH', `/admin/pools/${enc(id)}`, withRevision(d.encodePool(input), revision), false, DIALOG_WRITE));
   verifyAccount = (accountId: string) => call<{ ok: boolean; status: number }>('POST', `/admin/accounts/${enc(accountId)}/verify`);
 }
 

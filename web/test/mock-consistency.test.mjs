@@ -17,7 +17,7 @@ const sum = (list, read) => list.reduce((n, x) => n + read(x), 0);
 const near = (a, b) => Math.abs(a - b) < 1e-6;
 
 /** The names the mock's story used before it read as one operator's, and the admin harness's own. */
-const RETIRED = ['business', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'studio', 'team'];
+const RETIRED = ['business', 'codex', 'Console workspace', 'console', 'direct', 'evals', 'Evals workspace', 'mail', 'personal', 'team'];
 
 /**
  * The story as every view reads it, loaded at `at`: the mock draws its story from the clock it loads at, so each
@@ -42,9 +42,9 @@ async function storyAt(at) {
     if (e.kind === 'snapshot') live = e.snapshot;
   })();
   const now = Date.parse(at);
-  // The day the dashboard and the pools' charts draw: 24 hourly buckets, the current hour last. An account's or a
-  // pool's day total starts an hour earlier, on the hour a full day back, and the week on the hour seven days back,
-  // as the routes total their rollups.
+  // The day the dashboard draws: 24 hourly buckets, the current hour last. An account's or a pool's day total, and a
+  // pool's 25 hourly buckets, start an hour earlier, on the hour a full day back, and the week on the hour seven days
+  // back, as the routes total their rollups.
   const dayFrom = startOfHour(now) - 23 * HOUR;
   const totalsFrom = startOfHour(now) - 24 * HOUR;
   const weekFrom = startOfHour(now) - 7 * DAY;
@@ -52,7 +52,7 @@ async function storyAt(at) {
   const totalled = requests.filter((r) => r.kind !== 'probe' && Date.parse(r.at) >= totalsFrom);
   const rollups = d.ALL_ROLLUPS.filter((r) => r.kind !== 'probe');
   const settings = await api.getSettings();
-  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, totalled, weekFrom };
+  return { accounts, allRollups: d.ALL_ROLLUPS, api, attention, counted, dayFrom, events, keys, live, now, overview, pools, requests, rollups, sessions, settings, totalled, totalledFrom: totalsFrom, weekFrom };
 }
 
 // One load at a time, since each pins the clock its bundle reads while it loads.
@@ -69,7 +69,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const poolName = new Map(s.pools.map((p) => [p.id, p.name]));
     const keyName = new Map(s.keys.map((k) => [k.id, k.name]));
     const named = (map, id, where) => assert.ok(map.has(id), `${where} names ${id}, which the list lacks`);
-    for (const a of s.accounts) for (const m of a.pools) named(poolName, m.poolId, `account ${a.id}`);
+    for (const a of s.accounts) if (a.pool) named(poolName, a.pool.poolId, `account ${a.id}`);
     for (const p of s.pools) {
       for (const m of p.members) named(accountLabel, m.accountId, `pool ${p.id}`);
       for (const k of p.keys) {
@@ -133,17 +133,51 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
         const [id, generation] = g.key.split('@');
         named(labels, id, `the ${groupBy} grouping`);
         // The route labels a group by its key in every dimension, and a key group by the key's name, which is its id;
-        // an earlier holder of a reused key id is its own group, labelled with the id and its creation time.
+        // an earlier holder of a reused key id is its own group, labeled with the id and its creation time.
         if (generation === undefined) assert.equal(g.label, groupBy === 'key' ? labels.get(id) : id, `the ${groupBy} grouping labels ${id}`);
         else assert.ok(id === desktop.id && g.label.startsWith(`${id} (deleted, created `), `the ${groupBy} grouping labels ${g.key} as an earlier holder`);
       }
     }
   });
 
+  test(`an account belongs to one pool, and its pool is the one whose members name it, at ${at}`, async () => {
+    const s = await story;
+    const holder = new Map();
+    for (const p of s.pools) {
+      for (const m of p.members) {
+        assert.ok(!holder.has(m.accountId), `${m.accountId} is a member of ${holder.get(m.accountId)?.poolId} and ${p.id}`);
+        holder.set(m.accountId, { poolId: p.id, priority: m.priority });
+      }
+    }
+    for (const a of s.accounts) assert.deepEqual(a.pool, holder.get(a.id) ?? null, `account ${a.id} answers the pool whose members name it`);
+  });
+
+  test(`no account's rollup row predates the plan it was served under, at ${at}`, async () => {
+    const s = await story;
+    const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
+    // A row covers its whole hour, so one whose hour ends after the plan started can hold the plan's first requests.
+    for (const a of s.accounts.filter((x) => x.subscription?.since)) {
+      const since = Date.parse(a.subscription.since);
+      const early = [...s.allRollups, ...facts].filter((r) => r.accountId === a.id && Date.parse(r.hour) + HOUR <= since);
+      assert.equal(early.length, 0, `${a.id}'s plan started at ${a.subscription.since}, after ${early.length} of its rollup rows from ${early[0]?.hour}`);
+    }
+  });
+
+  test(`no account fact outlasts the account's newest window reading, at ${at}`, async () => {
+    const s = await story;
+    const facts = await s.api.listAccountRollups(iso(s.now - 31 * DAY), iso(s.now));
+    // A fact's peaks are readings, so an hour that starts after the account's newest window reading has none behind it.
+    for (const a of s.accounts) {
+      const readings = [...a.windows, ...(a.fableWindow ? [a.fableWindow] : [])].map((w) => Date.parse(w.observedAt));
+      const late = facts.filter((r) => r.accountId === a.id && Date.parse(r.hour) > Math.max(...readings));
+      assert.equal(late.length, 0, `${a.id}'s newest reading is ${readings.length ? iso(Math.max(...readings)) : 'none'}, before ${late.length} of its account facts from ${late[0]?.hour}`);
+    }
+  });
+
   test(`no retired story name and no harness name reaches a row, at ${at}`, async () => {
     const s = await story;
     const names = [
-      ...s.accounts.flatMap((a) => [a.id, a.label, ...a.pools.map((m) => m.poolId)]),
+      ...s.accounts.flatMap((a) => [a.id, a.label, a.pool?.poolId]),
       ...s.pools.flatMap((p) => [p.id, p.name, ...p.members.map((m) => m.accountId), ...p.keys.flatMap((k) => [k.id, k.label])]),
       ...s.keys.flatMap((k) => [k.id, k.name, k.poolId]),
       ...s.sessions.flatMap((x) => [x.keyId, x.accountId]),
@@ -164,12 +198,20 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     assert.deepEqual(
       s.accounts.filter((a) => a.kind === 'oauth').map((a) => a.email),
-      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+old@example.com', 'operator+spare@example.com'],
+      ['operator@example.com', 'operator+second@example.com', 'operator+nightly@example.com', 'operator+studio@example.com', 'operator+old@example.com', 'operator+spare@example.com'],
       'every subscription keeps the identity it last paired with',
     );
     const pairing = await s.api.startPairing('legacy');
     const preview = await s.api.completePairing(pairing.id, { code: 'code', state: pairing.state });
     assert.deepEqual([preview.email, preview.organization], ['operator+old@example.com', 'Personal']);
+  });
+
+  test(`no account bills overage beside the provider's reason for no longer funding it, at ${at}`, async () => {
+    const s = await story;
+    for (const a of s.accounts) {
+      const billing = a.extraUsage?.inUse === true || a.overage?.inUse === true;
+      assert.ok(!billing || !a.extraUsage?.disabledReason, `${a.id} reads its overage in use beside "${a.extraUsage?.disabledReason}"`);
+    }
   });
 
   test(`each account's request counts are its rows' from the hour a day back and the rollups' over the week, at ${at}`, async () => {
@@ -198,15 +240,15 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
-  test(`each pool's day totals its rows from the hour a day back, and its 24 hourly buckets its rows from the chart's first hour, at ${at}`, async () => {
+  test(`each pool's day and its 25 hourly buckets total its rows from the hour a day back, at ${at}`, async () => {
     const s = await story;
     for (const p of s.pools) {
       const mine = s.totalled.filter((r) => r.poolId === p.id);
       assert.equal(p.requests24h, mine.length, `${p.id}'s day`);
       assert.ok(near(p.cost24h, sum(mine, (r) => r.costUsd)), `${p.id}'s cost`);
-      assert.equal(p.traffic24h.length, 24, `${p.id}'s buckets`);
-      assert.equal(Date.parse(p.traffic24h[0].at), s.dayFrom, `${p.id}'s first bucket`);
-      assert.equal(sum(p.traffic24h, (b) => b.requests), s.counted.filter((r) => r.poolId === p.id).length, `${p.id}'s buckets`);
+      assert.equal(p.traffic24h.length, 25, `${p.id}'s buckets`);
+      assert.equal(Date.parse(p.traffic24h[0].at), s.totalledFrom, `${p.id}'s first bucket`);
+      assert.equal(sum(p.traffic24h, (b) => b.requests), mine.length, `${p.id}'s buckets`);
     }
   });
 
@@ -214,7 +256,7 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     const s = await story;
     assert.equal(s.overview.requests24h, s.counted.length);
     assert.equal(sum(s.overview.hourly, (h) => h.requests), s.overview.requests24h, 'the hourly buckets');
-    assert.equal(s.overview.requests24h, sum(s.pools, (p) => sum(p.traffic24h, (b) => b.requests)), "the pools' charts");
+    assert.equal(sum(s.pools, (p) => p.requests24h), s.totalled.length, "the pools' days");
     const range = { from: iso(s.now - DAY), to: iso(s.now) };
     const points = await s.api.getAnalyticsSeries({ ...range, groupBy: 'all' });
     const day = s.rollups.filter((r) => Date.parse(r.hour) >= Date.parse(range.from) && Date.parse(r.hour) <= Date.parse(range.to));
@@ -223,8 +265,10 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
 
   test(`the live desktop key starts on the hour its earlier holder ended, inside the last day, at ${at}`, async () => {
     const s = await story;
-    const created = Date.parse(s.keys.find((k) => k.id === 'desktop').createdAt);
+    const desktop = s.keys.find((k) => k.id === 'desktop');
+    const created = Date.parse(desktop.createdAt);
     assert.equal(created % HOUR, 0, 'on the hour');
+    assert.equal(Math.floor(desktop.revision / 2 ** 42), 2, "the live key is its id's second incarnation");
     assert.ok(created >= s.now - 22 * HOUR && created <= s.now - 18 * HOUR, `created ${new Date(created).toISOString()}, not 18 to 22 hours back`);
     const rows = s.allRollups.filter((r) => r.keyId === 'desktop');
     const holder = rows.filter((r) => Date.parse(r.hour) < created);
@@ -277,6 +321,44 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
   });
 
+  test(`the ci key's last use is its newest admitted request, its revocation follows, and its pool's exhaustion starts at the first request the spent member could not take, at ${at}`, async () => {
+    const s = await story;
+    const ci = s.keys.find((k) => k.id === 'ci');
+    // The rows run newest first. A send on the key after its revocation is refused as an unknown key and uses nothing.
+    const rows = s.requests.filter((r) => r.keyId === 'ci');
+    const admitted = rows.filter((r) => r.errorCode !== 'auth_unknown');
+    const revokedAt = Date.parse(ci.updatedAt);
+    assert.equal(ci.status, 'revoked');
+    assert.ok(admitted.length > 0, 'the key has requests');
+    assert.ok(Date.parse(ci.lastUsedAt) >= Date.parse(admitted[0].at), `last used at ${ci.lastUsedAt}, before its request of ${admitted[0].at}`);
+    assert.ok(revokedAt > Date.parse(admitted[0].at), `revoked at ${ci.updatedAt}, before its request of ${admitted[0].at}`);
+    for (const r of rows.filter((x) => Date.parse(x.at) > revokedAt)) assert.deepEqual([r.status, r.errorCode], [401, 'auth_unknown'], `the send of ${r.at} after the revocation`);
+    // The attention reader dates an exhaustion from the first exhausted answer after the pool's last success, under
+    // that request's key, and a success clears it.
+    const pooled = s.requests.filter((r) => r.poolId === ci.poolId);
+    const lastSuccess = pooled.find((r) => r.outcome === 'succeeded');
+    const first = pooled.filter((r) => r.outcome === 'exhausted' && (lastSuccess === undefined || Date.parse(r.at) > Date.parse(lastSuccess.at))).at(-1);
+    const item = s.attention.find((i) => i.kind === 'pool_exhausted' && i.subject.id === ci.poolId);
+    assert.ok(first !== undefined && item !== undefined, `the ${ci.poolId} pool holds an exhausted answer after its last success and an exhaustion item`);
+    assert.deepEqual([item.since, item.detail.key], [iso(Date.parse(first.at) + (first.durationMs ?? 0)), first.keyId], `the ${ci.poolId} pool's exhaustion`);
+  });
+
+  test(`the runner's sessions on ci read their last use off their own newest request, at ${at}`, async () => {
+    const s = await story;
+    const runner = s.sessions.filter((x) => x.keyId === 'ci' && !x.historical);
+    assert.ok(runner.length > 0, 'the story lists sessions of the ci key');
+    for (const x of runner) assert.equal(x.lastUsedAt, x.lastRequestAt, `${x.sessionId}'s last use`);
+  });
+
+  test(`each pool's active pins are the pinned sessions under its keys, and the dashboard's are their sum, at ${at}`, async () => {
+    const s = await story;
+    const poolOf = new Map(s.keys.map((k) => [k.id, k.poolId]));
+    for (const p of s.pools) {
+      assert.equal(p.activePins, s.sessions.filter((x) => x.pinned && poolOf.get(x.keyId) === p.id).length, `${p.id}'s active pins`);
+    }
+    assert.equal(s.overview.activePins, sum(s.pools, (p) => p.activePins), "the dashboard's active pins");
+  });
+
   test(`the key with one request in its life reads one, at ${at}`, async () => {
     const s = await story;
     const notebook = s.keys.find((k) => k.id === 'notebook');
@@ -284,19 +366,19 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
   });
 }
 
-// An instant whose hour a full day back carries traffic before the charts' first bucket.
+// An instant whose hour a full day back carries traffic before the dashboard's first bucket.
 const firstHour = (loading = loading.then(() => storyAt('2026-09-16T09:30:00Z')));
 
-test("the hour a full day back counts toward the accounts' and pools' day totals and toward no chart", async () => {
+test("the hour a full day back counts toward the accounts' and pools' day totals and a pool's first bucket, and toward no dashboard figure", async () => {
   const s = await firstHour;
   const early = s.totalled.filter((r) => Date.parse(r.at) < s.dayFrom);
-  assert.ok(early.length > 0, "the story has traffic in the hour before the charts' first bucket");
+  assert.ok(early.length > 0, "the story has traffic in the hour before the dashboard's first bucket");
   for (const a of s.accounts) {
     const own = (rows) => rows.filter((r) => r.accountId === a.id).length;
     assert.equal(a.requests.last24h, own(s.counted) + own(early), `${a.id}'s first hour`);
   }
   for (const p of s.pools) {
-    assert.equal(p.requests24h - sum(p.traffic24h, (b) => b.requests), early.filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
+    assert.equal(p.traffic24h[0].requests, early.filter((r) => r.poolId === p.id).length, `${p.id}'s first hour`);
   }
-  assert.equal(s.overview.requests24h, s.counted.length, "the dashboard's day keeps the charts' first hour");
+  assert.equal(s.overview.requests24h, s.counted.length, "the dashboard's day keeps its own first hour");
 });

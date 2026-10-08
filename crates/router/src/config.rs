@@ -286,6 +286,8 @@ pub enum ConfigError {
     RefreshConcurrencyOutOfRange { value: usize },
     #[error("stats.rollup_retention_days must be 0 or at least stats.retention_days ({retention_days}), not {value}")]
     RollupRetentionTooShort { retention_days: u32, value: u32 },
+    #[error("environment variable {name} holds a secret outside the allowed shape (printable ASCII, no surrounding spaces)")]
+    SecretShape { name: String },
     #[error("environment variable {name} holds a secret shorter than 16 characters")]
     SecretTooShort { name: String },
     #[error("sessions.expire_after_seconds must be at least 60")]
@@ -563,9 +565,10 @@ pub fn secret_is_unset(name: &str) -> bool {
 const PLACEHOLDER_ADMIN_SECRET: &str = "replace-with-a-long-random-string";
 
 pub(crate) fn from_env(name: &str) -> Result<Secret, ConfigError> {
-    let value = match std::env::var(name) {
-        // The value is never part of the error: a variable set to something unusable still holds a secret.
-        Ok(value) if !value.is_empty() => value,
+    let value = match std::env::var_os(name) {
+        // The value is never part of the error: a variable set to something unusable still holds a secret. A byte
+        // that is not UTF-8 reads as U+FFFD, so the shape check below refuses it rather than calling it unset.
+        Some(value) if !value.is_empty() => value.to_string_lossy().into_owned(),
         _ => {
             return Err(ConfigError::MissingSecret {
                 name: name.to_string(),
@@ -579,6 +582,16 @@ pub(crate) fn from_env(name: &str) -> Result<Secret, ConfigError> {
     }
     if value == PLACEHOLDER_ADMIN_SECRET {
         return Err(ConfigError::PlaceholderSecret {
+            name: name.to_string(),
+        });
+    }
+    // The bearer path reads its header as ASCII text and trims it, so a secret of another shape would open the
+    // console and never a bearer call.
+    if value.chars().any(|c| !(' '..='~').contains(&c))
+        || value.starts_with(' ')
+        || value.ends_with(' ')
+    {
+        return Err(ConfigError::SecretShape {
             name: name.to_string(),
         });
     }
@@ -1348,6 +1361,45 @@ mod tests {
             )),
             Err(ConfigError::SecretTooShort { name }) if name == "TEST_CFG_MULTIBYTE_SHORT"
         ));
+    }
+
+    #[test]
+    fn a_secret_with_a_non_ascii_character_or_a_surrounding_space_refuses_with_secret_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        for (name, secret) in [
+            ("TEST_CFG_SHAPE_NON_ASCII", "sixteen-chars-ok-é"),
+            ("TEST_CFG_SHAPE_SPACES", " sixteen-chars-ok "),
+            ("TEST_CFG_SHAPE_LEADING", " sixteen-chars-ok"),
+            ("TEST_CFG_SHAPE_TRAILING", "sixteen-chars-ok "),
+        ] {
+            std::env::set_var(name, secret);
+            let refused = load(&file_with_secret_env(dir.path(), name, name));
+            assert!(
+                matches!(&refused, Err(ConfigError::SecretShape { name: named }) if named == name),
+                "{secret:?}: {refused:?}"
+            );
+        }
+        std::env::set_var("TEST_CFG_SHAPE_OK", "sixteen-chars-ok");
+        assert!(load(&file_with_secret_env(
+            dir.path(),
+            "shape-ok",
+            "TEST_CFG_SHAPE_OK"
+        ))
+        .is_ok());
+    }
+
+    #[test]
+    fn a_base64url_secret_init_writes_passes_the_shape() {
+        let dir = tempfile::tempdir().unwrap();
+        let secret = "VWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+        assert_eq!(secret.len(), 43);
+        std::env::set_var("TEST_CFG_BASE64URL", secret);
+        assert!(load(&file_with_secret_env(
+            dir.path(),
+            "base64url",
+            "TEST_CFG_BASE64URL"
+        ))
+        .is_ok());
     }
 
     #[test]

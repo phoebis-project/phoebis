@@ -1,7 +1,7 @@
 # The downstream client
 
 Claude Code reaches the router through a handful of environment variables, two required and the rest optional.
-This page gives the block, says what each line changes in the client's behaviour, and describes what the proxy
+This page gives the block, says what each line changes in the client's behavior, and describes what the proxy
 listener accepts from the client and what it refuses.
 
 ## The environment block
@@ -17,8 +17,8 @@ NODE_EXTRA_CA_CERTS=<path to the CA's PEM>   # a private CA only
 ```
 
 When the proxy listener's certificate comes from a private CA, the client trusts that CA through `NODE_EXTRA_CA_CERTS`:
-for a pair `phoebis init --tls self-signed` wrote, that is a copy of the router's `tls/ca.pem`; a public CA needs
-nothing here. The client checks the CA before anything else, so the leaf needs no pin.
+a copy of the CA's PEM. A public CA needs nothing here. The client checks the CA before anything else, so the leaf needs
+no pin.
 
 ### ANTHROPIC_BASE_URL
 
@@ -29,7 +29,7 @@ mod's reports go here. Plain HTTP is accepted on any address, by the router and 
 ### CLAUDE_CODE_OAUTH_TOKEN
 
 Holds the router key's secret, the one shown once at creation or rotation. Put it here rather than in
-`ANTHROPIC_API_KEY`: the client gates three behaviours on a subscriber check that a credential in `ANTHROPIC_API_KEY`
+`ANTHROPIC_API_KEY`: the client gates three behaviors on a subscriber check that a credential in `ANTHROPIC_API_KEY`
 never passes, the one-hour cache TTL for the main conversation, the parsing of the unified rate-limit headers on a 429,
 and the automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all three up.
 
@@ -135,7 +135,7 @@ the model's own turn: every session post carries a `safeguards` member near the 
 permission rules with their literal text, the working and home directories, the trusted directories, the git state
 and the user identity) and the `dangerous-tool-use-2026-09-03` beta, and the answer's `message_delta` carries one
 verdict per tool use. A Max account answered a verdict for every reviewed tool use through a gateway that relays the
-member unchanged, as the router does with the setting on; an Anthropic-key account has not been measured. A session post
+member unchanged, as the router does with the setting on; an API-key account has not been measured. A session post
 that asks takes two to four seconds against one to two for one that does not, and the client's own classifier request
 about 1.3 seconds.
 
@@ -246,12 +246,13 @@ A request body whose top-level object carries `metadata`, `model`, `stream` or `
 `system` block carries `text` more than once, raw or escaped, whose `safeguards` member cannot be cut while its key's
 server-side auto mode is off (carried twice, or spelled with an escape), whose `cache_control` marker the pool's cache
 TTL policy cannot reach (a key on the marker's path spelled with an escape), or whose billing stamp the router can
-neither check nor restamp (a key on its path, the billing line's header name or its `cch=` spelled with an escape, or a
-second stamped `text` in the first `system` block), whether or not the request needs an edit, is refused before anything
-reaches the upstream: `400` with the error code `body_shape` and a message naming the member. A `metadata` object that
-names `user_id` twice, raw or escaped, is refused the same way, since the router splices the account into one spelling
-and a last-wins parser upstream would read the other. A body whose top-level object nests deeper than the relay reads is
-refused `400` with the error code `invalid_body`.
+neither check nor restamp (a key on its path, the billing line's header name or its `cch=` spelled with an escape, a
+lone surrogate escape on the billing line beside an escaped header name or `cch=`, or a second stamped `text` in the
+first `system` block), whether or not the request needs an edit, is refused before anything reaches the upstream: `400`
+with the error code `body_shape` and a message naming the member. A `metadata` object that names `user_id` twice, raw or
+escaped, is refused the same way, since the router splices the account into one spelling and a last-wins parser upstream
+would read the other. A body whose top-level object nests deeper than the relay reads is refused `400` with the error
+code `invalid_body`.
 
 A request body that does not finish arriving within `proxy.body_read_seconds` (60 by default) after authentication is
 refused `408` with the error code `request_timeout` and the message `the request body did not arrive in time`.

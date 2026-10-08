@@ -28,8 +28,8 @@ use phoebis_routing::{
     SEVEN_DAY_FABLE,
 };
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, CooldownRow, Identity, NewBundle, PoolMember,
-    StateCause, StoreError,
+    answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, CooldownRow, Identity,
+    NewBundle, PoolMember, StateCause, StoreError,
 };
 use phoebis_transport::response::ResponseHead;
 use serde::Deserialize;
@@ -37,7 +37,7 @@ use serde_json::{json, Value};
 
 use crate::{
     accounts, analytics, attention, dashboard, keepalive, keys, live, models, pools, pricing,
-    requests, sessions, settings, AdminState, LoginError,
+    requests, sessions, settings, tls, AdminState, LoginError,
 };
 
 /// Covers a slow control-plane answer without letting one stalled exchange hold an admin request open
@@ -131,6 +131,7 @@ pub fn router(state: Arc<AdminState>) -> Router {
         .route("/admin/sessions/costs", get(sessions::costs))
         .route("/admin/settings", get(settings::show))
         .route("/admin/system", get(system))
+        .route("/admin/tls/reload", post(tls::reload))
         .route("/admin", any(unknown_admin_route))
         .route("/admin/{*rest}", any(unknown_admin_route))
         .layer(from_fn_with_state(state.clone(), gate))
@@ -524,7 +525,7 @@ async fn disconnect(State(state): State<Arc<AdminState>>, Path(id): Path<String>
     // The bump deleted the bundle outside the manager, so the copy it keeps goes with it.
     state.manager.invalidate(&id);
     state.catalog.evict(&id);
-    // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An Anthropic-key slot
+    // The bump leaves the slot `disconnected`, which an OAuth slot leaves again by pairing. An API-key slot
     // has no pairing to run, so it rests where a slot that never had a key rests.
     if row.kind == AccountKind::ApiKey {
         if let Err(error) = state
@@ -608,7 +609,7 @@ async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<Stri
     }
 }
 
-/// Answers whether an Anthropic key still works, by asking the cheapest authenticated endpoint there is: the
+/// Answers whether an API key still works, by asking the cheapest authenticated endpoint there is: the
 /// catalog discovery, which goes to the account's own host over the pool that host belongs to.
 async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
     let row = match account(&state, &id) {
@@ -618,7 +619,7 @@ async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) ->
     if row.kind != AccountKind::ApiKey {
         return failure(
             StatusCode::BAD_REQUEST,
-            "only an Anthropic-key account is verified this way",
+            "only an API-key account is verified this way",
         );
     }
     let (ok, status) = match state.catalog.discover(&row).await {
@@ -626,7 +627,7 @@ async fn verify(State(state): State<Arc<AdminState>>, Path(id): Path<String>) ->
         Err(DiscoveryError::Unauthorized) => (false, 401),
         Err(DiscoveryError::Status(status)) => (false, status),
         Err(DiscoveryError::NoCredential) => {
-            return failure(StatusCode::CONFLICT, "account holds no Anthropic key")
+            return failure(StatusCode::CONFLICT, "account holds no API key")
         }
         Err(error) => return failure(StatusCode::BAD_GATEWAY, &format!("upstream: {error}")),
     };
@@ -660,7 +661,7 @@ async fn pairing_start(
         Ok(row) => row,
         Err(refusal) => return refusal,
     };
-    // An Anthropic-key slot has no login to run: committing an OAuth bundle onto it would leave a credential
+    // An API-key slot has no login to run: committing an OAuth bundle onto it would leave a credential
     // the relay never reaches for, since it picks the credential by the account's kind.
     if row.kind != AccountKind::Oauth {
         return failure(
@@ -1339,7 +1340,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
     }
     let fast_lane = ctx.held.get(&row.id).and_then(fast_lane_json);
     // Composed as the usage `GET` composes its answer, over the router's windows the list already read once, so one
-    // list read carries every account's standing. The poll never reads an Anthropic-key account.
+    // list read carries every account's standing. The poll never reads an API-key account.
     let usage = (row.kind == AccountKind::Oauth).then(|| {
         let (poll, unread) = poll_standing(state, row);
         let latest = state.usage.latest(&row.id);
@@ -1403,7 +1404,7 @@ async fn account_view(state: &AdminState, row: &AccountRow, ctx: &AccountContext
         "windows": windows,
         "fast_lane": fast_lane,
         "extra_usage": ctx.extra.iter().find(|e| e.account_id == row.id).map(|e| json!({ "currency": e.currency, "disabled_reason": e.disabled_reason, "in_use": e.in_use, "is_enabled": e.is_enabled, "monthly_limit": e.monthly_limit, "used_credits": e.used_credits, "utilization": e.utilization, "observed_at": e.bucket * 1_000 })),
-        "pools": ctx.members.iter().filter(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })).collect::<Vec<_>>(),
+        "pool": ctx.members.iter().find(|m| m.account_id == row.id).map(|m| json!({ "pool_id": m.pool_id, "priority": m.priority })),
         "requests": { "last_24h": ctx.day.get(&row.id).map_or(0, |t| t.requests), "last_7d": ctx.week.get(&row.id).map_or(0, |t| t.requests), "lifetime": ctx.lifetime.get(&row.id).map_or(0, |t| t.requests) },
         "usage": usage,
     })
@@ -1677,23 +1678,36 @@ pub(crate) fn present<'de, D: serde::Deserializer<'de>>(
     serde_json::Value::deserialize(d).map(Some)
 }
 
-const DAY_MS: i64 = 86_400_000;
-
-/// The stamp an edit's body names: the row's own when the body sent none, else the body's integer, refused when it
-/// is not one or lies more than a day past the row's stamp. The route answers 409 when it differs from its own read.
+/// The stamp a pool or key edit's body names through the row's `revision`: the row's own when the body sent none,
+/// refused when it is not a non-negative integer, and answered `409 stale_edit` with `stale` when it names another
+/// incarnation than the row's. A token of the row's incarnation answers the stamp it carries, which the route
+/// compares with its own read.
 // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
 // pointer chase and nothing else.
 #[allow(clippy::result_large_err)]
-pub(crate) fn fence_stamp(sent: Option<&serde_json::Value>, current: i64) -> Result<i64, Response> {
+pub(crate) fn fence_token(
+    sent: Option<&serde_json::Value>,
+    incarnation: u64,
+    updated_at: i64,
+    stale: &str,
+) -> Result<i64, Response> {
     let Some(value) = sent else {
-        return Ok(current);
+        return Ok(updated_at);
     };
-    match value.as_i64() {
-        Some(stamp) if stamp <= current.saturating_add(DAY_MS) => Ok(stamp),
-        _ => Err(failure(
+    let Some(token) = value.as_u64() else {
+        return Err(failure(
             StatusCode::BAD_REQUEST,
-            "expected_revision is the updated_at the row was read at",
-        )),
+            "expected_revision is the revision the row was read at",
+        ));
+    };
+    // What the token carries above the incarnation's floor is its stamp only when its incarnation is the row's, which
+    // `answers_stamp_token` confirms for the two parts together.
+    match token
+        .checked_sub(stamp_token(incarnation, 0))
+        .and_then(|stamp| i64::try_from(stamp).ok())
+    {
+        Some(stamp) if answers_stamp_token(incarnation, stamp, token) => Ok(stamp),
+        _ => Err(failure_with_code(StatusCode::CONFLICT, "stale_edit", stale)),
     }
 }
 

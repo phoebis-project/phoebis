@@ -368,7 +368,7 @@ test('the request detail reads the row and its events from one GET, and a purged
 
 const keyEdit = { autoModeServer: null, bodyCaptureHours: null, enabled: true, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'Desktop', notes: null, poolId: 'main' };
 
-test('a key create and a key edit send the auto mode override in snake_case', async () => {
+test('a key creation and a key edit send the auto mode override in snake_case', async () => {
   const row = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
   const calls = stub((url, init) => answer(200, { ...row, ...JSON.parse(init.body), ...(init.method === 'POST' ? { secret: 'phoebis-fixture' } : {}) }));
   const api = new HttpApi();
@@ -419,21 +419,16 @@ test('a pool save is one PATCH that carries the members with the settings', asyn
   );
 });
 
-test('a pool or key edit sends the stamp it read as expected_revision, and one it cannot read is refused as stale unsent', async () => {
+test('a pool or key edit sends the revision it read as expected_revision, and none for a save that read no row', async () => {
   const pools = JSON.parse(readFileSync(new URL('./fixtures/pools.json', import.meta.url), 'utf8')).body.pools[0];
   const keys = JSON.parse(readFileSync(new URL('./fixtures/keys.json', import.meta.url), 'utf8')).body.keys[0];
   const calls = stub((url) => answer(200, url.startsWith('/admin/pools') ? pools : keys));
   const api = new HttpApi();
-  const read = '2026-09-16T14:30:00.000Z';
-  await api.updatePool('main', poolSave(pools.label), read);
-  await api.updateKey('desktop', keyEdit, read);
+  await api.updatePool('main', poolSave(pools.label), pools.revision);
+  await api.updateKey('desktop', keyEdit, keys.revision);
   await api.updatePool('main', poolSave(pools.label));
   const sent = calls.map((c) => JSON.parse(c.init.body).expected_revision);
-  assert.deepEqual(sent, [Date.parse(read), Date.parse(read), undefined], 'the millisecond stamp, and none for a save that read no row');
-  const unread = (e) => e instanceof ApiError && e.status === 409 && e.code === 'stale_edit';
-  await assert.rejects(api.updatePool('main', poolSave(pools.label), 'not a stamp'), unread);
-  await assert.rejects(api.updateKey('desktop', keyEdit, 'not a stamp'), unread);
-  assert.equal(calls.length, 3, 'a stamp the dialog cannot read sends nothing, so the route never sees a null');
+  assert.deepEqual(sent, [pools.revision, keys.revision, undefined], "the row's token as the answer carried it");
 });
 
 test('deleting an account calls the account route, and a disconnect keeps to the credentials route', async () => {
@@ -462,6 +457,57 @@ test('listCatalogOf reads each named catalog once and answers the union by id, a
   const none = stub(() => answer(500));
   assert.deepEqual(await new HttpApi().listCatalogOf([]), []);
   assert.equal(none.length, 0, 'no account named, no read');
+});
+
+test("the replay is one POST that decodes its counts, and a held writer's 503 reaches no toast, since the line draws it", async () => {
+  let failures = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => undefined, onUnauthorized: () => undefined });
+  const body = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
+  const calls = stub(() => answer(200, body('replay')));
+  assert.deepEqual(await new HttpApi().replayParked(), { landed: 0, remaining: 0 });
+  assert.deepEqual(calls.map((c) => [c.init.method, c.url, c.init.body]), [['POST', '/admin/ledger/parked/replay', undefined]]);
+  stub(() => answer(503, body('replay_held')));
+  await assert.rejects(new HttpApi().replayParked(), (e) => e instanceof ApiError && e.status === 503 && e.message === 'the ledger writer is held, try again');
+  assert.equal(failures, 0, 'the dashboard line draws the refusal in its own slot');
+});
+
+test("a dialog's write reaches no toast when refused, since the dialog draws the refusal, while every other write still does", async () => {
+  let failures = 0;
+  let forbidden = 0;
+  let unauthorized = 0;
+  setHooks({ onFailure: () => { failures += 1; }, onForbidden: () => { forbidden += 1; }, onUnauthorized: () => { unauthorized += 1; } });
+  const api = new HttpApi();
+  const dialogs = [
+    () => api.createAccount({ id: 'work', kind: 'oauth', label: 'work', secret: null }),
+    () => api.createKey({ ...keyEdit, expiresInDays: null }),
+    () => api.createPool(poolSave('Spare')),
+    () => api.renameAccount('work', 'Work', 1),
+    () => api.updateAccount('work', { cancelled: false, subscriptionEndsAt: null }, 1),
+    () => api.updateKey('desktop', keyEdit, 1),
+    () => api.updatePool('main', poolSave('Main'), 1),
+  ];
+  for (const status of [400, 403, 409, 500]) {
+    stub(() => answer(status, { error: 'refused' }));
+    for (const write of dialogs) await assert.rejects(write(), (e) => e instanceof ApiError && e.status === status && e.message === 'refused');
+  }
+  stub(() => Promise.reject(new TypeError('fetch failed')));
+  for (const write of dialogs) await assert.rejects(write(), (e) => e instanceof ApiError && e.status === 0);
+  assert.deepEqual([failures, forbidden], [0, 0], 'the dialog shows the refusal once, in its own callout or footer');
+  stub(() => answer(401, { error: 'no admin session' }));
+  await assert.rejects(dialogs[0]());
+  assert.equal(unauthorized, 1, 'a lapsed session still returns the console to the login');
+  stub(() => answer(500, { error: 'the store is unavailable' }));
+  const others = [
+    () => api.clearCooldown('work', 'account'),
+    () => api.deleteAccount('work'),
+    () => api.pauseAccount('work'),
+    () => api.releaseSession('desktop', 's1'),
+    () => api.resumeAccount('work'),
+    () => api.revokeKey('desktop'),
+    () => api.rotateKey('desktop'),
+  ];
+  for (const write of others) await assert.rejects(write());
+  assert.equal(failures, others.length, 'a write no dialog draws keeps the toast');
 });
 
 test('the attention read is one GET, and its failures reach no toast, since the line draws its own', async () => {

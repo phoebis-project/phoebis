@@ -408,7 +408,7 @@ async fn cooldowns_on_two_unpriced_models_render_as_one_other_sample_with_the_lo
     assert_eq!(
         gauges.cooldowns,
         vec![("a".into(), "model:other".into(), 120)],
-        "one sample per normalised label set, the maximum remaining"
+        "one sample per normalized label set, the maximum remaining"
     );
     let text = Metrics::new().render(&gauges, &[], 0);
     assert_eq!(
@@ -583,6 +583,7 @@ fn every_registered_family_renders_and_nothing_else_does() {
     let metrics = Metrics::new();
     metrics.observe_probe("main", "landed");
     metrics.observe_probe("main", "cold");
+    metrics.observe_probe("main", "held");
     metrics.observe_probe("night", "failed");
     metrics.observe_skipped("main", "held");
     metrics.observe_skipped("main", "ended");
@@ -618,6 +619,7 @@ fn every_registered_family_renders_and_nothing_else_does() {
         r#"phoebis_keepalive_agents{state="parked"} 0"#,
         r#"phoebis_keepalive_probes_total{outcome="cold",pool="main"} 1"#,
         r#"phoebis_keepalive_probes_total{outcome="failed",pool="night"} 1"#,
+        r#"phoebis_keepalive_probes_total{outcome="held",pool="main"} 1"#,
         r#"phoebis_keepalive_probes_total{outcome="landed",pool="main"} 1"#,
         r#"phoebis_keepalive_skipped_total{pool="main",state="ended"} 1"#,
         r#"phoebis_keepalive_skipped_total{pool="main",state="held"} 1"#,

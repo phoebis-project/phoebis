@@ -44,9 +44,9 @@ pub struct Listeners {
 }
 
 /// One line per listener pair whose leaf needs a look: `tls::expiry_line`'s for a leaf within the expiry warning, or
-/// the refusal the next start would print for a certificate file it cannot read or a leaf past its dates. A running
-/// router read its pair at start and keeps serving it, so the file on disk is what the next start meets. `pairs` are
-/// `(key, tls)`, `key` being `proxy.tls` or `admin.tls`.
+/// the refusal the loader prints for a certificate file the operator running this cannot read or a leaf past its
+/// dates. A running router read its pair at start and keeps serving it until `tls reload`. The file on disk is what
+/// the next reload or start meets. `pairs` are `(key, tls)`, `key` being `proxy.tls` or `admin.tls`.
 pub fn certificate_lines(pairs: &[(&'static str, &Option<ListenerTls>)]) -> Vec<String> {
     pairs
         .iter()
@@ -70,8 +70,8 @@ pub const WIDTH: usize = 80;
 /// width is cut at its end.
 const LABEL_FLOOR: usize = 12;
 
-/// The columns a pin line keeps for its state after the account, so `pinned` or `shedding from` and the age stay on
-/// the screen however long the label.
+/// The fewest columns a pin line keeps for its state after the account. A shedding row keeps the state word with its
+/// source, then the age in a cell of its own, so the age prints whole however long the label.
 const PIN_STATE_ROOM: usize = 20;
 
 /// The widest an agent id prints in the pins block.
@@ -274,7 +274,7 @@ pub fn render(
                 .as_array()
                 .into_iter()
                 .flatten()
-                .filter(|account| account["pools"].as_array().is_none_or(Vec::is_empty))
+                .filter(|account| account["pool"].is_null())
                 .map(|account| (accounts.label(text(&account["id"])), state_word(account)))
                 .collect();
             if !unpooled.is_empty() {
@@ -411,8 +411,15 @@ fn pools_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: 
                 row
             })
             .collect();
-        // The label, the state, the eligibility and the windows; the reset or the cooldown after them is cut first.
-        fit_column(&mut rows, 0, 5 + usize::from(fable), 4, 0);
+        // The reset or the cooldown keeps its width, so a long label is cut before the scope word that says the
+        // member is held for one model or the fast lane alone.
+        let widest_reset = rows
+            .iter()
+            .filter_map(|row| row.get(5 + usize::from(fable)))
+            .map(|cell| 2 + columns(cell))
+            .max()
+            .unwrap_or(0);
+        fit_column(&mut rows, 0, 5 + usize::from(fable), 4, widest_reset);
         for line in table("    ", rows) {
             screen.push(line);
         }
@@ -520,25 +527,37 @@ fn pins_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: &
     let mut rows = vec![["session", "agent", "account", "state"]
         .map(str::to_owned)
         .to_vec()];
-    rows.extend(pins.iter().map(|row| {
+    // Beside each row, a shedding row's age and the keepalive words after it: the age is a cell of its own until the
+    // labels are fitted, so the cuts reach the labels and never the age.
+    let mut shed_ages: Vec<Option<(String, String)>> = vec![None];
+    for row in &pins {
         let age = row["last_used_at"].as_i64().map(|at| clock.age(at));
-        let mut state = match (row["shed_from"].as_str(), age) {
-            (Some(from), Some(age)) => format!("shedding from {}, {age} ago", accounts.label(from)),
-            (Some(from), None) => format!("shedding from {}", accounts.label(from)),
-            (None, Some(age)) => format!("pinned {age} ago, {}", text(&row["model"])),
-            (None, None) => format!("pinned, {}", text(&row["model"])),
-        };
-        let keepalive = &row["keepalive"];
-        if let Some(keepalive_state) = keepalive["state"].as_str() {
-            state.push_str(&format!(", keepalive {keepalive_state}"));
-            if !keepalive["next_probe_at"].is_null() {
-                state.push_str(&format!(
+        let mut keepalive = String::new();
+        if let Some(keepalive_state) = row["keepalive"]["state"].as_str() {
+            keepalive.push_str(&format!(", keepalive {keepalive_state}"));
+            if !row["keepalive"]["next_probe_at"].is_null() {
+                keepalive.push_str(&format!(
                     " next probe {}",
-                    clock.time(&keepalive["next_probe_at"])
+                    clock.time(&row["keepalive"]["next_probe_at"])
                 ));
             }
         }
-        vec![
+        let (state, shed_age) = match (row["shed_from"].as_str(), age) {
+            (Some(from), Some(age)) => (
+                format!("shedding from {}", accounts.label(from)),
+                Some((format!("{age} ago"), keepalive)),
+            ),
+            (Some(from), None) => (
+                format!("shedding from {}{keepalive}", accounts.label(from)),
+                None,
+            ),
+            (None, Some(age)) => (
+                format!("pinned {age} ago, {}{keepalive}", text(&row["model"])),
+                None,
+            ),
+            (None, None) => (format!("pinned, {}{keepalive}", text(&row["model"])), None),
+        };
+        rows.push(vec![
             text(&row["session_id"])
                 .chars()
                 .take(SESSION_CHARS)
@@ -546,9 +565,28 @@ fn pins_block(screen: &mut Screen, answer: &Value, accounts: &Accounts, clock: &
             cut(named_or(&row["agent_id"], &Value::Null), AGENT_CAP),
             accounts.label(text(&row["account_id"])),
             state,
-        ]
-    }));
-    fit_column(&mut rows, 2, 3, 2, 2 + PIN_STATE_ROOM);
+        ]);
+        shed_ages.push(shed_age);
+    }
+    // The account label is cut first, down to its floor, to leave a shedding row its state word, its source and its
+    // age. Past the floor the source is cut as well.
+    let shedding = rows
+        .iter()
+        .zip(&shed_ages)
+        .filter_map(|(row, shed_age)| {
+            let (age, _) = shed_age.as_ref()?;
+            Some(columns(&row[3]) + 2 + columns(age))
+        })
+        .max()
+        .unwrap_or(0);
+    fit_column(&mut rows, 2, 3, 2, 2 + PIN_STATE_ROOM.max(shedding));
+    let state_at = 2 + (0..3).map(|i| widest(&rows, i) + 2).sum::<usize>();
+    for (row, shed_age) in rows.iter_mut().zip(shed_ages) {
+        if let Some((age, keepalive)) = shed_age {
+            let room = WIDTH.saturating_sub(state_at + 2 + columns(&age));
+            row[3] = format!("{}, {age}{keepalive}", cut(&row[3], room));
+        }
+    }
     let mut lines = table("  ", rows).into_iter();
     if let Some(columns) = lines.next() {
         screen.push(columns);
@@ -627,16 +665,9 @@ fn fit_column(
     indent: usize,
     reserve: usize,
 ) {
-    let widest = |i: usize| {
-        rows.iter()
-            .filter_map(|row| row.get(i))
-            .map(|cell| columns(cell))
-            .max()
-            .unwrap_or(0)
-    };
     let others: usize = (0..fixed)
         .filter(|i| *i != column)
-        .map(|i| widest(i) + 2)
+        .map(|i| widest(rows, i) + 2)
         .sum();
     let room = WIDTH
         .saturating_sub(indent + others + reserve)
@@ -646,6 +677,15 @@ fn fit_column(
             *cell = cut(cell, room);
         }
     }
+}
+
+/// The widest cell of `column` among `rows`, or 0 when no row reaches it.
+fn widest(rows: &[Vec<String>], column: usize) -> usize {
+    rows.iter()
+        .filter_map(|row| row.get(column))
+        .map(|cell| columns(cell))
+        .max()
+        .unwrap_or(0)
 }
 
 /// Rows as columns two spaces apart, each column as wide as its widest cell, every line after `indent`; the last
@@ -885,20 +925,11 @@ mod tests {
         }
     }
 
-    /// A pair whose leaf's `not_after` is midnight UTC `days` days on, so it has `days - 1` whole days left and part
-    /// of one.
+    /// A pair whose leaf's `not_after` is `days` days and an hour from now, so it has `days` whole days left and part
+    /// of one whatever the clock reads.
     fn expiring_pair(dir: &Path, days: i64) -> (std::path::PathBuf, std::path::PathBuf) {
-        let date = Timestamp::now()
-            .to_zoned(TimeZone::UTC)
-            .date()
-            .checked_add(jiff::Span::new().days(days))
-            .unwrap();
-        fake_upstream::generate_pair_valid_between(
-            &["localhost"],
-            (2020, 1, 1),
-            (i32::from(date.year()), date.month() as u8, date.day() as u8),
-        )
-        .write_to(dir, "proxy")
+        let not_after = Timestamp::now().as_second() + days * 86_400 + 3_600;
+        fake_upstream::generate_pair_valid_until(&["localhost"], not_after).write_to(dir, "proxy")
     }
 
     #[test]
@@ -996,7 +1027,7 @@ mod tests {
             ..fixture_reads()
         };
         let dir = tempfile::tempdir().unwrap();
-        let (cert, key) = expiring_pair(dir.path(), 31);
+        let (cert, key) = expiring_pair(dir.path(), 30);
         let tls = Some(ListenerTls {
             cert_file: cert.clone(),
             key_file: key,
@@ -1287,17 +1318,21 @@ mod tests {
 
     #[test]
     fn a_label_column_is_as_wide_as_its_widest_label_where_the_row_has_room() {
-        // Two labels that agree on their first twenty columns stay apart on the member lines and the pin line.
+        // Two labels that agree on their first twenty columns stay apart on the member lines and the pin line. The
+        // member lines carry no reset or cooldown here, since either one keeps its width ahead of the label.
         let one = "engineering-shared-1@corp.io";
         let two = "engineering-shared-2@corp.io";
-        let screen = render(
-            &labelled(one, two),
-            &listeners(),
-            "9.9.9",
-            now(),
-            &TimeZone::UTC,
-            false,
-        );
+        let mut roomy = labelled(one, two);
+        for account in roomy.accounts.as_mut().unwrap()["accounts"]
+            .as_array_mut()
+            .unwrap()
+        {
+            account["cooldowns"] = json!([]);
+            for window in account["windows"].as_array_mut().unwrap() {
+                window["resets_at"] = Value::Null;
+            }
+        }
+        let screen = render(&roomy, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
         let lines: Vec<&str> = screen.lines().collect();
         let members = block(&lines, "pools");
         assert!(members[1].starts_with(&format!("    {one}  ")), "{screen}");
@@ -1366,6 +1401,129 @@ mod tests {
             cooldown("account", 1_800_000, "rate_limit"),
         ]));
         assert!(account.ends_with("  until 00:30 rate_limit"), "{account}");
+    }
+
+    /// Thirty columns, past what a pin line or a member line leaves a label beside the cells it keeps whole.
+    const LONG_LABEL: &str = "operations-shared-07@corp.test";
+
+    #[test]
+    fn a_shedding_pin_prints_its_age_whole_however_long_the_labels() {
+        assert_eq!(LONG_LABEL.chars().count(), 30);
+        let twelve_seconds_ago = 1_000_000 - 12_000;
+        let pin = |session: &str, agent: Value, account: &str, from: &str| {
+            json!({
+                "session_id": session, "agent_id": agent, "account_id": account, "shed_from": from,
+                "pinned": true, "model": "claude-sonnet-5", "last_used_at": twelve_seconds_ago,
+                "keepalive": {"state": null, "next_probe_at": null},
+            })
+        };
+        let reads = Reads {
+            sessions: Ok(json!({"sessions": [
+                pin("7b21aa90f3d1aaaa", json!("a1"), "business", "direct"),
+                pin("3f9a0c12e4b7bbbb", Value::Null, "direct", "business"),
+            ]})),
+            ..labelled(LONG_LABEL, "Direct")
+        };
+        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let lines: Vec<&str> = screen.lines().collect();
+        for line in &lines {
+            assert!(line.chars().count() <= WIDTH, "{line}: {screen}");
+        }
+        let pins = block(&lines, "pins (one per session, the main agent's)");
+        assert_eq!(pins.len(), 3, "{screen}");
+        // The pin on the long label: the account cell is cut, the state reads through its age.
+        let on_long = pins[2];
+        assert!(on_long.starts_with("  7b21aa90f3d1  a1 "), "{screen}");
+        assert!(
+            on_long.ends_with("  shedding from Direct, 12s ago"),
+            "{screen}"
+        );
+        let account = on_long
+            .trim_end_matches("  shedding from Direct, 12s ago")
+            .rsplit("  ")
+            .next()
+            .unwrap();
+        assert!(
+            account.ends_with('…') && LONG_LABEL.starts_with(account.trim_end_matches('…')),
+            "{screen}"
+        );
+        // The pin shedding from the long label: the source is cut, the age stays whole after it.
+        let from_long = pins[1];
+        assert!(from_long.starts_with("  3f9a0c12e4b7  -  "), "{screen}");
+        let source = from_long
+            .split("shedding from ")
+            .nth(1)
+            .and_then(|state| state.strip_suffix(", 12s ago"))
+            .unwrap_or_else(|| panic!("the age is cut: {screen}"));
+        assert!(
+            source.ends_with('…') && LONG_LABEL.starts_with(source.trim_end_matches('…')),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn a_member_cooldown_prints_its_scope_word_whole_however_long_the_label() {
+        // The API-key account alone in its pool: no sample, so its windows read `-` and the cooldown has the most room
+        // a member line gives it.
+        let mut accounts = fixture("accounts");
+        for account in accounts["accounts"].as_array_mut().unwrap() {
+            if account["id"] == "direct" {
+                account["label"] = json!(LONG_LABEL);
+                account["cooldowns"] = json!([{
+                    "scope": "model:claude-opus-5", "until": 55_800_000, "reason": "rate_limited",
+                    "window": null, "set_at": 1_000_000,
+                }]);
+            }
+        }
+        let reads = Reads {
+            accounts: Ok(accounts),
+            pools: Ok(json!({"pools": [{
+                "id": "lab", "status": "active", "keys": [], "active_pins": 0, "requests_24h": 0,
+                "members": [{"account_id": "direct", "priority": 0, "eligible": "cooldown"}],
+            }]})),
+            ..fixture_reads()
+        };
+        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let lines: Vec<&str> = screen.lines().collect();
+        let member = block(&lines, "pools")[1];
+        assert!(member.chars().count() <= WIDTH, "{screen}");
+        assert!(
+            member.contains("  until 15:30 model:claude-opus-5 "),
+            "{screen}"
+        );
+        let label = member.trim_start().split("  ").next().unwrap();
+        assert!(
+            label.ends_with('…') && LONG_LABEL.starts_with(label.trim_end_matches('…')),
+            "{screen}"
+        );
+    }
+
+    #[test]
+    fn the_accounts_in_no_pool_block_lists_an_account_whose_pool_is_null() {
+        let mut accounts = fixture("accounts");
+        for account in accounts["accounts"].as_array_mut().unwrap() {
+            if account["id"] == "direct" {
+                account["pool"] = Value::Null;
+            }
+        }
+        let business = accounts["accounts"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|account| account["id"] == "business")
+            .unwrap();
+        assert!(business["pool"].is_object(), "{business}");
+        let reads = Reads {
+            accounts: Ok(accounts),
+            ..fixture_reads()
+        };
+        let screen = render(&reads, &listeners(), "9.9.9", now(), &TimeZone::UTC, false);
+        let lines: Vec<&str> = screen.lines().collect();
+        assert_eq!(
+            block(&lines, "accounts in no pool"),
+            ["  Direct  ready"],
+            "{screen}"
+        );
     }
 
     #[test]

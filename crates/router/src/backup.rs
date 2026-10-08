@@ -4,7 +4,7 @@
 
 use std::fs::{DirBuilder, File};
 use std::io::{Read, Write};
-use std::os::unix::fs::DirBuilderExt;
+use std::os::unix::fs::{DirBuilderExt, MetadataExt};
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
@@ -63,6 +63,8 @@ pub enum RunError {
     MissingSource { path: PathBuf },
     #[error("{path} is not an empty directory")]
     NotEmpty { path: PathBuf },
+    #[error("{path}: group or other can write it, or another user owns it. Nothing was written.")]
+    NotPrivate { path: PathBuf },
 }
 
 /// The run: every refusal before a byte is written, every failure after one cleaned up. `report` is stderr.
@@ -95,6 +97,11 @@ pub fn run(
                     .is_none();
             if !empty {
                 return Err(RunError::NotEmpty { path: dir });
+            }
+            // SAFETY: `geteuid` reads the process's effective uid and cannot fail.
+            let euid = unsafe { libc::geteuid() };
+            if refused_destination(metadata.mode(), metadata.uid(), euid) {
+                return Err(RunError::NotPrivate { path: dir });
             }
             true
         }
@@ -319,6 +326,13 @@ fn sync_dir(dir: &Path) -> Result<(), String> {
         .map_err(|error| format!("{}: {error}", dir.display()))
 }
 
+/// Whether an existing destination is refused: a group or other write bit, or an owner other than the run's uid,
+/// lets someone besides the run's user replace or remove the copies, and the ledger copy holds captured prompts in
+/// plain text. Read access alone is left to `check_private_dir`'s warning.
+fn refused_destination(mode: u32, owner: u32, euid: u32) -> bool {
+    mode & 0o022 != 0 || owner != euid
+}
+
 fn failed(dir: &Path, reason: String) -> RunError {
     RunError::Failed {
         dir: dir.to_path_buf(),
@@ -351,6 +365,19 @@ mod tests {
         assert_eq!(error.kind(), std::io::ErrorKind::AlreadyExists, "{error}");
         assert!(created.is_empty(), "{created:?}");
         assert!(!target.exists());
+    }
+
+    #[test]
+    fn a_directory_owned_by_another_uid_reads_as_refused() {
+        let (run_as, other) = (1000, 1001);
+        assert!(refused_destination(0o40700, other, run_as));
+        assert!(refused_destination(0o40770, run_as, run_as));
+        assert!(refused_destination(0o40707, run_as, run_as));
+        assert!(!refused_destination(0o40700, run_as, run_as));
+        assert!(
+            !refused_destination(0o40755, run_as, run_as),
+            "read access alone is a warning"
+        );
     }
 
     #[test]

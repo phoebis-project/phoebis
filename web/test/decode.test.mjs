@@ -7,7 +7,7 @@ import { same, shapeOf } from './shape.mjs';
 const fixture = (name) => JSON.parse(readFileSync(new URL(`./fixtures/${name}.json`, import.meta.url), 'utf8')).body;
 const isIso = (s) => typeof s === 'string' && !Number.isNaN(Date.parse(s)) && s.endsWith('Z');
 
-test('an account decodes with its windows, plan, pools, and models', () => {
+test('an account decodes with its windows, plan, pool, and models', () => {
   const body = fixture('account');
   const a = d.decodeAccount(body);
   assert.equal(a.id, 'business');
@@ -28,7 +28,9 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.fableWindow.id, '7d_fable');
   assert.ok(isIso(a.windows[0].resetsAt) && isIso(a.windows[0].observedAt));
   assert.equal(a.windows[0].utilization, 0.62, 'the five_hour sample is the 5h window');
-  assert.deepEqual(a.pools, [{ poolId: 'main', priority: 0 }]);
+  assert.deepEqual(a.pool, { poolId: 'main', priority: 0 });
+  assert.equal(d.decodeAccount({ ...body, pool: null }).pool, null, 'an account in no pool answers a null pool');
+  assert.equal(d.decodeAccount({ ...body, pool: undefined }).pool, null, 'a row without the member reads as in no pool');
   assert.equal(a.extraUsage.monthlyLimitCredits, 5000);
   assert.equal(a.requests.lifetime, 5);
   // The fixture seeds one live model-scoped cooldown so the key-models and models-state fixtures have a row.
@@ -36,7 +38,7 @@ test('an account decodes with its windows, plan, pools, and models', () => {
   assert.equal(a.email, 'test@example.invalid');
   assert.deepEqual(
     Object.keys(a).sort(),
-    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pools', 'requests', 'revision', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
+    ['cancelled', 'cooldowns', 'credential', 'email', 'extraUsage', 'fableWindow', 'fastLane', 'id', 'kind', 'label', 'overage', 'plan', 'pool', 'requests', 'revision', 'routingEnabled', 'status', 'subscription', 'usage', 'windows'],
     'an account decodes to the fields the console draws and nothing more',
   );
 });
@@ -83,7 +85,7 @@ test('the account list folds state, enabled, and cooldowns onto one status', () 
   assert.equal(d.decodeAccount({ ...fixture('account'), cooldowns: [{ scope: 'account', until: 1, reason: 'rate_limit', window: '5h', set_at: 0 }] }).status, 'cooldown');
 });
 
-test('an account row decodes its usage block and null for an Anthropic-key account', () => {
+test('an account row decodes its usage block and null for an API-key account', () => {
   const rows = fixture('accounts').accounts;
   const [business, direct] = ['business', 'direct'].map((id) => d.decodeAccount(rows.find((r) => r.id === id)));
   const at = d.iso(rows.find((r) => r.id === 'business').usage.poll.last_attempt_at);
@@ -94,7 +96,7 @@ test('an account row decodes its usage block and null for an Anthropic-key accou
     poll: { backoffSince: null, lastAttemptAt: at, lastCleanAt: at, lastError: null, lastOutcome: 'clean', nextAttemptAt: null, rateLimitedInARow: 0 },
     status: 'success',
   });
-  assert.equal(direct.usage, null, 'the poll never reads an Anthropic-key account');
+  assert.equal(direct.usage, null, 'the poll never reads an API-key account');
   const spare = d.decodeAccount({ ...rows[0], id: 'spare', usage: { error: 'no credential is stored for this account; pair it to load quota', fetched_at: null, poll: null } }).usage;
   assert.deepEqual([spare.accountId, spare.status, spare.fetchedAt, spare.poll], ['spare', 'error', null, null], 'the sentence standing in for a snapshot reads as an error');
 });
@@ -260,7 +262,7 @@ test('a key keeps its enabled flag beside the status the flag folds into', () =>
 });
 
 test('a key edit sends enabled every time and expires_at only when the dialog changed it', () => {
-  const input = { bodyCaptureHours: null, enabled: false, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'batch', notes: null, poolId: 'codex' };
+  const input = { bodyCaptureHours: null, enabled: false, keepaliveOptOut: false, longContextTwins: true, modelRules: [], modelRulesMode: 'extend', name: 'batch', notes: null, poolId: 'jobs' };
   const kept = d.encodeKey({ ...input, expiresAt: undefined });
   assert.equal(kept.enabled, false);
   assert.equal('expires_at' in kept, false, 'an absent expiry leaves the stored one alone');
@@ -314,7 +316,7 @@ test('a pool decodes its policy, status, members, and traffic', () => {
   assert.equal(p.cacheTtl.plan.main, '1h');
   assert.equal(p.cacheDiagnostics, false);
   assert.equal(p.status, 'active');
-  assert.equal(p.traffic24h.length, 24);
+  assert.equal(p.traffic24h.length, 25);
   assert.ok(isIso(p.traffic24h[0].at));
   assert.deepEqual(p.members.map((m) => m.accountId), ['business', 'direct']);
   assert.deepEqual(p.members.map((m) => m.eligible), ['eligible', 'eligible'], 'both members are servable in the captured pool');
@@ -337,7 +339,7 @@ test('a pool decodes the ceilings the router resolved for it, and a pool with no
     },
     'the five ranges as the route answers them',
   );
-  assert.ok(resolved.breakEvenSeconds.min < resolved.breakEvenSeconds.max, 'the captured pool mixes a plan member and an Anthropic-key member, so its break-even is a range');
+  assert.ok(resolved.breakEvenSeconds.min < resolved.breakEvenSeconds.max, 'the captured pool mixes a plan member and an API-key member, so its break-even is a range');
   assert.equal(d.decodePool({ ...row, keepalive_resolved: null }).keepaliveResolved, null, 'a pool with no member');
   const bare = { ...row };
   delete bare.keepalive_resolved;
@@ -364,12 +366,30 @@ test('a pool decodes its shedding margin and encodes it back', () => {
   assert.equal(d.encodePool({ ...p, name: p.name, shedAheadOfPace: null, status: 'active' }).shed_ahead_of_pace, null, 'null clears it rather than leaving it alone');
 });
 
-test('a pool and a key decode the stamp of their last write, which an edit sends back', () => {
+test('a pool and a key decode the stamp of their last write', () => {
   const pool = fixture('pools').pools[0];
   const key = fixture('keys').keys[0];
   const [p, k] = [d.decodePool(pool), d.decodeKey(key)];
   assert.ok(isIso(p.updatedAt) && isIso(k.updatedAt));
   assert.deepEqual([p.updatedAt, k.updatedAt], [new Date(pool.updated_at).toISOString(), new Date(key.updated_at).toISOString()]);
+});
+
+test('a pool and a key decode the revision of their row, which an edit sends back', () => {
+  const pool = fixture('pools').pools[0];
+  const key = fixture('keys').keys[0];
+  const created = fixture('key_created');
+  for (const row of [pool, key, created]) {
+    assert.ok(Number.isSafeInteger(row.revision) && row.revision > 2 ** 42, "the capture carries the row's token");
+  }
+  const decoded = [d.decodePool(pool), d.decodeKey(key), d.decodeKey(created)];
+  assert.deepEqual(decoded.map((row) => row.revision), [pool.revision, key.revision, created.revision]);
+  // The token packs the incarnation above the stamp's 42 bits, so it reads back to the row's own stamp.
+  assert.deepEqual(decoded.map((row) => row.revision % 2 ** 42), [pool.updated_at, key.updated_at, created.updated_at]);
+  assert.deepEqual(
+    [d.decodePool({ ...pool, revision: undefined }).revision, d.decodeKey({ ...key, revision: undefined }).revision],
+    [0, 0],
+    'a row whose answer carried none reads 0, which the route refuses as stale',
+  );
 });
 
 test('an account decodes the revision of its row, which an edit sends back', () => {
@@ -505,7 +525,7 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   assert.deepEqual(
     [direct.kind, direct.budgetDailyUsd, direct.budgetMonthlyUsd, direct.budgetUntil, direct.spends],
     ['api_key', null, 50, null, [{ period: 'month', periodEnd: new Date(report.period_end).toISOString(), spentUsd: report.spent_usd }]],
-    'the budgeted Anthropic-key member reads its budgets and the spend the ledger reported against each',
+    'the budgeted API-key member reads its budgets and the spend the ledger reported against each',
   );
   const business = p.members.find((m) => m.accountId === 'business');
   const [metered] = row.members[0].spends;
@@ -552,7 +572,7 @@ test('a pool decodes the pin and placement fields and its members\' budgets, and
   assert.deepEqual(
     [defaults.members[0].budgetDailyUsd, defaults.members[0].budgetMonthlyUsd, defaults.members[0].budgetUntil, defaults.members[0].spends, defaults.members[0].kind],
     [null, null, null, [], 'oauth'],
-    'a member row without the fields reads no budget, no spend and no Anthropic key',
+    'a member row without the fields reads no budget, no spend and no API key',
   );
   assert.equal(defaults.keys[0].enabled, true, 'a key row without the fields reads the store defaults');
   const odd = d.decodePool({
@@ -691,6 +711,10 @@ test('analytics groups and points keep the histograms and reasons whole', () => 
   assert.equal(desktop.wastedProbeReasons.idle_limit, 0);
   assert.equal('savings' in desktop, false, 'the group carries the probe figures and no savings member');
   assert.equal(desktop.errors.upstream_error, 1);
+  assert.equal(desktop.probes.held, 0, 'the captured group counts no held probe');
+  // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
+  const row = fixture('analytics_breakdown').rows[0];
+  assert.equal(d.decodeAnalyticsGroup({ ...row, probes: { ...row.probes, held: 3 } }).probes.held, 3, 'a group reads its held probes off the route');
   const points = fixture('analytics_series').points.map(d.decodeAnalyticsPoint);
   assert.ok(points.length >= 24 && isIso(points[0].at));
   const rollups = d.decodeAccountRollups(fixture('analytics_accounts'));
@@ -725,7 +749,7 @@ test('the burn series decodes each point with its instant, both token sides, and
   assert.deepEqual(
     [direct.group, direct.fiveHourShare, direct.sevenDayShare, direct.unit, direct.usd],
     ['direct', null, null, 'usd', body.points.at(-1).usd],
-    'an Anthropic-key point spends dollars and reads no window',
+    'an API-key point spends dollars and reads no window',
   );
   assert.ok(burn.points.every((p) => isIso(p.at)));
   // Every grouping but the account one answers the shares and the unit as null.
@@ -922,6 +946,7 @@ test('request rows fold into analytics groups with the same sums the routes answ
   assert.equal(all.histograms.ttfbMs.reduce((a, b) => a + b, 0), 6);
   assert.equal(all.cacheMissReasons.none, 6);
   assert.equal(all.probes.ok, 0);
+  assert.equal(all.probes.held, 0, 'a group folded from request rows counts no held probe');
   const captured = page.requests.find((r) => r.id === 'r-captured');
   const busy = d.foldGroups([{ ...captured, usage: { ...captured.usage, webSearch: 3, webFetch: 1 } }, captured], 'all')[0].tokens;
   assert.equal(busy.webSearch, 3 + captured.usage.webSearch);
@@ -949,7 +974,7 @@ test('the fold uses the ledger formulas for failovers, throughput, and cache mis
   const [g] = d.foldGroups([slowStart], 'all');
   assert.ok(g.percentiles.outputTps.p50 >= 90 && g.percentiles.outputTps.p50 <= 110, `p50 ${g.percentiles.outputTps.p50} is the bucket holding 100`);
   assert.equal(d.foldGroups([{ ...slowStart, ttftMs: null }], 'all')[0].histograms.outputTps.reduce((a, b) => a + b, 0), 0, 'no first-content timing, no sample');
-  // An Anthropic-key request with writes and no diagnostic is a miss by tokens, whatever the reason says.
+  // An API-key request with writes and no diagnostic is a miss by tokens, whatever the reason says.
   const apiKey = { ...base, attempts: [{ ...attempt, cacheMissReason: null }], usage: { ...base.usage, cacheRead: 0, cacheWrite5m: 300 } };
   const [m] = d.foldGroups([apiKey], 'all');
   assert.deepEqual([m.cacheHits, m.cacheMisses, m.uncached], [0, 1, 0]);
@@ -1260,6 +1285,9 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   const wire = { ...fixture('keepalive_overview'), pools: [{ ...fixture('keepalive_overview').pools[0], credited_24h: 2, wasted_reasons_24h: { horizon: 1 } }] };
   const [read] = d.decodeKeepaliveOverview(wire).pools;
   assert.deepEqual([read.credited24h, read.wastedReasons24h.horizon, read.wastedReasons24h.idle_limit], [2, 1, 0], 'a reason the answer leaves out reads zero');
+  assert.deepEqual(Object.keys(ov.probes24h).sort(), ['failed', 'held', 'migrated', 'ok', 'skipped'], 'the five probe outcomes the tile draws');
+  const captured = fixture('keepalive_overview');
+  assert.equal(d.decodeKeepaliveOverview({ ...captured, probes_24h: { ...captured.probes_24h, held: 2 } }).probes24h.held, 2, 'the held count reads off the route');
   // The capture reads 0, which a missing field decodes to as well, so a nonzero copy proves the wire name.
   assert.equal(d.decodeKeepaliveOverview({ ...fixture('keepalive_overview'), bus_gaps: 3 }).busGaps, 3, 'the engine\'s gap count reads off the route');
 });

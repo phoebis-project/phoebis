@@ -18,8 +18,8 @@ use serde_json::Value;
 
 use crate::breakeven::Ceilings;
 use crate::engine::{
-    Agent, AgentState, Engine, Funding, Inner, ParkKind, Reason, SavingsUnit, SessionKey, Verdict,
-    Wasted, MAIN_AGENT,
+    Agent, AgentState, Engine, Funding, Inner, ParkKind, Reason, SavingsUnit, SessionKey,
+    UnansweredProbe, Verdict, Wasted, MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_reason};
@@ -44,6 +44,9 @@ pub(crate) struct ProbeJob {
     pub canonical_model: String,
     pub recipe: Recipe,
     pub expected: u64,
+    /// The dispatch counted this probe in the agent's `idle_ticks`, as it does for an idle main agent or an unattended
+    /// session alone. A hold gives back only a tick its dispatch counted.
+    pub counted_idle_tick: bool,
 }
 
 pub(crate) struct ProbeResult {
@@ -78,6 +81,7 @@ pub enum ProbeOutcome {
     Cancelled,
     Exhausted,
     Failed,
+    Held,
     Migrated,
     Ok,
     RateLimited,
@@ -91,6 +95,7 @@ impl ProbeOutcome {
             ProbeOutcome::Cancelled => "cancelled",
             ProbeOutcome::Exhausted => "exhausted",
             ProbeOutcome::Failed => "failed",
+            ProbeOutcome::Held => "held",
             ProbeOutcome::Migrated => "migrated",
             ProbeOutcome::Ok => "ok",
             ProbeOutcome::RateLimited => "rate_limited",
@@ -107,6 +112,7 @@ pub fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'static 
     match outcome {
         ProbeOutcome::Migrated | ProbeOutcome::Ok if cache_read => "landed",
         ProbeOutcome::Migrated | ProbeOutcome::Ok => "cold",
+        ProbeOutcome::Held => "held",
         ProbeOutcome::Cancelled
         | ProbeOutcome::Exhausted
         | ProbeOutcome::Failed
@@ -222,6 +228,7 @@ fn classify_status(status: u16, error_code: Option<&str>) -> ProbeOutcome {
         429 => ProbeOutcome::RateLimited,
         _ if exhausted => ProbeOutcome::Exhausted,
         400..=499 => ProbeOutcome::Rejected,
+        503 if error_code == Some(phoebis_relay::LEDGER_BEHIND) => ProbeOutcome::Held,
         _ => ProbeOutcome::Failed,
     }
 }
@@ -306,13 +313,16 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         };
         // The tier the store names now: a share is of the window the account has at this settlement.
         let tier = (default_unit == SavingsUnit::WindowShare)
-            .then(|| {
-                engine
-                    .parts
-                    .store
-                    .subscription(&record.account)
-                    .ok()
-                    .flatten()
+            .then(|| match engine.parts.store.subscription(&record.account) {
+                Ok(row) => row,
+                Err(error) => {
+                    tracing::warn!(
+                        account = %record.account,
+                        %error,
+                        "the account's tier could not be read, so the settlement falls back to dollars"
+                    );
+                    None
+                }
             })
             .flatten()
             .and_then(|s| s.tier);
@@ -491,7 +501,17 @@ impl Inner {
         let cold_limit = agent.timing.cold_probe_limit;
         let result = match exchange {
             Exchange::Cancelled | Exchange::TimedOut => {
-                self.probe_error(key, agent_id, 0, None, None, None, false, now);
+                self.probe_error(
+                    key,
+                    agent_id,
+                    0,
+                    None,
+                    None,
+                    None,
+                    false,
+                    job.counted_idle_tick,
+                    now,
+                );
                 return Applied::Landed { covered: false };
             }
             Exchange::Answered(result) => result,
@@ -506,6 +526,7 @@ impl Inner {
                 result.obstacle,
                 result.retry_after_secs,
                 exhausted,
+                job.counted_idle_tick,
                 now,
             );
             return Applied::Landed { covered: false };
@@ -522,7 +543,21 @@ impl Inner {
             .agents
             .get_mut(agent_id)
             .unwrap();
-        agent.unanswered.push(record.cost_usd);
+        // The end of the entry this probe wrote, computed once as the landing reads it, so a probe a check below
+        // pauses still settles by its own entry.
+        let ttl = record.usage.ttl_ms(
+            agent.ttl_ms,
+            result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms),
+        );
+        agent.unanswered.push(UnansweredProbe {
+            cost: record.cost_usd,
+            unit: covered_unit,
+            account: Some(record.account.clone()),
+            fast: job.recipe.fast,
+            model: agent.canonical_model.clone(),
+            expires: job.started + ttl,
+            covered: false,
+        });
         let Some(account) = result.account.clone() else {
             self.set_reason(key, agent_id, Reason::MissingAccount);
             self.pause(key, agent_id);
@@ -608,19 +643,14 @@ impl Inner {
             .unwrap();
         agent.failures = 0;
         agent.retry_at = None;
-        agent.ttl_ms = usage.ttl_ms(
-            agent.ttl_ms,
-            result.cache_ttl_ms.unwrap_or(job.recipe.ttl_ms),
-        );
+        agent.ttl_ms = ttl;
         agent.cache_started = job.started;
-        agent.expires = Some(job.started + agent.ttl_ms);
+        agent.expires = Some(job.started + ttl);
         agent.jitter_frac = rand::random::<f64>();
-        if covered {
-            agent.covered_since_real = true;
-            agent.covered_account = Some(record.account.clone());
-            agent.covered_unit = covered_unit;
-            agent.covered_fast = job.recipe.fast;
-            agent.covered_until = agent.expires;
+        // A full read and an accepted complete rewrite alike leave the whole prefix in an entry the next request
+        // can read, so either covers from here.
+        if let Some(probe) = agent.unanswered.last_mut() {
+            probe.covered = true;
         }
         self.set_reason(key, agent_id, Reason::Scheduled);
         // A probe that consumed its whole refresh interval must not start a tight loop.
@@ -648,15 +678,15 @@ impl Inner {
     /// (`accounts_at_cap`) retries after the header's wait instead, since a slot there may free up before the
     /// next real request would; a probe the selector refused on the pinned member's spend budget holds under
     /// `budget` without a pause, since only a raised budget or the period's end clears it, never a wait; a probe
-    /// the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure; a probe
-    /// the selector answered on its pinned member's standing holds under that standing: `Paused` for the
-    /// operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in the console), a
-    /// retry for a member this probe already tried, or for one whose budget the degraded ledger leaves unknown,
-    /// which the ledger's recovery clears without a real request; a pinned member a leg of the probe marked for
-    /// re-authentication pauses under the authentication reason; the untimed exhaustion 503, when every account of
-    /// the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from upstream retries; any
-    /// other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange (status 0) is a
-    /// transport error.
+    /// the router refused with `ledger_behind` holds under it for the answer's wait, counting no failure and no
+    /// idle tick; a probe the selector answered on its pinned member's standing holds under that standing:
+    /// `Paused` for the operator's pause, `IneligibleCredential` for an ended subscription (both read `paused` in
+    /// the console), a retry for a member this probe already tried, or for one whose budget the degraded ledger
+    /// leaves unknown, which the ledger's recovery clears without a real request; a pinned member a leg of the
+    /// probe marked for re-authentication pauses under the authentication reason; the untimed exhaustion 503, when
+    /// every account of the pool was unusable at selection, pauses under its own reason; a 5xx forwarded from
+    /// upstream retries; any other 4xx is a shape the upstream refuses; a cancelled, timed-out, or lost exchange
+    /// (status 0) is a transport error.
     #[allow(clippy::too_many_arguments)]
     pub(crate) fn probe_error(
         &mut self,
@@ -667,8 +697,14 @@ impl Inner {
         obstacle: Option<&str>,
         retry_after_secs: Option<u64>,
         exhausted: bool,
+        counted_idle_tick: bool,
         now: i64,
     ) {
+        let retry_after_ms = retry_after_secs.map(|secs| {
+            i64::try_from(secs)
+                .unwrap_or(i64::MAX)
+                .saturating_mul(1_000)
+        });
         match (exhausted, obstacle) {
             (true, Some("operator")) => {
                 self.set_reason(key, agent_id, Reason::Paused);
@@ -694,12 +730,13 @@ impl Inner {
         if status == 429 && error_code == Some("accounts_at_cap") {
             // Retrying, not pausing: the pool is momentarily full, not out of quota, and a slot frees up in
             // seconds, so `RetryableProbeError` ("retrying") is the honest label rather than the quota one.
-            let delay_ms = retry_after_secs.map(|secs| {
-                i64::try_from(secs)
-                    .unwrap_or(i64::MAX)
-                    .saturating_mul(1_000)
-            });
-            self.retry(key, agent_id, Reason::RetryableProbeError, now, delay_ms);
+            self.retry(
+                key,
+                agent_id,
+                Reason::RetryableProbeError,
+                now,
+                retry_after_ms,
+            );
             return;
         }
         if status == 429 && obstacle == Some(BUDGET_WINDOW) {
@@ -720,12 +757,14 @@ impl Inner {
                 .agents
                 .get_mut(agent_id)
                 .unwrap();
-            let wait_ms = retry_after_secs.map_or(agent.timing.retry_ms, |secs| {
-                i64::try_from(secs)
-                    .unwrap_or(i64::MAX)
-                    .saturating_mul(1_000)
-            });
+            let wait_ms = retry_after_ms.unwrap_or(agent.timing.retry_ms);
             agent.retry_at = Some(now.saturating_add(wait_ms));
+            // A hold costs no tick: `idle_ticks` counts served or failed probes, so the tick this probe's dispatch
+            // counted comes back, and a dispatch that counted none gives back nothing. The entry's lapse and
+            // `max_idle_seconds` bound the hold.
+            if counted_idle_tick {
+                agent.idle_ticks = agent.idle_ticks.saturating_sub(1);
+            }
             self.set_reason(key, agent_id, Reason::LedgerBehind);
             return;
         }
@@ -902,6 +941,7 @@ mod tests {
                 Some(obstacle),
                 None,
                 true,
+                false,
                 1_000,
             );
             let agent = &inner.sessions[&key].agents["main"];
@@ -925,6 +965,7 @@ mod tests {
             Some("pool_moved"),
             Some(1),
             true,
+            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -946,6 +987,7 @@ mod tests {
             None,
             Some(3),
             false,
+            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
@@ -961,7 +1003,7 @@ mod tests {
     #[test]
     fn every_other_429_still_pauses_as_probe_quota_exhausted() {
         let (mut inner, key) = one_agent_inner();
-        inner.probe_error(&key, "main", 429, None, None, None, false, 1_000);
+        inner.probe_error(&key, "main", 429, None, None, None, false, false, 1_000);
         let agent = &inner.sessions[&key].agents["main"];
         assert!(agent.paused);
         assert_eq!(agent.reason, Reason::ProbeQuotaExhausted);
@@ -978,11 +1020,27 @@ mod tests {
             None,
             None,
             false,
+            false,
             1_000,
         );
         let agent = &inner.sessions[&key].agents["main"];
         assert!(!agent.paused);
         assert_eq!(agent.retry_at, Some(1_000 + agent.timing.retry_ms));
+    }
+
+    #[test]
+    fn a_503_ledger_behind_classifies_as_held_and_no_other_outcome() {
+        assert_eq!(
+            classify_status(503, Some("ledger_behind")),
+            ProbeOutcome::Held,
+            "the router's own refusal is its own outcome"
+        );
+        assert_eq!(ProbeOutcome::Held.as_str(), "held");
+        assert_eq!(
+            classify_status(503, None),
+            ProbeOutcome::Failed,
+            "an upstream 503 stays a failure"
+        );
     }
 
     #[test]
@@ -995,6 +1053,7 @@ mod tests {
             Some("ledger_behind"),
             None,
             Some(5),
+            false,
             false,
             1_000,
         );
@@ -1016,6 +1075,7 @@ mod tests {
             Some("ledger_behind"),
             None,
             None,
+            false,
             false,
             1_000,
         );
@@ -1046,6 +1106,7 @@ mod tests {
                 None,
                 Some(5),
                 false,
+                false,
                 now,
             );
             let agent = &inner.sessions[&key].agents["main"];
@@ -1060,7 +1121,7 @@ mod tests {
     #[test]
     fn a_503_without_the_code_still_retries_under_backoff() {
         let (mut inner, key) = one_agent_inner();
-        inner.probe_error(&key, "main", 503, None, None, None, false, 1_000);
+        inner.probe_error(&key, "main", 503, None, None, None, false, false, 1_000);
         let agent = &inner.sessions[&key].agents["main"];
         assert_eq!(
             (agent.paused, agent.failures, agent.reason),

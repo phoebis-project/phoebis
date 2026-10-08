@@ -1,7 +1,7 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
   CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
-  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
+  ModelsState, Overview, PairingSession, ParkKind, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, Range, RateLimitWindow, RecipeCause, RecipeState, RecordCandidate, RecordOutcome, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestShape, RewritePoint,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId,
 } from './types';
 import { ACCOUNT_KIND_VALUES, ATTENTION_KIND_VALUES, AUTO_MODE_VALUES } from './types';
@@ -137,6 +137,7 @@ export function decodeAccount(v: unknown): Account {
   const fastLane = a.fast_lane === null || a.fast_lane === undefined ? null : rec(a.fast_lane);
   const extra = a.extra_usage === null || a.extra_usage === undefined ? null : rec(a.extra_usage);
   const overage = a.overage === null || a.overage === undefined ? null : rec(a.overage);
+  const pool = a.pool === null || a.pool === undefined ? null : rec(a.pool);
   const profile = a.profile === null || a.profile === undefined ? null : rec(a.profile);
   const sub = a.subscription === null || a.subscription === undefined ? null : rec(a.subscription);
   const identity = rec(a.identity);
@@ -156,7 +157,7 @@ export function decodeAccount(v: unknown): Account {
     label: str(a.label),
     overage: overage ? { inUse: bool(overage.in_use), observedAt: isoOr(overage.observed_at, epoch), reset: isoOrNull(overage.reset), since: isoOrNull(overage.since) } : null,
     plan: planName(subscription),
-    pools: list(a.pools).map(rec).map((p) => ({ poolId: str(p.pool_id), priority: num(p.priority) })),
+    pool: pool ? { poolId: str(pool.pool_id), priority: num(pool.priority) } : null,
     requests: { last24h: num(rec(a.requests).last_24h), last7d: num(rec(a.requests).last_7d), lifetime: num(rec(a.requests).lifetime) },
     // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
     // than landing over a row it could not vouch for.
@@ -262,6 +263,11 @@ export function decodeAttention(v: unknown): AttentionItem {
   };
 }
 
+export function decodeReplay(v: unknown): ReplayOutcome {
+  const r = rec(v);
+  return { landed: num(r.landed), remaining: num(r.remaining) };
+}
+
 export function decodeKey(v: unknown): ApiKey {
   const k = rec(v);
   const expires = isoOrNull(k.expires_at);
@@ -286,6 +292,9 @@ export function decodeKey(v: unknown): ApiKey {
     poolId: str(k.pool_id),
     prefix: str(k.prefix),
     retiredSecretLastUsedAt: isoOrNull(k.retired_secret_last_used_at),
+    // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
+    // than landing over a row it could not vouch for.
+    revision: num(k.revision),
     sessionsOnRetiredSecret: num(k.sessions_on_retired_secret),
     // Routing refuses a key that is revoked, expired or switched off, in that order of finality.
     status: revoked !== null ? 'revoked' : expires !== null && Date.parse(expires) <= Date.now() ? 'expired' : enabled ? 'active' : 'disabled',
@@ -372,7 +381,7 @@ export function decodePool(v: unknown): Pool {
       budgetUntil: isoOrNull(m.budget_until),
       // A row from before the router reported eligibility reads as not servable rather than as servable.
       eligible: ELIGIBILITY_VALUES.find((e) => e === str(m.eligible)) ?? 'unavailable',
-      // The route answers null for an account it cannot find, which is no Anthropic-key account either.
+      // The route answers null for an account it cannot find, which is no API-key account either.
       kind: ACCOUNT_KIND_VALUES.find((x) => x === str(m.kind)) ?? 'oauth',
       priority: num(m.priority),
       spends: list(m.spends).map(rec).map((s) => ({ period: BUDGET_PERIOD_VALUES.find((x) => x === str(s.period)) ?? 'month', periodEnd: isoOrNull(s.period_end), spentUsd: num(s.spent_usd) })),
@@ -388,6 +397,9 @@ export function decodePool(v: unknown): Pool {
     preferSubscription: bool(p.prefer_subscription),
     requests24h: num(p.requests_24h),
     retryInPlaceSeconds: num(p.retry_in_place_seconds, POOL_ENGINE_DEFAULTS.retryInPlaceSeconds),
+    // A row whose answer carried none reads 0, which the route refuses as stale, so the editor offers Reload rather
+    // than landing over a row it could not vouch for.
+    revision: num(p.revision),
     selectBelowUtilization: numOrNull(p.select_below_utilization),
     sessionPlacement: SESSION_PLACEMENT_VALUES.find((x) => x === str(p.session_placement)) ?? POOL_AFFINITY_DEFAULTS.sessionPlacement,
     shedAheadOfPace: numOrNull(p.shed_ahead_of_pace),
@@ -650,7 +662,7 @@ export function decodeAnalyticsGroup(v: unknown): AnalyticsGroup {
     histograms: { durationMs: histogram(h.duration_ms), outputTps: histogram(h.output_tps), ttfbMs: histogram(h.ttfb_ms), ttftMs: histogram(h.ttft_ms) },
     incomplete: num(g.incomplete), keptWarm: { requests: num(rec(g.kept_warm).requests), tokens: num(rec(g.kept_warm).tokens) }, key: str(g.key), label: str(g.label, str(g.key)),
     percentiles: { durationMs: quartet(p.duration_ms), outputTps: quartet(p.output_tps), ttfbMs: quartet(p.ttfb_ms), ttftMs: quartet(p.ttft_ms) },
-    probeCostUsd: num(g.probe_cost_usd), probes: { failed: num(rec(g.probes).failed), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
+    probeCostUsd: num(g.probe_cost_usd), probes: { failed: num(rec(g.probes).failed), held: num(rec(g.probes).held), migrated: num(rec(g.probes).migrated), ok: num(rec(g.probes).ok), skipped: num(rec(g.probes).skipped) },
     rateLimited: num(g.rate_limited), rejected: num(g.rejected), requests: num(g.requests),
     succeeded: num(g.succeeded), tokens: { cacheRead: num(t.cache_read), cacheWrite1h: num(t.cache_write_1h), cacheWrite5m: num(t.cache_write_5m), output: num(t.output), thinking: num(t.thinking), uncachedInput: num(t.uncached_input), webFetch: num(t.web_fetch), webSearch: num(t.web_search) }, uncached: num(g.uncached),
     wastedProbeReasons: record(WASTED_PROBE_REASONS, g.wasted_probe_reasons, emptyWastedProbeReasons), wastedProbeUsd: num(g.wasted_probe_usd), wastedProbes: num(g.wasted_probes),
@@ -768,7 +780,7 @@ export function decodeKeepaliveOverview(v: unknown): KeepaliveOverview {
       wasted24h: num(q.wasted_24h),
       wastedReasons24h: record(WASTED_PROBE_REASONS, q.wasted_reasons_24h, emptyWastedProbeReasons),
     })),
-    probes24h: { failed: num(p.failed), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) },
+    probes24h: { failed: num(p.failed), held: num(p.held), migrated: num(p.migrated), ok: num(p.ok), skipped: num(p.skipped) },
   };
 }
 

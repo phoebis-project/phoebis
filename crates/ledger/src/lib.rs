@@ -89,6 +89,9 @@ pub enum LedgerError {
     /// `LedgerDb` runs as if nothing happened.
     #[error("the ledger read was cancelled before it ran")]
     ReadCancelled,
+    /// A replay's bound passed before the writer took its turn, so nothing was replayed.
+    #[error("the ledger writer is held, try again")]
+    WriterHeld,
     #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
     #[error("plan table: {0}")]

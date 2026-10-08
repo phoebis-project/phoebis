@@ -12,20 +12,21 @@ use phoebis_keepalive::KeepalivePolicy;
 use phoebis_relay::CacheTtlPolicy;
 use phoebis_routing::{MemberSpend, OverageEvidence, RegistrySnapshot};
 use phoebis_store::{
-    AccountRow, Affinity, AffinityMode, ApiKeyRow, CooldownRow, Failover, MemberWrite,
+    stamp_token, AccountRow, Affinity, AffinityMode, ApiKeyRow, CooldownRow, Failover, MemberWrite,
     OveragePolicy, PinRow, PoolMember, PoolRow, SessionPlacement, Shedding, StoreError, Strategy,
     SubagentPlacement, WarmSessions,
 };
 use serde_json::{json, Value};
 
 use crate::routes::{
-    double_option, failure, failure_with_code, fence_stamp, present, reload_or_refuse,
+    double_option, failure, failure_with_code, fence_token, present, reload_or_refuse,
     store_failure, CreatedId,
 };
 use crate::rules::{parse_rules, RuleInput};
 use crate::AdminState;
 
 const ACTOR: &str = "admin";
+const STALE_EDIT: &str = "the pool changed while it was being edited; reload and try again";
 
 #[derive(serde::Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -520,6 +521,7 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         cache_diagnostics: false,
         auto_mode_server: true,
         affinity: Affinity::default(),
+        incarnation: 1,
         created_at: now,
         updated_at: now,
     };
@@ -537,13 +539,20 @@ pub(crate) async fn create(State(state): State<Arc<AdminState>>, body: Bytes) ->
         .store
         .insert_pool_with_members(&row, writes.as_deref(), ACTOR)
     {
-        Ok(at) => {
-            row.created_at = at;
-            row.updated_at = at;
-        }
+        // The store takes the incarnation inside the insert, so the answer serializes the row it wrote.
+        Ok(written) => row = written,
         // The row and its members are one transaction, so a refused member leaves no pool to name.
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
+        }
+        Err(StoreError::AccountInPool {
+            account_id,
+            pool_id,
+        }) => {
+            return failure(
+                StatusCode::CONFLICT,
+                &format!("account {account_id} is a member of pool {pool_id}"),
+            )
         }
         Err(error) => return store_failure(error),
     }
@@ -576,7 +585,12 @@ pub(crate) async fn patch(
         Ok(None) => return failure(StatusCode::NOT_FOUND, "pool not found"),
         Err(e) => return store_failure(e),
     };
-    let read_at = match fence_stamp(input.expected_revision.as_ref(), row.updated_at) {
+    let read_at = match fence_token(
+        input.expected_revision.as_ref(),
+        row.incarnation,
+        row.updated_at,
+        STALE_EDIT,
+    ) {
         Ok(stamp) => stamp,
         Err(refusal) => return refusal,
     };
@@ -591,11 +605,7 @@ pub(crate) async fn patch(
         None => None,
     };
     if read_at != row.updated_at {
-        return failure_with_code(
-            StatusCode::CONFLICT,
-            "stale_edit",
-            "the pool changed while it was being edited; reload and try again",
-        );
+        return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT);
     }
     match state
         .store
@@ -603,17 +613,22 @@ pub(crate) async fn patch(
     {
         Ok(at) => row.updated_at = at,
         Err(StoreError::Stale) => {
-            return failure_with_code(
-                StatusCode::CONFLICT,
-                "stale_edit",
-                "the pool changed while it was being edited; reload and try again",
-            )
+            return failure_with_code(StatusCode::CONFLICT, "stale_edit", STALE_EDIT)
         }
         Err(StoreError::PoolNotFound(_)) => {
             return failure(StatusCode::NOT_FOUND, "pool not found")
         }
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
+        }
+        Err(StoreError::AccountInPool {
+            account_id,
+            pool_id,
+        }) => {
+            return failure(
+                StatusCode::CONFLICT,
+                &format!("account {account_id} is a member of pool {pool_id}"),
+            )
         }
         Err(error) => return store_failure(error),
     }
@@ -666,6 +681,15 @@ pub(crate) async fn set_members(
         Ok(at) => row.updated_at = at,
         Err(StoreError::AccountNotFound(id)) => {
             return failure(StatusCode::NOT_FOUND, &format!("account {id} not found"))
+        }
+        Err(StoreError::AccountInPool {
+            account_id,
+            pool_id,
+        }) => {
+            return failure(
+                StatusCode::CONFLICT,
+                &format!("account {account_id} is a member of pool {pool_id}"),
+            )
         }
         Err(error) => return store_failure(error),
     }
@@ -776,10 +800,12 @@ pub(crate) async fn pool_json_from(
     let now = context.now;
     let hour = phoebis_ledger::hour_of(now);
     let day = &context.day;
+    // From the hour `pool_context` totals the day from, so the bars sum to `requests_24h`: 25 buckets, the current
+    // partial hour last.
     let traffic = phoebis_ledger::pool_traffic(
         state.ledger.db(),
         &row.id,
-        hour - 23 * 3_600,
+        hour - 24 * 3_600,
         hour + 3_600,
         3_600,
     )
@@ -880,6 +906,7 @@ pub(crate) async fn pool_json_from(
         "cache_ttl": CacheTtlPolicy::from_json(&row.cache_ttl_json), "cache_diagnostics": row.cache_diagnostics,
         "auto_mode_server": row.auto_mode_server,
         "body_capture_hours": row.body_capture_hours, "created_at": row.created_at, "updated_at": row.updated_at,
+        "revision": stamp_token(row.incarnation, row.updated_at),
         "members": members.iter().map(|m| member_json(m, accounts, spends, ineligible(m).unwrap_or("eligible"), now)).collect::<Vec<_>>(),
         "keys": keys,
         "status": status,

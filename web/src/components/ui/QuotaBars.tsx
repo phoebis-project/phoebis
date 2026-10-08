@@ -52,7 +52,7 @@ export function WindowTriple({ account, now, compact = false, others = false }: 
   const rest = others ? account.windows.filter((w) => !known.includes(w.id)) : [];
   if (!w5 && !w7 && !account.fableWindow && rest.length === 0) return <div className="wbar__none muted">No quota windows</div>;
   // One word each: "Fable 7d" wraps in the narrow compact columns, which drops
-  // that meter a line below its two neighbours.
+  // that meter a line below its two neighbors.
   const labels = compact ? { '5h': '5h', '7d': '7d', fable: 'Fable' } : { '5h': '5-hour', '7d': '7-day', fable: 'Fable' };
   return (
     <div className={`wbars wbars--3 ${compact ? 'wbars--compact' : ''}`}>

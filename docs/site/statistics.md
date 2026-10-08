@@ -60,9 +60,9 @@ by the static prefix, by a subagent's fallback to its parent agent's pin, or, wi
 any request's landing on another agent's pin of its session, is a hit when it read at all.
 
 A budgeted pool member's spend sums the priced hourly rollups over each period it carries a budget for, the current UTC
-day and the current month, an Anthropic-key member's rows whole, a subscription member's metered rows alone (`overage`
+day and the current month, an API-key member's rows whole, a subscription member's metered rows alone (`overage`
 and `fast`); a keepalive probe's cost counts toward it the same as any other request's, since a probe on an
-Anthropic-key member still draws real money. The table in force is fixed at startup, so a member held at its budget
+API-key member still draws real money. The table in force is fixed at startup, so a member held at its budget
 waits for the period to end or its budget to be raised, rather than for a price correction. The rollups file each hour's
 traffic under who paid for it: the plan, overage, or a fast answer's usage credits, as the response reported it.
 
@@ -99,7 +99,7 @@ account five minutes after the startup step, on the account's phase, or when its
 an hour after.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
-`Retry-After` honoured up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
+`Retry-After` honored up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
 five-minute slot when the hold is shorter. Each 429 is logged as a warning naming the account and the endpoint that
 answered it, and the next clean answer returns the account to the five minutes. A transport failure or another error
 keeps the cadence. The other accounts keep theirs throughout.
@@ -124,12 +124,12 @@ or `NaN`, which no budget trips on.
 ## Plan meter
 
 A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
-with the window named; an Anthropic-key account, and a subscription account in overage, read dollars.
+with the window named; an API-key account, and a subscription account in overage, read dollars.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, or the burn a shedding round ranks by.
 It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which Spend per minute
 charts under every grouping; a member's budget counts them at the fast cells, a subscription member's as an
-Anthropic-key member's.
+API-key member's.
 
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
@@ -201,10 +201,10 @@ included, whether or not the router dropped it on the way upstream.
 A batch the ledger cannot write is retried in place after 1, 2, 4 and 8 seconds, then one record at a time; a record the
 file as a whole refuses (a corrupt, full, read-only or unopenable file, an I/O error) is held and retried every 10
 seconds until it lands; a record that fails on its own is dropped with a `ledger_gap` when it carries no money and
-parked in the ledger file when it does, and every parked record is tried again once at the next start or by `phoebis
-ledger replay-parked`, its parked row deleted in the transaction that lands the record, so its charge counts once. A
-parked record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone
-while its cost is kept. While a batch is under retry the ledger is degraded: the system page shows it,
+parked in the ledger file when it does, and every parked record is tried again once at the next start or on the
+dashboard's Replay, its parked row deleted in the transaction that lands the record, so its charge counts once. A parked
+record keeps its request and attempt rows and not its captured bodies, so the capture of a parked request is gone while
+its cost is kept. While a batch is under retry the ledger is degraded: the system page shows it,
 `phoebis_ledger_degraded` reads 1, and routing treats every budgeted member's spend as unknown until a batch lands and
 the spend is read again.
 
@@ -273,7 +273,8 @@ dated id priced under its undated base, that base; every other model is reported
 cannot grow the label set by naming models it likes.
 `phoebis_keepalive_probes_total` counts each probe under its pool and one of four outcomes: `landed` when it read the
 whole prefix back, or wrote it on the account a migration moved it to, `cold` when the upstream served it without that
-read, `failed` when the upstream did not serve it, and `held` when the router refused it while its ledger was behind.
+read, `failed` when the upstream did not serve it, and `held` when the router refused it with `503 ledger_behind` while
+its ledger caught up, which the engine sends again.
 `phoebis_keepalive_skipped_total` counts a due probe the engine withheld, under its pool and the recipe's state, one of
 [the five states](keepalive.md#the-five-states): `held` or `paused` for a gate that held it, `ended` for an entry that
 lapsed before it.
@@ -334,25 +335,41 @@ that fails after its 200 head keeps that status, so a finished request with an e
 
 ### Quota
 
-The header counts the accounts and those needing attention. A card per account shows one row per rate-limit window,
-filterable by tabs for all accounts, OAuth accounts, and Anthropic-key accounts, and every window share on the view
-reads as the share left. Each OAuth card's footer says when the poll last asked the endpoint and how it answered, a
-failed poll naming its reason (cut to the line's width, the whole message in the line's title), when the snapshot it
-shows was read, and, while the account backs off, since when and when the next attempt comes; Refresh reads the endpoint
-now unless the account is backing off or a fresh snapshot is cached. A card draws the windows the ledger sampled in the
-last day, or the ones the router holds when the ledger has none, whatever the last read said, and shows an error in
-their place only when it holds none; the page counts a card that shows an error, whose last poll failed, or that is
-backing off as needing attention. A window whose reset has passed with no reading since reads as expired, with no share
-and an empty meter, until the next reading. Each card names the account's plan with the date its subscription started
-and, for an account on the Claude Code trial, when the trial ends; an account marked cancelled says when its plan ends,
-in the serious tone inside a week. A card whose account served a fast-mode request shows a Fast mode line: the share of
-the fast lane's input and output buckets used, as the last answer reported them, with the reset, a bucket past its reset
-reading as refilled, and a chip while the account's fast lane cools, naming the reason (rate limited, or credits
-unavailable) and when it lifts; the account page's Usage card shows the same line and chip. Below the cards, a reset
-timeline lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour view.
+The Quota view covers the subscription accounts alone, since an API-key account has no quota window. The header counts
+them and those needing attention, and a section bar under it shows one of two sections at a time: Accounts, where the
+view opens, and Quota windows. A plain `/quota` shows the accounts, and a link or a reload with `#quota-windows` lands
+on the timeline.
 
-![The Quota view: the cards per account and the reset timeline](assets/quota-light.png#only-light)
-![The Quota view: the cards per account and the reset timeline](assets/quota-dark.png#only-dark)
+Accounts draws a card per account, in the default order or by soonest recovery. Every card has the same height and the
+same slots in the same order, so a card with more to say moves no rule against its neighbors: the header, one row per
+rate-limit window (5-hour, 7-day and Fable), the Extra usage line, the chips and the poll reading. Every window share on
+the view reads as the share left. A card draws the windows the ledger sampled in the last day, or the ones the router
+holds when the ledger has none, whatever the last read said, and shows an error in their place only when it holds none.
+A window whose reset has passed with no reading since reads as expired, with no share and an empty meter, until the next
+reading. The Extra usage line reads the month's spend against its limit, in the serious tone while requests bill as
+extra usage and in the muted ink while they do not, and reads off or not reported in the muted ink when extra usage is
+disabled or the account has not reported it. The reason the provider gave for it sits inside the line, cut to the line's
+width, with the whole message on hover. The chips start with the plan, named by its tier (Max 20x, Max 5x or Pro), then
+say when the plan of an account marked cancelled ends, in the serious tone inside a week, and when the trial of an
+account on the Claude Code trial ends. The poll reading takes one or two lines: when the poll last asked the endpoint
+and how it answered, a failed poll naming its reason cut to the line's width, and, while the account backs off, the next
+attempt in the serious tone. The line's title carries the rest: the attempt's instant, a failed poll's whole message,
+when the snapshot shown was read, since when the account backs off, and how many rate-limited answers it has had in a
+row. Refresh reads the endpoint now unless the account is backing off or a fresh snapshot is cached. The page counts a
+card that shows an error, whose last poll failed, or that is backing off as needing attention.
+
+Quota windows lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
+view. An account marked cancelled with a saved end shows the end on its lane where it falls inside the drawn period: no
+window opens after it, and the window that spans it stops there.
+
+The fast-mode reading is on the account page's Usage card: a Fast mode line with the share of the fast lane's input and
+output buckets used, as the last answer reported them, with the reset, a bucket past its reset reading as refilled, and
+a chip while the account's fast lane cools, naming the reason (rate limited, or credits unavailable) and when it lifts.
+
+![The Quota view's Accounts section: the cards per account](assets/quota-light.png#only-light)
+![The Quota view's Accounts section: the cards per account](assets/quota-dark.png#only-dark)
+![The Quota view's Quota windows section: the reset timeline](assets/quota-windows-light.png#only-light)
+![The Quota view's Quota windows section: the reset timeline](assets/quota-windows-dark.png#only-dark)
 
 ### Models
 
@@ -452,7 +469,7 @@ Every row opens. A click anywhere on a row but a link opens it beneath itself on
 and another page or another filter starts with every row shut. A decision row loads its record and draws its card, a
 probe decision's included. A card opened on a request that is still running reads its record again when Follow brings
 the answer. The verdict line names the decision with its accounts and its pool as links ("Moved
-secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in codex") and chips for the tier, the rule or
+secondary to primary", "Attempt 2 of 2: placed on primary", "Exhausted in jobs") and chips for the tier, the rule or
 the rung, the pin's warmth and the cache verdict once the attempt reports usage (`cache pending` before). "How the
 router decided" numbers the walk in the engine's order: the pin, every member's eligibility, the move rules, the cool
 reading and the cap filter after a fired rule, the renewal, the three rungs, the partitions, the pick, and a hold or an
@@ -465,7 +482,7 @@ admission with its reason and the rest of the walk not run.
 
 The candidate table lists every pool member in the walk's order with the chosen or held-on member tinted: the account
 with its plan beneath, the tier (`plan P0`, `overage P0`, `keys P1`), the 5-hour, 7-day and Fable windows as three lines
-each (the utilization, the reset, the reading's source and age), or an Anthropic key's one merged reading, the requests
+each (the utilization, the reset, the reading's source and age), or an API key's one merged reading, the requests
 in flight against the cap, the Pace score, the prefix entry, and the verdict with the one chip that decided it (`429 on
 5h until 15:42`, `budget $1.10 of $5.00`), whose hover says why the member was passed over. Three folds, closed until
 opened, hold the request's facts, the pin and its warmth (a record that pins nothing reads why: not looked
@@ -548,7 +565,7 @@ request folds under the reserved value alongside a keepalive credit, and a reque
 reserved id. The speed grouping reads the speed the answer reported, else `fast` when the request asked for it,
 `standard` otherwise; the Requests by speed chart therefore counts a fast request the router refused before any attempt
 as fast. A key deleted and created again under the same id appears twice under the key grouping, since its figures stay
-with the key that spent them. The earlier holder is labelled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date
+with the key that spent them. The earlier holder is labeled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date
 and time it was created at minute precision, or `<id> (deleted)` when the ledger holds no creation time for it. The
 client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the folded
 token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`) selects
@@ -560,7 +577,7 @@ per-group table's Rejected beside them) and the error rate, with a Failovers cha
 it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range counted,
 by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar per level
 the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day window and
-an Anthropic-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account,
+an API-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account,
 key, request class, or session; the 5-hour share carries the peak band's weight, the 7-day share the week's own band
 factor, 1 in the shipped model. The shares read under the account grouping alone, since shares of different accounts'
 windows do not add, and the Spend per minute chart draws dollars alone, a subscription account's among them only for its
@@ -630,10 +647,12 @@ at the first read.
 | `client_drift` | the client version | an inference request from that version is relayed, or a re-pinned build starts |
 | `writer_degraded` | the ledger | a batch lands and the spend refresh after it succeeds |
 | `writer_degraded` | the routing state writer | the backlog drains |
-| `reauth_required` | the account | the account is paired again, or an Anthropic-key account gets a new secret |
-| `funding_required` | the Anthropic-key account | the operator clears funding |
+| `certificate_reload_failed` | the listener key | a reload lands or the router restarts |
+| `reauth_required` | the account | the account is paired again, or an API-key account gets a new secret |
+| `funding_required` | the API-key account | the operator clears funding |
 | `refresh_failed` | the OAuth account | a refresh commits, or a newer credential supersedes a pending one |
-| `ledger_record_parked` | the pool, or `-` for a record without one | the next start or replay lands the parked rows |
+| `certificate_expiring` | the listener key | a pair with more than 30 days left is loaded |
+| `ledger_record_parked` | the pool, or `-` for a record without one | the next start or the Replay button lands them |
 | `poll_backoff` | the polled account | a poll answers clean |
 
 **`pool_exhausted`** holds while a request of the pool has ended exhausted and none of the pool's requests has
@@ -658,6 +677,12 @@ neither writer records when it degraded, so the item dates from the first read o
 nothing. While the ledger's holds, routing treats every budgeted member's spend as unknown
 ([routing](routing.md#pools)).
 
+**`certificate_reload_failed`** holds from a `phoebis tls reload` whose pair the loader refused until a later reload
+lands or the router restarts, and the listener keeps serving the pair it had
+([TLS on the listeners](installation.md#tls-on-the-listeners)). The subject is the listener key, `proxy.tls` or
+`admin.tls`, and the item opens nothing. It dates from the refused reload, and the detail names the two files, the
+loader's line and when the pair still served was loaded.
+
 **`reauth_required`** holds while the account's state is `reauth_required`, read from the registry
 ([account states](pairing.md#account-states)). The registry records no time for a state change, so the item dates from
 the first read of this process that saw the state. The detail names the account and its label.
@@ -670,11 +695,15 @@ a run read from the registry. A refresh that commits ends the run, and so does o
 re-pairing settles a refresh still pending; a pairing records its own committed attempt, so it ends the run even when
 nothing was pending. The detail counts the run's failures and gives the newest attempt's outcome and error.
 
+**`certificate_expiring`** holds while the leaf a listener serves is within 30 days of its end, past the end included.
+It reads the pair the router loaded rather than the files, so a pair replaced on disk counts once `phoebis tls reload`
+loads it. The subject is the listener key, and the item opens nothing. It dates from 30 days before the leaf's end, so a
+restart keeps the date, and the detail names the certificate file, the end and the whole days left, negative once past.
+
 **`ledger_record_parked`** holds while the ledger file keeps priced records that failed to land on their own; each is
-tried again once at the next start or by `phoebis ledger replay-parked`, and the condition clears when the table
-empties. The subject is the pool the record was served under, or `-` for a record without one; a pool deleted since
-shows under its id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names
-the accounts.
+tried again once at the next start or on the dashboard's Replay, and the condition clears when the table empties. The
+subject is the pool the record was served under, or `-` for a record without one; a pool deleted since shows under its
+id with nothing to open. The item dates from the oldest row, and the detail counts the rows and names the accounts.
 
 **`poll_backoff`** holds once the usage poll has been backing off from the endpoint's 429 answers on the account for
 thirty minutes, counted from the run's first 429. The detail gives when the run started, when the next attempt comes,

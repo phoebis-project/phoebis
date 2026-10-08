@@ -1,7 +1,6 @@
 //! The `phoebis` command line: run the router, write a first installation's files, check a configuration without
 //! starting anything, probe a running proxy listener, read a running router's readiness, pools, accounts and pins,
-//! copy both databases into a backup, or create or pair an account, create a pool or a key, clear a cooldown and land
-//! the ledger's parked records over the admin API.
+//! have it re-read its listeners' certificate pairs, or copy both databases into a backup.
 
 use std::io::{IsTerminal, Write};
 use std::path::{Path, PathBuf};
@@ -9,10 +8,10 @@ use std::time::Duration;
 
 use anyhow::{bail, Context};
 use clap::{Parser, Subcommand};
-use phoebis_router::admin_client::{self, AdminClient};
+use phoebis_router::admin_client::{self, AdminClient, ClientError};
 use phoebis_router::backup::{self, BackupArgs};
 use phoebis_router::status::{self, Listeners, StatusArgs};
-use phoebis_router::subcommands::{self, AccountCommand, KeyCommand, LedgerCommand, PoolCommand};
+use phoebis_router::tls_reload::{self, TlsReloadArgs};
 use phoebis_router::{init, tls};
 
 #[derive(Parser)]
@@ -39,9 +38,6 @@ struct Cli {
 #[allow(clippy::large_enum_variant)]
 #[derive(Subcommand)]
 enum Command {
-    /// Create or pair an account, or clear one of its cooldowns, over the admin API.
-    #[command(subcommand)]
-    Account(AccountCommand),
     /// Copy both databases into a directory with a manifest that names the key file, taking no lock and opening no
     /// socket: exit 0 once the manifest is written, 1 otherwise.
     Backup(BackupArgs),
@@ -52,33 +48,24 @@ enum Command {
     Health,
     /// Write the bootstrap file, the storage key and the admin secret, once, refusing anything that exists.
     Init(init::InitArgs),
-    /// Create a key over the admin API.
-    #[command(subcommand)]
-    Key(KeyCommand),
-    /// Land the ledger's parked priced records over the admin API.
-    #[command(subcommand)]
-    Ledger(LedgerCommand),
-    /// Create a pool over the admin API.
-    #[command(subcommand)]
-    Pool(PoolCommand),
     /// Probe the proxy listener, read the admin API and print one screen of readiness, pools, accounts and live pins:
     /// exit 0 when ready, 1 otherwise.
     Status(StatusArgs),
+    /// Ask the running router to re-read every listener's certificate pair.
+    #[command(subcommand)]
+    Tls(TlsCommand),
+}
+
+#[derive(Subcommand)]
+enum TlsCommand {
+    /// Re-read every listener's certificate pair over the admin API: exit 0 once every pair reloaded, 1 otherwise. A
+    /// pair that does not load leaves the listener serving the pair it had.
+    Reload(TlsReloadArgs),
 }
 
 fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command {
-        Some(Command::Account(command)) => {
-            let code = subcommands::run_account(
-                command,
-                &cli.config,
-                &mut std::io::stdin().lock(),
-                &mut std::io::stdout().lock(),
-                &mut std::io::stderr().lock(),
-            );
-            std::process::exit(code)
-        }
         Some(Command::Backup(args)) => run_backup(&cli.config, &args),
         Some(Command::CheckConfig) => {
             let mut config = phoebis_router::config::load_unresolved(&cli.config)?;
@@ -219,6 +206,18 @@ fn main() -> anyhow::Result<()> {
                     phoebis_store::SCHEMA_VERSION
                 );
             }
+            // The start refuses to migrate a registry that holds an account in two pools, naming each account.
+            let overlaps = phoebis_store::Store::read_overlapping_memberships(registry)
+                .with_context(|| format!("reading the registry at {}", registry.display()))?;
+            if !overlaps.is_empty() {
+                for overlap in &overlaps {
+                    println!("{overlap}");
+                }
+                bail!(
+                    "the registry at {} holds an account in more than one pool, and an account belongs to one",
+                    registry.display()
+                );
+            }
             let ledger = &config.stats.ledger_path;
             let found = phoebis_ledger::LedgerDb::read_schema_version(ledger)
                 .with_context(|| format!("reading the ledger at {}", ledger.display()))?;
@@ -280,10 +279,6 @@ fn main() -> anyhow::Result<()> {
             }
         }
         Some(Command::Init(args)) => {
-            if let Some(renewal) = init::renewal(&cli.config, &args)? {
-                init::renew(&renewal, &mut std::io::stderr().lock())?;
-                return Ok(());
-            }
             let interactive = std::io::stdin().is_terminal()
                 && std::io::stderr().is_terminal()
                 && !args.non_interactive;
@@ -304,36 +299,8 @@ fn main() -> anyhow::Result<()> {
             )?;
             Ok(())
         }
-        Some(Command::Key(command)) => {
-            let code = subcommands::run_key(
-                command,
-                &cli.config,
-                &mut std::io::stdin().lock(),
-                &mut std::io::stdout().lock(),
-                &mut std::io::stderr().lock(),
-            );
-            std::process::exit(code)
-        }
-        Some(Command::Ledger(command)) => {
-            let code = subcommands::run_ledger(
-                command,
-                &cli.config,
-                &mut std::io::stdout().lock(),
-                &mut std::io::stderr().lock(),
-            );
-            std::process::exit(code)
-        }
-        Some(Command::Pool(command)) => {
-            let code = subcommands::run_pool(
-                command,
-                &cli.config,
-                &mut std::io::stdin().lock(),
-                &mut std::io::stdout().lock(),
-                &mut std::io::stderr().lock(),
-            );
-            std::process::exit(code)
-        }
         Some(Command::Status(args)) => run_status(&cli.config, &args),
+        Some(Command::Tls(TlsCommand::Reload(args))) => run_tls_reload(&cli.config, &args),
         None => {
             let config = phoebis_router::config::load(&cli.config)?;
             tokio::runtime::Builder::new_multi_thread()
@@ -374,7 +341,7 @@ fn main() -> anyhow::Result<()> {
     }
 }
 
-/// `phoebis backup`. It never returns: it exits with the run's answer as the other subcommands do.
+/// `phoebis backup`. It never returns: it exits with the run's answer as the other commands do.
 fn run_backup(config_path: &Path, args: &BackupArgs) -> ! {
     let taken = backup::run(
         config_path,
@@ -486,6 +453,45 @@ fn run_status(config_path: &Path, args: &StatusArgs) -> ! {
         .write_all(printed.as_bytes())
         .and_then(|()| stdout.flush());
     std::process::exit(status::exit_code(&reads))
+}
+
+/// `phoebis tls reload`. It never returns, for the reason `run_status` gives.
+fn run_tls_reload(config_path: &Path, args: &TlsReloadArgs) -> ! {
+    let client = AdminClient::from_flags(&args.common, config_path).unwrap_or_else(|error| {
+        eprintln!("{error}");
+        std::process::exit(error.exit_code())
+    });
+    let runtime = admin_client::runtime().unwrap_or_else(|error| {
+        eprintln!("cannot start the runtime: {error}");
+        std::process::exit(1)
+    });
+    let body = runtime
+        .block_on(tls_reload::read(
+            &client,
+            Duration::from_secs(args.common.timeout),
+        ))
+        .unwrap_or_else(|error| {
+            match &error {
+                ClientError::Transport { url, reason } => {
+                    eprintln!("the admin listener did not answer on {url}: {reason}")
+                }
+                error => eprintln!("{error}"),
+            }
+            std::process::exit(error.exit_code())
+        });
+    let printed = if args.common.json {
+        serde_json::to_string_pretty(&body)
+            .map(|json| format!("{json}\n"))
+            .unwrap_or_default()
+    } else {
+        tls_reload::render(&body)
+    };
+    let mut stdout = std::io::stdout().lock();
+    // The router has reloaded by now, and a reader that went away does not undo it.
+    let _ = stdout
+        .write_all(printed.as_bytes())
+        .and_then(|()| stdout.flush());
+    std::process::exit(tls_reload::exit_code(&body))
 }
 
 /// One table's `check-config` line: the file read, or the built-in table with the configured path it found nothing

@@ -960,7 +960,7 @@ async fn a_model_only_rejection_leaves_opus_eligible_and_a_5h_rejection_cools_ev
 #[tokio::test]
 async fn a_spend_cap_429_on_a_fable_request_answers_the_exhausted_pool_with_the_overage_included_claim(
 ) {
-    // The header set an organisation at its spend cap answers, as observed: both shared windows healthy, the
+    // The header set an organization at its spend cap answers, as observed: both shared windows healthy, the
     // overage week rejected under its own claim.
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),

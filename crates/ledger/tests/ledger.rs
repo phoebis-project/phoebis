@@ -1137,6 +1137,69 @@ fn complete_short_event(id: &str, response_chunks: u32) -> BusEvent {
     BusEvent::RequestComplete(complete)
 }
 
+/// The two events the relay publishes for a probe its admission refused: the observation of kind `probe`, and the
+/// completion `complete` writes for a refusal before any attempt, under no account, with the outcome `outcome_of`
+/// answers for a code at attempt 0.
+fn refused_probe_events(id: &str, error_code: &str) -> [BusEvent; 2] {
+    let BusEvent::RequestObserved(mut observed) = observed_event(id) else {
+        unreachable!()
+    };
+    observed.origin = Origin::Keepalive;
+    observed.kind = Kind::Probe;
+    let BusEvent::RequestComplete(mut complete) = complete_event(id) else {
+        unreachable!()
+    };
+    complete.outcome = BusOutcome::Rejected;
+    complete.status = 503;
+    complete.error_code = Some(error_code.into());
+    [
+        BusEvent::RequestObserved(observed),
+        BusEvent::RequestComplete(complete),
+    ]
+}
+
+/// The hour's probe row once it holds `requests` probes.
+async fn probe_row(h: &Harness, requests: u64) -> phoebis_ledger::RollupRow {
+    wait_for_async(Duration::from_secs(5), || async {
+        h.db.read(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|r| r.kind == "probe" && r.requests == requests)
+    })
+    .await
+}
+
+/// The router's own `503 ledger_behind` holds a probe while its ledger catches up, which the account never answered:
+/// the row counts it under `probes_held` whatever outcome it carries, outside `failed` and `rejected`. A probe refused
+/// with another code is a rejection as before.
+#[tokio::test]
+async fn a_probe_the_relay_refused_at_admission_folds_as_held_and_not_as_failed_or_rejected() {
+    let up = FakeUpstream::start(vec![]).await;
+    let h = harness(&up, &[oauth("a", A, 0)], (0, None), LedgerConfig::default()).await;
+    for event in refused_probe_events("held", phoebis_relay::LEDGER_BEHIND) {
+        h.bus.publish(event);
+    }
+    let row = probe_row(&h, 1).await;
+    assert_eq!(
+        (row.probes_held, row.rejected, row.failed),
+        (1, 0, 0),
+        "the held probe counts under its own column alone"
+    );
+    for event in refused_probe_events("refused", "auth_unknown") {
+        h.bus.publish(event);
+    }
+    let row = probe_row(&h, 2).await;
+    assert_eq!(
+        (row.probes_held, row.rejected, row.failed),
+        (1, 1, 0),
+        "a probe refused with another code folds into rejected"
+    );
+    up.shutdown().await;
+}
+
 /// The row `list_requests` hands back, the same query `/admin/requests` runs.
 async fn listed(h: &Harness, id: &str) -> RequestRecord {
     wait_for_async(Duration::from_secs(5), || async {
@@ -2050,13 +2113,14 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
     {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         // The four columns migration 18 adds, the five migration 19 adds, migration 20's column and table, the
-        // columns migrations 21, 25 and 26 add, migration 27's table and index and migration 29's table, columns and
-        // indexes, each dropped back out so the replay below has to add them again. `rollups_hourly` keeps the
+        // columns migrations 21, 25, 26 and 30 add, migration 27's table and index and migration 29's table, columns
+        // and indexes, each dropped back out so the replay below has to add them again. `rollups_hourly` keeps the
         // shape the class dimension joins, since a primary-key column cannot be dropped in place and the rebuild
         // names its own columns regardless of what the source table still carries.
         db.write(|c| {
             c.execute_batch(
-                "ALTER TABLE requests DROP COLUMN request_class; \
+                "ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
+                 ALTER TABLE requests DROP COLUMN request_class; \
                  ALTER TABLE requests DROP COLUMN identified_by; \
                  ALTER TABLE requests DROP COLUMN identity_root; \
                  ALTER TABLE requests DROP COLUMN identity_depth; \
@@ -2098,7 +2162,7 @@ async fn a_rollup_row_from_before_the_class_dimension_reads_under_the_reserved_c
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2184,7 +2248,8 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
         db.write(|c| {
             c.execute_batch(
-                "ALTER TABLE requests DROP COLUMN identified_by; \
+                "ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
+                 ALTER TABLE requests DROP COLUMN identified_by; \
                  ALTER TABLE requests DROP COLUMN identity_root; \
                  ALTER TABLE requests DROP COLUMN identity_depth; \
                  ALTER TABLE requests DROP COLUMN forked_from; \
@@ -2205,7 +2270,7 @@ async fn migration_nineteen_adds_the_identity_columns_to_a_version_eighteen_file
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         (
@@ -2248,7 +2313,8 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
         db.write(|c| {
             c.execute_batch(&format!(
-                "ALTER TABLE requests DROP COLUMN auto_mode; ALTER TABLE requests DROP COLUMN held; \
+                "ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
+                 ALTER TABLE requests DROP COLUMN auto_mode; ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  {RECREATE_DROPPED_TABLE}\n\
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
@@ -2263,7 +2329,7 @@ async fn a_ledger_from_before_the_auto_mode_column_gains_it() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let columns = db
         .read_blocking(|c| {
             let mut stmt = c.prepare("SELECT name FROM pragma_table_info('requests')")?;
@@ -2346,7 +2412,7 @@ async fn migration_twenty_two_files_every_rollup_row_under_standard_speed_and_ke
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let speeds = |ledger: &phoebis_ledger::LedgerDb| {
         ledger
             .read_blocking(|c| {
@@ -2423,7 +2489,7 @@ async fn migration_twenty_four_files_a_rollup_row_under_fast_funding_by_its_spee
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let mut rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2479,7 +2545,8 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
         db.write(|c| {
             c.execute_batch(
-                "ALTER TABLE requests DROP COLUMN held; \
+                "ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
+                 ALTER TABLE requests DROP COLUMN held; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
@@ -2494,7 +2561,7 @@ async fn migration_twenty_five_gives_a_request_row_from_before_no_hold() {
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let (row, _) = db.request("r0").await.unwrap().unwrap();
     assert_eq!(
         row.held, None,
@@ -2537,7 +2604,8 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
         db.write(|c| {
             c.execute_batch(
-                "ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
+                "ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
+                 ALTER TABLE rollups_hourly DROP COLUMN incomplete; \
                  ALTER TABLE attempts DROP COLUMN upstream_message_id; \
                  DROP TABLE parked_records; DROP INDEX IF EXISTS bodies_expires; \
                  DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
@@ -2551,7 +2619,7 @@ async fn migration_twenty_six_adds_the_incomplete_counter_and_the_message_id_col
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let rows = db
         .read_blocking(|c| {
             phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
@@ -2592,7 +2660,8 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         // and `seven_day_fable` rows stand for a poll key the captured bodies never carried.
         db.write(|c| {
             c.execute_batch(
-                "INSERT INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES \
+                "ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
+                 INSERT INTO quota_samples (account_id, bucket, window, utilization, reset_at, source, observed_at) VALUES \
                    ('a', 0, '5h', 0.5, NULL, 'header', 10), \
                    ('a', 0, 'five_hour', 0.4, NULL, 'poll', 20), \
                    ('a', 0, '7d', 0.2, NULL, 'header', 10), \
@@ -2613,7 +2682,7 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
         .unwrap();
     }
     let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
-    assert_eq!(db.schema_version().await.unwrap(), 29);
+    assert_eq!(db.schema_version().await.unwrap(), 30);
     let rows: Vec<(i64, String, Option<f64>, String)> = db
         .quota_samples("a", 0, i64::MAX)
         .await
@@ -2642,6 +2711,81 @@ async fn migration_twenty_eight_spells_every_quota_window_by_the_endpoints_key_a
     );
 }
 
+#[tokio::test]
+async fn a_ledger_below_the_held_column_migrates_and_a_fresh_file_carries_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("ledger.sqlite");
+    {
+        let db = phoebis_ledger::LedgerDb::open(&path).unwrap();
+        db.insert_request(
+            &RequestRecord {
+                id: "r0".into(),
+                received_at: 3_600_000,
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            &[AttemptRecord {
+                request_id: "r0".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "oauth".into(),
+                outcome: "succeeded".into(),
+                output_tokens: Some(5),
+                ..Default::default()
+            }],
+            None,
+        )
+        .unwrap();
+        db.write(|c| {
+            c.execute_batch(&format!(
+                "ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
+                 UPDATE meta SET value = '{}' WHERE key = 'schema_version';",
+                phoebis_ledger::LedgerDb::supported_schema_version() - 1
+            ))?;
+            Ok(())
+        })
+        .unwrap();
+    }
+    let db = std::sync::Arc::new(phoebis_ledger::LedgerDb::open(&path).unwrap());
+    assert_eq!(db.schema_version().await.unwrap(), 30);
+    let rows = db
+        .read_blocking(|c| {
+            phoebis_ledger::read_rollups(c, 0, i64::MAX, &phoebis_ledger::RollupSelect::default())
+        })
+        .unwrap();
+    assert_eq!(
+        rows.iter()
+            .map(|r| (r.requests, r.succeeded, r.probes_held))
+            .collect::<Vec<_>>(),
+        vec![(1, 1, 0)],
+        "a rollup row from before the column keeps its counts and counts no held probe"
+    );
+    let held_columns = |ledger: &phoebis_ledger::LedgerDb| {
+        ledger
+            .read_blocking(|c| {
+                Ok(c.query_row(
+                    "SELECT COUNT(*) FROM pragma_table_info('rollups_hourly') WHERE name = 'probes_held'",
+                    [],
+                    |r| r.get::<_, i64>(0),
+                )?)
+            })
+            .unwrap()
+    };
+    assert_eq!(held_columns(&db), 1, "the migration added the column");
+    assert_eq!(
+        held_columns(&phoebis_ledger::LedgerDb::open_in_memory().unwrap()),
+        1,
+        "a fresh file carries it"
+    );
+}
+
 /// What one query lists in its first column, in the query's order.
 fn names(db: &phoebis_ledger::LedgerDb, sql: &str) -> Vec<String> {
     db.read_blocking(|c| {
@@ -2665,7 +2809,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
     let event_indexes = "SELECT name FROM pragma_index_list('events') ORDER BY name";
     {
         let fresh = Arc::new(LedgerDb::open(&path).unwrap());
-        assert_eq!(fresh.schema_version().await.unwrap(), 29);
+        assert_eq!(fresh.schema_version().await.unwrap(), 30);
         assert_eq!(
             names(
                 &fresh,
@@ -2704,7 +2848,8 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         fresh
             .write(|c| {
                 c.execute_batch(
-                    "DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
+                    "ALTER TABLE rollups_hourly DROP COLUMN probes_held; \
+                     DROP TABLE decisions; DROP INDEX IF EXISTS events_account; \
                      DROP INDEX IF EXISTS events_session; DROP INDEX IF EXISTS events_request; \
                      ALTER TABLE events DROP COLUMN request_id; ALTER TABLE events DROP COLUMN agent_id; \
                      ALTER TABLE events DROP COLUMN pool_id; \
@@ -2720,7 +2865,7 @@ async fn migration_29_adds_the_decisions_table_and_the_events_columns_on_a_fresh
         );
     }
     let existing = Arc::new(LedgerDb::open(&path).unwrap());
-    assert_eq!(existing.schema_version().await.unwrap(), 29);
+    assert_eq!(existing.schema_version().await.unwrap(), 30);
     assert_eq!(
         names(&existing, event_columns),
         [
@@ -3190,7 +3335,7 @@ fn a_fast_attempt_prices_at_the_fast_cells_beside_a_standard_one() {
             attempts[0].pricing_version.as_deref(),
             unknown.load(Ordering::SeqCst)
         ),
-        (Some("2026-10-01"), 0)
+        (Some("2026-10-08"), 0)
     );
 }
 
@@ -4064,26 +4209,6 @@ fn drop_trigger(db: &LedgerDb, name: &str) {
     .unwrap();
 }
 
-/// Caps the writer connection's file at the pages it holds once a vacuum has left none free, so the next insert
-/// that needs a page meets `SQLITE_FULL`.
-fn fill_the_disk(db: &LedgerDb) {
-    db.write(|c| {
-        c.execute_batch("VACUUM;")?;
-        let pages: i64 = c.query_row("PRAGMA page_count", [], |r| r.get(0))?;
-        c.pragma_update(None, "max_page_count", pages)?;
-        Ok(())
-    })
-    .unwrap();
-}
-
-fn free_the_disk(db: &LedgerDb) {
-    db.write(|c| {
-        c.pragma_update(None, "max_page_count", 1_073_741_823)?;
-        Ok(())
-    })
-    .unwrap();
-}
-
 /// A finished request of pool `main` on account `a`.
 fn finished_row(id: &str) -> RequestRecord {
     RequestRecord {
@@ -4124,7 +4249,7 @@ fn finished(id: &str, priced: bool) -> Record {
     }
 }
 
-/// A harness over an on-disk ledger at `path`, its pool's one member the Anthropic-key account `a`, whose whole spend
+/// A harness over an on-disk ledger at `path`, its pool's one member the API-key account `a`, whose whole spend
 /// counts toward a budget.
 async fn on_disk(
     up: &FakeUpstream,
@@ -4465,7 +4590,7 @@ async fn a_full_disk_holds_the_batch_and_recovers_with_the_spend_refreshed() {
     )
     .await;
     budget_member_a(&h).await;
-    fill_the_disk(&h.db);
+    h.db.fill_the_disk();
     // A user agent that spans many pages, so the row needs pages the cap refuses.
     let wide = "x".repeat(512 << 10);
     let refused =
@@ -4535,7 +4660,7 @@ async fn a_full_disk_holds_the_batch_and_recovers_with_the_spend_refreshed() {
         "the scrape reads the degraded state"
     );
 
-    free_the_disk(&h.db);
+    h.db.free_the_disk();
     step(&h, BATCH_RETRY_HOLD);
     wait_for_async(Duration::from_secs(5), || async {
         (!h.ledger.degraded() && !h.router.accounting_degraded().await.unwrap()).then_some(())
@@ -4716,22 +4841,25 @@ async fn a_landing_batch_whose_spend_read_fails_keeps_the_degradation() {
 /// Parks the priced record `finished(id, true)` straight into the file at `path`, as a writer that met a poison row
 /// would have, with `error` and `at` as its last try.
 fn park_in_file(path: &std::path::Path, id: &str, error: &str, at: i64) {
+    park_in(&LedgerDb::open(path).unwrap(), id, error, at);
+}
+
+/// A parked priced record of member `a` in `db`, one the writer lands once nothing refuses it.
+fn park_in(db: &LedgerDb, id: &str, error: &str, at: i64) {
     let record = serde_json::to_string(&phoebis_ledger::ParkedRecord {
         request: finished_row(id),
         attempts: vec![serving_attempt(id, true)],
     })
     .unwrap();
-    LedgerDb::open(path)
-        .unwrap()
-        .write(|c| {
-            c.execute(
-                "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
-                 VALUES (?1, ?1, ?2, 'main', 'a', ?3, ?4)",
-                rusqlite::params![at, id, record, error],
-            )?;
-            Ok(())
-        })
-        .unwrap();
+    db.write(|c| {
+        c.execute(
+            "INSERT INTO parked_records (parked_at, last_tried_at, request_id, pool_id, account_id, record, error) \
+             VALUES (?1, ?1, ?2, 'main', 'a', ?3, ?4)",
+            rusqlite::params![at, id, record, error],
+        )?;
+        Ok(())
+    })
+    .unwrap();
 }
 
 /// A stop while a batch waits out its hold gives the batch the drain's one try; what the database still refuses then
@@ -4747,7 +4875,7 @@ async fn a_stop_during_a_hold_tries_the_batch_once_more_and_counts_what_is_still
         quick(),
     )
     .await;
-    fill_the_disk(&h.db);
+    h.db.fill_the_disk();
     h.ledger
         .record_request(Record::Request {
             request: RequestRecord {
@@ -4933,7 +5061,7 @@ async fn replay_parked_lands_a_parked_record_whose_cause_is_gone() {
     drop_trigger(&h.db, "refuse");
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
-        h.ledger.replay_parked(now).await.unwrap(),
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
         Replayed {
             landed: 1,
             remaining: 0
@@ -4967,13 +5095,13 @@ async fn a_replay_whose_parked_rows_cannot_be_read_answers_the_error() {
     // The row read names the column; the count a reply carries does not, so only the pass itself fails.
     rename_parked_record(&h.db, "record", "record_held");
     let now = h.clock.load(Ordering::SeqCst);
-    let error = h.ledger.replay_parked(now).await.unwrap_err();
+    let error = h.ledger.replay_parked(now, BOUND).await.unwrap_err();
     assert!(error.to_string().contains("record"), "{error}");
     assert_eq!(parked_rows(&h).await, 1);
 
     rename_parked_record(&h.db, "record_held", "record");
     assert_eq!(
-        h.ledger.replay_parked(now).await.unwrap(),
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
         Replayed {
             landed: 1,
             remaining: 0
@@ -5012,7 +5140,7 @@ async fn a_replay_whose_acknowledgement_is_refused_keeps_the_row_and_a_retry_cha
     let charged = charged_to_a(&h).await;
     let now = h.clock.load(Ordering::SeqCst);
     assert_eq!(
-        h.ledger.replay_parked(now).await.unwrap(),
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
         Replayed {
             landed: 0,
             remaining: 1
@@ -5026,7 +5154,7 @@ async fn a_replay_whose_acknowledgement_is_refused_keeps_the_row_and_a_retry_cha
 
     drop_trigger(&h.db, "refuse_ack");
     assert_eq!(
-        h.ledger.replay_parked(now).await.unwrap(),
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
         Replayed {
             landed: 1,
             remaining: 0
@@ -5107,7 +5235,7 @@ async fn a_replay_that_crosses_a_budget_is_followed_by_a_refused_selection() {
     );
 
     let now = h.clock.load(Ordering::SeqCst);
-    let replayed = h.ledger.replay_parked(now).await.unwrap();
+    let replayed = h.ledger.replay_parked(now, BOUND).await.unwrap();
     assert_eq!(replayed.landed, 1, "{replayed:?}");
     let refused = h
         .app
@@ -5141,13 +5269,280 @@ async fn two_replays_at_once_land_the_row_once() {
     park_poison(&h).await;
     drop_trigger(&h.db, "refuse");
     let now = h.clock.load(Ordering::SeqCst);
-    let (first, second) = tokio::join!(h.ledger.replay_parked(now), h.ledger.replay_parked(now));
+    let (first, second) = tokio::join!(
+        h.ledger.replay_parked(now, BOUND),
+        h.ledger.replay_parked(now, BOUND)
+    );
     let (first, second) = (first.unwrap(), second.unwrap());
     assert_eq!(first.landed + second.landed, 1, "{first:?} {second:?}");
     assert_eq!((first.remaining, second.remaining), (0, 0));
     assert_eq!(rows_of(&h, "requests", "id", "poison").await, 1);
     assert_eq!(rows_of(&h, "attempts", "request_id", "poison").await, 1);
     assert_eq!(charged_to_a(&h).await, 1_000_000);
+    up.shutdown().await;
+}
+
+/// The replay route's bound on the writer's turn.
+const BOUND: Duration = Duration::from_secs(30);
+
+/// Parks `id` once the writer is past its start-up pass, which would otherwise land the row before the test asks: a
+/// replay answers from the writer's loop alone, and the loop starts after the pass.
+async fn park_landable(h: &Harness, id: &str) {
+    let now = h.clock.load(Ordering::SeqCst);
+    assert_eq!(
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
+        Replayed::default()
+    );
+    park_in(&h.db, id, "refused by test", NOW);
+}
+
+/// A batch of one unpriced request held on the full disk past its in-place retries, so the writer waits out
+/// `BATCH_RETRY_HOLD` and takes no turn between batches until the disk is freed.
+async fn hold_a_batch(h: &Harness) {
+    h.db.fill_the_disk();
+    h.ledger
+        .record_request(Record::Request {
+            request: RequestRecord {
+                user_agent: Some("x".repeat(512 << 10)),
+                ..finished_row("held")
+            },
+            attempts: vec![serving_attempt("held", false)],
+            bodies: None,
+        })
+        .await;
+    through_the_retries(h).await;
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(h) == 6).then_some(())
+    })
+    .await;
+}
+
+/// A replay asked for on a task, so the test can step the ledger's clock while it waits.
+fn replay_on_a_task(
+    h: &Harness,
+    now: i64,
+) -> tokio::task::JoinHandle<Result<Replayed, LedgerError>> {
+    let ledger = h.ledger.clone();
+    tokio::spawn(async move { ledger.replay_parked(now, BOUND).await })
+}
+
+/// The parked rows counted on the writer's connection, for a test that holds the reader.
+fn parked_on_the_writer(h: &Harness) -> i64 {
+    h.db.write(|c| Ok(c.query_row("SELECT COUNT(*) FROM parked_records", [], |r| r.get(0))?))
+        .unwrap()
+}
+
+/// Frees the disk and steps the clock a hold at a time until the held batch lands.
+async fn free_the_writer(h: &Harness) {
+    h.db.free_the_disk();
+    step_until(h, BATCH_RETRY_HOLD, || retrying(h) == 0).await;
+}
+
+/// A replay asked for while the writer holds a batch waits its bound on the ledger's clock and answers that the writer
+/// is held. The message it left in the control channel is the caller's once the deadline passed, so the writer drops
+/// it unrun when it comes back, and the replay after it lands the row.
+#[tokio::test]
+async fn a_replay_asked_under_a_held_batch_answers_held_past_its_bound_and_never_runs() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_landable(&h, "parked").await;
+    hold_a_batch(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let replay = replay_on_a_task(&h, now);
+    stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
+    step(&h, BOUND + Duration::from_secs(1));
+    let answer = tokio::time::timeout(Duration::from_secs(5), replay)
+        .await
+        .expect("the replay answers once its bound passed")
+        .unwrap();
+    assert!(matches!(answer, Err(LedgerError::WriterHeld)), "{answer:?}");
+    // The step also ran out the hold, and the batch met the full disk once more.
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 7).then_some(())
+    })
+    .await;
+    free_the_writer(&h).await;
+    assert_eq!(parked_rows(&h).await, 1);
+    assert_eq!(
+        charged_to_a(&h).await,
+        0,
+        "the parked charge has not landed"
+    );
+    // The control channel is read in order, so the message given up on reaches the writer ahead of this one: a landed
+    // row here means the first never ran.
+    assert_eq!(
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
+    up.shutdown().await;
+}
+
+/// The control channel holds one message, so a second replay asked for under the same held batch waits to send behind
+/// the first. Both waits run to one deadline, so both answer held as the bound passes and neither replay runs.
+#[tokio::test]
+async fn two_replays_asked_under_a_held_batch_both_answer_held_past_the_bound_and_neither_runs() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_landable(&h, "parked").await;
+    hold_a_batch(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let (first, second) = (replay_on_a_task(&h, now), replay_on_a_task(&h, now));
+    stays_for(Duration::from_millis(400), || {
+        !first.is_finished() && !second.is_finished()
+    })
+    .await;
+    step(&h, BOUND + Duration::from_secs(1));
+    // The waits read the ledger's clock every 250 ms, so a second covers both seeing the deadline, and a send left
+    // outside the bound would wait on the writer for good.
+    let answers = tokio::time::timeout(Duration::from_secs(1), async {
+        (first.await.unwrap(), second.await.unwrap())
+    })
+    .await
+    .expect("both replays answer within a clock read of their deadline");
+    assert!(
+        matches!(
+            answers,
+            (Err(LedgerError::WriterHeld), Err(LedgerError::WriterHeld))
+        ),
+        "{answers:?}"
+    );
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 7).then_some(())
+    })
+    .await;
+    free_the_writer(&h).await;
+    assert_eq!(parked_rows(&h).await, 1);
+    assert_eq!(
+        charged_to_a(&h).await,
+        0,
+        "the parked charge has not landed"
+    );
+    assert_eq!(
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
+    up.shutdown().await;
+}
+
+/// A caller that goes away before its deadline never takes the claim, as the route's future does when its client
+/// closes the connection. The message it sent still carries the deadline, so the writer that comes back after it
+/// refuses the replay unrun, and the replay after it lands the row.
+#[tokio::test]
+async fn a_replay_whose_caller_went_away_before_its_deadline_never_runs_after_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_landable(&h, "parked").await;
+    hold_a_batch(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let replay = replay_on_a_task(&h, now);
+    stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
+    replay.abort();
+    assert!(replay.await.unwrap_err().is_cancelled());
+    step(&h, BOUND + Duration::from_secs(1));
+    wait_for(Duration::from_secs(5), || {
+        (write_failures(&h) == 7).then_some(())
+    })
+    .await;
+    free_the_writer(&h).await;
+    // The control channel is read in order, so the abandoned message reaches the writer ahead of this one: a landed
+    // row here means the first never ran.
+    assert_eq!(
+        h.ledger.replay_parked(now, BOUND).await.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
+    up.shutdown().await;
+}
+
+/// The claim decides who owns a replay, never the clock: a replay the writer took before the deadline answers its
+/// rows to a caller still waiting past it. The test holds the reader connection from before the claim until after the
+/// deadline, so the writer has landed the row and waits on the count it answers with while the bound runs out.
+#[tokio::test]
+async fn a_replay_the_writer_claimed_inside_the_bound_answers_its_rows_past_it() {
+    let up = FakeUpstream::start(vec![]).await;
+    let dir = tempfile::tempdir().unwrap();
+    let h = on_disk(
+        &up,
+        fresh_store(),
+        &dir.path().join("ledger.sqlite"),
+        quick(),
+    )
+    .await;
+    park_landable(&h, "parked").await;
+    hold_a_batch(&h).await;
+    let now = h.clock.load(Ordering::SeqCst);
+    let replay = replay_on_a_task(&h, now);
+    stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
+    let (taken, held) = std::sync::mpsc::channel();
+    let (release, released) = std::sync::mpsc::channel::<()>();
+    let reader = std::thread::spawn({
+        let db = h.db.clone();
+        move || {
+            db.read_blocking(|_| {
+                taken.send(()).unwrap();
+                released.recv().unwrap();
+                Ok(())
+            })
+            .unwrap()
+        }
+    });
+    held.recv().unwrap();
+    h.db.free_the_disk();
+    // Halfway: the hold runs out, the batch lands, and the writer's next turn claims the replay and lands the row.
+    step(&h, BOUND / 2);
+    wait_for(Duration::from_secs(5), || {
+        (parked_on_the_writer(&h) == 0).then_some(())
+    })
+    .await;
+    step(&h, BOUND / 2 + Duration::from_secs(1));
+    stays_for(Duration::from_millis(400), || !replay.is_finished()).await;
+    release.send(()).unwrap();
+    reader.join().unwrap();
+    let answer = tokio::time::timeout(Duration::from_secs(5), replay)
+        .await
+        .expect("the claimed replay answers once the count is read")
+        .unwrap();
+    assert_eq!(
+        answer.unwrap(),
+        Replayed {
+            landed: 1,
+            remaining: 0
+        }
+    );
+    assert_eq!(rows_of(&h, "requests", "id", "parked").await, 1);
+    assert_eq!(charged_to_a(&h).await, 1_000_000, "the charge lands once");
     up.shutdown().await;
 }
 

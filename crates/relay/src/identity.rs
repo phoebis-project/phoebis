@@ -388,6 +388,7 @@ mod tests {
             body_capture_hours: None,
             secret_digest: Vec::new(),
             prefix: "k".into(),
+            incarnation: 1,
             created_at: 0,
             updated_at: 0,
             rotated_at: None,

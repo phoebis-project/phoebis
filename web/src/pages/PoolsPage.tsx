@@ -24,7 +24,7 @@ import { FAILOVER_MOVE_REASONS, RULE_MOVE_REASONS, moveLabel, sizedAccounts } fr
 import { anchorOf } from '@/lib/attention';
 import { fmtAbsolute, fmtCompact, fmtDuration, fmtHourTick, fmtHours, fmtInt, fmtPct, fmtPeriodEnd, fmtRelative, fmtUsd } from '@/lib/format';
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, poolRefusals, type PoolGroup } from '@/lib/forms';
-import { useAsync, useAttention, useNow } from '@/lib/hooks';
+import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
 import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
@@ -274,7 +274,7 @@ export function PoolsPage() {
         <Tile label="Cost, 24h" value={totals ? fmtUsd(totals.cost) : null} />
       </div>
       {/* A failed read leaves the cards on the last answer's items, or none before the first; this line says so. */}
-      {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} />}
+      {attention.error !== null && <AttentionLine items={attention.items} error={attention.error} loadedAt={attention.loadedAt} now={now} refresh={refreshAttention} />}
       <div className="pool-grid">
         {pools.data
           ? pools.data.map((p) => (
@@ -775,7 +775,7 @@ function ReturnRate({ buckets, error, loading }: { buckets: IdleReturnBucket[]; 
 }
 
 /**
- * A member's spend against each budget it carries, an Anthropic-key member's whole spend and a subscription member's
+ * A member's spend against each budget it carries, an API-key member's whole spend and a subscription member's
  * metered spend (overage and fast answers), one line each under its name; a member without a budget draws none.
  */
 function MemberBudget({ member }: { member: PoolMember }) {
@@ -1194,7 +1194,7 @@ export function PoolDialog({
         name: moving.name,
         notes: moving.notes,
         poolId: moveTo,
-      }, moving.updatedAt);
+      }, moving.revision);
       setMoved((prev) => new Set(prev).add(moving.id));
       setMoving(null);
       onKeysChanged();
@@ -1222,7 +1222,7 @@ export function PoolDialog({
     setError(null);
     setStale(null);
     try {
-      if (pool) await api.updatePool(pool.id, input, pool.updatedAt);
+      if (pool) await api.updatePool(pool.id, input, pool.revision);
       else await api.createPool(input);
     } catch (e) {
       // Stated inside the dialog, which stays open: it sits in the browser's top layer, where a toast raised
@@ -1276,11 +1276,11 @@ export function PoolDialog({
     members: (
       <div className="cells">
         <p className="field__hint">
-          Lower numbers are tried first: the strategy picks inside the first tier that has an eligible account, after the kind order that <GroupLink id="selection">Prioritize subscription accounts</GroupLink> sets. Each account&apos;s windows and state are on the{' '}
+          Lower numbers are tried first: the strategy picks inside the first tier that has an eligible account, after the kind order that <GroupLink id="selection">Prioritize subscription accounts</GroupLink> sets. An account belongs to one pool. Each account&apos;s windows and state are on the{' '}
           <PageLink to="/accounts">Accounts page</PageLink>.
         </p>
         <p className="field__hint">
-          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an Anthropic-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
+          A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member&apos;s whole spend counts, a subscription member&apos;s metered spend alone (overage and fast answers); set one, both, or neither.
         </p>
         {accountsFailed !== null ? (
           <ErrorState
@@ -1306,6 +1306,30 @@ export function PoolDialog({
               <tbody>
                 {orderedAccounts.map((a) => {
                   const on = a.id in form.members;
+                  // A ticked member keeps its checkbox even once a re-read finds another pool holding it, so the
+                  // operator can still untick it.
+                  const heldBy = on ? undefined : otherPools.find((p) => p.members.some((m) => m.accountId === a.id));
+                  if (heldBy) {
+                    return (
+                      <tr key={a.id}>
+                        <td>
+                          <div className="row">
+                            <div className="members-table__check" />
+                            <span>{a.label}</span>
+                            {a.email && <span className="muted mono">{a.email}</span>}
+                            <span className="muted" title={`An account belongs to one pool. Remove it from ${heldBy.id} first.`}>
+                              In pool {heldBy.id}
+                            </span>
+                          </div>
+                        </td>
+                        <td className="right">
+                          <div className="input members-table__blank">&nbsp;</div>
+                        </td>
+                        <td className="right" />
+                        <td className="right" />
+                      </tr>
+                    );
+                  }
                   return (
                     <tr key={a.id}>
                       <td>
@@ -1519,7 +1543,7 @@ export function PoolDialog({
           beside
           hint={
             <>
-              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then Anthropic keys; <GroupLink id="members">priority</GroupLink> orders each of those groups.
+              Plan quota first, then accounts in <GroupLink id="overage">overage</GroupLink>, then API keys; <GroupLink id="members">priority</GroupLink> orders each of those groups.
             </>
           }
         >
@@ -1834,7 +1858,7 @@ export function PoolDialog({
           plain
           hint={
             <>
-              For subscription accounts billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an Anthropic-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/accounts">Accounts page</PageLink> shows which account is in overage.
+              For subscription accounts billing extra usage. A daily or monthly budget in <GroupLink id="members">Members</GroupLink> caps a member&apos;s spend in dollars: an API-key member&apos;s whole spend, a subscription member&apos;s overage and fast answers. The <PageLink to="/accounts">Accounts page</PageLink> shows which account is in overage.
             </>
           }
         >
@@ -1903,7 +1927,7 @@ export function PoolDialog({
         <Field
           label="Write cost"
           plain
-          hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an Anthropic-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
+          hint="Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way."
         >
           <div className="row">
             <CostReferenceLink tab="api-prices" />
@@ -2100,10 +2124,10 @@ export function PoolDialog({
         chosen={chosen}
         initialGroup={initialGroup}
         onChoose={(id) => setChosen(id as PoolGroup)}
-        // The line always explains the current hold: a refusal of the form's own beats a server message left from
-        // before the edit.
-        status={first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
-        hold={first?.group ?? null}
+        // The line always explains the current hold: a row that moved under the dialog first, since only Reload clears
+        // it, then a refusal of the form's own, which beats a server message left from before the edit.
+        status={stale ? 'Save is held: the pool changed since you opened it. Reload to edit the current version.' : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
+        hold={stale ? null : (first?.group ?? null)}
         held={first !== null || error !== null || stale !== null}
         notice={
           stale &&

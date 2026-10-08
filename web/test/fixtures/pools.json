@@ -80,8 +80,9 @@
         "cache_diagnostics": false,
         "auto_mode_server": true,
         "body_capture_hours": 24,
-        "created_at": 1791475953607,
-        "updated_at": 1791475953607,
+        "created_at": 1791490205870,
+        "updated_at": 1791490205870,
+        "revision": 6189536716974,
         "members": [
           {
             "account_id": "business",
@@ -120,15 +121,22 @@
           {
             "id": "desktop",
             "label": "Desktop",
-            "prefix": "x76OCOgS",
+            "prefix": "Ho2F-k6I",
             "enabled": true
           }
         ],
         "status": "active",
         "requests_24h": 6,
-        "cost_24h": 0.0252,
+        "cost_24h": 0.0249,
         "active_pins": 1,
         "traffic_24h": [
+          {
+            "at": -86400000,
+            "requests": 0,
+            "failed": 0,
+            "tokens": 0,
+            "cost_usd": 0.0
+          },
           {
             "at": -82800000,
             "requests": 0,
@@ -288,14 +296,14 @@
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0144
+            "cost_usd": 0.0142
           },
           {
             "at": 0,
             "requests": 3,
             "failed": 1,
             "tokens": 5400,
-            "cost_usd": 0.0108
+            "cost_usd": 0.0107
           }
         ]
       }

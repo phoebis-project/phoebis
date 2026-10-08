@@ -45,6 +45,17 @@ const revised = (a: Account): Account => ({ ...a, revision: a.revision + 1 });
  * again starts past every token its predecessor answered. */
 const INCARNATION = 2 ** 32;
 
+/** The pool and key routes' edit token carries the row's incarnation above the 42 bits of its `updatedAt`
+ * millisecond, so an id deleted and created again inside one millisecond still answers a token of its own. */
+const INCARNATION_STAMP = 2 ** 42;
+const stampToken = (incarnation: number, updatedAt: string) => incarnation * INCARNATION_STAMP + Date.parse(updatedAt);
+
+/** A pool or key write's stamp and the token that carries it under the row's own incarnation. */
+const restamp = (row: { revision: number; updatedAt: string }) => {
+  const updatedAt = stamped(row.updatedAt);
+  return { revision: stampToken(Math.floor(row.revision / INCARNATION_STAMP), updatedAt), updatedAt };
+};
+
 /**
  * The policy check's bounds in its own order and wording, written out apart from the form's table so a form that
  * drifts from the route is refused here rather than agreed with.
@@ -102,6 +113,15 @@ const repeatedMember = (members: PoolInput['members']): string | null => {
   for (const m of members) {
     if (seen.has(m.accountId)) return m.accountId;
     seen.add(m.accountId);
+  }
+  return null;
+};
+
+/** The route's 409 for a member another pool holds, since an account belongs to one pool. */
+const heldElsewhere = (members: PoolInput['members'], pools: Omit<Pool, 'keys'>[], poolId: string): string | null => {
+  for (const m of members) {
+    const holder = pools.find((p) => p.id !== poolId && p.members.some((x) => x.accountId === m.accountId));
+    if (holder) return `account ${m.accountId} is a member of pool ${holder.id}`;
   }
   return null;
 };
@@ -180,6 +200,19 @@ export const emptyStore = (): boolean => {
   }
 };
 
+/**
+ * Set to stand in for a ledger writer holding a batch past the replay route's bound: a replay answers the route's `503`
+ * and lands nothing.
+ */
+export const HELD_WRITER_KEY = 'phoebis.mockHeldWriter';
+const heldWriter = (): boolean => {
+  try {
+    return localStorage.getItem(HELD_WRITER_KEY) === '1';
+  } catch {
+    return false;
+  }
+};
+
 /** The keepalive overview of a router with no session and no probe yet. */
 const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   agents: { busy: 0, idle: 0, parked: 0 },
@@ -187,7 +220,7 @@ const EMPTY_KEEPALIVE_OVERVIEW: KeepaliveOverview = {
   expiredBetweenTurns24h: 0,
   limits: { agents: { count: 0, max: 1_024 }, retainedBytes: { count: 0, max: 256 * 1_048_576 }, sessions: { count: 0, max: 128 } },
   pools: [],
-  probes24h: { failed: 0, migrated: 0, ok: 0, skipped: 0 },
+  probes24h: { failed: 0, held: 0, migrated: 0, ok: 0, skipped: 0 },
 };
 
 type WireMetric = { quality: string; series: number[]; value: number | null };
@@ -315,11 +348,21 @@ export class MockApi implements Api {
   private accounts = ACCOUNTS.map((a) => ({ ...a }));
   /** The incarnation each deleted id reached, which its next account starts above. */
   private buried = new Map<string, number>();
-  private keys: ApiKey[] = [...KEYS];
+  /** The incarnation each deleted key id reached, which its next key starts above. */
+  private buriedKeys = new Map<string, number>([['desktop', 1]]);
+  /** The incarnation each deleted pool id reached, which its next pool starts above. */
+  private buriedPools = new Map<string, number>();
+  // The live desktop key was issued under the id its deleted earlier holder had, so it is that id's second; every other
+  // key of the story is its id's first.
+  private keys: ApiKey[] = KEYS.map((k) => ({ ...k, revision: stampToken((this.buriedKeys.get(k.id) ?? 0) + 1, k.updatedAt) }));
   private pairings = new Map<string, { accountId: string; state: string }>();
+  /** Set by the first replay, which lands the story's parked records. */
+  private parkedLanded = false;
   // The route reads every member's kind and verdict afresh on each answer; the story's are read once, at load.
   private pools: Omit<Pool, 'keys'>[] = POOLS.map((p) => ({
     ...p,
+    // Every pool of the story is its id's first.
+    revision: stampToken(1, p.updatedAt),
     members: p.members.map((m) => {
       const account = this.accounts.find((a) => a.id === m.accountId);
       return { ...m, budgetUntil: budgetUntilOf(m, Date.now()), eligible: eligibilityOf(account, p.overagePolicy, m), kind: account?.kind ?? 'oauth' };
@@ -349,6 +392,13 @@ export class MockApi implements Api {
   private putAccount(next: Account): Account {
     this.accounts = this.accounts.map((a) => (a.id === next.id ? next : a));
     return next;
+  }
+
+  /** The account as the route answers it, its pool read off the member lists a pool write rewrites. */
+  private withPool(a: Account): Account {
+    const pool = this.pools.find((p) => p.members.some((m) => m.accountId === a.id));
+    const member = pool?.members.find((m) => m.accountId === a.id);
+    return { ...a, pool: pool && member ? { poolId: pool.id, priority: member.priority } : null };
   }
 
   analyticsBudgets() {
@@ -426,7 +476,7 @@ export class MockApi implements Api {
       kind: input.kind,
       label: input.label,
       plan: null,
-      pools: [],
+      pool: null,
       requests: { last24h: 0, last7d: 0, lifetime: 0 },
       revision: ((this.buried.get(input.id) ?? 0) + 1) * INCARNATION + 1,
       routingEnabled: true,
@@ -436,7 +486,7 @@ export class MockApi implements Api {
       windows: [],
     };
     this.accounts = [...this.accounts, account];
-    return latency(account, 300);
+    return latency(this.withPool(account), 300);
   }
 
   async createKey(input: CreateKeyInput): Promise<CreatedApiKey> {
@@ -461,6 +511,7 @@ export class MockApi implements Api {
       status: 'active',
       createdAt: iso(NOW),
       updatedAt: iso(NOW),
+      revision: stampToken((this.buriedKeys.get(id) ?? 0) + 1, iso(NOW)),
       expiresAt: input.expiresInDays ? iso(NOW + input.expiresInDays * DAY) : null,
       keepaliveOptOut: input.keepaliveOptOut,
       lastUsedAt: null,
@@ -483,6 +534,8 @@ export class MockApi implements Api {
     if (repeated) throw new ApiError(409, `members name account ${repeated} twice`, null);
     const members = memberRefusal(input.members);
     if (members) throw new ApiError(400, members, null);
+    const held = heldElsewhere(input.members, this.pools, id);
+    if (held) throw new ApiError(409, held, null);
     const pool: Omit<Pool, 'keys'> = {
       ...POOL_SAMPLE,
       ...input,
@@ -499,6 +552,7 @@ export class MockApi implements Api {
       modelRules: input.modelRules ?? [],
       movesPerHour: {},
       requests24h: 0,
+      revision: stampToken((this.buriedPools.get(id) ?? 0) + 1, iso(NOW)),
       traffic24h: [],
       updatedAt: iso(NOW),
     };
@@ -517,6 +571,8 @@ export class MockApi implements Api {
   }
 
   async deleteKey(id: string) {
+    const key = this.keys.find((k) => k.id === id);
+    if (key) this.buriedKeys.set(id, Math.floor(key.revision / INCARNATION_STAMP));
     this.keys = this.keys.filter((k) => k.id !== id);
     return latency(undefined, 200);
   }
@@ -524,6 +580,8 @@ export class MockApi implements Api {
   async deletePool(id: string) {
     // A key reaches only its own pool's members, so a pool cannot leave while keys still point at it.
     if (this.keys.some((k) => k.poolId === id)) return Promise.reject(new ApiError(409, 'pool still has keys', null));
+    const pool = this.pools.find((p) => p.id === id);
+    if (pool) this.buriedPools.set(id, Math.floor(pool.revision / INCARNATION_STAMP));
     this.pools = this.pools.filter((p) => p.id !== id);
     return latency(undefined, 200);
   }
@@ -561,9 +619,10 @@ export class MockApi implements Api {
     return latency(seriesOf(emptyStore() ? [] : ALL_ROLLUPS, query));
   }
 
-  /** The story's conditions, or none for a fresh installation. */
+  /** The story's conditions, or none for a fresh installation, the parked records' items gone once a replay landed them. */
   getAttention() {
-    return latency(emptyStore() ? [] : ATTENTION);
+    if (emptyStore()) return latency([]);
+    return latency(this.parkedLanded ? ATTENTION.filter((i) => i.kind !== 'ledger_record_parked') : ATTENTION);
   }
 
   async getCapturedBodies(requestId: string) {
@@ -686,7 +745,7 @@ export class MockApi implements Api {
   }
 
   listAccounts() {
-    return latency(emptyStore() ? [] : this.accounts);
+    return latency(emptyStore() ? [] : this.accounts.map((a) => this.withPool(a)));
   }
 
   listCatalog() {
@@ -777,7 +836,15 @@ export class MockApi implements Api {
     if (revision !== undefined && revision !== a.revision) {
       return Promise.reject(new ApiError(409, 'the account changed while the edit was being saved', 'stale_edit'));
     }
-    return latency(this.putAccount(revised({ ...a, label })), 250);
+    return latency(this.withPool(this.putAccount(revised({ ...a, label }))), 250);
+  }
+
+  /** The first replay lands the story's parked count to zero, and a later one finds nothing to land. */
+  async replayParked() {
+    if (heldWriter()) return Promise.reject(new ApiError(503, 'the ledger writer is held, try again', null));
+    const parked = emptyStore() || this.parkedLanded ? [] : ATTENTION.filter((i) => i.kind === 'ledger_record_parked');
+    if (parked.length > 0) this.parkedLanded = true;
+    return latency({ landed: parked.reduce((n, i) => n + (typeof i.detail.count === 'number' ? i.detail.count : 0), 0), remaining: 0 }, 250);
   }
 
   async resumeAccount(accountId: string) {
@@ -788,7 +855,7 @@ export class MockApi implements Api {
 
   async revokeKey(id: string) {
     // The route switches a revoked key off in the same write, and an edit sends that flag back.
-    this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const, updatedAt: stamped(k.updatedAt) } : k));
+    this.keys = this.keys.map((k) => (k.id === id ? { ...k, enabled: false, status: 'revoked' as const, ...restamp(k) } : k));
     return latency(undefined, 250);
   }
 
@@ -796,7 +863,7 @@ export class MockApi implements Api {
     const key = this.keys.find((k) => k.id === id);
     if (!key) return Promise.reject(new ApiError(404, 'key not found', null));
     const secret = `phoebis-${this.token(40)}`;
-    const next: ApiKey = { ...key, prefix: secret.slice(0, 12), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, updatedAt: stamped(key.updatedAt) };
+    const next: ApiKey = { ...key, prefix: secret.slice(0, 12), retiredSecretLastUsedAt: null, sessionsOnRetiredSecret: 2, ...restamp(key) };
     this.keys = this.keys.map((k) => (k.id === id ? next : k));
     return latency({ key: next, secret }, 300);
   }
@@ -846,26 +913,26 @@ export class MockApi implements Api {
     const blank: Subscription = { billingType: '', derivedEndsAt: null, endsAt: null, organizationType: '', plan: null, rateLimitTier: '', since: null, trialEndsAt: null };
     const base = a.subscription ?? (patch.cancelled ? blank : null);
     const subscription = base ? { ...base, endsAt: patch.cancelled ? patch.subscriptionEndsAt : null } : null;
-    return latency(this.putAccount(revised({ ...a, cancelled: patch.cancelled, subscription })), 250);
+    return latency(this.withPool(this.putAccount(revised({ ...a, cancelled: patch.cancelled, subscription }))), 250);
   }
 
-  async updateKey(id: string, input: KeyInput, updatedAt?: string): Promise<ApiKey> {
+  async updateKey(id: string, input: KeyInput, revision?: number): Promise<ApiKey> {
     const idx = this.keys.findIndex((k) => k.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown key ${id}`));
     const refusal = keyRulesRefusal(input);
     if (refusal) return Promise.reject(new ApiError(400, refusal, null));
     const { expiresAt: expiry, ...rest } = input;
     const current = this.keys[idx];
-    if (updatedAt !== undefined && updatedAt !== current.updatedAt) return Promise.reject(new ApiError(409, 'the key changed while it was being edited; reload and try again', 'stale_edit'));
+    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the key changed while it was being edited; reload and try again', 'stale_edit'));
     const expiresAt = expiry === undefined ? current.expiresAt : expiry;
     // The status is the decoder's fold of the stored flags, so a key switched off or lapsed reads that way at once.
     const status = current.status === 'revoked' ? 'revoked' : expiresAt !== null && Date.parse(expiresAt) <= Date.now() ? 'expired' : rest.enabled ? 'active' : 'disabled';
-    const next: ApiKey = { ...current, ...rest, expiresAt, status, updatedAt: stamped(current.updatedAt) };
+    const next: ApiKey = { ...current, ...rest, expiresAt, status, ...restamp(current) };
     this.keys = this.keys.map((k, i) => (i === idx ? next : k));
     return latency(next, 250);
   }
 
-  async updatePool(id: string, input: PoolInput, updatedAt?: string): Promise<Pool> {
+  async updatePool(id: string, input: PoolInput, revision?: number): Promise<Pool> {
     const idx = this.pools.findIndex((p) => p.id === id);
     if (idx < 0) return Promise.reject(new Error(`Unknown pool ${id}`));
     const refusal = poolRefusal(input);
@@ -879,10 +946,14 @@ export class MockApi implements Api {
     if (repeated) return Promise.reject(new ApiError(409, `members name account ${repeated} twice`, null));
     const members = memberRefusal(input.members);
     if (members) return Promise.reject(new ApiError(400, members, null));
+    // In the route's order: the stamp after the list's own shape and ahead of the member lookups, so a stale edit that
+    // names an unknown or a held member answers `stale_edit`.
+    const current = this.pools[idx];
+    if (revision !== undefined && revision !== current.revision) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited; reload and try again', 'stale_edit'));
     const unknown = input.members.find((m) => !this.accounts.some((a) => a.id === m.accountId));
     if (unknown) return Promise.reject(new ApiError(404, `account ${unknown.accountId} not found`, null));
-    const current = this.pools[idx];
-    if (updatedAt !== undefined && updatedAt !== current.updatedAt) return Promise.reject(new ApiError(409, 'the pool changed while it was being edited; reload and try again', 'stale_edit'));
+    const held = heldElsewhere(input.members, this.pools, id);
+    if (held) return Promise.reject(new ApiError(409, held, null));
     const verdict = new Map(current.members.map((m) => [m.accountId, m.eligible]));
     const next: Omit<Pool, 'keys'> = {
       ...current,
@@ -896,7 +967,7 @@ export class MockApi implements Api {
         const kept = verdict.get(m.accountId) ?? 'eligible';
         return writtenMember(m, account, (member) => (kept === 'budget' ? eligibilityOf(account, input.overagePolicy, member) : kept));
       }),
-      updatedAt: stamped(current.updatedAt),
+      ...restamp(current),
     };
     this.pools = this.pools.map((p, i) => (i === idx ? next : p));
     return latency(this.poolView(next), 250);

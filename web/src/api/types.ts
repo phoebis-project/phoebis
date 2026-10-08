@@ -93,7 +93,8 @@ export interface Account {
   /** The router's own reading of whether requests bill as overage; `since` is null when a usage sample, not a response, reported it. */
   overage: { inUse: boolean; observedAt: string; reset: string | null; since: string | null } | null;
   plan: string | null;
-  pools: PoolMembership[];
+  /** An account belongs to one pool at most, so this is its one membership or null. */
+  pool: PoolMembership | null;
   requests: { last24h: number; last7d: number; lifetime: number };
   /** The row's edit token, which an edit sends back as `expected_revision`; an account deleted and created again
    * under its id never answers one its predecessor did. */
@@ -102,7 +103,7 @@ export interface Account {
   status: AccountStatus;
   subscription: Subscription | null;
   /** The poll's standing and its last snapshot's error and instant, as the usage route answers them; null for an
-   * Anthropic-key account, which the poll never reads. */
+   * API-key account, which the poll never reads. */
   usage: QuotaSnapshot | null;
   /** The 5-hour and 7-day windows; the Fable window is `fableWindow`. */
   windows: RateLimitWindow[];
@@ -228,7 +229,7 @@ export interface QuotaSnapshot {
  * The conditions that need the operator, worst first: the order the route ranks by and the dashboard's line draws,
  * so not alphabetical.
  */
-export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'reauth_required', 'funding_required', 'refresh_failed', 'ledger_record_parked', 'poll_backoff'] as const;
+export const ATTENTION_KIND_VALUES = ['pool_exhausted', 'client_drift', 'writer_degraded', 'certificate_reload_failed', 'reauth_required', 'funding_required', 'refresh_failed', 'certificate_expiring', 'ledger_record_parked', 'poll_backoff'] as const;
 export type AttentionKind = (typeof ATTENTION_KIND_VALUES)[number];
 
 /** One condition that holds now, as `GET /admin/attention` answers it. */
@@ -244,9 +245,16 @@ export interface AttentionItem {
   since: string;
   /**
    * An account or a pool by id and label, a client version as both, or one of the router's own components as both:
-   * the ledger or the routing state writer, or `-` for a parked record without a pool.
+   * the ledger or the routing state writer, a listener's pair by its key (`proxy.tls`, `admin.tls`), or `-` for a
+   * parked record without a pool.
    */
   subject: { id: string; label: string; type: 'account' | 'client' | 'pool' | 'router' };
+}
+
+/** What `POST /admin/ledger/parked/replay` landed, and the parked records the ledger still refuses. */
+export interface ReplayOutcome {
+  landed: number;
+  remaining: number;
 }
 
 export type PoolStrategy = 'pace' | 'priority' | 'round_robin';
@@ -378,6 +386,9 @@ export interface Pool {
   requests24h: number;
   /** The longest throttle a request waits out on its own member before it fails over. */
   retryInPlaceSeconds: number;
+  /** The row's edit token, which an edit sends back as `expected_revision`. A pool deleted and created again under
+   * its id never answers one its predecessor did. */
+  revision: number;
   /** Null lets selection pick among every eligible member; otherwise it prefers those under this 5-hour utilization. */
   selectBelowUtilization: number | null;
   sessionPlacement: SessionPlacement;
@@ -392,7 +403,7 @@ export interface Pool {
   strategy: PoolStrategy;
   subagentPlacement: SubagentPlacement;
   traffic24h: TrafficBucket[];
-  /** The stamp of the row's last write, which an edit sends back as `expected_revision`. */
+  /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;
   warmSessions: WarmSessions;
   /** Minutes before an account's subscription end from which it takes a fresh session only as the last resort. */
@@ -425,10 +436,13 @@ export interface ApiKey {
   prefix: string;
   /** When the secret the last rotation retired last authenticated; null until it does or once rotation clears it. */
   retiredSecretLastUsedAt: string | null;
+  /** The row's edit token, which an edit sends back as `expected_revision`. A key deleted and created again under
+   * its id never answers one its predecessor did. */
+  revision: number;
   /** Live sessions whose newest request still presented the previous secret; 0 once the grace ends. */
   sessionsOnRetiredSecret: number;
   status: KeyStatus;
-  /** The stamp of the row's last write, which an edit sends back as `expected_revision`. */
+  /** The stamp of the row's last write, which `revision` carries. */
   updatedAt: string;
   usage7d: { cost: number; requests: number; tokens: number };
 }
@@ -1112,7 +1126,7 @@ export interface AnalyticsGroup {
   label: string;
   percentiles: Record<keyof LatencyHistograms, { p50: number | null; p90: number | null; p95: number | null; p99: number | null }>;
   probeCostUsd: number;
-  probes: { failed: number; migrated: number; ok: number; skipped: number };
+  probes: { failed: number; held: number; migrated: number; ok: number; skipped: number };
   rateLimited: number;
   rejected: number;
   requests: number;
@@ -1168,8 +1182,8 @@ export interface BurnPoint {
   /** Cache-read tokens. */
   cachedTokens: number;
   /** A subscription account's spend in the bucket as a fraction of its own 5-hour window, the band weighed in; null
-   *  for an Anthropic-key account, one whose tier is unknown, a bucket with no row the cost model prices (an idle hour
-   *  among them) or one holding a row the cost model cannot price, and under every other grouping. */
+   *  for an API-key account, one whose tier is unknown, a bucket with no row the cost model prices (an idle hour among
+   *  them) or one holding a row the cost model cannot price, and under every other grouping. */
   fiveHourShare: number | null;
   group: string;
   /** The same spend as a fraction of the account's 7-day window, unbanded. */
@@ -1178,10 +1192,10 @@ export interface BurnPoint {
   tokens: number;
   /** Uncached input tokens. */
   uncachedTokens: number;
-  /** What the account spends in: a subscription's window share, even while no tier prices it, or an Anthropic key's
+  /** What the account spends in: a subscription's window share, even while no tier prices it, or an API key's
    *  dollars; null under every other grouping, and for an account the registry no longer holds. */
   unit: BurnUnit | null;
-  /** An Anthropic-key account's estimated cost. */
+  /** An API-key account's estimated cost. */
   usd: number;
 }
 
@@ -1375,7 +1389,7 @@ export interface KeepaliveOverview {
    * open-ended. An account outside every pool lists under its own id.
    */
   pools: { credited24h: number; idleReturns: { fromSeconds: number; toSeconds: number | null; reached: number; returned: number }[]; poolId: string; probes24h: number; wasted24h: number; wastedReasons24h: Record<WastedProbeReason, number> }[];
-  probes24h: { failed: number; migrated: number; ok: number; skipped: number };
+  probes24h: { failed: number; held: number; migrated: number; ok: number; skipped: number };
 }
 
 /** A model's fast-mode cells, USD per million tokens, which an answer served fast is priced at. */

@@ -25,7 +25,7 @@ use phoebis_profile::{
     claude_code_2_1_269_linux_x64,
     fixtures::{control_response, ControlFixture},
 };
-use phoebis_relay::{CatalogService, Limits, Relay, UpstreamGzip};
+use phoebis_relay::{AccountingSource, CatalogService, Limits, Relay, UpstreamGzip};
 use phoebis_routing::{spawn, RouterConfig, RouterHandle};
 use phoebis_store::{
     AccountKind, AccountRow, AccountState, AttemptOutcome, Identity, NewBundle, Secret, StateCause,
@@ -119,6 +119,12 @@ pub async fn admin_parts_full() -> Full {
     full_from(app_with(None, ACCOUNT_UUID, false, None).await)
 }
 
+/// The full harness with its relay's admission reading the ledger's standing through `accounting`, as the router
+/// wires it: a case that needs the router's own `503 ledger_behind` names a reading it can flip.
+pub async fn admin_parts_full_with_accounting(accounting: AccountingSource) -> Full {
+    full_from(build_app(None, ACCOUNT_UUID, false, None, USAGE_TTL, Some(accounting)).await)
+}
+
 /// The full harness over a store the caller already holds. The router task reads the routing state once, at
 /// spawn, so a test that needs a pin in the list has to write it before this call.
 pub async fn admin_parts_full_on(store: Arc<Store>) -> Full {
@@ -194,6 +200,7 @@ pub async fn admin_parts_polled(usage_ttl: Duration) -> Polled {
         false,
         None,
         usage_ttl,
+        None,
     )
     .await;
     Polled {
@@ -686,7 +693,7 @@ async fn app_with(
     tls: bool,
     store: Option<Arc<Store>>,
 ) -> Parts {
-    build_app(identity, upstream_uuid, tls, store, USAGE_TTL).await
+    build_app(identity, upstream_uuid, tls, store, USAGE_TTL, None).await
 }
 
 async fn build_app(
@@ -695,6 +702,7 @@ async fn build_app(
     tls: bool,
     store: Option<Arc<Store>>,
     usage_ttl: Duration,
+    accounting: Option<AccountingSource>,
 ) -> Parts {
     let up = fake_control_plane(upstream_uuid).await;
     let p = claude_code_2_1_269_linux_x64();
@@ -848,19 +856,21 @@ async fn build_app(
         model_rejection: Duration::from_secs(3_600),
         upstream_gzip: UpstreamGzip::Auto,
     };
-    let relay = Arc::new(
-        Relay::new(
-            store.clone(),
-            manager.clone(),
-            pool,
-            router_handle.clone(),
-            resolver.clone(),
-            clock.clone(),
-            limits,
-            catalog.clone(),
-        )
-        .with_bus(bus.clone()),
-    );
+    let relay = Relay::new(
+        store.clone(),
+        manager.clone(),
+        pool,
+        router_handle.clone(),
+        resolver.clone(),
+        clock.clone(),
+        limits,
+        catalog.clone(),
+    )
+    .with_bus(bus.clone());
+    let relay = Arc::new(match accounting {
+        Some(source) => relay.with_accounting(source),
+        None => relay,
+    });
     let tables = Arc::new(PlanTables::shipped());
     let keepalive = Engine::new(EngineParts {
         bus: bus.clone(),
@@ -884,6 +894,7 @@ async fn build_app(
         ledger: Some(ledger.clone()),
         router: router_handle.clone(),
         store: store.clone(),
+        tls: None,
         usage: Some(usage.clone()),
     });
     let settings = Arc::new(SettingsView {
@@ -919,6 +930,7 @@ async fn build_app(
         },
         clock,
         tls,
+        tls_reload: None,
         vault: vault.clone(),
         started_at: NOW,
         router: router_handle.clone(),

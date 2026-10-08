@@ -16,7 +16,8 @@ use serde::{Deserialize, Serialize};
 use crate::config::{KeepaliveLimits, KeepalivePolicy, KeepaliveTiming};
 use crate::engine::{
     Agent, AgentState, Engine, Guard, IdleEpisode, IdleReturnBucket, Inner, Kept, Observation,
-    ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, Wasted, MAIN_AGENT,
+    ParkKind, PriorCoverage, Reason, SavingsUnit, Session, SessionKey, UnansweredProbe, Wasted,
+    MAIN_AGENT,
 };
 use crate::recipe::Recipe;
 use crate::usage::ProbeUsage;
@@ -99,15 +100,8 @@ pub(crate) struct PersistedAgent {
     pub probes: u64,
     pub migrations: u64,
     pub usage: PersistedUsage,
-    #[serde(with = "exact_list")]
-    pub unanswered: Vec<f64>,
-    pub left_fast: Option<bool>,
+    pub unanswered: Vec<PersistedUnanswered>,
     pub kept: Vec<PersistedKept>,
-    pub covered_since_real: bool,
-    pub covered_account: Option<String>,
-    pub covered_unit: Option<String>,
-    pub covered_fast: bool,
-    pub covered_until: Option<i64>,
     pub last_real_at: Option<i64>,
     pub last_stop: Option<Wasted>,
     pub last_presence_at: Option<i64>,
@@ -176,14 +170,26 @@ pub(crate) struct PersistedUsage {
 }
 
 #[derive(Serialize, Deserialize)]
+pub(crate) struct PersistedUnanswered {
+    #[serde(with = "exact")]
+    pub cost: f64,
+    pub unit: Option<String>,
+    pub account: Option<String>,
+    pub fast: bool,
+    pub model: String,
+    pub expires: i64,
+    pub covered: bool,
+}
+
+#[derive(Serialize, Deserialize)]
 pub(crate) struct PersistedKept {
     pub key_generation: i64,
     pub pool_id: String,
     pub canonical_model: String,
     pub account: Option<String>,
     pub fast: bool,
-    #[serde(with = "exact_list")]
-    pub costs: Vec<f64>,
+    #[serde(with = "exact")]
+    pub cost: f64,
     pub entry_expires: i64,
 }
 
@@ -201,26 +207,6 @@ mod exact {
         String::deserialize(deserializer)?
             .parse()
             .map_err(D::Error::custom)
-    }
-}
-
-/// `exact` over a list.
-mod exact_list {
-    use serde::{de::Error, ser::SerializeSeq, Deserialize, Deserializer, Serializer};
-
-    pub fn serialize<S: Serializer>(values: &[f64], serializer: S) -> Result<S::Ok, S::Error> {
-        let mut seq = serializer.serialize_seq(Some(values.len()))?;
-        for value in values {
-            seq.serialize_element(&value.to_string())?;
-        }
-        seq.end()
-    }
-
-    pub fn deserialize<'de, D: Deserializer<'de>>(deserializer: D) -> Result<Vec<f64>, D::Error> {
-        Vec::<String>::deserialize(deserializer)?
-            .iter()
-            .map(|text| text.parse().map_err(D::Error::custom))
-            .collect()
     }
 }
 
@@ -374,8 +360,19 @@ impl PersistedAgent {
                     .to_string()
                 }),
             },
-            unanswered: agent.unanswered.clone(),
-            left_fast: agent.left_fast,
+            unanswered: agent
+                .unanswered
+                .iter()
+                .map(|probe| PersistedUnanswered {
+                    cost: probe.cost,
+                    unit: probe.unit.map(unit_word),
+                    account: probe.account.clone(),
+                    fast: probe.fast,
+                    model: probe.model.clone(),
+                    expires: probe.expires,
+                    covered: probe.covered,
+                })
+                .collect(),
             kept: agent
                 .kept
                 .iter()
@@ -385,15 +382,10 @@ impl PersistedAgent {
                     canonical_model: kept.canonical_model.clone(),
                     account: kept.account.clone(),
                     fast: kept.fast,
-                    costs: kept.costs.clone(),
+                    cost: kept.cost,
                     entry_expires: kept.entry_expires,
                 })
                 .collect(),
-            covered_since_real: agent.covered_since_real,
-            covered_account: agent.covered_account.clone(),
-            covered_unit: agent.covered_unit.map(unit_word),
-            covered_fast: agent.covered_fast,
-            covered_until: agent.covered_until,
             last_real_at: agent.last_real_at,
             last_stop: agent.last_stop,
             last_presence_at: agent.last_presence_at,
@@ -464,8 +456,21 @@ impl PersistedAgent {
                 .as_deref()
                 .map(|word| Speed::of(Some(word))),
         };
-        agent.unanswered = self.unanswered;
-        agent.left_fast = self.left_fast;
+        agent.unanswered = self
+            .unanswered
+            .into_iter()
+            .map(|probe| {
+                Some(UnansweredProbe {
+                    cost: probe.cost,
+                    unit: optional_unit(probe.unit)?,
+                    account: probe.account,
+                    fast: probe.fast,
+                    model: probe.model,
+                    expires: probe.expires,
+                    covered: probe.covered,
+                })
+            })
+            .collect::<Option<_>>()?;
         agent.kept = self
             .kept
             .into_iter()
@@ -475,15 +480,10 @@ impl PersistedAgent {
                 canonical_model: kept.canonical_model,
                 account: kept.account,
                 fast: kept.fast,
-                costs: kept.costs,
+                cost: kept.cost,
                 entry_expires: kept.entry_expires,
             })
             .collect();
-        agent.covered_since_real = self.covered_since_real;
-        agent.covered_account = self.covered_account;
-        agent.covered_unit = optional_unit(self.covered_unit)?;
-        agent.covered_fast = self.covered_fast;
-        agent.covered_until = self.covered_until;
         agent.last_real_at = self.last_real_at;
         agent.last_stop = self.last_stop;
         agent.last_presence_at = self.last_presence_at;
@@ -789,7 +789,7 @@ impl Inner {
     }
 
     /// An agent row a limit leaves out of the load. Its recipe counts as evicted, and the probes it left unanswered and
-    /// the batches a request kept settle under `evicted`, as they do when the retained bytes evict a recipe through
+    /// the ones a request kept settle under `evicted`, as they do when the retained bytes evict a recipe through
     /// `discard`. The row itself goes with its session's removal or the caller's.
     fn dispose_loaded(
         &mut self,
@@ -806,11 +806,9 @@ impl Inner {
         let Some((mut agent, _)) = decoded else {
             return;
         };
-        let fast = agent.left_fast.take().unwrap_or(row.fast);
-        let costs = std::mem::take(&mut agent.unanswered);
-        if !costs.is_empty() {
+        for probe in std::mem::take(&mut agent.unanswered) {
             self.settlements
-                .push(Kept::of(&agent, fast, costs).settle(key, Wasted::Evicted));
+                .push(Kept::of(&agent, &probe).settle(key, Wasted::Evicted));
         }
         for kept in std::mem::take(&mut agent.kept) {
             self.settlements.push(kept.settle(key, Wasted::Evicted));
@@ -1228,20 +1226,19 @@ mod tests {
                 serde_json::from_str(&serde_json::to_string(&Jitter(value)).unwrap()).unwrap();
             assert_eq!(back.0.to_bits(), value.to_bits());
         }
-        let kept = PersistedKept {
-            key_generation: 1,
-            pool_id: "main".into(),
-            canonical_model: "m".into(),
-            account: None,
-            fast: false,
-            costs: vec![DRIFTS, f64::MIN_POSITIVE],
-            entry_expires: 0,
-        };
-        let back: PersistedKept =
-            serde_json::from_str(&serde_json::to_string(&kept).unwrap()).unwrap();
-        assert_eq!(
-            back.costs.iter().map(|c| c.to_bits()).collect::<Vec<_>>(),
-            kept.costs.iter().map(|c| c.to_bits()).collect::<Vec<_>>()
-        );
+        for cost in [DRIFTS, f64::MIN_POSITIVE] {
+            let kept = PersistedKept {
+                key_generation: 1,
+                pool_id: "main".into(),
+                canonical_model: "m".into(),
+                account: None,
+                fast: false,
+                cost,
+                entry_expires: 0,
+            };
+            let back: PersistedKept =
+                serde_json::from_str(&serde_json::to_string(&kept).unwrap()).unwrap();
+            assert_eq!(back.cost.to_bits(), cost.to_bits());
+        }
     }
 }

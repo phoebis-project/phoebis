@@ -55,7 +55,7 @@ const merged = (a: Resolved, b: Resolved): Resolved => ({
 
 /**
  * A pool's figures from its members' kinds as the router composes them: an OAuth member brings the plan's figures on the
- * plan set's main TTL, an Anthropic-key member the dollar rows' on the metered set's, and a policy that leaves the
+ * plan set's main TTL, an API-key member the dollar rows' on the metered set's, and a policy that leaves the
  * markers as sent brings both TTLs. Per-model overrides and model rules are not read, so a pool that narrows its models
  * reads wider here than the router answers it. Null with no member.
  */
@@ -73,7 +73,7 @@ export function composedFor(kinds: AccountKind[], cacheTtl: PoolCacheTtl): Pool[
  * zero reading as the break-even, and the idle share moved with the window, since a window's probes cost in proportion
  * to its length. An approximation: the router keeps each combination apart, while this recomputes the low and the high
  * end alone, so where the two ends come from different combinations (the five-minute 0.92 and the hour's 3,600 s on
- * `codex`) a save answers a share range the router would not. The break-even depends on prices alone and stays.
+ * `jobs`) a save answers a share range the router would not. The break-even depends on prices alone and stays.
  */
 export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKeepalive): Pool['keepaliveResolved'] {
   if (resolved === null) return null;
@@ -86,6 +86,8 @@ export function resolvedFor(resolved: Pool['keepaliveResolved'], policy: PoolKee
 
 /** The day's traffic, which `requests.ts` derives from the request rows once they are drawn. */
 const UNTIL_DRAWN: Pick<PoolSeed, 'cost24h' | 'requests24h' | 'traffic24h'> = { cost24h: 0, requests24h: 0, traffic24h: [] };
+/** The pins the story's sessions hold, which `operations.ts` counts once the sessions are drawn. */
+const UNTIL_PINNED: Pick<PoolSeed, 'activePins'> = { activePins: 0 };
 
 const POOL_ROWS: PoolSeed[] = [
   {
@@ -105,7 +107,7 @@ const POOL_ROWS: PoolSeed[] = [
     sessionPlacement: 'by_warm_prefix',
     subagentPlacement: 'by_cohort',
     keepalive: { ...KEEPALIVE_DEFAULTS, enabled: true },
-    // Three plan members on the hour (Haiku's five-minute override lands inside the range) and the Anthropic-key
+    // Three plan members on the hour (Haiku's five-minute override lands inside the range) and the API-key
     // `overflow` on the metered five minutes, which brings the low end: 46 minutes to 44.1 hours.
     keepaliveResolved: merged(FIGURES.plan['1h'], FIGURES.dollars['5m']),
     autoModeServer: true,
@@ -146,7 +148,7 @@ const POOL_ROWS: PoolSeed[] = [
       },
     ],
     ...UNTIL_DRAWN,
-    activePins: 10,
+    ...UNTIL_PINNED,
     // The 09:05:12 edit that set its shedding margin, the registry change the routing log records.
     updatedAt: iso(NOW - (5 * HOUR + 24 * MINUTE + 48_000)),
     // The sample's shedding and failover settings are the store's defaults, so this pool reads balanced on both. The
@@ -155,8 +157,8 @@ const POOL_ROWS: PoolSeed[] = [
   },
   {
     ...POOL_SAMPLE,
-    id: 'codex',
-    name: 'codex',
+    id: 'jobs',
+    name: 'jobs',
     // Its one member has spent its daily budget, which leaves the pool nothing to route to until the day ends.
     status: 'exhausted',
     strategy: 'round_robin',
@@ -197,7 +199,7 @@ const POOL_ROWS: PoolSeed[] = [
     ],
     members: [{ accountId: 'research', budgetDailyUsd: 20, budgetMonthlyUsd: null, priority: 0, spends: [{ period: 'day', periodEnd: periodEndAfter('day', NOW), spentUsd: 20.4 }] }],
     ...UNTIL_DRAWN,
-    activePins: 2,
+    ...UNTIL_PINNED,
     updatedAt: daysAgo(12),
   },
   {
@@ -221,9 +223,9 @@ const POOL_ROWS: PoolSeed[] = [
     cacheTtl: { ...CACHE_TTL_DEFAULTS, enabled: true },
     bodyCaptureHours: 0,
     modelRules: [],
-    members: [unbudgeted('primary', 0)],
+    members: [unbudgeted('studio', 0)],
     ...UNTIL_DRAWN,
-    activePins: 0,
+    ...UNTIL_PINNED,
     updatedAt: daysAgo(40),
   },
 ];
@@ -296,7 +298,7 @@ export const KEYS: ApiKey[] = [
     autoModeServer: null,
     name: 'batch',
     prefix: 'phoebis-5b70',
-    poolId: 'codex',
+    poolId: 'jobs',
     modelRules: [],
     modelRulesMode: 'extend',
     longContextTwins: true,
@@ -321,7 +323,7 @@ export const KEYS: ApiKey[] = [
     autoModeServer: null,
     name: 'ci',
     prefix: 'phoebis-19e7',
-    poolId: 'codex',
+    poolId: 'jobs',
     modelRules: [
       { not: false, pattern: 'claude-haiku-4-5-20251001' },
       { not: true, pattern: '*' },
@@ -335,7 +337,8 @@ export const KEYS: ApiKey[] = [
     // Its revocation, after the last request it reached selection with at 14:16:40.
     updatedAt: iso(KEY_REVOKED_AT),
     expiresAt: null,
-    lastUsedAt: iso(NOW - (13 * MINUTE + 20_000)),
+    // The request log's newest row the key was let through with sets the last use, since the rows are drawn.
+    lastUsedAt: null,
     retiredSecretLastUsedAt: null,
     sessionsOnRetiredSecret: 0,
     notes: 'Rotated out after the runner image moved to its own key.',

@@ -1,17 +1,19 @@
 //! `phoebis check-config` warns about a wide key file mode, refuses a file that sets an unknown or removed key,
 //! names the routing keys in its summary, and passes every shipped deploy config. It reads the key file as the start
 //! does and proves the key against the registry's canary, or against the sealed rows of a registry from before the
-//! canary, refuses a registry or a ledger a newer build wrote, and warns about an unset secret variable while
-//! refusing a set one the start refuses. It reads each listener's certificate pair as the start does, prints each
-//! listener's scheme on any address, refuses a pair the start refuses with the loader's line, and refuses a word in
-//! the `tls` key's place.
+//! canary, refuses a registry or a ledger a newer build wrote and a registry that holds an account in two pools, and
+//! warns about an unset secret variable while refusing a set one the start refuses. It reads each listener's
+//! certificate pair as the start does, prints each listener's scheme on any address, refuses a pair the start refuses
+//! with the loader's line, and refuses a word in the `tls` key's place.
 
+use std::os::unix::ffi::OsStrExt;
 use std::os::unix::fs::PermissionsExt;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Output};
 
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, NewBundle, Secret, StateCause, StorageKey, Store,
+    AccountKind, AccountRow, AccountState, MemberWrite, NewBundle, PoolRow, Secret, StateCause,
+    StorageKey, Store,
 };
 
 const HEX_KEY: &str = "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef";
@@ -647,6 +649,74 @@ fn a_registry_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_ve
 }
 
 #[test]
+fn a_registry_with_an_account_in_two_pools_fails_check_config_naming_it() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "two-pools", "");
+    let registry = dir.path().join("router.sqlite");
+    let key = StorageKey::from_file(&dir.path().join("storage.key")).unwrap();
+    let store = Store::open(&registry, &key).unwrap();
+    store
+        .insert_account(&AccountRow {
+            id: "a".into(),
+            kind: AccountKind::ApiKey,
+            label: "a".into(),
+            enabled: true,
+            identity: None,
+            lifecycle_generation: 1,
+            incarnation: 1,
+            revision: 1,
+            state: AccountState::Ready,
+            state_cause: StateCause::Operator,
+        })
+        .unwrap();
+    for id in ["p1", "p2"] {
+        store.insert_pool(&PoolRow::for_tests(id), "test").unwrap();
+    }
+    store
+        .set_pool_members(
+            "p1",
+            &[MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: None,
+            }],
+            "test",
+        )
+        .unwrap();
+    drop(store);
+    // A registry written before the one-pool index, holding the overlap that index forbids.
+    rusqlite::Connection::open(&registry)
+        .unwrap()
+        .execute_batch(
+            "DROP INDEX pool_members_one_pool; UPDATE meta SET value = '45' WHERE key = 'schema_version'; \
+             INSERT INTO pool_members (pool_id, account_id, priority, budget_daily_usd, budget_monthly_usd) \
+             VALUES ('p2', 'a', 0, NULL, NULL);",
+        )
+        .unwrap();
+    let out = check_config(&mut phoebis(), &config);
+    assert_eq!(out.status.code(), Some(1), "{}", printed(&out));
+    assert!(
+        String::from_utf8_lossy(&out.stdout).lines().any(|line| line
+            == "account a is a member of pools p1 and p2, and an account belongs to one pool"),
+        "{}",
+        printed(&out)
+    );
+    assert_eq!(
+        String::from_utf8_lossy(&out.stderr).lines().next(),
+        Some(
+            format!(
+                "Error: the registry at {} holds an account in more than one pool, and an account belongs to one",
+                registry.display()
+            )
+            .as_str()
+        ),
+        "{}",
+        printed(&out)
+    );
+}
+
+#[test]
 fn a_ledger_a_newer_build_wrote_fails_check_config_naming_the_path_and_both_versions() {
     let dir = tempfile::tempdir().unwrap();
     let ledger = dir.path().join("ledger.sqlite");
@@ -761,6 +831,37 @@ fn a_set_secret_shorter_than_sixteen_characters_fails_check_config() {
         "{}",
         printed(&out)
     );
+}
+
+#[test]
+fn a_secret_with_a_non_ascii_character_or_a_surrounding_space_fails_check_config() {
+    let dir = tempfile::tempdir().unwrap();
+    let config = config_file(dir.path(), "shape", "");
+    // A byte that is not UTF-8 is a character outside the shape too, never an unset variable.
+    let not_utf8 = std::ffi::OsStr::from_bytes(b"sixteen-chars-ok-\xff");
+    for secret in [
+        std::ffi::OsStr::new("sixteen-chars-ok-é"),
+        not_utf8,
+        std::ffi::OsStr::new(" sixteen-chars-ok "),
+        std::ffi::OsStr::new(" sixteen-chars-ok"),
+        std::ffi::OsStr::new("sixteen-chars-ok "),
+    ] {
+        let out = check_config(phoebis().env("TEST_CHECK_CONFIG_ADMIN", secret), &config);
+        assert_eq!(out.status.code(), Some(1), "{secret:?}: {}", printed(&out));
+        assert!(
+            String::from_utf8_lossy(&out.stderr).contains(
+                "environment variable TEST_CHECK_CONFIG_ADMIN holds a secret outside the allowed shape \
+                 (printable ASCII, no surrounding spaces)"
+            ),
+            "{secret:?}: {}",
+            printed(&out)
+        );
+    }
+    let out = check_config(
+        phoebis().env("TEST_CHECK_CONFIG_ADMIN", "sixteen-chars-ok"),
+        &config,
+    );
+    assert!(out.status.success(), "{}", printed(&out));
 }
 
 #[test]

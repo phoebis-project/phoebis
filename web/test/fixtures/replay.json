@@ -1,0 +1,7 @@
+{
+  "route": "POST /admin/ledger/parked/replay",
+  "body": {
+    "landed": 0,
+    "remaining": 0
+  }
+}

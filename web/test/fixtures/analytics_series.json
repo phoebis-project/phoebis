@@ -128,12 +128,12 @@
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.00030000000000000003,
+              "cache_read": 0.00015,
               "cache_write": 0.0015,
               "input": 0.006,
               "output": 0.003
             },
-            "cost_usd": 0.0108,
+            "cost_usd": 0.01065,
             "errors": {
               "stream_incomplete": 1
             },
@@ -438,6 +438,7 @@
             },
             "probes": {
               "failed": 0,
+              "held": 0,
               "migrated": 0,
               "ok": 0,
               "skipped": 0
@@ -474,12 +475,12 @@
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.0001,
+              "cache_read": 0.00005,
               "cache_write": 0.0005,
               "input": 0.002,
               "output": 0.001
             },
-            "cost_usd": 0.0036,
+            "cost_usd": 0.00355,
             "errors": {},
             "cache_miss_reasons": {
               "none": 1
@@ -782,6 +783,7 @@
             },
             "probes": {
               "failed": 0,
+              "held": 0,
               "migrated": 0,
               "ok": 0,
               "skipped": 0
@@ -823,12 +825,12 @@
               "web_search": 0
             },
             "cost": {
-              "cache_read": 0.00030000000000000003,
+              "cache_read": 0.0002,
               "cache_write": 0.0015,
               "input": 0.006,
               "output": 0.003
             },
-            "cost_usd": 0.0108,
+            "cost_usd": 0.0107,
             "errors": {
               "upstream_error": 1
             },
@@ -1133,6 +1135,7 @@
             },
             "probes": {
               "failed": 0,
+              "held": 0,
               "migrated": 0,
               "ok": 0,
               "skipped": 0

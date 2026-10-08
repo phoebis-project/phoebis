@@ -2,11 +2,15 @@
 //! how a late or a failed one is classified; the Go probe suite.
 mod common;
 
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::Arc;
+
 use common::*;
 use fake_upstream::{Respond, SseEvent};
 use phoebis_keepalive::{
     CompanionState, Event, KeepalivePolicy, KeepaliveTiming, Reason, MAIN_AGENT, MAX_WORKERS,
 };
+use phoebis_relay::Accounting;
 use phoebis_store::AccountState;
 
 fn json(status: u16, body: &str) -> Respond {
@@ -404,6 +408,109 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
         ),
         (1, 1, original.last_activity, Reason::IdleLimit),
         "{status:?}"
+    );
+}
+
+/// A probe the router refused with `503 ledger_behind` gives back the idle tick its dispatch counted, so a ledger
+/// catching up never runs the count up: three refusals in a row and the served probe after them count one tick, and
+/// a second served idle probe counts the second. The refusal is the relay's own, under the rig's accounting reading,
+/// and the probe counts under its own outcome.
+#[tokio::test]
+async fn held_re_sends_spend_no_idle_tick_until_the_router_serves_one() {
+    let behind = Arc::new(AtomicBool::new(false));
+    let reading = behind.clone();
+    let mut r = rig(RigSpec {
+        accounting: Some(Arc::new(move |_| Accounting {
+            behind: reading.load(Ordering::SeqCst),
+        })),
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.state("main", "idle");
+    behind.store(true, Ordering::SeqCst);
+    r.advance_attended(270_000);
+    r.step().await;
+    for _ in 0..2 {
+        r.advance_attended(5_000);
+        r.step().await;
+    }
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.idle_ticks, status.reason),
+        (3, 0, Reason::LedgerBehind),
+        "three refusals in a row spent no tick: {status:?}"
+    );
+    let text = r
+        .metrics
+        .render(&phoebis_ledger::RoutingGauges::default(), &[], 0);
+    assert!(
+        text.contains(r#"phoebis_keepalive_probes_total{outcome="held",pool="main"} 3"#)
+            && !text.contains(r#"outcome="failed""#),
+        "each refusal counts under its own outcome and none as failed: {text}"
+    );
+    behind.store(false, Ordering::SeqCst);
+    r.advance_attended(5_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.idle_ticks, status.reason),
+        (4, 1, Reason::Scheduled),
+        "the served probe counts the one tick: {status:?}"
+    );
+    r.advance_attended(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.idle_ticks, status.reason),
+        (5, 2, Reason::Scheduled),
+        "a second served idle probe counts the second tick: {status:?}"
+    );
+    assert_eq!(
+        r.up.requests().len(),
+        3,
+        "the arming request and the two served probes went out; the refusals stopped at the router"
+    );
+}
+
+/// A hold gives back only the tick its own dispatch counted: a `state` report moves the main agent off idle without
+/// resetting the ticks its idle probes counted, and a probe the router refuses while the agent is busy counted none,
+/// so the ticks stay where the idle probes left them.
+#[tokio::test]
+async fn a_hold_while_the_main_agent_is_busy_gives_back_no_tick_its_dispatch_never_counted() {
+    let behind = Arc::new(AtomicBool::new(false));
+    let reading = behind.clone();
+    let mut r = rig(RigSpec {
+        accounting: Some(Arc::new(move |_| Accounting {
+            behind: reading.load(Ordering::SeqCst),
+        })),
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.state("main", "idle");
+    for _ in 0..2 {
+        r.advance_attended(270_000);
+        r.step().await;
+    }
+    assert_eq!(
+        (r.status("main").probes, r.status("main").idle_ticks),
+        (2, 2),
+        "two served idle probes count two ticks"
+    );
+    r.state("main", "busy");
+    behind.store(true, Ordering::SeqCst);
+    r.advance_attended(270_000);
+    r.step().await;
+    r.advance_attended(5_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.idle_ticks, status.reason),
+        (4, 2, Reason::LedgerBehind),
+        "two holds while busy leave the idle probes' ticks alone: {status:?}"
     );
 }
 
@@ -962,6 +1069,46 @@ async fn a_withheld_probe_counts_under_its_pool_and_the_state_that_withheld_it()
     );
 }
 
+/// A probe that read nothing and rewrote the whole prefix covers from its own write, and the cold streak still
+/// counts it: a rewrite every probe is a prefix never kept warm, so two in a row pause the recipe at the limit.
+#[tokio::test]
+async fn an_uncovered_rewrite_still_counts_toward_the_cold_probe_limit() {
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        timing: KeepaliveTiming {
+            cold_probe_limit: 2,
+            ..RigSpec::default().timing
+        },
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.up.push_credential_rule(A, "/v1/messages", probe_answer(0, 2_000));
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.probes, status.cold, status.reason),
+        (1, 1, Reason::Scheduled),
+        "the first rewrite lands and counts one: {status:?}"
+    );
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (
+            status.probes,
+            status.unanswered,
+            status.cold,
+            status.reason,
+            status.next_probe_at
+        ),
+        (2, 2, 2, Reason::RepeatedColdProbe, None),
+        "the second rewrite reaches the limit: {status:?}"
+    );
+}
+
 #[tokio::test]
 async fn probe_outcomes_are_classified() {
     for (name, respond, reason, armed) in [
@@ -1508,5 +1655,55 @@ async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
     assert!(
         (charged - standard).abs() < 1e-12,
         "dollars at the standard cells: {charged} against {standard}"
+    );
+}
+
+/// A tier the store cannot read leaves a plan-funded probe no window to size a share by, so its unit falls back to
+/// dollars as on an account the store names no tier for, and the log says why, naming the account and the error.
+#[tokio::test]
+async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
+    let captured = Captured::default();
+    let _guard = captured.install();
+    // The rig's model weighed in the cost model, so a readable tier would settle the probe in the share.
+    let mut tables = phoebis_ledger::PlanTables::shipped();
+    tables
+        .costs
+        .model_weight
+        .insert("claude-sonnet-4-5".to_string(), Some(1.0));
+    let mut r = rig(RigSpec {
+        on_disk: true,
+        tables,
+        ..plan_funded_spec()
+    })
+    .await;
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", real_answer());
+    r.observe("main").await;
+    // The tier reads name the column, and the router serves on from the registry it already loaded.
+    let conn = rusqlite::Connection::open(r.store_path.as_ref().expect("an on-disk rig")).unwrap();
+    conn.execute_batch(
+        "ALTER TABLE accounts RENAME COLUMN subscription_tier TO subscription_tier_held;",
+    )
+    .unwrap();
+    drop(conn);
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    let text = captured.text();
+    let settled: Vec<&str> = text
+        .lines()
+        .filter(|line| {
+            line.contains(
+                "the account's tier could not be read, so the settlement falls back to dollars",
+            )
+        })
+        .collect();
+    assert_eq!(settled.len(), 1, "one line for the one settlement:\n{text}");
+    assert!(
+        settled[0].contains(" WARN ")
+            && settled[0].contains("account=o")
+            && settled[0].contains("no such column: subscription_tier")
+            && !settled[0].contains(OAUTH_SECRET),
+        "{}",
+        settled[0]
     );
 }

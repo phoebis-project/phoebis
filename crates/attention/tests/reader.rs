@@ -1,6 +1,7 @@
-//! The eight conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
+//! The ten conditions through the reader: each kind's hold and clear, the series at 0 for a subject in the clear,
 //! the router's own components among them, a deleted subject's series gone unless a parked record still names it, a
-//! refresh run read back by a second reader, and the gauge the metrics listener scrapes from the same read.
+//! refresh run read back by a second reader, a listener's pair read on the read's clock, and the gauge the metrics
+//! listener scrapes from the same read.
 mod common;
 use std::sync::Arc;
 use std::time::Duration;
@@ -10,7 +11,7 @@ use axum::http::Request;
 use common::*;
 use http_body_util::BodyExt;
 use phoebis_attention::{
-    Attention, AttentionError, Condition, Kind, Link, Subject, SubjectKind,
+    Attention, AttentionError, Condition, Kind, Link, PairFacts, Subject, SubjectKind,
     BACKOFF_ATTENTION_AFTER_MS,
 };
 use phoebis_bus::{Kind as RequestKind, Origin, Outcome};
@@ -61,8 +62,47 @@ async fn every_subject_a_kind_applies_to_has_a_series_at_zero_while_nothing_hold
             ("writer_degraded", "ledger".to_string(), false),
             ("writer_degraded", "routing".to_string(), false),
         ],
-        "every account carries its re-auth state, an Anthropic key its funding, and an OAuth account its refresh run \
+        "every account carries its re-auth state, an API key its funding, and an OAuth account its refresh run \
          and, before any poll status exists, its backoff; every pool its parked records, and each writer its state"
+    );
+}
+
+#[tokio::test]
+async fn each_loaded_pair_has_a_series_of_both_certificate_kinds_at_zero_while_nothing_holds() {
+    let rig = rig().await;
+    let pairs = Arc::new(Pairs::default());
+    pairs.set(vec![
+        pair("proxy.tls", NOW + 90 * DAY),
+        pair("admin.tls", NOW + 90 * DAY),
+    ]);
+    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs));
+    assert_eq!(
+        series(&read(&attention, NOW)),
+        [
+            ("certificate_expiring", "admin.tls".to_string(), false),
+            ("certificate_expiring", "proxy.tls".to_string(), false),
+            ("certificate_reload_failed", "admin.tls".to_string(), false),
+            ("certificate_reload_failed", "proxy.tls".to_string(), false),
+            ("funding_required", "direct".to_string(), false),
+            ("ledger_record_parked", "main".to_string(), false),
+            ("poll_backoff", "business".to_string(), false),
+            ("pool_exhausted", "main".to_string(), false),
+            ("reauth_required", "business".to_string(), false),
+            ("reauth_required", "direct".to_string(), false),
+            ("refresh_failed", "business".to_string(), false),
+            ("writer_degraded", "ledger".to_string(), false),
+            ("writer_degraded", "routing".to_string(), false),
+        ],
+        "each listener with a pair carries both certificate series beside the rest"
+    );
+    let (status, text) = scrape(&rig, &attention).await;
+    assert_eq!(status, 200);
+    assert!(
+        text.contains(r#"phoebis_attention{kind="certificate_expiring",subject="proxy.tls"} 0"#)
+            && text.contains(
+                r#"phoebis_attention{kind="certificate_reload_failed",subject="admin.tls"} 0"#
+            ),
+        "{text}"
     );
 }
 
@@ -508,7 +548,7 @@ async fn the_account_states_hold_by_kind_and_date_from_the_first_read_that_saw_t
         Some(NOW + 9_000),
         "a state that cleared and came back dates from the read that saw it again"
     );
-    // The relay marks an Anthropic key the upstream refuses as it marks an OAuth login whose refresh is gone.
+    // The relay marks an API key the upstream refuses as it marks an OAuth login whose refresh is gone.
     rig.store
         .set_state("direct", AccountState::ReauthRequired, StateCause::Operator)
         .unwrap();
@@ -772,7 +812,7 @@ async fn a_poll_backoff_holds_thirty_minutes_into_a_run_of_429s_through_a_failed
     );
     assert!(
         find(&before, Kind::PollBackoff, "direct").is_none(),
-        "the poll never asks an Anthropic key"
+        "the poll never asks an API key"
     );
     usage.poll("business").await.unwrap();
     // A second 429 once the first step's two minutes have passed: the run keeps its start and climbs the ladder.
@@ -1291,4 +1331,240 @@ async fn a_read_waiting_on_the_registry_leaves_the_bus_arm_free() {
     holder.join().unwrap();
     assert!(free, "observe waited on a read held by the registry");
     assert!(!reading.is_finished() || reading.join().unwrap().is_ok());
+}
+
+const HOUR: i64 = 3_600_000;
+const DAY: i64 = 24 * HOUR;
+
+/// A listener's pair as the router serves it, loaded a day before `NOW` with no failed reload.
+fn pair(key: &str, not_after_ms: i64) -> PairFacts {
+    let listener = key.trim_end_matches(".tls");
+    PairFacts {
+        key: key.into(),
+        cert_file: format!("/etc/phoebis/{listener}.pem").into(),
+        key_file: format!("/etc/phoebis/{listener}.key").into(),
+        not_after_ms,
+        loaded_at: NOW - DAY,
+        failed: None,
+    }
+}
+
+#[tokio::test]
+async fn a_pair_within_thirty_days_of_its_end_holds_certificate_expiring_since_thirty_days_before_it(
+) {
+    let rig = rig().await;
+    let pairs = Arc::new(Pairs::default());
+    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs.clone()));
+
+    pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY)]);
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.link,
+            held.pools.is_empty(),
+            &held.detail
+        ),
+        (
+            true,
+            Some(NOW),
+            &router_subject("proxy.tls"),
+            &None,
+            true,
+            &json!({
+                "cert_file": "/etc/phoebis/proxy.pem",
+                "days_left": 30,
+                "expires": NOW + 30 * DAY,
+            })
+        ),
+        "thirty days left holds, dated thirty days before the end"
+    );
+
+    pairs.set(vec![pair("proxy.tls", NOW + 31 * DAY)]);
+    let clear = read(&attention, NOW);
+    let clear = find(&clear, Kind::CertificateExpiring, "proxy.tls").unwrap();
+    assert_eq!(
+        (clear.holds, clear.since, &clear.detail["days_left"]),
+        (false, None, &json!(31)),
+        "thirty-one days left reads clear"
+    );
+
+    pairs.set(vec![pair("proxy.tls", NOW - 3 * DAY)]);
+    let past = read(&attention, NOW);
+    let past = find(&past, Kind::CertificateExpiring, "proxy.tls").unwrap();
+    assert_eq!(
+        (past.holds, past.since, &past.detail["days_left"]),
+        (true, Some(NOW - 33 * DAY), &json!(-3)),
+        "a leaf past its end still holds, its days left negative"
+    );
+}
+
+#[tokio::test]
+async fn a_loaded_pair_crosses_the_warning_threshold_and_its_end_as_the_clock_advances() {
+    let rig = rig().await;
+    let pairs = Arc::new(Pairs::default());
+    let not_after = NOW + 31 * DAY;
+    pairs.set(vec![pair("proxy.tls", not_after)]);
+    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs));
+
+    let expiring = |at: i64| {
+        let conditions = read(&attention, at);
+        let c = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
+        (c.holds, c.since, c.detail["days_left"].clone())
+    };
+    assert_eq!(expiring(NOW), (false, None, json!(31)));
+    assert_eq!(
+        expiring(NOW + DAY),
+        (true, Some(not_after - 30 * DAY), json!(30)),
+        "a day later the same loaded pair holds"
+    );
+    assert_eq!(
+        expiring(NOW + 32 * DAY),
+        (true, Some(not_after - 30 * DAY), json!(-1)),
+        "past its end the count goes negative without a reload"
+    );
+}
+
+#[tokio::test]
+async fn a_leaf_thirty_days_and_twelve_hours_from_its_end_holds_no_expiring_item() {
+    let rig = rig().await;
+    let pairs = Arc::new(Pairs::default());
+    pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY + 12 * HOUR)]);
+    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs));
+    let conditions = read(&attention, NOW);
+    let clear = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
+    assert_eq!(
+        (clear.holds, clear.since, &clear.detail["days_left"]),
+        (false, None, &json!(30)),
+        "thirty whole days left and part of a day is still outside the thirty days"
+    );
+}
+
+#[tokio::test]
+async fn a_leaf_exactly_thirty_days_from_its_end_holds_the_expiring_item_since_the_read() {
+    let rig = rig().await;
+    let pairs = Arc::new(Pairs::default());
+    pairs.set(vec![pair("proxy.tls", NOW + 30 * DAY)]);
+    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs.clone()));
+    let conditions = read(&attention, NOW);
+    let held = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
+    assert_eq!((held.holds, held.since), (true, Some(NOW)));
+
+    // One pair installed once and read at twelve-hour steps across its onset: no read dates the item after itself.
+    let not_after = NOW + 61 * DAY;
+    pairs.set(vec![pair("proxy.tls", not_after)]);
+    for at in [
+        NOW + 30 * DAY + 12 * HOUR,
+        NOW + 31 * DAY,
+        NOW + 31 * DAY + 12 * HOUR,
+    ] {
+        let conditions = read(&attention, at);
+        let c = find(&conditions, Kind::CertificateExpiring, "proxy.tls").unwrap();
+        assert!(
+            c.since.is_none_or(|since| since <= at),
+            "at {at}: since {:?} is after the read",
+            c.since
+        );
+        assert_eq!(
+            (c.holds, c.since),
+            if at < not_after - 30 * DAY {
+                (false, None)
+            } else {
+                (true, Some(not_after - 30 * DAY))
+            },
+            "at {at}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_failed_reload_holds_certificate_reload_failed_until_a_reload_succeeds() {
+    let rig = rig().await;
+    let pairs = Arc::new(Pairs::default());
+    let (attention, _arm) = rig.attention_with_pairs(None, Some(pairs.clone()));
+    let line = "proxy.tls.key_file /etc/phoebis/proxy.key: does not match the certificate in /etc/phoebis/proxy.pem";
+
+    pairs.set(vec![PairFacts {
+        failed: Some((NOW, line.to_string())),
+        ..pair("proxy.tls", NOW + 90 * DAY)
+    }]);
+    let conditions = read(&attention, NOW + 1_000);
+    let held = find(&conditions, Kind::CertificateReloadFailed, "proxy.tls").unwrap();
+    assert_eq!(
+        (
+            held.holds,
+            held.since,
+            &held.subject,
+            &held.link,
+            held.pools.is_empty(),
+            &held.detail
+        ),
+        (
+            true,
+            Some(NOW),
+            &router_subject("proxy.tls"),
+            &None,
+            true,
+            &json!({
+                "cert_file": "/etc/phoebis/proxy.pem",
+                "error": line,
+                "key_file": "/etc/phoebis/proxy.key",
+                "serving_since": NOW - DAY,
+            })
+        ),
+        "dated at the failed reload, naming the pair still served"
+    );
+    assert!(
+        !find(&conditions, Kind::CertificateExpiring, "proxy.tls")
+            .unwrap()
+            .holds,
+        "a failed reload says nothing about the served leaf's end"
+    );
+
+    pairs.set(vec![PairFacts {
+        loaded_at: NOW + 2_000,
+        ..pair("proxy.tls", NOW + 90 * DAY)
+    }]);
+    let cleared = read(&attention, NOW + 3_000);
+    let cleared = find(&cleared, Kind::CertificateReloadFailed, "proxy.tls").unwrap();
+    assert_eq!(
+        (cleared.holds, cleared.since),
+        (false, None),
+        "a reload that lands clears it"
+    );
+}
+
+#[test]
+fn the_certificate_kinds_rank_among_the_others() {
+    let mut kinds = vec![
+        Kind::PollBackoff,
+        Kind::CertificateExpiring,
+        Kind::ReauthRequired,
+        Kind::LedgerRecordParked,
+        Kind::CertificateReloadFailed,
+        Kind::PoolExhausted,
+        Kind::RefreshFailed,
+        Kind::WriterDegraded,
+        Kind::FundingRequired,
+        Kind::ClientDrift,
+    ];
+    kinds.sort();
+    assert_eq!(
+        kinds.iter().map(|k| k.as_str()).collect::<Vec<_>>(),
+        [
+            "pool_exhausted",
+            "client_drift",
+            "writer_degraded",
+            "certificate_reload_failed",
+            "reauth_required",
+            "funding_required",
+            "refresh_failed",
+            "certificate_expiring",
+            "ledger_record_parked",
+            "poll_backoff",
+        ]
+    );
 }

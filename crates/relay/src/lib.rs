@@ -63,7 +63,7 @@ pub use ratelimit::{
     head_sample, retry_after, upstream_date, Bucket, BucketHeaders, UnifiedHeaders, FAST_INPUT,
     FAST_OUTPUT,
 };
-pub use serve::{handshake, serve, Accepted, HandshakeError, Limits as ListenLimits};
+pub use serve::{handshake, serve, Accepted, HandshakeError, Limits as ListenLimits, LiveAcceptor};
 pub use sse::{SseEvent, SseParser};
 
 #[cfg(feature = "debug-hooks")]

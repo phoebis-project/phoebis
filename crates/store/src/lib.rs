@@ -13,6 +13,7 @@ pub mod crypto;
 pub mod keepalive;
 pub mod permissions;
 
+use std::fmt;
 use std::path::{Path, PathBuf};
 #[cfg(any(test, feature = "debug-hooks"))]
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
@@ -29,7 +30,8 @@ use sha2::Sha256;
 use zeroize::{Zeroize, ZeroizeOnDrop, Zeroizing};
 
 pub use accounts::{
-    AccountKind, AccountRow, AccountState, Identity, StateCause, SubscriptionRow, INFERENCE_HOST,
+    answers_stamp_token, stamp_token, AccountKind, AccountRow, AccountState, Identity, StateCause,
+    SubscriptionRow, INFERENCE_HOST,
 };
 pub use backup::{snapshot, BackupError, Snapshot, RETRY_PAUSE};
 pub use credentials::{
@@ -111,10 +113,36 @@ thread_local! {
     static ROUTING_COMMIT_SAW: std::cell::Cell<Option<i64>> = const { std::cell::Cell::new(None) };
 }
 
+/// An account the registry holds in more than one pool, found before the one-pool migration runs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Overlap {
+    pub account_id: String,
+    pub pool_ids: Vec<String>,
+}
+
+impl fmt::Display for Overlap {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        let pools = match self.pool_ids.split_last() {
+            Some((last, rest)) if !rest.is_empty() => format!("{} and {last}", rest.join(", ")),
+            _ => self.pool_ids.join(", "),
+        };
+        write!(
+            f,
+            "account {} is a member of pools {pools}, and an account belongs to one pool",
+            self.account_id
+        )
+    }
+}
+
 #[derive(Debug, thiserror::Error)]
 pub enum StoreError {
+    #[error("account {account_id} is a member of pool {pool_id}")]
+    AccountInPool { account_id: String, pool_id: String },
     #[error("account {0} not found")]
     AccountNotFound(String),
+    /// One line per account; the router does not start until the operator removes the extra memberships.
+    #[error("{}", .0.iter().map(ToString::to_string).collect::<Vec<_>>().join("\n"))]
+    AccountsInPools(Vec<Overlap>),
     #[error("refresh attempt {0} not found")]
     AttemptNotFound(u64),
     #[error("a refresh attempt is already pending for this account")]
@@ -518,6 +546,23 @@ impl Store {
         Ok(Some(read_version(&conn)?).filter(|version| *version != 0))
     }
 
+    /// The overlaps of a registry file read without a lock or a migration: empty for a missing file or one at or
+    /// past `ONE_POOL_VERSION`, whose index forbids them.
+    pub fn read_overlapping_memberships(db_path: &Path) -> Result<Vec<Overlap>, StoreError> {
+        if !db_path.try_exists()? {
+            return Ok(Vec::new());
+        }
+        let conn = Connection::open_with_flags(
+            db_path,
+            OpenFlags::SQLITE_OPEN_READ_ONLY | OpenFlags::SQLITE_OPEN_NO_MUTEX,
+        )?;
+        conn.busy_timeout(BUSY_TIMEOUT)?;
+        if read_version(&conn)? >= schema::ONE_POOL_VERSION || !has_table(&conn, "pool_members")? {
+            return Ok(Vec::new());
+        }
+        overlapping_memberships(&conn)
+    }
+
     /// Resolved refresh attempts and registry changes older than `before_ms`, but for the rows their readers need
     /// whatever their age, in rowid slices of 1,000, one transaction per slice; the ledger's purge pass calls it
     /// once with the request cutoff.
@@ -591,7 +636,7 @@ impl Store {
         self.loads.load(Ordering::SeqCst)
     }
 
-    /// Reads of an account row, its revision, an Anthropic key or an OAuth bundle since start: the reads a
+    /// Reads of an account row, its revision, an API key or an OAuth bundle since start: the reads a
     /// request's credential would pay, counted apart from the session memory and the routing writer, which take
     /// the same connection, so a test can prove a leg pays none.
     #[cfg(any(test, feature = "debug-hooks"))]
@@ -920,7 +965,7 @@ fn sealed_rows_open_under(conn: &Connection, key: &StorageKey) -> Result<Option<
     Ok(Some(rows.iter().any(|row| row.opens_under(key))))
 }
 
-/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles and Anthropic-key
+/// The first `PROOF_ROWS_PER_KIND` sealed rows of each kind in row order: credential bundles and API-key
 /// secrets. `read_canary` meets the file as it is, without `prepare`, so a table the registry does
 /// not have yet holds nothing sealed rather than failing the read.
 fn leading_sealed_rows(conn: &Connection) -> Result<Vec<SealedRow>, StoreError> {
@@ -995,6 +1040,14 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
             supported: schema::SCHEMA_VERSION,
         });
     }
+    // The index behind the one-pool rule cannot be created over an overlap, and a failed migration would leave the
+    // operator a SQLite line; the registry is read first and the refusal names what to remove.
+    if current < schema::ONE_POOL_VERSION && has_table(conn, "pool_members")? {
+        let overlaps = overlapping_memberships(conn)?;
+        if !overlaps.is_empty() {
+            return Err(StoreError::AccountsInPools(overlaps));
+        }
+    }
     if on_disk {
         // WAL lets the router task's reads run beside an admin write; an in-memory database has no journal.
         // Unlike `foreign_keys` this rewrites the database header, so it waits behind the version check too.
@@ -1019,6 +1072,28 @@ fn prepare(conn: &mut Connection, on_disk: bool) -> Result<(), StoreError> {
         tx.commit()?;
     }
     Ok(())
+}
+
+/// Every account `pool_members` names under more than one pool, in account order, its pools sorted.
+fn overlapping_memberships(conn: &Connection) -> Result<Vec<Overlap>, StoreError> {
+    let mut statement = conn.prepare(
+        "SELECT account_id, GROUP_CONCAT(pool_id) FROM pool_members GROUP BY account_id HAVING COUNT(*) > 1 \
+         ORDER BY account_id",
+    )?;
+    let rows = statement.query_map([], |row| {
+        Ok((row.get::<_, String>(0)?, row.get::<_, String>(1)?))
+    })?;
+    rows.map(|row| {
+        let (account_id, pools) = row?;
+        // A pool id is a slug, so the comma `GROUP_CONCAT` joins with never sits inside one.
+        let mut pool_ids: Vec<String> = pools.split(',').map(str::to_owned).collect();
+        pool_ids.sort();
+        Ok(Overlap {
+            account_id,
+            pool_ids,
+        })
+    })
+    .collect()
 }
 
 /// A connection that has never run `prepare` has no `meta` table yet, which reads as version 0 so the check
@@ -1215,7 +1290,7 @@ mod tests {
     }
 
     #[test]
-    fn a_registry_whose_only_sealed_row_is_an_anthropic_key_secret_proves_the_key_against_it() {
+    fn a_registry_whose_only_sealed_row_is_an_api_key_secret_proves_the_key_against_it() {
         let dir = tempfile::tempdir().unwrap();
         let db = dir.path().join("router.sqlite");
         let key = StorageKey::generate();

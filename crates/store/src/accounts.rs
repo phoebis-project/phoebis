@@ -187,6 +187,30 @@ impl AccountRow {
     }
 }
 
+/// The low bits of a stamp edit token, which carry the `updated_at` millisecond; 42 bits hold every stamp to the
+/// year 2109, and the incarnation takes the bits above them, below 2^53.
+pub(crate) const STAMP_TOKEN_BITS: u32 = 42;
+const STAMP_TOKEN_STAMP_MAX: u64 = (1 << STAMP_TOKEN_BITS) - 1;
+const STAMP_TOKEN_INCARNATION_MAX: u64 = (1 << (53 - STAMP_TOKEN_BITS)) - 1;
+
+/// What an operator's edit of a pool or a key sends back to be fenced on: the row's incarnation and its `updated_at`
+/// in one integer, so an editor opened before the row was deleted and created again cannot land on the replacement
+/// even when both stamps fall in one millisecond. A part past its share saturates, as `edit_token`'s does, and the
+/// token then names a row this one is not.
+pub fn stamp_token(incarnation: u64, updated_at: i64) -> u64 {
+    let stamp = u64::try_from(updated_at).unwrap_or(0);
+    (incarnation.min(STAMP_TOKEN_INCARNATION_MAX) << STAMP_TOKEN_BITS)
+        | stamp.min(STAMP_TOKEN_STAMP_MAX)
+}
+
+/// Whether `token` names a row of this incarnation and this `updated_at` both.
+pub fn answers_stamp_token(incarnation: u64, updated_at: i64, token: u64) -> bool {
+    (
+        token >> STAMP_TOKEN_BITS,
+        (token & STAMP_TOKEN_STAMP_MAX) as i64,
+    ) == (incarnation, updated_at)
+}
+
 /// The one host the relay dials.
 pub const INFERENCE_HOST: &str = "api.anthropic.com";
 
@@ -613,9 +637,18 @@ pub struct SubscriptionRow {
 /// The incarnation a fresh row under `id` takes: one past the tombstone of whatever held that id before,
 /// and 1 when the id is new.
 pub(crate) fn next_incarnation(conn: &rusqlite::Connection, id: &str) -> Result<u64, StoreError> {
+    next_incarnation_in(conn, "account_tombstones", id)
+}
+
+/// The incarnation a fresh row under `id` takes in the `tombstones` table: one past what held the id before, 1 when new.
+pub(crate) fn next_incarnation_in(
+    conn: &rusqlite::Connection,
+    tombstones: &str,
+    id: &str,
+) -> Result<u64, StoreError> {
     let buried: Option<i64> = conn
         .query_row(
-            "SELECT incarnation FROM account_tombstones WHERE id = ?1",
+            &format!("SELECT incarnation FROM {tombstones} WHERE id = ?1"),
             params![id],
             |row| row.get(0),
         )

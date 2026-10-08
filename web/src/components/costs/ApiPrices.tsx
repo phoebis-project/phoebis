@@ -33,7 +33,7 @@ export function ApiPrices({ prices }: { prices: ModelPrice[] }) {
     <>
       <div className="cost-ref__caption">
         <b>USD per million tokens at list price</b>
-        <span className="muted">An Anthropic-key account pays these. A subscription account pays them in overage and for fast-mode answers.</span>
+        <span className="muted">An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.</span>
       </div>
       <div className="table-wrap cost-ref__wrap">
         <table className="table cost-ref__table">

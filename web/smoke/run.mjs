@@ -208,7 +208,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   localStorage.removeItem('phoebis.mockSession');
   const login = await mount('/');
   expect('login screen without a session', login.text(), ['Admin secret', 'Log in']);
-  // Counted by fill, so a cell drawn in a fixed colour (which the theme toggle would not reach) or a dropped body
+  // Counted by fill, so a cell drawn in a fixed color (which the theme toggle would not reach) or a dropped body
   // square fails the check.
   const markCells = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-cell)"]').length;
   const markBody = login.container.querySelectorAll('.brand__mark svg rect[fill="var(--mark-body)"]').length;
@@ -272,36 +272,39 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     await dash.settle(300);
   };
   results.push({ name: '/ the attention line runs on one schedule, registered as the dashboard mounts', ok: ticks.length === 1, missing: [`intervals at ${ATTENTION_REFRESH_MS} ms: ${ticks.length}`] });
-  // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits.
-  // The age and the routing log's line close a title, so neither is a member.
+  // An instant member reads as a date rather than the route's milliseconds, so the check accepts any value but digits,
+  // and so does the date a certificate's sentence names. An item that carries no pool leads with its sentence. The age
+  // and the routing log's line close a title, so neither is a member.
   const members = (title) =>
     title
       .split('\n')
       .filter((l) => !l.startsWith('started ') && !l.startsWith('Opens the Routing log'))
-      .map((l) => l.replace(/^(backoff_since|next_attempt_at): (?!\d+$).+$/, '$1: <instant>'));
+      .map((l) => l.replace(/^(backoff_since|expires|next_attempt_at): (?!\d+$).+$/, '$1: <instant>').replace(/ \((?!\d+\))[^()]+\)\. Replace the pair/, ' (<instant>). Replace the pair'));
   // The exhausted pool's badge opens the routing log on a range that ends now, which its own check reads; here the
   // address's path stands for it.
   const target = (href) => href?.split('?')[0] ?? null;
   const read = badges().map((b) => [b.text, b.tone, target(b.href), members(b.title)]);
   const want = [
-    ['Pool exhausted: codex', 'badge--critical', '/routing-log', ['key: ci', 'pool: codex']],
+    ['Pool exhausted: jobs', 'badge--critical', '/routing-log', ['key: ci', 'pool: jobs']],
     ['Client drift: 2.1.271', 'badge--serious', '/keys#laptop', ['client_version: 2.1.271', 'key: laptop', 'trigger: hash']],
-    ['State writer degraded: routing', 'badge--serious', null, ['component: routing']],
-    ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['account: legacy', 'label: legacy']],
+    ['State writer degraded: routing', 'badge--serious', null, ['routing state is kept in memory until the registry file takes writes again', 'component: routing']],
+    ['Re-auth required: legacy', 'badge--critical', '/accounts/legacy', ['serves nothing until its credential is renewed', 'account: legacy', 'label: legacy']],
     ['Funding required: Overflow workspace', 'badge--serious', '/accounts/overflow', ['account: overflow', 'label: Overflow workspace']],
-    ['Credential refresh failed: legacy', 'badge--critical', '/accounts/legacy', ['account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
-    ['Priced record parked: codex', 'badge--serious', '/pools#codex', ['accounts: ["research"]', 'count: 1', 'pool: codex']],
+    ['Credential refresh failed: legacy', 'badge--critical', '/accounts/legacy', ['5 refreshes failed in a row: refresh_token rejected: invalid_grant', 'account: legacy', 'failures: 5', 'last_error: refresh_token rejected: invalid_grant', 'outcome: failed']],
+    ['Certificate expiring: proxy.tls', 'badge--warning', null, ["The proxy listener's certificate /etc/phoebis/proxy.pem expires in 12 days (<instant>). Replace the pair and run phoebis tls reload.", 'cert_file: /etc/phoebis/proxy.pem', 'days_left: 12', 'expires: <instant>']],
+    ['Priced record parked: jobs', 'badge--serious', '/pools#jobs', ['accounts: ["research"]', 'count: 1', 'pool: jobs']],
     ['Usage poll backing off: secondary', 'badge--warning', '/accounts/secondary', ['account: secondary', 'backoff_since: <instant>', 'next_attempt_at: <instant>', 'rate_limited_in_a_row: 6']],
   ];
   const ages = badges().map((b) => b.title.split('\n').find((l) => l.startsWith('started ')));
   results.push({
-    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's the routing log, and titled with its detail and age",
+    name: "/ the attention line names what needs attention above the tiles, worst first, each badge in its tone opening where it is fixed, an exhausted pool's the routing log, and titled with its detail and age, its sentence first where no pool card draws it",
     ok:
-      lead() === '8 need attention' &&
+      lead() === '9 need attention' &&
       JSON.stringify(read) === JSON.stringify(want) &&
-      ages[0] === 'started 2d 0h ago' &&
-      /^started 1h [01]m ago$/.test(ages[6] ?? '') &&
-      /^started 4[23]m ago$/.test(ages[7] ?? '') &&
+      /^started 1[34]m ago$/.test(ages[0] ?? '') &&
+      ages[6] === 'started 18d 0h ago' &&
+      /^started 1h [01]m ago$/.test(ages[7] ?? '') &&
+      /^started 4[23]m ago$/.test(ages[8] ?? '') &&
       ages.every((a) => /^started (\d+[dhm] ?)+ ago$/.test(a ?? '')) &&
       line()?.nextElementSibling?.classList.contains('stat-grid') === true,
     missing: [lead() ?? 'no lead', ...read.map((r) => JSON.stringify(r)), ...ages],
@@ -315,8 +318,8 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     ok:
       writer?.text === 'State writer degraded: routing' &&
       writer.href === null &&
-      parked?.text === 'Priced record parked: codex' &&
-      parked.href === '/pools#codex' &&
+      parked?.text === 'Priced record parked: jobs' &&
+      parked.href === '/pools#jobs' &&
       badges().filter((b) => b.text.startsWith('Pool exhausted')).length === 1,
     missing: [JSON.stringify(writer ?? null), JSON.stringify(parked ?? null)],
   });
@@ -362,7 +365,51 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   results.push({ name: '/ the window regaining focus reads the attention list again, and an answer clears the failure', ok: reads === 1 && quiet(), missing: [`reads ${reads}`, line()?.textContent ?? 'no line'] });
   localStorage.removeItem('phoebis.mockEmpty');
   await tick();
-  results.push({ name: '/ the story back, the next tick draws its eight items again', ok: lead() === '8 need attention', missing: [lead() ?? 'no lead'] });
+  results.push({ name: '/ the story back, the next tick draws its nine items again', ok: lead() === '9 need attention', missing: [lead() ?? 'no lead'] });
+  dash.unmount();
+}
+
+{
+  // The story holds one parked record, so the line carries the Replay button after its badges. The held writer's
+  // refusal reads in the slot beside it and in no toast, and a replay then lands the record: its counts read in the
+  // slot, and the read the button asks for afterwards takes the parked badge and the button off the line.
+  const dash = await mount('/');
+  const line = () => dash.container.querySelector('.attention-line');
+  const button = () => [...(line()?.querySelectorAll('button.pill') ?? [])].find((b) => b.textContent?.trim() === 'Replay parked records');
+  const slot = () => line()?.querySelector('.attention-line__replay')?.textContent ?? null;
+  const parked = () => [...(line()?.querySelectorAll('.badge') ?? [])].some((b) => b.textContent?.trim().startsWith('Priced record parked'));
+  const lastBadge = [...(line()?.querySelectorAll('.badge') ?? [])].pop();
+  results.push({
+    name: '/ the attention line carries the Replay button after its badges while a parked record shows, and no answer yet',
+    ok: parked() && button() !== undefined && button()?.disabled === false && lastBadge?.nextElementSibling === button() && slot() === null,
+    missing: [`parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button', `after ${lastBadge?.textContent ?? 'no badge'}`, `slot ${JSON.stringify(slot())}`],
+  });
+  localStorage.setItem('phoebis.mockHeldWriter', '1');
+  button()?.click();
+  await dash.settle(500);
+  localStorage.removeItem('phoebis.mockHeldWriter');
+  const toasts = dash.container.querySelectorAll('[role="status"]').length;
+  results.push({
+    name: "/ a replay under the held writer reads the route's refusal in the slot beside the button, in no toast, and the parked badge stays",
+    ok: slot() === 'the ledger writer is held, try again' && toasts === 0 && parked() && button()?.disabled === false,
+    missing: [`slot ${JSON.stringify(slot())}`, `toasts ${toasts}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+  });
+  // The answer is held until the check releases it, so the button is read while the replay runs, whatever the timing.
+  const answer = deferNextCall('replayParked');
+  button()?.click();
+  await dash.settle(100);
+  const running = [answer.calls.length, button()?.disabled];
+  answer.release();
+  answer.restore();
+  await dash.settle(700);
+  results.push({
+    name: '/ a replay reads its counts in the slot, and the read after it takes the parked badge and the button off the line',
+    ok: running[0] === 1 && running[1] === true && slot() === 'Landed 1, 0 still parked' && !parked() && button() === undefined,
+    missing: [`calls ${running[0]}, disabled while it runs ${running[1]}`, `slot ${JSON.stringify(slot())}`, `parked ${parked()}`, button()?.outerHTML.slice(0, 160) ?? 'no button'],
+  });
+  // The replay landed the story's record for good, and the checks below read it on the jobs card, so the story takes
+  // it back.
+  api.parkedLanded = false;
   dash.unmount();
 }
 {
@@ -370,7 +417,7 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
   // began to now, read on the frozen clock so the range is the one the page computed.
   const exhausted = (await api.getAttention()).find((i) => i.kind === 'pool_exhausted');
   const page = await mount('/', { now: CLOCK_ORIGIN });
-  const badge = [...page.container.querySelectorAll('.attention-line .badge')].find((b) => b.textContent?.trim() === 'Pool exhausted: codex');
+  const badge = [...page.container.querySelectorAll('.attention-line .badge')].find((b) => b.textContent?.trim() === 'Pool exhausted: jobs');
   const href = badge?.getAttribute('href') ?? null;
   const last = (badge?.getAttribute('title') ?? '').split('\n').pop();
   badge?.click();
@@ -380,9 +427,9 @@ const desktopRow = requests.find((r) => r.keyId === 'desktop' && r.attempts.leng
     name: '/ the Pool exhausted item opens the log and its title ends with the sentence',
     ok:
       exhausted !== undefined &&
-      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'codex', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
-      exhausted.since.startsWith('2026-09-14') &&
-      last === `Opens the Routing log: pool codex, exhausted, since Sep 14 ${exhausted.since.slice(11, 16)}` &&
+      JSON.stringify(logTarget(href)) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'jobs', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
+      exhausted.since.startsWith('2026-09-16T14:16:40') &&
+      last === `Opens the Routing log: pool jobs, exhausted, since ${exhausted.since.slice(11, 16)}` &&
       `${landed.pathname}${landed.search}` === href,
     missing: [href ?? 'no badge', last ?? '', JSON.stringify(landed)],
   });
@@ -398,10 +445,10 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   results.push({ name: 'the theme buttons carry their names', ok: JSON.stringify(named) === JSON.stringify([['Light', 'Light'], ['Dark', 'Dark'], ['System', 'System']]), missing: named.map((n) => n.join(' / ')) });
 }
 {
-  // The story's pools hold 10, 2 and no pins, all of the pinned sessions sit on primary or nightly, and the
+  // The story's pools hold 10, 0 and 0 pins, the pinned sessions under their keys, all on primary or nightly, and the
   // sessions route answers 17 rows, so a hero counting rows or a note counting every row's account reads otherwise.
   const hero = m.container.querySelector('.sess-summary__hero');
-  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '12' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
+  results.push({ name: "/ the sessions card counts the router's live pins over the pinned rows' accounts", ok: hero?.querySelector('.stat__value')?.textContent === '10' && hero?.querySelector('.stat__note')?.textContent === 'active pins across 2 accounts', missing: [hero?.textContent ?? 'absent'] });
   // The expectations come from the figures the page draws, over the accounts route and the decoded cost model, which
   // the tier match reads in camelCase.
   const costs = decodeSettings(SETTINGS_WIRE).subscriptionCosts;
@@ -422,7 +469,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
   const lineFrom = (f) => `${fmtWindows(f.left)} of ${fmtWindows(f.capacity)} ${f.anchor} windows left`;
   results.push({
     name: '/ the line under each ring reads the weighed figures',
-    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 3 && JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'secondary']),
+    ok: lineOf('5h') === lineFrom(f5) && lineOf('7d') === lineFrom(f7) && f5.rows.length === 4 && JSON.stringify(f7.rows.map((r) => r.id).sort()) === JSON.stringify(['nightly', 'primary', 'secondary', 'studio']),
     missing: [`5-hour ${JSON.stringify(lineOf('5h'))} against ${JSON.stringify(lineFrom(f5))}`, `7-day ${JSON.stringify(lineOf('7d'))} against ${JSON.stringify(lineFrom(f7))}`, `rows ${f5.rows.map((r) => r.id)} and ${f7.rows.map((r) => r.id)}`],
   });
   const named = (id) => [...(rings[id]?.querySelectorAll('.remaining__left-out li') ?? [])].map((li) => li.textContent ?? '');
@@ -437,7 +484,7 @@ results.push({ name: 'the shell carries the mark beside the name and no couplet'
     const f = figures[id];
     const want = f.rows.map((r) => `${r.label}: ${fmtWindows(r.weight * r.remaining)} of ${fmtWindows(f.capacity)} ${f.anchor} windows, ${fmtPct((r.weight * r.remaining) / f.capacity)} of the pooled capacity`);
     const legend = [...(rings[id]?.querySelectorAll('.remaining__list li') ?? [])];
-    // The grey remainder is the spent arc, which carries its own title.
+    // The gray remainder is the spent arc, which carries its own title.
     const slices = [...(rings[id]?.querySelectorAll('svg.donut circle > title') ?? [])].map((t) => t.textContent ?? '').filter((t) => !t.startsWith('Spent: '));
     return { id, legend: legend.map((li) => li.getAttribute('title')), shares: legend.map((li) => li.querySelector('.num')?.textContent ?? ''), slices, want, wantShares: f.rows.map((r) => fmtPct(r.remaining)) };
   };
@@ -474,7 +521,7 @@ m = await mount('/observe');
   }
   {
     // The dot is drawn hidden from a screen reader beside the Status badge, so its title is for a pointer alone; each
-    // one names the state its colour stands for.
+    // one names the state its color stands for.
     const dots = [...m.container.querySelectorAll('.live-table .ldot')];
     const wrong = dots.filter((d) => {
       const state = [...d.classList].find((c) => c in DOT_TITLES);
@@ -615,16 +662,41 @@ m = await mount('/observe');
 }
 m.unmount();
 
+/** Picks a section from the Quota page's bar on the given mount and lets the page draw it. */
+const quotaSection = async (page, label) => {
+  [...page.container.querySelectorAll('.section-bar [role="tab"]')].find((b) => b.textContent?.trim() === label)?.click();
+  await page.settle();
+};
 m = await mount('/quota');
-expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off since']);
+expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind === 'oauth').length} accounts`, '3 need attention', 'Refresh all', 'Plan', 'Trial', 'Ends in', 'Extra usage', '$12.34 / $50.00', '5h', '7d', 'Fable', 'n/a', 'not reported', 'resets in', 'Retry', 'not yet polled', 'polled', 'rate limited', 'backing off']);
 {
   const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
   await emailLines('/quota each card names its email on hover, and nothing for one without', [...m.container.querySelectorAll('.qcard__name')].map((n) => [byLabel.get(n.textContent?.trim() ?? '') ?? '', n.getAttribute('title')]));
 }
 {
-  // The story dates each subscription by its distance from the anchor, so each needle is the pinned origin moved by
-  // that distance and rendered with fmtDate's own options.
-  const dayOf = (days) => new Date(CLOCK_ORIGIN + days * 86_400_000).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+  // An API-key account carries no quota window, so the page lists the subscription accounts under a bar of its two
+  // sections, and the cards' section is the one /quota lands on.
+  const apiKeys = (await api.listAccounts()).filter((a) => a.kind === 'api_key').map((a) => a.label);
+  const tabs = [...m.container.querySelectorAll('.section-bar [role="tab"]')].map((b) => `${b.textContent?.trim()} ${b.getAttribute('aria-selected')}`);
+  const lists = [...m.container.querySelectorAll('[role="tablist"]')].map((l) => l.getAttribute('aria-label'));
+  const names = [...m.container.querySelectorAll('.qcard__name')].map((n) => n.textContent?.trim() ?? '');
+  const panel = m.container.querySelector('#accounts');
+  results.push({
+    name: '/quota draws the bar of its two sections in place of kind tabs, on Accounts with the cards and no timeline, and no API-key card',
+    ok:
+      JSON.stringify(tabs) === JSON.stringify(['Accounts true', 'Quota windows false']) &&
+      JSON.stringify(lists) === JSON.stringify(['Sections']) &&
+      panel?.getAttribute('role') === 'tabpanel' &&
+      panel.getAttribute('aria-labelledby') === 'tab-accounts' &&
+      panel.querySelector('select[aria-label="Sort"]') !== null &&
+      names.length > 0 &&
+      apiKeys.length > 0 &&
+      !names.some((n) => apiKeys.includes(n)) &&
+      m.container.querySelector('.timeline') === null,
+    missing: [...tabs, JSON.stringify(lists), names.join(','), m.container.querySelector('.timeline') ? 'a timeline is drawn' : 'no timeline'],
+  });
+}
+{
   const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
   const chipsOf = (label) =>
     [...(cardOf(label)?.querySelectorAll('.qcard__chips .chip') ?? [])]
@@ -632,10 +704,10 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
       .map((c) => [...c.childNodes].map((n) => n.textContent?.trim()).filter(Boolean).join(' '));
   // The story ends secondary's trial eight days after the anchor and the page reads it a moment later, so the whole
   // days still to run are seven.
-  const drawn = { legacy: chipsOf('legacy'), primary: chipsOf('primary'), secondary: chipsOf('secondary') };
-  const wanted = { legacy: ['Plan Pro'], primary: [`Plan Max since ${dayOf(-200)}`], secondary: [`Plan Pro since ${dayOf(-20)}`, 'Trial ends in 7 days'] };
+  const drawn = { legacy: chipsOf('legacy'), nightly: chipsOf('nightly'), primary: chipsOf('primary'), secondary: chipsOf('secondary') };
+  const wanted = { legacy: ['Plan Pro'], nightly: ['Plan Max 5x'], primary: ['Plan Max 20x'], secondary: ['Plan Pro', 'Trial ends in 7 days'] };
   results.push({
-    name: '/quota each card names its plan with the subscription start, and counts down the trial where the profile reports one',
+    name: '/quota each card names its plan by the tier with no start date, and counts down the trial where the profile reports one',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn), JSON.stringify(wanted)],
   });
@@ -654,9 +726,12 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   });
 }
 {
+  // The counts come from the list, so an account the story adds moves no check: a card draws its windows when the
+  // account holds a 5-hour, 7-day or Fable window.
+  const windowed = (await api.listAccounts()).filter((a) => a.kind === 'oauth' && (a.windows.length > 0 || a.fableWindow !== null)).length;
   const chipRows = [...m.container.querySelectorAll('.qcard__windows')];
   const names = chipRows.map((g) => [...g.querySelectorAll('.qchip__name')].map((n) => n.textContent).join(','));
-  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === 4 && names.every((n) => n === '5h,7d,Fable'), missing: [String(chipRows.length), ...new Set(names)] });
+  results.push({ name: '/quota every card chips 5h, 7d, Fable in that order', ok: chipRows.length === windowed && names.every((n) => n === '5h,7d,Fable'), missing: [`${chipRows.length} of ${windowed}`, ...new Set(names)] });
   const tones = [...m.container.querySelectorAll('.qcard__windows .qchip')].map((c) => [...c.classList].find((n) => n.startsWith('qchip--')) ?? 'none');
   results.push({ name: '/quota chips carry a meter tone', ok: tones.length > 0 && tones.every((t) => ['qchip--absent', 'qchip--good', 'qchip--low', 'qchip--warn'].includes(t)), missing: [...new Set(tones)] });
   results.push({ name: '/quota fixtures exercise all three meter tones', ok: ['qchip--good', 'qchip--low', 'qchip--warn'].every((t) => tones.includes(t)), missing: [...new Set(tones)] });
@@ -668,61 +743,80 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   const resets = [...m.container.querySelectorAll('.qcard__windows .qwin__reset')].length;
   results.push({ name: '/quota every chip has a reset label beside it', ok: resets === [...m.container.querySelectorAll('.qcard__windows .qchip')].length, missing: [String(resets)] });
   const aligned = chipRows.map((g) => g.querySelectorAll(':scope > .qwin__chip').length);
-  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === 4 && aligned.every((n) => n === 3), missing: aligned.map(String) });
-  const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
-  results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
-  const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
-  results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
-  const toned = [...m.container.querySelectorAll('.tl-chip__pct')].map((c) => [...c.classList].find((n) => n.startsWith('tl-chip__pct--') || n === 'muted') ?? 'none');
-  results.push({ name: '/quota timeline chips tone the percentage only', ok: toned.length > 0 && toned.every((t) => ['muted', 'tl-chip__pct--good', 'tl-chip__pct--low', 'tl-chip__pct--warn'].includes(t)), missing: [...new Set(toned)] });
-  const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
-  results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
-  results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
-  const shares = [...m.container.querySelectorAll('.qcard__windows .qchip__pct, .tl-chip__pct')].map((e) => e.textContent?.trim() ?? '');
-  const liveShares = live.filter((l) => l.includes('%'));
-  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
-  results.push({ name: '/quota every window share reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
-  const axis = m.container.querySelector('.timeline__axis-label')?.textContent?.trim() ?? 'no axis label';
-  results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
+  results.push({ name: '/quota every window row owns a cell in the aligned chip column', ok: aligned.length === windowed && aligned.every((n) => n === 3), missing: aligned.map(String) });
+  const shares = [...m.container.querySelectorAll('.qcard__windows .qchip__pct')].map((e) => e.textContent?.trim() ?? '');
+  const off = shares.filter((t) => t !== 'n/a' && !/\d+% left/.test(t));
+  results.push({ name: '/quota every window share on the cards reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && off.length === 0, missing: [...new Set(off)] });
 }
 {
   // The story's legacy was last read two days ago, before its 5-hour window reset, so that window has no reading since.
   const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
   const [chip, meter, reset] = [...(legacy?.querySelector('.qcard__windows')?.children ?? [])];
-  const lane = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy');
-  const laneChip = lane?.querySelector('.tl-chip');
   const absolute = /^[A-Z][a-z]{2} \d{2}, \d{4}/;
   const drawn = {
     chip: [chip?.textContent?.trim(), chip?.classList.contains('qchip--absent'), chip?.getAttribute('title')],
     meter: meter?.classList.contains('meter--absent'),
     reset: [reset?.textContent?.trim(), reset?.classList.contains('muted'), absolute.test(reset?.getAttribute('title') ?? '')],
-    lane: [laneChip?.textContent?.trim(), laneChip?.querySelector('.tl-chip__pct')?.classList.contains('muted'), (laneChip?.getAttribute('title') ?? '').endsWith(', no reading since')],
   };
   const wanted = {
     chip: ['5h', true, '5-hour: expired, no reading since the reset'],
     meter: true,
     reset: ['expired 2d 0h ago, no reading since', true, true],
-    lane: ['5-hour limit reset', true, true],
   };
-  // The 5-hour zoom draws the lanes on the 5-hour windows, where legacy's current bar sits past the reset it last read.
-  const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
-  zoom('5-hour');
-  await m.settle();
-  const bar = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy')?.querySelector('.lane__bar--live');
-  const barLabel = bar?.querySelector('.lane__label')?.textContent?.trim() ?? 'no label';
-  const barTitle = bar?.getAttribute('title') ?? 'no bar';
-  zoom('Weekly');
-  await m.settle();
   results.push({
     name: '/quota an expired window reads expired with no share and an empty meter',
     ok: JSON.stringify(drawn) === JSON.stringify(wanted),
     missing: [JSON.stringify(drawn)],
   });
+}
+{
+  // Every card draws the same slots in the same order whatever its account's state, so a conditional line never
+  // grows one card past the rest.
+  const SLOTS = ['qcard__head', 'qcard__body', 'qcard__extra', 'qcard__chips', 'qcard__foot'];
+  const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
+  const cards = [...m.container.querySelectorAll('.qcard')];
+  const slotsOf = (card) => [...card.children].map((e) => SLOTS.find((s) => e.classList.contains(s)) ?? e.className).join();
+  const odd = cards.filter((c) => slotsOf(c) !== SLOTS.join()).map((c) => `${c.querySelector('.qcard__name')?.textContent?.trim()}: ${slotsOf(c)}`);
+  results.push({ name: '/quota every card holds the same slots in the same order', ok: cards.length === subscriptions.length && odd.length === 0, missing: [`${cards.length} cards of ${subscriptions.length}`, ...odd] });
+}
+{
+  // The story draws every state of the line: nightly in use, primary enabled and not in use, legacy disabled, and
+  // secondary and spare with no extra usage reported.
+  const cards = [...m.container.querySelectorAll('.qcard')];
+  const cardOf = (label) => cards.find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
+  const read = (label) => {
+    const chip = cardOf(label)?.querySelector('.qcard__extra .chip');
+    return [chip?.textContent?.trim() ?? 'no line', chip?.classList.contains('chip--serious') ? 'serious' : chip?.classList.contains('qcard__extra-quiet') ? 'quiet' : 'neither'];
+  };
+  const drawn = { legacy: read('legacy'), nightly: read('nightly'), primary: read('primary'), secondary: read('secondary'), spare: read('spare') };
+  const wanted = {
+    legacy: ['Extra usageoff', 'quiet'],
+    nightly: ['Extra usage$6.12 / $20.00in use', 'serious'],
+    primary: ['Extra usage$12.34 / $50.00not in use', 'quiet'],
+    secondary: ['Extra usagenot reported', 'quiet'],
+    spare: ['Extra usagenot reported', 'quiet'],
+  };
+  const placed = cards.filter((c) => !(c.querySelectorAll('.qcard__extra').length === 1 && c.querySelector('.qcard__body')?.nextElementSibling?.classList.contains('qcard__extra')));
+  const fableLast = cards.filter((c) => c.querySelector('.qcard__windows')).every((c) => [...c.querySelectorAll('.qcard__windows .qchip__name')].pop()?.textContent === 'Fable');
   results.push({
-    name: "/quota an expired window's current bar carries its reset stamp and no share",
-    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%'),
-    missing: [barLabel, barTitle],
+    name: '/quota every card draws one Extra usage line directly after the Fable row, in use in the serious tone and each quiet state in the muted ink',
+    ok: cards.length > 0 && placed.length === 0 && fableLast && JSON.stringify(drawn) === JSON.stringify(wanted) && cardOf('nightly')?.querySelector('.qcard__extra .chip__flag')?.textContent === 'in use',
+    missing: [JSON.stringify(drawn), ...placed.map((c) => `misplaced on ${c.querySelector('.qcard__name')?.textContent?.trim()}`), fableLast ? 'Fable last' : 'a row after Fable'],
   });
+}
+{
+  // The Plan chip leads the chips row on every card, and a card whose account reports no plan keeps its place empty.
+  const firsts = [...m.container.querySelectorAll('.qcard')].map((c) => {
+    const first = c.querySelector('.qcard__chips')?.firstElementChild;
+    const what = !first ? 'no chips row' : first.classList.contains('chip--empty') ? 'empty' : (first.querySelector('.chip__label')?.textContent?.trim() ?? first.textContent?.trim());
+    return [c.querySelector('.qcard__name')?.textContent?.trim(), what];
+  });
+  results.push({
+    name: "/quota every card draws the chips row led by the Plan chip, and spare's first chip holds the empty slot",
+    ok: firsts.length > 0 && firsts.every(([name, what]) => what === (name === 'spare' ? 'empty' : 'Plan')),
+    missing: firsts.map(([name, what]) => `${name}: ${what}`),
+  });
+  results.push({ name: '/quota draws no fast-mode line or chip on any card', ok: m.container.querySelector('.fast-lane') === null && !m.text().includes('Fast mode'), missing: [m.container.querySelector('.fast-lane')?.outerHTML.slice(0, 160) ?? 'Fast mode in the text'] });
 }
 {
   // The mock's blocks read the same before and after a refresh, so the check watches the calls the button makes and
@@ -751,91 +845,195 @@ expect('/quota', m.text(), ['7 accounts', '3 need attention', 'Refresh all', 'Pl
   });
 }
 {
-  // The mock registry holds seven, so the plural is what this can read; the singular is asserted by its absence.
+  // The story holds more than one subscription account, so the plural is what this can read, and the count comes from
+  // the list rather than a literal.
+  const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
-  results.push({ name: '/quota gives the account count the noun that number takes', ok: count === '7 accounts', missing: [count] });
+  results.push({ name: '/quota counts the subscription accounts with the noun that number takes', ok: count === `${subscriptions.length} accounts`, missing: [count, `${subscriptions.length} subscription accounts listed`] });
   // The route answers from the account's hold or its cache inside either, so the button says when it reads the
   // endpoint.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
   results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
-  // The story's nightly raised its spend cap at 11:30:12, so its extra usage carries no reason; a provider's reason is
-  // drawn when the account answers one.
-  const nightly = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
-  results.push({ name: '/quota draws no extra usage reason for an account whose provider gave none', ok: nightly !== undefined && nightly.querySelector('.callout') === null, missing: [nightly?.querySelector('.callout')?.textContent ?? 'no nightly card'] });
+  // The story's legacy carries the provider's reason for its extra usage being off, drawn inside the Extra usage line
+  // and whole in its title. Mounted again with the reason cleared, the same card draws none.
+  const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
+  results.push({ name: '/quota draws the reason the provider gave for its extra usage inside the Extra usage line, whole in its title', ok: legacy?.querySelector('.qcard__extra .qcard__extra-reason')?.textContent?.includes('Payment method declined') === true && legacy.querySelector('.qcard__extra')?.getAttribute('title')?.includes('Payment method declined') === true, missing: [legacy?.querySelector('.qcard__extra')?.outerHTML.slice(0, 200) ?? 'no legacy card'] });
   const { listAccounts } = api;
-  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'nightly' ? { ...a, extraUsage: { ...a.extraUsage, disabledReason: 'Payment method declined on 02 Sep; overage paused by the provider' } } : a));
-  const declined = await mount('/quota');
-  const card = [...declined.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'nightly');
-  results.push({ name: '/quota draws the reason the provider gave for its extra usage', ok: card?.querySelector('.callout')?.textContent?.includes('Payment method declined') === true, missing: [card?.textContent?.slice(0, 160) ?? 'no nightly card'] });
-  declined.unmount();
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'legacy' ? { ...a, extraUsage: { ...a.extraUsage, disabledReason: null } } : a));
+  const cleared = await mount('/quota');
+  const card = [...cleared.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
+  results.push({ name: '/quota draws no extra usage reason for an account whose provider gave none', ok: card !== undefined && card.querySelector('.qcard__extra') !== null && card.querySelector('.qcard__extra .qcard__extra-reason') === null && card.querySelector('.qcard__extra')?.getAttribute('title') === null, missing: [card?.querySelector('.qcard__extra')?.outerHTML.slice(0, 200) ?? 'no legacy card'] });
+  cleared.unmount();
   api.listAccounts = listAccounts;
 }
 {
   const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
-  const lines = (label) => [...(cardOf(label)?.querySelectorAll('.qcard__status > span') ?? [])].map((n) => n.textContent?.trim() ?? '');
-  const drawn = { primary: lines('primary'), secondary: lines('secondary'), spare: lines('spare'), legacy: lines('legacy') };
+  const lines = (label) => [...(cardOf(label)?.querySelectorAll('.qcard__poll') ?? [])].map((n) => n.textContent?.trim() ?? '');
+  const drawn = { legacy: lines('legacy'), primary: lines('primary'), secondary: lines('secondary'), spare: lines('spare') };
   // The pinned clock runs on from the story's anchor, so a minute count may have ticked once by the time it is read.
   results.push({
-    name: '/quota each subscription card says when the poll last asked and how it answered, then when its snapshot was read',
+    name: '/quota each subscription card reads its poll on one or two lines: when it last asked and how it answered, and a backoff with its next attempt',
     ok:
+      drawn.primary.length === 1 &&
       /^polled (now|\d+s ago|1m ago): clean$/.test(drawn.primary[0] ?? '') &&
-      /^checked (now|\d+s ago|1m ago)$/.test(drawn.primary[1] ?? '') &&
+      drawn.secondary.length === 2 &&
       /^polled 1[12]m ago: rate limited$/.test(drawn.secondary[0] ?? '') &&
+      /^backing off, next attempt in [34]m$/.test(drawn.secondary[1] ?? '') &&
+      drawn.legacy.length === 1 &&
       /^polled [34]m ago: failed: usage request rejected with status 503$/.test(drawn.legacy[0] ?? '') &&
-      drawn.legacy[1] === 'checked 2d 3h ago' &&
       JSON.stringify(drawn.spare) === JSON.stringify(['not yet polled']),
     missing: [JSON.stringify(drawn)],
   });
-  // The reason is cut to the line's width on screen, so the line's title carries it whole, under the poll's time.
-  const failedLine = cardOf('legacy')?.querySelector('.qcard__status > span');
-  const title = (failedLine?.getAttribute('title') ?? '').split('\n');
-  const cleanTitle = cardOf('primary')?.querySelector('.qcard__status > span')?.getAttribute('title') ?? '';
+  // The lines keep the essential reading, so the title of the first one carries every fact they leave: the attempt's
+  // instant, a failed poll's whole reason and when the snapshot was read.
+  const titleOf = (label) => (cardOf(label)?.querySelector('.qcard__poll')?.getAttribute('title') ?? '').split('\n');
+  const failedLine = cardOf('legacy')?.querySelector('.qcard__poll');
+  const failedTitle = titleOf('legacy');
+  const cleanTitle = titleOf('primary');
+  const year = /\d{4}/;
   results.push({
-    name: "/quota a failed poll's line names its reason in a span of its own, the whole message under the poll's time in the title",
+    name: "/quota a failed poll's line names its reason in a span of its own, the whole message in the title between the attempt's time and the snapshot's",
     ok:
       failedLine?.querySelector('.qcard__reason')?.textContent === 'usage request rejected with status 503' &&
-      title.length === 2 &&
-      /\d{4}/.test(title[0]) &&
-      title[1] === 'usage request rejected with status 503' &&
-      !cleanTitle.includes('\n') &&
+      failedTitle.length === 3 &&
+      year.test(failedTitle[0]) &&
+      failedTitle[1] === 'usage request rejected with status 503' &&
+      failedTitle[2].startsWith('checked ') &&
+      year.test(failedTitle[2]) &&
       cardOf('secondary')?.querySelector('.qcard__reason') === null,
-    missing: [failedLine?.outerHTML.slice(0, 200) ?? 'no line on legacy', cleanTitle],
+    missing: [failedLine?.outerHTML.slice(0, 200) ?? 'no line on legacy', JSON.stringify(failedTitle)],
   });
-  const backoff = [...m.container.querySelectorAll('.qcard__backoff')];
   results.push({
-    name: '/quota a card backing off says since when and when the next attempt comes, the run in its title',
+    name: "/quota a clean poll's title names when it asked and when its snapshot was read",
+    ok: cleanTitle.length === 2 && year.test(cleanTitle[0]) && cleanTitle[1].startsWith('checked ') && year.test(cleanTitle[1]),
+    missing: [JSON.stringify(cleanTitle)],
+  });
+  // The story backs secondary off with a next attempt, and the check reads both instants by their date, as the end
+  // chip's check does.
+  const poll = (await api.listAccounts()).find((a) => a.id === 'secondary').usage.poll;
+  const dateOf = (iso) => new Date(iso).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
+  const backoff = [...m.container.querySelectorAll('.qcard__backoff')];
+  const backoffTitle = titleOf('secondary');
+  results.push({
+    name: '/quota a card backing off reads it on one serious line, and the title names since when, the run and the next attempt',
     ok:
-      backoff.length === 2 &&
-      backoff.every((b) => cardOf('secondary')?.contains(b)) &&
-      /^backing off since 4[23]m ago$/.test(backoff[0].textContent?.trim() ?? '') &&
-      backoff[0].getAttribute('title') === '6 rate-limited answers in a row' &&
-      /^next attempt in [34]m$/.test(backoff[1].textContent?.trim() ?? ''),
-    missing: backoff.map((b) => `${b.textContent?.trim()} | ${b.getAttribute('title')}`),
+      backoff.length === 1 &&
+      cardOf('secondary')?.contains(backoff[0]) === true &&
+      backoff[0].classList.contains('qcard__poll') &&
+      /^backing off, next attempt in [34]m$/.test(backoff[0].textContent?.trim() ?? '') &&
+      backoffTitle.some((f) => f.startsWith(`backing off since ${dateOf(poll.backoffSince)}`)) &&
+      backoffTitle.includes('6 rate-limited answers in a row') &&
+      backoffTitle.some((f) => f.startsWith(`next attempt ${dateOf(poll.nextAttemptAt)}`)),
+    missing: [...backoff.map((b) => b.textContent?.trim() ?? ''), JSON.stringify(backoffTitle)],
+  });
+}
+await quotaSection(m, 'Quota windows');
+{
+  const panel = m.container.querySelector('#quota-windows');
+  results.push({
+    name: '/quota a click on Quota windows writes its hash, hides the cards and shows the timeline',
+    ok:
+      m.location().hash === '#quota-windows' &&
+      m.location().pathname === '/quota' &&
+      panel?.getAttribute('role') === 'tabpanel' &&
+      panel.getAttribute('aria-labelledby') === 'tab-quota-windows' &&
+      panel.querySelector('.timeline') !== null &&
+      m.container.querySelector('.qcard') === null,
+    missing: [JSON.stringify(m.location()), m.container.querySelector('.qcard') ? 'a card is drawn' : 'no card', panel?.querySelector('.timeline') ? 'a timeline' : 'no timeline'],
+  });
+}
+expect('/quota#quota-windows', m.text(), ['Quota windows', 'Account', '5-hour limit', '7-day limit', 'Fable 7-day limit', 'left ·', 'Weekly', '5-hour', 'Today', 'current window', 'plan ends']);
+{
+  const laneChips = [...m.container.querySelectorAll('.lane')].map((l) => [...l.querySelectorAll('.tl-chip')].length);
+  results.push({ name: '/quota timeline gives every credential a chip per window', ok: laneChips.length >= 3 && laneChips.every((n) => n === 3), missing: laneChips.map(String) });
+  const chipLabels = [...m.container.querySelectorAll('.lane .tl-chip')].map((c) => c.childNodes[0]?.textContent?.trim());
+  results.push({ name: '/quota timeline names every window in its chips', ok: chipLabels.length > 0 && chipLabels.every((l, i) => l === ['5-hour limit', '7-day limit', 'Fable 7-day limit'][i % 3]), missing: [...new Set(chipLabels)] });
+  const toned = [...m.container.querySelectorAll('.tl-chip__pct')].map((c) => [...c.classList].find((n) => n.startsWith('tl-chip__pct--') || n === 'muted') ?? 'none');
+  results.push({ name: '/quota timeline chips tone the percentage only', ok: toned.length > 0 && toned.every((t) => ['muted', 'tl-chip__pct--good', 'tl-chip__pct--low', 'tl-chip__pct--warn'].includes(t)), missing: [...new Set(toned)] });
+  const live = [...m.container.querySelectorAll('.lane__bar--live .lane__label')].map((e) => e.textContent ?? '');
+  results.push({ name: '/quota timeline labels the current window with the share left and its reset', ok: live.length >= 3 && live.every((l) => / left · /.test(l)), missing: live.slice(0, 3) });
+  results.push({ name: '/quota timeline draws one now line for the whole chart', ok: m.container.querySelectorAll('.timeline__now').length === 1, missing: [String(m.container.querySelectorAll('.timeline__now').length)] });
+  const shares = [...m.container.querySelectorAll('.tl-chip__pct')].map((e) => e.textContent?.trim() ?? '');
+  const liveShares = live.filter((l) => l.includes('%'));
+  const off = [...shares.filter((t) => t !== 'n/a' && t !== 'reset'), ...liveShares].filter((t) => !/\d+% left/.test(t));
+  results.push({ name: '/quota every window share on the timeline reads N% left', ok: shares.some((t) => /\d+% left/.test(t)) && liveShares.length > 0 && off.length === 0, missing: [...new Set(off)] });
+  const axis = m.container.querySelector('.timeline__axis-label')?.textContent?.trim() ?? 'no axis label';
+  results.push({ name: "/quota the timeline's axis reads Account", ok: axis === 'Account', missing: [axis] });
+}
+{
+  // legacy's 5-hour window reset two days ago with no reading since, so its lane reads the reset and no share.
+  const lane = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy');
+  const laneChip = lane?.querySelector('.tl-chip');
+  const drawn = [laneChip?.textContent?.trim(), laneChip?.querySelector('.tl-chip__pct')?.classList.contains('muted'), (laneChip?.getAttribute('title') ?? '').endsWith(', no reading since')];
+  results.push({ name: "/quota an expired window's lane chip reads reset with no share", ok: JSON.stringify(drawn) === JSON.stringify(['5-hour limit reset', true, true]), missing: [JSON.stringify(drawn)] });
+  // The 5-hour zoom draws the lanes on the 5-hour windows, where legacy's current bar sits past the reset it last read.
+  const zoom = (label) => [...m.container.querySelectorAll('.timeline button')].find((b) => b.textContent?.trim() === label)?.click();
+  zoom('5-hour');
+  await m.settle();
+  const bar = [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === 'legacy')?.querySelector('.lane__bar--live');
+  const barLabel = bar?.querySelector('.lane__label')?.textContent?.trim() ?? 'no label';
+  const barTitle = bar?.getAttribute('title') ?? 'no bar';
+  zoom('Weekly');
+  await m.settle();
+  results.push({
+    name: "/quota an expired window's current bar carries its reset stamp and no share",
+    ok: bar !== undefined && !barLabel.includes('%') && !barLabel.includes('left') && barLabel.length > 0 && !barTitle.includes('%'),
+    missing: [barLabel, barTitle],
   });
 }
 {
-  // The story's primary answered a fast request and cools on its fast lane's rate limit, the Overflow workspace
-  // answered one with room left, and secondary never answered one.
-  const cardOf = (label) => [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label);
-  const lineOf = (label) => cardOf(label)?.querySelector('.fast-lane__line')?.textContent?.trim() ?? '';
-  const chip = cardOf('primary')?.querySelector('.fast-lane__cooldown');
+  // secondary is cancelled with its saved end five days after the anchor, inside the weekly zoom's current period, so
+  // its lane marks the end and the window that spans it stops there.
+  const endsAt = (await api.listAccounts()).find((a) => a.id === 'secondary').subscription.endsAt;
+  const laneOf = (label) => [...m.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
+  const ends = [...(laneOf('secondary')?.querySelectorAll('.lane__end') ?? [])];
+  const at = parseFloat(ends[0]?.style.left ?? 'NaN');
+  const bars = [...(laneOf('secondary')?.querySelectorAll('.lane__bar') ?? [])].map((b) => [parseFloat(b.style.left), parseFloat(b.style.left) + parseFloat(b.style.width)]);
+  const past = bars.filter(([left, right]) => left > at || right > at + 1e-9);
+  const day = new Date(endsAt).toLocaleDateString('en-US', { day: '2-digit', month: 'short', year: 'numeric' });
   results.push({
-    name: '/quota a card whose account answered a fast request reads its fast lane, both shares used and the reset, an Anthropic-key card too',
-    ok: /^Fast modeinput 100% used, output 64% used, resets in 1[12]m$/.test(lineOf('primary')) && /^Fast modeinput 18% used, output 5% used, resets /.test(lineOf('Overflow workspace')),
-    missing: [lineOf('primary') || 'no line on primary', lineOf('Overflow workspace') || 'no line on the Overflow workspace'],
+    name: "/quota on the weekly zoom a cancelled account's lane marks its saved end with no window past it, and a lane not cancelled marks none",
+    ok: ends.length === 1 && (ends[0].getAttribute('title') ?? '').startsWith(`secondary ends ${day}`) && bars.length > 0 && past.length === 0 && laneOf('primary')?.querySelectorAll('.lane__end').length === 0,
+    missing: [`${ends.length} end markers`, ends[0]?.getAttribute('title') ?? 'no title', JSON.stringify(bars), `at ${at}`, `primary ${laneOf('primary')?.querySelectorAll('.lane__end').length}`],
   });
-  results.push({
-    name: '/quota a card whose fast lane cools carries a serious chip naming the reason and the lift, the time on hover',
-    ok: /^Fast moderate limited, lifts in 1[12]m$/.test(chip?.textContent?.trim() ?? '') && chip.classList.contains('chip--serious') && Boolean(chip.getAttribute('title')),
-    missing: [chip ? `${chip.textContent?.trim()} | ${chip.className} | ${chip.getAttribute('title')}` : 'no chip on primary'],
-  });
-  const secondary = cardOf('secondary');
-  results.push({ name: '/quota a card whose account never answered a fast request draws no Fast mode line', ok: secondary !== undefined && secondary.querySelector('.fast-lane') === null && !(secondary.textContent ?? '').includes('Fast mode'), missing: [secondary?.textContent?.slice(0, 160) ?? 'no secondary card'] });
 }
 m.unmount();
+{
+  // An address that names the timeline lands on it, drawn once the list has loaded.
+  const windows = await mount('/quota#quota-windows');
+  const selected = [...windows.container.querySelectorAll('.section-bar [role="tab"]')].filter((b) => b.getAttribute('aria-selected') === 'true').map((b) => b.textContent?.trim());
+  results.push({
+    name: '/quota#quota-windows lands on the timeline once the list has loaded, with no card drawn',
+    ok: JSON.stringify(selected) === JSON.stringify(['Quota windows']) && windows.container.querySelectorAll('#quota-windows .timeline .lane').length > 0 && windows.container.querySelector('.qcard') === null,
+    missing: [JSON.stringify(selected), `${windows.container.querySelectorAll('.lane').length} lanes`, windows.container.querySelector('.qcard') ? 'a card is drawn' : 'no card'],
+  });
+  windows.unmount();
+}
+{
+  // A period paged past a cancelled account's end draws none of its windows, the one that opened before the end and
+  // spans the period's start among them. The story's end falls inside the current period, so the check moves it into
+  // the week that straddles the next period's start.
+  const { listAccounts } = api;
+  const endsAt = new Date(Date.now() + 8 * 86_400_000).toISOString();
+  api.listAccounts = async () => (await listAccounts.call(api)).map((a) => (a.id === 'secondary' ? { ...a, subscription: { ...a.subscription, endsAt } } : a));
+  const paged = await mount('/quota#quota-windows');
+  paged.container.querySelector('.timeline button[aria-label="Next period"]')?.click();
+  await paged.settle();
+  const laneOf = (label) => [...paged.container.querySelectorAll('.lane')].find((l) => l.querySelector('.lane__name')?.textContent?.trim() === label);
+  const bars = (label) => laneOf(label)?.querySelectorAll('.lane__bar').length ?? -1;
+  const subtitle = paged.container.querySelector('.timeline .card__subtitle')?.textContent ?? 'no subtitle';
+  results.push({
+    name: "/quota a period paged past a cancelled account's end draws no window on its lane",
+    ok: !subtitle.includes('current') && bars('secondary') === 0 && laneOf('secondary')?.querySelector('.lane__end') === null && bars('primary') > 0,
+    missing: [subtitle, `secondary ${bars('secondary')} bars`, `primary ${bars('primary')} bars`],
+  });
+  api.listAccounts = listAccounts;
+  paged.unmount();
+}
 
 // The router holds the fast pair in memory until the next fast answer, and its buckets reset within minutes, so a
-// reading past its reset reads as refilled rather than as the share the last answer reported.
+// reading past its reset reads as refilled rather than as the share the last answer reported. The account page's
+// Usage card draws the fast lane.
 {
   const { listAccounts } = api;
   const past = new Date(Date.now() - 2 * 3_600_000).toISOString();
@@ -850,26 +1048,30 @@ m.unmount();
             ? { ...a, fastLane: { input: { observedAt: past, resetsAt: null, utilization: 0.5 }, output: { observedAt: past, resetsAt: past, utilization: 0.3 } } }
             : a,
     );
-  const stale = await mount('/quota');
-  const laneOf = (label) => [...stale.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === label)?.querySelector('.fast-lane__line');
-  const lineOf = (label) => laneOf(label)?.textContent?.trim() ?? '';
-  const titleOf = (label) => laneOf(label)?.getAttribute('title') ?? null;
+  const usageLane = async (id) => {
+    const page = await mount(`/accounts/${id}`);
+    const usage = [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Usage');
+    const line = usage?.querySelector('.fast-lane__line');
+    const read = { text: line?.textContent?.trim() ?? '', title: line?.getAttribute('title') ?? null };
+    page.unmount();
+    return read;
+  };
+  const lanes = { overflow: await usageLane('overflow'), primary: await usageLane('primary'), secondary: await usageLane('secondary') };
   results.push({
-    name: '/quota a fast lane reading past its reset reads refilled, a lane past both says when it refilled, and one beside a reading with no reset says nothing of when',
+    name: '/accounts a fast lane reading past its reset reads refilled, a lane past both says when it refilled, and one beside a reading with no reset says nothing of when',
     ok:
-      /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lineOf('primary')) &&
-      /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lineOf('Overflow workspace')) &&
-      lineOf('secondary') === 'Fast modeinput 50% used, output 0% used',
-    missing: [lineOf('primary') || 'no line on primary', lineOf('Overflow workspace') || 'no line on the Overflow workspace', lineOf('secondary') || 'no line on secondary'],
+      /^Fast modeinput 0% used, output 0% used, refilled 2h 0m ago$/.test(lanes.primary.text) &&
+      /^Fast modeinput 0% used, output 5% used, resets in [45]m$/.test(lanes.overflow.text) &&
+      lanes.secondary.text === 'Fast modeinput 50% used, output 0% used',
+    missing: [lanes.primary.text || 'no line on primary', lanes.overflow.text || 'no line on overflow', lanes.secondary.text || 'no line on secondary'],
   });
   // The hover names the reset the line's suffix speaks of, so a line that says nothing of when carries none.
   results.push({
-    name: '/quota a fast lane line carries the reset on hover only where it names a reset or a refill',
-    ok: titleOf('primary') !== null && titleOf('Overflow workspace') !== null && titleOf('secondary') === null,
-    missing: [`primary: ${titleOf('primary')}`, `Overflow workspace: ${titleOf('Overflow workspace')}`, `secondary: ${titleOf('secondary')}`],
+    name: '/accounts a fast lane line carries the reset on hover only where it names a reset or a refill',
+    ok: lanes.primary.title !== null && lanes.overflow.title !== null && lanes.secondary.title === null,
+    missing: [`primary: ${lanes.primary.title}`, `overflow: ${lanes.overflow.title}`, `secondary: ${lanes.secondary.title}`],
   });
   api.listAccounts = listAccounts;
-  stale.unmount();
 }
 
 // A block's error can stand beside windows the ledger sampled, as before the poll's first read after a restart; the
@@ -970,7 +1172,19 @@ results.push({ name: 'nav calls the pages Accounts and Keys, and no text names t
   const nav = [...m.container.querySelectorAll('.nav__link')].map((a) => a.textContent?.trim());
   results.push({ name: 'nav has Observe and Sessions, no Keepalive or Plugins', ok: nav.includes('Observe') && nav.includes('Sessions') && !nav.includes('Keepalive') && !nav.includes('Plugins') && nav.indexOf('Observe') === nav.indexOf('Dashboard') + 1, missing: nav });
 }
-expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'Pools', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
+expect('/accounts (lands on the first)', m.text(), ['operator@example.com', 'Identity', 'OAuth login', 'Max since', 'default_claude_max_20x', 'Billing type', 'Organization', 'Renewal date is not reported by the provider', 'Usage', 'Fable', '7-day trend', 'priority 0', 'Credential', 'Requests', 'Re-pair', 'Pause', 'Disconnect', 'Delete account', 'Extra usage this month', 'Add account']);
+{
+  // An account belongs to one pool: the list row's foot names it or says there is none, and the Pool card holds the
+  // one membership.
+  const foot = (id) => m.container.querySelector(`a.account-row[href="/accounts/${id}"] .account-row__foot > span.muted`)?.textContent?.trim() ?? 'no row';
+  const cardOf = (title) => [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === title);
+  const rows = [...(cardOf('Pool')?.querySelectorAll('li') ?? [])].map((li) => [li.querySelector('a')?.textContent?.trim(), li.querySelector('.muted')?.textContent?.trim()]);
+  results.push({
+    name: '/accounts/primary names its one pool on the list row and in the Pool card, and an account in no pool says so',
+    ok: foot('primary') === 'pool all' && foot('legacy') === 'no pool' && cardOf('Pools') === undefined && JSON.stringify(rows) === '[["all","priority 0"]]',
+    missing: [foot('primary'), foot('legacy'), cardOf('Pools') ? 'a Pools card' : 'no Pools card', JSON.stringify(rows)],
+  });
+}
 await emailLines('/accounts each row reads its email under the name, and draws no line without one', [...m.container.querySelectorAll('a.account-row')].map((r) => [idOf(r), r.querySelector('.account-row__sub')?.textContent ?? null]));
 await emailLines('/accounts/primary the head reads the email under the name', [['primary', m.container.querySelector('.detail__ident > .detail__sub.mono')?.textContent ?? null]]);
 {
@@ -1193,16 +1407,23 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   results.push({ name: '/accounts Add account opens a dialog', ok: dlg !== null, missing: [String(m.container.querySelectorAll('dialog[open]').length)] });
+  const hints = () => [...(dlg?.querySelectorAll('.form-row input') ?? [])].map((i) => i.getAttribute('placeholder'));
+  const oauthHints = hints();
   const kinds = [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])];
-  kinds.find((b) => b.textContent?.trim() === 'Anthropic key')?.click();
+  kinds.find((b) => b.textContent?.trim() === 'API key')?.click();
   await m.settle(150);
+  results.push({
+    name: "/accounts Add account suggests personal for an OAuth account's id and label, and Console workspace for an API key's label",
+    ok: JSON.stringify(oauthHints) === '["personal","personal"]' && hints()[1] === 'Console workspace',
+    missing: [JSON.stringify(oauthHints), JSON.stringify(hints())],
+  });
   const fields = [...(dlg?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim() ?? '');
   const choices = [...(dlg?.querySelectorAll('[role="group"]') ?? [])].map((g) => g.getAttribute('aria-label') ?? '');
   const inputs = dlg?.querySelectorAll('input').length ?? 0;
-  const subtitle = 'Subscription logins share your Claude.ai quota. Anthropic keys bill per token against a Console workspace.';
+  const subtitle = 'Subscription logins share your Claude.ai quota. API keys bill per token against a Console workspace.';
   results.push({
-    name: '/accounts the Anthropic-key form asks for an id, a label, and the key, and nothing else',
-    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'Anthropic key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
+    name: '/accounts the API-key form asks for an id, a label, and the key, and nothing else',
+    ok: JSON.stringify(fields) === JSON.stringify(['Id', 'Label', 'API key']) && JSON.stringify(choices) === JSON.stringify(['Account type']) && inputs === 3 && (dlg?.textContent ?? '').includes(subtitle),
     missing: [...fields, ...choices, `${inputs} inputs`, (dlg?.textContent ?? '').includes(subtitle) ? 'subtitle' : 'no subtitle'],
   });
   const pairs = [...(dlg?.querySelectorAll('.form-row') ?? [])].map((r) => [...r.querySelectorAll('.field__label')].map((l) => l.textContent?.trim() ?? ''));
@@ -1272,7 +1493,11 @@ await emailLines('/accounts/primary the head reads the email under the name', [[
   }
 }
 await m.navigate('/accounts/legacy');
-expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a']);
+expect('/accounts/legacy renders the legacy account', m.text(), ['Routing is off', 'invalid_grant', 'Needs re-auth', 'n/a', 'Payment method declined']);
+{
+  const card = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Pool');
+  results.push({ name: '/accounts/legacy reads in its Pool card that it is in no pool', ok: card?.querySelector('p.muted')?.textContent === 'Not a member of a pool.', missing: [card?.textContent ?? 'no Pool card'] });
+}
 {
   const at = accountsInPlace(m);
   results.push({ name: '/accounts/legacy stays at its path on the Accounts page', ok: at.heading === 'Accounts' && at.nav === '/accounts' && at.row === '/accounts/legacy', missing: [JSON.stringify(at)] });
@@ -1328,7 +1553,7 @@ await m.navigate('/accounts/nightly');
 // Overage started with nightly's head at 11:35:39, so the label reads 2h 54m or 2h 55m while the clock runs.
 expect('/accounts/nightly', m.text(), ['in use', 'Overage since 2h 5']);
 {
-  // The funding flag is an Anthropic key's state, so this OAuth account in overage reads ready and offers no clear.
+  // The funding flag is an API key's state, so this OAuth account in overage reads ready and offers no clear.
   const badges = [...m.container.querySelectorAll('.detail__badges .badge')].map((b) => b.textContent?.trim() ?? '');
   const head = [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].map((b) => b.textContent?.trim() ?? '');
   results.push({ name: '/accounts/nightly an OAuth account in overage reads ready and offers no funding clear', ok: badges[0] === 'Ready' && !head.includes('Clear funding flag'), missing: [...badges, ...head] });
@@ -1430,7 +1655,7 @@ await emailLines('/accounts/overflow the head draws no line under the name of an
 {
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
-  results.push({ name: '/accounts/overflow the identity card reads the type and draws no base URL row', ok: rows.includes('Type=Anthropic key') && !rows.some((r) => r.startsWith('Base URL=')), missing: rows });
+  results.push({ name: '/accounts/overflow the identity card reads the type and draws no base URL row', ok: rows.includes('Type=API key') && !rows.some((r) => r.startsWith('Base URL=')), missing: rows });
 }
 await m.navigate('/accounts/spare');
 {
@@ -1439,14 +1664,14 @@ await m.navigate('/accounts/spare');
   const identity = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
   const rows = [...(identity?.querySelectorAll('.kv__row') ?? [])].map((r) => `${r.querySelector('dt')?.textContent?.trim()}=${r.querySelector('dd')?.textContent?.trim()}`);
   results.push({
-    name: '/accounts/spare an unpaired OAuth account reads as OAuth, never as an Anthropic key',
-    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('Anthropic key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-',
+    name: '/accounts/spare an unpaired OAuth account reads as OAuth, never as an API key',
+    ok: (identity?.textContent ?? '').includes('OAuth') && !(identity?.textContent ?? '').includes('API key') && rows.join('|') === 'Type=OAuth login|Plan=unknown until paired|Rate-limit tier=-|Organization=-|Billing type=-',
     missing: rows,
   });
   [...(m.container.querySelector('.detail__head')?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete account')?.click();
   await m.settle(250);
   const confirm = [...m.container.querySelectorAll('dialog[open]')].pop();
-  expect('/accounts Delete account names the consequence before it runs', confirm?.textContent ?? '', ['Delete account', 'Removes spare from every pool it is in and deletes it; request history stays in the ledger.']);
+  expect('/accounts Delete account names the consequence before it runs', confirm?.textContent ?? '', ['Delete account', 'Removes spare from its pool and deletes it. Request history stays in the ledger.']);
   [...(confirm?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Delete')?.click();
   await m.settle(1200);
   const listed = [...m.container.querySelectorAll('.account-row__name')].map((n) => n.textContent?.trim());
@@ -1458,8 +1683,8 @@ await m.navigate('/accounts/spare');
 }
 m.unmount();
 {
-  // A mount of its own on the frozen clock: the shell holds a refusal's route failure for six seconds ahead of the
-  // page's own report, and only a tick takes it down, so neither toast reaches another check's read.
+  // A mount of its own on the frozen clock: a toast there stays until a tick takes it down, so a toast one check raised
+  // never reaches another check's read.
   const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
   const typeInto = async (input, value) => {
@@ -1475,7 +1700,9 @@ m.unmount();
     page.container.querySelector('button[aria-label="Edit label"]')?.click();
     await page.settle(150);
   };
-  /** The shell's route failure shows first; after its six seconds the page's own report takes its place. */
+  /**
+   * The toast line at once and after the shell's six seconds, when a page's own report would follow a route failure.
+   */
   const reports = async () => {
     const shell = toast();
     tick(6_000);
@@ -1488,7 +1715,7 @@ m.unmount();
 
   await editLabel();
   await typeInto(labelInput(), 'primary 2');
-  failNextCall('renameAccount', '/admin/accounts/primary', 'that label is taken');
+  failNextCall('renameAccount', '/admin/accounts/primary', 'that label is taken', { quiet: true });
   // Held in front of the refusal: the release runs the refusal, which puts the mock's method back, so neither hold here
   // is restored.
   const renaming = deferNextCall('renameAccount');
@@ -1498,11 +1725,12 @@ m.unmount();
   renaming.release();
   await page.settle(600);
   const typed = labelInput()?.value ?? null;
+  const renameCallout = page.container.querySelector('.detail__ident [role="alert"]')?.textContent ?? null;
   const renamed = await reports();
   results.push({
-    name: '/accounts a refused rename keeps the editor open with the typed label and reports the sentence',
-    ok: typed === 'primary 2' && renamed.shell === '/admin/accounts/primary failed: that label is taken' && renamed.own === 'that label is taken',
-    missing: [typed === null ? 'the editor closed' : `input ${typed}`, renamed.shell || 'no route failure', renamed.own || 'no page report'],
+    name: "/accounts a refused rename keeps the editor open with the typed label and the sentence in the editor's callout, in no toast",
+    ok: typed === 'primary 2' && renameCallout === 'that label is taken' && renamed.shell === '' && renamed.own === '',
+    missing: [typed === null ? 'the editor closed' : `input ${typed}`, renameCallout ?? 'no callout', renamed.shell || 'no first toast', renamed.own || 'no second toast'],
   });
 
   titleButton('Cancel')?.click();
@@ -1534,7 +1762,7 @@ m.unmount();
   box()?.click();
   await page.settle(100);
   await typeInto(field(), '2027-03-01T10:00');
-  failNextCall('updateAccount', '/admin/accounts/primary', 'the store is unavailable');
+  failNextCall('updateAccount', '/admin/accounts/primary', 'the store is unavailable', { quiet: true });
   const ending = deferNextCall('updateAccount');
   identityButton('Save')?.click();
   await page.settle(100);
@@ -1542,12 +1770,13 @@ m.unmount();
   ending.release();
   await page.settle(600);
   const kept = { checked: box()?.checked ?? null, ends: field()?.value ?? null };
+  const endCalloutText = identity()?.querySelector('[role="alert"]')?.textContent ?? null;
   const ended = await reports();
   const stored = (await api.listAccounts()).find((a) => a.id === 'primary');
   results.push({
-    name: '/accounts a refused end edit keeps the form with the typed date',
-    ok: kept.checked === true && kept.ends === '2027-03-01T10:00' && ended.shell === '/admin/accounts/primary failed: the store is unavailable' && ended.own === 'the store is unavailable' && stored?.cancelled === false,
-    missing: [kept.checked === null ? 'the form closed' : `ticked ${kept.checked}, ends ${kept.ends}`, ended.shell || 'no route failure', ended.own || 'no page report', `stored cancelled ${stored?.cancelled}`],
+    name: "/accounts a refused end edit keeps the form with the typed date and the sentence in the editor's callout, in no toast",
+    ok: kept.checked === true && kept.ends === '2027-03-01T10:00' && endCalloutText === 'the store is unavailable' && ended.shell === '' && ended.own === '' && stored?.cancelled === false,
+    missing: [kept.checked === null ? 'the form closed' : `ticked ${kept.checked}, ends ${kept.ends}`, endCalloutText ?? 'no callout', ended.shell || 'no first toast', ended.own || 'no second toast', `stored cancelled ${stored?.cancelled}`],
   });
   results.push({
     name: '/accounts the label and end editors take no typing and no Cancel while their save runs',
@@ -1558,7 +1787,8 @@ m.unmount();
   await page.settle(100);
 
   // Each editor fences on the revision it opened with. A write through the API while one is open moves the mock's
-  // revision past it, so its save is refused as stale with a Reload of its own, and nothing reloads until it is pressed.
+  // revision past it, so its save is refused as stale with a Reload of its own, and nothing reloads until it is
+  // pressed.
   const sentence = 'the account changed while the edit was being saved';
   const primary = async () => (await api.listAccounts()).find((a) => a.id === 'primary');
   const accountReads = async (click) => {
@@ -1673,8 +1903,254 @@ m.unmount();
     ok: endStaleShown && endCancelReads === 1 && field() === null,
     missing: [`callout ${endStaleShown}`, `listAccounts ${endCancelReads}`, `field ${field() !== null}`],
   });
+
+  // The operator's own save moves the token both editors opened on, so the other editor takes the answer's token and
+  // its save lands without a Reload: the label first, then the subscription end.
+  const putBack = async () => {
+    await api.renameAccount('primary', 'primary');
+    await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+    tick(30_000);
+    await page.settle(400);
+  };
+  await putBack();
+  opened = (await primary())?.revision ?? null;
+  await editLabel();
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  await typeInto(labelInput(), 'primary 2');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  box()?.click();
+  await page.settle(100);
+  await typeInto(field(), '2027-03-01T10:00');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const both = { alert: identity()?.querySelector('[role="alert"]')?.textContent ?? null, field: field() !== null, stored: await primary() };
+  results.push({
+    name: '/accounts a label save and then an end save from editors opened together both land without a Reload',
+    ok: both.alert === null && !both.field && both.stored?.label === 'primary 2' && both.stored?.cancelled === true && both.stored?.revision === opened + 2,
+    missing: [both.alert ?? 'no callout', `field ${both.field}`, `label ${both.stored?.label}`, `cancelled ${both.stored?.cancelled}`, `revision ${both.stored?.revision}, opened ${opened}`],
+  });
+
+  // An end editor opened before another operator's write keeps its token through the title editor's own save, which
+  // moved a row the end editor never read, so its save still meets the fence. Both editors start closed, so the check
+  // reads its own rule whatever the one before it left open.
+  titleButton('Cancel')?.click();
+  identityButton('Cancel')?.click();
+  await page.settle(400);
+  await putBack();
+  identityButton('Edit end')?.click();
+  await page.settle(100);
+  await api.renameAccount('primary', 'primary (written)');
+  await editLabel();
+  await typeInto(labelInput(), 'primary 3');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  reloadIn(page.container.querySelector('.detail__ident [role="alert"]'))?.click();
+  await page.settle(400);
+  await editLabel();
+  await typeInto(labelInput(), 'primary 3');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  box()?.click();
+  await page.settle(100);
+  await typeInto(field(), '2027-03-01T10:00');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const fenced = { callout: identity()?.querySelector('[role="alert"]')?.textContent ?? '', stored: await primary() };
+  results.push({
+    name: "/accounts an end editor opened before another operator's write still reads stale_edit after the title editor's own save",
+    ok: fenced.callout === `${sentence} Reload` && fenced.stored?.label === 'primary 3' && fenced.stored?.cancelled === false,
+    missing: [fenced.callout || 'no callout', `label ${fenced.stored?.label}`, `cancelled ${fenced.stored?.cancelled}`],
+  });
+  identityButton('Cancel')?.click();
+  await page.settle(400);
   await api.renameAccount('primary', 'primary');
   await api.updateAccount('primary', { cancelled: false, subscriptionEndsAt: null });
+  page.unmount();
+}
+{
+  // The detail is left for another account while a save there is held, so the save answers once the other account's
+  // editor is open on the same token. That editor keeps the token it opened with: its save lands at that token, and a
+  // write by another operator in between still meets the fence. Both directions run, a label save under the other
+  // account's end editor and an end save under its label editor.
+  const [first, second] = ['nightly', 'studio'];
+  const sentence = 'the account changed while the edit was being saved';
+  const stored = async (id) => (await api.listAccounts()).find((a) => a.id === id);
+  // The rule needs both rows on one token, so the row behind takes unfenced writes of the label it holds until the two
+  // match. Null when they never do, as across two incarnations of an id.
+  const level = async () => {
+    for (let n = 0; n < 64; n++) {
+      const [a, b] = [await stored(first), await stored(second)];
+      if (a.revision === b.revision) return a.revision;
+      const behind = a.revision < b.revision ? a : b;
+      await api.renameAccount(behind.id, behind.label);
+    }
+    return null;
+  };
+  const page = await mount(`/accounts/${first}`, { now: CLOCK_ORIGIN });
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const typeInto = async (input, value) => {
+    setter.call(input, value);
+    input?.dispatchEvent(new window.Event('input', { bubbles: true }));
+    await page.settle(100);
+  };
+  const title = () => page.container.querySelector('.detail__title');
+  const labelInput = () => title()?.querySelector('input') ?? null;
+  const titleButton = (text) => [...(title()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+  const labelCallout = () => page.container.querySelector('.detail__ident [role="alert"]')?.textContent ?? null;
+  const editLabel = async () => {
+    page.container.querySelector('button[aria-label="Edit label"]')?.click();
+    await page.settle(150);
+  };
+  const identity = () => [...page.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Identity');
+  const identityButton = (text) => [...(identity()?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === text);
+  const box = () => identity()?.querySelector('label.row input[type="checkbox"]') ?? null;
+  const field = () => identity()?.querySelector('input[type="datetime-local"]') ?? null;
+  const endCallout = () => identity()?.querySelector('[role="alert"]')?.textContent ?? null;
+  const editEnd = async () => {
+    identityButton('Edit end')?.click();
+    await page.settle(100);
+  };
+  const markCancelled = async () => {
+    if (box()?.checked === false) box()?.click();
+    await page.settle(100);
+    await typeInto(field(), '2027-03-01T10:00');
+  };
+  const goTo = async (id) => {
+    page.container.querySelector(`a.account-row[href="/accounts/${id}"]`)?.click();
+    await page.settle(400);
+  };
+  // Closes whatever editor a run left open and puts both rows back on one token, which the list's own 30-second read
+  // takes in, so the next run's editors open on the stored rows.
+  const reset = async () => {
+    titleButton('Cancel')?.click();
+    identityButton('Cancel')?.click();
+    await page.settle(400);
+    for (const id of [first, second]) {
+      await api.renameAccount(id, id);
+      await api.updateAccount(id, { cancelled: false, subscriptionEndsAt: null });
+    }
+    const token = await level();
+    tick(30_000);
+    await page.settle(400);
+    return token;
+  };
+
+  const labelOpened = await reset();
+  await editLabel();
+  await typeInto(labelInput(), `${first} 2`);
+  let held = deferNextCall('renameAccount');
+  titleButton('Save')?.click();
+  await page.settle(100);
+  await goTo(second);
+  await editEnd();
+  held.release();
+  await page.settle(600);
+  held.restore();
+  await markCancelled();
+  const endSends = countCalls('updateAccount');
+  identityButton('Save')?.click();
+  await page.settle(600);
+  endSends.restore();
+  const endLanded = { alert: endCallout(), first: await stored(first), path: page.location().pathname, second: await stored(second), sent: endSends.calls[0]?.[2] ?? null };
+
+  const fenceOpened = await reset();
+  await goTo(first);
+  await editLabel();
+  await typeInto(labelInput(), `${first} 3`);
+  held = deferNextCall('renameAccount');
+  titleButton('Save')?.click();
+  await page.settle(100);
+  await goTo(second);
+  await editEnd();
+  await api.renameAccount(second, `${second} (written)`);
+  held.release();
+  await page.settle(600);
+  held.restore();
+  await markCancelled();
+  identityButton('Save')?.click();
+  await page.settle(600);
+  const fenced = { callout: endCallout() ?? '', second: await stored(second) };
+  results.push({
+    name: "/accounts a label save that answers after the detail moved to another account leaves that account's end editor on its own token, and a write in between still meets the fence",
+    ok:
+      labelOpened !== null &&
+      endLanded.path === `/accounts/${second}` &&
+      endLanded.sent === labelOpened &&
+      endLanded.alert === null &&
+      endLanded.second?.cancelled === true &&
+      endLanded.second?.revision === labelOpened + 1 &&
+      endLanded.first?.label === `${first} 2` &&
+      fenceOpened !== null &&
+      fenced.callout === `${sentence} Reload` &&
+      fenced.second?.cancelled === false &&
+      fenced.second?.label === `${second} (written)`,
+    missing: [`opened ${labelOpened}, sent ${endLanded.sent}`, `path ${endLanded.path}`, endLanded.alert ?? 'no callout', `${second} cancelled ${endLanded.second?.cancelled}, revision ${endLanded.second?.revision}`, `${first} label ${endLanded.first?.label}`, `fence opened ${fenceOpened}`, fenced.callout || 'no fence callout', `${second} after the fence: cancelled ${fenced.second?.cancelled}, label ${fenced.second?.label}`],
+  });
+
+  const endOpened = await reset();
+  await goTo(first);
+  await editEnd();
+  await markCancelled();
+  held = deferNextCall('updateAccount');
+  identityButton('Save')?.click();
+  await page.settle(100);
+  await goTo(second);
+  await editLabel();
+  held.release();
+  await page.settle(600);
+  held.restore();
+  await typeInto(labelInput(), `${second} 2`);
+  const labelSends = countCalls('renameAccount');
+  titleButton('Save')?.click();
+  await page.settle(600);
+  labelSends.restore();
+  const labelLanded = { alert: labelCallout(), first: await stored(first), input: labelInput() !== null, path: page.location().pathname, second: await stored(second), sent: labelSends.calls[0]?.[2] ?? null };
+  results.push({
+    name: "/accounts an end save that answers after the detail moved to another account leaves that account's label editor on its own token",
+    ok:
+      endOpened !== null &&
+      labelLanded.path === `/accounts/${second}` &&
+      labelLanded.sent === endOpened &&
+      labelLanded.alert === null &&
+      !labelLanded.input &&
+      labelLanded.second?.label === `${second} 2` &&
+      labelLanded.second?.revision === endOpened + 1 &&
+      labelLanded.first?.cancelled === true,
+    missing: [`opened ${endOpened}, sent ${labelLanded.sent}`, `path ${labelLanded.path}`, labelLanded.alert ?? 'no callout', `input ${labelLanded.input}`, `${second} label ${labelLanded.second?.label}, revision ${labelLanded.second?.revision}`, `${first} cancelled ${labelLanded.first?.cancelled}`],
+  });
+  await reset();
+  page.unmount();
+}
+{
+  // A mount of its own, whose provider holds the shell's toast: a refused create reads in the Add account dialog's own
+  // callout and raises no toast.
+  const page = await mount('/accounts/primary', { now: CLOCK_ORIGIN });
+  [...page.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Add account')?.click();
+  await page.settle(300);
+  const dlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+  [...(dlg?.querySelectorAll('[aria-label="Account type"] button') ?? [])].find((b) => b.textContent?.trim() === 'API key')?.click();
+  await page.settle(150);
+  const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
+  const values = ['refused', 'Refused workspace', 'sk-ant-api03-not-a-key'];
+  for (const [n, input] of [...(dlg?.querySelectorAll('input') ?? [])].entries()) {
+    setter.call(input, values[n]);
+    input.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  await page.settle(100);
+  const refusal = 'secret must be an API key';
+  failNextCall('createAccount', '/admin/accounts', refusal, { quiet: true, status: 400 });
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Add API key')?.click();
+  await page.settle(500);
+  const refused = [String(dlg?.hasAttribute('open')), dlg?.querySelector('[role="alert"]')?.textContent ?? 'no callout', page.container.querySelector('.toast')?.textContent ?? ''];
+  results.push({
+    name: "/accounts a refused create keeps the Add account dialog open with the route's sentence and raises no toast",
+    ok: JSON.stringify(refused) === JSON.stringify(['true', refusal, '']),
+    missing: refused,
+  });
+  [...(dlg?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await page.settle(200);
   page.unmount();
 }
 {
@@ -1769,10 +2245,10 @@ const tab = async (page, label) => {
   const metered = spentOf('primary');
   const whole = spentOf('overflow');
   results.push({
-    name: "/analytics a subscription member's spent cell reads its metered spend, an Anthropic-key member's its whole spend",
+    name: "/analytics a subscription member's spent cell reads its metered spend, an API-key member's its whole spend",
     ok:
       card?.querySelector('.card__subtitle')?.textContent ===
-        "Each budgeted member's spend in its current period, an Anthropic-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here" &&
+        "Each budgeted member's spend in its current period, an API-key member's whole spend and a subscription member's metered spend; the range and the filters above do not apply here" &&
       metered?.querySelector('.num')?.textContent === 'metered $12.50' &&
       metered?.querySelector('.num .muted')?.textContent === 'metered ' &&
       (whole?.querySelector('.num')?.textContent ?? '').startsWith('$') &&
@@ -1785,7 +2261,7 @@ const tab = async (page, label) => {
 // The pool dialog checks below read every field, the expert ones included; the plain view's checks come further on.
 localStorage.setItem('phoebis.expertView', 'on');
 m = await mount('/pools');
-expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, subscription accounts first', 'Round robin', 'Priority, then random; subscription accounts first', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'Overflow workspace', 'codex', 'Research workspace', 'Active pins', 'Moves in the last hour', 'Edit']);
+expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, subscription accounts first', 'Round robin', 'Priority, then random; subscription accounts first', 'Traffic, 24h', 'Requests per hour', '3-hour average', 'Members', 'Overflow workspace', 'jobs', 'Research workspace', 'Active pins', 'Moves in the last hour', 'Edit']);
 {
   const cards = new Map([...m.container.querySelectorAll('.pool')].map((c) => [c.querySelector('.card__title')?.textContent?.trim(), c]));
   const card = (name) => cards.get(name);
@@ -1794,12 +2270,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   for (const k of await api.listKeys()) keyCount.set(k.poolId, (keyCount.get(k.poolId) ?? 0) + 1);
   const countWord = (n) => (n === 0 ? 'No keys yet' : n === 1 ? '1 key' : `${n} keys`);
   const keyLink = (name) => card(name)?.querySelector('.pool__keys');
-  const links = ['all', 'codex', 'work'].map((name) => [keyLink(name)?.textContent?.trim(), keyLink(name)?.getAttribute('href')]);
-  const wanted = ['all', 'codex', 'work'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pool=${id}`]);
+  const links = ['all', 'jobs', 'work'].map((name) => [keyLink(name)?.textContent?.trim(), keyLink(name)?.getAttribute('href')]);
+  const wanted = ['all', 'jobs', 'work'].map((id) => [countWord(keyCount.get(id) ?? 0), `/keys?pool=${id}`]);
   const none = [...cards.entries()].filter(([, c]) => c.querySelector('.pool__keys--none')).map(([name]) => name);
   results.push({
     name: '/pools each card links its key count to the Keys page filtered to the pool',
-    ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify(['all', 'codex', 'work'].filter((id) => !keyCount.get(id))),
+    ok: JSON.stringify(links) === JSON.stringify(wanted) && JSON.stringify(none) === JSON.stringify(['all', 'jobs', 'work'].filter((id) => !keyCount.get(id))),
     missing: [...links.flat().map(String), ...wanted.flat(), ...none],
   });
   const strip = (name) => [...(card(name)?.querySelectorAll('.pool__features .badge') ?? [])].map((b) => [b.textContent?.trim(), b.getAttribute('href'), b.getAttribute('title')]);
@@ -1807,9 +2283,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     name: '/pools the strip badges the features a pool has on and opens the dialog on their groups',
     ok:
       JSON.stringify(strip('all')) === JSON.stringify([['load shedding', '/pools?edit=all&group=shedding', 'Opens the pool dialog on Load shedding'], ['cache TTL', '/pools?edit=all&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=all&group=keepalive', 'Opens the pool dialog on Keepalive']]) &&
-      JSON.stringify(strip('codex')) === JSON.stringify([['load shedding', '/pools?edit=codex&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
+      JSON.stringify(strip('jobs')) === JSON.stringify([['load shedding', '/pools?edit=jobs&group=shedding', 'Opens the pool dialog on Load shedding']]) &&
       JSON.stringify(strip('work')) === JSON.stringify([['server-side auto mode off', '/pools?edit=work&group=autoMode', 'Opens the pool dialog on Auto mode'], ['cache TTL', '/pools?edit=work&group=cacheTtl', 'Opens the pool dialog on Cache TTL'], ['keepalive', '/pools?edit=work&group=keepalive', 'Opens the pool dialog on Keepalive']]),
-    missing: [...strip('all'), ...strip('codex'), ...strip('work')].map((b) => b.join(' | ')),
+    missing: [...strip('all'), ...strip('jobs'), ...strip('work')].map((b) => b.join(' | ')),
   });
   const badged = [...cards.entries()].filter(([, c]) => [...c.querySelectorAll('.badge')].some((b) => b.textContent?.trim() === 'server-side auto mode off')).map(([name]) => name);
   results.push({ name: '/pools the card of a pool with server-side auto mode off carries the badge, and no other card does', ok: JSON.stringify(badged) === '["work"]', missing: badged });
@@ -1823,10 +2299,22 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok:
       sentence('all') === 'Degraded: 2 of 4 members take fresh sessions; the next one goes to primary.' &&
       JSON.stringify(linked('all')) === '["/accounts/primary"]' &&
-      sentence('codex') === `Exhausted: no member can take a request until Research workspace's daily budget resets at ${dayEnd}.` &&
-      JSON.stringify(linked('codex')) === '["/accounts/research"]' &&
-      sentence('work') === 'Active: primary takes every fresh session.',
-    missing: [sentence('all'), sentence('codex'), sentence('work')].map(String),
+      sentence('jobs') === `Exhausted: no member can take a request until Research workspace's daily budget resets at ${dayEnd}.` &&
+      JSON.stringify(linked('jobs')) === '["/accounts/research"]' &&
+      sentence('work') === 'Active: studio takes every fresh session.',
+    missing: [sentence('all'), sentence('jobs'), sentence('work')].map(String),
+  });
+  // The head totals the day from the hour a full day back, where the bars start, so the head reads the bars' sum.
+  const series = new Map((await api.listPools()).map((p) => [p.name, p.traffic24h]));
+  const heads = [...cards.entries()].map(([name, c]) => {
+    const head = Number(/([\d,]+) requests/.exec(c.querySelector('.pool__chart-head .num')?.textContent ?? '')?.[1]?.replace(/,/g, '') ?? -1);
+    const bars = series.get(name) ?? [];
+    return [name, head, bars.length, bars.reduce((n, b) => n + b.requests, 0)];
+  });
+  results.push({
+    name: "/pools each card's head figure equals the sum of its 25 hourly bars",
+    ok: heads.length > 0 && heads.some(([, head]) => head > 0) && heads.every(([, head, length, sum]) => length === 25 && head === sum),
+    missing: heads.map((h) => h.join(' ')),
   });
   {
     // Without the accounts the order has no members to place, so until they land the sentence says what the pool's
@@ -1834,7 +2322,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const held = deferNextCall('listAccounts');
     const d = await mount('/pools');
     const read = () =>
-      ['all', 'codex', 'work'].map((name) => {
+      ['all', 'jobs', 'work'].map((name) => {
         const line = [...d.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name)?.querySelector('.pool__status');
         return [line?.textContent?.replace(/\s+/g, ' ').trim() ?? 'no sentence', line?.querySelectorAll('a').length ?? 0];
       });
@@ -1849,7 +2337,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok:
         held.calls.length > 0 &&
         JSON.stringify(waiting) === JSON.stringify([['Degraded: 2 of 4 members take fresh sessions.', 0], ['Exhausted: no member can take a request.', 0], ["Active: the pool's one member takes every fresh session.", 0]]) &&
-        JSON.stringify(landed) === JSON.stringify([[sentence('all'), 1], [sentence('codex'), 1], [sentence('work'), 1]]),
+        JSON.stringify(landed) === JSON.stringify([[sentence('all'), 1], [sentence('jobs'), 1], [sentence('work'), 1]]),
       missing: [`held ${held.calls.length}`, ...waiting, ...landed].map((x) => JSON.stringify(x)),
     });
   }
@@ -1857,28 +2345,28 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // path stands for it.
   const attentionRows = (name) =>
     [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])].map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.children[1]?.textContent?.trim(), li.children[1]?.getAttribute('href')?.split('?')[0] ?? null]);
-  // The story's items: codex exhausted and holding a parked record; the laptop key's client drift, the Overflow
+  // The story's items: jobs exhausted and holding a parked record; the laptop key's client drift, the Overflow
   // workspace out of funding and secondary's poll backoff in all; nothing on work, whose one member and one key carry
   // no item; and the routing state writer on no card, since it belongs to no pool.
   results.push({
     name: "/pools each card draws the dashboard's items that belong to it, the pool's own rows unlinked but for its exhaustion, and a card with none draws no list",
     ok:
-      JSON.stringify(attentionRows('codex')) === JSON.stringify([['Pool exhausted', 'codex', '/routing-log'], ['Priced record parked', 'codex', null]]) &&
+      JSON.stringify(attentionRows('jobs')) === JSON.stringify([['Pool exhausted', 'jobs', '/routing-log'], ['Priced record parked', 'jobs', null]]) &&
       JSON.stringify(attentionRows('all')) === JSON.stringify([['Client drift', '2.1.271', '/keys#laptop'], ['Funding required', 'Overflow workspace', '/accounts/overflow'], ['Usage poll backing off', 'secondary', '/accounts/secondary']]) &&
       card('work')?.querySelector('.attention') === null,
-    missing: ['codex', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
+    missing: ['jobs', 'all', 'work'].map((name) => `${name}: ${JSON.stringify(attentionRows(name))}`),
   });
   {
-    const parkedRow = [...(card('codex')?.querySelectorAll('ul.attention > li.attention__row') ?? [])].find((li) => li.querySelector('.badge')?.textContent?.trim() === 'Priced record parked');
+    const parkedRow = [...(card('jobs')?.querySelectorAll('ul.attention > li.attention__row') ?? [])].find((li) => li.querySelector('.badge')?.textContent?.trim() === 'Priced record parked');
     const writerRows = [...cards.values()].filter((c) => [...c.querySelectorAll('ul.attention .badge')].some((b) => b.textContent?.trim() === 'State writer degraded')).length;
     results.push({
       name: "/pools a pool's card draws its parked records' row with the count and the accounts, and no card draws the state writer",
-      ok: parkedRow?.querySelector('.attention__detail')?.textContent === '1 priced record parked, landing at the next start or replay (research)' && writerRows === 0,
+      ok: parkedRow?.querySelector('.attention__detail')?.textContent === "1 priced record parked, landing at the next start or on the dashboard's Replay (research)" && writerRows === 0,
       missing: [parkedRow?.querySelector('.attention__detail')?.textContent ?? 'no parked row', `writer rows ${writerRows}`],
     });
   }
   const caption = (name) => card(name)?.querySelector('.serving caption');
-  const captions = ['all', 'codex', 'work'].map((name) => [caption(name)?.textContent?.trim(), caption(name)?.getAttribute('title')]);
+  const captions = ['all', 'jobs', 'work'].map((name) => [caption(name)?.textContent?.trim(), caption(name)?.getAttribute('title')]);
   const fable = 'A request for a Fable model is placed on the Fable window instead, which this card does not draw.';
   results.push({
     name: '/pools each serving table names its strategy in a caption titled with the Fable caveat',
@@ -1890,7 +2378,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const accountsOf = (name) => rows(name).map((tr) => cell(tr, 1).querySelector('a')?.textContent?.trim());
   results.push({ name: '/pools the serving table lists the members in selection order', ok: JSON.stringify(accountsOf('all')) === JSON.stringify(['primary', 'secondary', 'nightly', 'Overflow workspace']), missing: accountsOf('all') });
   const tiers = rows('all').map((tr) => cell(tr, 0).textContent?.trim());
-  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'Anthropic keys P1']), missing: tiers });
+  results.push({ name: '/pools the card draws the selection order by tier', ok: JSON.stringify(tiers) === JSON.stringify(['plan P0', 'plan P0', 'overage P0', 'API keys P1']), missing: tiers });
   const standing = (name, label) => {
     const tr = rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label);
     const td = tr ? cell(tr, 2) : null;
@@ -1917,17 +2405,17 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   results.push({ name: '/pools an ineligible member says why', ok: standing('all', 'secondary').why === 'secondary: in cooldown, skipped by selection', missing: [standing('all', 'secondary').why] });
   const spend = (name, label) =>
     [...(rows(name).find((r) => cell(r, 1).querySelector('a')?.textContent?.trim() === label)?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((s) => s.textContent?.replace(/\s+/g, ' ').trim());
-  results.push({ name: '/pools an Anthropic-key member reads its spend against each budget, the day before the month', ok: JSON.stringify(spend('all', 'Overflow workspace')) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]', missing: spend('all', 'Overflow workspace') });
+  results.push({ name: '/pools an API-key member reads its spend against each budget, the day before the month', ok: JSON.stringify(spend('all', 'Overflow workspace')) === '["$1.10 of $5.00 today","$25.00 of $50.00 this month"]', missing: spend('all', 'Overflow workspace') });
   results.push({
     name: '/pools a subscription member reads its metered spend against its budget, and a member without one draws no spend line',
     ok: spend('all', 'primary').length === 1 && spend('all', 'primary')[0].startsWith('metered $12.50 of $30.00 this month') && spend('all', 'secondary').length === 0,
     missing: [...spend('all', 'primary'), String(spend('all', 'secondary').length)],
   });
-  const research = standing('codex', 'Research workspace');
+  const research = standing('jobs', 'Research workspace');
   results.push({
     name: "/pools a member at its budget reads the route's verdict beside its spend, until the day ends",
-    ok: JSON.stringify(spend('codex', 'Research workspace')) === '["$20.40 of $20.00 today"]' && JSON.stringify(research.badges) === JSON.stringify([[`at budget until ${dayEnd}`, 'badge--warning', '']]) && research.why === 'Research workspace: at budget, skipped by selection',
-    missing: [...spend('codex', 'Research workspace'), ...research.badges.map((b) => b.join(' | ')), research.why],
+    ok: JSON.stringify(spend('jobs', 'Research workspace')) === '["$20.40 of $20.00 today"]' && JSON.stringify(research.badges) === JSON.stringify([[`at budget until ${dayEnd}`, 'badge--warning', '']]) && research.why === 'Research workspace: at budget, skipped by selection',
+    missing: [...spend('jobs', 'Research workspace'), ...research.badges.map((b) => b.join(' | ')), research.why],
   });
   const tiles = (name) => [...(card(name)?.querySelectorAll('.pool__stats > div') ?? [])].map((d) => [d.querySelector('dt')?.textContent?.trim(), d.querySelector('dd')?.textContent?.trim(), d.querySelector('dd')?.getAttribute('title')]);
   // The story's pool all moved two sessions by the spent rule, two by a failover and one by its fast lane cooling.
@@ -1944,9 +2432,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     ok:
       tiles('all').length === 6 &&
       JSON.stringify(tiles('all')[5]) === JSON.stringify(['Moves in the last hour', '2', allTitle]) &&
-      JSON.stringify(tiles('codex')[5]?.slice(0, 2)) === JSON.stringify(['Moves in the last hour', '0']) &&
-      tiles('codex')[5]?.[2]?.split('\n')[0] === 'No rule moved a session in the last hour',
-    missing: [...(tiles('all')[5] ?? []), ...(tiles('codex')[5] ?? [])].map(String),
+      JSON.stringify(tiles('jobs')[5]?.slice(0, 2)) === JSON.stringify(['Moves in the last hour', '0']) &&
+      tiles('jobs')[5]?.[2]?.split('\n')[0] === 'No rule moved a session in the last hour',
+    missing: [...(tiles('all')[5] ?? []), ...(tiles('jobs')[5] ?? [])].map(String),
   });
   results.push({ name: '/pools nothing of the recap, the selection-order strip, the member list or the key chips is left', ok: m.container.querySelector('.pool .pool__policy, .pool .selection-order, .pool .pool__members, .pool .pool__eligibility, .pool a.badge[href="/keys"]') === null, missing: [] });
 }
@@ -1957,26 +2445,26 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const card = (name) => [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === name);
   const figure = (name) => card(name)?.querySelector('.pool__stats > div:nth-child(6) dd a');
   const lastHour = (pool) => ({ path: '/routing-log', kinds: 'moved', pools: pool, from: isoAt(CLOCK_ORIGIN - 3_600_000), to: isoAt(CLOCK_ORIGIN) });
-  const read = ['all', 'codex'].map((name) => [figure(name)?.textContent?.trim() ?? null, logTarget(figure(name)?.getAttribute('href'))]);
+  const read = ['all', 'jobs'].map((name) => [figure(name)?.textContent?.trim() ?? null, logTarget(figure(name)?.getAttribute('href'))]);
   results.push({
     name: "/pools the sixth tile's figure opens the log on the pool and the moved kind for the last hour",
-    ok: JSON.stringify(read) === JSON.stringify([['2', lastHour('all')], ['0', lastHour('codex')]]),
+    ok: JSON.stringify(read) === JSON.stringify([['2', lastHour('all')], ['0', lastHour('jobs')]]),
     missing: read.map((r) => JSON.stringify(r)),
   });
   const rows = (name) => [...(card(name)?.querySelectorAll('ul.attention > li.attention__row') ?? [])];
   const row = (name, label) => rows(name).find((li) => li.querySelector('.badge')?.textContent?.trim() === label);
-  const exhaustedRow = row('codex', 'Pool exhausted');
+  const exhaustedRow = row('jobs', 'Pool exhausted');
   const link = exhaustedRow?.querySelector('a');
-  const others = [...rows('codex'), ...rows('all')].filter((li) => li !== exhaustedRow).map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.querySelector('a')?.getAttribute('href') ?? null]);
+  const others = [...rows('jobs'), ...rows('all')].filter((li) => li !== exhaustedRow).map((li) => [li.querySelector('.badge')?.textContent?.trim(), li.querySelector('a')?.getAttribute('href') ?? null]);
   const last = (exhaustedRow?.getAttribute('title') ?? '').split('\n').pop();
   results.push({
     name: "/pools the card's pool exhausted row opens the log since the condition began and its other rows keep their targets",
     ok:
       exhausted !== undefined &&
-      link?.textContent?.trim() === 'codex' &&
-      JSON.stringify(logTarget(link.getAttribute('href'))) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'codex', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
-      exhausted.since.startsWith('2026-09-14') &&
-      last === `Opens the Routing log: pool codex, exhausted, since Sep 14 ${exhausted.since.slice(11, 16)}` &&
+      link?.textContent?.trim() === 'jobs' &&
+      JSON.stringify(logTarget(link.getAttribute('href'))) === JSON.stringify({ path: '/routing-log', kinds: 'exhausted', pools: 'jobs', from: isoAt(Date.parse(exhausted.since)), to: isoAt(CLOCK_ORIGIN) }) &&
+      exhausted.since.startsWith('2026-09-16T14:16:40') &&
+      last === `Opens the Routing log: pool jobs, exhausted, since ${exhausted.since.slice(11, 16)}` &&
       JSON.stringify(others) === JSON.stringify([['Priced record parked', null], ['Client drift', '/keys#laptop'], ['Funding required', '/accounts/overflow'], ['Usage poll backing off', '/accounts/secondary']]),
     missing: [link?.getAttribute('href') ?? 'no link', last ?? '', JSON.stringify(others)],
   });
@@ -2016,14 +2504,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const at = (hours) => new Date(now - hours * 3_600_000).toISOString();
   const account = (id, label) => ({ link: { id, page: 'accounts' }, subject: { id, label, type: 'account' } });
   const items = [
-    { detail: { key: 'ci', pool: 'codex' }, kind: 'pool_exhausted', link: { id: 'codex', page: 'pools' }, pools: ['codex'], since: at(1), subject: { id: 'codex', label: 'codex', type: 'pool' } },
+    { detail: { key: 'ci', pool: 'jobs' }, kind: 'pool_exhausted', link: { id: 'jobs', page: 'pools' }, pools: ['jobs'], since: at(1), subject: { id: 'jobs', label: 'jobs', type: 'pool' } },
     { detail: { client_version: '2.1.271', key: 'laptop', trigger: 'hash' }, kind: 'client_drift', link: { id: 'laptop', page: 'keys' }, pools: ['all'], since: at(3), subject: { id: '2.1.271', label: '2.1.271', type: 'client' } },
     { detail: { client_version: '2.1.272', key: null, trigger: 'version_suffix' }, kind: 'client_drift', link: null, pools: [], since: at(2), subject: { id: '2.1.272', label: '2.1.272', type: 'client' } },
     { detail: { component: 'ledger' }, kind: 'writer_degraded', link: null, pools: [], since: at(1), subject: { id: 'ledger', label: 'ledger', type: 'router' } },
     { ...account('legacy', 'legacy'), detail: { account: 'legacy', label: 'legacy' }, kind: 'reauth_required', pools: [], since: at(5) },
-    { ...account('research', 'Research workspace'), detail: { account: 'research', label: 'Research workspace' }, kind: 'funding_required', pools: ['codex'], since: at(4) },
+    { ...account('research', 'Research workspace'), detail: { account: 'research', label: 'Research workspace' }, kind: 'funding_required', pools: ['jobs'], since: at(4) },
     { ...account('legacy', 'legacy'), detail: { account: 'legacy', failures: 3, last_error: 'invalid_grant', outcome: 'failed' }, kind: 'refresh_failed', pools: [], since: at(6) },
-    { detail: { accounts: ['research', 'secondary'], count: 2, pool: 'codex' }, kind: 'ledger_record_parked', link: { id: 'codex', page: 'pools' }, pools: ['codex'], since: at(8), subject: { id: 'codex', label: 'codex', type: 'pool' } },
+    { detail: { accounts: ['research', 'secondary'], count: 2, pool: 'jobs' }, kind: 'ledger_record_parked', link: { id: 'jobs', page: 'pools' }, pools: ['jobs'], since: at(8), subject: { id: 'jobs', label: 'jobs', type: 'pool' } },
     { ...account('secondary', 'secondary'), detail: { account: 'secondary', backoff_since: now - 2 * 3_600_000, next_attempt_at: null, rate_limited_in_a_row: 6 }, kind: 'poll_backoff', pools: ['all'], since: at(2) },
   ];
   const a = await mountNode(h(AttentionRows, { items, now }));
@@ -2039,14 +2527,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const row = (label, tone, subject, href, detail, age, log) => [label, tone, subject, href ? 'A' : 'SPAN', href, detail, `${detail} (${age})${log ? `\n${log}` : ''}`];
   const exhaustedSince = at(1);
   const want = [
-    row('Pool exhausted', 'badge--critical', 'codex', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'codex', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h 0m ago', `Opens the Routing log: pool codex, exhausted, since ${exhaustedSince.slice(11, 16)}`),
+    row('Pool exhausted', 'badge--critical', 'jobs', `/routing-log?${new URLSearchParams({ kinds: 'exhausted', pools: 'jobs', from: exhaustedSince, to: isoAt(now) })}`, 'no member could take a request from key ci', '1h 0m ago', `Opens the Routing log: pool jobs, exhausted, since ${exhaustedSince.slice(11, 16)}`),
     row('Client drift', 'badge--serious', '2.1.271', '/keys#laptop', 'its billing hash differs from the pinned build, newest refusal from key laptop', '3h 0m ago'),
     row('Client drift', 'badge--serious', '2.1.272', null, 'its version suffix differs from the pinned build', '2h 0m ago'),
     row('State writer degraded', 'badge--serious', 'ledger', null, 'ledger batches are being retried; budgeted members are held back until a batch lands', '1h 0m ago'),
     row('Re-auth required', 'badge--critical', 'legacy', '/accounts/legacy', 'serves nothing until its credential is renewed', '5h 0m ago'),
     row('Funding required', 'badge--serious', 'Research workspace', '/accounts/research', 'serves nothing until its organization is funded again', '4h 0m ago'),
     row('Credential refresh failed', 'badge--critical', 'legacy', '/accounts/legacy', '3 refreshes failed in a row: invalid_grant', '6h 0m ago'),
-    row('Priced record parked', 'badge--serious', 'codex', null, '2 priced records parked, landing at the next start or replay (research, secondary)', '8h 0m ago'),
+    row('Priced record parked', 'badge--serious', 'jobs', null, "2 priced records parked, landing at the next start or on the dashboard's Replay (research, secondary)", '8h 0m ago'),
     row('Usage poll backing off', 'badge--warning', 'secondary', '/accounts/secondary', '6 rate-limited answers in a row', '2h 0m ago'),
   ];
   results.push({
@@ -2085,21 +2573,21 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const el = [...page.container.querySelectorAll(target.selector)].find((e) => e.id === target.id) ?? null;
     return { early, focused: el !== null && document.activeElement === el, page, scrolled: JSON.stringify(scrolls) };
   };
-  const card = { id: 'codex', selector: '.pool' };
+  const card = { id: 'jobs', selector: '.pool' };
   const row = { id: 'laptop', selector: 'tbody tr' };
-  const pool = await arrive('/pools#codex', null, card);
-  await pool.page.navigate('/pools?edit=codex#codex');
+  const pool = await arrive('/pools#jobs', null, card);
+  await pool.page.navigate('/pools?edit=jobs#jobs');
   const rewritten = pool.page.location();
   results.push({
     name: "/pools#<pool id> scrolls the card into view and focuses it, and the dialog query's rewrite that keeps the hash scrolls nothing more",
-    ok: pool.scrolled === JSON.stringify([['SECTION', 'codex', 'smooth']]) && pool.focused && JSON.stringify(scrolls) === pool.scrolled && rewritten.search === '' && rewritten.hash === '#codex',
+    ok: pool.scrolled === JSON.stringify([['SECTION', 'jobs', 'smooth']]) && pool.focused && JSON.stringify(scrolls) === pool.scrolled && rewritten.search === '' && rewritten.hash === '#jobs',
     missing: [pool.scrolled, `focused ${pool.focused}`, JSON.stringify(scrolls), JSON.stringify(rewritten)],
   });
   pool.page.unmount();
-  const latePool = await arrive('/pools#codex', 'listPools', card);
+  const latePool = await arrive('/pools#jobs', 'listPools', card);
   results.push({
     name: '/pools#<pool id> still lands on the card when the pools answer after the page has mounted',
-    ok: latePool.early === 0 && latePool.scrolled === JSON.stringify([['SECTION', 'codex', 'smooth']]) && latePool.focused,
+    ok: latePool.early === 0 && latePool.scrolled === JSON.stringify([['SECTION', 'jobs', 'smooth']]) && latePool.focused,
     missing: [`before the answer ${latePool.early}`, latePool.scrolled, `focused ${latePool.focused}`],
   });
   latePool.page.unmount();
@@ -2119,8 +2607,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   window.matchMedia = matchMedia;
   results.push({ name: '/keys#<key id> under reduced motion brings the row into view without the smooth scroll', ok: reduced.scrolled === JSON.stringify([['TR', 'laptop', 'auto']]) && reduced.focused, missing: [reduced.scrolled, `focused ${reduced.focused}`] });
   reduced.page.unmount();
-  // laptop is all's key, so a filter to codex would hide its row.
-  const filtered = await arrive('/keys?pool=codex#laptop', null, row);
+  // laptop is all's key, so a filter to jobs would hide its row.
+  const filtered = await arrive('/keys?pool=jobs#laptop', null, row);
   const cleared = filtered.page.location();
   results.push({
     name: '/keys#<key id> clears a pool filter that hides the row, then lands on it',
@@ -2174,14 +2662,14 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // The card reads the router's figures in whole hours, floored, right after the keepalive chip, and a pool that keeps
   // no caches warm draws no line. The story's `work` holds one plan member on the hour, so it reads one figure each,
-  // while `all` mixes plan members with the Anthropic-key `overflow` on five minutes and reads both ends.
+  // while `all` mixes plan members with the API-key `overflow` on five minutes and reads both ends.
   const cards = [...m.container.querySelectorAll('.pool')];
   const ceilingsOf = (id) => cards.find((c) => c.id === id)?.querySelector('.pool__ceilings') ?? null;
   const work = ceilingsOf('work');
   results.push({
     name: '/pools the pool card reads the three resolved ceilings',
-    ok: work?.textContent === 'idle 1h · parked 44h · horizon 44h' && work.previousElementSibling?.textContent?.trim() === 'keepalive' && ceilingsOf('codex') === null,
-    missing: [work?.textContent ?? 'no line on the work card', work?.previousElementSibling?.textContent ?? '', String(ceilingsOf('codex')?.textContent)],
+    ok: work?.textContent === 'idle 1h · parked 44h · horizon 44h' && work.previousElementSibling?.textContent?.trim() === 'keepalive' && ceilingsOf('jobs') === null,
+    missing: [work?.textContent ?? 'no line on the work card', work?.previousElementSibling?.textContent ?? '', String(ceilingsOf('jobs')?.textContent)],
   });
   const hint = (dlg) => group(dlg, 'Keepalive');
   const linesOf = (dlg) => [...(hint(dlg)?.querySelectorAll('.keepalive-resolved') ?? [])].map((l) => l.textContent?.replace(/\s+/g, ' ').trim());
@@ -2244,7 +2732,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(300);
   const dlg = m.container.querySelector('dialog[open]');
   const t = dlg?.textContent ?? '';
-  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an Anthropic-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
+  expect('/pools edit dialog prefilled', t, ['Edit pool all', 'Name', 'Status', 'Strategy', 'Session affinity', 'How long a session stays on its account after its last request; off keeps no pins, and a custom value is at least 60 seconds.', 'off', '5m', '10m', '1h', '4h', 'custom', 'Shed ahead of pace', 'Prefer plan quota:', 'move sessions to a sibling with plan quota when this account starts billing extra usage', "caps a member's spend in dollars: an API-key member's whole spend, a subscription member's overage and fast answers.", 'Allow:', 'ignore extra usage', 'Never:', 'treat an account in extra usage as unavailable until its window resets', 'Keep prompt caches warm', 'Max idle (s)', 'Max parked (s)', 'Scheduled horizon (s)', 'Cost reference', 'Members', 'Priority', 'Keys', 'Create key', 'desktop', 'laptop', 'phoebis-8f2a', 'active', "A key reaches only this pool's members. Create key, Move to and Revoke apply at once, without Save pool; rotation and expiry are on the Keys page", 'Save pool', 'Model rules', 'Allow', 'Deny', 'Add rule', 'written with a trailing *']);
   const nameInput = group(dlg, 'Identity')?.querySelector('input[placeholder="research"]');
   results.push({ name: '/pools edit dialog name prefilled', ok: nameInput?.value === 'all', missing: [nameInput?.value] });
   const keysMulti = [...(dlg?.querySelectorAll('.mselect__trigger') ?? [])].map((b) => b.textContent?.trim()).filter((x) => x?.startsWith('Keys'));
@@ -2336,7 +2824,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools the Keepalive warning closes its group', ok: keepalive?.lastElementChild?.classList.contains('callout--warning') === true, missing: [keepalive?.lastElementChild?.className ?? 'no Keepalive group'] });
     const halves = [...(keepalive?.querySelectorAll('.cells > .cell--half') ?? [])].map((c) => c.querySelector('button[role="switch"]')?.getAttribute('aria-label'));
     results.push({ name: '/pools the two switched ceilings share the last row of the Keepalive group', ok: JSON.stringify(halves) === '["Max parked (s)","Scheduled horizon (s)"]' && keepalive?.querySelector('.cells')?.lastElementChild?.querySelector('button[aria-label="Scheduled horizon (s)"]') != null, missing: halves.map(String) });
-    const legacy = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent === 'legacy');
+    const legacy = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === 'legacy');
     const legacyPriority = legacy?.querySelector('input[aria-label="Priority for legacy"]');
     results.push({ name: '/pools a non-member row renders its Priority input disabled', ok: legacy?.querySelector('input[type="checkbox"]')?.checked === false && legacyPriority?.disabled === true, missing: [legacyPriority ? String(legacyPriority.disabled) : 'no Priority input for legacy'] });
 
@@ -2535,7 +3023,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const ticks = [...(util?.querySelectorAll('.ubar__tick') ?? [])].map((tick) => tick.getAttribute('title'));
     results.push({
       name: '/pools the bar draws each member reading with no migrate handle, and the percent field holds the typed margin',
-      ok: percent?.value === '50' && ticks.length === 6 && ticks.includes('primary: 5-hour 62%') && util?.querySelector('[role="slider"][aria-label="Migrate threshold"]') === null && util?.querySelector('.ubar__band') === null,
+      ok: percent?.value === '50' && ticks.length === 6 && ticks.includes('primary: 5-hour 62%') && util?.querySelector('[role="slider"][aria-label="Shed ahead of pace"]') === null && util?.querySelector('.ubar__band') === null,
       missing: [String(percent?.value), ...ticks],
     });
     // At the mock's clock nightly's 5-hour window leads its pace by about 0.71 and secondary's 7-day window by about
@@ -2647,12 +3135,12 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 
   {
     const memberRows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
-    const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
+    const memberLabels = () => memberRows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
     {
       const byLabel = new Map((await api.listAccounts()).map((a) => [a.label, a.id]));
-      await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => tr.querySelector('td:first-child label')).map((l) => [byLabel.get(l?.querySelector('span:nth-child(2)')?.textContent ?? '') ?? '', l?.querySelector('span:nth-child(3)')?.textContent ?? null]));
+      await emailLines('/pools dialog reads each member\'s email beside its label, and nothing beside one without', memberRows().map((tr) => [byLabel.get(tr.querySelector('td:first-child span')?.textContent ?? '') ?? '', tr.querySelector('td:first-child span.mono')?.textContent ?? null]));
     }
-    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace'];
+    const listed = ['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio'];
     results.push({ name: '/pools dialog lists members by priority then label', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     const prio = dlg?.querySelector('input[aria-label="Priority for primary"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
@@ -2662,7 +3150,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     results.push({ name: '/pools priority keystrokes leave the row where it is', ok: JSON.stringify(memberLabels()) === JSON.stringify(listed), missing: memberLabels() });
     prio?.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Enter', bubbles: true }));
     await m.settle(150);
-    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace']), missing: memberLabels() });
+    results.push({ name: '/pools committing a priority re-sorts the list', ok: JSON.stringify(memberLabels()) === JSON.stringify(['nightly', 'secondary', 'Overflow workspace', 'primary', 'legacy', 'Research workspace', 'studio']), missing: memberLabels() });
     setter.call(prio, '0');
     dlg?.querySelector('input[aria-label="Priority for primary"]')?.dispatchEvent(new window.Event('input', { bubbles: true }));
     await m.settle(150);
@@ -2765,7 +3253,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
     const moveDlg = await openMove();
     const before = problems.length;
-    failNextCall('updateKey', '/admin/keys/laptop', 'the pool is disabled');
+    failNextCall('updateKey', '/admin/keys/laptop', 'the pool is disabled', { quiet: true });
     // Held until read, so the button can be seen while the move is out.
     const refuse = api.updateKey;
     let release = () => {};
@@ -2818,7 +3306,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const moveDlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const moveSelect = moveDlg?.querySelector('select[aria-label="Destination pool"]');
   expect('/pools move dialog', moveDlg?.textContent ?? '', ['Move key laptop', 'ends its current session pins', 'Move key']);
-  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'codex,work', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
+  results.push({ name: '/pools move dialog lists the other pools only', ok: [...(moveSelect?.options ?? [])].map((o) => o.value).join(',') === 'jobs,work', missing: [...(moveSelect?.options ?? [])].map((o) => o.value) });
   [...(moveDlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Move key')?.click();
   await m.settle(600);
   results.push({ name: '/pools moved key leaves the list', ok: keyRows().length > 0 && !keyRows().some((tr) => tr.children[0]?.textContent?.trim() === 'laptop'), missing: keyRows().map((tr) => tr.children[0]?.textContent?.trim()) });
@@ -2845,7 +3333,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       name: '/pools the write cost line says when each rule set applies, and the grid says which TTL a keepalive probe follows',
       ok:
         (writeCost?.querySelector(':scope > .field__hint')?.textContent ?? '') ===
-          'Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an Anthropic-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way.' &&
+          'Plan writes apply while an account spends plan quota, where a 1-hour write costs the same as a 5-minute one. Metered writes apply while a write costs money, on an API-key account or a subscription account in overage: 2x input for an hour against 1.25x for five minutes. Reads cost the same either way.' &&
         gridHint === "The TTL each turn writes with, by agent. A keepalive probe replays the turn under its agent's TTL, so the first probe after a turn and every later one follow the same rule." &&
         meteredMain?.value === '5m',
       missing: [writeCost?.querySelector(':scope > .field__hint')?.textContent ?? 'no write cost hint', gridHint || 'no grid hint', meteredMain?.value ?? 'no metered main select'],
@@ -2923,7 +3411,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
       ok: stored === '20000' && refused[0] === true && refused[1] === 'The minimum shared prefix is a whole number of tokens, 0 or more.' && JSON.stringify(cohortOnly) === '[false,true]' && JSON.stringify(neither) === '[true,true,false]' && save()?.disabled === false,
       missing: [String(stored), ...refused.map(String), JSON.stringify(cohortOnly), JSON.stringify(neither)],
     });
-    // Every member row carries a daily and a monthly budget, a subscription member's as an Anthropic-key member's; a
+    // Every member row carries a daily and a monthly budget, a subscription member's as an API-key member's; a
     // budget the member write refuses holds the save.
     const daily = (label) => dlg?.querySelector(`input[aria-label="Daily budget for ${label}, USD"]`);
     const monthly = (label) => dlg?.querySelector(`input[aria-label="Monthly budget for ${label}, USD"]`);
@@ -2931,10 +3419,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     const rows = [daily('Overflow workspace'), monthly('Overflow workspace')].flatMap(field);
     const subscription = [daily('primary'), monthly('primary')].flatMap(field);
     const hint =
-      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an Anthropic-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers); set one, both, or neither.";
+      "A member whose spend reaches its daily or its monthly budget is skipped until that UTC day or month ends, priced at API list rates: an API-key member's whole spend counts, a subscription member's metered spend alone (overage and fast answers); set one, both, or neither.";
     const heads = [...(group(dlg, 'Members')?.querySelectorAll('.members-table thead th') ?? [])].map((th) => th.textContent?.trim());
     results.push({
-      name: "/pools every member row carries a daily and a monthly budget field, a subscription member's as an Anthropic-key member's",
+      name: "/pools every member row carries a daily and a monthly budget field, a subscription member's as an API-key member's",
       ok:
         JSON.stringify(rows) === '["5","none","0.01","any","50","none","0.01","any"]' &&
         JSON.stringify(subscription) === '["","none","0.01","any","30","none","0.01","any"]' &&
@@ -3013,7 +3501,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   {
     const hours = dlg?.querySelector('input[aria-label="Capture retention in hours"]');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set;
-    failNextCall('updatePool', '/admin/pools/all', 'body_capture_hours exceeds stats.body_capture_max_hours', { status: 400 });
+    failNextCall('updatePool', '/admin/pools/all', 'body_capture_hours exceeds stats.body_capture_max_hours', { quiet: true, status: 400 });
     [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
     await m.settle(600);
     const open = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -3073,7 +3561,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // The dialog keys its members by account, so it cannot send a repeat itself; the route's 409 is stubbed to prove the
   // refusal reaches the footer line as the route words it, with the dialog left open.
   const twice = 'members name account overflow twice';
-  failNextCall('updatePool', '/admin/pools/all', twice, { status: 409 });
+  failNextCall('updatePool', '/admin/pools/all', twice, { quiet: true, status: 409 });
   footButton(dlg, 'Save pool')?.click();
   await m.settle(600);
   const repeat = [dlg?.hasAttribute('open') === true, dlg?.querySelector('.dialog__status')?.textContent ?? ''];
@@ -3105,8 +3593,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
   // Through the API, which the mock stamps later than the row the dialog opened with.
   await api.updatePool('all', { ...written, shedAheadOfPace: 0.3 });
+  const staleSave = countCalls('updatePool');
   footButton(stale, 'Save pool')?.click();
   await m.settle(600);
+  staleSave.restore();
+  results.push({
+    name: '/pools a stale save sends the revision the dialog opened with',
+    ok: staleSave.calls.length === 1 && staleSave.calls[0][2] === story.revision,
+    missing: [String(staleSave.calls.length), String(staleSave.calls[0]?.[2]), String(story.revision)],
+  });
   const sentence = 'the pool changed while it was being edited; reload and try again';
   const callout = stale?.querySelector('.dialog__body--grouped [role="alert"]');
   const reload = [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');
@@ -3303,21 +3798,21 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const name = [...(group(dlg, 'Identity')?.querySelectorAll('.field') ?? [])].find((f) => f.querySelector('.field__label')?.textContent?.trim() === 'Name');
   const input = name?.querySelector('input');
-  if (input) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Codex');
+  if (input) Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(input, 'Jobs');
   input?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(150);
   const create = [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create pool');
   const read = [name?.querySelector('.field__hint')?.textContent ?? '', dlg?.querySelector('.dialog__status')?.textContent ?? '', create?.disabled, input?.getAttribute('aria-invalid')];
   results.push({
-    name: '/pools typing Codex beside the story pool codex holds Save and shows the id under Name',
-    ok: read[0].endsWith(' Id: codex') && read[1] === 'Save is held: Another pool already has the id codex.Go to Identity' && read[2] === true && read[3] === 'true',
+    name: '/pools typing Jobs beside the story pool jobs holds Save and shows the id under Name',
+    ok: read[0].endsWith(' Id: jobs') && read[1] === 'Save is held: Another pool already has the id jobs.Go to Identity' && read[2] === true && read[3] === 'true',
     missing: read.map(String),
   });
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(200);
 }
 {
-  const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool codex');
+  const edit = [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool jobs');
   edit?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
@@ -3362,7 +3857,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
 {
   // An edit left in the Keepalive group of a pool whose warming ends up off is neither sent nor allowed to hold the
   // save: the mock refuses an idle window past a year the way the route does, so a save that sent it would stay open.
-  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool codex')?.click();
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool jobs')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const chip = (label) => [...(dlg?.querySelectorAll('[aria-label="Session affinity"] .pill') ?? [])].find((c) => c.textContent?.trim() === label);
@@ -3386,18 +3881,124 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   save()?.click();
   await m.settle(700);
   const open = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'codex');
+  const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'jobs');
   results.push({
     name: '/pools an idle window left in a block whose warming is off is not sent and holds nothing',
     // The dialog offers active and disabled alone, so the save turns the exhausted pool active, and the write clears
     // the spend that held its member: the sentence reads what the save left.
-    ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool codex') && card?.querySelector('.pool__status')?.textContent?.replace(/\s+/g, ' ').trim() === 'Active: Research workspace takes every fresh session.',
-    missing: [String(heldWhileOn), String(freedWhenOff), open?.querySelector('.callout--critical')?.textContent ?? 'no callout', card?.querySelector('.pool__status')?.textContent ?? 'no codex card'],
+    ok: heldWhileOn && freedWhenOff && !(open?.textContent ?? '').includes('Edit pool jobs') && card?.querySelector('.pool__status')?.textContent?.replace(/\s+/g, ' ').trim() === 'Active: Research workspace takes every fresh session.',
+    missing: [String(heldWhileOn), String(freedWhenOff), open?.querySelector('.callout--critical')?.textContent ?? 'no callout', card?.querySelector('.pool__status')?.textContent ?? 'no jobs card'],
   });
-  if ((open?.textContent ?? '').includes('Edit pool codex')) {
+  if ((open?.textContent ?? '').includes('Edit pool jobs')) {
     [...(open?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
     await m.settle(200);
   }
+}
+{
+  // primary sits in all, so the work dialog marks it held there and offers neither a checkbox nor a field for it.
+  // Blanks of their size stand in the checkbox's place and the Priority cell, so the row keeps the others' alignment.
+  m.unmount();
+  m = await mount('/pools');
+  [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
+  await m.settle(300);
+  const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
+  const primary = [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === 'primary');
+  const marking = primary?.querySelector('td:first-child span.muted:not(.mono)');
+  const cells = [...(primary?.querySelectorAll('td') ?? [])].slice(1).map((td) => [...td.children].map((c) => c.className).join(' '));
+  const spacer = primary?.querySelector('td:first-child .row')?.firstElementChild?.className;
+  results.push({
+    name: '/pools the work dialog marks primary as held by all, with no checkbox and no field, and blanks in their place',
+    ok:
+      marking?.textContent === 'In pool all' &&
+      marking.getAttribute('title') === 'An account belongs to one pool. Remove it from all first.' &&
+      !!primary &&
+      primary.querySelector('input') === null &&
+      spacer === 'members-table__check' &&
+      JSON.stringify(cells) === '["input members-table__blank","",""]',
+    missing: [marking?.textContent ?? 'no marking', marking?.getAttribute('title') ?? 'no title', primary?.querySelector('input') ? 'an input' : 'no input', String(spacer), JSON.stringify(cells)],
+  });
+  expect('/pools the Members hint says an account belongs to one pool', group(dlg, 'Members')?.querySelector('.field__hint')?.textContent ?? '', ['An account belongs to one pool.']);
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await m.settle(200);
+  m.unmount();
+  m = await mount('/pools');
+}
+{
+  // A re-read can find another pool holding a member the dialog has ticked: the row keeps its checkbox, so the operator
+  // can untick it, and only then reads held. The pools read here answers work holding primary as well, as a re-read
+  // would once another pool took it.
+  const listPools = api.listPools;
+  api.listPools = async () => (await listPools.call(api)).map((p) => (p.id === 'work' ? { ...p, members: [...p.members, { ...p.members[0], accountId: 'primary' }] } : p));
+  const page = await mount('/pools');
+  [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+  await page.settle(300);
+  const dlg = [...page.container.querySelectorAll('dialog[open]')].pop();
+  const row = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === 'primary');
+  const box = row()?.querySelector('input[type="checkbox"]');
+  const ticked = box?.checked === true;
+  box?.click();
+  await page.settle(150);
+  const unticked = row()?.querySelector('td:first-child span.muted:not(.mono)')?.textContent ?? null;
+  results.push({
+    name: '/pools a ticked member a re-read finds in another pool keeps its checkbox, and reads held there once unticked',
+    ok: ticked && unticked === 'In pool work' && row()?.querySelector('input') === null,
+    missing: [`ticked ${ticked}`, String(unticked)],
+  });
+  [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
+  await page.settle(200);
+  api.listPools = listPools;
+  page.unmount();
+}
+{
+  // A mount of its own, whose provider holds the shell's toast: a save the route refuses for a field and the stale
+  // story's 409 each read in the pool dialog alone, and the stale footer says what is held.
+  const page = await mount('/pools');
+  const openAll = async () => {
+    [...page.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
+    await page.settle(300);
+    return [...page.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const footButton = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const toast = () => page.container.querySelector('.toast')?.textContent ?? '';
+  let dlg = await openAll();
+  failNextCall('updatePool', '/admin/pools/all', 'shed_share is between 0 and 1', { quiet: true, status: 400 });
+  footButton(dlg, 'Save pool')?.click();
+  await page.settle(600);
+  const refused = [String(dlg?.hasAttribute('open')), dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
+  results.push({ name: '/pools a save the route refuses for a field reads in the dialog footer and raises no toast', ok: JSON.stringify(refused) === JSON.stringify(['true', 'shed_share is between 0 and 1', '']), missing: refused });
+  footButton(dlg, 'Cancel')?.click();
+  await page.settle(400);
+  dlg = await openAll();
+  const story = (await api.listPools()).find((p) => p.id === 'all');
+  // Another operator's write through the API: the same settings under a later stamp.
+  await api.updatePool('all', { ...story, members: story.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  footButton(dlg, 'Save pool')?.click();
+  await page.settle(600);
+  const held = [dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
+  results.push({
+    name: "/pools a stale refusal's footer says the save is held because the pool changed, and no toast repeats it",
+    ok: JSON.stringify(held) === JSON.stringify(['Save is held: the pool changed since you opened it. Reload to edit the current version.', '']),
+    missing: held,
+  });
+  // A local refusal typed after the stale one leaves the line on the stale sentence, with no Go to beside it.
+  const blank = dlg?.querySelector('input[placeholder="research"]');
+  if (blank) {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(blank, '');
+    blank.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  await page.settle(150);
+  const typed = [dlg?.querySelector('.dialog__status')?.textContent ?? '', String(dlg?.querySelector('.dialog__status button') ?? null)];
+  results.push({
+    name: '/pools a local refusal typed after a stale one leaves the stale sentence alone in the footer, with no Go to',
+    ok: JSON.stringify(typed) === JSON.stringify(['Save is held: the pool changed since you opened it. Reload to edit the current version.', 'null']),
+    missing: typed,
+  });
+  footButton(dlg, 'Cancel')?.click();
+  await page.settle(400);
+  page.unmount();
+  // The write above moved the pool's stamp under the page mounted before it, which reads its lists again.
+  m.unmount();
+  m = await mount('/pools');
 }
 {
   // Emptying a stored budget sends none, which clears it, and leaves the member's other budget as it stood.
@@ -3427,20 +4028,20 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   // A budget on a subscription member bounds its metered spend: one stored through the API draws its two fields and
   // its metered lines, and the dialog's save keeps it.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.updatePool('work', { ...work, members: [{ accountId: 'primary', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
+  await api.updatePool('work', { ...work, members: [{ accountId: 'studio', budgetDailyUsd: 30, budgetMonthlyUsd: 300, priority: 0 }] });
   m.unmount();
   m = await mount('/pools');
   const card = [...m.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'work');
-  const row = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'primary');
+  const row = [...(card?.querySelectorAll('.serving tbody tr') ?? [])].find((tr) => tr.children[1]?.querySelector('a')?.textContent?.trim() === 'studio');
   const lines = [...(row?.querySelectorAll('td:nth-child(2) .num') ?? [])].map((c) => c.textContent?.replace(/\s+/g, ' ').trim());
   const standingBadges = [...(row?.querySelectorAll('td:nth-child(3) .badge') ?? [])].map((b) => b.textContent?.trim());
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const fields = ['Daily', 'Monthly'].map((period) => dlg?.querySelector(`input[aria-label="${period} budget for primary, USD"]`)?.value ?? null);
+  const fields = ['Daily', 'Monthly'].map((period) => dlg?.querySelector(`input[aria-label="${period} budget for studio, USD"]`)?.value ?? null);
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool')?.click();
   await m.settle(700);
-  const stored = (await api.listPools()).find((p) => p.id === 'work')?.members.find((x) => x.accountId === 'primary');
+  const stored = (await api.listPools()).find((p) => p.id === 'work')?.members.find((x) => x.accountId === 'studio');
   results.push({
     name: '/pools a budget on a subscription member draws its two fields and a save keeps it',
     ok:
@@ -3456,9 +4057,15 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await api.updatePool('work', work);
 }
 {
-  // A round marks the triggering pool's pins alone: with laptop moved into work, work's one primary pin (the busy
-  // laptop session) is its slice's last unmarked pin, so its preview sheds nothing, whatever desktop holds there. The
-  // mock's cost model has no weight for the pin's Sonnet 5 either, so the 0 holds from both causes.
+  // A round counts the triggering pool's pins alone: with primary moved from all into work and laptop moved into work,
+  // work's one primary pin (the busy laptop session) is its slice's last unmarked pin, so its preview sheds nothing,
+  // whatever desktop, still all's key, holds there. The mock's cost model has no weight for the pin's Sonnet 5 either,
+  // so the 0 holds from both causes.
+  const pools = await api.listPools();
+  const story = (id) => pools.find((p) => p.id === id);
+  const written = (p, members) => ({ ...p, members: members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })) });
+  await api.updatePool('all', written(story('all'), story('all').members.filter((x) => x.accountId !== 'primary')));
+  await api.updatePool('work', written(story('work'), [...story('work').members, { accountId: 'primary', budgetDailyUsd: null, budgetMonthlyUsd: null, priority: 0 }]));
   const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
   const moveLaptop = (poolId) =>
     api.updateKey('laptop', {
@@ -3489,7 +4096,7 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   const line = group(dlg, 'Load shedding')?.querySelector('.shed-preview')?.textContent ?? '';
   results.push({
-    name: "/pools the shedding preview counts the pool's own pins alone on an account shared with another pool",
+    name: "/pools the shedding preview counts the pool's own pins alone on an account that left another pool",
     // The unit shows the round ran over a pin, since a member with no pin in the slice reads none, and the unpriced
     // count that it ran over laptop's one pin alone.
     ok: /^Would (move|mark) 0 sessions, 0 warm, 0% of the burn in window share\b.* 1 pin the cost model cannot price stays\.$/.test(line),
@@ -3498,6 +4105,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Cancel')?.click();
   await m.settle(300);
   await moveLaptop(laptop.poolId);
+  await api.updatePool('work', written(story('work'), story('work').members));
+  await api.updatePool('all', written(story('all'), story('all').members));
+  m.unmount();
+  m = await mount('/pools');
 }
 {
   // A threshold the API stored finer than a percent reopens as stored and survives a save of another field, and a
@@ -3621,7 +4232,7 @@ m.unmount();
   const unchecked = !(dlg?.textContent ?? '').includes('is not an account') && members?.querySelector('.members-table') === null;
   retry?.click();
   await m.settle(600);
-  const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
+  const labels = [...(members?.querySelectorAll('.members-table tbody tr') ?? [])].map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: "/pools a failed accounts read holds the dialog's save without naming a member",
     ok:
@@ -3630,7 +4241,7 @@ m.unmount();
       held.startsWith('Save is held: the account list did not load, so the members cannot be checked.') &&
       held.includes('Go to Members') &&
       unchecked &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio']) &&
       status() === 'Every group saves together.',
     missing: [...failed.map(String), retry ? 'Try again' : 'no Try again', held, unchecked ? '' : 'a member refusal or a table while the read failed', ...labels.map(String), status()],
   });
@@ -3648,18 +4259,18 @@ m.unmount();
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
   const rows = () => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])];
   const status = () => dlg?.querySelector('.dialog__status')?.textContent ?? '';
-  const early = rows().map((tr) => [tr.querySelector('td:first-child label span:nth-child(2)')?.textContent, tr.querySelector('input[type="checkbox"]')?.checked, tr.querySelector('.badge') === null]);
+  const early = rows().map((tr) => [tr.querySelector('td:first-child span')?.textContent, tr.querySelector('input[type="checkbox"]')?.checked, tr.querySelector('.badge') === null]);
   const before = status();
   read.release();
   await m.settle(600);
   read.restore();
-  const labels = rows().map((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent);
+  const labels = rows().map((tr) => tr.querySelector('td:first-child span')?.textContent);
   results.push({
     name: '/pools while the accounts read is out the stored members draw unmarked and hold nothing',
     ok:
       JSON.stringify(early) === JSON.stringify([['nightly', true, true], ['overflow', true, true], ['primary', true, true], ['secondary', true, true]]) &&
       before === 'Every group saves together.' &&
-      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace']) &&
+      JSON.stringify(labels) === JSON.stringify(['nightly', 'primary', 'secondary', 'Overflow workspace', 'legacy', 'Research workspace', 'studio']) &&
       status() === 'Every group saves together.',
     missing: [JSON.stringify(early), before, ...labels.map(String), status()],
   });
@@ -3679,7 +4290,7 @@ m.unmount();
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool all')?.click();
   await m.settle(300);
   const dlg = [...m.container.querySelectorAll('dialog[open]')].pop();
-  const rowOf = (name) => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child label span:nth-child(2)')?.textContent === name);
+  const rowOf = (name) => [...(dlg?.querySelectorAll('.members-table tbody tr') ?? [])].find((tr) => tr.querySelector('td:first-child span')?.textContent === name);
   const save = () => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Save pool');
   const status = () => dlg?.querySelector('.dialog__status')?.textContent ?? '';
   const secondary = rowOf('secondary');
@@ -3832,8 +4443,9 @@ localStorage.removeItem('phoebis.expertView');
 // line and the Keys tiles wait for the refresh rather than read "No keys yet" and 0, and a failed refresh reads
 // unavailable rather than the list from before it.
 {
+  // No member, since each of the story's accounts already belongs to a pool.
   const work = (await api.listPools()).find((p) => p.id === 'work');
-  await api.createPool({ ...work, members: work.members.map((x) => ({ accountId: x.accountId, budgetDailyUsd: x.budgetDailyUsd, budgetMonthlyUsd: x.budgetMonthlyUsd, priority: x.priority })), name: 'keyless' });
+  await api.createPool({ ...work, members: [], name: 'keyless' });
   const read = (page) => {
     const card = [...page.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'keyless');
     const tile = [...(card?.querySelectorAll('.pool__stats > div') ?? [])].find((d) => d.querySelector('dt')?.textContent?.trim() === 'Keys')?.querySelector('dd');
@@ -3935,9 +4547,9 @@ localStorage.removeItem('phoebis.expertView');
   });
   dialogOf(q)?.querySelector('button[aria-label="Close"]')?.click();
   await q.settle(200);
-  await q.navigate('/pools?edit=codex&group=shedding');
+  await q.navigate('/pools?edit=jobs&group=shedding');
   await q.settle(200);
-  results.push({ name: '/pools a search change on the mounted page opens the dialog on its group', ok: titleOf(q) === 'Edit pool codex' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
+  results.push({ name: '/pools a search change on the mounted page opens the dialog on its group', ok: titleOf(q) === 'Edit pool jobs' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
   q.unmount();
   // The card's strip writes the same address, and the page reads it on every change, so a second badge opens too.
   q = await mount('/pools');
@@ -3947,9 +4559,9 @@ localStorage.removeItem('phoebis.expertView');
   results.push({ name: "/pools the all card's cache TTL badge opens Edit pool all on Cache TTL and leaves the address at /pools", ok: titleOf(q) === 'Edit pool all' && shown(q) === 'Cache TTL' && q.location().pathname === '/pools' && q.location().search === '', missing: [titleOf(q), shown(q), JSON.stringify(q.location())] });
   dialogOf(q)?.querySelector('button[aria-label="Close"]')?.click();
   await q.settle(200);
-  poolCard('codex')?.querySelector('.pool__features a[href="/pools?edit=codex&group=shedding"]')?.click();
+  poolCard('jobs')?.querySelector('.pool__features a[href="/pools?edit=jobs&group=shedding"]')?.click();
   await q.settle(300);
-  results.push({ name: "/pools the strip's badges open the dialog twice in a row", ok: titleOf(q) === 'Edit pool codex' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
+  results.push({ name: "/pools the strip's badges open the dialog twice in a row", ok: titleOf(q) === 'Edit pool jobs' && shown(q) === 'Load shedding' && q.location().search === '', missing: [titleOf(q), shown(q), q.location().search] });
   q.unmount();
   q = await mount('/pools?edit=nope');
   await q.settle(200);
@@ -4385,7 +4997,7 @@ localStorage.removeItem('phoebis.expertView');
   localStorage.removeItem('phoebis.expertView');
   p.unmount();
   p = await mount('/pools');
-  [...p.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'codex')?.querySelector('.pool__features a[href="/pools?edit=codex&group=shedding"]')?.click();
+  [...p.container.querySelectorAll('.pool')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'jobs')?.querySelector('.pool__features a[href="/pools?edit=jobs&group=shedding"]')?.click();
   await p.settle(300);
   dlg = p.container.querySelector('dialog[open]');
   results.push({
@@ -4510,15 +5122,15 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
 // The Pool select is the address: `?pool=<id>` filters the rows, All pools clears it, and an unknown id reads as All
 // pools and leaves the address.
 {
-  // The /pools checks above move a key into codex and create one in all, so every count is the store's at this point.
+  // The /pools checks above move a key into jobs and create one in all, so every count is the store's at this point.
   const stored = await api.listKeys();
   const inPool = (id) => stored.filter((key) => key.poolId === id).length;
   // A filter that keeps every row, or none, would pass the cell reads without filtering anything.
   const narrows = (id) => inPool(id) > 0 && inPool(id) < stored.length;
   const poolCells = (page) => [...page.container.querySelectorAll('.card--table tbody tr td:nth-child(3)')].map((td) => td.textContent?.trim());
   const select = (page) => page.container.querySelector('.table-toolbar select[aria-label="Pool"]');
-  let k = await mount('/keys?pool=codex');
-  results.push({ name: "/keys?pool=codex lists the pool's keys alone with the Pool select on codex", ok: narrows('codex') && poolCells(k).length === inPool('codex') && poolCells(k).every((c) => c === 'codex') && select(k)?.value === 'codex', missing: [`expected ${inPool('codex')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
+  let k = await mount('/keys?pool=jobs');
+  results.push({ name: "/keys?pool=jobs lists the pool's keys alone with the Pool select on jobs", ok: narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs') && select(k)?.value === 'jobs', missing: [`expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k), select(k)?.value ?? 'no select'] });
   const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
   const choosePool = async (page, id) => {
     const target = select(page);
@@ -4542,9 +5154,9 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   // key count link lands on the pool's rows from the first render, never on every key.
   // The select holds an option for the id meanwhile, since one it lacks would read All pools beside filtered rows.
   const options = (page) => [...(select(page)?.options ?? [])].map((o) => [o.value, o.textContent]);
-  const codexName = (await api.listPools()).find((p) => p.id === 'codex')?.name;
+  const jobsName = (await api.listPools()).find((p) => p.id === 'jobs')?.name;
   const heldPools = deferNextCall('listPools');
-  k = await mount('/keys?pool=codex');
+  k = await mount('/keys?pool=jobs');
   const waiting = poolCells(k);
   const waitingSearch = k.location().search;
   const waitingSelect = [select(k)?.value ?? 'no select', options(k)];
@@ -4552,39 +5164,39 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   heldPools.restore();
   await k.settle(300);
   results.push({
-    name: "/keys?pool=codex lists the pool's keys alone with the Pool select on codex while the pools are still loading",
+    name: "/keys?pool=jobs lists the pool's keys alone with the Pool select on jobs while the pools are still loading",
     ok:
-      narrows('codex') &&
+      narrows('jobs') &&
       heldPools.calls.length > 0 &&
-      waiting.length === inPool('codex') &&
-      waiting.every((c) => c === 'codex') &&
-      waitingSearch === '?pool=codex' &&
-      JSON.stringify(waitingSelect) === JSON.stringify(['codex', [['', 'All pools'], ['codex', 'codex']]]) &&
-      poolCells(k).length === inPool('codex') &&
-      select(k)?.value === 'codex' &&
-      JSON.stringify(options(k).filter(([value]) => value === 'codex')) === JSON.stringify([['codex', codexName]]) &&
-      k.location().search === '?pool=codex',
-    missing: [`expected ${inPool('codex')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingSelect), `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', JSON.stringify(options(k)), k.location().search],
+      waiting.length === inPool('jobs') &&
+      waiting.every((c) => c === 'jobs') &&
+      waitingSearch === '?pool=jobs' &&
+      JSON.stringify(waitingSelect) === JSON.stringify(['jobs', [['', 'All pools'], ['jobs', 'jobs']]]) &&
+      poolCells(k).length === inPool('jobs') &&
+      select(k)?.value === 'jobs' &&
+      JSON.stringify(options(k).filter(([value]) => value === 'jobs')) === JSON.stringify([['jobs', jobsName]]) &&
+      k.location().search === '?pool=jobs',
+    missing: [`expected ${inPool('jobs')} of ${stored.length}`, `held ${heldPools.calls.length}`, `loading ${waiting.join(',')}`, waitingSearch, JSON.stringify(waitingSelect), `loaded ${poolCells(k).join(',')}`, select(k)?.value ?? 'no select', JSON.stringify(options(k)), k.location().search],
   });
   k.unmount();
   failNextCall('listPools', '/admin/pools', 'the pool store is unavailable');
-  k = await mount('/keys?pool=codex');
+  k = await mount('/keys?pool=jobs');
   const failed = poolCells(k);
   const failedValue = select(k)?.value ?? 'no select';
   await choosePool(k, '');
   results.push({
-    name: '/keys?pool=codex after a failed pool read keeps the rows filtered and the Pool select on codex, and All pools clears both',
-    ok: narrows('codex') && failed.length === inPool('codex') && failed.every((c) => c === 'codex') && failedValue === 'codex' && select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '',
-    missing: [`expected ${inPool('codex')} of ${stored.length}`, `failed ${failed.join(',')}`, failedValue, select(k)?.value ?? 'no select', `cleared ${poolCells(k).length}`, k.location().search],
+    name: '/keys?pool=jobs after a failed pool read keeps the rows filtered and the Pool select on jobs, and All pools clears both',
+    ok: narrows('jobs') && failed.length === inPool('jobs') && failed.every((c) => c === 'jobs') && failedValue === 'jobs' && select(k)?.value === '' && poolCells(k).length === stored.length && k.location().search === '',
+    missing: [`expected ${inPool('jobs')} of ${stored.length}`, `failed ${failed.join(',')}`, failedValue, select(k)?.value ?? 'no select', `cleared ${poolCells(k).length}`, k.location().search],
   });
   k.unmount();
-  k = await mount('/keys?pool=codex&edit=batch&group=models');
+  k = await mount('/keys?pool=jobs&edit=batch&group=models');
   await k.settle(200);
   const dlg = k.container.querySelector('dialog[open]');
   results.push({
     name: '/keys the pool filter survives the dialog query',
-    ok: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join() === 'Models' && k.location().search === '?pool=codex' && narrows('codex') && poolCells(k).length === inPool('codex') && poolCells(k).every((c) => c === 'codex'),
-    missing: [k.location().search, `expected ${inPool('codex')} of ${stored.length}`, ...poolCells(k)],
+    ok: [...(dlg?.querySelectorAll('section.dialog-group:not([hidden])') ?? [])].map((s) => s.getAttribute('aria-label')).join() === 'Models' && k.location().search === '?pool=jobs' && narrows('jobs') && poolCells(k).length === inPool('jobs') && poolCells(k).every((c) => c === 'jobs'),
+    missing: [k.location().search, `expected ${inPool('jobs')} of ${stored.length}`, ...poolCells(k)],
   });
   k.unmount();
 }
@@ -4614,7 +5226,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   };
   const status = () => dlg?.querySelector('.dialog__status');
   const read = () => `${status()?.classList.contains('is-held') ? 'held' : 'free'} | ${status()?.textContent ?? ''}`;
-  failNextCall('createKey', '/admin/keys', 'name is taken');
+  failNextCall('createKey', '/admin/keys', 'name is taken', { quiet: true });
   await type(dlg?.querySelector('input[placeholder="workstation"]'), 'taken');
   [...(dlg?.querySelectorAll('.dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === 'Create')?.click();
   await m.settle(400);
@@ -4763,8 +5375,8 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     await m.settle(120);
     const labels = [...(models?.querySelectorAll('.field__label') ?? [])].map((l) => l.textContent?.trim());
     results.push({
-      name: "/keys the pool's rules show in grey under extend and go under replace",
-      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint === "Extend applies the pool's rules, in grey, after this key's own; Replace applies this key's rules alone." && grey().length === 1,
+      name: "/keys the pool's rules show in gray under extend and go under replace",
+      ok: JSON.stringify(extended) === JSON.stringify(['Deny claude-3* from pool']) && mode('Extend pool rules')?.getAttribute('aria-pressed') === 'true' && twins === 'true' && replaced.length === 0 && hint === "Extend applies the pool's rules, in gray, after this key's own; Replace applies this key's rules alone." && grey().length === 1,
       missing: [JSON.stringify(extended), String(twins), JSON.stringify(replaced), hint],
     });
     results.push({
@@ -4859,7 +5471,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     const key = group(editDlg, 'Key');
     const before = key?.querySelector('.callout--warning');
     const setter = Object.getOwnPropertyDescriptor(window.HTMLSelectElement.prototype, 'value').set;
-    setter.call(sel, sel.value === 'all' ? 'codex' : 'all');
+    setter.call(sel, sel.value === 'all' ? 'jobs' : 'all');
     sel.dispatchEvent(new window.Event('change', { bubbles: true }));
     await m.settle(100);
     expect('/keys moving pool shows note', editDlg?.textContent ?? '', ['Moving this key ends its current session pins.']);
@@ -4970,7 +5582,7 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   });
 }
 {
-  // The pool checks moved laptop to codex. Its own dialog moves it back, drawing the grey rows of the pool the
+  // The pool checks moved laptop to jobs. Its own dialog moves it back, drawing the gray rows of the pool the
   // select names before the save; reopened, the list the route processes puts its own rows ahead of the pool's.
   const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
   const foot = (dlg, label) => [...(dlg?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
@@ -4996,8 +5608,8 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   }
   const after = greyOf(dlg);
   results.push({
-    name: '/keys the grey rows follow the pool the dialog names',
-    ok: from === 'codex' && JSON.stringify(before) === JSON.stringify(greyRules(await poolRules('codex'))) && JSON.stringify(after) === JSON.stringify(greyRules(await poolRules('all'))),
+    name: '/keys the gray rows follow the pool the dialog names',
+    ok: from === 'jobs' && JSON.stringify(before) === JSON.stringify(greyRules(await poolRules('jobs'))) && JSON.stringify(after) === JSON.stringify(greyRules(await poolRules('all'))),
     missing: [from, JSON.stringify(before), JSON.stringify(after)],
   });
   foot(dlg, 'Save')?.click();
@@ -5053,8 +5665,15 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
   const stale = await edit('laptop');
   // Through the API, which the mock stamps later than the row the dialog opened with.
   await api.updateKey('laptop', input);
+  const staleSave = countCalls('updateKey');
   foot(stale, 'Save')?.click();
   await m.settle(600);
+  staleSave.restore();
+  results.push({
+    name: '/keys a stale save sends the revision the dialog opened with',
+    ok: staleSave.calls.length === 1 && staleSave.calls[0][2] === laptop.revision,
+    missing: [String(staleSave.calls.length), String(staleSave.calls[0]?.[2]), String(laptop.revision)],
+  });
   const sentence = 'the key changed while it was being edited; reload and try again';
   const callout = stale?.querySelector('.dialog__body--grouped [role="alert"]');
   const reload = [...(callout?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Reload');
@@ -5090,6 +5709,57 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     ok: m.container.querySelector('dialog[open]') === null && labelled('laptop') && (await api.listKeys()).find((k) => k.id === 'laptop')?.name === 'laptop',
     missing: [String(labelled('laptop'))],
   });
+}
+{
+  // A mount of its own, whose provider holds the shell's toast: a save the route refuses for a field and the stale
+  // story's 409 each read in the key dialog alone, and the stale footer says what is held.
+  const page = await mount('/keys');
+  const rows = () => [...page.container.querySelectorAll('.card--table tbody tr')];
+  const edit = async (name) => {
+    rows().find((r) => r.children[0]?.querySelector('b')?.textContent?.trim() === name)?.querySelector('.menu__trigger')?.click();
+    await page.settle(120);
+    [...page.container.querySelectorAll('[role="menuitem"]')].find((b) => b.textContent?.trim() === 'Edit')?.click();
+    await page.settle(400);
+    return [...page.container.querySelectorAll('dialog[open]')].pop();
+  };
+  const foot = (dialog, label) => [...(dialog?.querySelectorAll(':scope > .dialog__inner > .dialog__foot button') ?? [])].find((b) => b.textContent?.trim() === label);
+  const toast = () => page.container.querySelector('.toast')?.textContent ?? '';
+  let dlg = await edit('laptop');
+  failNextCall('updateKey', '/admin/keys/laptop', 'model_rules_mode is extend or replace', { quiet: true, status: 400 });
+  foot(dlg, 'Save')?.click();
+  await page.settle(600);
+  const refused = [String(dlg?.hasAttribute('open')), dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
+  results.push({ name: '/keys a save the route refuses for a field reads in the dialog footer and raises no toast', ok: JSON.stringify(refused) === JSON.stringify(['true', 'model_rules_mode is extend or replace', '']), missing: refused });
+  foot(dlg, 'Cancel')?.click();
+  await page.settle(300);
+  dlg = await edit('laptop');
+  const laptop = (await api.listKeys()).find((k) => k.id === 'laptop');
+  // Another operator's write through the API: the same fields under a later stamp.
+  await api.updateKey('laptop', { autoModeServer: laptop.autoModeServer, bodyCaptureHours: laptop.bodyCaptureHours, enabled: laptop.enabled, keepaliveOptOut: laptop.keepaliveOptOut, longContextTwins: laptop.longContextTwins, modelRules: laptop.modelRules, modelRulesMode: laptop.modelRulesMode, name: laptop.name, notes: laptop.notes, poolId: laptop.poolId });
+  foot(dlg, 'Save')?.click();
+  await page.settle(600);
+  const held = [dlg?.querySelector('.dialog__status')?.textContent ?? '', toast()];
+  results.push({
+    name: "/keys a stale refusal's footer says the save is held because the key changed, and no toast repeats it",
+    ok: JSON.stringify(held) === JSON.stringify(['Save is held: the key laptop changed since you opened it. Reload to edit the current version.', '']),
+    missing: held,
+  });
+  // A local refusal typed after the stale one leaves the line on the stale sentence, with no Go to beside it.
+  const blank = dlg?.querySelector('input[placeholder="workstation"]');
+  if (blank) {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(blank, '');
+    blank.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  await page.settle(150);
+  const typed = [dlg?.querySelector('.dialog__status')?.textContent ?? '', String(dlg?.querySelector('.dialog__status button') ?? null)];
+  results.push({
+    name: '/keys a local refusal typed after a stale one leaves the stale sentence alone in the footer, with no Go to',
+    ok: JSON.stringify(typed) === JSON.stringify(['Save is held: the key laptop changed since you opened it. Reload to edit the current version.', 'null']),
+    missing: typed,
+  });
+  foot(dlg, 'Cancel')?.click();
+  await page.settle(300);
+  page.unmount();
 }
 {
   const rows = () => [...m.container.querySelectorAll('.card--table tbody tr')];
@@ -5182,7 +5852,7 @@ await readsAgain('/keys', 'listKeys');
 
 // A helper that cannot find the control a check needs fails that check by name, so a control that disappears
 // fails the run rather than leaving the check to read a page nothing narrowed.
-const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labelled ${label}`] });
+const controlMissing = (check, label) => results.push({ name: check, ok: false, missing: [`no control labeled ${label}`] });
 
 m = await mount('/models');
 {
@@ -8095,7 +8765,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
 
   await tab(m, 'Burn');
   const planned = legendOf('Plan per hour');
-  const windows = ['primary', 'secondary', 'nightly'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
+  const windows = ['primary', 'secondary', 'nightly', 'studio'].flatMap((id) => [`${id} (5-hour)`, `${id} (7-day)`]);
   const planItems = [...(card('Plan per hour')?.querySelectorAll('.legend li') ?? [])];
   const dashedOf = (items) => items.filter((li) => li.querySelector('.legend__swatch')?.getAttribute('style')?.includes('repeating-linear-gradient')).map((li) => li.textContent ?? '');
   {
@@ -8112,10 +8782,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
         windows.every((w) => planned.includes(w)) &&
         !planned.some((t) => t.startsWith('overflow')) &&
         dashedOf(planItems).every((t) => t.includes('(7-day)')) &&
-        dashedOf(planItems).length === 3 &&
-        fiveHour.length === 3 &&
+        dashedOf(planItems).length === 4 &&
+        fiveHour.length === 4 &&
         fiveHour.every((li) => (labelOf(li).startsWith('secondary ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
-        sevenDay.length === 3 &&
+        sevenDay.length === 4 &&
         sevenDay.every((li) => (labelOf(li).startsWith('secondary ') ? valueOf(li) === '-' : valueOf(li).endsWith('%'))) &&
         unlisted.length === 1 &&
         valueOf(unlisted[0]) === '5-hour, 7-day' &&
@@ -8482,7 +9152,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const columnSum = (i) => body.reduce((n, row) => n + Number(row[i + 1].replace(/,/g, '')), 0);
     results.push({ name: '/analytics panel counts equal the per-group column sums', ok: order.every((label, i) => panel[label] === columnSum(i)), missing: order.map((label, i) => `${label} ${panel[label]} vs ${columnSum(i)}`) });
     const ci = body.find((row) => row[0] === 'ci') ?? [];
-    results.push({ name: '/analytics an Anthropic-key account only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
+    results.push({ name: '/analytics an API-key account only ever reads Not requested', ok: ci.length > 0 && ci.slice(1, 8).every((v) => v === '0') && Number(ci[8]) > 0 && ci[9] === '0', missing: ci });
     const meta = m.container.querySelector('#cache .analytics-section__meta')?.textContent ?? '';
     const metaExpired = Number(/([\d,]+) expired between turns/.exec(meta)?.[1].replace(/,/g, '') ?? -1);
     results.push({ name: '/analytics cache meta matches the table expired column', ok: metaExpired === columnSum(8), missing: [String(metaExpired), String(columnSum(8))] });
@@ -8549,8 +9219,8 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   await tab(m, 'Cache warming');
   {
     const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
-    const codex = [...(warming?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? '')).find((row) => row[0] === 'codex') ?? [];
-    results.push({ name: '/analytics a pool with cache warming off reads zero across the warming table', ok: codex.length > 1 && codex.slice(1, 6).every((v) => v === '0'), missing: codex });
+    const jobs = [...(warming?.querySelectorAll('tbody tr') ?? [])].map((tr) => [...tr.children].map((td) => td.textContent?.trim() ?? '')).find((row) => row[0] === 'jobs') ?? [];
+    results.push({ name: '/analytics a pool with cache warming off reads zero across the warming table', ok: jobs.length > 1 && jobs.slice(1, 6).every((v) => v === '0'), missing: jobs });
   }
   {
     // A day draws ten to twenty wasted probes, few enough that the reason weights do not separate and the
@@ -8604,7 +9274,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     };
     const unfiltered = trafficRows();
     const earlierLabel = [...unfiltered.keys()].find((k) => k.startsWith('desktop (deleted, created ')) ?? '';
-    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labelled with its creation time', ok: /^desktop \(deleted, created \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
+    results.push({ name: '/analytics a deleted holder of a reused key id is its own group, labeled with its creation time', ok: /^desktop \(deleted, created \d{4}-\d{2}-\d{2} \d{2}:\d{2} UTC\)$/.test(earlierLabel) && unfiltered.has('desktop'), missing: [...unfiltered.keys()] });
     {
       // The mock's raw rows rather than the page's sums of them: an hour both generations filled would still
       // split into two key groups, so only the rows show it. The runner's zone is UTC, so the holder's day reads
@@ -8679,6 +9349,19 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
       name: '/analytics probes by outcome carries a migrated slice with its hint',
       ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows it or when the request after it reads no cache."),
       missing: [migrated?.getAttribute('title') ?? legend.join('|').slice(0, 160)],
+    });
+    const probeLegend = [...(migrated?.parentElement?.querySelectorAll('li') ?? [])];
+    const held = probeLegend.find((li) => (li.textContent ?? '').startsWith('Held'));
+    const warming = [...m.container.querySelectorAll('.card--table')].find((c) => (c.textContent ?? '').startsWith('Cache warming by pool'));
+    const columns = [...(warming?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? '');
+    results.push({
+      name: '/analytics probes by outcome carries a held slice above zero after migrated, and the warming table a Held column before Skipped',
+      ok:
+        probeLegend.map((li) => li.textContent?.match(/^[A-Za-z]+/)?.[0]).join(',') === 'OK,Migrated,Held,Skipped,Failed' &&
+        (held?.getAttribute('title') ?? '') === 'The router refused the probe while its ledger caught up. It was sent again and never adds to the cold streak.' &&
+        columns.indexOf('Held') === columns.indexOf('Skipped') - 1 &&
+        /^Held\s*[1-9]/.test(held?.textContent ?? ''),
+      missing: [probeLegend.map((li) => li.textContent ?? '').join('|').slice(0, 160), held?.getAttribute('title') ?? 'no held slice', columns.join(',')],
     });
   }
   results.push({ name: '/analytics filter bar is sticky', ok: m.container.querySelector('.filters.filters--sticky') !== null, missing: [m.container.querySelector('.filters')?.className ?? 'no filter bar'] });
@@ -9299,6 +9982,17 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
 {
   const tiles = [...m.container.querySelectorAll('.stat--compact')].map((t) => ({ label: t.querySelector('.stat__label')?.textContent?.trim(), value: t.querySelector('.stat__value')?.textContent?.trim(), warn: t.querySelector('.stat__value')?.classList.contains('is-warning') === true }));
   const expired = tiles.find((t) => t.label === 'Expired between turns, 24h');
+  {
+    const probe = [...m.container.querySelectorAll('.stat--compact')].find((t) => t.querySelector('.stat__label')?.textContent?.trim() === 'Cache probes, 24h');
+    const segments = [...(probe?.querySelectorAll('.probe-bar .probe-bar__seg') ?? [])].map((s) => [...s.classList].find((c) => c.startsWith('probe-bar__seg--'))?.slice('probe-bar__seg--'.length));
+    const note = probe?.querySelector('.stat__note')?.textContent?.replace(/\s+/g, ' ').trim() ?? '';
+    const label = probe?.querySelector('.probe-bar')?.getAttribute('aria-label') ?? '';
+    results.push({
+      name: '/sessions the probe tile draws five segments, the held one after migrated, and its note names the held probes',
+      ok: segments.join(',') === 'ok,migrated,held,skipped,failed' && note.includes('18 migrated, 4 held, 45 skipped') && label.includes('18 migrated, 4 held, 45 skipped') && probe?.querySelector('.stat__value')?.textContent?.trim() === '295',
+      missing: [segments.join(','), note || 'no note', label || 'no label'],
+    });
+  }
   results.push({ name: '/sessions expired-between-turns tile follows the probe tile', ok: tiles.findIndex((t) => t.label === 'Expired between turns, 24h') === tiles.findIndex((t) => t.label === 'Cache probes, 24h') + 1, missing: tiles.map((t) => t.label ?? '') });
   results.push({ name: '/sessions expired-between-turns tile counts the mock', ok: Boolean(expired) && Number(expired.value.replace(/,/g, '')) > 0, missing: [expired?.value ?? 'absent'] });
   results.push({ name: '/sessions expired-between-turns warns while a pool keeps caches warm', ok: expired?.warn === true, missing: [String(expired?.warn)] });
@@ -9373,7 +10067,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
   {
     // The kind badge gave its width to the fit, so the cell's title names the account's kind and its description
     // carries the same words to a reader that never hovers.
-    const KINDS = { 'Anthropic key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
+    const KINDS = { 'API-key account: billed per token, no quota windows': 'api_key', 'Subscription account: quota windows apply': 'oauth' };
     const titled = rows().map((r) => cell(r, 'Account')).filter((c) => KINDS[c?.getAttribute('title') ?? ''] !== undefined);
     const kinds = titled.map((c) => KINDS[c.getAttribute('title')]);
     const undescribed = titled.filter((c) => {
@@ -9797,7 +10491,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
       missing: [...new Set(counts)],
     });
   }
-  expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool codex keeps no caches warm', 'key ci opts out']);
+  expect('/sessions says why the ci sessions have no recipe', m.text(), ['pool jobs keeps no caches warm', 'key ci opts out']);
   const collapseAll = [...m.container.querySelectorAll('button')].find((b) => b.textContent?.trim() === 'Collapse all');
   results.push({ name: '/sessions Expand all flips to Collapse all', ok: Boolean(collapseAll), missing: [] });
   collapseAll?.click();
@@ -10118,7 +10812,7 @@ m.unmount();
         JSON.stringify(subs) === JSON.stringify(familyOrder(prices.filter((p) => p.fast !== null).map((p) => p.model))) &&
         stripes.length === 0 &&
         (panel?.querySelector('.cost-ref__caption b')?.textContent ?? '') === 'USD per million tokens at list price' &&
-        (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An Anthropic-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
+        (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
       missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(subs), ...stripes],
     });
   }
@@ -10387,8 +11081,8 @@ m.unmount();
     const week = fable?.nextElementSibling;
     const opus5 = rowOf('claude-opus-5');
     const dashes = (n) => Array.from({ length: n }, () => '-');
-    // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10, on
-    // the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the Fable week, Opus 5's 3 x m x 1e6 / 1000.
+    // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10,
+    // on the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the Fable week, Opus 5's 3 x m x 1e6 / 1000.
     const drawn = {
       fable: { above: above(fable), cells: cellsOf(fable), weight: weightIn(fable) },
       opus5: { above: above(opus5), cells: cellsOf(opus5), sub: opus5?.nextElementSibling?.classList.contains('cost-ref__sub') ?? false, weight: weightIn(opus5) },
@@ -10449,9 +11143,9 @@ m.unmount();
       missing: [JSON.stringify(weekend), JSON.stringify(weekday)],
     });
 
-    // A zone this browser cannot read: the card gives the band's hours in that zone and says it cannot read it, and Plan
-    // rates leaves the state to the viewer, Inside first. One Opus 5.5 input token on the Max 20x 5-hour window is 2 /
-    // 100 / 0.5 inside the band and 2 / 100 outside, a million of them 40,000 and 20,000 windows.
+    // A zone this browser cannot read: the card gives the band's hours in that zone and says it cannot read it, and
+    // Plan rates leaves the state to the viewer, Inside first. One Opus 5.5 input token on the Max 20x 5-hour window is
+    // 2 / 100 / 0.5 inside the band and 2 / 100 outside, a million of them 40,000 and 20,000 windows.
     const unzoned = { ...tested, peak: { ...tested.peak, zone: 'Not/AZone' } };
     const card = await mountNode(React.createElement(PeakBand, { costs: unzoned, now: CLOCK_ORIGIN }));
     const drawnCard = {
@@ -11332,7 +12026,7 @@ m.unmount();
       !drawn.week.ring &&
       drawn.week.sentence === "No listed account's tier is sized for the 7-day window." &&
       drawn.week.listAfter &&
-      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: Max 20x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured']) &&
+      JSON.stringify(drawn.week.names) === JSON.stringify(['primary: Max 20x 7-day capacity not measured', 'secondary: Pro 7-day capacity not measured', 'nightly: Max 5x 7-day capacity not measured', 'studio: Max 5x 7-day capacity not measured']) &&
       drawn.fiveHour.ring &&
       drawn.fiveHour.names.length === 0,
     missing: [JSON.stringify(drawn)],

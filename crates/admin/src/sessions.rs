@@ -120,17 +120,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 .price_burn(&p.model, &p.burn)
                 .map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
-                let tier = tiers
-                    .entry(p.account_id.clone())
-                    .or_insert_with(|| {
-                        state
-                            .store
-                            .subscription(&p.account_id)
-                            .ok()
-                            .flatten()
-                            .and_then(|s| s.tier)
-                    })
-                    .as_deref();
+                if !tiers.contains_key(&p.account_id) {
+                    let tier = state
+                        .store
+                        .subscription(&p.account_id)
+                        .map_err(crate::routes::store_failure)?
+                        .and_then(|s| s.tier);
+                    tiers.insert(p.account_id.clone(), tier);
+                }
+                let tier = tiers.get(&p.account_id).and_then(Option::as_deref);
                 // A tier the model does not size, or a model it has no weight for, prices nothing, so the figure
                 // reads null rather than a guess.
                 tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR))

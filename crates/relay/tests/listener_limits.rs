@@ -5,17 +5,17 @@ mod common;
 use std::sync::Arc;
 use std::time::Duration;
 
-use boring::ssl::SslAcceptor;
 use common::*;
 use fake_upstream::{FakeUpstream, Respond, Rule, SseEvent};
 use phoebis_bus::{Bus, Delivery, Event};
+use phoebis_relay::LiveAcceptor;
 use tokio::io::{AsyncReadExt, AsyncWriteExt};
 
 /// The stop sender comes back with the address: `stopped()` reads a dropped sender as a stop, so a test holds
 /// it until its end or the listener ends first.
 async fn listening(
     limits: phoebis_relay::ListenLimits,
-    acceptor: Option<Arc<SslAcceptor>>,
+    acceptor: Option<Arc<LiveAcceptor>>,
 ) -> (
     std::net::SocketAddr,
     FakeUpstream,
@@ -70,8 +70,8 @@ async fn a_tls_listener_drops_a_silent_peer_at_the_bound_and_serves_a_finished_h
         header_read_timeout: Duration::from_millis(200),
         max_connections: 1,
     };
-    let (addr, up, _stop) =
-        listening(limits, Some(Arc::new(fake_upstream::acceptor_for(&pair)))).await;
+    let acceptor = LiveAcceptor::new(fake_upstream::acceptor_for(&pair));
+    let (addr, up, _stop) = listening(limits, Some(Arc::new(acceptor))).await;
     let mut silent = tokio::net::TcpStream::connect(addr).await.unwrap();
     let mut buf = [0u8; 16];
     let read = tokio::time::timeout(Duration::from_secs(3), silent.read(&mut buf)).await;
@@ -123,13 +123,14 @@ async fn a_stop_ends_a_silent_handshake_well_before_its_bound() {
         header_read_timeout: Duration::from_secs(30),
         max_connections: 8,
     };
+    let acceptor = LiveAcceptor::new(fake_upstream::acceptor_for(&pair));
     let serving = tokio::spawn(phoebis_relay::serve(
         listener,
         h.relay.clone(),
         axum::Router::new(),
         stop_rx,
         limits,
-        Some(Arc::new(fake_upstream::acceptor_for(&pair))),
+        Some(Arc::new(acceptor)),
     ));
     let _silent = tokio::net::TcpStream::connect(addr).await.unwrap();
     let socket = tokio::net::TcpStream::connect(addr).await.unwrap();

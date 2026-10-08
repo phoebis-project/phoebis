@@ -2,7 +2,7 @@ import type { BurnUnit, CompanionState, KeepaliveOverview, KeepaliveRecipe, Keep
 import { anchorTier, ratesOf } from '@/lib/costs';
 import { accountById } from './accounts';
 import { FIXTURES } from './generated/fixtures';
-import { keyById } from './pools';
+import { POOLS, keyById } from './pools';
 import { DELETED_HOLDER_GENERATION, REQUESTS, SESSION_IDS } from './requests';
 import { createRng } from './rng';
 import { KEEPALIVE_OVERVIEW_SAMPLE, RECIPE_SAMPLE, SESSION_SAMPLE, SETTINGS_SAMPLE, TABLES } from './samples';
@@ -11,7 +11,7 @@ import { MINUTE, NOW, ago, ahead } from './time';
 const rng = createRng(2_024);
 
 // `state: null` marks a session with no cache-warming recipe: the `ci` key opts
-// out and `codex` keeps no caches warm.
+// out and `jobs` keeps no caches warm.
 // `companion` is independent of that: it says whether the keepalive mod ever
 // registered for the session and is still reporting. A silent
 // companion changes neither, because the retained prompts stay and are probed
@@ -19,13 +19,17 @@ const rng = createRng(2_024);
 // model and, with that, land on another account. `idleMinutes` overrides the
 // random idle on the few sessions that exist to straddle the expiry presets:
 // without it every fixture is idle for under an hour and no preset in Settings
-// would ever drop a row.
+// would ever drop a row. `lastUseFromRows` reads the last use off the session's
+// own requests instead, for the runner's sessions on `ci`: no pin keeps them in
+// use, and their account has been at its daily budget since its last served
+// request.
 const sessionSpec: {
   accountId: string;
   agents: number;
   companion: CompanionState;
   idleMinutes?: number;
   keyId: string;
+  lastUseFromRows?: boolean;
   model: string;
   state: Session['keepalive']['state'];
   subagents?: { accountId?: string; model: string };
@@ -42,8 +46,8 @@ const sessionSpec: {
   { keyId: 'laptop', accountId: 'primary', model: 'claude-sonnet-5', state: 'busy', agents: 2, companion: 'reporting', subagents: { model: 'claude-haiku-4-5-20251001' } },
   { keyId: 'laptop', accountId: 'nightly', model: 'claude-haiku-4-5-20251001', state: 'parked', agents: 1, companion: 'reporting' },
   { keyId: 'desktop', accountId: 'primary', model: 'claude-fable-5-1', state: 'idle', agents: 2, companion: 'reporting' },
-  { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none' },
-  { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', idleMinutes: 240 },
+  { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 1, companion: 'none', lastUseFromRows: true },
+  { keyId: 'ci', accountId: 'research', model: 'claude-haiku-4-5-20251001', state: null, agents: 2, companion: 'none', lastUseFromRows: true },
   { keyId: 'laptop', accountId: 'secondary', model: 'claude-sonnet-5', state: null, agents: 1, companion: 'none' },
   { keyId: 'desktop', accountId: 'overflow', model: 'claude-opus-5', state: null, agents: 1, companion: 'none', idleMinutes: 570 },
   // Seen by the router but with nothing in the ledger, so the per-row jumps to
@@ -79,7 +83,9 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
   // does not shift the seeded stream the rest of these fixtures read from.
   const createdRoll = rng.int(8, 9 * 60) * MINUTE;
   const idleRoll = spec.state === 'busy' ? rng.int(5, 90) * 1000 : rng.int(2, 40) * MINUTE;
-  const lastUsedAgo = spec.idleMinutes === undefined ? Math.min(createdRoll, idleRoll) : spec.idleMinutes * MINUTE;
+  // Off the rows, a session the ledger holds no request of has no last use.
+  const lastFromRows = spec.lastUseFromRows ? (seen ? Date.parse(seen.last) : null) : undefined;
+  const lastUsedAgo = typeof lastFromRows === 'number' ? NOW - lastFromRows : spec.idleMinutes === undefined ? Math.min(createdRoll, idleRoll) : spec.idleMinutes * MINUTE;
   const createdAgo = Math.max(createdRoll, lastUsedAgo + 5 * MINUTE);
   // A session the engine still keeps a recipe for is the one holding a pin on its account.
   const pinned = spec.state !== null;
@@ -112,7 +118,7 @@ export const SESSIONS: Session[] = sessionSpec.map((spec, i) => {
     historical: false,
     keyGeneration,
     createdAt: ago(createdAgo),
-    lastUsedAt: ago(lastUsedAgo),
+    lastUsedAt: lastFromRows === null ? null : ago(lastUsedAgo),
     lastRequestAt: seen ? seen.last : null,
     pinned,
     requests: seen ? seen.requests : 0,
@@ -331,6 +337,10 @@ if (holderLast && Date.parse(holderLast.at) + SESSION_EXPIRE_SECONDS * 1000 > NO
   });
 }
 
+// A pool's active pins are the pinned sessions under its keys, so the pool's figure, its members' pins and the
+// dashboard's sum read one count.
+for (const p of POOLS) p.activePins = SESSIONS.filter((x) => x.pinned && keyById.get(x.keyId)?.poolId === p.id).length;
+
 // Counted off the recipes so the tiles cannot drift from the table below them.
 const WARMED = SESSIONS.filter((pin) => pin.keepalive.state !== null);
 
@@ -342,9 +352,9 @@ const EXPIRED_BETWEEN_TURNS_24H = REQUESTS.filter((r) => r.status === 200 && r.u
 const ENGINE_SESSIONS = SESSIONS.filter((s) => s.companion !== 'none' || s.keepalive.state !== null);
 
 // Router-wide, so every probe counted here belongs to a pool that keeps caches
-// warm, and `codex` has warming off and contributes none. Hand-set at a busier
+// warm, and `jobs` has warming off and contributes none. Hand-set at a busier
 // scale than the logged rows.
-const PROBES_24H = { ok: 225, migrated: 18, skipped: 45, failed: 3 };
+const PROBES_24H = { ok: 225, migrated: 18, held: 4, skipped: 45, failed: 3 };
 
 // Each bucket reaches fewer windows than the one before it left unreturned.
 const IDLE_REACHED = [96, 70, 50, 36, 22, 13, 8, 5, 2, 1];

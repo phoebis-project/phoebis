@@ -123,7 +123,7 @@ const NOT_FORWARDED: &[&str] = &[
 ];
 
 /// The upstream's rate-limit header families, hidden from every committed answer so an organization's standing
-/// never reads as the key holder's own: the unified family and the Anthropic-key bucket family under the first
+/// never reads as the key holder's own: the unified family and the API-key bucket family under the first
 /// prefix, the fast-token family under the second. A rate limit keeps them, a 429 or a 200 whose first event is a
 /// `rate_limit_error`, so the client's continue arms on the reset the upstream named.
 const RATE_LIMIT_FAMILY_PREFIXES: [&str; 2] = ["anthropic-ratelimit-", "anthropic-fast-"];
@@ -247,7 +247,7 @@ pub struct Relay {
     readiness: Option<ReadinessSource>,
     resolver: Resolver,
     router: RouterHandle,
-    /// The Anthropic keys legs dispatch with, by account id, so a leg reads no registry while its row's lineage
+    /// The API keys legs dispatch with, by account id, so a leg reads no registry while its row's lineage
     /// and the snapshot's generation hold.
     secrets: Mutex<HashMap<String, SecretEntry>>,
     /// `proxy.sign_cch_placeholder`: whether a restored `cch=00000` is signed rather than sent as the placeholder.
@@ -255,7 +255,7 @@ pub struct Relay {
     store: Arc<Store>,
 }
 
-/// A cached Anthropic key and the lineage it was read under: the holder's incarnation and lifecycle generation
+/// A cached API key and the lineage it was read under: the holder's incarnation and lifecycle generation
 /// beside the credential generation, since a deleted and recreated id and a disconnected and reconnected one both
 /// restart the generation at 1, and an entry keyed on the generation alone would serve the old holder's secret.
 struct SecretEntry {
@@ -1635,6 +1635,9 @@ impl Relay {
         // request can take it before the next selection; without this the same account could hold the request
         // again on every pass.
         let mut held_for: Vec<String> = Vec::new();
+        // Set by the request's first hold and shared by every later one, so a pool of any size holds the request
+        // one `retry_in_place` at most.
+        let mut hold_deadline: Option<tokio::time::Instant> = None;
         // Whether a hold ran out, and whether any leg dialled: an untimed exhaustion reached through holds alone
         // is a pool at its cap, which frees on its own, not one only an operator can clear.
         let mut held_out = false;
@@ -1776,19 +1779,23 @@ impl Relay {
                     account_id,
                     mut hold,
                 } => {
-                    // The account had its one hold of this request, so at its cap it is passed over as one whose
-                    // wait ran out.
-                    if held_for.contains(&account_id) {
+                    // The account had its one hold of this request, or the request's one bound has passed: at its
+                    // cap it is passed over as one whose wait ran out.
+                    if held_for.contains(&account_id)
+                        || hold_deadline.is_some_and(|at| tokio::time::Instant::now() >= at)
+                    {
                         held_out = true;
                         attempted.push(account_id);
                         continue;
                     }
                     let started = tokio::time::Instant::now();
-                    let deadline = started + admitted.retry_in_place;
+                    let hold_deadline = *hold_deadline.get_or_insert_with(|| {
+                        tokio::time::Instant::now() + admitted.retry_in_place
+                    });
                     let freed = self
                         .router
                         .in_flight()
-                        .wait_for_slot(&account_id, failover.in_flight_cap, deadline)
+                        .wait_for_slot(&account_id, failover.in_flight_cap, hold_deadline)
                         .await;
                     // Measured here, the one place that knows: the trace of the attempt that follows names the
                     // wait, and so does the completion when no attempt follows.
@@ -3176,11 +3183,11 @@ impl Relay {
                     kind: CredentialKind::ApiKey { secret },
                 },
                 Ok(None) => {
-                    tracing::warn!(account = %account.id, "the account has no Anthropic key stored");
+                    tracing::warn!(account = %account.id, "the account has no API key stored");
                     return Err(NoCredential::Unavailable);
                 }
                 Err(error) => {
-                    tracing::error!(account = %account.id, %error, "the stored Anthropic key is unreadable");
+                    tracing::error!(account = %account.id, %error, "the stored API key is unreadable");
                     return Err(NoCredential::Unavailable);
                 }
             },
@@ -3210,7 +3217,7 @@ impl Relay {
         }
     }
 
-    /// The account's Anthropic key and its generation: the cached entry while its holder and lifecycle are the
+    /// The account's API key and its generation: the cached entry while its holder and lifecycle are the
     /// row's and its generation is at or above the snapshot's, else one store read on a blocking thread, which
     /// replaces the entry under the row's lineage and the generation the store returned. The snapshot's figure
     /// catches up with the store's at the next reload, so a mismatch between the two costs one more read at most.

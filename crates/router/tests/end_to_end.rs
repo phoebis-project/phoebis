@@ -2856,6 +2856,7 @@ async fn a_startup_poll_the_endpoint_refuses_routes_the_first_request_from_the_p
                     body_capture_hours: None,
                     secret_digest: store.api_key_digest(KEY_SECRET).to_vec(),
                     prefix: phoebis_store::key_prefix(KEY_SECRET),
+                    incarnation: 1,
                     created_at: 0,
                     updated_at: 0,
                     rotated_at: None,
@@ -3585,29 +3586,49 @@ async fn the_ui_passes_the_browser_pass_over_every_view_in_both_themes() {
         .map(std::path::PathBuf::from)
         .unwrap_or_else(|_| std::env::temp_dir().join("phoebis-screenshots"));
     let web = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web");
+    // The directory may also hold the mock pass's shots, so only the files written from here on are this pass's.
+    let started = std::time::SystemTime::now();
     // Awaited, never blocked on: the router and the fake upstream are tasks on this same current-thread
     // runtime, and a blocking wait here would starve the very server the browser is talking to.
-    let status = tokio::process::Command::new("node")
+    let pass = tokio::process::Command::new("node")
         .arg("e2e/views.mjs")
         .current_dir(&web)
         .env("PHOEBIS_E2E_BASE", format!("http://127.0.0.1:{admin_port}"))
         .env("PHOEBIS_E2E_SECRET", "admin-secret-001")
         .env("PHOEBIS_SCREENSHOT_DIR", &shots)
-        .status()
+        .output()
         .await
         .expect("node runs");
+    let printed = String::from_utf8_lossy(&pass.stdout);
+    print!("{printed}");
+    eprint!("{}", String::from_utf8_lossy(&pass.stderr));
     assert!(
-        status.success(),
+        pass.status.success(),
         "the browser pass failed; its output names the view"
     );
+    // The pass names how many views it ran, so a view added to it needs no count here.
+    let views: usize = printed
+        .lines()
+        .find_map(|line| {
+            let (count, _) = line
+                .strip_prefix("browser pass: ")?
+                .split_once(" views in 2 themes")?;
+            count.parse().ok()
+        })
+        .expect("the pass prints its summary line");
     let pngs = walkdir(&shots)
         .into_iter()
         .filter(|p| p.extension().is_some_and(|e| e == "png"))
+        .filter(|p| {
+            std::fs::metadata(p)
+                .and_then(|metadata| metadata.modified())
+                .is_ok_and(|written| written >= started)
+        })
         .count();
     assert_eq!(
         pngs,
-        24,
-        "twelve views in two themes under {}",
+        2 * views,
+        "{views} views in two themes under {}",
         shots.display()
     );
     println!("screenshots: {}", shots.display());
