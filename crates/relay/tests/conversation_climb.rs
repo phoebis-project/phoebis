@@ -520,6 +520,11 @@ async fn a_quota_probe_names_no_fork_and_leaves_no_content_entry_and_a_fork_need
     {
         let map = h.router.affinity();
         let guard = map.read().unwrap();
+        assert_eq!(
+            probe_chains.message_boundaries.len(),
+            1,
+            "the probe's one message is one boundary, so the loop below checks something"
+        );
         for boundary in probe_chains.message_boundaries.iter() {
             assert!(
                 guard.entry(MODEL, boundary).is_none(),
