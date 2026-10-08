@@ -10634,10 +10634,21 @@ m.unmount();
     const opus = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-opus-5-5');
     const fast = opus?.nextElementSibling;
     const opusFast = prices.find((p) => p.model === 'claude-opus-5-5')?.fast;
-    const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => r.previousElementSibling?.children[0]?.textContent?.trim());
-    const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(r.classList.contains('cost-ref__sub') ? r.previousElementSibling : r) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
+    // A model can carry a fast row and a prompt row, so a sub-row's model is the nearest plain row above it.
+    const modelOf = (row) => {
+      let at = row;
+      while (at?.classList.contains('cost-ref__sub')) at = at.previousElementSibling;
+      return at;
+    };
+    const subs = rows.filter((r) => r.classList.contains('cost-ref__sub')).map((r) => modelOf(r)?.children[0]?.textContent?.trim());
+    const stripes = rows.filter((r) => r.classList.contains('is-alt') !== (main.indexOf(modelOf(r)) % 2 === 1)).map((r) => r.children[0]?.textContent?.trim());
+    const haiku = main.find((r) => r.children[0]?.textContent?.trim() === 'claude-haiku-5-5');
+    const long = prices.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
+    const prompt = haiku?.nextElementSibling;
+    const expectedSubs = familyOrder(prices.filter((p) => p.fast !== null || p.longContext !== null).map((p) => p.model))
+      .flatMap((model) => { const p = prices.find((x) => x.model === model); return [...(p.fast ? [model] : []), ...(p.longContext ? [model] : [])]; });
     results.push({
-      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells",
+      name: "/sessions API prices list the price file's models family by family at their cells, a fast-mode row under each model with fast cells and a prompt-length row under each model priced by prompt length",
       ok:
         JSON.stringify(listed) === JSON.stringify(familyOrder(Object.keys(SETTINGS_WIRE.api_prices.content.models))) &&
         wrong.length === 0 &&
@@ -10645,11 +10656,15 @@ m.unmount();
         fast.children[0]?.textContent === 'fast mode' &&
         opusFast !== null &&
         JSON.stringify(cells(fast)) === JSON.stringify(priced(opusFast)) &&
-        JSON.stringify(subs) === JSON.stringify(familyOrder(prices.filter((p) => p.fast !== null).map((p) => p.model))) &&
+        long !== null &&
+        prompt?.classList.contains('cost-ref__sub') === true &&
+        prompt.children[0]?.textContent === `prompt over ${fmtCompact(long.over)} tokens` &&
+        JSON.stringify(cells(prompt)) === JSON.stringify(priced(long)) &&
+        JSON.stringify(subs) === JSON.stringify(expectedSubs) &&
         stripes.length === 0 &&
         (panel?.querySelector('.cost-ref__caption b')?.textContent ?? '') === 'USD per million tokens at list price' &&
         (panel?.querySelector('.cost-ref__caption .muted')?.textContent ?? '') === 'An API-key account pays these. A subscription account pays them in overage and for fast-mode answers.',
-      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(subs), ...stripes],
+      missing: [JSON.stringify(listed), ...wrong, JSON.stringify(cells(fast)), JSON.stringify(cells(prompt)), JSON.stringify(subs), ...stripes],
     });
   }
 

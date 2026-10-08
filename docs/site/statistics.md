@@ -119,9 +119,17 @@ A model that serves fast mode carries a second set of five cells at the fast rat
 whose answer reports `speed: fast` is priced at them, in dollars, as spend from usage credits, and one on a model
 without them at the standard cells.
 
+A model priced by prompt length carries a `long_context` block, a threshold `over` in tokens and a second set of the
+five cells. An attempt whose prompt is longer than the threshold is priced at that set for all five counts, the output
+included. The prompt is the attempt's uncached input, cache reads and cache writes together, as the answer's usage
+reports them. A fast answer prices at the fast cells whatever its prompt. The shipped table lists Claude Haiku 5.5 with
+both sets.
+
 A price file whose cell is not a finite non-negative number is refused at start and by `check-config`, naming the
-model and the cell (`fast.<cell>` for a fast-mode cell): a negative or `NaN` price would turn every estimate negative
-or `NaN`, which no budget trips on.
+model and the cell (`fast.<cell>` for a fast-mode cell, `long_context.<cell>` for a cell over the threshold): a
+negative or `NaN` price would turn every estimate negative or `NaN`, which no budget trips on. A `long_context.over`
+that is not a whole number of tokens above zero is refused the same way, since a zero would price every prompt at the
+long-context cells.
 
 ## Plan meter
 

@@ -100,6 +100,24 @@
         "long_context": null
       },
       {
+        "model": "claude-haiku-5-5",
+        "input_per_m": 0.1,
+        "cache_write_5m_per_m": 0.125,
+        "cache_write_1h_per_m": 0.2,
+        "cache_read_per_m": 0.01,
+        "output_per_m": 0.5,
+        "reads_per_write_5m": 12.5,
+        "fast": null,
+        "long_context": {
+          "over": 100000,
+          "input_per_m": 0.5,
+          "cache_write_5m_per_m": 0.625,
+          "cache_write_1h_per_m": 1.0,
+          "cache_read_per_m": 0.05,
+          "output_per_m": 2.5
+        }
+      },
+      {
         "model": "claude-haiku-4-5",
         "input_per_m": 1.0,
         "cache_write_5m_per_m": 1.25,

@@ -77,6 +77,21 @@
             "cache_read": 0.2,
             "output": 10.0
           },
+          "claude-haiku-5-5": {
+            "input": 0.1,
+            "cache_write_5m": 0.125,
+            "cache_write_1h": 0.2,
+            "cache_read": 0.01,
+            "output": 0.5,
+            "long_context": {
+              "over": 100000,
+              "input": 0.5,
+              "cache_write_5m": 0.625,
+              "cache_write_1h": 1.0,
+              "cache_read": 0.05,
+              "output": 2.5
+            }
+          },
           "claude-haiku-4-5": {
             "input": 1.0,
             "cache_write_5m": 1.25,
