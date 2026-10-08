@@ -1,4 +1,4 @@
-import type { SubscriptionCosts, TypeMultiplier } from '@/api/types';
+import type { Attempt, SubscriptionCosts, TypeMultiplier } from '@/api/types';
 import { undatedModel } from '@/lib/format';
 
 /**
@@ -142,6 +142,19 @@ export const shareIn = (costs: SubscriptionCosts, window: string, tier: string, 
 export const shareOf = (costs: SubscriptionCosts, window: string, tier: string, model: string, usage: Usage, at: number): number | null => {
   const inside = inBand(costs, at);
   return inside === null ? null : shareIn(costs, window, tier, model, usage, inside);
+};
+
+/** Who paid for an attempt: the subscription's window, its overage, a fast answer's usage credits, or an API key. */
+export type Funding = 'api_key' | 'fast' | 'overage' | 'plan';
+
+/** Who paid for an attempt, in the ledger's order: the account's kind first (an API-key account's answer is billed in
+ *  dollars whatever its speed or overage flag), then a fast answer, then overage, else the subscription's window. A
+ *  request with no attempt is billed in dollars (its cost is zero). */
+export const fundingOf = (attempt: Pick<Attempt, 'accountKind' | 'overageInUse' | 'response'> | null): Funding => {
+  if (attempt === null || attempt.accountKind === 'api_key') return 'api_key';
+  if (attempt.response.speed === 'fast') return 'fast';
+  if (attempt.overageInUse === true) return 'overage';
+  return 'plan';
 };
 
 /** Minutes of a day in the viewing zone. */

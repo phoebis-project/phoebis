@@ -8789,7 +8789,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     await burnGroup('account');
     results.push({
       name: "/analytics spend per minute under the account grouping draws a folded rest's fast-mode dollars under a dollar label",
-      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && grouped === 'account' && !said.includes('No account spent dollars in this range.'),
+      ok: JSON.stringify(folded) === JSON.stringify(['Other (fast mode or overage)']) && JSON.stringify(values) === JSON.stringify(['$0.01']) && grouped === 'account' && !said.includes('No account spent dollars in this range.'),
       missing: [...folded, ...values, `grouped by ${grouped}`, said.slice(0, 120)],
     });
   }

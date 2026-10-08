@@ -580,6 +580,7 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.deepEqual(failover.shape, { contextEdits: ['clear_thinking_20251015'], effort: 'high', maxTokens: 32_000, messageCount: 1, requestedServiceTier: null, requestedSpeed: null, systemBlocks: 4, temperature: null, thinkingBudget: 31_999, thinkingType: 'enabled', toolCount: 12 });
   assert.equal(failover.autoMode, 'server');
   assert.deepEqual(failover.attempts[1].response, { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'fast', stopReason: 'tool_use', stopSequence: null });
+  assert.deepEqual([failover.attempts[1].accountKind, failover.attempts[1].overageInUse], ['oauth', null], "the serving attempt's account kind and its unread overage flag");
   assert.equal(failover.responseTruncated, false);
   const failed = page.requests.find((r) => r.id === 'r-failed');
   assert.equal(failed.errorCode, 'upstream_error');
@@ -615,6 +616,17 @@ test('a request carries its seven phases as ISO instants and null where the ledg
     [null, null, null, null, null, null],
     'a phase the ledger holds no instant for reads null',
   );
+});
+
+test("a request's cost shares decode keyed by window, null when billed in dollars, empty for an unknown account and null on an unpriced window", () => {
+  const page = d.decodeRequestPage(fixture('requests'));
+  const plan = page.requests.find((r) => r.id === 'r-captured');
+  assert.deepEqual(Object.keys(plan.costShares), ['five_hour', 'seven_day'], 'a Sonnet request a subscription window paid reads its two shared windows and no model week');
+  assert.ok(Object.values(plan.costShares).every((s) => typeof s === 'number' && s > 0), 'each a priced fraction');
+  assert.equal(page.requests.find((r) => r.id === 'r-failover').costShares, null, 'a fast answer is billed in dollars');
+  assert.deepEqual(d.decodeRequest({ cost_shares: {} }).costShares, {}, "an account the route's tiers lack");
+  assert.deepEqual(d.decodeRequest({ cost_shares: { five_hour: 0.01, seven_day_fable: null } }).costShares, { five_hour: 0.01, seven_day_fable: null }, 'a window the cost model could not price keeps its null');
+  assert.equal(d.decodeRequest({}).costShares, null, 'a row without the member reads null');
 });
 
 test("an attempt reads the upstream's request id, and its message id only on the answer that served", () => {

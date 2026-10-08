@@ -320,3 +320,13 @@ test('the full 5-hour windows a week are the week over the window, each at its o
   const bandedWeek = { ...costs, peak: { ...costs.peak, capacityFactor: { fiveHour: 0.5, sevenDay: 0.5 } } };
   close(d.fullWindowsAWeek(bandedWeek, MAX_20X, true), 10, 'a banded week, (1000 x 0.5) / (100 x 0.5)');
 });
+
+test('fundingOf reads the account kind, then a fast answer, then overage, and a missing attempt as dollars', () => {
+  const attempt = (over) => ({ accountKind: 'oauth', overageInUse: false, response: { speed: 'standard' }, ...over });
+  assert.equal(d.fundingOf(attempt({ accountKind: 'api_key', overageInUse: null, response: { speed: 'fast' } })), 'api_key', "an API-key account's answer bills in dollars whatever its speed");
+  assert.equal(d.fundingOf(attempt({ overageInUse: true, response: { speed: 'fast' } })), 'fast', 'a fast answer draws usage credits whatever the overage flag');
+  assert.equal(d.fundingOf(attempt({ overageInUse: true })), 'overage');
+  assert.equal(d.fundingOf(attempt({})), 'plan');
+  assert.equal(d.fundingOf(attempt({ overageInUse: null, response: { speed: null } })), 'plan', 'an unread flag and an unreported speed leave the window paying');
+  assert.equal(d.fundingOf(null), 'api_key', 'a request with no attempt is billed in dollars');
+});

@@ -5,14 +5,17 @@ use std::collections::{BTreeMap, HashMap};
 use phoebis_ledger::{
     apply_filter, breakdown, breakdown_paged, bucket_index, bucket_seconds, burn_rows, burn_series,
     burn_series_over, delta_of, fold_account, fold_event, fold_keepalive, hour_ceil, hour_of,
-    key_request_totals, list_requests, member_spends, moves_by_reason, placements,
+    key_request_totals, list_requests, member_spends, moves_by_reason, placements, price_shares,
     read_account_rollups, read_rollups, rewrite_series, run_retention_blocking, series,
     series_paged, session_identities, AttemptRecord, BudgetedMember, EventRecord, Histogram,
     KeepaliveDelta, LedgerConfig, LedgerDb, LiveKeys, ModelPrice, ModelRow, PlanTables, PriceTable,
-    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter, Tiers,
-    FAST_FUNDING, NO_CLASS, PAGE_HOURS, PLAN_FUNDING, UNATTRIBUTED,
+    RequestFilter, RequestRecord, RollupFilter, RollupRow, RollupSelect, SeriesFilter,
+    SubscriptionCosts, Tiers, WindowShares, FAST_FUNDING, NO_CLASS, OVERAGE_FUNDING, PAGE_HOURS,
+    PLAN_FUNDING, UNATTRIBUTED,
 };
-use phoebis_routing::{PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{
+    PinUsage, RegistrySnapshot, RoutingState, FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE,
+};
 use phoebis_store::{AccountKind, BudgetPeriod, PoolMember, RegistryLoad, RoutingLoad};
 use rand::{RngExt, SeedableRng};
 
@@ -2036,6 +2039,287 @@ fn a_sessions_fast_attempt_reads_its_dollars_at_a_zero_share() {
         (10.0, Some(0.0), Some(0.0), 1_000_000),
         "the attempt that reported speed fast reads its dollars and a zero share"
     );
+}
+
+/// A cost model in round numbers for the share cases: one Fable input token weighs 10 units, `test_tier` holds 100
+/// units on the 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week
+/// is half the 7-day window.
+const SHARE_COSTS: &str = "\
+effective: 2026-01-01
+unit:
+  defined_by: {tier: test_tier, window: five_hour, band: out_of_band}
+  units_per_window: 100
+capacity:
+  test_tier:   {five_hour: 100, seven_day: 1000}
+  narrow_tier: {five_hour: 100, seven_day: null}
+peak:
+  zone: America/Los_Angeles
+  weekdays: true
+  from_hour: 5
+  to_hour: 11
+  capacity_factor: {five_hour: 0.5, seven_day: 1}
+type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+model_weight:
+  claude-fable-5-1: 10
+  claude-sonnet-5-5: 1
+  claude-haiku-4-5: 0.5
+model_windows:
+  seven_day_fable: {of: seven_day, capacity_factor: 0.5}
+overrides: {}
+";
+
+fn share_tables() -> PlanTables {
+    PlanTables {
+        costs: SubscriptionCosts::from_yaml(SHARE_COSTS).expect("the share cost model parses"),
+        path: None,
+        source: "test".to_string(),
+    }
+}
+
+/// One Sonnet request of `session` on the oauth account `a` in the off-band hour, `overage` as its head reported it.
+fn plant_funded(db: &LedgerDb, id: &str, session: &str, overage: Option<bool>, usd: f64) {
+    db.insert_request(
+        &RequestRecord {
+            id: id.into(),
+            received_at: WEEKDAY_OFF_PEAK,
+            finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+            key_id: Some("k".into()),
+            pool_id: Some("p".into()),
+            session_id: Some(session.into()),
+            canonical_model: "claude-sonnet-5-5".into(),
+            model: "claude-sonnet-5-5".into(),
+            kind: "inference".into(),
+            origin: "client".into(),
+            outcome: "succeeded".into(),
+            attempts: 1,
+            ..Default::default()
+        },
+        &[AttemptRecord {
+            request_id: id.into(),
+            attempt: 1,
+            account_id: "a".into(),
+            account_kind: "oauth".into(),
+            started_at: WEEKDAY_OFF_PEAK,
+            finished_at: Some(WEEKDAY_OFF_PEAK + 500),
+            outcome: "succeeded".into(),
+            input_tokens: Some(1_000),
+            output_tokens: Some(100),
+            estimated_usd: Some(usd),
+            overage_in_use: overage,
+            ..Default::default()
+        }],
+        None,
+    )
+    .unwrap();
+}
+
+#[test]
+fn price_shares_answers_the_two_shared_windows_and_the_model_week_the_model_carries() {
+    let tables = share_tables();
+    let one = usage(1, 0);
+    let keys = |shares: &WindowShares| shares.keys().copied().collect::<Vec<_>>();
+    let close = |got: Option<f64>, want: f64| got.is_some_and(|g| (g - want).abs() < 1e-12);
+    // One Fable input token weighs 10 units off the band: over 100 on the 5-hour window, over 1000 on the week, and
+    // over the model week's half of it.
+    let fable = price_shares(
+        &tables,
+        "test_tier",
+        "claude-fable-5-1",
+        one,
+        WEEKDAY_OFF_PEAK,
+    );
+    assert_eq!(keys(&fable), [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]);
+    assert!(
+        close(fable[FIVE_HOUR], 0.1)
+            && close(fable[SEVEN_DAY], 0.01)
+            && close(fable[SEVEN_DAY_FABLE], 0.02),
+        "a Fable model prices every window it carries: {fable:?}"
+    );
+    let haiku = price_shares(
+        &tables,
+        "test_tier",
+        "claude-haiku-4-5",
+        one,
+        WEEKDAY_OFF_PEAK,
+    );
+    assert_eq!(
+        keys(&haiku),
+        [FIVE_HOUR, SEVEN_DAY],
+        "a Haiku model has no week of its own"
+    );
+    assert!(
+        close(haiku[FIVE_HOUR], 0.005) && close(haiku[SEVEN_DAY], 0.0005),
+        "{haiku:?}"
+    );
+    let narrow = price_shares(
+        &tables,
+        "narrow_tier",
+        "claude-fable-5-1",
+        one,
+        WEEKDAY_OFF_PEAK,
+    );
+    assert_eq!(keys(&narrow), [FIVE_HOUR, SEVEN_DAY, SEVEN_DAY_FABLE]);
+    assert!(
+        close(narrow[FIVE_HOUR], 0.1) && narrow[SEVEN_DAY].is_none() && narrow[SEVEN_DAY_FABLE].is_none(),
+        "a tier sized on the 5-hour window alone prices the week and the model week null: {narrow:?}"
+    );
+    let unweighted = price_shares(
+        &tables,
+        "test_tier",
+        "claude-opus-5-5",
+        one,
+        WEEKDAY_OFF_PEAK,
+    );
+    assert_eq!(
+        unweighted.into_iter().collect::<Vec<_>>(),
+        [(FIVE_HOUR, None), (SEVEN_DAY, None)],
+        "a model with no weight keeps its two shared keys, each null"
+    );
+    let no_tier = price_shares(
+        &tables,
+        "missing_tier",
+        "claude-fable-5-1",
+        one,
+        WEEKDAY_OFF_PEAK,
+    );
+    assert_eq!(
+        no_tier.into_iter().collect::<Vec<_>>(),
+        [
+            (FIVE_HOUR, None),
+            (SEVEN_DAY, None),
+            (SEVEN_DAY_FABLE, None)
+        ],
+        "a tier the file lacks keeps every applicable key, each null"
+    );
+}
+
+#[test]
+fn an_overage_row_adds_to_no_share_and_a_plan_row_to_both() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_funded(&db, "r-plan", "s", None, 3.0);
+    plant_funded(&db, "r-overage", "s", Some(true), 7.0);
+    let tables = share_tables();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some("test_tier".to_string()))]);
+    let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
+    let filter = SeriesFilter {
+        from: hour,
+        to: hour + 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let mut fundings: Vec<String> = db
+        .read_blocking(|c| burn_rows(c, &filter))
+        .unwrap()
+        .into_iter()
+        .map(|row| row.funding)
+        .collect();
+    fundings.sort();
+    assert_eq!(
+        fundings,
+        [OVERAGE_FUNDING, PLAN_FUNDING],
+        "the fold files the two requests under their fundings"
+    );
+    let point = db
+        .read_blocking(|c| burn_series(c, &tables, &kinds, &tiers, &filter))
+        .unwrap()
+        .into_iter()
+        .find(|p| p.at == hour)
+        .expect("the planted hour");
+    let plan = usage(1_000, 100);
+    let five_hour = share_of(
+        &tables,
+        FIVE_HOUR,
+        "test_tier",
+        "claude-sonnet-5-5",
+        plan,
+        hour,
+    );
+    let seven_day = share_of(
+        &tables,
+        SEVEN_DAY,
+        "test_tier",
+        "claude-sonnet-5-5",
+        plan,
+        hour,
+    );
+    assert!(
+        (point.usd - 7.0).abs() < 1e-9,
+        "the overage row's dollars alone reach the bucket: {point:?}"
+    );
+    assert!(
+        point
+            .five_hour_share
+            .is_some_and(|s| (s - five_hour).abs() < 1e-9),
+        "the plan row alone prices the 5-hour share: {point:?} vs {five_hour}"
+    );
+    assert!(
+        point
+            .seven_day_share
+            .is_some_and(|s| (s - seven_day).abs() < 1e-9),
+        "the plan row alone prices the 7-day share: {point:?} vs {seven_day}"
+    );
+    assert_eq!(point.uncached_tokens, 2_000, "both rows' tokens count");
+}
+
+#[test]
+fn a_session_s_overage_attempt_adds_dollars_and_no_share_while_its_plan_attempt_adds_shares() {
+    let db = LedgerDb::open_in_memory().unwrap();
+    plant_funded(&db, "r-plan", "s-mixed", None, 3.0);
+    plant_funded(&db, "r-overage", "s-mixed", Some(true), 7.0);
+    let tables = share_tables();
+    let kinds = HashMap::from([("a".to_string(), AccountKind::Oauth)]);
+    let tiers: Tiers = HashMap::from([("a".to_string(), Some("test_tier".to_string()))]);
+    let hour = phoebis_ledger::hour_of(WEEKDAY_OFF_PEAK) * 1_000;
+    let filter = SeriesFilter {
+        from: hour,
+        to: hour + 3_600_000,
+        bucket_seconds: 3_600,
+        ..SeriesFilter::default()
+    };
+    let sessions = db
+        .read_blocking(|c| phoebis_ledger::session_burn_series(c, &tables, &kinds, &tiers, &filter))
+        .unwrap();
+    let point = sessions
+        .iter()
+        .find(|(id, _)| id == "s-mixed")
+        .and_then(|(_, points)| points.iter().find(|p| p.at == hour).cloned())
+        .unwrap_or_else(|| panic!("the session has the planted hour: {sessions:?}"));
+    let plan = usage(1_000, 100);
+    let at = WEEKDAY_OFF_PEAK + 500;
+    let five_hour = share_of(
+        &tables,
+        FIVE_HOUR,
+        "test_tier",
+        "claude-sonnet-5-5",
+        plan,
+        at,
+    );
+    let seven_day = share_of(
+        &tables,
+        SEVEN_DAY,
+        "test_tier",
+        "claude-sonnet-5-5",
+        plan,
+        at,
+    );
+    assert!(
+        (point.usd - 7.0).abs() < 1e-9,
+        "the overage attempt's dollars alone reach the bucket: {point:?}"
+    );
+    assert!(
+        point
+            .five_hour_share
+            .is_some_and(|s| (s - five_hour).abs() < 1e-9),
+        "the plan attempt alone prices the 5-hour share: {point:?} vs {five_hour}"
+    );
+    assert!(
+        point
+            .seven_day_share
+            .is_some_and(|s| (s - seven_day).abs() < 1e-9),
+        "the plan attempt alone prices the 7-day share: {point:?} vs {seven_day}"
+    );
+    assert_eq!(point.uncached_tokens, 2_000, "both attempts' tokens count");
 }
 
 /// A caller that folds several scopes reads the range once: the series over the rows `burn_rows` read answers,

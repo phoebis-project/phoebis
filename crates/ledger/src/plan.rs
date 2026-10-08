@@ -10,8 +10,10 @@ use indexmap::IndexMap;
 use jiff::civil::Weekday;
 use jiff::tz::{TimeZone, TimeZoneDatabase};
 use jiff::Timestamp;
-use phoebis_routing::{PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{window_for, PinUsage, RateTable, Rates, FIVE_HOUR, SEVEN_DAY};
+use phoebis_store::AccountKind;
 
+use crate::rollup::{FAST_FUNDING, OVERAGE_FUNDING};
 use crate::LedgerError;
 
 const SHIPPED_SUBSCRIPTION_COSTS: &str = include_str!("../subscription_costs.yaml");
@@ -653,4 +655,82 @@ impl PlanTables {
     pub fn priced(&self, window: &str, tier: &str, canonical_model: &str) -> bool {
         self.costs.priced(window, tier, canonical_model)
     }
+}
+
+/// Who paid for an attempt. The account's kind decides first: an api_key account's answer is billed in dollars
+/// whatever its speed or overage flag, as the burn pricer matches the kind first. On an oauth account a fast
+/// answer draws usage credits, then an answer in overage is billed in dollars, else the subscription's window paid.
+/// The console's `fundingOf` reads the same three facts in the same order.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum Funding {
+    Plan,
+    Overage,
+    Fast,
+    ApiKey,
+}
+
+/// The funding of an attempt from its row's three facts: the account's kind, the answer's `speed` and the head's
+/// `overage_in_use`, read in `Funding`'s order.
+pub fn funding_of(
+    account_kind: &str,
+    overage_in_use: Option<bool>,
+    speed: Option<&str>,
+) -> Funding {
+    match (account_kind, speed, overage_in_use) {
+        ("api_key", _, _) => Funding::ApiKey,
+        (_, Some("fast"), _) => Funding::Fast,
+        (_, _, Some(true)) => Funding::Overage,
+        _ => Funding::Plan,
+    }
+}
+
+impl Funding {
+    /// A rollup row's funding from its key's word and its account's kind: an api_key account's rows file under
+    /// `plan` in the key, so the kind decides first.
+    pub fn of_rollup(kind: AccountKind, funding: &str) -> Funding {
+        match (kind, funding) {
+            (AccountKind::ApiKey, _) => Funding::ApiKey,
+            (AccountKind::Oauth, FAST_FUNDING) => Funding::Fast,
+            (AccountKind::Oauth, OVERAGE_FUNDING) => Funding::Overage,
+            (AccountKind::Oauth, _) => Funding::Plan,
+        }
+    }
+
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Funding::Plan => "plan",
+            Funding::Overage => "overage",
+            Funding::Fast => "fast",
+            Funding::ApiKey => "api_key",
+        }
+    }
+}
+
+/// The shares of an account's own windows one usage charges, keyed by the ledger's window ids in the order
+/// `five_hour`, `seven_day`, then the model week `window_for(canonical_model)` names when it is one. Every window
+/// the model applies to is a key: `Some(share)` where the tier and the model price it, `None` where the tier has no
+/// capacity or the model no weight on it, so a reader tells a window that does not apply (absent) from one it
+/// could not price (`None`), and a model week is never nulled by a model that has none.
+pub type WindowShares = IndexMap<&'static str, Option<f64>>;
+
+/// `share_at` on the two shared windows and on `window_for(canonical_model)` where that is a model week, at `at`.
+pub fn price_shares(
+    tables: &PlanTables,
+    tier: &str,
+    canonical_model: &str,
+    usage: PinUsage,
+    at: i64,
+) -> WindowShares {
+    let week = window_for(canonical_model);
+    [FIVE_HOUR, SEVEN_DAY]
+        .into_iter()
+        .chain((week != SEVEN_DAY).then_some(week))
+        .map(|window| {
+            (
+                window,
+                tables.share_at(window, tier, canonical_model, usage, at),
+            )
+        })
+        .collect()
 }

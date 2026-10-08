@@ -1389,10 +1389,10 @@ const CONVERSATION_HINT = CONVERSATION_CLASSES.join(', ');
 const OVERHEAD_HINT = 'every other class, and requests that named none';
 const CLASS_NOTE = `conversation is ${CONVERSATION_HINT}; overhead is ${OVERHEAD_HINT}`;
 
-const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode answers; its plan quota spends window share, charted under Plan per hour";
+const SPEND_NOTE = "Dollars per minute: API-key traffic, and a subscription account's fast-mode and overage answers; its plan quota spends window share, charted under Plan per hour";
 /** A folded rest of subscription accounts as the dollars chart names it: its dollars are its members' fast-mode
- *  answers, and its own label names the plan unit, which the dollars axis does not chart. */
-const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode, tier unknown)', window_share: 'Other (fast mode)' };
+ *  and overage answers, and its own label names the plan unit, which the dollars axis does not chart. */
+const SPEND_REST_LABEL: Record<Exclude<BurnLineUnit, 'usd'>, string> = { unknown: 'Other (fast mode or overage, tier unknown)', window_share: 'Other (fast mode or overage)' };
 const PLAN_NOTE =
   "The share of each subscription account's own 5-hour window (solid) and 7-day window (dashed) its traffic used per hour, the 5-hour share weighed by the peak band, whose hours are shaded";
 const TIER_UNKNOWN_HINT = 'No tier on file, or one the cost model does not size, so no share of its windows is priced';

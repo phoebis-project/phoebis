@@ -35,8 +35,8 @@ pub use pattern::{
     within_bounds as patterns_within_bounds, MAX_PATTERNS, MAX_PATTERN_CHARS, PATTERNS_TOO_LONG,
 };
 pub use plan::{
-    Capacity, DefinedBy, ModelWindow, Override, Peak, PerWindow, PlanTables, SubscriptionCosts,
-    TypeMultiplier, TypeOverride, Unit,
+    funding_of, price_shares, Capacity, DefinedBy, Funding, ModelWindow, Override, Peak, PerWindow,
+    PlanTables, SubscriptionCosts, TypeMultiplier, TypeOverride, Unit, WindowShares,
 };
 pub use pricing::{price_attempts, ModelPrice, ModelRow, PriceTable, Pricing, Speed};
 #[cfg(any(test, feature = "test-support"))]

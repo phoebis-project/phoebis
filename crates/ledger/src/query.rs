@@ -12,7 +12,7 @@ use serde_json::Value;
 
 use crate::db::{row_to_attempt, row_to_request, LedgerDb, ATTEMPT_SELECT, REQUEST_SELECT};
 use crate::histogram::Histogram;
-use crate::plan::PlanTables;
+use crate::plan::{funding_of, price_shares, Funding, PlanTables};
 use crate::pricing::{PriceTable, Speed};
 use crate::record::{
     AttemptRecord, EventRecord, ExtraUsageSampleRecord, QuotaSampleRecord, RequestRecord,
@@ -21,7 +21,7 @@ use crate::record::{
 use crate::rollup::read_rollups;
 use crate::rollup::{
     hour_of, read_account_rollups, read_rollups_paged, KeySelector, RollupRow, RollupSelect,
-    FAST_FUNDING, UNATTRIBUTED,
+    UNATTRIBUTED,
 };
 use crate::LedgerError;
 
@@ -2530,18 +2530,19 @@ struct UsageRow<'a> {
     /// request's hour and keeps no completion, and the completion for an attempt, where the meter charges it. Per
     /// row, since a bucket spanning a band edge cannot say which side a charge fell on.
     at: i64,
-    /// A rollup row funded by fast mode, or an attempt the answer served fast. Never the rollup's speed, which also
-    /// files a request that asked for fast mode and was served without it.
-    fast: bool,
+    /// Who paid for the row: a rollup row's key read against its account's kind, an attempt's three facts. Never
+    /// the rollup's speed, which also files a request that asked for fast mode and was served without it.
+    funding: Funding,
 }
 
 /// The shares of an oauth account's two windows (each banded at the row's own instant) when `tier`
 /// names one the tables size, `estimated_usd` for an api_key account; a row whose account is not in `kinds`
-/// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account adds
-/// its `estimated_usd` and a zero share where the tables size its tier: fast mode spends usage credits and draws no
-/// plan window, and the zero still tells a reader the account is priced in its window unit. A bucket holding a row
-/// the table cannot price answers `None` on that window, whichever row came first; a row with no token has nothing
-/// to price and leaves both windows as the other rows set them.
+/// carries no price the caller could attribute, so it adds nothing at all. A fast row on an oauth account, and
+/// one in overage, adds its `estimated_usd` and a zero share where the tables size its tier: fast mode spends
+/// usage credits and overage is billed in dollars, neither draws a plan window, and the zero still tells a reader
+/// the account is priced in its window unit. A bucket holding a row the table cannot price answers `None` on that
+/// window, whichever row came first; a row with no token has nothing to price and leaves both windows as the
+/// other rows set them.
 fn price_usage(
     point: &mut BurnPoint,
     kind: Option<AccountKind>,
@@ -2555,10 +2556,10 @@ fn price_usage(
         + row.cache_write_1h_tokens
         + row.output_tokens;
     match kind {
-        Some(AccountKind::Oauth) if row.fast => {
+        Some(AccountKind::Oauth) if matches!(row.funding, Funding::Fast | Funding::Overage) => {
             point.usd += row.estimated_usd;
-            // Ahead of the model's weights: a fast row prices in dollars whatever the model weighs it at, so the zero
-            // rests on the tier alone.
+            // Ahead of the model's weights: a dollar-billed row prices in dollars whatever the model weighs it at,
+            // so the zero rests on the tier alone.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
                 if tables.tier_factor(tier, FIVE_HOUR).is_some() && !point.five_hour_unpriced {
                     point.five_hour_share.get_or_insert(0.0);
@@ -2579,7 +2580,10 @@ fn price_usage(
             // A failed request books a row with no token, and the model refuses a model it has no weight for before
             // it reads the usage: such a row would null a priced hour for a charge of nothing.
             if let Some(tier) = tier.filter(|_| tokens > 0) {
-                match tables.share_at(FIVE_HOUR, tier, row.canonical_model, usage, row.at) {
+                // The two shared windows alone: the burn chart draws no model week.
+                let shares = price_shares(tables, tier, row.canonical_model, usage, row.at);
+                let shared = |window: &str| shares.get(window).copied().flatten();
+                match shared(FIVE_HOUR) {
                     Some(share) if !point.five_hour_unpriced => {
                         *point.five_hour_share.get_or_insert(0.0) += share;
                     }
@@ -2589,7 +2593,7 @@ fn price_usage(
                         point.five_hour_share = None;
                     }
                 }
-                match tables.share_at(SEVEN_DAY, tier, row.canonical_model, usage, row.at) {
+                match shared(SEVEN_DAY) {
                     Some(share) if !point.seven_day_unpriced => {
                         *point.seven_day_share.get_or_insert(0.0) += share;
                     }
@@ -2694,9 +2698,10 @@ fn price_burn_row(
     let Some(point) = points.get_mut(((row.hour - first) / bucket_seconds) as usize) else {
         return;
     };
+    let kind = kinds.get(&row.account_id).copied();
     price_usage(
         point,
-        kinds.get(&row.account_id).copied(),
+        kind,
         tiers.get(&row.account_id).and_then(Option::as_deref),
         tables,
         &UsageRow {
@@ -2708,7 +2713,9 @@ fn price_burn_row(
             output_tokens: row.output_tokens,
             estimated_usd: row.estimated_usd,
             at: row.hour * 1_000,
-            fast: row.funding == FAST_FUNDING,
+            // A row whose account the registry no longer holds has no kind to read its key against, and
+            // `price_usage` adds nothing for it, so the word here is never read.
+            funding: kind.map_or(Funding::Plan, |kind| Funding::of_rollup(kind, &row.funding)),
         },
     );
 }
@@ -2869,6 +2876,9 @@ struct SessionAttempt {
     estimated_usd: f64,
     /// `attempts.speed`, the speed the answer reported.
     speed: Option<String>,
+    /// `attempts.account_kind` and `attempts.overage_in_use`, the two facts beside the speed that say who paid.
+    account_kind: String,
+    overage_in_use: Option<bool>,
 }
 
 /// `read_session_attempts`' statement for `sessions` ids and its binds, spelled once so the plan test explains the
@@ -2884,7 +2894,7 @@ fn session_attempts_statement(
         "SELECT r.session_id, a.account_id, a.started_at, \
          COALESCE(a.finished_at, r.finished_at, a.started_at), r.canonical_model, \
          a.input_tokens, a.cache_read_tokens, a.cache_write_5m_tokens, a.cache_write_1h_tokens, \
-         a.output_tokens, a.estimated_usd, a.speed \
+         a.output_tokens, a.estimated_usd, a.speed, a.account_kind, a.overage_in_use \
          FROM attempts a JOIN requests r ON r.id = a.request_id \
          WHERE r.session_id IN ({placeholders}) AND a.started_at >= ? AND a.started_at < ? \
          AND r.received_at >= ? AND r.received_at < ?"
@@ -2926,6 +2936,8 @@ fn read_session_attempts(
             output_tokens: tokens(row.get(9)?),
             estimated_usd: row.get::<_, Option<f64>>(10)?.unwrap_or(0.0),
             speed: row.get(11)?,
+            account_kind: row.get(12)?,
+            overage_in_use: row.get(13)?,
         })
     })?;
     rows.collect::<Result<Vec<_>, _>>()
@@ -2990,7 +3002,7 @@ pub fn session_burn_series(
                 output_tokens: a.output_tokens,
                 estimated_usd: a.estimated_usd,
                 at: a.completed_at,
-                fast: a.speed.as_deref() == Some("fast"),
+                funding: funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()),
             },
         );
     }

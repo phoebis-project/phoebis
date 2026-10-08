@@ -123,13 +123,15 @@ or `NaN`, which no budget trips on.
 
 ## Plan meter
 
-A subscription account's plan-side figures read as a share of its own 5-hour window and of its 7-day window, a percent
-with the window named; an API-key account, and a subscription account in overage, read dollars.
+A subscription account's plan-side figures read as a share of its own 5-hour and 7-day windows, a percent with the
+window named. An API-key account, and a subscription account in overage, read dollars, and an overage request adds to
+no window share.
 
 A fast answer draws no plan window: it adds nothing to the share, the prediction, or the burn a shedding round ranks by.
 It reads as a zero share in Plan per hour, and its dollars count toward the burn route's `usd`, which Spend per minute
-charts under every grouping; a member's budget counts them at the fast cells, a subscription member's as an
-API-key member's.
+charts under every grouping. An answer in overage reads the same in the burn figures, a zero share in Plan per hour and
+its dollars in `usd`. A member's budget counts a fast answer at the fast cells, a subscription member's as an API-key
+member's.
 
 The subscription cost model (`crates/ledger/subscription_costs.yaml`) ships beside the price table and holds constants:
 a token costs its model's weight times its type's multiplier in units on every window, a window holds a capacity in
@@ -575,13 +577,13 @@ per-group table's Rejected beside them) and the error rate, with a Failovers cha
 it: the cache-write tokens the first request after a move paid to warm its new account, and the moves the range counted,
 by reason; then a Requests by speed chart, standard and fast per bucket, and an Effort levels card with a bar per level
 the requests asked for. Burn reports a subscription account's spend as the share of its own 5-hour and 7-day window and
-an API-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account,
-key, request class, or session; the 5-hour share carries the peak band's weight, the 7-day share the week's own band
-factor, 1 in the shipped model. The shares read under the account grouping alone, since shares of different accounts'
-windows do not add, and the Spend per minute chart draws dollars alone, a subscription account's among them only for its
-fast-mode answers; past the seven lines a chart draws, the subscription accounts folded into the rest draw their
-fast-mode dollars as Other (fast mode), or Other (fast mode, tier unknown) for those whose tier the cost model does not
-size. The account, key and request class groupings read the hourly rollups, which fold a request under the hour it
+an API-key account's in dollars, side by side and each split into cached and uncached tokens, grouped by account, key,
+request class, or session; the 5-hour share carries the peak band's weight, the 7-day share the week's own band factor,
+1 in the shipped model. The shares read under the account grouping alone, since shares of different accounts' windows do
+not add, and the Spend per minute chart draws dollars alone, a subscription account's among them for its fast-mode and
+overage answers. Past the seven lines a chart draws, the subscription accounts folded into the rest draw those dollars
+as Other (fast mode or overage), or Other (fast mode or overage, tier unknown) for those whose tier the cost model does
+not size. The account, key and request class groupings read the hourly rollups, which fold a request under the hour it
 arrived in and weigh it by that hour's band rather than at its completion, where the meter charges it. Grouped by
 account, it adds a Plan per hour chart: the share of each subscription account's 5-hour window, solid, and of its 7-day
 window, dashed, that its traffic used per hour, a bucket the cost model cannot price (a model it has no weight for, or a

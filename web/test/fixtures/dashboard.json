@@ -183,7 +183,7 @@
         "at": 970000,
         "finished_at": 970900,
         "key_id": "desktop",
-        "key_generation": 1791487245985,
+        "key_generation": 1791490678721,
         "pool_id": "main",
         "account_id": "direct",
         "session_id": "s3",
@@ -244,6 +244,7 @@
           "web_search": 0
         },
         "cost_usd": 0.0036,
+        "cost_shares": null,
         "phases": {
           "received_at": 970000,
           "selected_at": 970000,
@@ -306,7 +307,7 @@
         "at": 940000,
         "finished_at": 940900,
         "key_id": "desktop",
-        "key_generation": 1791487245985,
+        "key_generation": 1791490678721,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -367,6 +368,10 @@
           "web_search": 0
         },
         "cost_usd": 0.00355,
+        "cost_shares": {
+          "five_hour": 0.000017625,
+          "seven_day": 2.9375e-6
+        },
         "phases": {
           "received_at": 940000,
           "selected_at": 940000,
@@ -423,7 +428,7 @@
         "at": 880000,
         "finished_at": 880900,
         "key_id": "desktop",
-        "key_generation": 1791487245985,
+        "key_generation": 1791490678721,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s2",
@@ -484,6 +489,10 @@
           "web_search": 0
         },
         "cost_usd": 0.00355,
+        "cost_shares": {
+          "five_hour": 0.000017625,
+          "seven_day": 2.9375e-6
+        },
         "phases": {
           "received_at": 880000,
           "selected_at": 880000,
@@ -540,7 +549,7 @@
         "at": -2599400,
         "finished_at": -2598500,
         "key_id": "desktop",
-        "key_generation": 1791487245985,
+        "key_generation": 1791490678721,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -605,6 +614,10 @@
           "web_search": 0
         },
         "cost_usd": 0.00355,
+        "cost_shares": {
+          "five_hour": 0.000017625,
+          "seven_day": 2.9375e-6
+        },
         "phases": {
           "received_at": -2599400,
           "selected_at": -2599400,
@@ -722,6 +735,10 @@
           "web_search": 0
         },
         "cost_usd": 0.00355,
+        "cost_shares": {
+          "five_hour": 0.000017625,
+          "seven_day": 2.9375e-6
+        },
         "phases": {
           "received_at": -2599500,
           "selected_at": -2599500,
@@ -778,7 +795,7 @@
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1791487245985,
+        "key_generation": 1791490678721,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -839,6 +856,7 @@
           "web_search": 0
         },
         "cost_usd": 0.0071,
+        "cost_shares": null,
         "phases": {
           "received_at": -2600000,
           "selected_at": -2600000,

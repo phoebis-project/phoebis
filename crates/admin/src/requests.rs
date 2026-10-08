@@ -9,19 +9,61 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use phoebis_ledger::{
-    list_requests, request_by_id, request_events, AttemptRecord, LiveKeys, RequestFilter,
-    RequestRecord,
+    funding_of, list_requests, price_shares, request_by_id, request_events,
+    AttemptRecord, Funding, LiveKeys, PlanTables, RequestFilter, RequestRecord, Tiers,
 };
+use phoebis_routing::PinUsage;
+use phoebis_store::AccountKind;
 use serde_json::{json, Value};
 
 use crate::analytics::ledger_failure;
-use crate::routes::failure;
+use crate::routes::{failure, store_failure};
 use crate::AdminState;
 
 const DEFAULT_LIMIT: usize = 50;
 const MAX_LIMIT: usize = 500;
 
-pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> Value {
+/// What a request's share is priced with, read once per handler call: the cost model in force and each oauth
+/// account's tier as the registry holds it now, so a request made under an earlier tier reads under the current
+/// one, as the burn route reads it.
+pub(crate) struct ShareContext {
+    pub tables: Arc<PlanTables>,
+    pub tiers: Tiers,
+}
+
+impl ShareContext {
+    /// `accounts()` and one `subscription()` per oauth account; a store failure is the route's 500.
+    // The error is a rendered HTTP response, returned once per request and dropped; boxing it would buy a
+    // pointer chase and nothing else.
+    #[allow(clippy::result_large_err)]
+    pub(crate) fn read(state: &AdminState) -> Result<ShareContext, Response> {
+        let accounts = state.store.accounts().map_err(store_failure)?;
+        let mut tiers = Tiers::new();
+        for account in accounts.iter().filter(|a| a.kind == AccountKind::Oauth) {
+            let tier = state
+                .store
+                .subscription(&account.id)
+                .map_err(store_failure)?
+                .and_then(|s| s.tier);
+            tiers.insert(account.id.clone(), tier);
+        }
+        Ok(ShareContext::of(state.tables.clone(), tiers))
+    }
+
+    /// The tables and tiers given: a test's own cost model, or the process's shared one.
+    pub(crate) fn of(tables: impl Into<Arc<PlanTables>>, tiers: Tiers) -> ShareContext {
+        ShareContext {
+            tables: tables.into(),
+            tiers,
+        }
+    }
+}
+
+pub(crate) fn request_summary(
+    r: &RequestRecord,
+    attempts: &[AttemptRecord],
+    shares: &ShareContext,
+) -> Value {
     let last = attempts.last();
     json!({
         "id": r.id, "at": r.received_at, "finished_at": r.finished_at, "key_id": r.key_id, "key_generation": r.key_generation, "pool_id": r.pool_id,
@@ -39,6 +81,7 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so a request with no
         // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
         "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).fold(0.0, |a, b| a + b),
+        "cost_shares": cost_shares_json(r, attempts, shares),
         "phases": phases_json(r, attempts),
         "attempts": attempts.iter().map(attempt_json).collect::<Vec<_>>(),
         // The request row's own facts rather than an attempt's: a hold that ended in an exhaustion has no attempt.
@@ -71,6 +114,38 @@ fn phases_json(r: &RequestRecord, attempts: &[AttemptRecord]) -> Value {
         "stream_end_at": r.stream_end_at,
         "finished_at": r.finished_at,
     })
+}
+
+/// Null for a request no subscription window paid: no attempt, or a serving attempt whose funding is not plan.
+/// Else the serving attempt's shares under the account's current tier at its completion, where the meter charges
+/// it (else the request's, else the attempt's start), `{}` for an account the tiers lack or hold without a tier,
+/// since the burn route prices no share without one.
+fn cost_shares_json(r: &RequestRecord, attempts: &[AttemptRecord], shares: &ShareContext) -> Value {
+    let Some(a) = attempts.last() else {
+        return Value::Null;
+    };
+    if funding_of(&a.account_kind, a.overage_in_use, a.speed.as_deref()) != Funding::Plan {
+        return Value::Null;
+    }
+    let Some(Some(tier)) = shares.tiers.get(&a.account_id) else {
+        return json!({});
+    };
+    let usage = PinUsage {
+        input: a.input_tokens.unwrap_or(0),
+        cache_read: a.cache_read_tokens.unwrap_or(0),
+        write_5m: a.cache_write_5m_tokens.unwrap_or(0),
+        write_1h: a.cache_write_1h_tokens.unwrap_or(0),
+        output: a.output_tokens.unwrap_or(0),
+    };
+    let at = a.finished_at.or(r.finished_at).unwrap_or(a.started_at);
+    serde_json::to_value(price_shares(
+        &shares.tables,
+        tier,
+        &r.canonical_model,
+        usage,
+        at,
+    ))
+    .expect("window shares serialize")
 }
 
 /// Its own function, beside `shape_json` and `attempt_json`, for the same reason.
@@ -205,6 +280,10 @@ pub(crate) async fn list(
     }) {
         return failure(StatusCode::BAD_REQUEST, "cursor is <received_at>:<id>");
     }
+    let shares = match ShareContext::read(&state) {
+        Ok(shares) => shares,
+        Err(refusal) => return refusal,
+    };
     let live = LiveKeys::from_snapshot(&state.router.snapshot());
     match state
         .ledger
@@ -212,12 +291,16 @@ pub(crate) async fn list(
         .read(move |c| list_requests(c, &filter, &live, cursor.as_deref(), limit))
         .await
     {
-        Ok((rows, next)) => Json(json!({ "requests": rows.iter().map(|(r, a)| request_summary(r, a)).collect::<Vec<_>>(), "next_cursor": next })).into_response(),
+        Ok((rows, next)) => Json(json!({ "requests": rows.iter().map(|(r, a)| request_summary(r, a, &shares)).collect::<Vec<_>>(), "next_cursor": next })).into_response(),
         Err(e) => ledger_failure(e),
     }
 }
 
 pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
+    let shares = match ShareContext::read(&state) {
+        Ok(shares) => shares,
+        Err(refusal) => return refusal,
+    };
     let found = state
         .ledger
         .db()
@@ -230,7 +313,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>, Path(id): Path<St
         })
         .await;
     match found {
-        Ok(Some((r, a, events))) => Json(json!({ "request": request_summary(&r, &a), "events": events.iter().map(event_json).collect::<Vec<_>>() })).into_response(),
+        Ok(Some((r, a, events))) => Json(json!({ "request": request_summary(&r, &a, &shares), "events": events.iter().map(event_json).collect::<Vec<_>>() })).into_response(),
         Ok(None) => failure(StatusCode::NOT_FOUND, "no such request"),
         Err(e) => ledger_failure(e),
     }
@@ -296,15 +379,104 @@ pub(crate) async fn bodies(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use phoebis_ledger::RequestRecord;
+    use phoebis_ledger::{PlanTables, RequestRecord, SubscriptionCosts, Tiers};
+
+    /// Monday 2026-09-21 at 20:00 UTC, past the peak band on a weekday.
+    const WEEKDAY_OFF_PEAK: i64 = 1_790_020_800_000;
+
+    /// A cost model in round numbers: one Fable input token weighs 10 units, `test_tier` holds 100 units on the
+    /// 5-hour window and 1000 on the week, `narrow_tier` sizes the 5-hour window alone, and the Fable week is half
+    /// the 7-day window.
+    const SHARE_COSTS: &str = "\
+effective: 2026-01-01
+unit:
+  defined_by: {tier: test_tier, window: five_hour, band: out_of_band}
+  units_per_window: 100
+capacity:
+  test_tier:   {five_hour: 100, seven_day: 1000}
+  narrow_tier: {five_hour: 100, seven_day: null}
+peak:
+  zone: America/Los_Angeles
+  weekdays: true
+  from_hour: 5
+  to_hour: 11
+  capacity_factor: {five_hour: 0.5, seven_day: 1}
+type_multiplier: {cache_read: 0.1, cache_write_1h: 2, cache_write_5m: 2, input: 1, output: 10}
+model_weight:
+  claude-fable-5-1: 10
+  claude-sonnet-5-5: 1
+  claude-haiku-4-5: 0.5
+model_windows:
+  seven_day_fable: {of: seven_day, capacity_factor: 0.5}
+overrides: {}
+";
+
+    fn shares_of(tiers: &[(&str, Option<&str>)]) -> ShareContext {
+        ShareContext::of(
+            PlanTables {
+                costs: SubscriptionCosts::from_yaml(SHARE_COSTS)
+                    .expect("the share cost model parses"),
+                path: None,
+                source: "test".to_string(),
+            },
+            tiers
+                .iter()
+                .map(|(id, tier)| (id.to_string(), tier.map(String::from)))
+                .collect(),
+        )
+    }
+
+    fn request_of(model: &str) -> RequestRecord {
+        RequestRecord {
+            canonical_model: model.into(),
+            finished_at: Some(WEEKDAY_OFF_PEAK + 900),
+            ..Default::default()
+        }
+    }
+
+    /// One input token on account `a`, finished off the band.
+    fn attempt_of(kind: &str, overage_in_use: Option<bool>, speed: Option<&str>) -> AttemptRecord {
+        AttemptRecord {
+            account_id: "a".into(),
+            account_kind: kind.into(),
+            started_at: WEEKDAY_OFF_PEAK,
+            finished_at: Some(WEEKDAY_OFF_PEAK + 400),
+            input_tokens: Some(1),
+            overage_in_use,
+            speed: speed.map(String::from),
+            ..Default::default()
+        }
+    }
+
+    fn cost_shares(model: &str, attempt: AttemptRecord, shares: &ShareContext) -> Value {
+        request_summary(&request_of(model), &[attempt], shares)["cost_shares"].clone()
+    }
+
+    fn keys(shares: &Value) -> Vec<&str> {
+        shares
+            .as_object()
+            .expect("an object")
+            .keys()
+            .map(String::as_str)
+            .collect()
+    }
 
     #[test]
     fn a_request_with_no_priced_attempt_costs_an_unsigned_zero() {
-        let summary = request_summary(&RequestRecord::default(), &[]);
+        let summary = request_summary(
+            &RequestRecord::default(),
+            &[],
+            &ShareContext::of(PlanTables::shipped(), Tiers::new()),
+        );
         assert_eq!(
             summary["cost_usd"].to_string(),
             "0.0",
             "a signed zero on the wire is read back as -$0.00"
+        );
+        assert_eq!(
+            summary["cost_shares"],
+            Value::Null,
+            "a request with no attempt is billed in dollars"
         );
     }
 
@@ -329,9 +501,10 @@ mod tests {
                 ..Default::default()
             },
         ];
-        let phases = |attempts: &[AttemptRecord]| request_summary(&row, attempts)["phases"].clone();
+        let shares = ShareContext::of(PlanTables::shipped(), Tiers::new());
+        let summary = |attempts: &[AttemptRecord]| request_summary(&row, attempts, &shares);
         assert_eq!(
-            phases(&attempts),
+            summary(&attempts)["phases"],
             json!({
                 "received_at": 1_000, "selected_at": 1_010, "written_at": 1_430, "head_at": 1_120,
                 "first_content_at": 1_300, "stream_end_at": 1_800, "finished_at": 1_900,
@@ -339,12 +512,127 @@ mod tests {
             "the first attempt's start is the selection and the serving attempt's write is the write"
         );
         assert_eq!(
-            phases(&[]),
+            summary(&[])["phases"],
             json!({
                 "received_at": 1_000, "selected_at": null, "written_at": null, "head_at": 1_120,
                 "first_content_at": 1_300, "stream_end_at": 1_800, "finished_at": 1_900,
             }),
             "a request with no attempt was neither selected nor written"
+        );
+        assert_eq!(
+            summary(&attempts)["cost_shares"],
+            json!({}),
+            "a plan attempt of an account the tiers lack reads an empty object"
+        );
+    }
+
+    #[test]
+    fn cost_shares_is_null_for_an_api_key_attempt() {
+        let shares = shares_of(&[("a", Some("test_tier"))]);
+        assert_eq!(
+            cost_shares(
+                "claude-fable-5-1",
+                attempt_of("api_key", None, None),
+                &shares
+            ),
+            Value::Null
+        );
+        assert_eq!(
+            cost_shares(
+                "claude-fable-5-1",
+                attempt_of("api_key", Some(true), Some("fast")),
+                &shares
+            ),
+            Value::Null,
+            "the kind decides whatever the speed or the overage flag says"
+        );
+    }
+
+    #[test]
+    fn cost_shares_is_null_for_an_overage_attempt() {
+        let shares = shares_of(&[("a", Some("test_tier"))]);
+        assert_eq!(
+            cost_shares(
+                "claude-fable-5-1",
+                attempt_of("oauth", Some(true), None),
+                &shares
+            ),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn cost_shares_is_null_for_a_fast_answer() {
+        let shares = shares_of(&[("a", Some("test_tier"))]);
+        assert_eq!(
+            cost_shares(
+                "claude-fable-5-1",
+                attempt_of("oauth", None, Some("fast")),
+                &shares
+            ),
+            Value::Null
+        );
+    }
+
+    #[test]
+    fn a_plan_attempt_of_a_fable_model_reads_three_windows() {
+        let shares = shares_of(&[("a", Some("test_tier"))]);
+        let got = cost_shares("claude-fable-5-1", attempt_of("oauth", None, None), &shares);
+        assert_eq!(keys(&got), ["five_hour", "seven_day", "seven_day_fable"]);
+        assert!(
+            keys(&got)
+                .iter()
+                .all(|k| got[k].as_f64().is_some_and(|s| s > 0.0 && s < 1.0)),
+            "each window a positive fraction: {got}"
+        );
+        assert_eq!(
+            cost_shares(
+                "claude-fable-5-1",
+                attempt_of("oauth", Some(false), Some("standard")),
+                &shares
+            ),
+            got,
+            "a standard answer with the overage flag read off is the plan reading"
+        );
+    }
+
+    #[test]
+    fn the_model_week_is_absent_for_a_haiku_model() {
+        let shares = shares_of(&[("a", Some("test_tier"))]);
+        let got = cost_shares("claude-haiku-4-5", attempt_of("oauth", None, None), &shares);
+        assert_eq!(keys(&got), ["five_hour", "seven_day"]);
+        assert!(
+            keys(&got)
+                .iter()
+                .all(|k| got[k].as_f64().is_some_and(|s| s > 0.0)),
+            "{got}"
+        );
+    }
+
+    #[test]
+    fn an_absent_account_reads_an_empty_object_and_an_unsized_window_reads_null() {
+        let attempt = || attempt_of("oauth", None, None);
+        assert_eq!(
+            cost_shares("claude-fable-5-1", attempt(), &shares_of(&[])),
+            json!({}),
+            "an account the tiers lack"
+        );
+        assert_eq!(
+            cost_shares("claude-fable-5-1", attempt(), &shares_of(&[("a", None)])),
+            json!({}),
+            "an account held without a tier prices no share, as the burn route prices none"
+        );
+        let narrow = cost_shares(
+            "claude-fable-5-1",
+            attempt(),
+            &shares_of(&[("a", Some("narrow_tier"))]),
+        );
+        assert_eq!(keys(&narrow), ["five_hour", "seven_day", "seven_day_fable"]);
+        assert!(
+            narrow["five_hour"].as_f64().is_some_and(|s| s > 0.0)
+                && narrow["seven_day"].is_null()
+                && narrow["seven_day_fable"].is_null(),
+            "the 5-hour window prices and the two the tier does not size read null: {narrow}"
         );
     }
 }

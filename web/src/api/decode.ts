@@ -1,6 +1,6 @@
 import type {
   Account, AccountCatalog, AccountRollup, AffinityMode, AnalyticsGroup, AnalyticsPoint, ApiKey, AttemptOutcome, AttemptResponse, AttentionItem, BudgetPeriod, BurnPoint, BurnUnit, CacheMissReason, CacheTtl, CapturedBodies, CatalogModel,
-  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, KnownWindowId, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
+  CohortHold, DecisionBy, DecisionKind, DecisionRecord, DecisionSummary, FactEntity, FactUnit, FastLaneReading, FastPrice, GuardVerdict, KeepaliveOverview, KeepaliveRecipe, KeyModels, LiveAttempt, LiveDelta, LiveMetric, LiveRequest, LiveSnapshot, LiveTick, MemberBudget, MemberEligibility, ModelPrice, ModelRule, ModelRulesMode,
   ModelsState, Overview, PairingSession, PinMigrationReason, PinReason, PinReleaseReason, Placement, PlacementRow, Pool, PoolCacheTtl, PrefixEntry, QuotaHistory, QuotaPoll, QuotaSnapshot, RateLimitWindow, RecordCandidate, RecordOutcome, ReplayOutcome, RequestEvent, RequestLog, RequestOutcome, RequestPage, RequestPhases, RequestShape, RewritePoint,
   RoutingEvent, RoutingLogPage, RoutingLogRow, RuleCooldown, Score, SelectionTrace, Session, SessionPlacement, Settings, SubagentPlacement, Subscription, SubscriptionCosts, SummaryFact, TtlRules, TypeMultiplier, WarmSessions, WindowId,
 } from './types';
@@ -11,7 +11,7 @@ import { emptyCounts } from '@/lib/counts';
 import { fmtDate } from '@/lib/format';
 import { BUCKET_COUNT, emptyHistogram } from '@/lib/histogram';
 import { isFastScope } from '@/lib/quota';
-import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey } from '@/lib/windows';
+import { WINDOW_HOURS, WINDOW_LABEL, WINDOW_ORDER, hoursOfKey, windowKeyId } from '@/lib/windows';
 
 type Rec = Record<string, unknown>;
 const rec = (v: unknown): Rec => (v && typeof v === 'object' ? (v as Rec) : {});
@@ -24,6 +24,9 @@ const bool = (v: unknown, fallback = false): boolean => (typeof v === 'boolean' 
 const strings = (v: unknown): string[] => list(v).filter((x): x is string => typeof x === 'string');
 /** A map the route keys by data (a move reason, a model id), with every entry that is not a number dropped. */
 const numberMap = (v: unknown): Record<string, number> => Object.fromEntries(Object.entries(rec(v)).filter((e): e is [string, number] => numOrNull(e[1]) !== null));
+/** A map the route keys by data whose value may be null (a window the cost model could not price), each value read
+ *  through `numOrNull`, so an unpriced window decodes null rather than zero. */
+const nullableNumberMap = (v: unknown): Record<string, number | null> => Object.fromEntries(Object.entries(rec(v)).map(([k, x]) => [k, numOrNull(x)]));
 
 /** The wire carries Unix milliseconds; every page formats ISO strings. */
 export const iso = (ms: number): string => new Date(ms).toISOString();
@@ -31,24 +34,8 @@ export const isoOrNull = (ms: unknown): string | null => (typeof ms === 'number'
 const isoOr = (ms: unknown, fallback: string): string => isoOrNull(ms) ?? fallback;
 const epoch = '1970-01-01T00:00:00.000Z';
 
-/**
- * The ledger, the request log and the usage endpoint spell a window by the endpoint's key; the live feed carries
- * the head's short ids and the router's own windows name the Fable week `fable`. Each spelling of a window is one
- * window to the UI: `seven_day_fable`, `seven_day_overage_included`, `7d_oi` and `fable` all mean the model-scoped
- * week the UI draws third. Any other key is a window of its own, kept under its name.
- */
-const WINDOW_IDS = new Map<string, KnownWindowId>([
-  ['5h', '5h'],
-  ['7d', '7d'],
-  ['7d_oi', '7d_fable'],
-  ['fable', '7d_fable'],
-  ['five_hour', '5h'],
-  ['seven_day', '7d'],
-  ['seven_day_fable', '7d_fable'],
-  ['seven_day_overage_included', '7d_fable'],
-]);
-/** The UI's id for a window key: a known window's own id, any other key as it is, `null` for no key at all. */
-export const windowId = (id: string): WindowId | null => WINDOW_IDS.get(id) ?? (id === '' ? null : id);
+/** The UI's id for a window key, as `windowKeyId` folds it. */
+export const windowId = (id: string): WindowId | null => windowKeyId(id);
 
 /** The known windows in the order the pages draw them, then every other id in the order it was first seen. */
 function inDrawnOrder<T>(byId: Map<WindowId, T>): T[] {
@@ -447,9 +434,9 @@ export function decodeRequest(v: unknown): RequestLog {
   const r = rec(v);
   return {
     accountId: strOrNull(r.account_id), agentId: strOrNull(r.agent_id), agentType: strOrNull(r.agent_type), at: isoOr(r.at, epoch),
-    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), response: responseOf(a.response), selection: decodeSelection(a.selection), startedAt: isoOr(a.started_at, epoch), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
+    attempts: list(r.attempts).map(rec).map((a) => ({ accountId: str(a.account_id), accountKind: ACCOUNT_KIND_VALUES.find((k) => k === str(a.account_kind)) ?? 'oauth', cacheMissReason: missReason(a.cache_miss_reason), cooldownSet: a.cooldown_set ? { reason: str(rec(a.cooldown_set).reason), until: isoOr(rec(a.cooldown_set).until, epoch) } : null, durationMs: numOrNull(a.duration_ms), index: num(a.index) - 1, outcome: outcomeOf(a.outcome), overageInUse: typeof a.overage_in_use === 'boolean' ? a.overage_in_use : null, response: responseOf(a.response), selection: decodeSelection(a.selection), startedAt: isoOr(a.started_at, epoch), upstreamMessageId: strOrNull(a.upstream_message_id), upstreamRequestId: strOrNull(a.upstream_request_id), upstreamStatus: numOrNull(a.upstream_status), windows: attemptWindows(a.windows) })),
     autoMode: AUTO_MODE_VALUES.find((m) => m === str(r.auto_mode)) ?? null,
-    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
+    canonicalModel: str(r.canonical_model), capturedBodies: bool(r.captured_bodies), client: strOrNull(r.client), clientDrift: strOrNull(r.client_drift), compaction: strOrNull(r.compaction), contextCompacted: strOrNull(r.context_compacted), costShares: r.cost_shares === null || r.cost_shares === undefined ? null : nullableNumberMap(r.cost_shares), costUsd: num(r.cost_usd), durationMs: numOrNull(r.duration_ms), errorCode: strOrNull(r.error_code),
     forkDepth: numOrNull(r.fork_depth), forkedFrom: strOrNull(r.forked_from), held: cohortHoldOf(r.held), id: str(r.id),
     keyGeneration: num(r.key_generation), keyId: strOrNull(r.key_id),
     kind: REQUEST_KIND_VALUES.find((k) => k === str(r.kind)) ?? 'inference', model: str(r.model),

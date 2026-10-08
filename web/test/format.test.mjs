@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import { test } from 'node:test';
-import { earlierHolderLabel, fmtAbsolute, fmtDayShort, fmtEndsIn, fmtHourTick, fmtMiB, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
+import { earlierHolderLabel, fmtAbsolute, fmtDayShort, fmtEndsIn, fmtHourTick, fmtMiB, fmtShare, fmtShortTime, fmtTime, fmtUsd, fmtUsdTick, placementHit, setTimeFormat, shareLabel, shortModel, undatedModel, usdTickDigits } from './dist/api.js';
 
 test('a placement is a hit when the cache read what it promised: a content one its prefix, any other one anything', () => {
   const content = { depth: 3, prefixTokens: 130_000, rung: 'content' };
@@ -79,6 +79,13 @@ test('a window share reads as a percent to three significant digits with no trai
   assert.equal(fmtShare(0.125), '12.5%');
   assert.equal(fmtShare(0.0061), '0.61%', 'a trailing zero drops');
   assert.equal(fmtShare(0.0000571), '0.00571%', 'a small share keeps its three digits');
+});
+
+test("a share names its window through the console's labels and an unknown key as itself", () => {
+  assert.equal(shareLabel('five_hour', 0.0042), '0.42% of 5-hour');
+  assert.equal(shareLabel('seven_day', 0.00061), '0.061% of 7-day');
+  assert.equal(shareLabel('seven_day_fable', 0.0012), '0.12% of 7-day Fable', 'the model week reads the label the pages draw');
+  assert.equal(shareLabel('seven_day_opus', 0.5), '50% of seven_day_opus', 'a window the pages do not know keeps its key');
 });
 
 test('a dated model id reads undated, any other as sent', () => {

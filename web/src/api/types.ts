@@ -544,12 +544,15 @@ export interface SelectionTrace {
 
 export interface Attempt {
   accountId: string;
+  accountKind: AccountKind;
   /** Null when the attempt drew no response body to read diagnostics from. */
   cacheMissReason: CacheMissReason | null;
   cooldownSet: { reason: string; until: string } | null;
   durationMs: number | null;
   index: number;
   outcome: AttemptOutcome;
+  /** The head's overage flag as the attempt stored it: null on an API-key attempt and on a head that reported none. */
+  overageInUse: boolean | null;
   response: AttemptResponse;
   /** Null for an attempt the router stored no trace for. */
   selection: SelectionTrace | null;
@@ -602,6 +605,11 @@ export interface RequestPhases {
   writtenAt: string | null;
 }
 
+/** A plan-funded request's shares of its account's windows, keyed by the ledger's window ids, every window the model
+ *  applies to a key and null on one the cost model could not price. Null for a request billed in dollars, and an
+ *  empty object for one whose account the route's tiers lack or hold without a tier. */
+export type CostShares = Record<string, number | null>;
+
 export interface RequestLog {
   accountId: string | null;
   agentId: string | null;
@@ -620,6 +628,7 @@ export interface RequestLog {
   clientDrift: string | null;
   compaction: string | null;
   contextCompacted: string | null;
+  costShares: CostShares | null;
   costUsd: number;
   durationMs: number | null;
   errorCode: string | null;

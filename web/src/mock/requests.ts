@@ -1,5 +1,5 @@
 import type {
-  AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
+  AccountKind, AccountRollup, Attempt, AttemptOutcome, AttemptWindow, AutoMode, CacheMissReason, CapturedBodies, CohortHold, CostSplit, LatencyHistograms, PinMigrationReason, Placement,
   RateLimitWindow, RequestEvent, RequestKind, RequestLog, RequestOutcome, SelectionTrace, TrafficBucket, Usage, WastedProbeReason,
 } from '@/api/types';
 import { emptyCacheMissReasons, emptyWastedProbeReasons, missCount } from '@/lib/cache';
@@ -18,6 +18,12 @@ const rng = createRng(7_331);
 // The upstream's own ids draw from a stream of their own, so they move no draw of the rows.
 const upstreamIds = createRng(9_191);
 const upstreamId = (prefix: string) => `${prefix}${upstreamIds.uuid().replace(/-/g, '').slice(0, 22)}`;
+/** The registry's kind of an account the story names. A wrong id fails the mock build rather than reading a default. */
+const kindOf = (accountId: string): AccountKind => {
+  const kind = ACCOUNTS.find((x) => x.id === accountId)?.kind;
+  if (kind === undefined) throw new Error(`the story names an account the registry lacks: ${accountId}`);
+  return kind;
+};
 
 export const SESSION_IDS = Array.from({ length: 14 }, () => rng.uuid());
 
@@ -331,13 +337,16 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
     // A head reads the account's windows as they stand, a 429's as much as any other.
     const windows = accountId === drawnId ? drawnWindows : oauthWindows(accountId, cursor, () => SERVED_FACTOR);
     const rateLimitHit = upstreamStatus === 429;
+    const kind = kindOf(accountId);
     const attempt: Attempt = {
       accountId,
+      accountKind: kind,
       cacheMissReason: null,
       cooldownSet: rateLimitHit ? rateLimitCooldown(windows, cursor + durationMs, rng.int(20, 75)) : null,
       durationMs,
       index: i,
       outcome,
+      overageInUse: kind === 'oauth' ? false : null,
       response: { clearedInputTokens: null, inferenceGeo: 'us', refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: 'standard', stopReason: 'end_turn', stopSequence: null },
       // Drawn once the events exist, since a trace names the move an event records.
       selection: null,
@@ -371,13 +380,16 @@ function buildAttempts(lane: Lane, atMs: number, finalStatus: number, attemptsWa
       if (attempts.some((a) => a.accountId === accountId) || !servable(accountId, cursor, model, stillFast) || (stillFast && accountId === UNPRICED_ACCOUNT)) continue;
       const windows = oauthWindows(accountId, cursor, () => SERVED_FACTOR);
       const refuses = accountId === UNPRICED_ACCOUNT && !sonnet5;
+      const kind = kindOf(accountId);
       attempts.push({
         ...tail,
         accountId,
+        accountKind: kind,
         cooldownSet: refuses ? { reason: 'model_rejected', until: iso(cursor + 300 + HOUR) } : rateLimitCooldown(windows, cursor + 300, 30),
         durationMs: 300,
         index: attempts.length,
         outcome: refuses ? 'upstream_error' : 'rate_limited',
+        overageInUse: kind === 'oauth' ? false : null,
         startedAt: iso(cursor),
         upstreamRequestId: upstreamId('req_011C'),
         upstreamStatus: refuses ? 404 : 429,
@@ -503,14 +515,17 @@ function buildRequests(): RequestLog[] {
       const moved = rows[rows.length - 1];
       // The pool's one member takes the request once: the answering attempt is the request's only one.
       const answered = moved.attempts[moved.attempts.length - 1];
+      const studio = kindOf('studio');
       Object.assign(moved, {
         accountId: 'studio',
         attempts: [
           {
             ...answered,
             accountId: 'studio',
+            accountKind: studio,
             cacheMissReason: answered.cacheMissReason === 'previous_message_not_found' ? 'none' : answered.cacheMissReason,
             index: 0,
+            overageInUse: studio === 'oauth' ? false : null,
             windows: oauthWindows('studio', Date.parse(answered.startedAt), () => SERVED_FACTOR),
           },
         ],
@@ -754,12 +769,14 @@ function storyRow(seed: StorySeed): RequestLog {
     const oauth = ACCOUNTS.find((x) => x.id === a.accountId)?.kind === 'oauth';
     return {
       accountId: a.accountId,
+      accountKind: kindOf(a.accountId),
       // A failover lands on an account that never saw the turn before this one.
       cacheMissReason: a.status !== 200 || kind === 'count_tokens' ? null : !oauth ? 'not_requested' : index > 0 ? 'previous_message_not_found' : 'none',
       cooldownSet: a.cooldown ? { reason: a.cooldown.reason, until: iso(a.cooldown.until) } : null,
       durationMs: a.ms,
       index,
       outcome: a.status === 200 ? (index === seed.attempts.length - 1 && seed.errorCode ? 'upstream_error' : 'succeeded') : a.status === 429 ? 'rate_limited' : 'upstream_error',
+      overageInUse: oauth ? false : null,
       response: { clearedInputTokens: null, inferenceGeo: a.status === 200 ? 'us' : null, refusalCategory: null, refusalRecommendedModel: null, servedModel: null, speed: a.status === 200 ? (fast ? 'fast' : 'standard') : null, stopReason: a.status === 200 ? 'end_turn' : null, stopSequence: null },
       // The routing log's records write each story attempt's trace, so the drawer and the card read one decision.
       selection: null,
@@ -966,6 +983,8 @@ export const OVERAGE_FROM = ((): number => {
 })();
 const nightly = ACCOUNTS.find((a) => a.id === 'nightly');
 if (nightly?.overage) nightly.overage.since = iso(OVERAGE_FROM);
+// The attempt literals run before the instant exists, so nightly's heads from it on read their overage flag here.
+for (const a of REQUESTS.flatMap((r) => r.attempts)) if (a.accountId === 'nightly' && Date.parse(a.startedAt) >= OVERAGE_FROM) a.overageInUse = true;
 
 /**
  * The pin each request's first selection found live, by request id: where the pin's last use left it within the

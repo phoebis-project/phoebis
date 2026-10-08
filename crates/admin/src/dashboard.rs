@@ -10,11 +10,15 @@ use phoebis_ledger::{dashboard, latest_quota};
 use serde_json::json;
 
 use crate::analytics::ledger_failure;
-use crate::requests::request_summary;
+use crate::requests::{request_summary, ShareContext};
 use crate::AdminState;
 
 pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     let now = (state.clock)();
+    let shares = match ShareContext::read(&state) {
+        Ok(shares) => shares,
+        Err(refusal) => return refusal,
+    };
     let board = match dashboard(state.ledger.db(), now).await {
         Ok(board) => board,
         Err(e) => return ledger_failure(e),
@@ -33,7 +37,7 @@ pub(crate) async fn show(State(state): State<Arc<AdminState>>) -> Response {
     body["recent"] = json!(board
         .recent
         .iter()
-        .map(|(r, a)| request_summary(r, a))
+        .map(|(r, a)| request_summary(r, a, &shares))
         .collect::<Vec<_>>());
     body["accounts"] = json!(accounts
         .into_iter()
