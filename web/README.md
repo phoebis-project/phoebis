@@ -24,7 +24,8 @@ The other scripts:
 
 - `npm run build:mock` bundles the console with the mock into `dist-mock/`.
 - `npm run e2e` runs the browser pass against a running router ([e2e/README.md](e2e/README.md)).
-- `npm run e2e:mock` runs `build:mock`, then the browser pass against that bundle on a loopback port.
+- `npm run e2e:mock` runs `build:mock`, then the browser pass against that bundle on a loopback port. Its shots go to
+  `PHOEBIS_SCREENSHOT_DIR`, or to `phoebis-screenshots` under the system's temporary directory when that is unset.
 - `npm run smoke` mounts every view in jsdom against the mock and checks what it draws.
 - `npm run sync-mock` regenerates the mock's fixture module from the admin fixtures (see below).
 - `npm test` builds the test bundle and runs the unit tests under `test/`.

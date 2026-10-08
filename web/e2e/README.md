@@ -70,6 +70,9 @@ npx playwright install chromium
 PHOEBIS_SCREENSHOT_DIR=/tmp/phoebis-mock-shots npm run e2e:mock
 ```
 
+When `PHOEBIS_SCREENSHOT_DIR` is unset, the shots go to `phoebis-screenshots` under the system's temporary directory,
+the directory the router's pass under `cargo test` defaults to as well.
+
 `e2e:mock` builds the console with the fixture-backed mock into `dist-mock/` (`npm run build:mock`), serves that bundle
 from a static server on a loopback port, and runs `mock-pass.mjs`, which drives `views.mjs` against it with the mock's
 admin secret and the clock pinned at `2026-09-16T14:30:00Z`, the weekday afternoon the smoke run pins. The mock's random

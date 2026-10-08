@@ -44,8 +44,9 @@ const HOUR_TICKS = [0, 3, 6, 9, 12, 15, 18, 21, 24];
 const LATE = 20 * 60;
 const atMinute = (minutes: number) => `${(minutes / 1440) * 100}%`;
 
-/** The peak band in the browser's zone over the week `bandWeek` draws, this week or, on a day the band is off before
- *  its next band day's week, next week, with the zone the file defines it in, now, and its weight per window. */
+/** The peak band in the browser's zone over the week `bandWeek` draws, this week, or next week when the start of
+ *  today's band (the next band day's on a day the band is off) falls in it, with the zone the file defines it in, now,
+ *  and its weight per window. */
 export function PeakBand({ costs, now }: { costs: SubscriptionCosts; now: number }) {
   const version = useFormatVersion();
   const zone = viewingZone();

@@ -561,7 +561,7 @@ request folds under the reserved value alongside a keepalive credit, and a reque
 reserved id. The speed grouping reads the speed the answer reported, else `fast` when the request asked for it,
 `standard` otherwise; the Requests by speed chart therefore counts a fast request the router refused before any attempt
 as fast. A key deleted and created again under the same id appears twice under the key grouping, since its figures stay
-with the key that spent them. The earlier holder is labelled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date
+with the key that spent them. The earlier holder is labeled `<id> (deleted, created 2026-09-14 09:31 UTC)`, the date
 and time it was created at minute precision, or `<id> (deleted)` when the ledger holds no creation time for it. The
 client and user agent filters take the request log's pattern grammar; the analytics agent filter matches the folded
 token while the request log's matches the raw header, so a pattern over the part after the token (`*sdk-cli*`) selects

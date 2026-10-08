@@ -778,7 +778,7 @@ it when the header is present and false, or absent while the shared window heade
 the flag when `extra_usage.is_enabled` is true and the 5-hour or 7-day utilization has reached 1.0, and clears it when
 both shared windows are below 1.0. An account with extra usage enabled keeps serving with the flag set once its plan
 quota empties, so `prefer_plan` and `never` act through this flag rather than through a cooldown. Once the
-organisation's spend cap is reached it answers `429` with the overage window rejected and the claim
+organization's spend cap is reached it answers `429` with the overage window rejected and the claim
 `seven_day_overage_included`; both shared windows still read healthy, so the cooldown path scopes that rejection to the
 requested model on its own week when it has one (the Fable-scoped week today) and to the account otherwise.
 

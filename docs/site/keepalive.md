@@ -160,13 +160,14 @@ or the file `stats.subscription_costs_path` names (see [Statistics](statistics.m
 profile reports, with the 5-hour and the 7-day window each as a bar labeled as a multiple of the smallest tier's window
 (Pro's in the shipped model), and the week counted in full 5-hour windows. A Peak band switch, outside the band until
 turned, redraws the bars and the count for a request completing inside the band, where each window holds its capacity
-factor of its capacity. Peak band draws this week, Monday to Sunday in the browser's time zone (on a day the band is
-off, the week of the next day it covers), the band's hours on each day it covers and a marker at now when that week
-holds it, under a caption that names this week's hours here and in the zone the cost model defines them in. Beside the
-grid it says whether the band runs now and until when, names the next change of the local hours that opens within ten
-weeks, from its first day to the last before the hours return, or as lasting when they have not returned 26 weeks on,
-and draws each window's capacity factor. A zone the browser's time zone data lacks leaves the band's state unknown: the
-card gives the band's hours in that zone alone, says the browser cannot read it, and draws no grid and no change.
+factor of its capacity. Peak band draws a week, Monday to Sunday in the browser's time zone: this week, or next week
+when the start of today's band (the next band day's on a day the band is off) falls in it. It draws the band's hours on
+each day it covers and a marker at now when that week holds it, under a caption that names this week's hours here and
+in the zone the cost model defines them in. Beside the grid it says whether the band runs now and until when, names the
+next change of the local hours that opens within ten weeks, from its first day to the last before the hours return, or
+as lasting when they have not returned 26 weeks on, and draws each window's capacity factor. A zone the browser's time
+zone data lacks leaves the band's state unknown: the card gives the band's hours in that zone alone, says the browser
+cannot read it, and draws no grid and no change.
 
 **Plan rates.** The share of a tier's 5-hour and 7-day window that a token count of each type spends, per model, for a
 request completing outside or inside the band. The tab opens on the cost model's anchor tier, Max 20x, outside the band,

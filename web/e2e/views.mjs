@@ -1,14 +1,15 @@
 import { execFileSync } from 'node:child_process';
 import { existsSync, mkdirSync, readlinkSync, realpathSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { basename, dirname, join, resolve, sep } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const base = process.env.PHOEBIS_E2E_BASE ?? 'http://127.0.0.1:8081';
 const secret = process.env.PHOEBIS_E2E_SECRET;
-const dir = process.env.PHOEBIS_SCREENSHOT_DIR;
-if (!secret || !dir) {
-  console.error('set PHOEBIS_E2E_SECRET and PHOEBIS_SCREENSHOT_DIR');
+const dir = process.env.PHOEBIS_SCREENSHOT_DIR ?? join(tmpdir(), 'phoebis-screenshots');
+if (!secret) {
+  console.error('set PHOEBIS_E2E_SECRET');
   process.exit(2);
 }
 // A router seeds its registry at real time, so its pass starts the page's clock at the launch instant; the mock

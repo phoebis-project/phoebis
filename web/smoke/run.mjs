@@ -1700,7 +1700,9 @@ m.unmount();
     page.container.querySelector('button[aria-label="Edit label"]')?.click();
     await page.settle(150);
   };
-  /** The toast line at once and after the shell's six seconds, when a page's own report would follow a route failure. */
+  /**
+   * The toast line at once and after the shell's six seconds, when a page's own report would follow a route failure.
+   */
   const reports = async () => {
     const shell = toast();
     tick(6_000);
@@ -1785,7 +1787,8 @@ m.unmount();
   await page.settle(100);
 
   // Each editor fences on the revision it opened with. A write through the API while one is open moves the mock's
-  // revision past it, so its save is refused as stale with a Reload of its own, and nothing reloads until it is pressed.
+  // revision past it, so its save is refused as stale with a Reload of its own, and nothing reloads until it is
+  // pressed.
   const sentence = 'the account changed while the edit was being saved';
   const primary = async () => (await api.listAccounts()).find((a) => a.id === 'primary');
   const accountReads = async (click) => {
@@ -3679,8 +3682,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   }
 }
 {
-  // primary sits in all, so the work dialog marks it held there and offers neither a checkbox nor a field for it. Blanks
-  // of their size stand in the checkbox's place and the Priority cell, so the row keeps the others' alignment.
+  // primary sits in all, so the work dialog marks it held there and offers neither a checkbox nor a field for it.
+  // Blanks of their size stand in the checkbox's place and the Priority cell, so the row keeps the others' alignment.
   m.unmount();
   m = await mount('/pools');
   [...m.container.querySelectorAll('button')].find((b) => b.getAttribute('aria-label') === 'Edit pool work')?.click();
@@ -10761,8 +10764,8 @@ m.unmount();
     const week = fable?.nextElementSibling;
     const opus5 = rowOf('claude-opus-5');
     const dashes = (n) => Array.from({ length: n }, () => '-');
-    // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10, on
-    // the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the Fable week, Opus 5's 3 x m x 1e6 / 1000.
+    // A million tokens of each type, input, cache read, the two writes and output at multipliers 1, 0.1, 2, 2 and 10,
+    // on the Max 20x week of 1000: Fable's 10 x m x 1e6 / 1000 / 0.5 on the Fable week, Opus 5's 3 x m x 1e6 / 1000.
     const drawn = {
       fable: { above: above(fable), cells: cellsOf(fable), weight: weightIn(fable) },
       opus5: { above: above(opus5), cells: cellsOf(opus5), sub: opus5?.nextElementSibling?.classList.contains('cost-ref__sub') ?? false, weight: weightIn(opus5) },
@@ -10823,9 +10826,9 @@ m.unmount();
       missing: [JSON.stringify(weekend), JSON.stringify(weekday)],
     });
 
-    // A zone this browser cannot read: the card gives the band's hours in that zone and says it cannot read it, and Plan
-    // rates leaves the state to the viewer, Inside first. One Opus 5.5 input token on the Max 20x 5-hour window is 2 /
-    // 100 / 0.5 inside the band and 2 / 100 outside, a million of them 40,000 and 20,000 windows.
+    // A zone this browser cannot read: the card gives the band's hours in that zone and says it cannot read it, and
+    // Plan rates leaves the state to the viewer, Inside first. One Opus 5.5 input token on the Max 20x 5-hour window is
+    // 2 / 100 / 0.5 inside the band and 2 / 100 outside, a million of them 40,000 and 20,000 windows.
     const unzoned = { ...tested, peak: { ...tested.peak, zone: 'Not/AZone' } };
     const card = await mountNode(React.createElement(PeakBand, { costs: unzoned, now: CLOCK_ORIGIN }));
     const drawnCard = {

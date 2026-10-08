@@ -18,7 +18,8 @@ const own = (map: object, key: string): boolean => Object.prototype.hasOwnProper
 
 export const anchorTier = (costs: SubscriptionCosts): string => costs.unit.definedBy.tier;
 
-/** The tier's capacity row as stored, then with `default_` taken off or put on; undefined for a tier the model lacks. */
+/** The tier's capacity row as stored, then with `default_` taken off or put on; undefined for a tier the model
+ *  lacks. */
 export const tierRow = (costs: SubscriptionCosts, tier: string): SubscriptionCosts['capacity'][string] | undefined => {
   const bare = tier.startsWith('default_') ? tier.slice('default_'.length) : null;
   const key = [tier, bare, `default_${tier}`].find((k): k is string => k !== null && own(costs.capacity, k));
@@ -320,7 +321,10 @@ export const bandCaption = (costs: SubscriptionCosts, at: number, zone: string, 
   const here = hereOf(today.span, today.date, zone);
   // The days follow the band's weekdays as they fall here: in Auckland a Monday's band starts on a Tuesday.
   const days = weekdays ? `${WEEKDAYS[(7 + here.shift) % 7]} to ${WEEKDAYS[(11 + here.shift) % 7]}` : 'Every day';
-  return `${days}, ${hoursText(here, clock)} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
+  // A band of whole days reads all day wherever its days start here. The change keeps the clock hours, since the hour
+  // those days start at is what a clock change moves.
+  const hours = fromHour === 0 && toHour === 24 ? 'all day' : hoursText(here, clock);
+  return `${days}, ${hours} here (${zone}). In ${zoneCity(own)}: ${defined}.`;
 };
 
 /** The band's state at `at`, or the peak zone when this browser cannot read it, which leaves the state unknown. */
@@ -424,7 +428,8 @@ export const familyOrder = (models: string[]): string[] =>
     return a.localeCompare(b);
   });
 
-/** The tier whose window is smallest among the sized tiers (Pro on the shipped file), the one the multiples are against. */
+/** The tier whose window is smallest among the sized tiers (Pro on the shipped file), the one the multiples are
+ *  against. */
 export const smallestTier = (costs: SubscriptionCosts, window: CostWindow): string | null => {
   let smallest: string | null = null;
   let least = Infinity;

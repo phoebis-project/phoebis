@@ -1,7 +1,7 @@
 # The downstream client
 
 Claude Code reaches the router through a handful of environment variables, two required and the rest optional.
-This page gives the block, says what each line changes in the client's behaviour, and describes what the proxy
+This page gives the block, says what each line changes in the client's behavior, and describes what the proxy
 listener accepts from the client and what it refuses.
 
 ## The environment block
@@ -29,7 +29,7 @@ companion's reports go here. Plain HTTP is accepted on any address, by the route
 ### CLAUDE_CODE_OAUTH_TOKEN
 
 Holds the router key's secret, the one shown once at creation or rotation. Put it here rather than in
-`ANTHROPIC_API_KEY`: the client gates three behaviours on a subscriber check that a credential in `ANTHROPIC_API_KEY`
+`ANTHROPIC_API_KEY`: the client gates three behaviors on a subscriber check that a credential in `ANTHROPIC_API_KEY`
 never passes, the one-hour cache TTL for the main conversation, the parsing of the unified rate-limit headers on a 429,
 and the automatic continue after a usage-limit reset. An `ANTHROPIC_API_KEY` gives all three up.
 
