@@ -1,0 +1,161 @@
+{
+  "source": "phoebis-routing",
+  "steps": [
+    {
+      "step": "admission",
+      "verdicts": [
+        "refused"
+      ]
+    },
+    {
+      "step": "bound",
+      "verdicts": [
+        "bound",
+        "exhausted",
+        "renewed"
+      ]
+    },
+    {
+      "step": "cap_filter",
+      "verdicts": [
+        "dropped",
+        "passed"
+      ]
+    },
+    {
+      "step": "cool",
+      "verdicts": [
+        "fell_through",
+        "preferred"
+      ]
+    },
+    {
+      "step": "eligible",
+      "verdicts": [
+        "match",
+        "none"
+      ]
+    },
+    {
+      "step": "exhausted",
+      "verdicts": [
+        "exhausted"
+      ]
+    },
+    {
+      "step": "hold",
+      "verdicts": [
+        "held",
+        "placed"
+      ]
+    },
+    {
+      "step": "move:drain",
+      "verdicts": [
+        "fired",
+        "no",
+        "not_run"
+      ]
+    },
+    {
+      "step": "move:overage",
+      "verdicts": [
+        "fired",
+        "no",
+        "not_run"
+      ]
+    },
+    {
+      "step": "move:return_to_plan",
+      "verdicts": [
+        "fired",
+        "no",
+        "not_run"
+      ]
+    },
+    {
+      "step": "move:shed",
+      "verdicts": [
+        "fired",
+        "no",
+        "not_run"
+      ]
+    },
+    {
+      "step": "move:spent",
+      "verdicts": [
+        "fired",
+        "no",
+        "not_run"
+      ]
+    },
+    {
+      "step": "partitions",
+      "verdicts": [
+        "match",
+        "none"
+      ]
+    },
+    {
+      "step": "pick",
+      "verdicts": [
+        "chosen",
+        "none"
+      ]
+    },
+    {
+      "step": "pin",
+      "verdicts": [
+        "match",
+        "none"
+      ]
+    },
+    {
+      "step": "probe",
+      "verdicts": [
+        "answered",
+        "passed"
+      ]
+    },
+    {
+      "step": "renew",
+      "verdicts": [
+        "renewed"
+      ]
+    },
+    {
+      "step": "rung:content",
+      "verdicts": [
+        "match",
+        "none"
+      ]
+    },
+    {
+      "step": "rung:static",
+      "verdicts": [
+        "match",
+        "none",
+        "not_run"
+      ]
+    },
+    {
+      "step": "rung:with_main",
+      "verdicts": [
+        "match",
+        "none",
+        "not_run"
+      ]
+    },
+    {
+      "step": "selection",
+      "verdicts": [
+        "not_run"
+      ]
+    }
+  ],
+  "partition_values": [
+    "fell_through",
+    "held",
+    "off"
+  ]
+}

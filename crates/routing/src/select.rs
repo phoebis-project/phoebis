@@ -18,7 +18,7 @@ use crate::record::{
     HoldOutcome, LaneFacts, ObstacleFacts, Outcome, OverageFacts, PaceFacts,
     PinFacts, PinKeyFacts, PinShed, PinWritten, PrefixEntry, PrefixLookup, RefusalFacts,
     RequestFacts, RequestFlags, Score, ShedPinFacts, ShedRoundFacts, SummaryFact, TermFacts,
-    WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION,
+    WalkStep, WarmthFacts, WindowFacts, RECORD_VERSION, WALK_STEPS,
 };
 use crate::state::{
     budget_reached, shed_marks, warm, BurnUnit, CreditsState, MemberSpend, PinRef, RoutingState,
@@ -854,6 +854,14 @@ struct Pick {
 
 impl Recorder {
     fn step(&mut self, step: &'static str, verdict: &'static str, facts: Vec<Fact>) {
+        // A step the table does not list would reach the console as a plain station and fail its fixture test there,
+        // so the engine refuses it first, where the author of the new step is.
+        debug_assert!(
+            WALK_STEPS
+                .iter()
+                .any(|(id, verdicts)| *id == step && verdicts.contains(&verdict)),
+            "the walk step {step}/{verdict} is not in WALK_STEPS"
+        );
         self.walk.push(WalkStep {
             step,
             verdict,
