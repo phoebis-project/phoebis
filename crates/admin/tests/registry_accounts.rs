@@ -95,6 +95,148 @@ async fn creating_an_api_key_account_verifies_it_and_a_rejected_key_is_refused()
 }
 
 #[tokio::test]
+async fn a_creation_whose_key_check_fails_at_the_endpoint_is_refused_and_leaves_no_row() {
+    let (app, up) = common::admin_app().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.add_credential_rule(
+        "sk-ant-api03-DOWN",
+        "/v1/models",
+        Respond::Json {
+            status: 500,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    let down = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"down","kind":"api_key","label":"Down","secret":"sk-ant-api03-DOWN"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(down.status(), 502);
+    let body = json(down).await;
+    assert_eq!(
+        body["error"].as_str(),
+        Some("the key check failed: the models endpoint answered 500")
+    );
+    assert!(
+        !body.to_string().contains("sk-ant-api03"),
+        "the refusal names no secret"
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts/down", Some(&cookie))
+            .await
+            .status(),
+        404,
+        "a refused creation leaves no row"
+    );
+    // The fake reads the request and closes without a head, which is what a host that is down looks like
+    // to the check, and the rule stays scoped to this one credential.
+    up.add_credential_rule(
+        "sk-ant-api03-GONE",
+        "/v1/models",
+        Respond::CloseAfterRequest,
+    );
+    let gone = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"gone","kind":"api_key","label":"Gone","secret":"sk-ant-api03-GONE"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(gone.status(), 502);
+    let body = json(gone).await;
+    assert!(
+        body["error"].as_str().is_some_and(
+            |e| e.starts_with("the key check failed: the models endpoint is unreachable: ")
+        ),
+        "{body}"
+    );
+    assert!(
+        !body.to_string().contains("sk-ant-api03"),
+        "the refusal names no secret"
+    );
+    assert_eq!(
+        get(&app, "/admin/accounts/gone", Some(&cookie))
+            .await
+            .status(),
+        404,
+        "a refused creation leaves no row"
+    );
+    let retried = post(
+        &app,
+        "/admin/accounts",
+        r#"{"id":"down","kind":"api_key","label":"Down","secret":"sk-ant-api03-NEW"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(
+        retried.status(),
+        201,
+        "the refused creation left the id free"
+    );
+}
+
+#[tokio::test]
+async fn a_replacement_whose_key_check_fails_at_the_endpoint_leaves_the_stored_key() {
+    let (app, up, store, router) = common::admin_parts().await;
+    let cookie = login(&app, "admin-secret").await;
+    up.add_credential_rule(
+        "sk-ant-api03-DOWN",
+        "/v1/models",
+        Respond::Json {
+            status: 500,
+            headers: vec![],
+            body: b"{}".to_vec(),
+        },
+    );
+    let before = router.snapshot().revision;
+    let refused = patch(
+        &app,
+        "/admin/accounts/direct",
+        r#"{"label":"Half","secret":"sk-ant-api03-DOWN"}"#,
+        Some(&cookie),
+    )
+    .await;
+    assert_eq!(refused.status(), 502);
+    let body = json(refused).await;
+    assert_eq!(
+        body["error"].as_str(),
+        Some("the key check failed: the models endpoint answered 500")
+    );
+    let row = store.account("direct").unwrap().unwrap();
+    assert_eq!(
+        (row.label.as_str(), row.state),
+        ("Direct", phoebis_store::AccountState::Ready),
+        "the edit landed nothing"
+    );
+    assert_eq!(
+        store
+            .api_key_credential("direct")
+            .unwrap()
+            .unwrap()
+            .0
+            .expose(),
+        common::API_KEY,
+        "the stored key is still the live one"
+    );
+    assert_eq!(router.snapshot().revision, before, "nothing was published");
+    let probe = up
+        .requests()
+        .into_iter()
+        .rfind(|r| r.line.starts_with("GET /v1/models"))
+        .unwrap();
+    assert!(
+        probe
+            .headers
+            .iter()
+            .any(|(n, v)| n == "x-api-key" && v == "sk-ant-api03-DOWN"),
+        "discovery ran with the staged secret"
+    );
+}
+
+#[tokio::test]
 async fn patching_deleting_and_disconnecting_accounts() {
     let (app, _up, _store, router) = common::admin_parts().await;
     let cookie = login(&app, "admin-secret").await;
