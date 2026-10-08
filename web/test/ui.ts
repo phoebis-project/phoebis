@@ -9,7 +9,7 @@ export { queueToast } from '@/app/session';
 export { DecisionCard } from '@/components/DecisionCard';
 export { MultiSelect } from '@/components/ui/MultiSelect';
 export { PATTERN_GRAMMAR, PatternInput } from '@/components/ui/PatternInput';
-export { Menu } from '@/components/ui/primitives';
+export { Descriptions, Menu } from '@/components/ui/primitives';
 export { installClock } from '@/lib/clock';
 export { useAsync, useNow } from '@/lib/hooks';
 export { fakeClock } from '../smoke/clock';

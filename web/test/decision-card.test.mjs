@@ -10,7 +10,7 @@ for (const key of ['document', 'navigator', 'HTMLElement', 'Element', 'Node', 'g
 globalThis.window = window;
 globalThis.IS_REACT_ACT_ENVIRONMENT = true;
 after(() => window.close());
-const { act, api, createElement: h, createRoot, DecisionCard, MemoryRouter } = await import('./dist/ui.js');
+const { act, api, createElement: h, createRoot, DecisionCard, Descriptions, MemoryRouter } = await import('./dist/ui.js');
 const { MockApi } = await import('./dist/api.js');
 
 const roots = [];
@@ -91,4 +91,31 @@ test("the candidates table's header names the window the record read", async () 
   };
   assert.equal(await header([key, { ...first, kind: 'oauth', pace }]), 'Pace, Fable week left per hour');
   assert.equal(await header([key]), 'Pace');
+});
+
+test("each Pace cell is described by its hover through the host the card sits under", async () => {
+  const mock = new MockApi();
+  const page = await mock.listRoutingLog({ from: new Date(0).toISOString(), limit: 200, to: new Date(Date.now() + 86_400_000).toISOString() });
+  const row = page.rows.find((r) => r.type === 'decision' && r.kind === 'placed');
+  assert.ok(row, 'the mock holds a placement');
+  const placed = await mock.getDecision(row.requestId, row.seq);
+  const [first] = placed.candidates;
+  const pace = { deadline: null, end: null, hours: 168, remaining: 1, reset: null, score: 1 / 168, window: 'seven_day' };
+  const key = { ...first, accountId: 'overflow', kind: 'api_key', pace: { ...pace, hours: null, score: 1, window: null }, planTier: null, windows: {} };
+  api.getDecision = async () => ({ ...placed, candidates: [{ ...first, accountId: 'primary', kind: 'oauth', pace }, key] });
+  const container = document.createElement('div');
+  document.body.append(container);
+  const root = createRoot(container);
+  roots.push(root);
+  // The routing log's card holds its open panel under a description host, which the case stands in for.
+  act(() => root.render(h(MemoryRouter, null, h(Descriptions, null, h(DecisionCard, { now: Date.parse(row.at), onWiden() {}, row })))));
+  await settled();
+  // Pace sits third from the end of a row whatever a key's merged windows span.
+  const cells = [...container.querySelectorAll('.decision-card__candidates tbody tr')].map((tr) => tr.children[tr.children.length - 3]);
+  assert.equal(cells.length, 2);
+  for (const td of cells) {
+    const title = td.getAttribute('title');
+    assert.ok(title, `a Pace cell carries its hover: ${td.textContent}`);
+    assert.equal(document.getElementById(td.getAttribute('aria-describedby') ?? '')?.textContent, title, `the cell's description is its hover: ${td.textContent}`);
+  }
 });

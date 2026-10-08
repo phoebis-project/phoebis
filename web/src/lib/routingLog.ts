@@ -1174,7 +1174,10 @@ function verdictChipOf(c: RecordCandidate, now: number): Chip | null {
 const PACE_WINDOW_WORD: Record<string, string> = { seven_day: '7-day', seven_day_fable: 'Fable week' };
 const PACE_WINDOW_PHRASE: Record<string, string> = { seven_day: 'the 7-day window', seven_day_fable: 'the Fable week' };
 
-/** The Pace column's header: the window the first subscription candidate's score read, "Pace" when none carries one. */
+/**
+ * The Pace column's header: the window the first subscription candidate's score read. It reads "Pace" when that
+ * candidate names no window or the record holds no subscription candidate.
+ */
 export function paceHeader(record: DecisionRecord): string {
   const id = record.candidates.find((c) => c.kind === 'oauth')?.pace?.window ?? null;
   return id === null ? 'Pace' : `Pace, ${wordOf(PACE_WINDOW_WORD, id)} left per hour`;

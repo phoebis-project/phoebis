@@ -7942,13 +7942,20 @@ m.unmount();
     const kind = (id) => record.candidates.find((c) => c.accountId === id)?.kind;
     const oauth = titles.filter((t) => kind(t.id) === 'oauth');
     const keys = titles.filter((t) => kind(t.id) === 'api_key');
-    const hint = rowOf(page, 'req_ef099b34-453/1')?.querySelector('td.routing-log__by .chip')?.getAttribute('title') ?? '';
+    const chip = rowOf(page, 'req_ef099b34-453/1')?.querySelector('td.routing-log__by .chip');
+    const hint = chip?.getAttribute('title') ?? '';
     results.push({
       name: "/routing-log the open card's Pace header names the story's window, every Pace cell of a subscription member carries its hover and the By chip its hint",
       ok:
         header === paceWord(record) && header !== 'Pace' && oauth.length > 0 && oauth.every((t) => /^\d+% of (the 7-day window|the Fable week|its window) left over \d+ h/.test(t.title)) &&
         keys.length > 0 && keys.every((t) => /worst live bucket left/.test(t.title)) && hint.startsWith('Pace: the account with the most of its window left'),
       missing: [header, ...titles.map((t) => `${t.id}: ${t.title}`), hint],
+    });
+    const described = document.getElementById(chip?.getAttribute('aria-describedby') ?? '')?.textContent ?? '';
+    results.push({
+      name: "/routing-log a Pace row's By chip is described by its hint through the page's host",
+      ok: described.startsWith('Pace: the account with the most of its window left') && described === hint,
+      missing: [chip?.getAttribute('aria-describedby') ?? 'no aria-describedby', described],
     });
     page.unmount();
   }
