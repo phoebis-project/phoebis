@@ -2059,7 +2059,7 @@ export function PoolDialog({
         // The line always explains the current hold: a row that moved under the dialog first, since only Reload clears
         // it, then a refusal of the form's own, which beats a server message left from before the edit.
         status={stale ? 'Save is held: the pool changed since you opened it. Reload to edit the current version.' : first ? `Save is held: ${first.text}` : (error ?? 'Every group saves together.')}
-        hold={first?.group ?? null}
+        hold={stale ? null : (first?.group ?? null)}
         held={first !== null || error !== null || stale !== null}
         notice={
           stale &&

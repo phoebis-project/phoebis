@@ -1873,7 +1873,11 @@ m.unmount();
   });
 
   // An end editor opened before another operator's write keeps its token through the title editor's own save, which
-  // moved a row the end editor never read, so its save still meets the fence.
+  // moved a row the end editor never read, so its save still meets the fence. Both editors start closed, so the check
+  // reads its own rule whatever the one before it left open.
+  titleButton('Cancel')?.click();
+  identityButton('Cancel')?.click();
+  await page.settle(400);
   await putBack();
   identityButton('Edit end')?.click();
   await page.settle(100);
@@ -3599,6 +3603,19 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     name: "/pools a stale refusal's footer says the save is held because the pool changed, and no toast repeats it",
     ok: JSON.stringify(held) === JSON.stringify(['Save is held: the pool changed since you opened it. Reload to edit the current version.', '']),
     missing: held,
+  });
+  // A local refusal typed after the stale one leaves the line on the stale sentence, with no Go to beside it.
+  const blank = dlg?.querySelector('input[placeholder="research"]');
+  if (blank) {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(blank, '');
+    blank.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  await page.settle(150);
+  const typed = [dlg?.querySelector('.dialog__status')?.textContent ?? '', String(dlg?.querySelector('.dialog__status button') ?? null)];
+  results.push({
+    name: '/pools a local refusal typed after a stale one leaves the stale sentence alone in the footer, with no Go to',
+    ok: JSON.stringify(typed) === JSON.stringify(['Save is held: the pool changed since you opened it. Reload to edit the current version.', 'null']),
+    missing: typed,
   });
   footButton(dlg, 'Cancel')?.click();
   await page.settle(400);
@@ -5343,6 +5360,19 @@ expect('/keys', m.text(), ['Keys', 'Active', 'Lifetime requests', 'Lifetime cost
     name: "/keys a stale refusal's footer says the save is held because the key changed, and no toast repeats it",
     ok: JSON.stringify(held) === JSON.stringify(['Save is held: the key laptop changed since you opened it. Reload to edit the current version.', '']),
     missing: held,
+  });
+  // A local refusal typed after the stale one leaves the line on the stale sentence, with no Go to beside it.
+  const blank = dlg?.querySelector('input[placeholder="workstation"]');
+  if (blank) {
+    Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, 'value').set.call(blank, '');
+    blank.dispatchEvent(new window.Event('input', { bubbles: true }));
+  }
+  await page.settle(150);
+  const typed = [dlg?.querySelector('.dialog__status')?.textContent ?? '', String(dlg?.querySelector('.dialog__status button') ?? null)];
+  results.push({
+    name: '/keys a local refusal typed after a stale one leaves the stale sentence alone in the footer, with no Go to',
+    ok: JSON.stringify(typed) === JSON.stringify(['Save is held: the key laptop changed since you opened it. Reload to edit the current version.', 'null']),
+    missing: typed,
   });
   foot(dlg, 'Cancel')?.click();
   await page.settle(300);
