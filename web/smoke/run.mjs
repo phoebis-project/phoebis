@@ -6144,6 +6144,12 @@ expect('/requests', m.text(), ['Columns (10)', 'Rows', 'Details', 'Client', 'cla
     ok: heldOnly?.getAttribute('aria-checked') === 'true' && caption === 'Held only' && besideSpeed === true && heldRows.length > 0 && heldRows.length === heldDay && heldRows.every((t) => t.startsWith('held ')),
     missing: [`${heldRows.length} rows against ${heldDay}`, String(caption), String(besideSpeed), ...new Set(heldRows)],
   });
+  const heldMarkers = [...m.container.querySelectorAll('.requests__table tbody .requests__attempts > .badge')].filter((b) => b.textContent?.trim().startsWith('held '));
+  results.push({
+    name: '/requests the held marker reads in the warning tone',
+    ok: heldMarkers.length > 0 && heldMarkers.every((b) => b.classList.contains('badge--warning')),
+    missing: [`${heldMarkers.length} markers`, ...new Set(heldMarkers.map((b) => b.className))],
+  });
   heldOnly?.click();
   await m.settle(700);
 }
@@ -7206,6 +7212,38 @@ m.unmount();
     results.push({ name: "/routing-log a refresh row's Fact reads the new token's expiry or the failure's class", ok: sorted(drawn) === sorted(want), missing: [JSON.stringify(drawn)] });
   }
   {
+    // The default page draws the hour's newest 25 rows, so a kind it misses is read on a story request's own page.
+    const tones = { exhausted: 'critical', held: 'warning', moved: 'warning', placed: 'good', refused: 'critical', renewed: 'good' };
+    const stories = { exhausted: 'req_51d0e2b8-7a0', held: 'req_69e30548-32e', moved: 'req_868264bc-611', placed: 'req_ef099b34-453', refused: 'req_6c3a9e27-5b1', renewed: 'req_f8085653-422' };
+    const seen = new Set();
+    const wrong = [];
+    const read = (page) => {
+      for (const tr of page.container.querySelectorAll('.routing-log__table tbody tr.routing-log__row')) {
+        const id = tr.getAttribute('data-row') ?? 'event/';
+        if (id.startsWith('event/')) continue;
+        const badge = cell(tr, 'kind')?.querySelector('.badge');
+        const word = badge?.textContent ?? '';
+        seen.add(word);
+        if (!badge?.classList.contains(`badge--${tones[word]}`)) wrong.push(`${id} ${word}: ${badge?.className ?? 'no badge'}`);
+      }
+    };
+    read(m);
+    for (const [kind, id] of Object.entries(stories)) {
+      if (seen.has(kind)) continue;
+      const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 24 * HOUR), limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows;
+      const at = Math.min(...own.filter((r) => r.type === 'decision').map((r) => Date.parse(r.at)));
+      const page = await mount(`/routing-log?request=${id}&from=${iso(at - 15 * MINUTE)}&to=${iso(Math.min(at + 15 * MINUTE, CLOCK_ORIGIN))}`, { now: CLOCK_ORIGIN });
+      read(page);
+      page.unmount();
+    }
+    const unseen = Object.keys(tones).filter((k) => !seen.has(k));
+    results.push({
+      name: "/routing-log every decision row's kind badge reads the scheme's tone: good on placed and renewed, warning on moved and held, critical on exhausted and refused",
+      ok: unseen.length === 0 && wrong.length === 0,
+      missing: [...unseen.map((k) => `no ${k} row`), ...wrong.slice(0, 8)],
+    });
+  }
+  {
     // A link in reads the request a quarter hour either side of its first decision.
     const id = 'req_1d9c3e55-0b2';
     const own = (await api.listRoutingLog({ from: iso(CLOCK_ORIGIN - 2 * HOUR), limit: 200, request: id, to: iso(CLOCK_ORIGIN) })).rows.filter((r) => r.type === 'decision');
@@ -7784,6 +7822,7 @@ m.unmount();
     const shed = walkOf(card).find((l) => l.step === 'Shed');
     const pinFold = card?.querySelectorAll('details.decision-card__fold')[1];
     const mark = kvRows(pinFold?.querySelector('.kv')).find((r) => r.label === 'Shed mark');
+    const toneClasses = [rowOf(page, 'req_868264bc-611/1')?.querySelector('td.routing-log__kind .badge')?.className ?? 'no row badge', card?.querySelector('.decision-card__verdict > .badge')?.className ?? 'no card badge'];
     page.unmount();
     const round = await story('req_1eaa9bc1-a18');
     scan('shedding round', round.card);
@@ -7798,6 +7837,7 @@ m.unmount();
         JSON.stringify(marks.map((c) => params(c.querySelector('a')?.getAttribute('href')).session)) === JSON.stringify(sessions) && marks.every((c) => !/[,;]/.test(c.textContent ?? '')),
       missing: [shed?.chips.join(' / ') ?? 'no shed line', JSON.stringify(ddWords(mark?.dd)), ran?.chips.join(' / ') ?? 'no round line'],
     });
+    results.push({ name: "/routing-log the open card's verdict badge carries its row's tone class", ok: toneClasses.every((c) => c.split(' ').includes('badge--warning')), missing: toneClasses });
     round.page.unmount();
   }
   {

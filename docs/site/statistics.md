@@ -433,14 +433,17 @@ First, Previous and Next. A row reads the time, with a decision's request beneat
 the kind (a decision in a filled badge with `attempt 2/3` beneath a failover attempt, an event in an outlined one), the
 session's first eight characters with the agent beneath, the account (a move names the account it left and the one it
 landed on, a pool or key event names its pool or key), the model, By and Fact, and Details, which opens the request's
-drawer. By names what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it (`static
-rung`), the strategy and the tier's priority (`Pace P0`, whose hover says how Pace ranks), where a hold waited
-(`cohort`, `session pin`), what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`,
-`key revoked`), `no rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value
-that made it so, one labeled value or two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the
-value after it, never a time the row's own time already gives. Every account, key, pool, model, session and request a
-row names is a link, and a column with nothing to say shows a dash. Below a window width of 1420 pixels the model moves
-beneath the account.
+drawer. A verdict reads in one color across the log's rows, the card's verdict line and walk, and the Requests view's
+held marker: good when it served the request (placed, renewed, a rung or a pin that matched), warning when it changed
+its course (moved, held, a rule that fired), critical for a refusal or an exhaustion, and neutral for none and no. The
+candidate table's badges keep their own tones, since they mark each member's verdict rather than the walk's. By names
+what decided the row in one chip: the rule that fired (`spent rule`), the rung that placed it (`static rung`), the
+strategy and the tier's priority (`Pace P0`, whose hover says how Pace ranks), where a hold waited (`cohort`, `session
+pin`), what exhausted the pool (`budget`, `cooldown`, `fast lane`), the refusal (`client drift`, `key revoked`), `no
+rule fired` for a renewal, or an event's reason (`window spent`, `429 on 5h`). Fact gives the value that made it so, one
+labeled value or two stacked: a muted label such as `gap`, `idle`, `prefix` or `until` and the value after it, never a
+time the row's own time already gives. Every account, key, pool, model, session and request a row names is a link, and a
+column with nothing to say shows a dash. Below a window width of 1420 pixels the model moves beneath the account.
 
 The filter bar reads the range (the last hour by default, 3, 6 or 24 hours, or a custom range), the kinds (decisions,
 then events), keys, pools, accounts, models, a session id or its prefix, and a request id. Every filter lives in the

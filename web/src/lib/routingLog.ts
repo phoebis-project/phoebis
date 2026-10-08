@@ -110,13 +110,15 @@ export const DECISION_KIND_LABEL: Record<DecisionKind, string> = {
   renewed: 'renewed',
 };
 
-export const DECISION_KIND_TONE: Record<DecisionKind, 'accent' | 'critical' | 'neutral' | 'warning'> = {
+export type VerdictTone = 'critical' | 'good' | 'neutral' | 'warning';
+
+export const DECISION_KIND_TONE: Record<DecisionKind, VerdictTone> = {
   exhausted: 'critical',
   held: 'warning',
-  moved: 'accent',
-  placed: 'accent',
+  moved: 'warning',
+  placed: 'good',
   refused: 'critical',
-  renewed: 'neutral',
+  renewed: 'good',
 };
 
 /** Every kind of the ledger's events table, in the console's words. */
@@ -192,12 +194,26 @@ export const STEP_NAME: Record<string, string> = {
   selection: 'Rest of the walk',
 };
 
-const ACTED = new Set(['bound', 'chosen', 'fired', 'match', 'placed', 'preferred', 'renewed']);
-const BLOCKED = new Set(['answered', 'blocked', 'dropped', 'exhausted', 'fell_through', 'held', 'refused', 'released']);
+const GOOD = new Set(['bound', 'chosen', 'match', 'passed', 'placed', 'renewed']);
+const WARNING = new Set(['blocked', 'dropped', 'fell_through', 'fired', 'held', 'moved', 'preferred', 'released']);
+const CRITICAL = new Set(['answered', 'exhausted', 'refused']);
+const NEUTRAL = new Set(['found', 'no', 'none', 'not_run', 'off']);
 
-/** The accent tone for a step that acted, the warning tone for one that blocked, neutral for the rest. */
-export function verdictTone(verdict: string): 'accent' | 'neutral' | 'warning' {
-  return ACTED.has(verdict) ? 'accent' : BLOCKED.has(verdict) ? 'warning' : 'neutral';
+/**
+ * Every word the scheme names a tone for, the neutral ones included, so a fixture test can tell a toned word from an
+ * unknown one.
+ */
+export const TONED_VERDICTS: ReadonlySet<string> = new Set([...GOOD, ...WARNING, ...CRITICAL, ...NEUTRAL]);
+
+/**
+ * One tone per verdict word across the log's rows, the card and the strip: good for a verdict that served the request,
+ * warning for one that changed its course, critical for a refusal or an exhaustion, neutral for found, no, none,
+ * not_run, off and a word the scheme does not know. The eligible step's `none` is critical, since no member was
+ * eligible and the request had nowhere to go.
+ */
+export function verdictTone(verdict: string, stepId?: string): VerdictTone {
+  if (verdict === 'none' && stepId === 'eligible') return 'critical';
+  return GOOD.has(verdict) ? 'good' : WARNING.has(verdict) ? 'warning' : CRITICAL.has(verdict) ? 'critical' : 'neutral';
 }
 
 const words = (name: string) => name.replace(/_/g, ' ');

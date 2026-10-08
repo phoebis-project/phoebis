@@ -250,7 +250,7 @@ test('every event kind has its words and its tone', () => {
 
 test('every decision kind has its words and its tone', () => {
   assert.deepEqual(d.DECISION_KIND_LABEL, { exhausted: 'exhausted', held: 'held', moved: 'moved', placed: 'placed', refused: 'refused', renewed: 'renewed' });
-  assert.deepEqual(d.DECISION_KIND_TONE, { exhausted: 'critical', held: 'warning', moved: 'accent', placed: 'accent', refused: 'critical', renewed: 'neutral' });
+  assert.deepEqual(d.DECISION_KIND_TONE, { exhausted: 'critical', held: 'warning', moved: 'warning', placed: 'good', refused: 'critical', renewed: 'good' });
 });
 
 test('the step and verdict words', () => {
@@ -262,10 +262,15 @@ test('the step and verdict words', () => {
   for (const [step, name] of Object.entries(steps)) assert.equal(d.STEP_NAME[step], name, step);
   assert.equal(d.STEP_NAME.selection, 'Rest of the walk');
   const tones = {
-    answered: 'warning', blocked: 'warning', bound: 'accent', chosen: 'accent', dropped: 'warning', exhausted: 'warning', fell_through: 'warning', fired: 'accent', found: 'neutral', held: 'warning', match: 'accent',
-    no: 'neutral', none: 'neutral', not_run: 'neutral', passed: 'neutral', placed: 'accent', preferred: 'accent', refused: 'warning', released: 'warning', renewed: 'accent',
+    answered: 'critical', blocked: 'warning', bound: 'good', chosen: 'good', dropped: 'warning', exhausted: 'critical', fell_through: 'warning', fired: 'warning', found: 'neutral', held: 'warning', match: 'good',
+    moved: 'warning', no: 'neutral', none: 'neutral', not_run: 'neutral', off: 'neutral', passed: 'good', placed: 'good', preferred: 'warning', refused: 'critical', released: 'warning', renewed: 'good',
   };
   for (const [verdict, tone] of Object.entries(tones)) assert.equal(d.verdictTone(verdict), tone, verdict);
+  assert.deepEqual([...d.TONED_VERDICTS].sort(), Object.keys(tones).sort());
+  assert.equal(d.verdictTone('none', 'eligible'), 'critical');
+  assert.equal(d.verdictTone('none', 'pin'), 'neutral');
+  assert.equal(d.verdictTone('match', 'eligible'), 'good');
+  assert.equal(d.verdictTone('a_word_added_later'), 'neutral');
 });
 
 test('a fact value is drawn by its unit', () => {
