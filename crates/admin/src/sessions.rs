@@ -7,7 +7,7 @@ use axum::extract::{Path, State};
 use axum::http::{HeaderValue, StatusCode};
 use axum::response::{IntoResponse, Response};
 use axum::Json;
-use phoebis_routing::{BurnUnit, FIVE_HOUR};
+use phoebis_routing::{BurnRates, BurnUnit, FIVE_HOUR};
 use serde_json::json;
 
 use crate::routes::failure;
@@ -30,6 +30,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             "the router is not available",
         ));
     };
+    // A second ask after the pins: a renewal landing between the two moves one pin's figure by one fold, which
+    // the next read shows, so the display needs no single snapshot of both.
+    let fast_burns = state.router.fast_burns().await.unwrap_or_default();
     // Read right after the pins ask and before the ledger read below awaits: a pin belongs to the live holder
     // of its key id alone, and taking this snapshot before that await keeps a key deleted and recreated during
     // it from stamping this request's pins with the replacement's generation.
@@ -68,10 +71,15 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         std::collections::BTreeSet<String>,
     > = std::collections::BTreeMap::new();
     // A pin's burn is typed tokens a second, priced here on the account it sits on: dollars through the table
-    // in force at the set the pin's last prompt length selects, or the share of the account's own 5-hour window
-    // through the model's anchor rates over its tier's capacity ratio. Each account's tier is read once per request.
-    let dollar_rates = state.pricing.current().rate_table();
-    let share_rates = state.tables.rate_table(FIVE_HOUR);
+    // in force at the set the pin's last prompt length selects, its fast usage at the fast cells beside it, or
+    // the share of the account's own 5-hour window through the model's anchor rates over its tier's capacity
+    // ratio. Each account's tier is read once per request.
+    let prices = state.pricing.current();
+    let rates = BurnRates {
+        dollars: prices.rate_table(),
+        five_hour: state.tables.rate_table(FIVE_HOUR),
+        fast: prices.fast_rate_table(),
+    };
     let mut tiers: std::collections::HashMap<String, Option<String>> =
         std::collections::HashMap::new();
     for p in pins.into_iter().filter(|p| p.last_used_at >= cutoff) {
@@ -114,10 +122,11 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                     .any(|(id, e)| *id == p.account_id && e.stands(now, fallback_ms));
                 BurnUnit::of(kind, in_overage)
             });
+        let fast = fast_burns.get(&p.key()).copied().unwrap_or_default();
         let burn = match unit {
             None => None,
-            Some(BurnUnit::Usd) => dollar_rates
-                .price_burn(&p.model, &p.burn, p.last_input_tokens)
+            Some(BurnUnit::Usd) => rates
+                .price_pin(BurnUnit::Usd, &p, &fast)
                 .map(|b| b * 3_600.0),
             Some(BurnUnit::WindowShare) => {
                 if !tiers.contains_key(&p.account_id) {
@@ -133,8 +142,8 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
                 // reads null rather than a guess.
                 tier.and_then(|t| state.tables.tier_factor(t, FIVE_HOUR))
                     .and_then(|factor| {
-                        share_rates
-                            .price_burn(&p.model, &p.burn_banded, p.last_input_tokens)
+                        rates
+                            .price_pin(BurnUnit::WindowShare, &p, &fast)
                             .map(|b| b * 3_600.0 / factor)
                     })
             }

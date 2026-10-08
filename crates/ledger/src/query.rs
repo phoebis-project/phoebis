@@ -2187,12 +2187,13 @@ pub struct BudgetedMember {
 }
 
 /// One budgeted period's spend of one member in its current period, summed from the hourly rollups and priced at
-/// read time, a keepalive probe's cost included since it draws real money from an API-key member's budget the
-/// same as any other request's; with `metered_only`, a subscription member's metered rows alone, those filed under
-/// `overage` or `fast`. The row names the period kind and its UTC bounds in ms (`period_end` is the next day or
-/// month boundary). The rollup's own stored price is read for a model priced by prompt length alone, since an
-/// hour's sums carry no per-attempt prompt. Every other group is re-priced, since a budget must move with the
-/// table in force, not the price an attempt happened to be booked at.
+/// read time, or at the booked dollars for a model priced by prompt length, a keepalive probe's cost included
+/// since it draws real money from an API-key member's budget the same as any other request's. With
+/// `metered_only`, a subscription member's metered rows alone count, those filed under `overage` or `fast`. The
+/// row names the period kind and its UTC bounds in ms (`period_end` is the next day or month boundary). The booked
+/// dollars are read for a model priced by prompt length because an hour's sums carry no per-attempt prompt, and
+/// every other group is re-priced because a budget must move with the table in force, not the price an attempt
+/// happened to be booked at.
 pub fn member_spends(
     conn: &Connection,
     members: &[BudgetedMember],

@@ -830,6 +830,12 @@ pub struct RoutingState {
     cooldowns: HashMap<(String, String), CooldownRow>,
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
+    /// Each pin's fast usage as typed tokens per second over the burn window, folded and decayed beside
+    /// `PinRow::burn` from the same `burn_at`. Kept apart because the fast cells never move with the prompt: a
+    /// reader prices this copy through the fast table and `burn` at the set the pin's last prompt selects, so a
+    /// prompt that crosses the threshold reprices the ordinary usage alone. Memory only, since the pin's row has no
+    /// column for it, so a restart reads a pin's fast usage as none until its next fast renewal.
+    fast_burn: HashMap<PinKey, PinBurn>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;
     /// memory only.
@@ -913,6 +919,7 @@ impl RoutingState {
                     )
                 })
                 .collect(),
+            fast_burn: HashMap::new(),
             in_flight: InFlight::default(),
             member_spend: HashMap::new(),
             newest_shed,
@@ -1003,11 +1010,42 @@ impl RoutingState {
             Some(replaced) => {
                 self.spend_mark(&replaced);
                 self.renewed.remove(&key);
+                self.fast_burn.remove(&key);
             }
             None => {
                 self.renewed.remove(&key);
+                self.fast_burn.remove(&key);
             }
         }
+    }
+
+    /// The pin's fast usage, typed tokens per second decayed from the pin's `burn_at` as `PinRow::burn` is, and
+    /// zero for a pin never renewed fast since the router started.
+    pub fn fast_burn(&self, key: &PinKey) -> PinBurn {
+        let key = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
+        self.fast_burn.get(&key).copied().unwrap_or_default()
+    }
+
+    /// Set by the task at each renewal with usage, and by a test that prices a round over fast usage. A copy of
+    /// zeros (a pin whose every renewal was standard) holds no entry, so the map stays as small as the fast pins.
+    pub fn set_fast_burn(&mut self, key: &PinKey, burn: PinBurn) {
+        let key = PinKey {
+            model: self.canonical(&key.model).to_string(),
+            ..key.clone()
+        };
+        if burn == PinBurn::default() {
+            self.fast_burn.remove(&key);
+        } else if self.pins.contains_key(&key) {
+            self.fast_burn.insert(key, burn);
+        }
+    }
+
+    /// Every pin with fast usage, by key, for a reader outside the loop that prices the pins beside their rows.
+    pub fn fast_burns(&self) -> HashMap<PinKey, PinBurn> {
+        self.fast_burn.clone()
     }
 
     /// Records that a selection or a completion renewed the pin under the key since its placement.
@@ -1044,6 +1082,7 @@ impl RoutingState {
     fn take_pin(&mut self, key: &PinKey) -> Option<PinRow> {
         let pin = self.pins.remove(key)?;
         self.renewed.remove(key);
+        self.fast_burn.remove(key);
         self.spend_mark(&pin);
         Some(pin)
     }
@@ -1565,7 +1604,8 @@ impl RoutingState {
     /// the sum over the priced pins; `keep` is the account's current pool, built by the caller from the snapshot
     /// this state does not hold, so a pin a former pool left on the account is outside the round. Under
     /// `WindowShare` a burn is the subscription cost model's anchor share per second, which orders the pins as the
-    /// tier's share does; `None` for a pin burning a type its row cannot price.
+    /// tier's share does, and under `Usd` the pin's fast usage counts beside its row's copy, as
+    /// `BurnRates::price_pin` sums them. `None` for a pin burning a type its row cannot price.
     pub fn burn_of(
         &self,
         account_id: &str,
@@ -1575,7 +1615,6 @@ impl RoutingState {
         now: i64,
         window_ms: i64,
     ) -> (Vec<(PinRow, Option<f64>)>, f64) {
-        let table = unit.table(rates);
         let mut pins: Vec<(PinRow, Option<f64>)> = self
             .pins
             .values()
@@ -1584,8 +1623,9 @@ impl RoutingState {
                 // Every type decays by the same factor, so decaying the price equals pricing the decayed rates.
                 // The pin's last prompt selects the set, so a long-prompt pin ranks at the rates it burns, and a
                 // pin never renewed with usage carries zero and prices at the standard rates.
-                let burn = table
-                    .price_burn(&p.model, &unit.read(p), p.last_input_tokens)
+                let fast = self.fast_burn.get(&p.key()).copied().unwrap_or_default();
+                let burn = rates
+                    .price_pin(unit, p, &fast)
                     .map(|priced| burn_decayed(priced, p.burn_at, now, window_ms));
                 (p.clone(), burn)
             })
@@ -1714,8 +1754,10 @@ impl RoutingState {
             .collect();
         for pin in moved_pins {
             let spelled = pin.key();
-            // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there.
+            // The pin keeps its epoch under the dated id, so a renewal it had still fences its release there, and
+            // its fast usage moves with it.
             let renewed = self.renewed.contains(&spelled);
+            let fast_burn = self.fast_burn.get(&spelled).copied();
             self.take_pin(&spelled);
             rekey.delete_pins.push(spelled);
             let dated_key = PinKey {
@@ -1736,9 +1778,17 @@ impl RoutingState {
                     self.spend_mark(&replaced);
                 }
                 if renewed {
-                    self.renewed.insert(dated_key);
+                    self.renewed.insert(dated_key.clone());
                 } else {
                     self.renewed.remove(&dated_key);
+                }
+                match fast_burn {
+                    Some(burn) => {
+                        self.fast_burn.insert(dated_key, burn);
+                    }
+                    None => {
+                        self.fast_burn.remove(&dated_key);
+                    }
                 }
                 rekey.upsert_pins.push(moved);
             }
@@ -2126,6 +2176,46 @@ mod tests {
         let mut state = RoutingState::from_load(RoutingLoad::default());
         state.apply_resolution("spelling", "dated", 0);
         assert!(lands_at_the_dated_id(&state, "spelling"));
+    }
+
+    #[test]
+    fn a_pins_fast_usage_moves_with_a_rekey_leaves_with_the_pin_and_never_reaches_a_fresh_pin_under_its_key(
+    ) {
+        let (pin, _) = burning("s", 1.0);
+        let mut state = RoutingState::from_load(RoutingLoad {
+            pins: vec![pin.clone()],
+            ..RoutingLoad::default()
+        });
+        let fast = PinBurn {
+            input: 2.0,
+            ..PinBurn::default()
+        };
+        state.set_fast_burn(&pin.key(), fast);
+        state.apply_resolution("m", "m-20260101", 0);
+        let dated = PinKey {
+            model: "m-20260101".into(),
+            ..pin.key()
+        };
+        assert_eq!(
+            state.fast_burns().into_iter().collect::<Vec<_>>(),
+            vec![(dated.clone(), fast)],
+            "the rekey carries the fast usage to the dated id"
+        );
+        state.put_pin(PinRow {
+            epoch: 2,
+            ..pin.clone()
+        });
+        assert_eq!(
+            state.fast_burn(&dated),
+            PinBurn::default(),
+            "a fresh pin under the key starts without the replaced pin's fast usage"
+        );
+        state.set_fast_burn(&dated, fast);
+        state.remove_pin(&dated);
+        assert!(
+            state.fast_burns().is_empty(),
+            "the fast usage leaves with the pin"
+        );
     }
 
     #[test]

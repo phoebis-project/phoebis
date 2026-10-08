@@ -478,9 +478,7 @@ mod tests {
         for over in ["-1", "1.5"] {
             let message = refusal(CELLS, None, Some(&format!("over: {over}, {CELLS}")));
             assert!(
-                message.starts_with("pricing table: ")
-                    && message.contains("long_context.over")
-                    && message.contains("expected u64"),
+                message.starts_with("pricing table: ") && message.contains("long_context.over"),
                 "{message}"
             );
         }

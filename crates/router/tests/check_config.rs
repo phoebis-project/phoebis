@@ -308,10 +308,10 @@ overrides:
 
 /// Two tables written for this count: two price rows dated 2026-02-01, the Haiku 4.5 row priced by prompt length,
 /// and a cost model dated 2026-03-01 that weighs Opus 5.5, Sonnet 5.5 and Haiku 4.5, leaves Opus 5 and Sonnet 5 at
-/// null, and weighs Sonnet 5 and Haiku 4.5 on the week through overrides; its four tiers are Pro and Max 20x sized on
-/// both windows, Team on the 5-hour window alone and Enterprise on neither. Counted by hand: two models on the price
-/// line (a row priced by prompt length is one model), and on the cost line four models (Opus 5 left out, Sonnet 5 in
-/// through its override, Haiku 4.5 once) and three tiers (Enterprise left out).
+/// null, and weighs Sonnet 5 and Haiku 4.5 on the week through overrides. Its four tiers are Pro and Max 20x sized
+/// on both windows, Team on the 5-hour window alone and Enterprise on neither. Counted by hand: two models on the
+/// price line (a row priced by prompt length is one model), and on the cost line four models (Opus 5 left out,
+/// Sonnet 5 in through its override, Haiku 4.5 once) and three tiers (Enterprise left out).
 #[test]
 fn files_at_both_paths_count_each_model_a_weight_or_an_override_prices_once_and_each_tier_sized_on_a_window(
 ) {

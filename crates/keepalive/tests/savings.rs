@@ -3317,7 +3317,7 @@ async fn a_probe_on_a_model_priced_by_prompt_length_costs_at_the_cells_its_own_p
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let rows = rollups(&r, |rows| probe_rows(rows).requests >= 1).await;
+    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
     let cost = probe_rows(&rows).probe_cost_usd;
     // The test price table's Haiku 5.5 row, per million tokens: cache read 0.1 up to 1,000 prompt tokens and 0.5
     // over them. The probe read the standing 2,000 tokens back, so its own prompt is over the threshold.

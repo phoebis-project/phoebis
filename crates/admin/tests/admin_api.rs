@@ -2248,7 +2248,7 @@ async fn a_session_row_carries_the_burn_in_the_unit_the_accounts_funding_selects
 
 #[tokio::test]
 async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects() {
-    use common::{get, json, login};
+    use common::{get, json, login, wait_json};
     use phoebis_ledger::Speed;
     let now = common::NOW;
     // One Haiku 5.5 row with both blocks in round numbers: the standard cells at 1, the fast cells at 2 and the
@@ -2267,38 +2267,73 @@ async fn a_session_row_prices_the_burn_at_the_set_the_pins_last_prompt_selects()
             .input
     };
     // Three api_key pins burning 100 input tokens a second: `s-at` with its last prompt at the threshold,
-    // `s-over` one token over it, and `s-fast` over it with the plain copy a fast renewal leaves, the tokens
-    // weighed by fast over long-context, so its burn priced at the long-context rates reads the fast dollars.
-    let fast_weight = input(Speed::Fast, 1_001) / input(Speed::Standard, 1_001);
+    // `s-over` one token over it, and `s-fast` over it, which then answers a fast turn and a standard turn below
+    // the threshold through the router. Its copies were never folded, so nothing decays at those turns.
     let parts = sessions_harness_priced(table.clone(), |generation| {
-        let haiku = |session: &str, plain: f64, last_input_tokens: u64| phoebis_store::PinRow {
+        let haiku = |session: &str, last_input_tokens: u64| phoebis_store::PinRow {
             model: "claude-haiku-5-5".into(),
             last_input_tokens,
-            ..burning_opus_pin(session, "direct", generation, now, plain, plain)
+            ..burning_opus_pin(session, "direct", generation, now, 100.0, 100.0)
         };
         vec![
-            haiku("s-at", 100.0, 1_000),
-            haiku("s-over", 100.0, 1_001),
-            haiku("s-fast", 100.0 * fast_weight, 1_001),
+            haiku("s-at", 1_000),
+            haiku("s-over", 1_001),
+            phoebis_store::PinRow {
+                burn_at: None,
+                ..haiku("s-fast", 1_001)
+            },
         ]
     })
     .await;
     let cookie = login(&parts.app, "admin-secret").await;
     let sessions = json(get(&parts.app, "/admin/sessions", Some(&cookie)).await).await;
-    let usd_per_hour = |speed, prompt| 100.0 * input(speed, prompt) / 1_000_000.0 * 3_600.0;
-    for (session, speed, prompt) in [
-        ("s-at", Speed::Standard, 1_000),
-        ("s-over", Speed::Standard, 1_001),
-        ("s-fast", Speed::Fast, 1_001),
-    ] {
+    let usd_per_hour =
+        |tokens: f64, speed, prompt| tokens * input(speed, prompt) / 1_000_000.0 * 3_600.0;
+    for (session, prompt) in [("s-at", 1_000), ("s-over", 1_001)] {
         let (burn, unit) = burn_of(&sessions, session);
         assert!(
-            close(burn, usd_per_hour(speed, prompt)) && unit.as_deref() == Some("usd"),
-            "{session} reads its burn per hour at the cells its last prompt and speed select: {:?} against {}",
+            close(burn, usd_per_hour(100.0, Speed::Standard, prompt))
+                && unit.as_deref() == Some("usd"),
+            "{session} reads its burn per hour at the cells its last prompt selects: {:?} against {}",
             (burn, unit),
-            usd_per_hour(speed, prompt)
+            usd_per_hour(100.0, Speed::Standard, prompt)
         );
     }
+    // 60,000 fast input tokens over the pool's default 600 s window are 100 a second at the fast cells, whatever
+    // the prompt. The standard turn's 600 tokens are one a second beside the seeded hundred, and its prompt of
+    // 600 moves the pin's ordinary copy to the standard cells.
+    let renewal = |fast: bool, input: u64| phoebis_routing::Report::PinRenewed {
+        pin: phoebis_routing::PinRef {
+            key_id: "desktop".into(),
+            session_id: "s-fast".into(),
+            agent_id: "main".into(),
+            model: "claude-haiku-5-5".into(),
+            epoch: 1,
+            lane: phoebis_routing::lane_key("claude-opus-5", "standard", "none", "-"),
+        },
+        now,
+        usage: Some(phoebis_routing::PinUsage {
+            input,
+            ..phoebis_routing::PinUsage::default()
+        }),
+        origin: "client",
+        cache_ttl_ms: 300_000,
+        fast,
+    };
+    parts.router.report(renewal(true, 60_000)).await;
+    parts.router.report(renewal(false, 600)).await;
+    let expected =
+        usd_per_hour(101.0, Speed::Standard, 600) + usd_per_hour(100.0, Speed::Fast, 600);
+    let renewed = wait_json(&parts.app, "/admin/sessions", &cookie, |v| {
+        close(session_row(v, "s-fast")["burn"].as_f64(), expected)
+    })
+    .await;
+    assert_eq!(
+        burn_of(&renewed, "s-fast").1.as_deref(),
+        Some("usd"),
+        "the fast tokens read at the fast cells and the ordinary ones at the set the last prompt selects, summed \
+         in dollars"
+    );
 }
 
 #[tokio::test]

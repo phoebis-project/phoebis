@@ -13374,3 +13374,50 @@ fn a_pin_whose_last_prompt_was_over_the_threshold_prices_its_burn_at_the_long_co
         "the long pin carries the mark"
     );
 }
+
+#[test]
+fn a_pins_fast_usage_prices_at_the_fast_cells_in_the_round_and_counts_toward_no_plan_share() {
+    // Sonnet 5's input at 1, at 5 over 1,000 prompt tokens and at 3 at the fast cells. Both pins burn one standard
+    // token and two fast tokens a second. `long`'s last prompt is one token over the threshold, `short`'s at it.
+    let long = PinRow {
+        last_input_tokens: 1_001,
+        ..burning("long", "a", 1.0, false, T)
+    };
+    let short = PinRow {
+        last_input_tokens: 1_000,
+        ..burning("short", "a", 1.0, false, T)
+    };
+    let mut st = loaded(vec![long.clone(), short.clone()]);
+    st.set_fast_burn(&long.key(), input_rate(2.0));
+    st.set_fast_burn(&short.key(), input_rate(2.0));
+    st.set_rates(BurnRates {
+        dollars: long_context_input_prices(
+            &[("claude-sonnet-5", Some(1.0))],
+            &[("claude-sonnet-5", 1_000, 5.0)],
+        ),
+        five_hour: RateTable::unit(),
+        fast: input_prices(&[("claude-sonnet-5", Some(3.0))]),
+    });
+    let burn = |unit| {
+        let (pins, sum) = st.burn_of("a", &|_| true, unit, st.rates(), T, HOUR);
+        let of = |session: &str| {
+            pins.iter()
+                .find(|(p, _)| p.session_id == session)
+                .map(|(_, burn)| *burn)
+                .expect("the account holds the pin")
+        };
+        (of("long"), of("short"), sum)
+    };
+    assert_eq!(
+        burn(BurnUnit::Usd),
+        (Some(11.0), Some(7.0), 18.0),
+        "in dollars each pin reads its standard token at the set its last prompt selects plus its two fast tokens \
+         at the fast cell, 5 + 6 and 1 + 6"
+    );
+    assert_eq!(
+        burn(BurnUnit::WindowShare),
+        (Some(1.0), Some(1.0), 2.0),
+        "as a window share the banded copy alone counts, since fast usage draws usage credits and never the plan's \
+         window"
+    );
+}
