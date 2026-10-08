@@ -79,7 +79,10 @@ pub struct Usage {
 
 impl Usage {
     /// `message_delta` repeats the counts it knows with running values, so the later value replaces the
-    /// earlier one field by field and a field only `message_start` carried survives.
+    /// earlier one field by field and a field only `message_start` carried survives. The write columns are
+    /// the exception: a read that names the 5-minute column alone carries the bare total of the older wire
+    /// shape, and a delta repeats that total for an answer whose start already gave the split, so the split
+    /// stands or a 1-hour write would be counted a second time as a 5-minute one.
     pub fn merge(&mut self, later: &Usage) {
         if later.input_tokens.is_some() {
             self.input_tokens = later.input_tokens;
@@ -90,7 +93,10 @@ impl Usage {
         if later.cache_read_tokens.is_some() {
             self.cache_read_tokens = later.cache_read_tokens;
         }
-        if later.cache_write_5m_tokens.is_some() {
+        let bare_total = later.cache_write_1h_tokens.is_none();
+        if later.cache_write_5m_tokens.is_some()
+            && !(bare_total && self.cache_write_1h_tokens.is_some())
+        {
             self.cache_write_5m_tokens = later.cache_write_5m_tokens;
         }
         if later.cache_write_1h_tokens.is_some() {
@@ -583,6 +589,44 @@ mod tests {
             ),
             (Some(40), Some(25), Some(1), Some(2)),
             "the later count wins and one only the earlier read carried survives"
+        );
+    }
+
+    #[test]
+    fn a_later_bare_write_total_does_not_replace_an_earlier_split() {
+        // A streamed answer written at the 1-hour tier: `message_start` names the split, the final
+        // `message_delta` repeats the write as one total with no tier.
+        let mut usage = Usage {
+            cache_write_5m_tokens: Some(0),
+            cache_write_1h_tokens: Some(11_285),
+            ..Default::default()
+        };
+        usage.merge(&Usage {
+            cache_write_5m_tokens: Some(11_285),
+            output_tokens: Some(90),
+            ..Default::default()
+        });
+        assert_eq!(
+            (
+                usage.cache_write_5m_tokens,
+                usage.cache_write_1h_tokens,
+                usage.output_tokens
+            ),
+            (Some(0), Some(11_285), Some(90)),
+            "the split stands and the counts beside it still move"
+        );
+        // With no split before it, a bare total is the whole write and the later one replaces the earlier.
+        let mut bare = Usage {
+            cache_write_5m_tokens: Some(3),
+            ..Default::default()
+        };
+        bare.merge(&Usage {
+            cache_write_5m_tokens: Some(5),
+            ..Default::default()
+        });
+        assert_eq!(
+            (bare.cache_write_5m_tokens, bare.cache_write_1h_tokens),
+            (Some(5), None)
         );
     }
 
