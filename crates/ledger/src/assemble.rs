@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use bytes::Bytes;
 use phoebis_bus::{
-    user_agent_of, AccountSelected, AutoMode, Event, Outcome, RequestComplete, RequestObserved,
-    ResponseChunk, ResponseHead, BODY_SHAPE_ERROR_CODE,
+    user_agent_of, AccountSelected, AutoMode, Event, Outcome, Phase, RequestComplete,
+    RequestObserved, ResponseChunk, ResponseHead, BODY_SHAPE_ERROR_CODE,
 };
 use phoebis_oauth::Clock;
 use phoebis_relay::UnifiedHeaders;
@@ -89,6 +89,8 @@ pub(crate) struct InFlight {
     /// Every account whose head rejected this request's model, in the order the heads arrived: what a later
     /// success's `model_permitted` event names as who was skipped first.
     pub rejected_by: Vec<String>,
+    /// The ledger task's clock at the answer's `message_stop` chunk. The first such chunk wins.
+    pub stream_end_at: Option<i64>,
 }
 
 pub struct Assembler {
@@ -201,6 +203,7 @@ impl Assembler {
                         request_len,
                         seq,
                         rejected_by: Vec::new(),
+                        stream_end_at: None,
                     },
                 );
                 if capturing {
@@ -296,6 +299,11 @@ impl Assembler {
             return Vec::new();
         };
         entry.seen_at = now;
+        // The chunk carries no instant of its own, so the ledger's clock stands in and `finish` holds it to the
+        // finish.
+        if chunk.phase == Some(Phase::MessageStop) {
+            entry.stream_end_at.get_or_insert(now);
+        }
         let mut records = Vec::new();
         if chunk.index != entry.next_index && !entry.gapped {
             entry.gapped = true;
@@ -380,6 +388,7 @@ fn fill_head(
 ) -> Option<(UnifiedHeaders, WireHead)> {
     attempt.upstream_status = Some(head.status);
     attempt.ttfb_ms = Some(head.observed_at - attempt.started_at);
+    attempt.written_at = Some(head.written_at);
     attempt.outcome = head.outcome.as_str().to_string();
     attempt.upstream_request_id = head
         .headers
@@ -435,6 +444,7 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         gapped,
         request_len,
         rejected_by,
+        stream_end_at,
         ..
     } = entry;
     let mut records = Vec::new();
@@ -592,6 +602,9 @@ fn finish(entry: InFlight, complete: &RequestComplete, now: i64) -> Vec<Record> 
         ttfb_ms: complete.ttfb_ms,
         ttfc_ms: complete.ttfc_ms,
         duration_ms: Some(complete.finished_at - observed.received_at),
+        // A ledger task behind the bus reads the message_stop chunk after the relay finished the request, and a
+        // stream end drawn after the finish would be a wrong figure.
+        stream_end_at: stream_end_at.map(|at| at.min(complete.finished_at)),
         error_code: complete.error_code.clone(),
         // Set here rather than only in the attempt loop above: a drift refusal answers before any account is
         // selected, so it has no attempt row to carry the kind, and the request row is the one place left.

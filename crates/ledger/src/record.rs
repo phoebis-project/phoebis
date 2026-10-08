@@ -83,6 +83,10 @@ pub struct RequestRecord {
     pub auto_mode: Option<String>,
     /// The `CohortHold` JSON of the holds the request waited through; `None` for a request never held.
     pub held: Option<String>,
+    /// The ledger task's clock when the answer's `message_stop` chunk arrived, held to `finished_at` so a ledger
+    /// behind the bus never records a stream that ended after its request finished; `None` for an answer that
+    /// never reached it and for a row from before the column.
+    pub stream_end_at: Option<i64>,
 }
 
 #[derive(Clone, Debug, Default, PartialEq, serde::Serialize, serde::Deserialize)]
@@ -140,6 +144,8 @@ pub struct AttemptRecord {
     pub refusal_recommended_model: Option<String>,
     /// The trace as stored, `cache_read` folded in at completion.
     pub selection: Option<String>,
+    /// When the relay flushed the request body to this attempt's upstream, as the response head reported it.
+    pub written_at: Option<i64>,
 }
 
 impl AttemptRecord {

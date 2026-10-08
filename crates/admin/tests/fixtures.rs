@@ -294,6 +294,7 @@ fn request(
         system_blocks: 4,
         message_count: 1,
         context_edits: "clear_thinking_20251015".into(),
+        stream_end_at: Some(at + 850),
         ..Default::default()
     }
 }
@@ -326,6 +327,7 @@ fn attempt(id: &str, n: u32, account: &str, status: u16, outcome: &str, at: i64)
         ratelimit_5h_reset: Some(at + 3_600_000),
         estimated_usd: Some(0.012),
         pricing_version: Some("2026-09-08".into()),
+        written_at: Some(at + 30),
         ..Default::default()
     }
 }

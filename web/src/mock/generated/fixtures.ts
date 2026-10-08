@@ -4455,7 +4455,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 970000,
           "finished_at": 970900,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -4516,6 +4516,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.0036,
+          "phases": {
+            "received_at": 970000,
+            "selected_at": 970000,
+            "written_at": 970030,
+            "head_at": 970120,
+            "first_content_at": 970300,
+            "stream_end_at": 970850,
+            "finished_at": 970900
+          },
           "attempts": [
             {
               "index": 1,
@@ -4569,7 +4578,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -4630,6 +4639,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.00355,
+          "phases": {
+            "received_at": 940000,
+            "selected_at": 940000,
+            "written_at": 940030,
+            "head_at": 940120,
+            "first_content_at": 940300,
+            "stream_end_at": 940850,
+            "finished_at": 940900
+          },
           "attempts": [
             {
               "index": 1,
@@ -4677,7 +4695,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -4738,6 +4756,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.00355,
+          "phases": {
+            "received_at": 880000,
+            "selected_at": 880000,
+            "written_at": 880030,
+            "head_at": 880120,
+            "first_content_at": 880300,
+            "stream_end_at": 880850,
+            "finished_at": 880900
+          },
           "attempts": [
             {
               "index": 1,
@@ -4785,7 +4812,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2599400,
           "finished_at": -2598500,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -4850,6 +4877,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.00355,
+          "phases": {
+            "received_at": -2599400,
+            "selected_at": -2599400,
+            "written_at": -2599370,
+            "head_at": -2599280,
+            "first_content_at": -2599100,
+            "stream_end_at": -2598550,
+            "finished_at": -2598500
+          },
           "attempts": [
             {
               "index": 1,
@@ -4958,6 +4994,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.00355,
+          "phases": {
+            "received_at": -2599500,
+            "selected_at": -2599500,
+            "written_at": -2599470,
+            "head_at": -2599380,
+            "first_content_at": -2599200,
+            "stream_end_at": -2598650,
+            "finished_at": -2598600
+          },
           "attempts": [
             {
               "index": 1,
@@ -5005,7 +5050,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -5066,6 +5111,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.0071,
+          "phases": {
+            "received_at": -2600000,
+            "selected_at": -2600000,
+            "written_at": -2599570,
+            "head_at": -2599880,
+            "first_content_at": -2599700,
+            "stream_end_at": -2599150,
+            "finished_at": -2599100
+          },
           "attempts": [
             {
               "index": 1,
@@ -7221,7 +7275,7 @@ export const FIXTURES: Record<string, Fixture> = {
         "at": -2600000,
         "finished_at": -2599100,
         "key_id": "desktop",
-        "key_generation": 1791465653858,
+        "key_generation": 1791487245985,
         "pool_id": "main",
         "account_id": "business",
         "session_id": "s1",
@@ -7282,6 +7336,15 @@ export const FIXTURES: Record<string, Fixture> = {
           "web_search": 0
         },
         "cost_usd": 0.0071,
+        "phases": {
+          "received_at": -2600000,
+          "selected_at": -2600000,
+          "written_at": -2599570,
+          "head_at": -2599880,
+          "first_content_at": -2599700,
+          "stream_end_at": -2599150,
+          "finished_at": -2599100
+        },
         "attempts": [
           {
             "index": 1,
@@ -7516,7 +7579,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 970000,
           "finished_at": 970900,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "direct",
           "session_id": "s3",
@@ -7577,6 +7640,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.0036,
+          "phases": {
+            "received_at": 970000,
+            "selected_at": 970000,
+            "written_at": 970030,
+            "head_at": 970120,
+            "first_content_at": 970300,
+            "stream_end_at": 970850,
+            "finished_at": 970900
+          },
           "attempts": [
             {
               "index": 1,
@@ -7630,7 +7702,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 940000,
           "finished_at": 940900,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7691,6 +7763,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.00355,
+          "phases": {
+            "received_at": 940000,
+            "selected_at": 940000,
+            "written_at": 940030,
+            "head_at": 940120,
+            "first_content_at": 940300,
+            "stream_end_at": 940850,
+            "finished_at": 940900
+          },
           "attempts": [
             {
               "index": 1,
@@ -7738,7 +7819,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": 880000,
           "finished_at": 880900,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s2",
@@ -7799,6 +7880,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.00355,
+          "phases": {
+            "received_at": 880000,
+            "selected_at": 880000,
+            "written_at": 880030,
+            "head_at": 880120,
+            "first_content_at": 880300,
+            "stream_end_at": 880850,
+            "finished_at": 880900
+          },
           "attempts": [
             {
               "index": 1,
@@ -7846,7 +7936,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2599400,
           "finished_at": -2598500,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -7911,6 +8001,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.00355,
+          "phases": {
+            "received_at": -2599400,
+            "selected_at": -2599400,
+            "written_at": -2599370,
+            "head_at": -2599280,
+            "first_content_at": -2599100,
+            "stream_end_at": -2598550,
+            "finished_at": -2598500
+          },
           "attempts": [
             {
               "index": 1,
@@ -8019,6 +8118,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.00355,
+          "phases": {
+            "received_at": -2599500,
+            "selected_at": -2599500,
+            "written_at": -2599470,
+            "head_at": -2599380,
+            "first_content_at": -2599200,
+            "stream_end_at": -2598650,
+            "finished_at": -2598600
+          },
           "attempts": [
             {
               "index": 1,
@@ -8066,7 +8174,7 @@ export const FIXTURES: Record<string, Fixture> = {
           "at": -2600000,
           "finished_at": -2599100,
           "key_id": "desktop",
-          "key_generation": 1791465653858,
+          "key_generation": 1791487245985,
           "pool_id": "main",
           "account_id": "business",
           "session_id": "s1",
@@ -8127,6 +8235,15 @@ export const FIXTURES: Record<string, Fixture> = {
             "web_search": 0
           },
           "cost_usd": 0.0071,
+          "phases": {
+            "received_at": -2600000,
+            "selected_at": -2600000,
+            "written_at": -2599570,
+            "head_at": -2599880,
+            "first_content_at": -2599700,
+            "stream_end_at": -2599150,
+            "finished_at": -2599100
+          },
           "attempts": [
             {
               "index": 1,
@@ -10051,7 +10168,7 @@ export const FIXTURES: Record<string, Fixture> = {
       "ready": true,
       "dead": [],
       "ledger": {
-        "schema_version": 30,
+        "schema_version": 31,
         "written": 18,
         "dropped": 0,
         "write_failures": 0,

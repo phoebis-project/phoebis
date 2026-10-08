@@ -6,7 +6,7 @@
       "at": -2600000,
       "finished_at": -2599100,
       "key_id": "desktop",
-      "key_generation": 1791465653858,
+      "key_generation": 1791487245985,
       "pool_id": "main",
       "account_id": "business",
       "session_id": "s1",
@@ -67,6 +67,15 @@
         "web_search": 0
       },
       "cost_usd": 0.0071,
+      "phases": {
+        "received_at": -2600000,
+        "selected_at": -2600000,
+        "written_at": -2599570,
+        "head_at": -2599880,
+        "first_content_at": -2599700,
+        "stream_end_at": -2599150,
+        "finished_at": -2599100
+      },
       "attempts": [
         {
           "index": 1,

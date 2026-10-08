@@ -39,6 +39,7 @@ pub(crate) fn request_summary(r: &RequestRecord, attempts: &[AttemptRecord]) -> 
         // Folded onto a positive zero rather than summed: `Sum<f64>` starts at -0.0, so a request with no
         // priced attempt would put a signed zero on the wire and the UI would read "-$0.00".
         "cost_usd": attempts.iter().filter_map(|a| a.estimated_usd).fold(0.0, |a, b| a + b),
+        "phases": phases_json(r, attempts),
         "attempts": attempts.iter().map(attempt_json).collect::<Vec<_>>(),
         // The request row's own facts rather than an attempt's: a hold that ended in an exhaustion has no attempt.
         "held": r.held.as_deref().and_then(|h| serde_json::from_str::<Value>(h).ok()),
@@ -54,6 +55,21 @@ fn shape_json(r: &RequestRecord) -> Value {
         "requested_service_tier": r.requested_service_tier, "requested_speed": r.requested_speed,
         "system_blocks": r.system_blocks, "temperature": r.temperature, "thinking_budget": r.thinking_budget,
         "thinking_type": r.thinking_type, "tool_count": r.tool_count,
+    })
+}
+
+/// Its own function, beside `shape_json` and `usage_json`, for the same reason. The write is the serving
+/// attempt's: an earlier attempt's write led nowhere the answer came from.
+fn phases_json(r: &RequestRecord, attempts: &[AttemptRecord]) -> Value {
+    let last = attempts.last();
+    json!({
+        "received_at": r.received_at,
+        "selected_at": attempts.first().map(|a| a.started_at),
+        "written_at": last.and_then(|a| a.written_at),
+        "head_at": r.ttfb_ms.map(|ms| r.received_at + ms),
+        "first_content_at": r.ttfc_ms.map(|ms| r.received_at + ms),
+        "stream_end_at": r.stream_end_at,
+        "finished_at": r.finished_at,
     })
 }
 
@@ -289,6 +305,46 @@ mod tests {
             summary["cost_usd"].to_string(),
             "0.0",
             "a signed zero on the wire is read back as -$0.00"
+        );
+    }
+
+    #[test]
+    fn a_summary_s_phases_read_the_row_and_the_serving_attempt() {
+        let row = RequestRecord {
+            received_at: 1_000,
+            finished_at: Some(1_900),
+            ttfb_ms: Some(120),
+            ttfc_ms: Some(300),
+            stream_end_at: Some(1_800),
+            ..Default::default()
+        };
+        let attempts = [
+            AttemptRecord {
+                started_at: 1_010,
+                ..Default::default()
+            },
+            AttemptRecord {
+                started_at: 1_400,
+                written_at: Some(1_430),
+                ..Default::default()
+            },
+        ];
+        let phases = |attempts: &[AttemptRecord]| request_summary(&row, attempts)["phases"].clone();
+        assert_eq!(
+            phases(&attempts),
+            json!({
+                "received_at": 1_000, "selected_at": 1_010, "written_at": 1_430, "head_at": 1_120,
+                "first_content_at": 1_300, "stream_end_at": 1_800, "finished_at": 1_900,
+            }),
+            "the first attempt's start is the selection and the serving attempt's write is the write"
+        );
+        assert_eq!(
+            phases(&[]),
+            json!({
+                "received_at": 1_000, "selected_at": null, "written_at": null, "head_at": 1_120,
+                "first_content_at": 1_300, "stream_end_at": 1_800, "finished_at": 1_900,
+            }),
+            "a request with no attempt was neither selected nor written"
         );
     }
 }

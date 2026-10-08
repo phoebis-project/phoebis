@@ -872,4 +872,9 @@ CREATE INDEX events_session ON events (session_id, at);
 CREATE INDEX events_request ON events (request_id);",
     ),
     (30, "ALTER TABLE rollups_hourly ADD COLUMN probes_held INTEGER NOT NULL DEFAULT 0;"),
+    (
+        31,
+        "ALTER TABLE attempts ADD COLUMN written_at INTEGER; \
+         ALTER TABLE requests ADD COLUMN stream_end_at INTEGER;",
+    ),
 ];

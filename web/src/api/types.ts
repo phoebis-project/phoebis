@@ -589,6 +589,19 @@ export interface RequestShape {
   toolCount: number;
 }
 
+/** The instants a request passed through, in the order it passed them. A phase the ledger holds no instant for
+ *  reads null: a row from before the two columns on `writtenAt` and `streamEndAt`, a request with no attempt on
+ *  `selectedAt`, `writtenAt` and `headAt`, a failed stream on `firstContentAt` and `streamEndAt`. */
+export interface RequestPhases {
+  finishedAt: string | null;
+  firstContentAt: string | null;
+  headAt: string | null;
+  receivedAt: string;
+  selectedAt: string | null;
+  streamEndAt: string | null;
+  writtenAt: string | null;
+}
+
 export interface RequestLog {
   accountId: string | null;
   agentId: string | null;
@@ -623,6 +636,7 @@ export interface RequestLog {
   model: string;
   /** How the request ended, once every attempt is in. */
   outcome: RequestOutcome;
+  phases: RequestPhases;
   poolId: string | null;
   /** The sum of the client's `x-claude-code-prev-tool-durations`, in milliseconds. */
   prevToolMs: number | null;

@@ -594,6 +594,29 @@ test('a request page carries the trail with zero-based attempt indexes and the c
   assert.equal(d.decodeRequest(fixture('request').request).canonicalModel, 'claude-sonnet-5-5');
 });
 
+test('a request carries its seven phases as ISO instants and null where the ledger holds none', () => {
+  const failover = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-failover');
+  const { phases } = failover;
+  assert.deepEqual(Object.keys(phases).sort(), ['finishedAt', 'firstContentAt', 'headAt', 'receivedAt', 'selectedAt', 'streamEndAt', 'writtenAt']);
+  assert.ok(Object.values(phases).every(isIso), 'a served stream passed every phase');
+  assert.equal(phases.receivedAt, failover.at);
+  assert.equal(phases.selectedAt, failover.attempts[0].startedAt, "the first attempt's start");
+  const ms = (s) => Date.parse(s);
+  assert.equal(ms(phases.writtenAt) - ms(failover.attempts[1].startedAt), 30, "the serving attempt's write");
+  assert.deepEqual(
+    [phases.headAt, phases.firstContentAt, phases.streamEndAt, phases.finishedAt].map((s) => ms(s) - ms(phases.receivedAt)),
+    [120, 300, 850, 900],
+    'the head, the first content, the stream end and the finish follow the receipt',
+  );
+  const bare = d.decodeRequest({ at: 5, phases: { received_at: 5 } }).phases;
+  assert.equal(bare.receivedAt, new Date(5).toISOString());
+  assert.deepEqual(
+    [bare.finishedAt, bare.firstContentAt, bare.headAt, bare.selectedAt, bare.streamEndAt, bare.writtenAt],
+    [null, null, null, null, null, null],
+    'a phase the ledger holds no instant for reads null',
+  );
+});
+
 test("an attempt reads the upstream's request id, and its message id only on the answer that served", () => {
   const failover = d.decodeRequestPage(fixture('requests')).requests.find((r) => r.id === 'r-failover');
   assert.deepEqual(
