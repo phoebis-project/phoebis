@@ -30,9 +30,6 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
             "the router is not available",
         ));
     };
-    // A second ask after the pins: a renewal landing between the two moves one pin's figure by one fold, which
-    // the next read shows, so the display needs no single snapshot of both.
-    let fast_burns = state.router.fast_burns().await.unwrap_or_default();
     // Read right after the pins ask and before the ledger read below awaits: a pin belongs to the live holder
     // of its key id alone, and taking this snapshot before that await keeps a key deleted and recreated during
     // it from stamping this request's pins with the replacement's generation.
@@ -48,6 +45,9 @@ pub(crate) async fn rows(state: &AdminState) -> Result<Vec<serde_json::Value>, R
         Err(e) => return Err(crate::routes::store_failure(e)),
     };
     let overages = state.router.overages().await.unwrap_or_default();
+    // Asked after the `live` snapshot so the pins ask and that read stay adjacent. A renewal landing between the
+    // pins ask and this one moves one pin's figure by one fold, which the next read shows.
+    let fast_burns = state.router.fast_burns().await.unwrap_or_default();
     let fallback_ms = phoebis_routing::seconds_ms(state.settings.cooldown_fallback_seconds);
     let cutoff = now - state.session_expiry.as_millis() as i64;
     let activity = match state

@@ -831,10 +831,11 @@ pub struct RoutingState {
     /// The poll's newest extra-usage state per account, loaded at startup from the rows the last run persisted.
     credits: HashMap<String, CreditsState>,
     /// Each pin's fast usage as typed tokens per second over the burn window, folded and decayed beside
-    /// `PinRow::burn` from the same `burn_at`. Kept apart because the fast cells never move with the prompt: a
-    /// reader prices this copy through the fast table and `burn` at the set the pin's last prompt selects, so a
-    /// prompt that crosses the threshold reprices the ordinary usage alone. Memory only, since the pin's row has no
-    /// column for it, so a restart reads a pin's fast usage as none until its next fast renewal.
+    /// `PinRow::burn` from the same `burn_at`. Kept apart so a reader prices this copy through the fast table
+    /// (`BurnRates::fast`, a row's fast cells whatever the prompt where the row has them) and `burn` at the set the
+    /// pin's last prompt selects, and a prompt that crosses the threshold on such a row reprices the ordinary usage
+    /// alone. Memory only, since the pin's row has no column for it, so a restart reads a pin's fast usage as none
+    /// until its next fast renewal.
     fast_burn: HashMap<PinKey, PinBurn>,
     in_flight: InFlight,
     /// The ledger's last-answered spend per pool member and budgeted period, by `(pool_id, account_id, period)`;

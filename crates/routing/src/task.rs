@@ -253,9 +253,9 @@ pub struct RouterConfig {
     /// resets and wind-downs. The router's start holds it until the ledger subscribed and holds the start row.
     pub hold_first_purge: bool,
     pub purge_interval: Duration,
-    /// The dollar table and the subscription cost model's 5-hour share table the shedding round prices each pin's
-    /// burn through when it reads it, and the fast table a renewal of a fast answer weighs the plain copy's fold by.
-    /// The task holds them because neither this crate nor the relay can see the ledger's tables.
+    /// The dollar table and the subscription cost model's 5-hour share table a reader prices each pin's row
+    /// through, and the fast table it prices the pin's fast usage through. A renewal folds tokens and reads none of
+    /// them. The task holds them because neither this crate nor the relay can see the ledger's tables.
     pub rates: BurnRates,
     /// The share of an account's windows a completed request consumed; the default prices nothing.
     pub share: SharePricer,
@@ -301,9 +301,11 @@ impl Default for BurnRates {
 impl BurnRates {
     /// One second of the pin's burn in `unit`, `fast` being the pin's fast usage the routing state holds beside its
     /// row. Under `Usd` the row's plain copy at the set the pin's last prompt selects plus the fast usage through
-    /// the fast table, whose cells never move with the prompt, so a prompt that crosses the threshold reprices the
-    /// ordinary usage alone. Under `WindowShare` the banded copy alone: fast usage draws usage credits, never the
-    /// plan's window. `None` where a type the pin burns has no rate.
+    /// the fast table. On a row with fast cells that table carries them whatever the prompt, so a prompt that
+    /// crosses the threshold reprices the ordinary usage alone, and on a row without them it carries the row's own
+    /// sets, so the fast usage reprices with the row, as the ledger prices a fast answer there. Under `WindowShare`
+    /// the banded copy alone: fast usage draws usage credits, never the plan's window. `None` where a type the pin
+    /// burns has no rate.
     pub fn price_pin(&self, unit: BurnUnit, pin: &PinRow, fast: &PinBurn) -> Option<f64> {
         let own =
             unit.table(self)
@@ -2900,11 +2902,10 @@ impl Task {
                                     write_5m: fold(copy.write_5m, usage.write_5m),
                                 }
                             };
-                            // A fast answer is usage credits at the fast cells, which never move with the prompt:
-                            // its tokens land in the fast copy the state holds beside the row, priced through the
-                            // fast table whatever the pin's later prompts, while the row's two copies only decay.
-                            // A standard answer folds into the row's copies, the banded one weighed by the band,
-                            // and the fast copy only decays.
+                            // A fast answer is usage credits: its tokens land in the fast copy the state holds
+                            // beside the row, priced later through the fast table (`BurnRates::fast`), while the
+                            // row's two copies only decay. A standard answer folds into the row's copies, the
+                            // banded one weighed by the band, and the fast copy only decays.
                             let (plain, fast_weight) = if fast { (0.0, 1.0) } else { (1.0, 0.0) };
                             renewed.burn = folded(renewed.burn, plain);
                             renewed.burn_banded =
