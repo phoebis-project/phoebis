@@ -3589,6 +3589,69 @@ async function forkLink(theme) {
 }
 
 /**
+ * The Copy button on a console served over plain HTTP, where `navigator.clipboard` is undefined: the accessor lives
+ * on the prototype, so it is deleted there, and a copy listener records what the page had selected at the copy
+ * instant. On the Keys view a key is created and the Key created dialog's Copy, inside a modal, copies the secret;
+ * on the Settings view Copy snippet copies the client block beside it, and a reload after it brings the accessor
+ * back for the views that follow. The Keys case runs in the mock pass alone: the mock's story is rebuilt at the next
+ * load, where the router's registry would keep the key and refuse its second creation. A failure names lengths, so
+ * no secret reaches the output.
+ */
+async function copyFallback(theme, path) {
+  const say = (what) => failures.push(`${theme} ${path}: ${what}`);
+  await page.evaluate(() => {
+    delete Navigator.prototype.clipboard;
+    window.__e2eCopied = null;
+    document.addEventListener('copy', () => {
+      const active = document.activeElement;
+      window.__e2eCopied = active instanceof HTMLTextAreaElement ? active.value.slice(active.selectionStart ?? 0, active.selectionEnd ?? 0) : (document.getSelection()?.toString() ?? '');
+    });
+  });
+  // `button` is an element handle: the button's accessible name changes with its state, so a locator by name would
+  // lose it at the click.
+  const copied = async (button, expected, where) => {
+    await button.click();
+    try {
+      await page.waitForFunction((el) => el.textContent?.trim() === 'Copied', button, { timeout: 1_000 });
+    } catch {
+      say(`${where}: Copy reads ${JSON.stringify(((await button.textContent()) ?? '').trim())} a second after the click, not Copied`);
+      return;
+    }
+    const recorded = await page.evaluate(() => window.__e2eCopied);
+    const lengths = JSON.stringify({ expected: expected.length, recorded: recorded === null ? null : recorded.length });
+    measurements.push(`${theme} ${path} copy by command ${lengths}`);
+    if (recorded !== expected) say(`${where}: the copy command took other text than the one beside the button ${lengths}`);
+  };
+  if (path === '/keys') {
+    const dialog = page.locator('dialog[open]');
+    const created = page.getByRole('dialog', { name: 'Key created' });
+    try {
+      await page.getByRole('button', { name: 'Create key', exact: true }).first().click();
+      await dialog.waitFor({ state: 'visible', timeout: 15_000 });
+      await dialog.locator('section.dialog-group[aria-label="Key"] input[placeholder="workstation"]').fill('copy check');
+      await dialog.getByRole('button', { name: 'Create', exact: true }).click();
+      // The mock answers the creation on a timer of its own, which the paused clock holds until it is advanced.
+      await advance(600);
+      await created.waitFor({ state: 'visible', timeout: 15_000 });
+    } catch (error) {
+      say(`the Key created dialog never opened (${error instanceof Error ? error.message : String(error)})`);
+      return;
+    }
+    const secret = ((await created.locator('.secret code').textContent()) ?? '').trim();
+    await copied(await created.locator('.secret button').elementHandle(), secret, 'the Key created dialog');
+    await created.getByRole('button', { name: 'Done' }).click();
+    await advance(CLOCK_STEP_MS);
+    await created.waitFor({ state: 'hidden', timeout: 5_000 }).catch(() => say('the Key created dialog stayed open after Done'));
+    return;
+  }
+  const expected = (await page.locator('pre.snippet').first().textContent()) ?? '';
+  await copied(await page.getByRole('button', { name: 'Copy snippet' }).elementHandle(), expected, 'the client block');
+  await page.reload();
+  await booted();
+  await advance(LOAD_MS);
+}
+
+/**
  * Signs `page` in with the pass's secret. The same pin the jsdom smoke run applies, over the timers as well as the
  * date: `install` alone keeps the clock running at the wall's pace, so it is paused at the origin and moves only when
  * `advance` moves it.
@@ -3707,9 +3770,11 @@ try {
       await page.waitForFunction(() => !document.querySelector('.skeleton'), null, { timeout: 3_000 }).catch(() => {});
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
+      if (view.path === '/keys' && mock) await copyFallback(theme, view.path);
       if (view.path === '/requests') await requestDrawerCompact(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
+      if (view.path === '/settings') await copyFallback(theme, view.path);
     }
   }
   // Only the mock bundle routes the fixture path. It runs after every view because its load moves the page clock,
