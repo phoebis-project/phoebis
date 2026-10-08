@@ -182,7 +182,8 @@ tint. The models the cost model does not weigh on any window follow a divider, e
 weighed".
 
 **API prices.** The dollar list prices per million tokens: input, cache read, cache write 5m, cache write 1h and output,
-with a fast-mode row under each model that serves fast mode, at its fast cells, what an answer served fast costs.
+with a fast-mode row under each model that serves fast mode, at its fast cells, what an answer served fast costs, and a
+row under each model priced by prompt length, at its prices over the threshold.
 
 Both tables list the models family by family, Fable, Opus, Sonnet, Haiku, the newest version first, the order both
 shipped files keep, and a file kept in another order lists the same. Plan rates lists the weighted models first and the
@@ -200,7 +201,8 @@ since the relay rewrites every marker of the probe to that TTL (and adds one whe
 policy off, when the recipe keeps an hour's cache or marks any part of its prefix for an hour. A probe settled in
 dollars on a model the price table does not list prices at the table's dearest cell of each type, never at zero, so the
 dollar cap and the net still bound it; a request such a probe kept warm saves at the same cells, so its net stays
-positive while the cache saves more than the probes cost. Whatever the account's funding, a fast-mode session's net is a
+positive while the cache saves more than the probes cost. On a model priced by prompt length, a probe and the read it
+kept warm price at the set their own prompt selects. Whatever the account's funding, a fast-mode session's net is a
 dollar net, since its probes draw usage credits. Each agent line of the Sessions view shows its net, as "N% of the
 5-hour window", in dollars, or both for an agent whose account changed funding while it was warmed.
 

@@ -66,7 +66,7 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtCompact, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
 
 const results = [];
 /**
@@ -10942,6 +10942,44 @@ m.unmount();
         JSON.stringify(drawn.opus5.cells) === JSON.stringify([...dashes(5), fmtShare(3_000), fmtShare(300), fmtShare(6_000), fmtShare(6_000), fmtShare(30_000)]) &&
         drawn.opus5.weight.text === 'by window' &&
         drawn.opus5.weight.title === 'claude-opus-5 carries no shared weight, only a weight per window: 3 on the 7-day window',
+      missing: [JSON.stringify(drawn)],
+    });
+  }
+
+  // On the test tables, the Haiku 5.5 row priced by prompt length: a prompt-length sub-row under the model, labeled
+  // from the row's threshold and priced at its cells over it.
+  {
+    const { getSettings } = api;
+    const tables = JSON.parse(readFileSync(new URL('../test/fixtures/test_tables.json', import.meta.url), 'utf8')).body;
+    const wired = decodeSettings({ ...SETTINGS_WIRE, api_prices: tables.api_prices, subscription_costs: tables.subscription_costs });
+    api.getSettings = async (...args) => ({ ...(await getSettings.apply(api, args)), apiPrices: wired.apiPrices, subscriptionCosts: wired.subscriptionCosts });
+    const page = await mount('/sessions', { now: CLOCK_ORIGIN });
+    linkIn(page.container.querySelector('.page-head'))?.click();
+    await page.settle(400);
+    const dlg = topDialog();
+    tabsOf(dlg).find((t) => t.textContent?.trim() === 'API prices')?.click();
+    await page.settle(200);
+    const rows = [...(shownPanel(dlg)?.querySelectorAll('tbody tr') ?? [])];
+    const haiku = rows.find((r) => !r.classList.contains('cost-ref__sub') && r.children[0]?.textContent?.trim() === 'claude-haiku-5-5');
+    const prompt = haiku?.nextElementSibling;
+    const long = wired.apiPrices.models.find((p) => p.model === 'claude-haiku-5-5')?.longContext ?? null;
+    const drawn = {
+      cells: [...(prompt?.children ?? [])].slice(1).map((td) => td.textContent?.trim()),
+      hasSub: haiku?.classList.contains('has-sub') ?? false,
+      label: prompt?.classList.contains('cost-ref__sub') ? prompt.children[0]?.textContent : 'no sub-row',
+      stripe: prompt?.classList.contains('is-alt') === haiku?.classList.contains('is-alt'),
+    };
+    await closeCost(page, dlg);
+    page.unmount();
+    api.getSettings = getSettings;
+    results.push({
+      name: '/sessions API prices list a prompt-length row under a model priced by prompt length, labeled from its threshold and priced at its cells over it',
+      ok:
+        long !== null &&
+        drawn.hasSub &&
+        drawn.label === `prompt over ${fmtCompact(long.over)} tokens` &&
+        JSON.stringify(drawn.cells) === JSON.stringify([long.inputPerM, long.cacheReadPerM, long.cacheWrite5mPerM, long.cacheWrite1hPerM, long.outputPerM].map(usd)) &&
+        drawn.stripe,
       missing: [JSON.stringify(drawn)],
     });
   }
