@@ -390,6 +390,95 @@ for (const at of ['2026-09-16T14:30:00Z', '2026-09-20T03:40:00Z']) {
     }
     for (const r of records) for (const c of r.candidates) if (c.kind === 'oauth' && c.pace !== null) assert.equal(c.pace.window, 'seven_day_fable', r.requestId);
   });
+
+  test(`every record that reaches the rungs carries one partitions step before them, a hold its pick and an exhaustion the walk the engine writes, at ${at}`, async () => {
+    const s = await story;
+    const records = await decisionsOf(s);
+    assert.ok(records.length > 20);
+    const seen = { exhausted: 0, held: 0, ranOut: 0 };
+    for (const r of records) {
+      const id = `${r.requestId}/${r.seq}`;
+      const steps = r.walk.map((w) => w.step);
+      const walk = `${id}: ${steps.join(', ')}`;
+      const firstRung = steps.findIndex((x) => x.startsWith('rung:'));
+      const partitions = steps.flatMap((x, i) => (x === 'partitions' ? [i] : []));
+      const pick = r.walk.find((w) => w.step === 'pick');
+      // A request every member held at its cap until the bound ran out is answered on the bound path, which places
+      // nothing.
+      if (r.outcome.kind === 'exhausted' && s.lib.requestById.get(r.requestId).errorCode === 'accounts_at_cap') {
+        seen.ranOut += 1;
+        assert.deepEqual(r.walk.slice(-2).map((w) => [w.step, w.verdict]), [['bound', 'exhausted'], ['exhausted', 'exhausted']], walk);
+        assert.deepEqual([partitions.length, firstRung, pick], [0, -1, undefined], walk);
+        continue;
+      }
+      if (!['exhausted', 'held', 'moved', 'placed'].includes(r.outcome.kind)) continue;
+      assert.ok(firstRung >= 0, walk);
+      assert.equal(partitions.length, 1, walk);
+      assert.ok(partitions[0] < firstRung, `${walk}: partitions after the rungs`);
+      const slot = steps.findIndex((x) => x === 'hold' || x === 'exhausted');
+      if (r.outcome.kind === 'held') {
+        seen.held += 1;
+        assert.equal(pick?.verdict, 'chosen', walk);
+        assert.ok(steps.indexOf('pick') < slot, `${walk}: no pick before the hold`);
+        assert.equal(r.candidates.find((c) => c.accountId === r.outcome.accountId)?.rank, 1, `${id}: the held-on member's rank`);
+      } else if (r.outcome.kind === 'exhausted') {
+        seen.exhausted += 1;
+        assert.deepEqual([r.walk[partitions[0]].verdict, pick?.verdict], ['none', 'none'], walk);
+        assert.ok(steps.indexOf('pick') < slot, `${walk}: no pick before the exhaustion`);
+      } else {
+        // A rung places the request itself, and the strategy picks only where no rung matched.
+        assert.equal(pick?.verdict, r.outcome.rung === null ? 'chosen' : undefined, walk);
+      }
+    }
+    assert.ok(seen.exhausted > 0 && seen.held > 0 && seen.ranOut > 0, JSON.stringify(seen));
+    assert.ok(records.some((r) => r.requestId === 'req_51d0e2b8-7a0' && r.walk.some((w) => w.step === 'partitions')), 'the empty-eligible exhaustion walks the partitions');
+  });
+
+  test(`every partitions step reads the five facts the derivation gives over the record's own set, none past the set, at ${at}`, async () => {
+    const s = await story;
+    const d = s.lib;
+    const records = await decisionsOf(s);
+    let seen = 0;
+    for (const r of records) {
+      const steps = r.walk.map((w) => w.step);
+      if (!steps.some((x) => x.startsWith('rung:'))) continue;
+      // The set the builder narrows: a move's destinations (the cap filter's facts name them), else the eligible members.
+      const capFilter = r.walk.find((w) => w.step === 'cap_filter');
+      const among = capFilter ? new Set(capFilter.facts.map((f) => f.accountId)) : null;
+      const set = r.candidates.filter((c) => (among ? among.has(c.accountId) : c.obstacle === null));
+      const expected = d.partitionsOf(set.map((c) => ({ ...c })), d.poolById.get(r.request.poolId), d.requestById.get(r.requestId));
+      for (const w of r.walk.filter((x) => x.step === 'partitions')) {
+        seen += 1;
+        assert.deepEqual(w.facts.map((f) => [f.key, f.value]), expected.map((f) => [f.key, f.value]), `${r.requestId}/${r.seq}`);
+        assert.deepEqual(w.facts.map((f) => f.key), ['spent', 'at_cap', 'above_ceiling', 'winding_down', 'floor']);
+        for (const f of w.facts) {
+          if (typeof f.value === 'number') assert.ok(f.value >= 0 && f.value <= set.length, `${r.requestId}: ${f.key} ${f.value} over ${set.length}`);
+          else assert.ok(['fell_through', 'held', 'off'].includes(String(f.value)), `${r.requestId}: ${f.key} ${f.value}`);
+        }
+      }
+    }
+    assert.ok(seen > 10);
+
+    const read = (id, keys) => {
+      const w = records.find((r) => `${r.requestId}/${r.seq}` === id)?.walk.find((x) => x.step === 'partitions');
+      return [w?.verdict, (w?.facts ?? []).filter((f) => keys.includes(f.key)).map((f) => [f.key, f.value])];
+    };
+    // The cohort hold waits with every member it could take at its cap, under a non-Fable model and no ceiling.
+    assert.deepEqual(read('req_69e30548-32e/1', ['spent', 'at_cap', 'above_ceiling']), ['match', [['spent', 'off'], ['at_cap', 'held'], ['above_ceiling', 'off']]]);
+    // Nothing is left to narrow, so the step reads none with every count 0 or off, the floor off on a round-robin pool.
+    assert.deepEqual(read('req_51d0e2b8-7a0/1', ['spent', 'at_cap', 'above_ceiling', 'winding_down', 'floor']), ['none', [['spent', 'off'], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 'off']]]);
+
+    const pairs = (facts) => facts.map((f) => [f.key, f.value]);
+    const member = (accountId, o = {}) => ({ accountId, credits: null, inFlight: 0, inFlightCap: 4, kind: 'oauth', pace: { remaining: 0.5 }, term: { windingDown: false }, windows: {}, ...o });
+    const haiku = { canonicalModel: 'claude-haiku-4-5-20251001', kind: 'inference' };
+    const fable = { canonicalModel: 'claude-fable-5-1', kind: 'inference' };
+    // The cap drops the member at it, and the wind-down then falls through rather than empty the set.
+    assert.deepEqual(pairs(d.partitionsOf([member('a', { inFlight: 4 }), member('b', { term: { windingDown: true } })], d.poolById.get('jobs'), haiku)), [['spent', 'off'], ['at_cap', 1], ['above_ceiling', 'off'], ['winding_down', 'fell_through'], ['floor', 'off']]);
+    // A Fable request draws on the shared windows too, and a spent member drops outright, even when none is left.
+    const spentOn = (name) => ({ windows: { [name]: { utilization: 1 } } });
+    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('five_hour')), member('b')], d.poolById.get('all'), fable)), [['spent', 1], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
+    assert.deepEqual(pairs(d.partitionsOf([member('a', spentOn('seven_day')), member('b', spentOn('seven_day_fable'))], d.poolById.get('all'), fable)), [['spent', 2], ['at_cap', 0], ['above_ceiling', 'off'], ['winding_down', 0], ['floor', 0]]);
+  });
 }
 
 // An instant whose hour a full day back carries traffic before the dashboard's first bucket.
