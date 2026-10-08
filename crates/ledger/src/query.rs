@@ -4,7 +4,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::sync::Arc;
 
-use phoebis_routing::{MemberSpend, PinUsage, FIVE_HOUR, SEVEN_DAY};
+use phoebis_routing::{MemberSpend, PinUsage, FIVE_HOUR, REFRESHING_CLASSES, SEVEN_DAY};
 use phoebis_store::{AccountKind, BudgetPeriod};
 use rusqlite::{params, params_from_iter, Connection, OptionalExtension, ToSql};
 use serde::{Deserialize, Serialize};
@@ -2118,11 +2118,18 @@ fn session_identities_chunk(
             format!("(?{}, ?{}, ?{n})", n - 2, n - 1)
         })
         .collect();
+    // The client's quota probe is an `inference` row ahead of the session's first main request and names no
+    // fork, so the marker is read off the first refreshing or unclassed request, as the router records it.
+    let refreshing = REFRESHING_CLASSES
+        .iter()
+        .map(|class| format!("'{class}'"))
+        .collect::<Vec<_>>()
+        .join(", ");
     let sql = format!(
         "WITH named(key_id, key_generation, session_id) AS (VALUES {}) \
          SELECT n.key_id, n.key_generation, n.session_id, \
-         (SELECT r.forked_from FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe' ORDER BY r.received_at ASC, r.id ASC LIMIT 1), \
-         (SELECT r.fork_depth FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe' ORDER BY r.received_at ASC, r.id ASC LIMIT 1) \
+         (SELECT r.forked_from FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe' AND (r.request_class IS NULL OR r.request_class IN ({refreshing})) ORDER BY r.received_at ASC, r.id ASC LIMIT 1), \
+         (SELECT r.fork_depth FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe' AND (r.request_class IS NULL OR r.request_class IN ({refreshing})) ORDER BY r.received_at ASC, r.id ASC LIMIT 1) \
          FROM named n \
          WHERE EXISTS (SELECT 1 FROM requests r WHERE r.key_id = n.key_id AND r.key_generation = n.key_generation AND r.session_id = n.session_id AND r.kind != 'probe')",
         values.join(", ")

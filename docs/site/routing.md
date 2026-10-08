@@ -234,7 +234,9 @@ A conversation is identified by its session header: the session id the client se
 session memory, and is what a turn that follows its own conversation's previous answer within milliseconds waits on, at
 most five milliseconds, for that answer's report to reach the map. A new session id whose messages continue another
 conversation of the same key keeps its own identity, and is recorded as a fork of that conversation at the depth where
-the two part.
+the two part, when that depth is 2 or deeper: a shared first message is a template, not a conversation. An auxiliary
+request (the client's quota probe among them) never names a fork and leaves no content entry, so no later request
+matches it.
 
 ## Model rules
 

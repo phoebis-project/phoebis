@@ -386,39 +386,39 @@ closed without its `message_stop`, `stream_stalled` when the upstream went silen
 reads the family and version, with the whole id on hover. The client column shows the class the router derived from the
 user agent (`claude-code/<entrypoint>` or `other`), cut at 12 characters, whole on hover, and the agent
 type beneath it on a subagent's turn.
-One row is one client request however many attempts it took, and the attempt trail reads as
-"secondary 429, primary 200" when a 429 on the first account failed over to a 200 on the second. A request that did not
-succeed names how it ended beside its status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request
-that waited for a slot while every account was at its cap carries a held marker beside its attempts with the time it
-waited. The search matches the request id, the session, the key, the model, the error code, and an attempt's account,
-upstream request id or upstream message id, literally: `_` and `%` are characters, not wildcards. Filters narrow the
-table: the user agent filter takes a pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for
-one, a backslash quoting either, and a value with no wildcard matching in full), the client filter takes a pattern over
-the class (`claude-code/*`), the agent type and turn origin filters pick from the values the client's hint headers and
-attribution line carry, the speed filter picks `fast` or `standard` by the speed the answer reported, else by whether
-the request asked for `fast`, the status filter offers the codes the router and Anthropic answer and any other code the
-page holds, the outcome filter picks how the request ended (`canceled`, `exhausted`, `failed`, `incomplete`, `rejected`,
-or `succeeded`), and the held toggle keeps the requests that waited for a slot. The search and the two pattern fields
-apply 400 milliseconds after the last keystroke, on Enter, or when the field loses focus. Every filter, the range and
-the page size live in the page's address, so a reload or a shared link keeps them. A filter whose list did not load is
-disabled and says why. Selecting a row opens a drawer with the request's detail, which shows the outcome beneath the
-status, the user agent, the model as the client spelled it and, when
-it differs, the canonical id the router recorded, its auto-mode standing (asked for a server-side check under an on
-setting; carried the safeguards member under an off setting, which the dispatch drops; refused for its body shape; or
-not requested), and the client hints: the agent type, the compaction and context-compacted markers, the turn origin, and
-the tool time before the turn. The drawer's Request section names the upstream's request id for each attempt and, on the
-answer that served, the message id a Claude Code transcript's assistant entry carries. The drawer's effort is the level
-the upstream applies: when the client sends a per-turn control entry, the last entry's level, else the request's
-top-level `output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its
-own prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
-Refresh brings it up to now. The drawer opens on the answer's facts: the status, the outcome, the serving account and
-model, the answer's stop reason and region, and the cache miss reason. The usage follows, then the request's identity
-with the upstream request and message ids under it, its shape, the client hints and the captured bodies. Its head
-carries a "Routing log" link and each row a "Routing" link beside "Details", both opening the
-[routing log](#routing-log) on that request with a quarter hour either side. While the drawer is open the table shows a
-compact set of columns (time, model, status and attempts), and the chosen set returns when it closes. The drawer shows
-the captured request and response bodies, each with Copy, which copies the text as shown; a body past 256 KiB shows
-compact until Pretty-print is pressed.
+One row is one
+client request however many attempts it took, and the attempt trail reads as "secondary 429, primary 200" when a 429 on
+the first account failed over to a 200 on the second. A request that did not succeed names how it ended beside its
+status: `canceled`, `exhausted`, `failed`, `incomplete`, or `rejected`. A request that waited for a slot while every
+account was at its cap carries a held marker beside its attempts with the time it waited. The search matches the request
+id, the session, the key, the model, the error code, and an attempt's account, upstream request id or upstream message
+id, literally: `_` and `%` are characters, not wildcards. Filters narrow the table: the user agent filter takes a
+pattern (`claude-cli/2.1.*`, `*sdk-cli*`; `*` for any run of characters, `?` for one, a backslash quoting either, and a
+value with no wildcard matching in full), the client filter takes a pattern over the class (`claude-code/*`), the agent
+type and turn origin filters pick from the values the client's hint headers and attribution line carry, the speed filter
+picks `fast` or `standard` by the speed the answer reported, else by whether the request asked for `fast`, the status
+filter offers the codes the router and Anthropic answer and any other code the page holds, the outcome filter picks how
+the request ended (`canceled`, `exhausted`, `failed`, `incomplete`, `rejected`, or `succeeded`), and the held toggle
+keeps the requests that waited for a slot. The search and the two pattern fields apply 400 milliseconds after the last
+keystroke, on Enter, or when the field loses focus. Every filter, the range and the page size live in the page's
+address, so a reload or a shared link keeps them. A filter whose list did not load is disabled and says why. Selecting a
+row opens a drawer with the request's detail, which shows the outcome beneath the status,
+the user agent, the model as the client spelled it and, when it differs, the canonical id the router
+recorded, its auto-mode standing (asked for a server-side check under an on setting; carried the safeguards member under
+an off setting, which the dispatch drops; refused for its body shape; or not requested), and the client hints: the agent
+type, the compaction and context-compacted markers, the turn origin, and the tool time before the turn. The drawer's
+Request section names the upstream's request id for each attempt and, on the answer that served, the message id a Claude
+Code transcript's assistant entry carries. The drawer's effort is the level the upstream applies: when the client sends
+a per-turn control entry, the last entry's level, else the request's top-level `output_config.effort`; a turn that ends
+with such an entry still counts as the user's turn, so it starts its own prompt. The table holds the requests up to the
+moment you opened it, so paging does not shift as new ones arrive; Refresh brings it up to now. The drawer opens on the
+answer's facts: the status, the outcome, the serving account and model, the answer's stop reason and region, and the
+cache miss reason. The usage follows, then the request's identity with the upstream request and message ids under it,
+its shape, the client hints and the captured bodies. Its head carries a "Routing log" link and each row a "Routing" link
+beside "Details", both opening the [routing log](#routing-log) on that request with a quarter hour either side. While
+the drawer is open the table shows a compact set of columns (time, model, status and attempts), and the chosen set
+returns when it closes. The drawer shows the captured request and response bodies, each with Copy, which copies the text
+as shown; a body past 256 KiB shows compact until Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

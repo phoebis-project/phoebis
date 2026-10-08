@@ -488,6 +488,81 @@ async fn a_second_session_id_sharing_the_firsts_prefix_and_diverging_is_a_fork_o
 }
 
 #[tokio::test]
+async fn a_quota_probe_names_no_fork_and_leaves_no_content_entry_and_a_fork_needs_depth_2() {
+    let up = FakeUpstream::start(vec![Rule {
+        path_prefix: "/v1/messages".into(),
+        respond: ok("msg_1", None, true),
+    }])
+    .await;
+    let (h, mut sub) = setup(&up, &one()).await;
+
+    // The client's quota probe: one message every probe of the key shares, sent under the session id at a
+    // session's start, so the second session's probe matches the first's at depth 1.
+    let probe = json!({"model": MODEL, "max_tokens": 1, "messages": [user("quota")]});
+    let probe_chains = phoebis_relay::Chains::read(&probe).unwrap();
+    let classed = |value: &Value, session: &str, class: &str| {
+        let mut request = req(value);
+        set_header(&mut request, "x-claude-code-session-id", session);
+        set_header(&mut request, "x-claude-code-request-class", class);
+        request
+    };
+
+    send(&h, classed(&probe, "s1", "auxiliary")).await;
+    assert_eq!(identified(&mut sub).await, Fork::default());
+    settle(&h).await;
+    send(&h, classed(&probe, "s2", "auxiliary")).await;
+    assert_eq!(
+        identified(&mut sub).await,
+        Fork::default(),
+        "an auxiliary request names no fork, whatever its one message matches"
+    );
+    settle(&h).await;
+    {
+        let map = h.router.affinity();
+        let guard = map.read().unwrap();
+        for boundary in probe_chains.message_boundaries.iter() {
+            assert!(
+                guard.entry(MODEL, boundary).is_none(),
+                "an auxiliary request's report lands no message boundary"
+            );
+        }
+        let static_entry = guard
+            .entry(MODEL, &probe_chains.static_boundaries[0])
+            .expect("the probe's static boundary lands, a cache of its own");
+        assert_eq!(
+            static_entry.root, "s1",
+            "rooted at the first probe's session, as any static entry of the key is"
+        );
+    }
+
+    let three = vec![user("one"), assistant("two"), user("three")];
+    send(&h, classed(&body(three.clone()), "s1", "main")).await;
+    assert_eq!(identified(&mut sub).await, Fork::default());
+    settle(&h).await;
+
+    send(&h, classed(&body(vec![user("one")]), "s2", "main")).await;
+    assert_eq!(
+        identified(&mut sub).await,
+        Fork::default(),
+        "a shared first message is depth 1, a template rather than a conversation"
+    );
+    settle(&h).await;
+
+    let mut four = three;
+    four.push(assistant("a different fourth"));
+    send(&h, classed(&body(four), "s4", "main")).await;
+    assert_eq!(
+        identified(&mut sub).await,
+        Fork {
+            forked_from: Some("s1".into()),
+            fork_depth: Some(3),
+        },
+        "a conversation that parts after the first answer is a fork at the depth where it parts"
+    );
+    up.shutdown().await;
+}
+
+#[tokio::test]
 async fn the_base_sessions_own_retry_after_a_fork_reads_no_fork_and_its_own_root() {
     let up = FakeUpstream::start(vec![Rule {
         path_prefix: "/v1/messages".into(),
