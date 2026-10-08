@@ -413,14 +413,16 @@ the upstream applies: when the client sends a per-turn control entry, the last e
 top-level `output_config.effort`; a turn that ends with such an entry still counts as the user's turn, so it starts its
 own prompt. The table holds the requests up to the moment you opened it, so paging does not shift as new ones arrive;
 Refresh brings it up to now. The drawer opens on the answer's facts: the status, the outcome, the serving account and
-model, the answer's stop reason and region, and the cache miss reason. The usage follows, then the request's identity
-with the upstream request and message ids under it, its shape, the client hints and the captured bodies. Its head
-carries a "Routing log" link and each row a "Routing" link beside "Details", both opening the
-[routing log](#routing-log) on that request with a quarter hour either side. While the drawer is open the table shows a
-compact set of columns (time, model, status and attempts), and the chosen set returns when it closes. The drawer shows
-the captured request and response bodies highlighted, a streamed answer as its events with each `event:` line over its
-data, each with Copy, which copies the text as shown, and an "Open wide" link that opens the body in a wide dialog. A
-body past 256 KiB shows compact until Pretty-print is pressed.
+model, the answer's stop reason and region, and the cache miss reason. The phases follow as a waterfall from received to
+finished, each phase with its offset and a phase the ledger holds no instant for marked not measured, then the usage,
+opened by a bar of the token kinds in the Tokens chart's colors over the table, then the request's identity with the
+upstream request and message ids under it, its shape, the client hints and the captured bodies. Its head carries a
+"Routing log" link and each row a "Routing" link beside "Details", both opening the [routing log](#routing-log) on that
+request with a quarter hour either side. While the drawer is open the table shows a compact set of columns (time, model,
+status and attempts), and the chosen set returns when it closes. The drawer shows the captured request and response
+bodies highlighted, a streamed answer as its events with each `event:` line over its data, each with Copy, which copies
+the text as shown, and an "Open wide" link that opens the body in a wide dialog. A body past 256 KiB shows compact until
+Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

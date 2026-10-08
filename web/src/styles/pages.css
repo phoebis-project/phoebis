@@ -2407,6 +2407,101 @@
   padding: 6px 4px;
 }
 
+.waterfall {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.waterfall__bar {
+  display: flex;
+  gap: 2px;
+  height: 18px;
+  overflow: hidden;
+  background: var(--surface-3);
+  border-radius: 4px;
+}
+
+.waterfall__seg {
+  min-width: 2px;
+  height: 100%;
+}
+
+.waterfall__legend {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 0;
+  margin: 0;
+  font-size: 12px;
+  list-style: none;
+}
+
+.waterfall__legend li {
+  display: contents;
+}
+
+.waterfall__legend .muted {
+  font-style: italic;
+}
+
+.waterfall__key {
+  width: 12px;
+  height: 8px;
+  border-radius: 2px;
+}
+
+.token-bar {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-bottom: 10px;
+}
+
+.token-bar__row {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.token-bar__track {
+  display: flex;
+  flex: 1;
+  gap: 2px;
+  height: 10px;
+  overflow: hidden;
+  background: var(--surface-3);
+  border-radius: 5px;
+}
+
+.token-bar__seg {
+  display: block;
+  min-width: 2px;
+  height: 100%;
+}
+
+.token-bar__legend {
+  display: grid;
+  grid-template-columns: 12px 1fr auto;
+  gap: 4px 8px;
+  align-items: center;
+  padding: 0;
+  margin: 0;
+  font-size: 12px;
+  list-style: none;
+}
+
+.token-bar__legend li {
+  display: contents;
+}
+
+.token-bar__key {
+  width: 12px;
+  height: 8px;
+  border-radius: 2px;
+}
+
 .bodies {
   display: flex;
   flex-direction: column;
@@ -4054,51 +4149,6 @@
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
-}
-
-.waterfall {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-}
-
-.waterfall__bar {
-  display: flex;
-  gap: 2px;
-  height: 18px;
-  overflow: hidden;
-  background: var(--surface-3);
-  border-radius: 4px;
-}
-
-.waterfall__seg {
-  min-width: 2px;
-  height: 100%;
-}
-
-.waterfall__legend {
-  display: grid;
-  grid-template-columns: 12px 1fr auto;
-  gap: 4px 8px;
-  align-items: center;
-  padding: 0;
-  margin: 0;
-  font-size: 12px;
-  list-style: none;
-}
-
-.waterfall__legend li {
-  display: contents;
-}
-
-.waterfall__legend .muted {
-  font-style: italic;
-}
-
-.waterfall__key {
-  width: 12px;
-  height: 8px;
-  border-radius: 2px;
 }
 
 .preview {

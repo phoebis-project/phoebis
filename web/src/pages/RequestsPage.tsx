@@ -4,6 +4,8 @@ import { api } from '@/api';
 import { REQUEST_OUTCOME_VALUES } from '@/api/decode';
 import type { Attempt, AttemptResponse, CapturedBodies, CohortHold, RequestKind, RequestLog, RequestOutcome, RequestQuery, Usage } from '@/api/types';
 import { Chips } from '@/components/DecisionCard';
+import { PhaseWaterfall } from '@/components/PhaseWaterfall';
+import { TokenBar } from '@/components/TokenBar';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { MultiSelect } from '@/components/ui/MultiSelect';
@@ -565,7 +567,13 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
           </section>
 
           <section>
+            <h3 className="section-title">Phases</h3>
+            <PhaseWaterfall phases={r.phases} />
+          </section>
+
+          <section>
             <h3 className="section-title">Usage</h3>
+            <TokenBar usage={r.usage} />
             <table className="table usage-table">
               <tbody>
                 <tr>

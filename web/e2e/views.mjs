@@ -2570,13 +2570,18 @@ async function fastLane(theme, path) {
  * The newest request's drawer beside the compact table: the drawer is 400 px at 1280 by 800 and 440 px at 1440 by 900,
  * its head 70 px at both, the table draws Time, Model, Status, Attempts and the links' column with nothing to scroll
  * sideways at both, and every chip the drawer draws, the Answer row's and the upstream ids', takes the status badge's
- * type and height, and the request class badge its box. A request that ended with no answer draws no chip, so then the
- * chips are read on the newest request that answered 200. The router's seeded answers name no stop reason, speed or
- * region, so there the ids' chips carry that measure. It runs after the list view's shot, so that shot stays the list
- * alone.
+ * type and height, and the request class badge its box. The Phases legend lists the seven phases, and the token bar
+ * draws a segment wherever the Usage table holds tokens (a request that ended with no answer holds none and draws
+ * none). A request that ended with no answer draws no chip, so then the chips are read on the newest request that
+ * answered 200. The router's seeded answers name no stop reason, speed or region, so there the ids' chips carry that
+ * measure. It runs after the list view's shot, so that shot stays the list alone.
  */
 async function requestDrawerCompact(theme) {
   const say = (what) => failures.push(`${theme} /requests: ${what}`);
+  const counted = (where, got) => {
+    if (got.phases !== 7) say(`${where}: the Phases legend lists ${got.phases} phases, not seven`);
+    if (got.segments === 0 && got.tokens > 0) say(`${where}: the token bar draws no segment over ${got.tokens} tokens`);
+  };
   await page.locator('.requests__table tbody tr').first().click();
   await advance(LOAD_MS);
   try {
@@ -2609,8 +2614,14 @@ async function requestDrawerCompact(theme) {
         drawer: Math.round(document.querySelector('.drawer')?.getBoundingClientRect().width ?? 0),
         head: head ? Math.round(head.getBoundingClientRect().height) : null,
         heads: [...(table?.querySelectorAll('thead th') ?? [])].map((th) => th.textContent?.trim() ?? ''),
+        phases: document.querySelectorAll('.drawer .waterfall__legend li').length,
         reference: status ? box(status) : null,
+        segments: document.querySelectorAll('.drawer .token-bar__seg').length,
         table: wrap && table ? { client: wrap.clientWidth, scroll: table.scrollWidth } : null,
+        // The Usage table's six token rows summed, the figure a zero segment count is judged against.
+        tokens: [...document.querySelectorAll('.drawer .usage-table tr')]
+          .filter((tr) => ['Input (uncached)', 'Cache read', 'Cache write, 5m', 'Cache write, 1h', 'Output, thinking', 'Output, plain'].includes(tr.children[0]?.textContent?.trim() ?? ''))
+          .reduce((n, tr) => n + Number((tr.querySelector('.num')?.textContent ?? '0').replace(/,/g, '')), 0),
       };
     });
   let chips = 0;
@@ -2630,6 +2641,7 @@ async function requestDrawerCompact(theme) {
     else if (got.table.scroll > got.table.client) say(`${where}: the table needs ${got.table.scroll}px of its card's ${got.table.client}px`);
     if (got.reference === null) say(`${where} has no status badge to measure against`);
     if (got.badge !== null && got.badge.box !== got.badge.reference) say(`${where}: the "${got.badge.text}" class badge measures ${got.badge.box} against the status badge's ${got.badge.reference}`);
+    counted(where, got);
     chips += got.chips.length;
     for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`${where}: the ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
   }
@@ -2648,6 +2660,7 @@ async function requestDrawerCompact(theme) {
   measurements.push(`${theme} /requests drawer of the newest answered request ${JSON.stringify(got)}`);
   if (got.reference === null) say('the newest answered request has no status badge to measure against');
   if (got.chips.length === 0) say("the newest answered request's drawer draws no chip to measure");
+  counted("the newest answered request's drawer", got);
   for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
 }
 

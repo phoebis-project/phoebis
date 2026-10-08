@@ -1,7 +1,8 @@
 import { memo, useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import { api } from '@/api';
-import type { LiveDelta, LiveEvent, LiveMetric, LivePhases, LiveRequest, LiveSnapshot, LiveTick, MetricQuality } from '@/api/types';
+import type { LiveDelta, LiveEvent, LiveMetric, LivePhases, LiveRequest, LiveSnapshot, LiveTick, MetricQuality, RequestPhases } from '@/api/types';
+import { PhaseWaterfall } from '@/components/PhaseWaterfall';
 import { Sparkline } from '@/components/charts/Sparkline';
 import { useChartInk } from '@/components/charts/useChartInk';
 import { AttemptTrail } from '@/components/ui/AttemptTrail';
@@ -678,15 +679,16 @@ const StreamTile = memo(function StreamTile({ r, frozenAt }: { frozenAt: number 
 
 /* Detail pane */
 
-const PHASES: { key: keyof LivePhases; label: string }[] = [
-  { key: 'receivedAt', label: 'Received' },
-  { key: 'selectedAt', label: 'Selected' },
-  { key: 'writtenAt', label: 'Written' },
-  { key: 'headAt', label: 'Head' },
-  { key: 'firstContentAt', label: 'First content' },
-  { key: 'streamEndAt', label: 'Stream end' },
-  { key: 'finishedAt', label: 'Finished' },
-];
+/** The feed leaves a phase it has not seen absent, where the waterfall reads null. */
+const requestPhasesOf = (p: LivePhases): RequestPhases => ({
+  finishedAt: p.finishedAt ?? null,
+  firstContentAt: p.firstContentAt ?? null,
+  headAt: p.headAt ?? null,
+  receivedAt: p.receivedAt,
+  selectedAt: p.selectedAt ?? null,
+  streamEndAt: p.streamEndAt ?? null,
+  writtenAt: p.writtenAt ?? null,
+});
 
 function DetailPane({ r, onClose, frozenAt }: { frozenAt: number | null; onClose: () => void; r: LiveRequest }) {
   const closeRef = useRef<HTMLButtonElement>(null);
@@ -712,7 +714,7 @@ function DetailPane({ r, onClose, frozenAt }: { frozenAt: number | null; onClose
 
       <section>
         <h3 className="section-title">Phases</h3>
-        <Waterfall phases={r.phases} endMs={endMs} inFlight={r.state === 'in_flight'} />
+        <PhaseWaterfall phases={requestPhasesOf(r.phases)} endMs={endMs} inFlight={r.state === 'in_flight'} />
       </section>
 
       <section>
@@ -789,40 +791,5 @@ function DetailPane({ r, onClose, frozenAt }: { frozenAt: number | null; onClose
         )}
       </section>
     </aside>
-  );
-}
-
-function Waterfall({ phases, endMs, inFlight }: { endMs: number; inFlight: boolean; phases: LivePhases }) {
-  const ink = useChartInk();
-  const startMs = Date.parse(phases.receivedAt);
-  const total = Math.max(1, endMs - startMs);
-  const points = PHASES.map((p) => ({ ...p, at: phases[p.key] ? Date.parse(phases[p.key]!) : null }));
-  // A segment spans from the previous measured phase to this one; a phase with
-  // no timestamp draws nothing rather than a zero-width sliver.
-  const segments: { color: string; label: string; width: number }[] = [];
-  let prev = startMs;
-  points.slice(1).forEach((p, i) => {
-    if (p.at === null) return;
-    const width = Math.max(0.5, ((p.at - prev) / total) * 100);
-    segments.push({ color: i < ink.ramp.length ? ink.ramp[i] : ink.muted, label: p.label, width });
-    prev = p.at;
-  });
-  return (
-    <div className="waterfall">
-      <div className="waterfall__bar" role="img" aria-label={`Phase waterfall over ${fmtMs(total)}`}>
-        {segments.map((s) => (
-          <span key={s.label} className="waterfall__seg" style={{ width: `${s.width}%`, background: s.color }} title={s.label} />
-        ))}
-      </div>
-      <ul className="waterfall__legend">
-        {points.map((p, i) => (
-          <li key={p.key}>
-            <span className="waterfall__key" style={{ background: i === 0 ? ink.ink3 : p.at === null ? 'transparent' : i - 1 < ink.ramp.length ? ink.ramp[i - 1] : ink.muted, border: p.at === null ? `1px dashed ${ink.axis}` : undefined }} />
-            <span>{p.label}</span>
-            {p.at === null ? <span className="muted">{inFlight ? 'not yet' : 'not measured'}</span> : <span className="num">+{fmtMs(p.at - startMs)}</span>}
-          </li>
-        ))}
-      </ul>
-    </div>
   );
 }

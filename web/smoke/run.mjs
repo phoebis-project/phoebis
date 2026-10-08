@@ -105,7 +105,7 @@ async function emailLines(name, rows) {
 }
 const idOf = (link) => link.getAttribute('href')?.split('/').pop() ?? '';
 /** The request drawer's sections, in the order it draws them. */
-const DRAWER_SECTIONS = ['Outcome', 'Usage', 'Request', 'Request shape', 'Client hints', 'Captured bodies'];
+const DRAWER_SECTIONS = ['Outcome', 'Phases', 'Usage', 'Request', 'Request shape', 'Client hints', 'Captured bodies'];
 /** A row of the request drawer by its label, wherever its section is. */
 const drawerRowOf = (page, label) => [...page.container.querySelectorAll('.drawer .kv__row')].find((row) => row.querySelector('dt')?.textContent?.trim() === label);
 /** A drawer row's chips: the label, whether the chip is mono, its hover and the value after the label. */
@@ -6286,6 +6286,61 @@ await m.navigate(`/requests/${laptopRow.id}`);
   results.push({ name: '/requests/:laptop drawer', ok: missing.length === 0, missing });
 }
 {
+  // The offsets are read against the row's own instants: a phase the row holds reads one and draws a segment, and
+  // Received, the origin, reads +0 ms.
+  const PHASE_LABELS = ['Received', 'Selected', 'Written', 'Head', 'First content', 'Stream end', 'Finished'];
+  const PHASE_KEYS = ['receivedAt', 'selectedAt', 'writtenAt', 'headAt', 'firstContentAt', 'streamEndAt', 'finishedAt'];
+  const items = [...m.container.querySelectorAll('.drawer .waterfall__legend li')].map((li) => ({ label: li.children[1]?.textContent?.trim() ?? '', num: li.querySelector('.num')?.textContent?.trim() ?? null }));
+  const held = PHASE_KEYS.filter((k) => laptopRow.phases[k] !== null);
+  const offsets = items.length === PHASE_KEYS.length && items.every((it, i) => (laptopRow.phases[PHASE_KEYS[i]] === null ? it.num === null : /^\+\d+(\.\d+)? (ms|s)$/.test(it.num ?? '')));
+  const segments = m.container.querySelectorAll('.drawer .waterfall__seg').length;
+  results.push({
+    name: '/requests the Phases section lists the seven phases in order with an offset for each the sample holds',
+    ok: JSON.stringify(items.map((it) => it.label)) === JSON.stringify(PHASE_LABELS) && items[0]?.num === '+0 ms' && offsets && segments === held.length - 1,
+    missing: [JSON.stringify(items), `${segments} segments for ${held.length} instants`],
+  });
+}
+{
+  // The bar's labels are the Tokens chart's and the table's rows spell their own, so the map pairs each legend
+  // entry with the row it must equal. The plain output is the table's own reading, the output less its thinking.
+  const ROW_OF = { 'Cache read': 'Cache read', 'Cache write 1h': 'Cache write, 1h', 'Cache write 5m': 'Cache write, 5m', Output: 'Output, plain', Thinking: 'Output, thinking', 'Uncached input': 'Input (uncached)' };
+  const ORDER = ['Uncached input', 'Cache read', 'Cache write 5m', 'Cache write 1h', 'Thinking', 'Output'];
+  const u = laptopRow.usage;
+  const counts = { 'Cache read': u.cacheRead, 'Cache write 1h': u.cacheWrite1h, 'Cache write 5m': u.cacheWrite5m, Output: Math.max(0, u.output - u.thinking), Thinking: u.thinking, 'Uncached input': u.input };
+  const kinds = Object.values(counts).filter((n) => n > 0).length;
+  const total = u.input + u.cacheRead + u.cacheWrite5m + u.cacheWrite1h + u.output;
+  const tableOf = (label) => [...m.container.querySelectorAll('.drawer .usage-table tr')].find((tr) => tr.children[0]?.textContent?.trim() === label)?.querySelector('.num')?.textContent?.trim() ?? null;
+  const legend = [...m.container.querySelectorAll('.drawer .token-bar__legend li')].map((li) => ({ count: li.querySelector('.num')?.textContent?.trim() ?? null, label: li.children[1]?.textContent?.trim() ?? '' }));
+  const matched = legend.every((l) => l.count !== null && l.count === tableOf(ROW_OF[l.label]));
+  const segments = m.container.querySelectorAll('.drawer .token-bar__seg').length;
+  const aria = m.container.querySelector('.drawer .token-bar__track')?.getAttribute('aria-label') ?? '';
+  results.push({
+    name: "/requests the token bar's segments count the kinds with tokens and its legend's counts equal the Usage table's",
+    ok: kinds > 0 && segments === kinds && JSON.stringify(legend.map((l) => l.label)) === JSON.stringify(ORDER) && matched && aria.startsWith(`${total.toLocaleString('en-US')} tokens`),
+    missing: [`${segments} segments for ${kinds} kinds`, JSON.stringify(legend), aria],
+  });
+}
+{
+  // A failed row of the story carries no usage, so its bar is the bare track with the word beside it. The checks
+  // after this one read the laptop row's drawer, so it is opened again.
+  const sum = (usage) => usage.input + usage.cacheRead + usage.cacheWrite5m + usage.cacheWrite1h + usage.output;
+  const bare = requests.find((r) => r.kind === 'inference' && sum(r.usage) === 0);
+  const name = '/requests a request with no tokens draws the bare track and "no tokens"';
+  if (!bare) results.push({ name, ok: false, missing: ['fixture'] });
+  else {
+    await m.navigate(`/requests/${bare.id}`);
+    const track = m.container.querySelector('.drawer .token-bar__track');
+    const word = m.container.querySelector('.drawer .token-bar__row .muted')?.textContent?.trim() ?? null;
+    const legend = m.container.querySelectorAll('.drawer .token-bar__legend li').length;
+    results.push({
+      name,
+      ok: track !== null && track.querySelectorAll('.token-bar__seg').length === 0 && track.getAttribute('aria-label') === 'no tokens' && word === 'no tokens' && legend === 6,
+      missing: [bare.id, `${track?.querySelectorAll('.token-bar__seg').length ?? 'no track'} segments`, String(track?.getAttribute('aria-label')), String(word), `${legend} legend entries`],
+    });
+    await m.navigate(`/requests/${laptopRow.id}`);
+  }
+}
+{
   // The two ids sit in the Request section's row for the served attempt, the request id first, each a mono chip.
   const served = laptopRow.attempts[laptopRow.attempts.length - 1];
   const row = drawerRowOf(m, `Attempt ${served.index + 1}`);
@@ -6655,7 +6710,7 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
   }
 }
 {
-  // The drawer draws its six sections and nothing of the attempts, however many the request made. Each attempt's
+  // The drawer draws its seven sections and nothing of the attempts, however many the request made. Each attempt's
   // routing is read in the routing log.
   const several = requests.find((r) => r.attempts.length >= 3);
   const none = requests.find((r) => r.attempts.length === 0);
@@ -6670,7 +6725,7 @@ expect('/requests/:desktop drawer', m.text(), ['Not captured for this key']);
     });
   }
   results.push({
-    name: '/requests the drawer draws Outcome, Usage, Request, Request shape, Client hints and Captured bodies in that order and no Attempts',
+    name: '/requests the drawer draws Outcome, Phases, Usage, Request, Request shape, Client hints and Captured bodies in that order and no Attempts',
     ok: several !== undefined && none !== undefined && read.length === 3 && read.every((d) => JSON.stringify(d.titles) === JSON.stringify(DRAWER_SECTIONS) && d.attempts === 0),
     missing: read.map((d) => JSON.stringify(d)),
   });
