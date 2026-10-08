@@ -1392,6 +1392,25 @@ async fn a_fast_probe_keeps_a_fast_request_warm_and_a_switch_of_speed_earns_noth
     assert!(!row(&r, &switched).await.kept_warm);
 }
 
+/// The upstream may serve a request asked fast at standard speed. The credit reads the recipe's speed, the lane the
+/// fast probe kept, so the request is kept warm whatever speed its answer reports.
+#[tokio::test]
+async fn a_request_asked_fast_and_served_standard_is_kept_warm() {
+    let mut r = rig(RigSpec::default()).await;
+    let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
+    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
+    r.observe_with("main", &fast).await;
+    r.up.push_credential_rule(A, "/v1/messages", fast_read_back());
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance(60_000);
+    r.up.push_credential_rule(A, "/v1/messages", warm_answer());
+    let kept = r.observe_with("main", &fast).await;
+    rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert!(row(&r, &kept).await.kept_warm);
+}
+
 #[tokio::test]
 async fn the_canonical_model_prices_a_probe_whatever_the_caller_spelled() {
     // A caller that asks for `Claude-Sonnet-5[1m]` is served under `claude-sonnet-5`: the replay keeps the
@@ -1707,6 +1726,41 @@ async fn the_credit_follows_only_a_re_arming_request() {
         row(&r, &credited).await.kept_warm,
         "the next continuing request earns the credit the auxiliary one left behind"
     );
+}
+
+const OAUTH_SECRET: &str = "sk-ant-oat01-OOOO";
+
+/// A subscription account on plan quota under a tier the shipped tables price, so its standard probes on a model they
+/// weigh settle in a share of the 5-hour window.
+fn plan_funded_spec() -> RigSpec {
+    RigSpec {
+        accounts: vec![oauth("o", OAUTH_SECRET, 0)],
+        pool: PoolSpec {
+            overage_policy: phoebis_store::OveragePolicy::Allow,
+            ..PoolSpec::default()
+        },
+        tier: Some("default_claude_max_5x"),
+        ..RigSpec::default()
+    }
+}
+
+/// A probe on plan quota settles in a window share where an api_key account's settles in dollars, and the request
+/// it kept warm is credited all the same.
+#[tokio::test]
+async fn a_request_kept_warm_on_a_plan_funded_account_is_credited() {
+    let mut r = rig(plan_funded_spec()).await;
+    let body = opus_body();
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
+    r.observe_with("main", &body).await;
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 1);
+    r.advance(60_000);
+    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", warm_answer());
+    let kept = r.observe_with("main", &body).await;
+    let rows = rollups(&r, |rows| inference_rows(rows).kept_warm_requests == 1).await;
+    assert_eq!(inference_rows(&rows).kept_warm_tokens, 2_000);
+    assert!(row(&r, &kept).await.kept_warm);
 }
 
 const OPUS: &str = "claude-opus-5-5";

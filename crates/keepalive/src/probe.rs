@@ -379,7 +379,6 @@ impl Inner {
     /// The fenced half, the Go `runProbe` after the call returned. The fence is the agent's incarnation and
     /// generation and the observation's id and attempt; a result that fails it touches no recipe and settles
     /// as one wasted probe under the stop that orphaned it, since the upstream served it either way.
-    #[allow(clippy::too_many_arguments)]
     pub(crate) fn apply_probe(
         &mut self,
         job: &ProbeJob,

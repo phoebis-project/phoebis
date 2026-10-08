@@ -73,15 +73,13 @@ export const TOKEN_SERIES = [
   { key: 'plainOutput', label: 'Output', slot: 6 },
 ] as const;
 
+export const MIGRATED_PROBE_HINT =
+  "The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows.";
+
 /** Ordered best outcome first rather than alphabetically, so the stack reads top to bottom as it degrades. */
 export const PROBE_SERIES: { hint?: string; key: 'failed' | 'migrated' | 'ok' | 'skipped'; label: string; slot: number }[] = [
   { key: 'ok', label: 'OK', slot: 0 },
-  {
-    key: 'migrated',
-    label: 'Migrated',
-    slot: 2,
-    hint: "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the wasted count.",
-  },
+  { key: 'migrated', label: 'Migrated', slot: 2, hint: MIGRATED_PROBE_HINT },
   { key: 'skipped', label: 'Skipped', slot: 3 },
   { key: 'failed', label: 'Failed', slot: 7 },
 ];

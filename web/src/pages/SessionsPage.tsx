@@ -3,6 +3,7 @@ import { Link, useNavigate } from 'react-router-dom';
 import { api } from '@/api';
 import type { Account, ApiKey, CompanionState, KeepaliveOverview, KeepaliveRecipe, KeepaliveState, Pool, RecipeState, Session } from '@/api/types';
 import { useSession } from '@/app/session';
+import { MIGRATED_PROBE_HINT } from '@/components/charts/theme';
 import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { CostReferenceLink } from '@/components/ui/CostReference';
 import { Tile } from '@/components/ui/Tile';
@@ -61,8 +62,6 @@ const COMPANION_HINT: Record<CompanionState, string> = {
   silent:
     "The companion stopped reporting at the time shown. The retained prompts stay and are probed under the pool's idle limits, counted from the last real request, until the companion registers again or the limits run out.",
 };
-const MIGRATED_PROBE_HINT =
-  "The probe was served by another account than the recipe's; it paid the write the next request would have paid there, so it counts for neither the cold streak nor the wasted count.";
 const NO_TRAFFIC_HINT = 'This session has no ledgered requests, so there is nothing to show in analytics or observe.';
 interface Row {
   account: Account | null;

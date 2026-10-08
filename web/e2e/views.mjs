@@ -1590,8 +1590,9 @@ async function keysPageMenus(theme) {
 
 /**
  * The Settings cards in the order an operator uses them, the client block first with its own snippet, and the
- * listener hint spaced from the variable list at least as the block is spaced from the hint, so the list's first term
- * never sits against the hint's last line. The hint reads at the subtitle's size, the size the page's other hints take.
+ * listener hint at the gaps its styles give it, 10 px under the block and 14 px over the variable list (the list's own
+ * top margin), so a hint that drifts toward or away from either neighbour fails. The hint reads at the subtitle's size,
+ * the size the page's other hints take.
  * About's lines run in their order at the Storage path line's type and one gap between every two, so the keepalive
  * limits and the admin secret's badge read as lines of the same list.
  */
@@ -1642,7 +1643,7 @@ async function settingsOrder(theme) {
   if (new Set(about.gaps).size > 1) say(`About's lines sit ${JSON.stringify(about.gaps)} px apart, not one gap`);
   if (!read.blockFirst) say("the client block's snippet is not in the first card");
   if (read.above === null || read.below === null) say('no listener hint between the client block and the variable list');
-  else if (read.above < 8 || read.below < read.above) say(`the hint sits ${read.above} px under the block and ${read.below} px over the variable list, closer to the list than to the block`);
+  else if (read.above !== 10 || read.below !== 14) say(`the hint sits ${read.above} px under the block and ${read.below} px over the variable list, not 10 and 14`);
   if (read.hintSize !== null && read.hintSize !== read.subtitleSize) say(`the hint reads at ${read.hintSize}, the subtitle at ${read.subtitleSize}`);
 }
 

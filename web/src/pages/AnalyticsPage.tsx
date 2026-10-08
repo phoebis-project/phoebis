@@ -1045,7 +1045,7 @@ function ReasonBars({ totals }: { totals: AnalyticsGroup }) {
 }
 
 const WASTED_PROBE_BLURB =
-  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used; a high parked-limit or horizon share says the parked ceilings do.";
+  "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.";
 
 function WastedProbes({ group, probes }: { group: AnalyticsGroup; probes: number }) {
   const ink = useChartInk();

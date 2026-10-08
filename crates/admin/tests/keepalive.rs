@@ -724,8 +724,8 @@ async fn a_session_row_groups_by_key_generation_and_a_historical_row_is_read_onl
     );
 }
 
-/// A deleted key's session outlives the key in the engine until the idle sweep clears it: the row must read as
-/// historical, with no companion, agents, or recipe, and the console must not be able to release it by naming
+/// A deleted key's session outlives the key in the engine until the engine's next tick ends it: the row must read
+/// as historical, with no companion, agents, or recipe, and the console must not be able to release it by naming
 /// it directly.
 #[tokio::test]
 async fn a_deleted_keys_session_is_historical_with_no_companion_and_its_release_is_refused() {

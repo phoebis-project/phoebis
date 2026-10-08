@@ -2401,22 +2401,6 @@
 }
 
 /* Settings */
-.snippet-group {
-  margin-bottom: 4px;
-}
-
-.snippet-group__head {
-  display: flex;
-  gap: 12px;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
-}
-
-.snippet--sm {
-  font-size: 11.5px;
-}
-
 .envdl {
   display: flex;
   flex-direction: column;

@@ -7921,7 +7921,7 @@ expect('/analytics cache tab', m.text(), ['Cache', 'Hit ratio and cached share',
 await tab(m, 'Cost');
 expect('/analytics cost tab', m.text(), ['Cost', 'Cost per request', 'Cost per 1k output tokens', 'Cost by key', 'Cost split', 'Cache read']);
 await tab(m, 'Cache warming');
-expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used; a high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
+expect('/analytics cache warming tab', m.text(), ['Cache warming', 'Probes by outcome', 'Migrated', 'Probe cost', 'Kept-warm requests', 'Kept-warm tokens', 'Wasted probes', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Session ended', "Probes no real request came back for, settled when the recipe stopped, lapsed or was evicted, or when the request after them read no cache. A high idle-limit share says the pool's idle window outlasts how these sessions are used. A high parked-limit or horizon share says the parked ceilings do.", 'Cache warming by pool']);
 {
   const titles = [...m.container.querySelectorAll('.card__title')].map((t) => t.textContent?.trim());
   const left = ['Gross saved', 'Net saved'].filter((w) => m.text().includes(w));
@@ -8587,7 +8587,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     const migrated = [...m.container.querySelectorAll('.legend li')].find((li) => (li.textContent ?? '').startsWith('Migrated'));
     results.push({
       name: '/analytics probes by outcome carries a migrated slice with its hint',
-      ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("it paid the write the next request would have paid there, so it counts for neither the cold streak nor the wasted count"),
+      ok: migrated !== undefined && (migrated.getAttribute('title') ?? '').includes("The probe was served by another account than the recipe's. It paid the write the next request would have paid there, so it never adds to the cold streak and keeps that request warm. Like any probe, it counts as wasted when no request follows."),
       missing: [migrated?.getAttribute('title') ?? legend.join('|').slice(0, 160)],
     });
   }
@@ -10471,7 +10471,7 @@ results.push({ name: '/settings has no retention save button', ok: ![...m.contai
   ];
   results.push({ name: '/settings defines every environment variable in order', ok: JSON.stringify(terms) === JSON.stringify(want), missing: terms });
   expect('/settings variable definitions', m.text(), [
-    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine; the address under the block is where the router binds it. Every model request and the cache-keepalive companion's reports go here.",
+    "Points Claude Code at the router's proxy listener, at the URL that reaches it from the client's machine; the address under the block is where the router binds it. Every model request and the keepalive mod's reports go here.",
     'Holds the router key. Claude Code treats it as a subscription credential',
     'an ANTHROPIC_API_KEY would switch those off.',
     'Makes Claude Code send its first-party request shape to the router',
