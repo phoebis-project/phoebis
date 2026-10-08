@@ -26,7 +26,7 @@ import { fmtAbsolute, fmtCompact, fmtHourTick, fmtInt, fmtPeriodEnd, fmtRelative
 import { ENGINE_BOUNDS, ENGINE_FIELD_LABELS, KEEPALIVE_BOUNDS, KEEPALIVE_FIELD_LABELS, POOL_GROUPS, PROBE_TUNING_ROWS, poolRefusals, type PoolGroup } from '@/lib/forms';
 import { refreshAttention, useAsync, useAttention, useNow } from '@/lib/hooks';
 import { POOL_RAIL } from '@/lib/poolRail';
-import { FAILOVER_PRESETS, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
+import { FAILOVER_PRESETS, SHED_AHEAD_OF_PACE_DEFAULT, SHEDDING_PRESETS, failoverPresetOf, sheddingPresetOf, shedPreview, shedPreviewLine, type FailoverPreset, type SheddingPreset } from '@/lib/presets';
 import { windowOf } from '@/lib/quota';
 import { aroundSubject, logHref } from '@/lib/routingLog';
 import { scrollToElement } from '@/lib/scroll';
@@ -796,7 +796,10 @@ interface PoolForm {
   selectBelow: number;
   selectBelowOn: boolean;
   sessionPlacement: SessionPlacement;
-  /** The lead over pace in percent; null while the field is empty, which a switched-on save refuses. */
+  /**
+   * The lead over pace in percent: the proposed default for a new pool or a stored null, or null once the operator
+   * clears the field, which a switched-on save refuses.
+   */
   shedAhead: number | null;
   shedAheadOn: boolean;
   sheddingCustom: boolean;
@@ -808,6 +811,9 @@ interface PoolForm {
 }
 
 const isPreset = (seconds: number) => AFFINITY_PICKS.some((p) => p.seconds === seconds);
+
+// Two decimals, as formFrom keeps a stored lead, so the proposed 0.2 reads as 20 and never as a float's tail.
+const SHED_AHEAD_DEFAULT_PERCENT = Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100;
 
 const blankForm = (): PoolForm => ({
   affinity: 3_600,
@@ -833,7 +839,7 @@ const blankForm = (): PoolForm => ({
   selectBelow: 80,
   selectBelowOn: false,
   sessionPlacement: POOL_AFFINITY_DEFAULTS.sessionPlacement,
-  shedAhead: null,
+  shedAhead: SHED_AHEAD_DEFAULT_PERCENT,
   shedAheadOn: false,
   sheddingCustom: false,
   status: 'active',
@@ -885,7 +891,7 @@ const formFrom = (pool: Pool): PoolForm => ({
   selectBelowOn: pool.selectBelowUtilization !== null,
   sessionPlacement: pool.sessionPlacement,
   // Two decimals, as select-below keeps, so a threshold the API set finer than a percent survives an unrelated edit.
-  shedAhead: pool.shedAheadOfPace === null ? null : Math.round(pool.shedAheadOfPace * 10_000) / 100,
+  shedAhead: pool.shedAheadOfPace === null ? SHED_AHEAD_DEFAULT_PERCENT : Math.round(pool.shedAheadOfPace * 10_000) / 100,
   shedAheadOn: pool.shedAheadOfPace !== null,
   sheddingCustom: sheddingPresetOf(pool) === 'custom',
   // Only the two settable states reach the form; a degraded or exhausted pool is still routing.

@@ -65,7 +65,7 @@ Every field, in the order the request body takes them:
 | `min_shared_prefix_tokens` | `20000` | at least 0; see Selection |
 | `overage_policy` | `prefer_plan` | `prefer_plan`, `allow`, or `never` |
 | `overage_move_grace_minutes` | `30` | 0 to 300; see Moves |
-| `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`; the lead over pace that sheds |
+| `shed_ahead_of_pace` | unset | 0 to 1: `shed_ahead_of_pace is between 0 and 1`. The console proposes 20%. See Moves. |
 | `shed_share` | `0.5` | 0 to 1 |
 | `burn_window_seconds` | `600` | at least 60 |
 | `source_dwell_seconds` | `900` | at least 60 |

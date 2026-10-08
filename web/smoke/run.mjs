@@ -66,7 +66,9 @@ class PinnedDate extends WallClock {
 }
 globalThis.Date = PinnedDate;
 
-const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+const { anchorTier, api, AttemptTrail, ATTENTION_REFRESH_MS, AttentionRows, bandFactor, bandRuns, call, countCalls, decodeSettings, deferNextCall, DELETED_HOLDER_DAY, DELETED_HOLDER_GENERATION, effectiveLabel, emitLive, Expert, failCalls, failNextCall, familyOrder, Field, fmtPct, fmtShare, fmtWindows, fullWindowsAWeek, GroupedDialog, GroupLink, inBand, Input, MOCK_VERSION, mount, mountNode, nextLocalChange, PageLink, PeakBand, planLabel, PlanRates, React, requestEvents, requests, ringFigures, rollups, SessionNotKept, SETTINGS_WIRE, shareOf, SHED_AHEAD_OF_PACE_DEFAULT, shortModel, stallLive, SwitchedNumber, tick, weightOf, windowMultiple } = await import('./dist/entry.js');
+// Rounded to two decimals as the form rounds it, and a string since that is what the percent field's value reads.
+const SHED_DEFAULT_PERCENT = String(Math.round(SHED_AHEAD_OF_PACE_DEFAULT * 10_000) / 100);
 
 const results = [];
 /**
@@ -2922,11 +2924,11 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     await m.settle(120);
     const util = card('Utilization thresholds');
     results.push({
-      name: '/pools migrate on enables its percent field, empty until a margin is typed',
+      name: '/pools migrate on enables its percent field, proposing the default lead until a margin is typed',
       ok:
         migrateSwitch?.getAttribute('aria-checked') === 'true' &&
         migratePercent()?.disabled === false &&
-        migratePercent()?.value === '' &&
+        migratePercent()?.value === SHED_DEFAULT_PERCENT &&
         (util?.textContent ?? '').includes('A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.'),
       missing: [String(migrateSwitch?.getAttribute('aria-checked')), String(migratePercent()?.disabled), JSON.stringify(migratePercent()?.value)],
     });
@@ -3700,6 +3702,20 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     });
   }
   {
+    const shedSwitch = dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]');
+    const shedPercent = () => dlg?.querySelector('input[aria-label="Shed ahead of pace (%)"]');
+    shedSwitch?.click();
+    await m.settle(120);
+    results.push({
+      name: '/pools create dialog proposes the default lead the moment Shed ahead of pace turns on',
+      ok: shedSwitch?.getAttribute('aria-checked') === 'true' && shedPercent()?.disabled === false && shedPercent()?.value === SHED_DEFAULT_PERCENT,
+      missing: [String(shedSwitch?.getAttribute('aria-checked')), String(shedPercent()?.disabled), JSON.stringify(shedPercent()?.value)],
+    });
+    // Off again, so the checks below read the form as the dialog opened it.
+    shedSwitch?.click();
+    await m.settle(120);
+  }
+  {
     const autoMode = group(dlg, 'Auto mode');
     const toggle = autoMode?.querySelector('[role="switch"][aria-label="Support server-side auto mode"]');
     results.push({
@@ -4159,7 +4175,8 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
     missing: [String(low), String(lowSaved), closed ? 'closed' : 'open', ...typed.map(String), String(typedSaved)],
   });
 
-  // A pool storing no margin opens with the field empty, holds the save until one is typed, and saves 20 % as 0.2.
+  // A pool storing no margin opens with the field at the proposed lead, holds the save once the field is cleared, and
+  // saves 20 % as 0.2.
   await api.updatePool('all', written);
   m.unmount();
   m = await mount('/pools');
@@ -4167,6 +4184,10 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   rail(dlg, 'utilization')?.click();
   await m.settle(120);
   dlg?.querySelector('button[role="switch"][aria-label="Shed ahead of pace"]')?.click();
+  await m.settle(120);
+  const proposed = percent(dlg)?.value;
+  setter.call(percent(dlg), '');
+  percent(dlg)?.dispatchEvent(new window.Event('input', { bubbles: true }));
   await m.settle(120);
   const hint = (group(dlg, 'Utilization thresholds')?.textContent ?? '').includes(
     'A member whose 5-hour or 7-day window runs ahead of pace by this much starts a shedding round; a sibling counts as cool under the line minus 5%.',
@@ -4177,9 +4198,9 @@ expect('/pools', m.text(), ['Create pool', 'Pools', 'Accounts in pools', 'Pace, 
   await m.settle(120);
   const fifth = await savedMigrate(dlg);
   results.push({
-    name: '/pools a margin of 20 % saves as 0.2 once typed into a field that opened empty',
-    ok: hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Shed ahead of pace needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
-    missing: [hint ? 'hint' : 'no hint', ...empty.map(String), String(fifth)],
+    name: '/pools a cleared margin holds the save, and 20 % typed back saves as 0.2',
+    ok: proposed === SHED_DEFAULT_PERCENT && hint && empty[0] === '' && empty[1] === true && empty[2] === 'Save is held: Shed ahead of pace needs a value from 0 to 100.Go to Utilization thresholds' && fifth === 0.2 && !m.container.querySelector('dialog[open]'),
+    missing: [String(proposed), hint ? 'hint' : 'no hint', ...empty.map(String), String(fifth)],
   });
   // The story's pool back, so the checks below read the pool the fixture holds.
   await api.updatePool('all', written);

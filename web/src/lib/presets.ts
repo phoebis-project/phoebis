@@ -27,6 +27,13 @@ export const FAILOVER_PRESETS: Record<Exclude<FailoverPreset, 'custom'>, { inFli
  */
 export const MIGRATE_BAND = 0.05;
 
+/**
+ * The lead over pace the console proposes when the shed switch turns on: a prediction twenty points ahead of the
+ * elapsed share, whose cool line under `MIGRATE_BAND` is 0.15. The router keeps no default, since the switch is the
+ * operator's choice.
+ */
+export const SHED_AHEAD_OF_PACE_DEFAULT = 0.2;
+
 /** The router's reading: a window's utilization less the share of it that has elapsed; 0 elapsed without a reset. */
 export function aheadOf(window: { resetsAt: string | null; utilization: number }, lengthMs: number, now: number): number {
   if (window.resetsAt === null) return window.utilization;

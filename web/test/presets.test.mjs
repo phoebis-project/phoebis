@@ -22,6 +22,11 @@ test('a preset is derived from the values and custom when none matches', () => {
   for (const off of [{ inFlightCap: 9 }, { paceFloor: 0.05 }, { retryInPlaceSeconds: 21 }]) assert.equal(d.failoverPresetOf({ ...d.FAILOVER_PRESETS.fast, ...off }), 'custom', JSON.stringify(off));
 });
 
+test('the proposed lead over pace is a lead the router can shed on, above the cool band', () => {
+  assert.ok(d.SHED_AHEAD_OF_PACE_DEFAULT > 0 && d.SHED_AHEAD_OF_PACE_DEFAULT < 1);
+  assert.ok(d.SHED_AHEAD_OF_PACE_DEFAULT - d.MIGRATE_BAND > 0, 'the cool line under the proposed lead stays above zero');
+});
+
 const NOW = Date.parse('2026-09-16T14:30:00Z');
 const MINUTE = 60_000;
 const at = (ms) => new Date(ms).toISOString();
