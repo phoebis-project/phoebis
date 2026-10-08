@@ -1539,6 +1539,7 @@ fn keepalive_tables(path: &std::path::Path) -> std::collections::BTreeSet<String
         .unwrap()
 }
 
+/// The one upgrade-path check of `V49`'s tables: `V38`'s own change leaves no end state once `V50` drops its table.
 #[test]
 fn a_store_left_at_37_is_carried_to_the_engines_three_keepalive_tables_alone() {
     let dir = tempfile::tempdir().unwrap();

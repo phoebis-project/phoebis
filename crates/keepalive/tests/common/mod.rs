@@ -705,8 +705,8 @@ impl Rig {
         })
     }
 
-    /// Reports evidence that stands: the plan-side cap and the overage gate both read it through the router's
-    /// view on the scheduling tick that follows.
+    /// Reports evidence that stands: the overage gate reads it through the router's view on the scheduling tick
+    /// that follows.
     pub async fn enter_overage(&self, account: &str, reset_at: i64) {
         let incarnation = self.h.store.account(account).unwrap().unwrap().incarnation;
         self.h

@@ -273,8 +273,7 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         // request either, so its probe settles in dollars like today and the credit path never matches it.
         let in_overage = matches!(&exchange, Exchange::Answered(result) if result.in_overage);
         let funding = record.kind.map(|kind| Funding::of(kind, in_overage));
-        // A fast replay draws usage credits whatever the account's funding, so it settles in dollars: the pool's
-        // dollar figure below carries it and the account's share figure never does.
+        // A fast replay draws usage credits whatever the account's funding, so it settles in dollars.
         let default_unit = if job.recipe.fast {
             SavingsUnit::Usd
         } else {
@@ -418,7 +417,7 @@ impl Inner {
             })
             && self.live(key, agent_id);
         if !fenced {
-            // The job already charged the day and the ledger; the agent's net takes the same debit so an orphaned
+            // The job's ledger row carries the probe's cost, and the agent's net takes the same debit so an orphaned
             // probe is not free. A probe the upstream did not serve is debited nowhere, as on the fenced path.
             let served = matches!(record.outcome, ProbeOutcome::Ok | ProbeOutcome::Migrated);
             if let Some(agent) = self
