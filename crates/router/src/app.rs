@@ -332,8 +332,6 @@ pub async fn run(config: Config, shutdown: impl Future<Output = ()>) -> anyhow::
         timing: KeepaliveTiming::for_start(),
     });
     let keepalive_flush = keepalive.clone().spawn_persist_flush(PERSIST_INTERVAL);
-    // Both daily budgets are read back from the store so a restart resets neither cap.
-    keepalive.load_spent_today().await;
     // The sessions, recipes and counters the last process saved, back before the scheduler's first tick.
     keepalive.load_persisted().await;
     let (attention, mut attention_handles) =

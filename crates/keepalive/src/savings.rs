@@ -7,7 +7,6 @@ use std::collections::BTreeMap;
 
 use phoebis_ledger::{KeepaliveDelta, PlanTables, PriceTable, Record, Speed, UNATTRIBUTED};
 use phoebis_routing::{PinUsage, FIVE_HOUR};
-use phoebis_store::{BudgetRow, BudgetScope};
 
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
@@ -79,8 +78,7 @@ pub(crate) fn probe_cost(
 
 /// A probe's dollars at the list prices of the cells the answer's `usage.speed` selects. A model the price table
 /// does not list prices at the dearest listed cell of each type, the fallback `PriceTable::rate_table` gives the
-/// dollar burn: the daily cap and the net read this figure, and a zero would let a probe that consumed quota pass
-/// both.
+/// dollar burn: the net reads this figure, and a zero would let a probe that consumed quota pass it.
 pub(crate) fn probe_dollars(table: &PriceTable, canonical_model: &str, usage: ProbeUsage) -> f64 {
     let typed = typed(usage);
     if let Some((total, _)) = table.estimate(
@@ -136,7 +134,7 @@ pub(crate) fn unpriced_reason(tables: &PlanTables, canonical_model: &str) -> &'s
 
 /// The unit a probe is gated in, settles in and earns its savings in: `default_unit`, unless that is the window share
 /// and the model cannot price the account's tier and model on the 5-hour window (no weight, or no capacity), in which
-/// case dollars. One decision for the three, so the stop and the caps read the balance the probes move.
+/// case dollars. One decision for the three, so the stop reads the balance the probes move.
 pub(crate) fn settlement_unit(
     default_unit: SavingsUnit,
     tables: &PlanTables,
@@ -321,77 +319,6 @@ impl Engine {
             );
         }
     }
-
-    pub fn spent_today(&self) -> BTreeMap<String, f64> {
-        self.lock().spent_today.clone()
-    }
-
-    /// The share of each subscription account's 5-hour window its probes consumed on the current UTC day, the
-    /// band inside each probe's price.
-    pub fn share_spent_today(&self) -> BTreeMap<String, f64> {
-        self.lock().share_spent_today.clone()
-    }
-
-    /// The pool's probe spend for the current UTC day, and the accounts' plan-side figure beside it, as the
-    /// probes of the day settled them into the store: what a restart starts from. Days before today are deleted
-    /// here too, since a restart across midnight is a roll no running engine saw.
-    pub async fn load_spent_today(&self) -> BTreeMap<String, f64> {
-        let now = self.now();
-        let day = now.div_euclid(86_400_000);
-        self.purge_budgets_before(now);
-        let rows = self
-            .parts
-            .store
-            .keepalive_budgets(&budget_date(day))
-            .unwrap_or_else(|error| {
-                tracing::warn!(%error, "the keepalive's daily budgets could not be read; both start at zero");
-                Vec::new()
-            });
-        let mut spent = BTreeMap::new();
-        let mut share_spent = BTreeMap::new();
-        for row in rows {
-            match row.scope {
-                BudgetScope::Account => {
-                    share_spent.insert(row.id, row.five_hour_share);
-                }
-                BudgetScope::Pool => {
-                    spent.insert(row.id, row.usd);
-                }
-            }
-        }
-        let mut inner = self.lock();
-        inner.spent_today = spent.clone();
-        inner.share_spent_today = share_spent;
-        inner.spent_day = day;
-        spent
-    }
-
-    /// Adds a settled probe's charge to its row for `day`, a day index since the epoch. A failed write costs the
-    /// restore that charge, never the running engine's own figure.
-    pub(crate) fn persist_charge(&self, day: i64, charge: &BudgetRow) {
-        if let Err(error) = self
-            .parts
-            .store
-            .add_keepalive_budget(&budget_date(day), charge)
-        {
-            tracing::warn!(%error, id = %charge.id, "a probe's charge could not be kept for a restart");
-        }
-    }
-
-    /// Deletes the stored budgets of every UTC day before `now`'s.
-    pub(crate) fn purge_budgets_before(&self, now: i64) {
-        let today = budget_date(now.div_euclid(86_400_000));
-        if let Err(error) = self.parts.store.purge_keepalive_budgets_before(&today) {
-            tracing::warn!(%error, "the keepalive's past daily budgets could not be deleted");
-        }
-    }
-}
-
-/// The UTC date, `YYYY-MM-DD`, of the day index `day` counts from the epoch.
-fn budget_date(day: i64) -> String {
-    jiff::Timestamp::from_millisecond(day * 86_400_000)
-        .map(|t| t.strftime("%Y-%m-%d").to_string())
-        .unwrap_or_default()
 }
 
 #[cfg(test)]

@@ -1,6 +1,5 @@
 //! Savings accounting: a kept-warm request's gross saving, a probe's cost, a migrated probe's price, the wasted
-//! count settled when a recipe stops or the request after a probe returns cold, the net that can go negative, and
-//! the daily cap.
+//! count settled when a recipe stops or the request after a probe returns cold, and the net that can go negative.
 mod common;
 use std::collections::BTreeMap;
 use std::time::Duration;
@@ -56,12 +55,6 @@ fn rig_cells(model: &str, speed: phoebis_ledger::Speed) -> phoebis_ledger::Model
         .price_at(model, speed)
         .expect("the rig's table prices the model")
         .clone()
-}
-
-/// One probe on `PRICED` answered with the standing 2,000-token read: those tokens at the cache read of the table
-/// the rig prices through.
-fn one_probe_usd() -> f64 {
-    2_000.0 * rig_cells(PRICED, phoebis_ledger::Speed::Standard).cache_read / 1_000_000.0
 }
 
 /// What 2,000 cached tokens of `PRICED` save, its input less its cache read per million, in the table the rig
@@ -1201,8 +1194,8 @@ async fn a_read_arriving_as_the_kept_entry_expires_settles_its_probes_as_a_cold_
 }
 
 /// A migrated probe settles at its own cost in the unit its serving attempt was funded in: dollars on an
-/// Anthropic-key pool, where the day's dollar cap and the agent's dollar net move by its price, and the 5-hour share
-/// on a subscription pool, where the account's share cap and the agent's share move by its share.
+/// Anthropic-key pool, where the agent's dollar net moves by the price its ledger row carries, and the 5-hour share on
+/// a subscription pool, where the agent's share moves by the share of the serving account's window.
 #[tokio::test]
 async fn a_migrated_probe_settles_at_its_cost_under_dollar_and_under_plan_funding() {
     let mut r = rig(RigSpec {
@@ -1224,14 +1217,11 @@ async fn a_migrated_probe_settles_at_its_cost_under_dollar_and_under_plan_fundin
     r.step().await;
     let status = r.status("main");
     assert_eq!(status.migrations, 1, "{status:?}");
-    let spent = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
-    assert!(
-        spent > 0.0,
-        "the day's dollar cap counts the migrated probe"
-    );
+    let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
+    let spent = probe_rows(&rows).probe_cost_usd;
     assert!(
         (status.net_usd + spent).abs() < 1e-12,
-        "the dollar net moves by the same price: {status:?} against {spent}"
+        "the dollar net moves by the price the ledger's probe row carries: {status:?} against {spent}"
     );
     assert_eq!(status.net_five_hour_share, 0.0);
 
@@ -1258,19 +1248,27 @@ async fn a_migrated_probe_settles_at_its_cost_under_dollar_and_under_plan_fundin
     r.step().await;
     let status = r.status("main");
     assert_eq!(status.migrations, 1, "{status:?}");
+    assert_eq!(status.account_id.as_deref(), Some(other_id), "{status:?}");
+    // The answer's five-minute write of 2,000 tokens, on the tier every account of the rig names.
     let share = r
-        .engine
-        .share_spent_today()
-        .get(other_id)
-        .copied()
-        .unwrap_or(0.0);
+        .tables
+        .share_at(
+            FIVE_HOUR,
+            "default_claude_max_20x",
+            PRICED,
+            PinUsage {
+                input: 0,
+                cache_read: 0,
+                write_5m: 2_000,
+                write_1h: 0,
+                output: 0,
+            },
+            r.now(),
+        )
+        .unwrap();
     assert!(
-        share > 0.0,
-        "the serving account's share cap counts the migrated probe"
-    );
-    assert!(
-        (status.net_five_hour_share + share).abs() < 1e-12,
-        "the share net moves by the same share: {status:?} against {share}"
+        share > 0.0 && (status.net_five_hour_share + share).abs() < 1e-12,
+        "the share net moves by the probe's share of the serving account's window: {status:?} against {share}"
     );
     assert_eq!(status.net_usd, 0.0);
 }
@@ -1416,15 +1414,11 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
             );
             continue;
         }
-        // The upstream served it, so it is paid for whatever the fence said: the pool's spend and the probe
-        // row carry its cost, and a result whose recipe had stopped settles as one wasted probe under that stop.
+        // The upstream served it, so it is paid for whatever the fence said: the probe row carries its cost,
+        // and a result whose recipe had stopped settles as one wasted probe under that stop.
         let rows = rollups(&r, |rows| probe_rows(rows).probe_cost_usd > 0.0).await;
         let probe = probe_rows(&rows);
         assert!(probe.probe_cost_usd > 0.0, "{action}");
-        assert!(
-            r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0,
-            "{action}"
-        );
         match action {
             "expire" => assert_eq!(
                 probe.wasted_probe_reasons.get("session_ended").copied(),
@@ -1448,56 +1442,9 @@ async fn a_late_or_orphaned_probe_is_still_paid_for() {
     }
 }
 
-/// A plan-funded probe's would-be price is quota, never money: the dollar cap that bounds an api_key
-/// account's own spend must stay at zero for it, whatever the price table would have charged.
-#[tokio::test]
-async fn a_plan_funded_probe_leaves_the_dollar_cap_unchanged() {
-    let mut r = rig(subscription_spec()).await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1);
-    assert_eq!(
-        r.engine.spent_today().get("main").copied().unwrap_or(0.0),
-        0.0,
-        "a plan-funded probe's would-be price is quota, never money"
-    );
-}
-
 /// A probe's answer reading the 2,000-token prefix back, served fast.
 fn fast_read_back() -> Respond {
     Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":0,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"output_tokens":0,"speed":"fast"}}"#.to_vec() }
-}
-
-/// A fast-mode request draws usage credits and no plan window, so its probe settles in dollars whatever the
-/// upstream's funding: the day's dollar figure carries it and the day's share figure never sees it.
-#[tokio::test]
-async fn a_fast_probe_on_a_subscription_account_counts_in_the_days_dollars_and_not_its_share() {
-    let mut r = rig(subscription_spec()).await;
-    let fast = opus_body().replacen('{', r#"{"speed":"fast","#, 1);
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &fast).await;
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", fast_read_back());
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1);
-    // The probe read 2,000 tokens back at Opus 5.5's fast cache read.
-    let cost = 2_000.0 * rig_cells(OPUS, phoebis_ledger::Speed::Fast).cache_read / 1_000_000.0;
-    assert!(
-        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - cost).abs() < 1e-12,
-        "the day's dollar figure: {:?}",
-        r.engine.spent_today()
-    );
-    assert_eq!(
-        r.engine
-            .share_spent_today()
-            .get("o")
-            .copied()
-            .unwrap_or(0.0),
-        0.0,
-        "and the day's share figure is untouched"
-    );
 }
 
 /// A fast session's cache lives on the fast lane, so a fast probe keeps a fast request warm at the fast cells and
@@ -1588,244 +1535,6 @@ async fn a_request_asked_fast_and_served_standard_credits_the_standard_cells() {
     let credited = inference_rows(&rows).saved_usd_gross;
     assert!((credited - saving).abs() < 1e-12, "{credited}");
     assert!(row(&r, &kept).await.kept_warm);
-}
-
-/// A restart restores the plan-side figure beside the dollar one: an oauth account's probe counts toward it
-/// mid-day, not only while the engine has run continuously.
-#[tokio::test]
-async fn a_restart_mid_day_restores_the_plan_side_figure() {
-    let mut r = rig(subscription_spec()).await;
-    let body = priced_body();
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    let live = r
-        .engine
-        .share_spent_today()
-        .get("o")
-        .copied()
-        .unwrap_or(0.0);
-    assert!(live > 0.0, "{live}");
-    // A genuinely fresh engine over the same store: its own `Inner` starts empty, so the figure below is
-    // whatever `load_spent_today` restored, never the first engine's own running total.
-    let restarted = r.restart().await;
-    restarted.load_spent_today().await;
-    let rebuilt = restarted
-        .share_spent_today()
-        .get("o")
-        .copied()
-        .unwrap_or(0.0);
-    assert!(
-        (rebuilt - live).abs() < 1e-6,
-        "the restart reproduces the figure the running engine already had: {rebuilt} vs {live}"
-    );
-}
-
-/// Both figures equal key for key within a rounding step, a zero entry reading as an absent one.
-fn same_budgets(a: &BTreeMap<String, f64>, b: &BTreeMap<String, f64>) -> bool {
-    let nonzero = |m: &BTreeMap<String, f64>| -> BTreeMap<String, f64> {
-        m.iter()
-            .filter(|(_, v)| **v != 0.0)
-            .map(|(k, v)| (k.clone(), *v))
-            .collect()
-    };
-    let (a, b) = (nonzero(a), nonzero(b));
-    a.len() == b.len()
-        && a.iter()
-            .all(|(k, v)| b.get(k).is_some_and(|w| (v - w).abs() < 1e-12))
-}
-
-/// A subscription account's probes served in overage settle in dollars, so the pool's day counts them live, and a
-/// restart restores both budgets as they were settled.
-#[tokio::test]
-async fn a_restart_after_overage_probes_keeps_both_budgets() {
-    let mut r = rig(subscription_spec()).await;
-    r.enter_overage("o", r.now() + 10_000_000).await;
-    settled(&r, |r| async move {
-        r.h.router
-            .overage("o")
-            .await
-            .unwrap()
-            .is_some_and(|e| e.in_use)
-    })
-    .await;
-    let body = priced_body();
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    for _ in 0..2 {
-        r.advance(270_000);
-        r.step().await;
-    }
-    assert_eq!(r.status("main").probes, 2);
-    let spent = r.engine.spent_today();
-    let share_spent = r.engine.share_spent_today();
-    assert!(spent.get("main").copied().unwrap_or(0.0) > 0.0, "{spent:?}");
-    assert!(
-        same_budgets(&share_spent, &BTreeMap::new()),
-        "a probe served in overage never counts toward the plan side: {share_spent:?}"
-    );
-    // The rollups carry the probes' tokens under the subscription account; the restore must not read them there.
-    rollups(&r, |rows| {
-        rows.iter()
-            .filter(|row| row.kind == "probe" && row.account_id == "o")
-            .map(|row| row.cache_read_tokens)
-            .sum::<u64>()
-            >= 4_000
-    })
-    .await;
-    let restarted = r.restart().await;
-    restarted.load_spent_today().await;
-    assert!(
-        same_budgets(&restarted.spent_today(), &spent),
-        "the dollar figure the running engine had: {:?} vs {spent:?}",
-        restarted.spent_today()
-    );
-    assert!(
-        same_budgets(&restarted.share_spent_today(), &share_spent),
-        "and the plan-side one: {:?} vs {share_spent:?}",
-        restarted.share_spent_today()
-    );
-}
-
-/// A plan-funded probe on a model the plan table lacks settles in dollars, so the dollar cap counts it live and a
-/// restart restores it there.
-#[tokio::test]
-async fn a_restart_restores_the_dollar_delta_of_a_plan_funded_probe_on_an_unlisted_model() {
-    let mut r = rig(RigSpec {
-        tables: plan_pricing_no_model(),
-        ..subscription_spec()
-    })
-    .await;
-    let body = BODY.replace("claude-sonnet-4-5", "claude-haiku-4-5-20251001");
-    r.up.push_credential_rule(OAUTH_SECRET, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.advance(270_000);
-    r.step().await;
-    let spent = r.engine.spent_today();
-    assert!(spent.get("main").copied().unwrap_or(0.0) > 0.0, "{spent:?}");
-    rollups(&r, |rows| {
-        rows.iter()
-            .any(|row| row.kind == "probe" && row.account_id == "o" && row.cache_read_tokens > 0)
-    })
-    .await;
-    let restarted = r.restart().await;
-    restarted.load_spent_today().await;
-    assert!(
-        same_budgets(&restarted.spent_today(), &spent),
-        "the probe's dollar delta survives the restart: {:?} vs {spent:?}",
-        restarted.spent_today()
-    );
-    assert!(
-        same_budgets(&restarted.share_spent_today(), &BTreeMap::new()),
-        "and reaches no plan-side figure: {:?}",
-        restarted.share_spent_today()
-    );
-}
-
-/// A migrated probe is charged to the serving account's share live, and a restart restores that charge.
-#[tokio::test]
-async fn a_restart_restores_the_share_a_migrated_probe_charged() {
-    const OTHER_SECRET: &str = "sk-ant-oat01-PPPP";
-    let mut r = rig(RigSpec {
-        accounts: vec![oauth("o", OAUTH_SECRET, 0), oauth("p", OTHER_SECRET, 0)],
-        ..subscription_spec()
-    })
-    .await;
-    let body = priced_body();
-    // The two accounts rank equally, so which one serves the first request is not known until it has.
-    r.observe_with("main", &body).await;
-    let first = r.status("main").account_id.clone().unwrap();
-    let (mine, other) = if first == "o" {
-        (OAUTH_SECRET, OTHER_SECRET)
-    } else {
-        (OTHER_SECRET, OAUTH_SECRET)
-    };
-    r.up.push_credential_rule(
-        mine,
-        "/v1/messages",
-        relay_common::json_429_unified(4_600, "five_hour"),
-    );
-    r.up.push_credential_rule(other, "/v1/messages", probe_answer(0, 2_000));
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").migrations, 1, "{:?}", r.status("main"));
-    let spent = r.engine.spent_today();
-    let share_spent = r.engine.share_spent_today();
-    assert!(
-        same_budgets(&spent, &BTreeMap::new())
-            && share_spent.values().filter(|share| **share > 0.0).count() == 1,
-        "a plan-funded migrated probe charges its serving account's share live: {spent:?} {share_spent:?}"
-    );
-    // The rollups carry the migrated probe's write under the account that served it.
-    rollups(&r, |rows| {
-        rows.iter()
-            .any(|row| row.kind == "probe" && row.cache_write_5m_tokens > 0)
-    })
-    .await;
-    let restarted = r.restart().await;
-    restarted.load_spent_today().await;
-    assert!(
-        same_budgets(&restarted.spent_today(), &spent)
-            && same_budgets(&restarted.share_spent_today(), &share_spent),
-        "and a restart restores it: {:?} {:?} against {share_spent:?}",
-        restarted.spent_today(),
-        restarted.share_spent_today()
-    );
-}
-
-/// The UTC date a budget row is filed under.
-fn budget_day(ms: i64) -> String {
-    jiff::Timestamp::from_millisecond(ms)
-        .unwrap()
-        .strftime("%Y-%m-%d")
-        .to_string()
-}
-
-/// The budgets are one UTC day's: the day roll deletes the rows of the day before, and the first charge after
-/// it starts the new day's row, which is all a restart restores.
-#[tokio::test]
-async fn the_day_roll_deletes_yesterdays_budget_rows() {
-    // The clock crosses a UTC midnight below with no tick inside the jump, and the request after it restarts the
-    // idle window.
-    let mut r = rig(RigSpec::default()).await;
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    let yesterday = budget_day(r.now());
-    let rows = r.h.store.keepalive_budgets(&yesterday).unwrap();
-    assert!(
-        rows.len() == 1 && rows[0].id == "main" && (rows[0].usd - one_probe_usd()).abs() < 1e-12,
-        "the probe's charge is on its pool's row for the day: {rows:?}"
-    );
-    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
-    r.clock
-        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
-    // The entry the probe kept expired long before midnight, so a request re-arms the recipe for the day's next
-    // probe.
-    r.observe_with("main", &priced_body()).await;
-    r.advance(270_000);
-    r.step().await;
-    assert!(
-        r.h.store.keepalive_budgets(&yesterday).unwrap().is_empty(),
-        "the roll deleted the day before"
-    );
-    let today = r.h.store.keepalive_budgets(&budget_day(r.now())).unwrap();
-    assert!(
-        today.len() == 1 && (today[0].usd - one_probe_usd()).abs() < 1e-12,
-        "the probe due after midnight started the new day's row: {today:?}"
-    );
-    let restarted = r.restart().await;
-    restarted.load_spent_today().await;
-    assert!(
-        same_budgets(
-            &restarted.spent_today(),
-            &BTreeMap::from([("main".to_string(), one_probe_usd())])
-        ),
-        "a restart restores the new day alone: {:?}",
-        restarted.spent_today()
-    );
 }
 
 #[tokio::test]
@@ -1959,8 +1668,8 @@ fn plan_pricing_sonnet() -> phoebis_ledger::PlanTables {
     tables
 }
 
-/// A model the cost model lists with a `null` weight prices no share, so its probe settles in dollars and counts
-/// toward the day's dollars alone, as a model the cost model lacks does.
+/// A model the cost model lists with a `null` weight prices no share, so its probe settles in dollars, as a model
+/// the cost model lacks does.
 #[tokio::test]
 async fn a_plan_funded_probe_on_a_model_with_a_null_weight_settles_in_dollars() {
     let mut r = rig(subscription_spec()).await;
@@ -1973,10 +1682,6 @@ async fn a_plan_funded_probe_on_a_model_with_a_null_weight_settles_in_dollars() 
     assert!(
         status.net_usd < 0.0 && status.net_five_hour_share == 0.0,
         "{status:?}"
-    );
-    assert!(
-        !r.engine.share_spent_today().contains_key("o")
-            && r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0
     );
 }
 
@@ -1994,13 +1699,6 @@ async fn a_plan_funded_probe_on_a_model_neither_table_prices_books_the_dearest_c
     assert!(
         (status.net_usd + dearest_read_2000()).abs() < 1e-12 && status.net_five_hour_share == 0.0,
         "{status:?}"
-    );
-    assert!(
-        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - dearest_read_2000()).abs()
-            < 1e-12
-            && !r.engine.share_spent_today().contains_key("o"),
-        "{:?}",
-        r.engine.spent_today()
     );
 }
 
@@ -2033,50 +1731,7 @@ async fn a_plan_funded_credit_on_an_unlisted_model_lands_in_dollars() {
     );
 }
 
-/// The day roll belongs to the lock that charges: a probe that lands after UTC midnight before any tick
-/// charges the new day, and the tick that follows must not clear the charge it just took.
-#[tokio::test]
-async fn a_probe_that_lands_after_midnight_charges_the_new_day() {
-    // The clock crosses a UTC midnight below, past the idle window, and the tick after it reads the key's opt-out
-    // before any ceiling.
-    let mut r = rig(RigSpec::default()).await;
-    let body = priced_body();
-    r.up.push_credential_rule(A, "/v1/messages", cold_answer());
-    r.observe_with("main", &body).await;
-    r.up.push_credential_rule(
-        A,
-        "/v1/messages",
-        Respond::Gated(Box::new(probe_answer(2_000, 0))),
-    );
-    r.advance(270_000);
-    r.engine.step().await;
-    wait_for(Duration::from_secs(5), || {
-        (r.up.requests().len() == 2).then_some(())
-    })
-    .await;
-    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
-    r.clock
-        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
-    r.up.release();
-    r.engine.wait_idle().await;
-    let spent = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
-    assert!(spent > 0.0, "the probe after midnight charged its pool");
-    // The opt-out keeps the next tick from starting another probe, so the sum it leaves is the probe's own.
-    let mut key = r.h.store.api_key("desktop").unwrap().unwrap();
-    key.keepalive_opt_out = true;
-    r.h.store
-        .update_api_key(&key, key.updated_at, "test")
-        .unwrap();
-    r.h.router.reload().await.unwrap();
-    r.step().await;
-    assert_eq!(
-        r.engine.spent_today().get("main").copied(),
-        Some(spent),
-        "the first tick of the new day kept the charge the probe already took"
-    );
-}
-
-/// A key moved to another pool takes that pool's budget with it: the delta the probe charges belongs to the pool
+/// A key moved to another pool takes its probes with it: the cost the probe's ledger row carries belongs to the pool
 /// that serves the probe, not to the one the last real request selected.
 #[tokio::test]
 async fn a_key_moved_to_another_pool_is_charged_there() {
@@ -2089,7 +1744,6 @@ async fn a_key_moved_to_another_pool_is_charged_there() {
         r.step().await;
     }
     assert_eq!(r.status("main").probes, 2);
-    assert!(r.engine.spent_today().get("main").copied().unwrap_or(0.0) > 0.0003);
     r.h.store
         .insert_pool(
             &phoebis_store::PoolRow {
@@ -2131,11 +1785,6 @@ async fn a_key_moved_to_another_pool_is_charged_there() {
         r.engine.recipes().first().map(|v| v.pool_id.clone()),
         Some("warm".to_string()),
         "the recipe moved with its key, without another request"
-    );
-    let spent = r.engine.spent_today();
-    assert!(
-        spent.get("warm").copied().unwrap_or(0.0) > 0.0,
-        "the probe's delta landed on the pool that served it: {spent:?}"
     );
     // The probe's own request row reaches the rollups through the assembler with no cost on it, ahead of the
     // engine's keepalive delta, so the wait has to name the charge rather than the row.
@@ -2504,7 +2153,8 @@ fn million_input_answer() -> Respond {
     Respond::Json { status: 200, headers: vec![], body: br#"{"id":"msg_p","type":"message","content":[],"usage":{"input_tokens":1000000,"cache_read_input_tokens":2000,"cache_creation_input_tokens":0,"cache_creation":{"ephemeral_5m_input_tokens":0,"ephemeral_1h_input_tokens":0},"output_tokens":0}}"#.to_vec() }
 }
 
-/// One such probe on account `o` settled at `at`, and the share of the day it spent there.
+/// One such probe on account `o` settled at `at`, and the share of the window it settled at, which the agent's share
+/// balance carries.
 async fn one_opus_probe(spec: RigSpec, at: i64) -> (Rig, f64) {
     let mut r = rig(spec).await;
     r.clock.store(at, std::sync::atomic::Ordering::SeqCst);
@@ -2514,12 +2164,7 @@ async fn one_opus_probe(spec: RigSpec, at: i64) -> (Rig, f64) {
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let spent = r
-        .engine
-        .share_spent_today()
-        .get("o")
-        .copied()
-        .unwrap_or(0.0);
+    let spent = -r.status("main").net_five_hour_share;
     (r, spent)
 }
 

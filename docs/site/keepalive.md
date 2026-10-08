@@ -32,12 +32,11 @@ against that cost, per pool and per hour, and `GET /admin/keepalive/overview` re
 can go negative when probes outspend what they save.
 
 A probe of a request sent fast runs fast too, since the replay keeps the body as sent: it draws usage credits at the
-fast rates, settles in dollars whatever the account's funding, and counts toward the dollar cap and no share cap; a
-probe the upstream served at standard speed is priced at the standard cells. A request it kept warm saves the input cell
-less the cache-read cell of the speed its own answer was served at, the fast cells when it was served fast and the
-standard cells when the upstream answered it at standard speed. The upstream shares no cached prefix across speeds, so a
-probe keeps a request of its own speed warm alone: a session that switches between fast mode and standard requests earns
-no credit from the other speed's probe.
+fast rates and settles in dollars whatever the account's funding. A probe the upstream served at standard speed is
+priced at the standard cells. A request it kept warm saves the input cell less the cache-read cell of the speed its own
+answer was served at, the fast cells when it was served fast and the standard cells when the upstream answered it at
+standard speed. The upstream shares no cached prefix across speeds, so a probe keeps a request of its own speed warm
+alone: a session that switches between fast mode and standard requests earns no credit from the other speed's probe.
 
 A pool's cache TTL policy applies to a probe the way it applies to the request it replays, because the probe goes
 through the same edit path: a marker-less recipe body takes the top-level member only where the policy's
@@ -258,15 +257,15 @@ subscription account pays them in overage and for fast-mode answers." A recipe's
 share of the account's 5-hour window, the band inside each probe's price, on a subscription account outside overage, and
 dollars on an api_key account or one in overage; a plan-funded probe the cost model cannot price on the account's tier
 (no weight on the 5-hour window, or a tier with no capacity on it), or on an account whose tier the model does not size,
-settles in dollars too, counts toward the dollar cap and never toward the window-share cap. A probe goes out for an hour
-when the pool's cache TTL policy is on and the rule set the account's funding selects holds `1h` for the probe's agent,
-since the relay rewrites every marker of the probe to that TTL (and adds one where `inject_when_absent` is on); with the
-policy off, when the recipe keeps an hour's cache or marks any part of its prefix for an hour. A probe settled in
-dollars on a model the price table does not list prices at the table's dearest cell of each type, never at zero, so the
-dollar cap and the net still bound it; a request such a probe kept warm saves at the same cells, so its net stays
-positive while the cache saves more than the probes cost. Whatever the account's funding, a fast-mode session's net is a
-dollar net, since its probes draw usage credits. Each agent line of the Sessions view shows its net, as "N% of the
-5-hour window", in dollars, or both for an agent whose account changed funding while it was warmed.
+settles in dollars too. A probe goes out for an hour when the pool's cache TTL policy is on and the rule set the
+account's funding selects holds `1h` for the probe's agent, since the relay rewrites every marker of the probe to that
+TTL (and adds one where `inject_when_absent` is on); with the policy off, when the recipe keeps an hour's cache or marks
+any part of its prefix for an hour. A probe settled in dollars on a model the price table does not list prices at the
+table's dearest cell of each type, never at zero, so the net still bounds it. A request such a probe kept warm saves at
+the same cells, so its net stays positive while the cache saves more than the probes cost. Whatever the account's
+funding, a fast-mode session's net is a dollar net, since its probes draw usage credits. Each agent line of the Sessions
+view shows its net, as "N% of the 5-hour window", in dollars, or both for an agent whose account changed funding while
+it was warmed.
 
 The eight shipped rows, all prices in USD per million tokens, read from `crates/ledger/api_prices.yaml` in its order
 (the three Opus models' fast cells are twice each figure):
@@ -304,7 +303,6 @@ probe that made its net negative, not a contradiction.
 | `affinity_too_short` | affinity too short | The pool's affinity ends before this recipe's probe is due (see below). |
 | `awaiting_cache_evidence` | awaiting cache evidence | The request's stream has not yet reported cache usage. |
 | `budget` | at budget | The pinned member is at its spend budget until the period ends or the budget is raised. |
-| `cap_reached` | cap reached | The pool spent its daily probe cap, or a subscription account its 5-hour window share. |
 | `cold_probes` | paused: cold probes | Repeated cache-miss probes passed the pool's cold probe limit. |
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits it out while the entry lasts. |
 | `evicted` | evicted | The engine reached its retained-bytes cap and this recipe was the oldest idle one. |
@@ -331,14 +329,14 @@ that `keepalive.enabled` asks of the pool when it is saved stays the one refusal
 
 An entry the engine knows has expired is never probed: its recipe ends under `expired`, its unanswered probes are
 settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. A recipe
-held under any other reason, a gate's hold among them (`affinity_too_short`, `budget`, `cap_reached`, `cooled`,
-`net_negative`, `overage`, `paused` or `reauth`), leaves as `expired` once its entry has expired, and the next real
-request starts a new one. A recipe held under `horizon` or on a disabled pool leaves the same way, and one reopened or
-enabled again while its entry is warm probes on. While the request a recipe follows is still open, the lapse waits for
-its completion. At the retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first, oldest
-activity first, then attended sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted
-recipe leaves the recipe list, as one stopped under `idle_limit` or `storage_limit` does, and shows on the wasted
-counter. A lapse also shows in that log line.
+held under any other reason, a gate's hold among them (`affinity_too_short`, `budget`, `cooled`, `net_negative`,
+`overage`, `paused` or `reauth`), leaves as `expired` once its entry has expired, and the next real request starts a new
+one. A recipe held under `horizon` or on a disabled pool leaves the same way, and one reopened or enabled again while
+its entry is warm probes on. While the request a recipe follows is still open, the lapse waits for its completion. At
+the retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first,
+then attended sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe leaves
+the recipe list, as one stopped under `idle_limit` or `storage_limit` does, and shows on the wasted counter. A lapse
+also shows in that log line.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and holds the recipe under `unsupported_shape`: a probe built from it

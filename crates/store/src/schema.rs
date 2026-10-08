@@ -77,11 +77,12 @@ pub const MIGRATIONS: &[(u32, &str)] = &[
     (45, V45),
     (46, V46),
     (49, V49),
+    (50, V50),
 ];
 
 /// The newest schema version this build knows how to read. `prepare` refuses a registry stamped past it
 /// rather than skip migrations it does not carry and misread the tables that follow.
-pub const SCHEMA_VERSION: u32 = 49;
+pub const SCHEMA_VERSION: u32 = 50;
 
 const V2: &str = r#"
 CREATE TABLE IF NOT EXISTS account_models (
@@ -710,3 +711,6 @@ CREATE TABLE keepalive_idle_returns (
   PRIMARY KEY (pool_id, bucket)
 );
 "#;
+
+// Nothing reads the day budgets once the keepalive has no daily probe cap.
+const V50: &str = "DROP TABLE keepalive_budgets;";

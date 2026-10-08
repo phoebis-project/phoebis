@@ -13,7 +13,7 @@ use http_body_util::BodyExt;
 use phoebis_ledger::{PlanTables, PriceTable};
 use phoebis_relay::{RelayOutcome, ServedUnder};
 use phoebis_routing::BUDGET_WINDOW;
-use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
+use phoebis_store::AccountKind;
 use serde_json::Value;
 
 use crate::breakeven::Ceilings;
@@ -265,11 +265,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
     // the snapshot taken here, after the response, so a registry write mid-exchange never changes which account
     // this probe is charged against.
     let snapshot = engine.parts.router.snapshot();
-    let (record, applied, rolled, charge) = {
+    let (record, applied) = {
         let mut inner = engine.lock();
         let mut record = inner.probe_record(&job, &exchange, &table);
         record.kind = snapshot.account(&record.account).map(|a| a.kind);
-        let rolled = inner.roll_day(now);
         // A dangling account (gone from the registry between dispatch and landing) cannot serve the next
         // request either, so its probe settles in dollars like today and the credit path never matches it.
         let in_overage = matches!(&exchange, Exchange::Answered(result) if result.in_overage);
@@ -303,48 +302,10 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
             record.usage,
             now,
         );
-        let mut charge = None;
-        // The dollar cap counts what actually settles in dollars: an api_key account, a subscription account in
-        // overage, or a plan-funded probe the cost model cannot price on the account's tier, which `unit` (the
-        // settlement's decision) already reads as `Usd`. That last case is the only cap bounding such a probe at
-        // all, since the plan-side cap below counts `WindowShare` alone.
-        if unit == SavingsUnit::Usd {
-            *inner
-                .spent_today
-                .entry(record.pool_id.clone())
-                .or_insert(0.0) += record.cost_usd;
-            charge = Some(BudgetRow {
-                scope: BudgetScope::Pool,
-                id: record.pool_id.clone(),
-                usd: record.cost_usd,
-                five_hour_share: 0.0,
-            });
-        }
-        if unit == SavingsUnit::WindowShare {
-            *inner
-                .share_spent_today
-                .entry(record.account.clone())
-                .or_insert(0.0) += cost;
-            charge = Some(BudgetRow {
-                scope: BudgetScope::Account,
-                id: record.account.clone(),
-                usd: 0.0,
-                five_hour_share: cost,
-            });
-        }
-        // Filed under the day the in-memory sum is for: a probe whose `now` fell before a midnight another
-        // writer already rolled charged the new day's sum, and its row follows it.
-        let charge = charge.map(|c| (inner.spent_day, c));
         let covered_unit = funding.map(|_| unit);
         let applied = inner.apply_probe(&job, exchange, &record, covered_unit, unit, cost, now);
-        (record, applied, rolled, charge)
+        (record, applied)
     };
-    if rolled {
-        engine.purge_budgets_before(now);
-    }
-    if let Some((day, charge)) = charge {
-        engine.persist_charge(day, &charge);
-    }
     engine.record_probe(&record, applied, now);
     engine
         .parts

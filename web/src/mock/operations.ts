@@ -180,7 +180,7 @@ const RECIPE_REASONS: (RecipeReason | null)[] = [
   'idle_limit',
   'unsupported_shape',
   null,
-  'cap_reached',
+  null,
   null,
   null,
   null,

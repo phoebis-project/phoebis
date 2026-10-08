@@ -1246,7 +1246,6 @@ export type RecipeReason =
   | 'affinity_too_short'
   | 'awaiting_cache_evidence'
   | 'budget'
-  | 'cap_reached'
   | 'cold_probes'
   | 'cooled'
   | 'evicted'

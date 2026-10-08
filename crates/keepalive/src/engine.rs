@@ -156,7 +156,6 @@ reasons! {
     AwaitingSelection => "awaiting_selection",
     Budget => "budget",
     BusGap => "bus_gap",
-    CapReached => "cap_reached",
     Cooled => "cooled",
     Evicted => "evicted",
     Expired => "expired",
@@ -402,7 +401,7 @@ pub struct EngineParts {
     pub router: RouterHandle,
     pub session_expiry: Duration,
     /// The registry's own store, read for a subscription account's tier: the window a plan-funded probe or
-    /// saving is a share of, and the budgets a restart resumes.
+    /// saving is a share of, and the sessions and recipes a restart resumes.
     pub store: Arc<Store>,
     /// The subscription cost model, for a probe or a kept-warm saving on a plan-funded attempt.
     pub tables: Arc<PlanTables>,
@@ -823,12 +822,6 @@ pub(crate) struct Inner {
     pub agents: usize,
     pub running: usize,
     pub closed: bool,
-    /// Probe cost per pool for the current UTC day, and the day it was summed for.
-    pub spent_today: BTreeMap<String, f64>,
-    /// The share of each subscription account's 5-hour window its probes consumed on the current UTC day, the
-    /// band inside each probe's price; rolled at midnight beside `spent_today`.
-    pub share_spent_today: BTreeMap<String, f64>,
-    pub spent_day: i64,
     pub settlements: Vec<Settlement>,
     /// Due probes a gate withheld this tick, ledgered as skipped.
     pub skipped: Vec<(SessionKey, String)>,
@@ -996,9 +989,6 @@ impl Inner {
             agents: 0,
             running: 0,
             closed: false,
-            spent_today: BTreeMap::new(),
-            share_spent_today: BTreeMap::new(),
-            spent_day: 0,
             settlements: Vec::new(),
             skipped: Vec::new(),
             bus_gaps: 0,
@@ -1513,22 +1503,6 @@ impl Inner {
             self.discard(&key, &agent_id, Reason::Evicted, Some(Wasted::Evicted));
         }
         true
-    }
-
-    /// The cap is a budget per UTC day, so the day the sum was taken for is carried with it and the first
-    /// writer past midnight starts it over. Every writer of `spent_today` rolls under the same lock it
-    /// charges: a probe that completes after midnight would otherwise land on yesterday's sum and have its
-    /// charge cleared by the next tick. True when it rolled, so the caller deletes the stored days before it
-    /// once the lock is released.
-    pub(crate) fn roll_day(&mut self, now: i64) -> bool {
-        let day = now.div_euclid(86_400_000);
-        if self.spent_day < day {
-            self.spent_today.clear();
-            self.share_spent_today.clear();
-            self.spent_day = day;
-            return true;
-        }
-        false
     }
 
     pub(crate) fn expire(&mut self, now: i64, expiry_ms: i64) {
@@ -2409,7 +2383,7 @@ impl Engine {
         // trip apiece, plus one `store.subscription` read per OAuth account; a tick with nothing due pays none of
         // them. `drop_sessions_of_dead_keys` reads the snapshot alone, which `RouterHandle::snapshot` answers
         // without a command.
-        let (retained_models, rolled) = {
+        let retained_models = {
             let mut inner = self.lock();
             if inner.closed {
                 return;
@@ -2418,15 +2392,8 @@ impl Engine {
             let snapshot = self.parts.router.snapshot();
             inner.drop_sessions_of_dead_keys(&snapshot);
             inner.advance_idle_episodes(&snapshot, now);
-            let rolled = inner.roll_day(now);
-            (
-                inner.anything_retained().then(|| inner.retained_models()),
-                rolled,
-            )
+            inner.anything_retained().then(|| inner.retained_models())
         };
-        if rolled {
-            self.purge_budgets_before(now);
-        }
         let Some(retained_models) = retained_models else {
             return;
         };

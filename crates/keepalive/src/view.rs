@@ -13,7 +13,6 @@ pub enum ViewReason {
     AffinityTooShort,
     AwaitingCacheEvidence,
     Budget,
-    CapReached,
     ColdProbes,
     Cooled,
     Evicted,
@@ -44,7 +43,6 @@ pub fn view_reason(reason: Reason) -> Option<ViewReason> {
             ViewReason::AwaitingCacheEvidence
         }
         Budget => ViewReason::Budget,
-        CapReached => ViewReason::CapReached,
         RepeatedColdProbe | PartialCacheCoverage => ViewReason::ColdProbes,
         Cooled => ViewReason::Cooled,
         Evicted => ViewReason::Evicted,

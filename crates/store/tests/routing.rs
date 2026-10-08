@@ -1,8 +1,8 @@
 use phoebis_routing::lane_key;
 use phoebis_store::{
-    AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, BudgetRow, BudgetScope,
-    CooldownRow, CreditsRow, OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow,
-    ShedPin, ShedRoundRow, StateCause, StorageKey, Store, WindowRow,
+    AccountKind, AccountRow, AccountState, AffinityChain, AffinityRow, CooldownRow, CreditsRow,
+    OverageRow, PinBurn, PinKey, PinRow, RekeyWrite, ResolutionRow, ShedPin, ShedRoundRow,
+    StateCause, StorageKey, Store, WindowRow,
 };
 
 const SPELLING: &str = "claude-sonnet-4-5";
@@ -308,29 +308,6 @@ fn a_pins_lane_and_an_affinity_entrys_lane_survive_a_reopen() {
             .collect::<Vec<_>>(),
         vec![fast.as_str()],
         "so did the entry's"
-    );
-}
-
-#[test]
-fn a_days_budget_adds_each_settled_share() {
-    let store = store_with(&["a"]);
-    let charge = |five_hour_share| BudgetRow {
-        scope: BudgetScope::Account,
-        id: "a".into(),
-        usd: 0.0,
-        five_hour_share,
-    };
-    store
-        .add_keepalive_budget("2026-09-29", &charge(0.25))
-        .unwrap();
-    store
-        .add_keepalive_budget("2026-09-29", &charge(0.1))
-        .unwrap();
-    let read = store.keepalive_budgets("2026-09-29").unwrap();
-    assert_eq!(read.len(), 1, "one row per day and account: {read:?}");
-    assert!(
-        (read[0].five_hour_share - 0.35).abs() < 1e-12,
-        "the shares add: {read:?}"
     );
 }
 

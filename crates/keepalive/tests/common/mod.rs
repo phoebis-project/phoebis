@@ -335,9 +335,8 @@ pub fn session_start_as(
 
 impl Rig {
     /// A second engine over the same ledger, store and router: a real restart, whose fresh `Inner` starts
-    /// empty and has to restore `spent_today` and `share_spent_today` itself, unlike a `load_spent_today`
-    /// called back on this rig's own engine, which the running one already answers from. The persistence round
-    /// trip runs through it too: the first engine's `flush_persisted`, then this one's `load_persisted`.
+    /// empty and holds only what the persistence round trip brings back, the first engine's `flush_persisted`
+    /// and then this one's `load_persisted`.
     pub async fn restart(&self) -> Arc<Engine> {
         self.restart_with_limits(self.limits.clone()).await
     }

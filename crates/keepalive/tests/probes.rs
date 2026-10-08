@@ -34,6 +34,30 @@ fn read_evidence(request_id: &str, read: u64) -> phoebis_bus::Event {
     })
 }
 
+/// The cost the ledger's probe rows carry, once the engine's delta has landed: the probe's own request row reaches
+/// the rollups with no cost on it, ahead of that delta, so the wait names the cost rather than the row.
+async fn ledger_probe_cost(r: &Rig) -> f64 {
+    wait_for(std::time::Duration::from_secs(5), || {
+        let rows =
+            r.db.read_blocking(|c| {
+                phoebis_ledger::read_rollups(
+                    c,
+                    phoebis_ledger::hour_of(NOW) - 3_600,
+                    i64::MAX,
+                    &phoebis_ledger::RollupSelect::default(),
+                )
+            })
+            .unwrap();
+        let cost: f64 = rows
+            .iter()
+            .filter(|row| row.kind == "probe")
+            .map(|row| row.probe_cost_usd)
+            .sum();
+        (cost > 0.0).then_some(cost)
+    })
+    .await
+}
+
 /// The bus publishes every caller header outside its denylist and the recipe replays all of it, so a header
 /// the client starts sending after this code was written reaches the upstream on a probe exactly as it does
 /// on the request. The caller's credential and `accept-encoding` are not among them: the relay attaches the
@@ -495,9 +519,9 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
                 (Some("a"), None, 0),
                 "{action}: the late result touched no recipe state: {status:?}"
             );
-            // The upstream served it and the day carries it, so the record it outlived carries it too.
-            let charged = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
-            assert!(charged > 0.0, "{action}");
+            // The upstream served it and the ledger's probe row carries its cost, so the record it outlived carries
+            // it too.
+            let charged = ledger_probe_cost(&r).await;
             assert!(
                 (status.net_usd + charged).abs() < 1e-12,
                 "{action}: the net moved by the probe's cost: {status:?} against {charged}"
@@ -530,7 +554,7 @@ async fn a_late_probe_cannot_revive_a_new_generation() {
 }
 
 /// A probe whose record a replacement registration of the same agent superseded while it was in flight was still
-/// served and charged to the day, so the record that survives it carries its cost in the net.
+/// served and its ledger row carries its cost, so the record that survives it carries that cost in the net.
 #[tokio::test]
 async fn an_orphaned_probe_whose_agent_survives_debits_its_net() {
     let mut r = rig(RigSpec {
@@ -563,8 +587,7 @@ async fn an_orphaned_probe_whose_agent_survives_debits_its_net() {
     r.up.release();
     r.engine.wait_idle().await;
     r.pump(None).await;
-    let charged = r.engine.spent_today().get("main").copied().unwrap_or(0.0);
-    assert!(charged > 0.0, "the day carries the probe");
+    let charged = ledger_probe_cost(&r).await;
     let status = r.status("main");
     assert_eq!(
         (status.in_flight, status.next_probe_at, status.unanswered),
@@ -1093,44 +1116,6 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
     );
 }
 
-/// The day the cap charges against is read under the same lock that charges it, so a charge stamped with a
-/// day before the one already summed must not roll the sum back to it.
-#[tokio::test]
-async fn a_probe_that_read_its_clock_before_midnight_does_not_roll_the_day_back() {
-    let mut r = rig(RigSpec {
-        accounts: vec![api_key("a", A, 0)],
-        // The jump across midnight below is many times the session expiry, and this case is about the day roll
-        // alone. No tick lands inside the jump, and the request after it restarts the idle window.
-        session_expiry: std::time::Duration::from_secs(1_000_000_000),
-        ..RigSpec::default()
-    })
-    .await;
-    r.observe("main").await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 1, "the day's first charge");
-    let midnight = (r.now() / 86_400_000 + 1) * 86_400_000;
-    r.clock
-        .store(midnight + 1_000, std::sync::atomic::Ordering::SeqCst);
-    // The entry the first probe kept expired long before midnight, so a request re-arms the recipe for the day's
-    // next probe.
-    r.observe("main").await;
-    r.advance(270_000);
-    r.step().await;
-    assert_eq!(r.status("main").probes, 2, "the next day's own charge");
-    let after_the_roll = r.engine.spent_today();
-    // Nothing is due at this stamp, so only `roll_day`'s own comparison is exercised: a day already summed
-    // must not read as behind a day that came before it.
-    r.clock
-        .store(NOW + 270_000, std::sync::atomic::Ordering::SeqCst);
-    r.engine.step().await;
-    assert_eq!(
-        r.engine.spent_today(),
-        after_the_roll,
-        "the earlier stamp left the day already summed alone"
-    );
-}
-
 #[tokio::test]
 async fn retries_back_off_by_the_timing_and_pause_at_the_failure_limit() {
     let timing = KeepaliveTiming {
@@ -1422,20 +1407,6 @@ async fn a_fast_recipes_probe_settles_in_dollars_at_the_fast_cells_on_a_plan_fun
     assert_eq!(
         status.net_five_hour_share, 0.0,
         "the account's share balance is unchanged"
-    );
-    assert_eq!(
-        r.engine
-            .share_spent_today()
-            .get("o")
-            .copied()
-            .unwrap_or(0.0),
-        0.0,
-        "no window share was spent"
-    );
-    assert!(
-        (r.engine.spent_today().get("main").copied().unwrap_or(0.0) - fast).abs() < 1e-12,
-        "the day's dollar figure carries it: {:?}",
-        r.engine.spent_today()
     );
 }
 

@@ -1,7 +1,6 @@
 //! SQLite registry and encrypted credentials.
 
 mod accounts;
-mod budgets;
 mod credentials;
 mod lock;
 mod memory;
@@ -33,7 +32,6 @@ pub use accounts::{
     AccountKind, AccountRow, AccountState, Identity, StateCause, SubscriptionRow, INFERENCE_HOST,
 };
 pub use backup::{snapshot, BackupError, Snapshot, RETRY_PAUSE};
-pub use budgets::{BudgetRow, BudgetScope};
 pub use credentials::{
     AttemptOutcome, CredentialBundle, CredentialMetadata, LastAttempt, NewBundle, PendingAttempt,
     ResolvedAttempt, Secret,
