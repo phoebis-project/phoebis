@@ -384,43 +384,6 @@ async fn a_heartbeat_does_not_reset_idle_or_refresh() {
 }
 
 #[tokio::test]
-async fn idle_seconds_include_parked_time_and_exclude_subagents() {
-    let mut r = rig(RigSpec {
-        policy: KeepalivePolicy {
-            max_idle_seconds: 60,
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
-    r.event(Event {
-        event: "agent_start".into(),
-        agent_id: Some("worker".into()),
-        ..Default::default()
-    })
-    .unwrap();
-    r.observe("main").await;
-    r.observe("worker").await;
-    r.state("main", "parked");
-    r.state("worker", "idle");
-    r.advance_attended(270_000);
-    r.step().await;
-    assert_eq!(
-        r.status("main").probes,
-        1,
-        "a parked main is not under the idle budget"
-    );
-    r.state("main", "idle");
-    r.advance_attended(270_000);
-    r.step().await;
-    assert_eq!(
-        (r.status("main").probes, r.status("worker").probes),
-        (1, 2),
-        "the idle budget applies to the idle main agent alone"
-    );
-}
-
-#[tokio::test]
 async fn a_lapsed_lease_keeps_probing_under_the_idle_limit_and_a_release_discards_at_once() {
     // The lapse case: the recipe stays, the probe at 270 s still runs, a heartbeat is refused, and the idle
     // limit counted from the last real request ends it with the wasted label idle_limit.
@@ -998,6 +961,127 @@ async fn probe_outcomes_are_classified() {
     );
 }
 
+/// `a` at a monthly budget of 5.0, with 5.01 of priced spend the ledger landed and the router's view of `a` reading
+/// it, so the next tick's gate holds a probe pinned to `a` under `budget`.
+async fn over_budget(r: &Rig) {
+    r.h.store
+        .set_pool_members(
+            "main",
+            &[phoebis_store::MemberWrite {
+                account_id: "a".into(),
+                priority: 0,
+                budget_daily_usd: None,
+                budget_monthly_usd: Some(5.0),
+            }],
+            "test",
+        )
+        .unwrap();
+    r.h.router.reload().await.unwrap();
+    let rate = phoebis_ledger::PriceTable::shipped()
+        .price("claude-sonnet-5")
+        .expect("the shipped table prices claude-sonnet-5")
+        .input;
+    let now = r.now();
+    r.ledger
+        .record_request(phoebis_ledger::Record::Request {
+            request: phoebis_ledger::RequestRecord {
+                id: "over-budget".into(),
+                received_at: now,
+                finished_at: Some(now + 500),
+                key_id: Some("desktop".into()),
+                pool_id: Some("main".into()),
+                canonical_model: "claude-sonnet-5".into(),
+                model: "claude-sonnet-5".into(),
+                kind: "inference".into(),
+                origin: "client".into(),
+                outcome: "succeeded".into(),
+                attempts: 1,
+                ..Default::default()
+            },
+            attempts: vec![phoebis_ledger::AttemptRecord {
+                request_id: "over-budget".into(),
+                attempt: 1,
+                account_id: "a".into(),
+                account_kind: "api_key".into(),
+                outcome: "succeeded".into(),
+                input_tokens: Some((5.01 / rate * 1_000_000.0).round() as u64),
+                ..Default::default()
+            }],
+            bodies: None,
+        })
+        .await;
+    let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+    loop {
+        let spends = r.h.router.member_spends().await.unwrap();
+        if spends
+            .iter()
+            .any(|row| row.account_id == "a" && row.spent_usd >= 5.0)
+        {
+            return;
+        }
+        assert!(
+            tokio::time::Instant::now() < deadline,
+            "the router never read the spend"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    }
+}
+
+/// An exhaustion pauses the recipe until the next real request, while a gate hold keeps it armed for the tick that
+/// finds the hold gone: the `paused` bit tells the two apart, whatever the reason reads.
+#[tokio::test]
+async fn a_probe_exhaustion_pauses_the_recipe_and_a_gate_hold_leaves_it_armed() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    for secret in [A, B] {
+        r.up.push_credential_rule(
+            secret,
+            "/v1/messages",
+            relay_common::json_429_unified(4_600, "five_hour"),
+        );
+    }
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.paused, status.next_probe_at, status.reason),
+        (true, None, Reason::ProbeQuotaExhausted),
+        "{status:?}"
+    );
+    // Past the accounts' reset the next real request selects one again.
+    r.advance(5_000_000);
+    r.observe("main").await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.paused, status.reason),
+        (false, Reason::Scheduled),
+        "{status:?}"
+    );
+    assert!(
+        status.next_probe_at.is_some_and(|at| at > r.now()),
+        "the next real request re-arms a probe: {status:?}"
+    );
+    let mut r = rig(RigSpec {
+        accounts: vec![api_key("a", A, 0)],
+        ..RigSpec::default()
+    })
+    .await;
+    r.observe("main").await;
+    over_budget(&r).await;
+    r.advance(270_000);
+    r.step().await;
+    let status = r.status("main");
+    assert_eq!(
+        (status.paused, status.reason, status.probes),
+        (false, Reason::Budget, 0),
+        "{status:?}"
+    );
+    assert!(
+        status.next_probe_at.is_some(),
+        "the schedule is kept for the tick that finds the budget gone: {status:?}"
+    );
+}
+
 /// A pinned account that disconnects between admission and the probe's own selection leaves the pool with
 /// nothing to serve: the relay answers its untimed exhaustion, and the pause reads that reason rather than the
 /// authentication one a marked account gets.
@@ -1062,12 +1146,8 @@ async fn a_probe_on_a_pin_whose_subscription_ended_holds_the_agent_and_keeps_the
 async fn a_probe_that_read_its_clock_before_midnight_does_not_roll_the_day_back() {
     let mut r = rig(RigSpec {
         accounts: vec![api_key("a", A, 0)],
-        // The jump across midnight below is many times the default idle budget and the session expiry, and
-        // this case is about the day roll alone.
-        policy: KeepalivePolicy {
-            max_idle_seconds: 0,
-            ..RigSpec::default().policy
-        },
+        // The jump across midnight below is many times the session expiry, and this case is about the day roll
+        // alone. No tick lands inside the jump, and the request after it restarts the idle window.
         session_expiry: std::time::Duration::from_secs(1_000_000_000),
         ..RigSpec::default()
     })

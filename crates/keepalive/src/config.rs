@@ -282,3 +282,21 @@ impl KeepaliveTiming {
         ONE_HOUR_MS as f64 / (ttl_ms - self.lead_ms(ttl_ms)) as f64
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// A field the struct gains without a name in `POLICY_MEMBERS` would read as its default from every stored row.
+    #[test]
+    fn the_stored_read_names_every_field_of_the_policy() {
+        let serialized = serde_json::to_value(KeepalivePolicy::default()).unwrap();
+        let fields: std::collections::BTreeSet<&str> = serialized
+            .as_object()
+            .unwrap()
+            .keys()
+            .map(String::as_str)
+            .collect();
+        assert_eq!(fields, POLICY_MEMBERS.into_iter().collect());
+    }
+}

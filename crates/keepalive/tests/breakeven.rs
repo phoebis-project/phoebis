@@ -72,6 +72,11 @@ fn the_break_even_is_write_less_read_over_cadence_times_read() {
         None,
         "a free read never reaches a re-write"
     );
+    assert_eq!(
+        break_even_ms(factors(0.07, 1.25), ONE_HOUR_MS, &timing),
+        Some(54_617_142),
+        "54,617,142.857 ms floors, so the ceiling never runs past the exact value"
+    );
 }
 
 #[test]
@@ -240,4 +245,48 @@ fn a_plan_priced_model_takes_the_plan_factors_an_unpriced_one_falls_back_to_doll
             "{funding:?}: a model neither table prices takes the smallest break-even of the priced rows"
         );
     }
+}
+
+/// The tightest row differs by TTL: `claude-early-1` gains the least over its read on a five-minute write and
+/// `claude-late-1` on a one-hour write, so a model priced nowhere takes each TTL's smallest excess rather than one
+/// whole row.
+const SPLIT_PRICES: &str = r#"
+effective: 2026-01-01
+models:
+  claude-early-1: {input: 1, cache_write_5m: 2, cache_write_1h: 10, cache_read: 1, output: 1}
+  claude-late-1: {input: 1, cache_write_5m: 5, cache_write_1h: 3, cache_read: 1, output: 1}
+"#;
+
+#[test]
+fn a_model_priced_nowhere_takes_the_tightest_row_of_each_ttl() {
+    let pricing = PriceTable::from_yaml(SPLIT_PRICES, "test").unwrap();
+    let tables = PlanTables {
+        costs: SubscriptionCosts::from_yaml(COSTS).unwrap(),
+        path: None,
+        source: "test".to_string(),
+    };
+    let timing = KeepaliveTiming::default();
+    let at = |model: &str, ttl_ms: i64| {
+        break_even_ms(
+            factors_for(&pricing, &tables, Funding::ApiKey, model),
+            ttl_ms,
+            &timing,
+        )
+    };
+    assert_eq!(
+        (
+            at("claude-early-1", FIVE_MINUTES_MS),
+            at("claude-late-1", ONE_HOUR_MS)
+        ),
+        (Some(240_000), Some(6_480_000)),
+        "each row's own figure at the TTL it is tightest on"
+    );
+    assert_eq!(
+        (
+            at("claude-unlisted-9", FIVE_MINUTES_MS),
+            at("claude-unlisted-9", ONE_HOUR_MS)
+        ),
+        (Some(240_000), Some(6_480_000)),
+        "the early row on five minutes and the late row on an hour"
+    );
 }

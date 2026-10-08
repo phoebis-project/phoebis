@@ -9,10 +9,12 @@ export const REASON_LABEL: Record<RecipeReason, string> = {
   cooled: 'cooled down',
   evicted: 'evicted',
   expired: 'entry expired',
+  horizon: 'held: wake too far',
   idle_limit: 'idle limit',
   ledger_behind: 'ledger behind',
   net_negative: 'net negative',
   overage: 'overage',
+  parked_limit: 'parked limit',
   paused: 'paused',
   pool_exhausted: 'pool exhausted',
   probe_error: 'probe error',
@@ -32,10 +34,12 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   cooled: 'The account the session is pinned to is under a cooldown; the probe waits for it to end while the entry lasts.',
   evicted: 'The engine was at its retained-bytes cap and this recipe was the oldest idle one; the next real request starts a new recipe.',
   expired: 'The cache entry expired before its probe was due, so no probe was sent; the next real request starts a new recipe.',
+  horizon: "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held and probing resumes once the wake is within it.",
   idle_limit: "The pool's max idle time or idle probe budget ran out since the last real request, so the retained prompt was discarded. The next real request starts a new recipe.",
   ledger_behind: "The router refused the probe while its ledger was catching up; the probe is sent again after the answer's wait.",
   net_negative: "Probes on this session have cost more than the cache reads they bought. The recipe gets the pool's grace probes after each real request and then holds until a request lands warm again.",
   overage: 'The account is on extra usage and the pool policy skips probes there.',
+  parked_limit: "The pool's parked ceiling ran out while the session waited on a background command or a subagent, so the retained prompt was discarded. The next real request starts a new recipe.",
   paused: 'The account is paused, the pool is disabled, or the key opted out, so nothing probes this session.',
   pool_exhausted: 'Every account of the pool was exhausted or cooled when the probe was selected; the recipe resumes with the next real request.',
   probe_error: 'The last probe failed on the transport or was refused, and the recipe holds until the next real request.',
@@ -46,4 +50,4 @@ export const REASON_HINT: Record<RecipeReason, string> = {
   unsupported_shape: 'The last request had no cacheable prefix the probe could replay.',
 };
 
-export const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'budget', 'cap_reached', 'evicted', 'expired', 'idle_limit', 'net_negative', 'storage_limit', 'unsupported_shape'];
+export const WARNING_REASONS: RecipeReason[] = ['affinity_too_short', 'budget', 'cap_reached', 'evicted', 'expired', 'idle_limit', 'net_negative', 'parked_limit', 'storage_limit', 'unsupported_shape'];

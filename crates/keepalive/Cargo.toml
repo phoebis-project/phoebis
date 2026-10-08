@@ -6,8 +6,9 @@ rust-version.workspace = true
 version.workspace = true
 
 [features]
-# The step scheduler's router-ask counter, see `Engine::router_views`. A dependent's dev-dependency, and this
-# crate's own below, turn it on for a test build, so a release build carries no counter reader.
+# The step scheduler's router-ask counter, see `Engine::router_views`, and the timing seam `KeepaliveTiming::for_start`
+# reads its two variables through. A dependent's dev-dependency, and this crate's own below, turn it on for a test
+# build, so a release build carries neither.
 debug-hooks = []
 
 [dependencies]

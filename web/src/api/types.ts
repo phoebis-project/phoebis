@@ -1132,7 +1132,7 @@ export interface LatencyHistograms {
 }
 
 /** Why probes a recipe had already paid for went unanswered: the stop that left them, or a request after them that read no cache. */
-export type WastedProbeReason = 'cold_return' | 'evicted' | 'expired' | 'idle_limit' | 'released' | 'replaced' | 'session_ended';
+export type WastedProbeReason = 'cold_return' | 'evicted' | 'expired' | 'horizon' | 'idle_limit' | 'parked_limit' | 'released' | 'replaced' | 'session_ended';
 
 export interface AccountRollup {
   accountId: string;
@@ -1251,10 +1251,12 @@ export type RecipeReason =
   | 'cooled'
   | 'evicted'
   | 'expired'
+  | 'horizon'
   | 'idle_limit'
   | 'ledger_behind'
   | 'net_negative'
   | 'overage'
+  | 'parked_limit'
   | 'paused'
   | 'pool_exhausted'
   | 'probe_error'

@@ -192,18 +192,24 @@ const RECIPE_REASONS: (RecipeReason | null)[] = [
 // state hints describe.
 const SUBAGENT_HOLDS = new Map<number, RecipeReason>([
   [0, 'cold_probes'],
+  // A subagent whose park ran past the pool's parked ceiling.
+  [4, 'parked_limit'],
   [7, 'affinity_too_short'],
   // The last agent the story draws, so holding it moves no other roll.
   [9, 'pool_exhausted'],
 ]);
+
+// A parked main agent on a wakeup further away than the pool's horizon, held with its prompt kept. The other parked
+// session's agent is the one probe settled in a share of the 5-hour window, so it stays armed.
+const PARKED_HOLDS = new Map<number, RecipeReason>([[3, 'horizon']]);
 
 export const RECIPES: KeepaliveRecipe[] = SESSIONS.flatMap((pin, i) => {
   if (pin.keepalive.state === null) return [];
   const sub = sessionSpec[i].subagents;
   const agents = Array.from({ length: pin.agents }, (_, j) => (j === 0 ? 'main' : rng.uuid().slice(0, 4)));
   return agents.map((agentId, j) => {
-    // A parked agent is probed like a busy one, so it never carries a hold reason.
-    const reason = pin.keepalive.state === 'parked' ? null : j === 0 ? RECIPE_REASONS[i % RECIPE_REASONS.length] : j === 1 ? SUBAGENT_HOLDS.get(i) ?? null : null;
+    // A parked agent is probed like a busy one until one of the park's ceilings stops it.
+    const reason = pin.keepalive.state === 'parked' ? (j === 0 ? PARKED_HOLDS.get(i) ?? null : null) : j === 0 ? RECIPE_REASONS[i % RECIPE_REASONS.length] : j === 1 ? SUBAGENT_HOLDS.get(i) ?? null : null;
     // Cache evidence arrives with the first stream event and the probe timer
     // arms from it, so that agent is armed without a time rather than held.
     const state: KeepaliveRecipe['state'] =

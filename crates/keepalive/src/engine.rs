@@ -11,7 +11,7 @@ use phoebis_bus::{
     spawn_subscriber, AccountSelected, Bus, Delivery, Event as BusEvent, LifecycleSender, Outcome,
     Phase, RequestComplete, RequestObserved, ResponseChunk, ResponseHead, SessionLifecycle,
 };
-use phoebis_ledger::{Ledger, Metrics, PlanTables, Pricing, Speed};
+use phoebis_ledger::{Ledger, Metrics, PlanTables, PriceTable, Pricing, Speed};
 use phoebis_oauth::Clock;
 use phoebis_relay::Relay;
 use phoebis_routing::{budget_deadline, MemberSpend, RegistrySnapshot, RouterHandle};
@@ -20,10 +20,11 @@ use tokio::sync::Notify;
 use tokio_util::sync::CancellationToken;
 use tokio_util::task::TaskTracker;
 
+use crate::breakeven::{factors_for, resolve, Ceilings};
 use crate::config::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, FIVE_MINUTES_MS, MAX_WORKERS,
 };
-use crate::probe::{run_job, wasted_label, ProbeJob};
+use crate::probe::{ceiling, run_job, wasted_label, ProbeJob};
 use crate::recipe::{make_recipe, Recipe};
 use crate::savings::gross_saving;
 use crate::usage::ProbeUsage;
@@ -103,7 +104,9 @@ pub enum Wasted {
     ColdReturn,
     Evicted,
     Expired,
+    Horizon,
     IdleLimit,
+    ParkedLimit,
     Released,
     Replaced,
     SessionEnded,
@@ -115,7 +118,9 @@ impl Wasted {
             Wasted::ColdReturn => "cold_return",
             Wasted::Evicted => "evicted",
             Wasted::Expired => "expired",
+            Wasted::Horizon => "horizon",
             Wasted::IdleLimit => "idle_limit",
+            Wasted::ParkedLimit => "parked_limit",
             Wasted::Released => "released",
             Wasted::Replaced => "replaced",
             Wasted::SessionEnded => "session_ended",
@@ -154,6 +159,7 @@ reasons! {
     FixedThinking => "fixed_thinking",
     ForcedTool => "forced_tool",
     HeadersTooLarge => "headers_too_large",
+    Horizon => "horizon",
     IdleLimit => "idle_limit",
     IneligibleCredential => "ineligible_credential",
     InstanceReplaced => "instance_replaced",
@@ -172,6 +178,7 @@ reasons! {
     OptedOut => "opted_out",
     Overage => "overage",
     OwnerMismatch => "owner_mismatch",
+    ParkedLimit => "parked_limit",
     PartialCacheCoverage => "partial_cache_coverage",
     Paused => "paused",
     PoolDisabled => "pool_disabled",
@@ -366,12 +373,19 @@ pub(crate) struct Agent {
     /// Which record this is. A replacement registration builds a new record under the same ids, and a probe
     /// worker that started on the old one must not touch the new one's bookkeeping.
     pub incarnation: u64,
+    /// Written through `set_state`, which ends the park on any move out of `Parked`.
     pub state: AgentState,
-    // The park the last `parked` report described. A report of any other state clears the three, while a prompt
-    // or a real request moves the agent to busy and leaves them, so a reader judges them under `Parked` alone.
+    // The park the last `parked` report described, cleared with `park_began` on every move out of `Parked`, so a
+    // reader never finds a park on an agent that is not parked.
     pub deadline: Option<i64>,
     pub park_kind: Option<ParkKind>,
     pub wake_at: Option<i64>,
+    /// When the current park was reported, kept across a repeated `parked` of the same kind.
+    pub park_began: Option<i64>,
+    /// When a deadline or a wake passed without a request: the idle window restarts here. No report clears it,
+    /// since the window starts at the later of it and `last_activity` and an older end never outranks a newer
+    /// request.
+    pub park_ended_at: Option<i64>,
     pub generation: u64,
     pub current: Option<Observation>,
     /// When the entry the recipe keeps warm expires; the due time is this less the timing's lead and jitter.
@@ -381,7 +395,7 @@ pub(crate) struct Agent {
     pub jitter_frac: f64,
     /// An outstanding backoff after a failed probe; the due time is the later of it and the expiry's.
     pub retry_at: Option<i64>,
-    /// The pool's policy as of the last admission or tick, so the idle limit never needs the registry.
+    /// The pool's policy as of the last admission or tick, so the ceilings never need the registry.
     pub policy: KeepalivePolicy,
     /// The engine's timing, held here so a due time and a retry never need the engine.
     pub timing: KeepaliveTiming,
@@ -457,6 +471,8 @@ impl Agent {
             deadline: None,
             park_kind: None,
             wake_at: None,
+            park_began: None,
+            park_ended_at: None,
             generation: 0,
             current: None,
             expires: None,
@@ -516,6 +532,52 @@ impl Agent {
         self.expires = None;
         self.retry_at = None;
     }
+
+    /// Every state write. A move to any state but `Parked` ends the park, so a stale park never outlives it.
+    pub(crate) fn set_state(&mut self, state: AgentState) {
+        self.state = state;
+        if state != AgentState::Parked {
+            self.park_kind = None;
+            self.wake_at = None;
+            self.deadline = None;
+            self.park_began = None;
+        }
+    }
+
+    /// Drops the part of a park whose return has come without a request: a deadline the harness stopped the command
+    /// at, or a wake that passed. True when nothing is left of the park, which is when it ended.
+    pub(crate) fn pass_park(&mut self, now: i64) -> bool {
+        let Some(kind) = self.park_kind else {
+            return false;
+        };
+        let mut kind = Some(kind);
+        if self.deadline.is_some_and(|deadline| deadline <= now) {
+            self.deadline = None;
+            kind = match kind {
+                Some(ParkKind::Background) => None,
+                Some(ParkKind::Both) => Some(ParkKind::Scheduled),
+                other => other,
+            };
+        }
+        if self.wake_at.is_some_and(|wake| wake <= now) {
+            self.wake_at = None;
+            kind = match kind {
+                Some(ParkKind::Scheduled) => None,
+                Some(ParkKind::Both) => Some(ParkKind::Background),
+                other => other,
+            };
+        }
+        self.park_kind = kind;
+        kind.is_none()
+    }
+}
+
+/// What the ceilings decide for one retained recipe at a tick: probe on, hold the recipe with a reason, or end it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Verdict {
+    Probe,
+    Hold(Reason),
+    End(Reason),
 }
 
 /// What the agent's previous recipe had proved when this request arrived, taken at admission and consumed with
@@ -932,6 +994,53 @@ impl Inner {
         for kept in std::mem::take(&mut agent.kept) {
             self.settlements.push(kept.settle(key, label));
         }
+    }
+
+    /// A gate's hold on a retained recipe. One hold withholds one probe, whatever number of ticks it spans: the
+    /// production ticker runs each second, so a five-hour cooldown would otherwise ledger 18,000 withheld probes
+    /// for the one it actually withheld. A hold that begins before the due time has withheld nothing yet, so the
+    /// skip waits for the due time to pass. The due time is read after the policy refresh, so the pool's current
+    /// policy decides whether a probe was due, and a probe already in flight was not withheld.
+    pub(crate) fn hold(&mut self, key: &SessionKey, agent_id: &str, reason: Reason, now: i64) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        let began = agent.reason != reason;
+        let counted = agent.hold_counted && !began;
+        let was_due = !agent.in_flight && agent.due_at().is_some_and(|at| at <= now);
+        agent.hold_counted = counted || was_due;
+        if !counted && was_due {
+            self.skipped.push((key.clone(), agent_id.to_string()));
+        }
+        if began {
+            self.set_reason(key, agent_id, reason);
+        }
+    }
+
+    /// The probes sent since the last real request, settled under `label` the way a discard settles them, with the
+    /// recipe kept: a hold that retains the prompt still writes off what it paid for.
+    pub(crate) fn settle_unanswered(&mut self, key: &SessionKey, agent_id: &str, label: Wasted) {
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        let costs = std::mem::take(&mut agent.unanswered);
+        if costs.is_empty() {
+            return;
+        }
+        let fast = agent
+            .left_fast
+            .take()
+            .unwrap_or_else(|| agent.current.as_ref().is_some_and(|o| o.recipe.fast));
+        self.settlements
+            .push(Kept::of(agent, fast, costs).settle(key, label));
     }
 
     pub(crate) fn incarnation(&mut self) -> u64 {
@@ -1408,7 +1517,7 @@ impl Engine {
             return;
         }
         let was = agent.state;
-        agent.state = AgentState::Busy;
+        agent.set_state(AgentState::Busy);
         agent.last_activity = now;
         agent.cache_started = now;
         agent.idle_ticks = 0;
@@ -1895,6 +2004,8 @@ impl Engine {
             return;
         };
         let view = self.router_view(now, retained_models).await;
+        // One table for the whole tick, so every recipe's ceilings read the same prices.
+        let pricing = self.parts.pricing.current();
         let (jobs, lapsed) = {
             let mut inner = self.lock();
             if inner.closed {
@@ -1913,9 +2024,9 @@ impl Engine {
                     continue;
                 }
                 let agent = &inner.sessions[&key].agents[&agent_id];
-                // The idle limit and the gate run for every retained recipe, armed or not: a pause clears the
-                // schedule, so an opt-out could otherwise never discard a recipe paused by a 429 and the idle
-                // limit could never settle it while the companion keeps reporting.
+                // The ceilings and the gate run for every retained recipe, armed or not: a pause clears the
+                // schedule, so an opt-out could otherwise never discard a recipe paused by a 429 and a ceiling
+                // could never settle it while the companion keeps reporting.
                 if agent.current.is_none() {
                     continue;
                 }
@@ -1923,14 +2034,94 @@ impl Engine {
                     .current
                     .as_ref()
                     .is_some_and(|o| o.ready && o.expected > 0);
-                if inner.idle_limited(&key, &agent_id, now) {
-                    inner.discard(
-                        &key,
-                        &agent_id,
-                        Reason::IdleLimit,
-                        wasted_label(Reason::IdleLimit),
+                // Before any hold can short-circuit: a recipe held under `horizon` never reaches the gate, and the
+                // ceilings below read the pool's policy as it stands now, so a horizon raised in the console
+                // reopens the hold and an opt-out discards the prompt the hold retained.
+                let refreshed = {
+                    let agent = inner
+                        .sessions
+                        .get_mut(&key)
+                        .unwrap()
+                        .agents
+                        .get_mut(&agent_id)
+                        .unwrap();
+                    refresh_policy(&view, agent)
+                };
+                match refreshed {
+                    Err(Gate::Drop(reason, label)) => {
+                        inner.discard(&key, &agent_id, reason, Some(label));
+                        continue;
+                    }
+                    Err(Gate::Hold(reason)) => {
+                        inner.hold(&key, &agent_id, reason, now);
+                        continue;
+                    }
+                    Ok(()) => {}
+                }
+                let attended = inner.sessions[&key].attended;
+                let session_last_real_at = inner.sessions[&key].last_real_at;
+                let (verdict, main_resumed) = {
+                    let agent = inner
+                        .sessions
+                        .get_mut(&key)
+                        .unwrap()
+                        .agents
+                        .get_mut(&agent_id)
+                        .unwrap();
+                    // The mod reports the same end with `idle` when its heartbeat sees it first, and whichever comes
+                    // first records it. A park ended here is the engine's own move out of parked.
+                    let ended = agent.pass_park(now);
+                    if ended {
+                        agent.park_ended_at = Some(now);
+                        if agent.id == MAIN_AGENT {
+                            agent.set_state(AgentState::Idle);
+                        } else {
+                            agent.park_began = None;
+                        }
+                    }
+                    let ceilings = ceilings_for(
+                        agent,
+                        &view,
+                        &pricing,
+                        &self.parts.tables,
+                        &self.parts.timing,
                     );
-                    continue;
+                    (
+                        ceiling(agent, attended, session_last_real_at, &ceilings, now),
+                        ended && agent.id == MAIN_AGENT,
+                    )
+                };
+                if main_resumed {
+                    inner.emit(SessionLifecycle::MainResumed {
+                        key_id: key.0.clone(),
+                        session_id: key.1.clone(),
+                    });
+                }
+                match verdict {
+                    Verdict::End(reason) => {
+                        inner.discard(&key, &agent_id, reason, wasted_label(reason));
+                        continue;
+                    }
+                    Verdict::Hold(reason) => {
+                        let agent = &inner.sessions[&key].agents[&agent_id];
+                        // A paused recipe sends nothing either way, and its own reason says why.
+                        if agent.paused {
+                            continue;
+                        }
+                        if agent.reason != reason {
+                            // Once, as the hold begins: the probes paid so far kept nothing the wake will read.
+                            if let Some(label) = wasted_label(reason) {
+                                inner.settle_unanswered(&key, &agent_id, label);
+                            }
+                            inner.set_reason(&key, &agent_id, reason);
+                        }
+                        continue;
+                    }
+                    Verdict::Probe => {
+                        if inner.sessions[&key].agents[&agent_id].reason == Reason::Horizon {
+                            inner.set_reason(&key, &agent_id, Reason::Scheduled);
+                        }
+                    }
                 }
                 // The entry is dead at its expiry and the lead already places the due time ahead of it, so a
                 // probe past it warms nothing: the recipe ends under `expired` rather than being probed, its
@@ -1983,30 +2174,7 @@ impl Engine {
                         continue;
                     }
                     Err(Gate::Hold(reason)) => {
-                        // One hold withholds one probe, whatever number of ticks it spans: the production
-                        // ticker runs each second, so a five-hour cooldown would otherwise ledger 18,000
-                        // withheld probes for the one it actually withheld. A hold that begins before the
-                        // due time has withheld nothing yet, so the skip waits for the due time to pass.
-                        // The due time is read after the gate, so the policy the gate just refreshed
-                        // decides whether a probe was due, and a probe already in flight was not withheld.
-                        let agent = &inner.sessions[&key].agents[&agent_id];
-                        let began = agent.reason != reason;
-                        let counted = agent.hold_counted && !began;
-                        let was_due =
-                            !agent.in_flight && agent.due_at().is_some_and(|at| at <= now);
-                        if !counted && was_due {
-                            inner.skipped.push((key.clone(), agent_id.clone()));
-                        }
-                        if let Some(agent) = inner
-                            .sessions
-                            .get_mut(&key)
-                            .and_then(|s| s.agents.get_mut(&agent_id))
-                        {
-                            agent.hold_counted = counted || was_due;
-                        }
-                        if began {
-                            inner.set_reason(&key, &agent_id, reason);
-                        }
+                        inner.hold(&key, &agent_id, reason, now);
                         continue;
                     }
                     Ok(()) => {}
@@ -2247,24 +2415,77 @@ impl Engine {
     }
 }
 
-/// The spec's "Scheduling against router state" row, in its order. `Err` names why the due probe waits, or why
-/// the recipe goes; `Ok` lets the probe run.
-pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Result<(), Gate> {
-    let key_id = agent.key_id.clone();
+/// The head of `gate` as one function both the gate and the step's ceilings call: the key's opt-out drops the
+/// recipe, a disabled pool holds it, and the pool's current policy and id land on the agent, so a horizon raised in
+/// the console reaches a held recipe at the next tick and an opt-out discards a held prompt rather than leaving it
+/// retained.
+pub(crate) fn refresh_policy(view: &RouterView, agent: &mut Agent) -> Result<(), Gate> {
     // The operator's opt-out reaches an idle session here, not only at its next request: the recipe is dropped
     // rather than held, because nothing on that key may be probed again until the flag is cleared.
-    let Some(key) = view.snapshot.key(&key_id).filter(|k| !k.keepalive_opt_out) else {
+    let Some(key) = view
+        .snapshot
+        .key(&agent.key_id)
+        .filter(|k| !k.keepalive_opt_out)
+    else {
         return Err(Gate::Drop(Reason::KeyOptedOut, Wasted::Released));
     };
     let Some(pool) = view.snapshot.pool(&key.pool_id).filter(|p| p.enabled) else {
         return Err(Gate::Hold(Reason::PoolDisabled));
     };
-    let policy = KeepalivePolicy::from_json(&pool.keepalive_json);
-    // The pool's policy may have changed since admission, and an admin may have moved the key to another
-    // pool without a request following; the idle limit, the budget, and the probe's own delta all read the pool
-    // the key belongs to now.
-    agent.policy = policy.clone();
+    // The pool's policy may have changed since admission, and an admin may have moved the key to another pool
+    // without a request following. The ceilings, the budget and the probe's own delta all read the pool the key
+    // belongs to now.
+    agent.policy = KeepalivePolicy::from_json(&pool.keepalive_json);
     agent.pool_id = key.pool_id.clone();
+    Ok(())
+}
+
+/// The ceilings of one agent at a tick: its policy, the factors of its model under its account's funding (dollars
+/// for a fast recipe or an account the view lacks), its TTL and the engine's timing. A table that leaves no
+/// break-even (no priced row, or a free read) bounds nothing past the policy's own numbers.
+pub(crate) fn ceilings_for(
+    agent: &Agent,
+    view: &RouterView,
+    pricing: &PriceTable,
+    tables: &PlanTables,
+    timing: &KeepaliveTiming,
+) -> Ceilings {
+    let fast = agent.current.as_ref().is_some_and(|o| o.recipe.fast);
+    let funding = match agent
+        .account
+        .as_deref()
+        .and_then(|id| view.snapshot.account(id))
+    {
+        Some(account) if !fast => Funding::of(account.kind, view.overage.contains(&account.id)),
+        _ => Funding::ApiKey,
+    };
+    let factors = factors_for(pricing, tables, funding, &agent.canonical_model);
+    let ttl_ms = agent.ttl_ms.max(FIVE_MINUTES_MS);
+    resolve(&agent.policy, factors, ttl_ms, timing).unwrap_or_else(|| {
+        let ms = |seconds: Option<u64>| {
+            seconds.map_or(i64::MAX, |s| {
+                i64::try_from(s).unwrap_or(i64::MAX).saturating_mul(1_000)
+            })
+        };
+        let idle = agent.policy.max_idle_seconds;
+        Ceilings {
+            idle_ms: ms((idle > 0).then_some(idle)),
+            parked_ms: ms(agent.policy.max_parked_seconds),
+            horizon_ms: ms(agent.policy.scheduled_horizon_seconds),
+            break_even_ms: i64::MAX,
+            idle_share: 0.0,
+        }
+    })
+}
+
+/// The spec's "Scheduling against router state" row, in its order. `Err` names why the due probe waits, or why
+/// the recipe goes; `Ok` lets the probe run.
+pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Result<(), Gate> {
+    refresh_policy(view, agent)?;
+    let key_id = agent.key_id.clone();
+    let Some(pool) = view.snapshot.pool(&agent.pool_id) else {
+        return Err(Gate::Hold(Reason::PoolDisabled));
+    };
     // A probe keeps the session on the account it warmed only while the pin outlives the probe's due time:
     // the recipe's own TTL less the lead, so a five-minute recipe needs about four minutes of pin and a
     // one-hour one about fifty-four. The save-time floor of 300 s stays the one hard refusal.
@@ -2272,7 +2493,7 @@ pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Re
     if (pool.affinity_ttl_seconds as i64).saturating_mul(1_000) < due_after_ms {
         return Err(Gate::Hold(Reason::AffinityTooShort));
     }
-    if !policy.enabled {
+    if !agent.policy.enabled {
         return Err(Gate::Hold(Reason::KeepaliveOff));
     }
     // The pin is what the probe will follow, so the pin's account is the one to gate: the router may have moved

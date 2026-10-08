@@ -346,7 +346,7 @@ impl Inner {
                         .agents
                         .get_mut(agent)
                         .unwrap()
-                        .state = AgentState::Released;
+                        .set_state(AgentState::Released);
                 }
                 let session = self.sessions.get_mut(&key).unwrap();
                 session.ended = true;
@@ -379,7 +379,7 @@ impl Inner {
                             .agents
                             .get_mut(&agent_id)
                             .unwrap();
-                        agent.state = AgentState::Busy;
+                        agent.set_state(AgentState::Busy);
                         agent.last_activity = now;
                         agent.idle_ticks = 0;
                     }
@@ -431,7 +431,7 @@ impl Inner {
                     // clock alone. Only the decoder requires the kind, so one a direct caller left out is a prompt.
                     if ev.kind.as_deref() != Some("presence") {
                         agent.idle_ticks = 0;
-                        agent.state = AgentState::Busy;
+                        agent.set_state(AgentState::Busy);
                         if agent_id == MAIN_AGENT && was == AgentState::Parked {
                             self.emit(SessionLifecycle::MainResumed {
                                 key_id: key.0.clone(),
@@ -457,10 +457,25 @@ impl Inner {
                         .agents
                         .get_mut(&agent_id)
                         .unwrap();
-                    agent.state = state;
-                    agent.park_kind = park_kind.filter(|_| parked);
-                    agent.wake_at = ev.wake_at.filter(|_| parked);
-                    agent.deadline = ev.deadline.filter(|_| parked);
+                    if parked {
+                        // A repeated `parked` of the same kind moves the wake or the deadline and keeps the park's
+                        // start, which the parked ceiling counts from.
+                        if was != AgentState::Parked || agent.park_kind != park_kind {
+                            agent.park_began = Some(now);
+                        }
+                        agent.set_state(state);
+                        agent.park_kind = park_kind;
+                        agent.wake_at = ev.wake_at;
+                        agent.deadline = ev.deadline;
+                    } else {
+                        // The mod's heartbeat closes a command past its deadline or sees the wake pass, and reports
+                        // idle before or after the router's tick does: a park that ended without a request, which
+                        // restarts the idle window. A request behind a busy report moves the window itself.
+                        if was == AgentState::Parked && state == AgentState::Idle {
+                            agent.park_ended_at = Some(now);
+                        }
+                        agent.set_state(state);
+                    }
                     match state {
                         AgentState::Released => self.discard(
                             &key,
@@ -561,7 +576,7 @@ impl Inner {
                     // starts again as a registration starts it. The subagents stay released until the mod starts
                     // them again, and every generation stays as the end left it.
                     if let Some(main) = session.agents.get_mut(MAIN_AGENT) {
-                        main.state = AgentState::Busy;
+                        main.set_state(AgentState::Busy);
                         main.last_activity = now;
                         main.idle_ticks = 0;
                     }

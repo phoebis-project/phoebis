@@ -73,6 +73,8 @@ pub struct Rig {
     /// The spec's limits, kept so `restart` builds its engine with what this one was built with.
     pub limits: KeepaliveLimits,
     pub metrics: Arc<Metrics>,
+    /// The spec's price table, kept so `restart` builds its engine with what this one was built with.
+    pub pricing: PriceTable,
     pub sequence: u64,
     pub sub: Subscriber,
     /// The spec's tables, kept so `restart` builds its engine with what this one was built with.
@@ -93,6 +95,8 @@ pub struct RigSpec {
     pub limits: KeepaliveLimits,
     pub policy: KeepalivePolicy,
     pub pool: PoolSpec,
+    /// The shipped table by default. A ceiling test writes its own rows so a break-even follows from the text.
+    pub pricing: PriceTable,
     pub session_expiry: Duration,
     /// The shipped tables by default; a test naming a model the cost model has no weight for (though the price
     /// table prices it) overrides this so the gap is deliberate rather than a coincidence of the shipped tables.
@@ -116,6 +120,7 @@ impl Default for RigSpec {
                 ..KeepalivePolicy::default()
             },
             pool: PoolSpec::default(),
+            pricing: PriceTable::shipped(),
             session_expiry: Duration::from_secs(86_400),
             tables: PlanTables::shipped(),
             tier: None,
@@ -176,7 +181,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         Arc::new(move || c.load(Ordering::SeqCst))
     };
     let db = Arc::new(LedgerDb::open_in_memory().unwrap());
-    let pricing = Arc::new(Pricing::new(PriceTable::shipped()));
+    let pricing = Arc::new(Pricing::new(spec.pricing.clone()));
     let metrics = Arc::new(Metrics::new());
     let ledger = spawn_ledger(
         db.clone(),
@@ -216,6 +221,7 @@ pub async fn rig(spec: RigSpec) -> Rig {
         ledger,
         limits: spec.limits,
         metrics,
+        pricing: spec.pricing,
         sequence: 0,
         sub,
         tables,
@@ -298,7 +304,7 @@ impl Rig {
             limits: self.limits.clone(),
             max_request_bytes: 32 << 20,
             metrics: Arc::new(Metrics::new()),
-            pricing: Arc::new(Pricing::new(PriceTable::shipped())),
+            pricing: Arc::new(Pricing::new(self.pricing.clone())),
             relay: self.h.relay.clone(),
             router: self.h.router.clone(),
             session_expiry: Duration::from_secs(86_400),
@@ -369,7 +375,9 @@ impl Rig {
     }
 
     /// The instance each session of the rig registered under, kept by `event` from the `session_start` it sent
-    /// (the rig's default session starts as "instance"), so a report finds it without reading the engine.
+    /// (the rig's default session starts as "instance"), so a report finds it without reading the engine. A start
+    /// a test hands to `r.engine.apply_event` itself bypasses `event` and misses this map, so that test names the
+    /// instance in every report it sends after it.
     pub fn instance_of(&self, session_id: &str) -> String {
         self.instances
             .get(session_id)
@@ -409,19 +417,16 @@ impl Rig {
         .unwrap();
     }
 
-    /// One agent's state and generation as the engine records them, through `Engine::agent_status`.
-    pub fn agent(&self, id: &str) -> phoebis_keepalive::AgentStatus {
-        self.engine
-            .agent_status("desktop", "session", id)
-            .unwrap_or_else(|| panic!("missing agent {id}"))
-    }
-
-    /// The engine's own record of one agent of the rig's session, for a test that reads past its state and
-    /// generation.
+    /// The engine's own record of one agent of the rig's session, through `Engine::agent_status`.
     pub fn status(&self, id: &str) -> phoebis_keepalive::AgentStatus {
         self.engine
             .agent_status("desktop", "session", id)
             .unwrap_or_else(|| panic!("no agent {id}"))
+    }
+
+    /// `status` under the name the protocol tests read an agent's state and generation by.
+    pub fn agent(&self, id: &str) -> phoebis_keepalive::AgentStatus {
+        self.status(id)
     }
 
     pub fn request(&self, agent: &str) -> Request<Body> {

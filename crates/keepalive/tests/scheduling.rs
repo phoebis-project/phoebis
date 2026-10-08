@@ -1382,12 +1382,9 @@ async fn the_due_time_follows_the_timings_lead_and_jitter() {
 
 #[tokio::test]
 async fn the_session_expiry_discards_recipes_and_the_scheduler_ticks() {
+    // The expiry ends the session long before the idle window would.
     let mut r = armed(RigSpec {
         session_expiry: std::time::Duration::from_secs(600),
-        policy: KeepalivePolicy {
-            max_idle_seconds: 0,
-            ..RigSpec::default().policy
-        },
         ..RigSpec::default()
     })
     .await;

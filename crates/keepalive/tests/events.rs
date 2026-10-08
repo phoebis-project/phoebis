@@ -185,6 +185,7 @@ async fn json_events_match_the_contract() {
             "invalid_event",
         ),
         ("a wake time that is not a whole number", body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"scheduled","wake_at":1.5"#)), "invalid_event"),
+        ("a deadline that is not a whole number", body("state", 104, &format!(r#"{main},"state":"parked","park_kind":"background","deadline":1.5"#)), "invalid_event"),
         ("protocol 2", body("heartbeat", 104, "").replacen(r#""protocol":1"#, r#""protocol":2"#, 1), "unsupported_protocol"),
         (
             "protocol 2 with a member this protocol lacks",
@@ -391,6 +392,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         .event(Event {
             event: "activity".into(),
             agent_id: Some("worker".into()),
+            kind: Some("prompt".into()),
             request_generation: Some(r.agent("worker").request_generation),
             ..Default::default()
         })
@@ -428,6 +430,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         r.event(Event {
             event: "activity".into(),
             agent_id: Some("worker".into()),
+            kind: Some("prompt".into()),
             request_generation: Some(7),
             ..Default::default()
         })
@@ -443,6 +446,7 @@ async fn registration_sequences_and_generations_follow_the_protocol() {
         r.event(Event {
             event: "activity".into(),
             agent_id: Some("worker".into()),
+            kind: Some("prompt".into()),
             request_generation: Some(r.agent("worker").request_generation),
             ..Default::default()
         })

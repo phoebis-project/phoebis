@@ -92,6 +92,7 @@ async fn the_companions_reports_become_lifecycle_events_on_the_channel() {
     r.event(Event {
         event: "activity".into(),
         agent_id: Some("main".into()),
+        kind: Some("prompt".into()),
         request_generation: Some(r.agent("main").request_generation),
         ..Default::default()
     })
@@ -275,6 +276,7 @@ async fn a_parked_main_agent_that_sends_a_request_resumes_once() {
     r.event(Event {
         event: "activity".into(),
         agent_id: Some("main".into()),
+        kind: Some("prompt".into()),
         request_generation: Some(generation),
         ..Default::default()
     })

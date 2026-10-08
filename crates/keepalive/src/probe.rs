@@ -16,7 +16,11 @@ use phoebis_routing::BUDGET_WINDOW;
 use phoebis_store::{AccountKind, BudgetRow, BudgetScope};
 use serde_json::Value;
 
-use crate::engine::{Agent, Engine, Funding, Inner, Reason, SavingsUnit, SessionKey, Wasted};
+use crate::breakeven::Ceilings;
+use crate::engine::{
+    Agent, AgentState, Engine, Funding, Inner, ParkKind, Reason, SavingsUnit, SessionKey, Verdict,
+    Wasted, MAIN_AGENT,
+};
 use crate::recipe::Recipe;
 use crate::savings::{probe_cost, probe_dollars, settlement_unit, unpriced_reason};
 use crate::usage::{ProbeUsage, MAX_USAGE_BYTES};
@@ -799,26 +803,64 @@ impl Inner {
         agent.retry_at = Some(now + delay);
         self.set_reason(key, agent_id, reason);
     }
+}
 
-    pub(crate) fn idle_limited(&self, key: &SessionKey, agent_id: &str, now: i64) -> bool {
-        let Some(session) = self.sessions.get(key) else {
-            return false;
-        };
-        let Some(agent) = session.agents.get(agent_id) else {
-            return false;
-        };
-        let (counted, since) = if !session.attended {
-            (true, session.last_real_at.unwrap_or(agent.last_activity))
+/// The ceilings over one agent at `now`, active while any of them says probe. The idle window is main's in every
+/// state, from the later of `last_activity` (a real request, a prompt or a presence report) and `park_ended_at`. A
+/// park on a background command or a subagent is probed for `parked_ms` from `park_began`, and one on a scheduled
+/// wakeup while the wake is at most `horizon_ms` away, held under `horizon` beyond it. A busy subagent has no
+/// ceiling of its own. A silent session reads the window alone, from the session's last real request, for every
+/// agent: nothing reports its parks any more.
+pub(crate) fn ceiling(
+    agent: &Agent,
+    attended: bool,
+    session_last_real_at: Option<i64>,
+    ceilings: &Ceilings,
+    now: i64,
+) -> Verdict {
+    if !attended {
+        let since = session_last_real_at.unwrap_or(agent.last_activity);
+        return if now - since < ceilings.idle_ms {
+            Verdict::Probe
         } else {
-            (
-                agent.id == crate::engine::MAIN_AGENT
-                    && agent.state == crate::engine::AgentState::Idle,
-                agent.last_activity,
-            )
+            Verdict::End(Reason::IdleLimit)
         };
-        // Zero resolves to the recipe's break-even, which this check does not compute, so it bounds nothing here.
-        let limit_ms = agent.policy.max_idle_seconds as i64 * 1_000;
-        counted && limit_ms > 0 && now >= since + limit_ms
+    }
+    let main = agent.id == MAIN_AGENT;
+    if main {
+        let since = agent
+            .park_ended_at
+            .map_or(agent.last_activity, |ended| ended.max(agent.last_activity));
+        if now - since < ceilings.idle_ms {
+            return Verdict::Probe;
+        }
+    }
+    match agent.state {
+        AgentState::Parked => {
+            let kind = agent.park_kind;
+            let background = matches!(kind, Some(ParkKind::Background | ParkKind::Both));
+            if background
+                && agent
+                    .park_began
+                    .is_some_and(|began| now - began < ceilings.parked_ms)
+            {
+                return Verdict::Probe;
+            }
+            let wake = agent
+                .wake_at
+                .filter(|_| matches!(kind, Some(ParkKind::Scheduled | ParkKind::Both)));
+            match wake {
+                Some(wake) if wake - now <= ceilings.horizon_ms => Verdict::Probe,
+                // The wake is a certain return the hold keeps the prompt for, so it outranks a command's part
+                // whose ceiling ran out.
+                Some(_) => Verdict::Hold(Reason::Horizon),
+                None => Verdict::End(Reason::ParkedLimit),
+            }
+        }
+        AgentState::Busy if !main => Verdict::Probe,
+        // A subagent is busy, parked or released: in any other state no rule says probe for it.
+        _ if !main => Verdict::End(Reason::ParkedLimit),
+        _ => Verdict::End(Reason::IdleLimit),
     }
 }
 
@@ -828,7 +870,9 @@ fn debit(agent: &mut Agent, unit: SavingsUnit, cost: f64) {
 
 pub(crate) fn wasted_label(reason: Reason) -> Option<Wasted> {
     match reason {
+        Reason::Horizon => Some(Wasted::Horizon),
         Reason::IdleLimit => Some(Wasted::IdleLimit),
+        Reason::ParkedLimit => Some(Wasted::ParkedLimit),
         _ => None,
     }
 }

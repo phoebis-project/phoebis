@@ -1786,15 +1786,9 @@ fn budget_day(ms: i64) -> String {
 /// it starts the new day's row, which is all a restart restores.
 #[tokio::test]
 async fn the_day_roll_deletes_yesterdays_budget_rows() {
-    let mut r = rig(RigSpec {
-        // The clock crosses a UTC midnight below, which the idle limit would read as an abandoned session.
-        policy: KeepalivePolicy {
-            max_idle_seconds: 0,
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
+    // The clock crosses a UTC midnight below with no tick inside the jump, and the request after it restarts the
+    // idle window.
+    let mut r = rig(RigSpec::default()).await;
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &priced_body()).await;
     r.advance(270_000);
@@ -2043,15 +2037,9 @@ async fn a_plan_funded_credit_on_an_unlisted_model_lands_in_dollars() {
 /// charges the new day, and the tick that follows must not clear the charge it just took.
 #[tokio::test]
 async fn a_probe_that_lands_after_midnight_charges_the_new_day() {
-    let mut r = rig(RigSpec {
-        // The clock crosses a UTC midnight below, which the idle limit would read as an abandoned session.
-        policy: KeepalivePolicy {
-            max_idle_seconds: 0,
-            ..RigSpec::default().policy
-        },
-        ..RigSpec::default()
-    })
-    .await;
+    // The clock crosses a UTC midnight below, past the idle window, and the tick after it reads the key's opt-out
+    // before any ceiling.
+    let mut r = rig(RigSpec::default()).await;
     let body = priced_body();
     r.up.push_credential_rule(A, "/v1/messages", cold_answer());
     r.observe_with("main", &body).await;

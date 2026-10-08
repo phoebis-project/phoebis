@@ -917,19 +917,28 @@ async fn a_registration_acknowledgment_carries_the_sessions_agents_and_nothing_e
 #[tokio::test]
 async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_the_clock_alone() {
     let (tx, mut rx) = lifecycle_channel();
-    let r = rig(RigSpec {
+    let mut r = rig(RigSpec {
         lifecycle: Some(tx),
         ..RigSpec::default()
     })
     .await;
+    // An idle main probed once, so the presence below meets an idle tick count it must leave alone.
+    r.observe("main").await;
+    r.state("main", "idle");
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").idle_ticks, 1);
+    let generation = r.status("main").request_generation;
+    let base = r.sequence;
+    drain(&mut rx);
     let app = keepalive_router(r.engine.clone());
     let deadline = r.now() + 600_000;
     let wake = r.now() + 300_000;
-    let state = |sequence, fields: Value| {
+    let state = |sequence: u64, fields: Value| {
         let mut fields = fields;
         fields["agent_id"] = json!("main");
-        fields["request_generation"] = json!(0);
-        report("state", "session", "instance", sequence, fields)
+        fields["request_generation"] = json!(generation);
+        report("state", "session", "instance", base + sequence, fields)
     };
     let park = |r: &Rig| {
         let status = r.status("main");
@@ -1016,8 +1025,8 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         "activity",
         "session",
         "instance",
-        6,
-        json!({"agent_id": "main", "kind": "presence", "request_generation": 0}),
+        base + 6,
+        json!({"agent_id": "main", "kind": "presence", "request_generation": generation}),
     );
     assert_eq!(post(&app, presence, Some(KEY)).await.status, 200);
     let status = r.status("main");
@@ -1026,13 +1035,15 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
             status.last_activity,
             status.state,
             status.park_kind,
-            status.wake_at
+            status.wake_at,
+            status.idle_ticks
         ),
         (
             r.now(),
             AgentState::Parked,
             Some(ParkKind::Scheduled),
-            Some(wake)
+            Some(wake),
+            1
         ),
         "presence moves the idle clock and nothing else"
     );
@@ -1041,8 +1052,8 @@ async fn a_parked_state_records_its_kind_wake_and_deadline_and_presence_moves_th
         "activity",
         "session",
         "instance",
-        7,
-        json!({"agent_id": "main", "kind": "prompt", "request_generation": 0}),
+        base + 7,
+        json!({"agent_id": "main", "kind": "prompt", "request_generation": generation}),
     );
     assert_eq!(post(&app, prompt, Some(KEY)).await.status, 200);
     assert_eq!(r.status("main").state, AgentState::Busy);

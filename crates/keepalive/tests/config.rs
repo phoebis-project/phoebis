@@ -5,8 +5,42 @@ use phoebis_keepalive::{
 };
 use serde_json::json;
 
+/// The timing seam's two variables, which `for_start` reads under the `debug-hooks` feature this test build turns on.
+const TIMING_SEAM: [&str; 2] = [
+    "PHOEBIS_DEBUG_KEEPALIVE_JITTER_5M_SECONDS",
+    "PHOEBIS_DEBUG_KEEPALIVE_LEAD_5M_SECONDS",
+];
+
+/// Unsets the timing seam for its lifetime and puts back what the shell had set, so the defaults read below are
+/// the binary's own whatever a developer's environment holds.
+struct SeamCleared(Vec<(&'static str, Option<String>)>);
+
+impl SeamCleared {
+    fn new() -> SeamCleared {
+        let saved = TIMING_SEAM
+            .iter()
+            .map(|name| (*name, std::env::var(name).ok()))
+            .collect();
+        for name in TIMING_SEAM {
+            std::env::remove_var(name);
+        }
+        SeamCleared(saved)
+    }
+}
+
+impl Drop for SeamCleared {
+    fn drop(&mut self) {
+        for (name, value) in &self.0 {
+            if let Some(value) = value {
+                std::env::set_var(name, value);
+            }
+        }
+    }
+}
+
 #[test]
 fn the_default_limits_are_the_specs() {
+    let _seam = SeamCleared::new();
     let limits = KeepaliveLimits::default();
     assert_eq!(
         (
@@ -257,13 +291,13 @@ fn a_stored_policy_with_removed_names_reads_as_the_four_fields_and_one_out_of_bo
     );
     assert_eq!(
         KeepalivePolicy::from_json(
-            r#"{"enabled":true,"lead_seconds_5m":0,"max_idle_seconds":900,"max_parked_seconds":7200}"#
+            r#"{"enabled":true,"lead_seconds_5m":0,"max_idle_seconds":900,"max_parked_seconds":7200,"scheduled_horizon_seconds":86400}"#
         ),
         KeepalivePolicy {
             enabled: true,
             max_idle_seconds: 900,
             max_parked_seconds: Some(7_200),
-            scheduled_horizon_seconds: None,
+            scheduled_horizon_seconds: Some(86_400),
         },
         "the four known members keep their stored values, whatever the removed ones held"
     );

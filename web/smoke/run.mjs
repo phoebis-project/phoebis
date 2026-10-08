@@ -8276,7 +8276,7 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
   results.push({ name: '/analytics wasted probes lives in the cache warming section', ok: wasteCard()?.closest('.analytics-section')?.id === 'cache-warming' && m.container.querySelector('#cache') === null, missing: [wasteCard()?.closest('.analytics-section')?.id ?? 'no card', `cache mounted ${m.container.querySelector('#cache') !== null}`] });
   {
     const reasonRows = [...(wasteCard()?.querySelectorAll('.hbars--reasons li') ?? [])];
-    results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 7 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
+    results.push({ name: '/analytics wasted probe rows align their label at the top', ok: reasonRows.length === 9 && reasonRows.every((li) => li.classList.contains('hbars__row--top')), missing: [] });
   }
   {
     const group = [...m.container.querySelectorAll('.filters select')].find((s) => [...s.options].some((o) => o.textContent === 'Client'));
@@ -8476,10 +8476,10 @@ expect('/analytics accounts tab', m.text(), ['Accounts', 'Peak 5-hour utilizatio
     api.getAnalyticsBreakdown = getAnalyticsBreakdown;
     const weekCard = [...m.container.querySelectorAll('.card')].find((c) => c.querySelector('.card__title')?.textContent?.trim() === 'Wasted probes');
     const wasteBars = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].map((li) => li.children[0]?.textContent?.trim());
-    const labels = ['Entry expired', 'Evicted at the byte cap', 'Idle limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Returned cold', 'Session ended'];
-    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 7 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
+    const labels = ['Entry expired', 'Evicted at the byte cap', 'Horizon held the recipe', 'Idle limit ran out', 'Parked limit ran out', 'Released by an operator', 'Replaced by a new registration', 'Returned cold', 'Session ended'];
+    results.push({ name: '/analytics wasted probes draws a bar per reason', ok: wasteBars.length === 9 && labels.every((l) => wasteBars.includes(l)), missing: wasteBars });
     const wasteCounts = [...(weekCard?.querySelectorAll('.hbars--reasons li .num') ?? [])].map((n) => Number(n.textContent?.trim().split(' ')[0].replace(/,/g, '')));
-    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 7 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
+    results.push({ name: '/analytics wasted probes sorts by count and counts something', ok: wasteCounts.length === 9 && wasteCounts.some((v) => v > 0) && wasteCounts.every((v, i) => i === 0 || wasteCounts[i - 1] >= v), missing: wasteCounts.map(String) });
     {
       const coldRow = [...(weekCard?.querySelectorAll('.hbars--reasons li') ?? [])].find((li) => li.children[0]?.textContent?.trim() === 'Returned cold');
       const drawn = Number(coldRow?.children[2]?.textContent?.trim().split(' ')[0].replace(/,/g, '') ?? -1);
@@ -9342,11 +9342,13 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
       ok: (silentBadge?.getAttribute('title') ?? '').includes("The retained prompts stay and are probed under the pool's idle limits, counted from the last real request") && !(silentBadge?.getAttribute('title') ?? '').includes('lease'),
       missing: [silentBadge?.getAttribute('title') ?? 'absent'],
     });
-    const parkedRow = rows().find((r) => (cell(r, 'Cache warming')?.textContent?.trim() ?? '').startsWith('parked'));
+    const parkedRows = rows().filter((r) => (cell(r, 'Cache warming')?.textContent?.trim() ?? '').startsWith('parked'));
+    const probedParked = parkedRows.filter((r) => !(cell(r, 'Cache warming')?.textContent ?? '').includes('held'));
+    const parkedRow = parkedRows[0];
     results.push({
-      name: '/sessions parked sessions are probed like busy ones',
-      ok: parkedRow !== undefined && cell(parkedRow, 'Next probe')?.textContent?.trim() !== 'not scheduled' && !(cell(parkedRow, 'Cache warming')?.textContent ?? '').includes('held'),
-      missing: [cell(parkedRow, 'Cache warming')?.textContent?.trim() ?? 'absent', cell(parkedRow, 'Next probe')?.textContent?.trim() ?? 'absent'],
+      name: '/sessions a parked session inside its ceilings is probed like a busy one, and the one past its horizon is held',
+      ok: parkedRows.length === 2 && probedParked.length === 1 && cell(probedParked[0], 'Next probe')?.textContent?.trim() !== 'not scheduled',
+      missing: parkedRows.map((r) => `${cell(r, 'Cache warming')?.textContent?.trim()} ${cell(r, 'Next probe')?.textContent?.trim()}`),
     });
     const mixedRow = rows()[0];
     results.push({
@@ -9568,6 +9570,22 @@ expect('/sessions', m.text(), ['Sessions', 'with a recipe', 'Cache-warming agent
     });
     results.push({ name: '/sessions no companion lease copy is left', ok: !m.text().includes('lease lapsed'), missing: [m.text().includes('lease lapsed') ? 'still there' : ''] });
     expect('/sessions the idle limit explains the missing recipe', m.text(), ['the idle limit ran out ']);
+  }
+  {
+    // A parked session held while its wake is past the pool's horizon, and a subagent whose park ran past the parked
+    // ceiling.
+    const badge = (label) => [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === label);
+    const horizon = badge('held: wake too far');
+    const parked = badge('parked limit');
+    results.push({
+      name: "/sessions a parked agent's horizon hold and its parked limit render with their hints, the limit as a warning",
+      ok:
+        (horizon?.getAttribute('title') ?? '') === "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held and probing resumes once the wake is within it." &&
+        horizon?.classList.contains('badge--neutral') === true &&
+        (parked?.getAttribute('title') ?? '') === "The pool's parked ceiling ran out while the session waited on a background command or a subagent, so the retained prompt was discarded. The next real request starts a new recipe." &&
+        parked?.classList.contains('badge--warning') === true,
+      missing: [horizon?.getAttribute('title') ?? 'no horizon badge', parked?.getAttribute('title') ?? 'no parked limit badge'],
+    });
   }
   {
     const cold = [...m.container.querySelectorAll('.agents__row .badge')].find((b) => b.textContent?.trim() === 'paused: cold probes');

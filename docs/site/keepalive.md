@@ -3,7 +3,8 @@
 A prompt cache entry expires five minutes, or one hour, after its last use. With keepalive enabled on a pool, the
 router keeps a replayable copy of every eligible request a session sends and, shortly before the entry would
 expire, sends a probe that reads it. This page covers how the engine learns which sessions are alive, when a probe
-may run, the policy's four fields, and how the ledger accounts what a probe cost against what it saved.
+may run, the policy's four fields and the ceilings they set, and how the ledger accounts what a probe cost against what
+it saved.
 
 ## How a probe works
 
@@ -133,6 +134,38 @@ a one-hour entry, less a random jitter of up to 5 and 30 seconds. Two cold probe
 request. The third transient failure pauses it, after retries that wait 30 seconds and double up to 300. No limit
 counts idle probes, and every subagent's recipe is warmed.
 
+## The ceilings
+
+Three rules bound how long a retained recipe is probed, one for each way a session comes back, and the recipe is probed
+while any of them says so. Every park has a certain return: a cron fires, a command exits or reaches its deadline, a
+subagent completes. The two park rules are loss bounds. The idle window is the one bet, and it runs in every state of
+the main conversation, because the user can type while a background command, a subagent or a cron is open.
+
+**The idle window.** The main conversation is probed until `max_idle_seconds` after the latest of its last real
+request, its last presence report and the end of a park without a request, a deadline or a wakeup that passed. The
+window never runs past the recipe's break-even. A wakeup is a real request, so a cron that fires or a command that exits
+restarts the window. A silent session, whose companion's lease lapsed, is probed under the window from its last real
+request for every agent, and the park rules do not apply to it.
+
+**Parked on a background command or a subagent.** The main conversation or a subagent reported `parked` with kind
+`background` is probed until the return, at most `max_parked_seconds` after the park began. A real request or a state
+other than `parked` ends the park. A command's deadline ends the park when it passes, because the harness stops the
+command and wakes nobody, and the idle window restarts at that moment.
+
+**Parked on a scheduled wakeup.** With kind `scheduled`, a due probe goes out while the wakeup is at most
+`scheduled_horizon_seconds` away. Beyond that the recipe is held with the reason `horizon` and its prompt kept, and a
+later `parked` report with a nearer wakeup reopens it, as does a horizon raised on the pool. A wakeup that passes ends
+the park as a deadline does, which bounds a deleted or expired cron and covers the scheduler's jitter of up to 15
+minutes.
+
+A park of kind `both` is probed while either part says so, and a hold or an end applies only once neither does. A
+subagent's park follows the two park rules on its own, and the idle window never applies to a subagent, which is busy,
+parked or released. A busy agent that stays silent past the lead is probed with no ceiling of its own: a long
+foreground tool call on a five-minute entry stays covered, and the lease and the idle window bound a client that died.
+
+At a ceiling the recipe ends with the reason `idle_limit` or `parked_limit`, or is held with `horizon`, and its
+unanswered probes count as wasted under that reason. The next real request re-arms it.
+
 ## The cost reference
 
 The Cost reference dialog shows what a million tokens costs, in dollars at list price and as a share of a subscription
@@ -210,7 +243,7 @@ over the cache read price: 50 for the two Fable models, 25 for `claude-opus-5-5`
 ## Recipe states
 
 A recipe is `armed`, its probe scheduled or arming from the first stream event of the request in flight;
-`probing`, with a probe in flight; or `held`, with no probe scheduled and one of twenty reasons attached.
+`probing`, with a probe in flight; or `held`, with no probe scheduled and one of twenty-two reasons attached.
 
 ### The guard field
 
@@ -231,10 +264,12 @@ probe that made its net negative, not a contradiction.
 | `cooled` | cooled down | The pinned account is under a cooldown; the probe waits it out while the entry lasts. |
 | `evicted` | evicted | The engine reached its retained-bytes cap and this recipe was the oldest idle one. |
 | `expired` | entry expired | The cache entry expired before its probe was due; no probe was sent. |
-| `idle_limit` | idle limit | The pool's idle time or idle probe budget ran out since the last real request. |
+| `horizon` | held: wake too far | Parked on a wakeup further off than the pool's horizon: held, its prompt kept. |
+| `idle_limit` | idle limit | The idle window ran out (see [The ceilings](#the-ceilings)). |
 | `ledger_behind` | ledger behind | The router's ledger was behind; the probe is sent again after the answer's wait. |
 | `net_negative` | net negative | Probes cost more than they saved; a real request grants the grace probes again. |
 | `overage` | overage | The account is on extra usage and the pool policy skips probes there. |
+| `parked_limit` | parked limit | The parked ceiling ran out on a background command or a subagent: ended. |
 | `paused` | paused | The account is paused or its subscription has ended, the pool is disabled, or the key opted out. |
 | `pool_exhausted` | pool exhausted | Every account of the pool was exhausted or cooled when the probe was selected. |
 | `probe_error` | probe error | The last probe failed on the transport or was refused. |
@@ -253,11 +288,12 @@ An entry the engine knows has expired is never probed: its recipe ends under `ex
 settled wasted, and the engine logs one line naming the key, the agent, the expiry and how late the tick was. A recipe
 held under any other reason, a gate's hold among them (`affinity_too_short`, `budget`, `cap_reached`, `cooled`,
 `net_negative`, `overage`, `paused` or `reauth`), leaves as `expired` once its entry has expired; the next real request
-starts a new one. While the request a recipe follows is still open, the lapse waits for its completion. At the
-retained-bytes cap the engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then
-attended sessions' idle agents, never one with a probe or a request in flight. A lapsed or evicted recipe leaves the
-recipe list, as one stopped under `idle_limit` or `storage_limit` does, and shows on the wasted counter; a lapse also
-shows in that log line.
+starts a new one. Two holds keep the prompt past the expiry and leave as `expired` at the first tick after they end:
+`horizon`, which keeps it for the wakeup, and `paused` on a disabled pool, which keeps it for the pool coming back.
+While the request a recipe follows is still open, the lapse waits for its completion. At the retained-bytes cap the
+engine evicts before it refuses: unattended sessions' agents first, oldest activity first, then attended sessions' idle
+agents, never one with a probe or a request in flight. A lapsed or evicted recipe leaves the recipe list, as one stopped
+under `idle_limit` or `storage_limit` does, and shows on the wasted counter; a lapse also shows in that log line.
 
 A request whose `system`, `text`, `stream` or `max_tokens` member the replay's edits cannot reach, such as one whose key
 is spelled with a JSON escape, is not retained and holds the recipe under `unsupported_shape`: a probe built from it
@@ -273,15 +309,18 @@ A probe the router refused with `503 ledger_behind`, its ledger catching up, hol
 counts no failure toward the failure limit, so a ledger that stays behind never pauses the recipe. The entry's expiry
 still bounds the re-sends: once it passes, the recipe ends under `expired`, as under any other hold.
 
-A wasted probe settles with one of seven reasons of its own: when the recipe stops with a probe unanswered, when it
-lapses or is evicted, or when the next request after the probe reads nothing from the entry it kept:
+A wasted probe settles with one of nine reasons of its own: when the recipe stops with a probe unanswered or is held
+under `horizon`, when it lapses or is evicted, or when the next request after the probe reads nothing from the entry it
+kept:
 
 | Reason | What settles it |
 | --- | --- |
 | `cold_return` | The next request read no cache, or on another account, model or speed, or after the entry lapsed. |
 | `evicted` | The engine evicted the recipe at its retained-bytes cap. |
 | `expired` | The recipe's cache entry expired before its probe was due. |
-| `idle_limit` | The pool's idle limits ran out before a real request answered the probe. |
+| `horizon` | The recipe was held under `horizon` before a real request answered the probe. |
+| `idle_limit` | The idle window ran out before a real request answered the probe. |
+| `parked_limit` | The parked ceiling ran out before a real request answered the probe. |
 | `released` | By an operator's release, a key's opt-out, or the companion reporting the agent released. |
 | `replaced` | A replacement registration arrived for the same agent. |
 | `session_ended` | By an explicit `session_end` report or the session's own expiry with no report. |

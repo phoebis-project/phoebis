@@ -36,7 +36,8 @@ impl Factors {
 
 /// `(write - read) / (cadence * read)` in milliseconds for the entry's TTL, `None` when read is 0. Computed as
 /// `floor((write - read) * (ttl_ms - lead_ms) / read)`: one probe interval is `ttl_ms - lead_ms`, so the cadence never
-/// enters as a rounded figure, and the floor keeps the ceiling at or below the exact value, never above it.
+/// enters as a rounded figure, and the floor keeps the ceiling at or below the exact value within the nanosecond of
+/// float slack below.
 pub fn break_even_ms(factors: Factors, ttl_ms: i64, timing: &KeepaliveTiming) -> Option<i64> {
     let interval_ms = ttl_ms - timing.lead_ms(ttl_ms);
     if factors.read <= 0.0 || interval_ms <= 0 {
