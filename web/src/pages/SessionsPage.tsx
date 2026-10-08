@@ -159,7 +159,8 @@ function parkDetail(a: KeepaliveRecipe, now: number): string {
 export function SessionsPage() {
   // The router keeps a session while it is used, so the list is read again rather than aged on this clock alone:
   // a session still sending requests would otherwise drop off once its first-read activity crossed the expiry. The
-  // overview reads a week of rollups for tiles that move slowly, so it is read once a minute.
+  // overview's day of rollups moves slowly and a minute's lag on its live counts is fine for a summary, so it is read
+  // once a minute.
   const tick = useNow(15_000);
   const overviewTick = useNow(60_000);
   const accounts = useAsync(() => api.listAccounts(), []);
@@ -201,7 +202,7 @@ export function SessionsPage() {
   // Counted over the rows shown, so the note agrees with the table under it and the count beside it.
   const withCompanion = rows ? rows.filter((r) => r.session.companion === 'reporting' || r.session.companion === 'silent').length : null;
   const withRecipe = rows ? rows.filter((r) => r.session.keepalive.state !== null).length : null;
-  const sessionsNote = withCompanion !== null && withRecipe !== null ? `${fmtInt(withCompanion)} with a companion, ${fmtInt(withRecipe)} with a recipe` : null;
+  const sessionsNote = withCompanion !== null && withRecipe !== null ? `${fmtInt(withCompanion)} with the keepalive mod, ${fmtInt(withRecipe)} with a recipe` : null;
   const onConfirmRelease = () => {
     if (!pending) return;
     void api.releaseSession(pending.session.keyId, pending.session.sessionId).then(
@@ -340,7 +341,7 @@ export function SessionsPage() {
           </div>
         ) : rows.length === 0 ? (
           <div style={{ padding: 20 }}>
-            <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as a companion registers for it, and drops off once it passes the session expiry." />
+            <EmptyState title="No live sessions" body="A session appears here on its first request, or as soon as the keepalive mod registers it, and drops off once it passes the session expiry." />
           </div>
         ) : (
           <div className="table-wrap">

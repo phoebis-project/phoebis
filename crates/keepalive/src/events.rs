@@ -226,9 +226,12 @@ fn agents_of(session: &Session) -> Vec<AckAgent> {
         .collect()
 }
 
-fn acknowledge(session: &Session, agent: Option<&Agent>, agents: Option<Vec<AckAgent>>) -> Ack {
+/// `named` is the agent an agent event reports. A session-level event (a heartbeat, a `session_end`, a registration)
+/// names none and its answer carries main's generation, which the mod adopts for main.
+fn acknowledge(session: &Session, named: Option<&str>, agents: Option<Vec<AckAgent>>) -> Ack {
+    let agent = session.agents.get(named.unwrap_or(MAIN_AGENT));
     Ack {
-        agent_id: agent.map(|a| a.id.clone()),
+        agent_id: named.and(agent).map(|a| a.id.clone()),
         agents,
         instance_id: session.instance.clone(),
         lease_expires_ms: session.lease,
@@ -350,8 +353,7 @@ impl Inner {
                 session.sequence = ev.sequence;
                 session.last_report_at = now;
                 self.touch_session(&key);
-                let session = &self.sessions[&key];
-                return Ok(acknowledge(session, session.agents.get(&agent_id), None));
+                return Ok(acknowledge(&self.sessions[&key], None, None));
             }
             "agent_start" => {
                 let existing = self.sessions[&key]
@@ -506,8 +508,11 @@ impl Inner {
         if !renews_lease {
             self.touch_agent(&key, &agent_id);
         }
-        let session = &self.sessions[&key];
-        Ok(acknowledge(session, session.agents.get(&agent_id), None))
+        Ok(acknowledge(
+            &self.sessions[&key],
+            ev.agent_id.as_deref(),
+            None,
+        ))
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -569,11 +574,7 @@ impl Inner {
                 }
                 self.touch_session(&key);
                 let session = &self.sessions[&key];
-                return Ok(acknowledge(
-                    session,
-                    session.agents.get(MAIN_AGENT),
-                    Some(agents_of(session)),
-                ));
+                return Ok(acknowledge(session, None, Some(agents_of(session))));
             }
             if ev.previous_instance_id.as_deref() != Some(session.instance.as_str()) {
                 // An ended or silent holder is named so the mod can take over from it, and a live one is not.
@@ -639,10 +640,6 @@ impl Inner {
         self.touch_session(&key);
         self.set_reason(&key, MAIN_AGENT, Reason::AwaitingRequest);
         let session = &self.sessions[&key];
-        Ok(acknowledge(
-            session,
-            session.agents.get(MAIN_AGENT),
-            Some(agents_of(session)),
-        ))
+        Ok(acknowledge(session, None, Some(agents_of(session))))
     }
 }

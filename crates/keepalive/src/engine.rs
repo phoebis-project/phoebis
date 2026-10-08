@@ -481,7 +481,7 @@ pub(crate) struct Agent {
     pub last_prefix: Option<(String, String)>,
     pub generation: u64,
     pub current: Option<Observation>,
-    /// When the entry the recipe keeps warm expires; the due time is this less the timing's lead and jitter.
+    /// When the entry the recipe keeps warm expires. The due time is this less the timing's lead and jitter.
     pub expires: Option<i64>,
     /// The share of the timing's jitter this schedule takes, rolled once per schedule so the due time holds
     /// still between ticks.
@@ -637,9 +637,9 @@ impl Agent {
         Some(episode)
     }
 
+    /// The expiry stays, so the lapse still drops the prompt when the entry goes cold, as it does for a held recipe.
     pub(crate) fn pause(&mut self) {
         self.paused = true;
-        self.expires = None;
         self.retry_at = None;
     }
 
@@ -729,10 +729,8 @@ pub(crate) enum Verdict {
 pub(crate) struct PriorCoverage {
     pub account: Option<String>,
     pub covered: bool,
-    /// The unit the covering probe's cost settled in, so the credit it earns settles in the same one; a probe the
-    /// cost model cannot price falls the unit back to dollars along with the cost, so the two never split. `None`
-    /// when the account it warmed left the registry before the probe landed, in which case the credit never fires
-    /// (`same_account` cannot match a gone account either).
+    /// The unit the covering probe's cost settled in. `None` when the account it warmed left the registry before the
+    /// probe landed, in which case the credit never fires (`same_account` cannot match a gone account either).
     pub unit: Option<SavingsUnit>,
     pub model: String,
     /// The covering recipe's speed, which the credited request's has to match.
@@ -868,8 +866,10 @@ pub(crate) struct Inner {
     pub running: usize,
     pub closed: bool,
     pub settlements: Vec<Settlement>,
-    /// Due probes a gate withheld this tick, ledgered as skipped.
-    pub skipped: Vec<(SessionKey, String)>,
+    /// Due probes a gate withheld this tick, ledgered as skipped, each with the recipe state the hold left, read under
+    /// the lock that placed it: a real request between the tick and the flush would otherwise file a gate's skip
+    /// under the state it moved the recipe to.
+    pub skipped: Vec<(SessionKey, String, RecipeState)>,
     /// Bus gaps seen by the observer; each one discarded every observation that was still pending.
     pub bus_gaps: u64,
     /// Events a gap left queued behind it, counted down as they are applied. What arrives inside that
@@ -887,6 +887,9 @@ pub(crate) struct Inner {
     pub revision: u64,
     /// Whether the last save failed, so a failing registry is logged once per streak rather than every flush.
     pub persist_failing: bool,
+    /// The accounts whose last tier read failed, so a registry that stays unreadable is logged once per account and
+    /// streak rather than at every probe it settles. Held in memory alone, so a restart starts each streak over.
+    pub unreadable_tiers: BTreeSet<String>,
     /// The request events and reports refused after the quiesce.
     pub late_updates: u64,
 }
@@ -1058,6 +1061,7 @@ impl Inner {
             revision: 0,
             persist_failing: false,
             late_updates: 0,
+            unreadable_tiers: BTreeSet::new(),
         }
     }
 
@@ -1213,7 +1217,9 @@ impl Inner {
         let moved = agent.hold_counted != (counted || was_due);
         agent.hold_counted = counted || was_due;
         if !counted && was_due {
-            self.skipped.push((key.clone(), agent_id.to_string()));
+            let state = recipe_state(reason, agent.paused);
+            self.skipped
+                .push((key.clone(), agent_id.to_string(), state));
         }
         if began {
             self.set_reason(key, agent_id, reason);
@@ -1249,7 +1255,7 @@ impl Inner {
     /// a hold that already ledgered the probe it withheld is not counted again, and the skip takes the recipe's speed
     /// before the discard drops the recipe. While the request the observation follows is still open, the recipe is
     /// held unprobed instead: its completion earns its credit and decides the probes it kept, and the next tick lapses
-    /// it. True when the tick is done with the recipe.
+    /// it. A paused recipe loses its prompt alone (`drop_paused_prompt`). True when the tick is done with the recipe.
     fn lapse(
         &mut self,
         key: &SessionKey,
@@ -1271,6 +1277,12 @@ impl Inner {
         {
             return true;
         }
+        if agent.paused {
+            tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
+                "a paused keepalive recipe's entry expired, so its prompt was dropped");
+            self.drop_paused_prompt(key, agent_id);
+            return true;
+        }
         tracing::info!(key = %key.0, agent = %agent_id, expires, late_ms = now - expires,
             "a keepalive recipe lapsed before its probe; the probe was skipped");
         if !agent.hold_counted {
@@ -1287,6 +1299,33 @@ impl Inner {
         }
         self.discard(key, agent_id, Reason::Expired, Some(Wasted::Expired));
         true
+    }
+
+    /// The lapse of a paused recipe. The pause withheld every probe and holds until the next real request, so the agent
+    /// keeps its pause bit and its reason for the view's `paused`, and only the prompt the cold entry made worthless
+    /// leaves, with the probes it paid for settled under `expired`. No probe was due, so no skip is ledgered.
+    fn drop_paused_prompt(&mut self, key: &SessionKey, agent_id: &str) {
+        self.touch_agent(key, agent_id);
+        let Some(agent) = self
+            .sessions
+            .get_mut(key)
+            .and_then(|s| s.agents.get_mut(agent_id))
+        else {
+            return;
+        };
+        if let Some(observation) = agent.current.take() {
+            self.pending.remove(&observation.id);
+            self.retained -= observation.recipe.size;
+        }
+        agent.expires = None;
+        agent.last_stop = Some(Wasted::Expired);
+        for probe in std::mem::take(&mut agent.unanswered) {
+            self.settlements
+                .push(Kept::of(agent, &probe).settle(key, Wasted::Expired));
+        }
+        for kept in std::mem::take(&mut agent.kept) {
+            self.settlements.push(kept.settle(key, Wasted::Expired));
+        }
     }
 
     /// A deadline or a wake that passed ends that part of the park, and a park with nothing left ended without a
@@ -2908,6 +2947,30 @@ pub(crate) fn gate(view: &RouterView, agent: &mut Agent, session_id: &str) -> Re
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `ALL` is kept by hand. The cycle below names every variant with no wildcard, so a variant the enum gains stops
+    /// this test compiling until it joins the cycle, and the walk then wants it in `ALL`.
+    #[test]
+    fn wasted_all_holds_every_variant() {
+        let next = |label: Wasted| match label {
+            Wasted::ColdReturn => Wasted::Evicted,
+            Wasted::Evicted => Wasted::Expired,
+            Wasted::Expired => Wasted::Horizon,
+            Wasted::Horizon => Wasted::IdleLimit,
+            Wasted::IdleLimit => Wasted::ParkedLimit,
+            Wasted::ParkedLimit => Wasted::Released,
+            Wasted::Released => Wasted::Replaced,
+            Wasted::Replaced => Wasted::SessionEnded,
+            Wasted::SessionEnded => Wasted::ColdReturn,
+        };
+        let mut walked = vec![Wasted::ColdReturn];
+        let mut label = next(Wasted::ColdReturn);
+        while label != Wasted::ColdReturn && walked.len() <= Wasted::ALL.len() {
+            walked.push(label);
+            label = next(label);
+        }
+        assert_eq!(walked, Wasted::ALL.to_vec());
+    }
 
     #[test]
     fn a_refreshing_class_rearms_whatever_the_chain_says() {

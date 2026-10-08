@@ -15,7 +15,7 @@ mod usage;
 mod view;
 
 pub use breakeven::{
-    break_even_ms, factors_for, resolve, Ceilings, Factors, Range, ResolvedCeilings,
+    break_even_ms, factors_for, resolve, BreakEvenFactors, Ceilings, Range, ResolvedCeilings,
 };
 pub use config::{
     KeepaliveLimits, KeepalivePolicy, KeepaliveTiming, LimitsError, PolicyError, FIVE_MINUTES_MS,
@@ -27,7 +27,7 @@ pub use engine::{
     SavingsUnit, SessionKey, Wasted, IDLE_AGE_BOUNDS_SECONDS, MAIN_AGENT,
 };
 pub use events::{decode_json_event, Ack, AckAgent, Event, EventError, PROTOCOL};
-pub use probe::{probe_outcome_label, ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
+pub use probe::{ProbeOutcome, ProbeRecord, PROBE_DEADLINE};
 pub use recipe::{
     make_recipe, request_ttl_ms, valid_id, valid_opaque, Recipe, MAX_HEADER_BYTES, MAX_HEADER_VALUE,
 };

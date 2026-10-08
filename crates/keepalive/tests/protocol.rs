@@ -180,7 +180,7 @@ async fn events_need_the_key_and_a_key_cannot_read_or_alter_anothers_sessions() 
         (200, Some("instance")),
         "the first key's session keeps its own instance"
     );
-    // key_id is no member of the body, so the decoder refuses it before any scoping runs; the key that owns a
+    // key_id is no member of the body, so the decoder refuses it before any scoping runs. The key that owns a
     // session comes from the credential alone, never from a field naming one.
     let named = post(
         &app,
@@ -301,24 +301,26 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
             .cloned()
             .collect::<Vec<_>>(),
         [
-            "agent_id",
             "instance_id",
             "lease_expires_ms",
             "request_generation",
             "sequence",
             "session_id"
-        ]
+        ],
+        "a session-level event names no agent"
     );
     assert_eq!(
         (
             ack.body["sequence"].as_u64(),
-            ack.body["agent_id"].as_str(),
             ack.body["request_generation"].as_u64(),
             ack.body["lease_expires_ms"].as_i64()
         ),
-        (Some(2), Some("main"), Some(0), Some(r.now() + 90_000))
+        (Some(2), Some(0), Some(r.now() + 90_000)),
+        "and carries main's generation"
     );
-    // What the 409 rows below refuse against: a live subagent, a released one, and an ended session.
+    // What the 409 rows below refuse against: a live subagent, a released one, and an ended session. An agent
+    // event's answer names its agent, and a registration's and an end's name none.
+    let mut named = Vec::new();
     for (body, key) in [
         (
             report(
@@ -353,12 +355,20 @@ async fn the_acknowledgment_and_the_refusals_follow_the_json_contract() {
         (report("session_start", "over", "i-over", 1, json!({})), KEY),
         (report("session_end", "over", "i-over", 2, json!({})), KEY),
     ] {
-        assert_eq!(
-            post(&app, body.clone(), Some(key)).await.status,
-            200,
-            "{body}"
-        );
+        let answer = post(&app, body.clone(), Some(key)).await;
+        assert_eq!(answer.status, 200, "{body}");
+        named.push(answer.body["agent_id"].as_str().map(String::from));
     }
+    assert_eq!(
+        named,
+        [
+            Some("worker".to_string()),
+            Some("leaving".to_string()),
+            Some("leaving".to_string()),
+            None,
+            None
+        ]
+    );
     // Every refusal names the session's next sequence, and none of them may take it.
     let next = 6;
     let main = |fields: Value| report("state", "session", "instance", next, fields);

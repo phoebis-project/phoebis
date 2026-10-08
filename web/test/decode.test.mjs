@@ -1273,9 +1273,9 @@ test('the dashboard, sessions, recipes, and overview decode', () => {
   assert.deepEqual(ov.limits, { agents: { count: 1, max: 1024 }, retainedBytes: { count: fixture('keepalive_overview').limits.retained_bytes.count, max: 268_435_456 }, sessions: { count: 1, max: 128 } }, 'each count beside the cap the bootstrap file sets');
   const [pool] = ov.pools;
   assert.deepEqual(
-    [ov.pools.length, pool.poolId, pool.credited24h, pool.probes24h, pool.wasted24h, Object.keys(pool.wastedReasons24h).length],
-    [1, 'main', 0, 0, 0, d.WASTED_PROBE_REASONS.length],
-    'the captured pool has the idle window it opened and no ledger rows yet',
+    [ov.pools.length, pool.poolId, pool.credited24h, pool.probes24h, pool.wasted24h, Object.keys(fixture('keepalive_overview').pools[0].wasted_reasons_24h).sort()],
+    [1, 'main', 0, 0, 0, [...d.WASTED_PROBE_REASONS].sort()],
+    'the captured pool has the idle window it opened and no ledger rows yet, and the route names every wasted reason',
   );
   assert.deepEqual(
     pool.idleReturns.map((b) => [b.fromSeconds, b.toSeconds, b.reached, b.returned]),

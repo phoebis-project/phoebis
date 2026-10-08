@@ -27,11 +27,11 @@ const span = (min: number, max: number): Range => ({ max, min });
 const figures = (breakEven: Range, idle: Range, share: Range): Resolved => ({ breakEvenSeconds: breakEven, horizonSeconds: breakEven, idleSeconds: idle, idleShare: share, parkedSeconds: breakEven });
 
 /**
- * The router's figures for one funding on one main TTL over the shipped tables, at the default policy of an hour of idle
- * window and both ceilings null. The mock holds no price, so they are written out here. A plan recipe breaks even on the
- * cost model's multipliers whatever its model: 44.1 hours on the hour, 3 hours 16 minutes on five minutes. The dollar
- * rows span the price table: Sonnet, Haiku and the older Opus rows break even first, Fable last, and on five minutes the
- * first of them also cap the hour of idle window.
+ * The router's figures for one funding on one main TTL over the shipped tables, at the default policy of an hour of
+ * idle window and both ceilings null. The mock holds no price, so they are written out here. A plan recipe breaks even
+ * on the cost model's multipliers whatever its model: 44.1 hours on the hour, 3 hours 16 minutes on five minutes. The
+ * dollar rows span the price table: Sonnet, Haiku and the older Opus rows break even first, Fable last, and on five
+ * minutes the first of them also cap the hour of idle window.
  */
 const FIGURES: Record<'dollars' | 'plan', Record<CacheTtl, Resolved>> = {
   dollars: {
@@ -54,8 +54,8 @@ const merged = (a: Resolved, b: Resolved): Resolved => ({
 });
 
 /**
- * A pool's figures from its members' kinds as the router composes them: an OAuth member brings the plan's figures on the
- * plan set's main TTL, an API-key member the dollar rows' on the metered set's, and a policy that leaves the
+ * A pool's figures from its members' kinds as the router composes them: an OAuth member brings the plan's figures on
+ * the plan set's main TTL, an API-key member the dollar rows' on the metered set's, and a policy that leaves the
  * markers as sent brings both TTLs. Per-model overrides and model rules are not read, so a pool that narrows its models
  * reads wider here than the router answers it. Null with no member.
  */

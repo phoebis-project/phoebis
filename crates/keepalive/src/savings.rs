@@ -9,7 +9,7 @@ use phoebis_routing::{PinUsage, FIVE_HOUR};
 use crate::engine::{Engine, SavingsUnit, SessionKey, Settlement};
 use crate::probe::{Applied, ProbeOutcome, ProbeRecord};
 use crate::usage::ProbeUsage;
-use crate::view::{recipe_state, RecipeState};
+use crate::view::RecipeState;
 
 /// A withheld probe's skip row keys, read off its agent under the lock: the session, the key generation, the pool, the
 /// account, the model, the speed and the recipe state.
@@ -250,7 +250,7 @@ impl Engine {
             let mut inner = self.lock();
             let queued = std::mem::take(&mut inner.skipped);
             let mut skipped: Vec<QueuedSkip> = Vec::new();
-            for (key, agent_id) in queued {
+            for (key, agent_id, state) in queued {
                 let Some(agent) = inner
                     .sessions
                     .get(&key)
@@ -265,7 +265,7 @@ impl Engine {
                     agent.account.clone(),
                     agent.canonical_model.clone(),
                     agent.current.as_ref().is_some_and(|o| o.recipe.fast),
-                    recipe_state(agent.reason, agent.paused),
+                    state,
                 ));
             }
             (std::mem::take(&mut inner.settlements), skipped)

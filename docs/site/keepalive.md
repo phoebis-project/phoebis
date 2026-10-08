@@ -113,10 +113,12 @@ deletion rather than at their expiry.
 
 Every report is one `POST /v0/keepalive/events` on the proxy listener, a JSON body under the same key the client sends
 for model traffic. A session is scoped to the key that reports it, and to the generation that key was created under: an
-id deleted and created again reads and drives none of the previous holder's sessions. A registration's acknowledgment
-carries every agent the router holds for the session, so the mod reconciles from that answer after a lapse or a router
-restart. A report the route refuses is answered `{"code": "<code>"}` rather than with an Anthropic-shaped error body,
-and a key it refuses is answered as `/v1/messages` answers it. The mod's README describes
+id deleted and created again reads and drives none of the previous holder's sessions. Each acknowledgment names the
+session, the instance, the sequence and the lease's end, and an agent event's also names the agent and its
+`request_generation`. A registration's acknowledgment carries every agent the router holds for the session, so the mod
+reconciles from that answer after a lapse or a router restart. A report the route refuses is answered
+`{"code": "<code>"}` rather than with an Anthropic-shaped error body, and a key it refuses is answered as `/v1/messages`
+answers it. The mod's README describes
 [the protocol](https://github.com/daystrom-labs/phoebis-keepalive/blob/main/README.md#the-protocol): the six events,
 their fields, the acknowledgment and the codes.
 
@@ -181,11 +183,13 @@ any unknown field, `keepalive is not a policy object: unknown field ...`.
 
 For the console, `GET /admin/pools` also answers each pool's `keepalive_resolved`: the break-even and the three ceilings
 in seconds and the idle window's cost as a share of one re-write, each as the lowest and the highest figure over the
-pool's combinations. An OAuth member brings the cost model's factors and an API-key member the price table's. The
-pool's cache TTL policy gives the main conversation's TTL under each, and a policy that leaves the markers as sent
-brings both TTLs. The models are the price table's and those the cache TTL policy's per-model rows and the model rules'
-entries without a wildcard name, which carry the catalog's dated ids, each kept where the pool's model rules allow it.
-Rules that allow none of them leave a model priced nowhere. A pool with no member answers `null`.
+pool's combinations. An OAuth member brings the cost model's factors and an API-key member the price table's. The pool's
+cache TTL policy gives the main conversation's TTL under each, and a policy that leaves the markers as sent brings both
+TTLs. The models are the price table's and those the cache TTL policy's per-model rows and the model rules' entries
+without a wildcard name, which carry the catalog's dated ids, each kept where the pool's model rules allow it. Rules
+that allow none of them leave a model priced nowhere. A deny entry naming a dated id leaves the model's undated price
+row in the range, so for a model the catalog lists only dated, such as Haiku, the range keeps a figure no request on the
+pool reaches. A pool with no member answers `null`.
 
 The schedule's numbers are fixed. A probe is due 60 seconds before a five-minute entry expires and 360 seconds before
 a one-hour entry, less a random jitter of up to 5 and 30 seconds. Two cold probes in a row pause the recipe until a real
@@ -243,11 +247,11 @@ that opens before the session's first request has no conversation to compare aga
 counts under the pool its key was in when it opened. A return's age is read at the prompt that announced it, however
 long the request takes to follow. A lapsed lease, a park that ends without a request, a presence report, a release of
 the main conversation, a request on a new conversation and the session's end close a window with no return. After a
-request the guard reads as a return or a restart, the next window starts at the request's own instant, except on a main
-conversation reported `unknown`, where the request moves no start. After any other close, the next window opens only
-once its start moves past the one in force at that close, at a park's end, a presence report, a prompt, a request or the
-session's revival. A busy report pauses the count without closing the window, and a subagent or a silent session opens
-none.
+request that continued or restarted the conversation, the next window starts at the request's own instant, except on a
+main conversation reported `unknown`, where the request moves no start. After any other close, the next window opens
+only once its start moves past the one in force at that close, at a park's end, a presence report, a prompt, a request
+or the session's revival. A busy report pauses the count without closing the window, and a subagent or a silent session
+opens none.
 
 No rule reads the counters yet: the idle window is still the pool's `max_idle_seconds`, capped at the break-even. The
 pool dialog shows them by bucket.
@@ -285,11 +289,12 @@ Each state reads these causes:
 
 A `held` or `retained` cause reads `paused` while the engine's own pause holds. A probe's error answer pauses the recipe
 and clears its schedule, and a gate's hold that lands on it at a later tick (`budget`, `cooled`, `ineligible_credential`
-or `paused`) re-arms nothing, so the row stays `paused` with the hold's cause until the next real request. The same hold
-on an armed recipe reads `held`, since the gate reads it again at every tick and probing resumes when it clears. A
-recipe held on a disabled pool reads `retained` again at the first tick after the pool is enabled. A `held` or
-`retained` cause reads `not_retained` when the agent holds no prompt, as a request refused at its account selection
-does.
+or `paused`) re-arms nothing, so the row stays `paused` with the hold's cause until the next real request. The paused
+prompt itself leaves when its entry goes cold: at the entry's expiry the engine drops it, settles its unanswered probes
+under `expired` and sends nothing, and the row still reads `paused`. The same hold on an armed recipe reads `held`,
+since the gate reads it again at every tick and probing resumes when it clears. A recipe held on a disabled pool reads
+`retained` again at the first tick after the pool is enabled. A `held` or `retained` cause reads `not_retained` when the
+agent holds no prompt, as a request refused at its account selection does.
 
 ### The guard field
 
@@ -328,7 +333,8 @@ under `probe_pool_exhausted`: its next attempt admits under the new pool.
 A probe the router refused with `503 ledger_behind`, its ledger catching up, holds under `ledger_behind` rather than
 `retryable_probe_error`: its next attempt waits out that answer's `Retry-After`, or the 30-second retry wait without
 one, and counts no failure toward the failure limit, so a ledger that stays behind never pauses the recipe. The entry's
-expiry still bounds the re-sends: once it passes, the recipe ends under `expired`, as under any other hold.
+expiry and the ceilings still bound the re-sends: once the entry expires, the recipe ends under `expired`, as under any
+other hold, and a ceiling that runs out first ends it under its own reason.
 
 A wasted probe settles on its own with one of nine reasons: when the recipe stops with a probe unanswered or is held
 under `horizon`, when it lapses or is evicted, or when the next request after the probe reads nothing from the entry it

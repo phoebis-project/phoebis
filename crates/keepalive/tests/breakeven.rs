@@ -4,14 +4,14 @@ mod common;
 
 use common::relay_common::test_account_row;
 use phoebis_keepalive::{
-    break_even_ms, factors_for, resolve, Factors, Funding, KeepalivePolicy, KeepaliveTiming, Range,
-    FIVE_MINUTES_MS, ONE_HOUR_MS,
+    break_even_ms, factors_for, resolve, BreakEvenFactors, Funding, KeepalivePolicy,
+    KeepaliveTiming, Range, FIVE_MINUTES_MS, ONE_HOUR_MS,
 };
 use phoebis_ledger::{PlanTables, PriceTable, SubscriptionCosts};
 use phoebis_store::{ModelRule, PoolRow};
 
-fn factors(read: f64, write: f64) -> Factors {
-    Factors {
+fn factors(read: f64, write: f64) -> BreakEvenFactors {
+    BreakEvenFactors {
         read,
         write_5m: write,
         write_1h: write,
@@ -49,7 +49,7 @@ fn the_break_even_is_write_less_read_over_cadence_times_read() {
         Some(5_760_000),
         "1.6 h"
     );
-    let one_hour_write = Factors {
+    let one_hour_write = BreakEvenFactors {
         read: 0.025,
         write_5m: 1.25,
         write_1h: 2.0,
@@ -223,7 +223,7 @@ fn a_plan_recipe_reads_the_plans_multipliers_on_every_model_and_a_dollar_recipe_
     );
     assert_eq!(
         factors_for(&pricing, &tables, Funding::ApiKey, "claude-opus-5-5"),
-        Factors {
+        BreakEvenFactors {
             read: 0.2 / 1_000_000.0,
             write_5m: 5.0 / 1_000_000.0,
             write_1h: 8.0 / 1_000_000.0,
@@ -342,8 +342,8 @@ fn a_model_priced_nowhere_takes_the_tightest_row_of_each_ttl() {
     );
 }
 
-/// The rows `PRICES` and `COSTS` give at the production timing: Opus on the plan reads 0.025 against 1.25 on either
-/// TTL, Sonnet has no plan weight and reads its dollar row, and Sonnet's dollar row is the tightest.
+/// The rows `PRICES` and `COSTS` give at the production timing: every plan recipe reads 0.025 against 1.25 on either
+/// TTL whatever its model's weight, and Sonnet's dollar row is the tightest.
 #[tokio::test]
 async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
     let rig = common::rig(common::RigSpec {
@@ -466,6 +466,25 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
         one(5_760.0),
         "an allow entry naming the dated id reads that model's row through its undated base, not the tightest row"
     );
+    // A request's model reaches the rows lowercased and without a `[1m]` suffix, so a named id is judged the same way.
+    let (seconds, _) = figures(
+        &pool(rewritten, only(&["Claude-Opus-5-5-20261001"])),
+        std::slice::from_ref(&dollars),
+    );
+    assert_eq!(
+        seconds.0,
+        one(5_760.0),
+        "a capitalized name reads the model's row, as a request on it does"
+    );
+    let (seconds, _) = figures(
+        &pool(rewritten, only(&["claude-opus-5-5", "claude-opus-5-5[1m]"])),
+        std::slice::from_ref(&dollars),
+    );
+    assert_eq!(
+        seconds.0,
+        one(5_760.0),
+        "a `[1m]` twin is its base model and adds no combination of its own"
+    );
 
     let (seconds, _) = figures(
         &pool(rewritten, only(&["claude-unlisted-9"])),
@@ -476,6 +495,21 @@ async fn a_pool_resolves_its_ceilings_over_its_fundings_ttls_and_models() {
         one(2_760.0),
         "rules that allow no priced model leave the tightest row, as a recipe on an unpriced model reads"
     );
+    // A wildcard alone names no model, so neither the price table nor a named id leaves a combination.
+    for (account, expected, funding) in [
+        (&dollars, 2_760.0, "the tightest dollar row"),
+        (&plan, 158_760.0, "the plan's multipliers"),
+    ] {
+        let (seconds, _) = figures(
+            &pool(rewritten, only(&["gpt-*"])),
+            std::slice::from_ref(account),
+        );
+        assert_eq!(
+            seconds.0,
+            one(expected),
+            "rules that allow only an unpriced family read {funding}"
+        );
+    }
 
     assert_eq!(
         rig.engine

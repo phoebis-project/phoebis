@@ -493,8 +493,8 @@ async fn a_paused_recipe_keeps_its_cause_through_a_disabled_pool() {
         (RecipeState::Paused, Reason::ProbeQuotaExhausted),
         "the pause already withholds every probe, so the disabled pool leaves its cause: {disabled:?}"
     );
-    // Enabled again, the paused recipe is never cleared to scheduled. The accounts' cooldown still holds it, as a
-    // gate's hold lands on a paused recipe.
+    // Enabled again, the accounts' cooldown holds the recipe at the gate, and the pause bit keeps it `paused` under
+    // the hold's cause.
     edit_pool(&r, |pool| pool.enabled = true).await;
     r.advance_attended(1_000);
     r.step().await;
@@ -503,5 +503,49 @@ async fn a_paused_recipe_keeps_its_cause_through_a_disabled_pool() {
         (enabled.state, enabled.cause, r.status("main").paused),
         (RecipeState::Paused, Reason::Cooled, true),
         "{enabled:?}"
+    );
+}
+
+/// A pause withholds every probe until the next real request, and the prompt it keeps is worth nothing once the entry
+/// goes cold, so the prompt leaves at the entry's expiry while the row keeps reading `paused` with its cause.
+#[tokio::test]
+async fn a_paused_recipe_drops_its_prompt_at_its_entrys_expiry_and_still_reads_paused() {
+    let mut r = rig(RigSpec::default()).await;
+    r.observe("main").await;
+    let start = r.now();
+    exhaust_both(&r);
+    r.advance_attended(270_000);
+    r.step().await;
+    let paused = row(&r, "main");
+    assert_eq!(
+        (paused.state, paused.cause),
+        (RecipeState::Paused, Reason::ProbeQuotaExhausted),
+        "{paused:?}"
+    );
+    let probes = r.status("main").probes;
+    // The request's entry is five minutes long and the failed probe wrote none, so it expires 300 s after the request.
+    let now = r.now();
+    r.advance_attended(start + 300_000 - 1 - now);
+    r.step().await;
+    let warm = row(&r, "main");
+    assert!(
+        r.engine.stats().retained_bytes > 0,
+        "the entry is warm a millisecond short of its expiry: {warm:?}"
+    );
+    r.advance_attended(1);
+    r.step().await;
+    let cold = row(&r, "main");
+    let status = r.status("main");
+    assert_eq!(
+        (
+            cold.state,
+            cold.cause,
+            status.paused,
+            r.engine.stats().retained_bytes,
+            status.probes,
+            cold.next_probe_at
+        ),
+        (RecipeState::Paused, warm.cause, true, 0, probes, None),
+        "{cold:?}"
     );
 }

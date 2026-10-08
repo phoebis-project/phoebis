@@ -766,6 +766,110 @@ async fn a_restart_under_smaller_limits_restores_the_newest_rows_and_disposes_th
     );
 }
 
+/// A session the load admits can still carry more agents than the limit leaves room for: the subagent past it is
+/// disposed on its own, and the probe it paid for and nobody answered settles under the eviction.
+#[tokio::test]
+async fn a_subagent_past_the_agent_limit_is_disposed_alone_and_its_unanswered_probe_settles() {
+    let mut r = rig(on_disk()).await;
+    r.event(Event {
+        event: "agent_start".into(),
+        agent_id: Some("sub".into()),
+        ..Default::default()
+    })
+    .unwrap();
+    r.observe("main").await;
+    r.observe("sub").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(
+        (r.status("main").unanswered, r.status("sub").unanswered),
+        (1, 1)
+    );
+    let main_bytes = {
+        let (_, agents) = r.engine.persist_rows();
+        agents
+            .iter()
+            .find(|a| a.agent_id == "main")
+            .map(|a| a.body_size)
+            .unwrap()
+    };
+    r.engine.flush_persisted().await;
+    let second = r
+        .restart_with_limits(KeepaliveLimits {
+            max_agents: 1,
+            ..KeepaliveLimits::default()
+        })
+        .await;
+    second.load_persisted().await;
+    let stats = second.stats();
+    assert_eq!(
+        (stats.sessions, stats.agents, stats.retained_bytes),
+        (1, 1, main_bytes),
+        "the session and its main agent load"
+    );
+    assert_eq!(second.reasons().get(&Reason::Evicted).copied(), Some(1));
+    assert_eq!(
+        wasted(&r, 1).await,
+        BTreeMap::from([("evicted".to_string(), 1)]),
+        "the subagent's probe is wasted under the eviction, and main's stays unanswered"
+    );
+    assert_eq!(
+        second
+            .agent_status("desktop", "session", "main")
+            .unwrap()
+            .unanswered,
+        1
+    );
+    second.flush_persisted().await;
+    assert_eq!(
+        saved_agents(&r)
+            .iter()
+            .map(|a| a.agent_id.as_str())
+            .collect::<Vec<_>>(),
+        vec!["main"],
+        "the disposed subagent's row left the registry"
+    );
+}
+
+/// The credit after a restart reads the newest unanswered probe's coverage, entry, unit and model, so a probe nobody
+/// answered before the flush comes back with all four.
+#[tokio::test]
+async fn a_restart_restores_an_unanswered_probe_with_its_coverage_entry_unit_and_model() {
+    let mut r = rig(on_disk()).await;
+    r.observe("main").await;
+    r.advance_attended(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").unanswered, 1);
+    let (_, agents) = r.engine.persist_rows();
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    let (_, loaded) = second.persist_rows();
+    assert_eq!(
+        loaded, agents,
+        "the agent with its unanswered probe reads back as it stood"
+    );
+    let payload: serde_json::Value = serde_json::from_str(&loaded[0].payload).unwrap();
+    let probe = &payload["unanswered"][0];
+    assert_eq!(
+        (
+            payload["unanswered"].as_array().map(Vec::len),
+            probe["covered"].as_bool(),
+            probe["expires"].as_i64(),
+            probe["unit"].as_str().is_some(),
+            probe["model"].as_str(),
+        ),
+        (
+            Some(1),
+            Some(true),
+            Some(NOW + 270_000 + 300_000),
+            true,
+            Some("claude-sonnet-4-5")
+        ),
+        "{probe}"
+    );
+}
+
 #[tokio::test]
 async fn a_loaded_recipe_probes_warm_when_due() {
     let mut r = rig(on_disk()).await;

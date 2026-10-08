@@ -10001,7 +10001,7 @@ expect('/sessions', m.text(), ['Sessions', 'of 128', 'with a recipe', 'Agents', 
     // Counted off the table, so a tile that counts anything but the rows whose companion reports or went silent fails.
     const companions = [...m.container.querySelectorAll('tbody tr.srow')].filter((tr) => ['reporting', 'silent'].includes(sessionCell(m, tr, 'Companion')?.querySelector('.badge')?.textContent?.trim() ?? '')).length;
     const note = tile?.querySelector('.stat__note')?.textContent?.trim() ?? '';
-    results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with a companion,`), missing: [`${companions} rows`, note || 'no note'] });
+    results.push({ name: '/sessions the tile counts the rows whose companion reports or went silent', ok: companions > 0 && note.startsWith(`${companions} with the keepalive mod,`), missing: [`${companions} rows`, note || 'no note'] });
     // Ten of the story's seventeen rows hold a recipe; the overview's own count is every session row.
     results.push({ name: '/sessions the tile counts the rows that hold a recipe, not every session', ok: (tile?.textContent ?? '').includes(', 10 with a recipe'), missing: [tile?.textContent ?? 'absent'] });
   }

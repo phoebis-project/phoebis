@@ -154,15 +154,21 @@ fn retained(r: &Rig, agent: &str) -> bool {
         .any(|id| id == agent)
 }
 
+/// The due probes the ledger counts as withheld so far.
+fn skipped_now(r: &Rig) -> u64 {
+    r.db.read_blocking(|c| {
+        read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
+    })
+    .unwrap()
+    .iter()
+    .map(|row| row.probes_skipped)
+    .sum()
+}
+
 /// The due probes the ledger counts as withheld, once `want` of them have landed.
 async fn skipped(r: &Rig, want: u64) -> u64 {
     wait_for(Duration::from_secs(5), || {
-        let rows =
-            r.db.read_blocking(|c| {
-                read_rollups(c, hour_of(NOW) - 3_600, i64::MAX, &RollupSelect::default())
-            })
-            .unwrap();
-        let total: u64 = rows.iter().map(|row| row.probes_skipped).sum();
+        let total = skipped_now(r);
         (total == want).then_some(total)
     })
     .await
@@ -547,6 +553,9 @@ async fn a_horizon_hold_ends_expired_once_its_entry_lapses_and_shows_no_probe_du
         "the hold settled every probe, so the lapse settles none"
     );
     assert_eq!(skipped(&r, 1).await, 1, "the withheld probe counts once");
+    // The ledger takes its rows a moment after the tick, so a second count would land behind the first: the total has
+    // to hold at one a while.
+    fake_upstream::stays_for(Duration::from_millis(200), || skipped_now(&r) == 1).await;
 }
 
 #[tokio::test]
@@ -619,11 +628,18 @@ async fn a_park_with_no_deadline_ends_at_the_break_even_under_a_null_parked_ceil
 
 #[tokio::test]
 async fn a_paused_recipe_held_under_horizon_settles_its_probes_there_and_keeps_its_pause() {
-    let mut r = rig(plan(policy(|_| {}))).await;
+    // A paused recipe loses its prompt at its entry's expiry, a minute after the probe that paused it, so the window
+    // ends inside that minute here: without the jitter a five-minute entry is probed every 240 s, the probe at 3,600 s
+    // pauses it with the entry the 3,360 s probe wrote still warm until 3,660 s, and the window ends at 3,630 s.
+    let mut r = rig(RigSpec {
+        timing: exact(),
+        ..plan(policy(|p| p.max_idle_seconds = 3_630))
+    })
+    .await;
     r.observe("main").await;
     let start = r.now();
     park(&mut r, "main", "scheduled", None, Some(start + 72 * HOUR));
-    tick_to(&mut r, start + 30 * MINUTE).await;
+    tick_to(&mut r, start + 3_500_000).await;
     // An answer with no usage pauses the recipe and cools no account, so no gate hold rewrites the pause's reason.
     r.up.push_credential_rule(
         OAUTH,
@@ -634,7 +650,7 @@ async fn a_paused_recipe_held_under_horizon_settles_its_probes_there_and_keeps_i
             body: br#"{"id":"m","type":"message","content":[]}"#.to_vec(),
         },
     );
-    tick_to(&mut r, start + 40 * MINUTE).await;
+    tick_to(&mut r, start + 3_600_000).await;
     let paused = r.status("main");
     assert_eq!(
         (paused.paused, paused.reason),
@@ -642,16 +658,27 @@ async fn a_paused_recipe_held_under_horizon_settles_its_probes_there_and_keeps_i
         "{paused:?}"
     );
     assert!(paused.unanswered > 0, "{paused:?}");
-    tick_to(&mut r, start + HOUR).await;
+    tick_to(&mut r, start + 3_630_000).await;
     let held = r.status("main");
     assert_eq!(
-        (held.paused, held.reason, held.unanswered),
-        (true, Reason::InvalidProbeUsage, 0),
-        "the pause keeps its reason: {held:?}"
+        (
+            held.paused,
+            held.reason,
+            held.unanswered,
+            retained(&r, "main")
+        ),
+        (true, Reason::InvalidProbeUsage, 0, true),
+        "the pause keeps its reason and the warm entry its prompt: {held:?}"
     );
     assert_eq!(
         wasted(&r, paused.unanswered as u64).await,
         BTreeMap::from([("horizon".to_string(), paused.unanswered as u64)])
+    );
+    tick_to(&mut r, start + 3_660_000).await;
+    assert_eq!(
+        (r.status("main").paused, retained(&r, "main")),
+        (true, false),
+        "the cold entry takes the prompt and leaves the pause"
     );
 }
 

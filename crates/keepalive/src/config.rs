@@ -216,13 +216,17 @@ pub struct KeepaliveTiming {
     pub lead_1h_ms: i64,
     /// Spreads a pool's probes so one tick never bursts.
     pub jitter_5m_ms: i64,
+    /// The same spread on a one-hour entry, wider since its six-minute lead leaves the room.
     pub jitter_1h_ms: i64,
     /// Two cold probes in a row and the entry is gone for good.
     pub cold_probe_limit: u32,
-    /// Transient failures before the recipe pauses.
+    /// A failure that repeats this often is no passing fault, so the recipe pauses rather than keep paying for probes
+    /// that fail.
     pub failure_limit: u32,
     /// The first retry's wait, which each further failure doubles up to `retry_max_ms`.
     pub retry_ms: i64,
+    /// Caps the doubling and an `accounts_at_cap` answer's `Retry-After` at a five-minute entry's whole TTL, so a retry
+    /// never waits out the entry it is meant to keep.
     pub retry_max_ms: i64,
 }
 

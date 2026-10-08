@@ -85,7 +85,7 @@ export const CAUSE_HINT: Record<RecipeCause, string> = {
   horizon:
     "The session is parked on a scheduled wakeup further away than the pool's horizon, so the recipe is held. Probing resumes once the wake is within the horizon while the entry is still warm, and the recipe ends as expired when the entry's TTL passes.",
   idle_limit: "The pool's idle window, capped at the recipe's break-even, ran out with no real request, so the retained prompt was discarded. The next real request starts a new recipe.",
-  ineligible_credential: 'The pinned account cannot take a probe, because it left the registry or its subscription ended.',
+  ineligible_credential: 'The account this session would use left the registry or its subscription ended, so nothing is sent on it.',
   instance_replaced: "A new instance of the keepalive mod took this session over, so the old instance's recipes were dropped.",
   invalid_cache_control: "The request's cache markers could not be read, so it was not kept.",
   invalid_model: 'The request named a model a recipe cannot carry, so it was not kept.',

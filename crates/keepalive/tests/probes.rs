@@ -1659,7 +1659,8 @@ async fn a_fast_recipe_served_standard_prices_at_the_standard_cells() {
 }
 
 /// A tier the store cannot read leaves a plan-funded probe no window to size a share by, so its unit falls back to
-/// dollars as on an account the store names no tier for, and the log says why, naming the account and the error.
+/// dollars as on an account the store names no tier for, and the log says why, naming the account and the error. One
+/// line marks the start of a failing streak, and a restart alone starts the next.
 #[tokio::test]
 async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     let captured = Captured::default();
@@ -1688,16 +1689,25 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
     r.advance(270_000);
     r.step().await;
     assert_eq!(r.status("main").probes, 1);
-    let text = captured.text();
-    let settled: Vec<&str> = text
-        .lines()
-        .filter(|line| {
-            line.contains(
-                "the account's tier could not be read, so the settlement falls back to dollars",
-            )
-        })
-        .collect();
-    assert_eq!(settled.len(), 1, "one line for the one settlement:\n{text}");
+    let warnings = || -> Vec<String> {
+        captured
+            .text()
+            .lines()
+            .filter(|line| {
+                line.contains(
+                    "the account's tier could not be read, so the settlement falls back to dollars",
+                )
+            })
+            .map(String::from)
+            .collect()
+    };
+    let settled = warnings();
+    assert_eq!(
+        settled.len(),
+        1,
+        "one line for the one settlement:\n{}",
+        captured.text()
+    );
     assert!(
         settled[0].contains(" WARN ")
             && settled[0].contains("account=o")
@@ -1706,4 +1716,32 @@ async fn a_failed_tier_read_warns_once_and_settles_the_probe_in_dollars() {
         "{}",
         settled[0]
     );
+    let (_, agents) = r.engine.persist_rows();
+    let payload: serde_json::Value = serde_json::from_str(&agents[0].payload).unwrap();
+    assert_eq!(
+        payload["unanswered"][0]["unit"].as_str(),
+        Some("usd"),
+        "the probe settled in dollars: {}",
+        payload["unanswered"]
+    );
+    // The read still fails at the next probe's settlement, which is the same streak.
+    r.advance(270_000);
+    r.step().await;
+    assert_eq!(r.status("main").probes, 2);
+    assert_eq!(warnings().len(), 1, "{:?}", warnings());
+    // A restart starts with no streak, so the registry that is still unreadable warns once more.
+    r.engine.flush_persisted().await;
+    let second = r.restart().await;
+    second.load_persisted().await;
+    r.advance(270_000);
+    second.step().await;
+    second.wait_idle().await;
+    assert_eq!(
+        second
+            .agent_status("desktop", "session", "main")
+            .unwrap()
+            .probes,
+        3
+    );
+    assert_eq!(warnings().len(), 2, "{:?}", warnings());
 }

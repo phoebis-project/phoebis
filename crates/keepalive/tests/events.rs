@@ -128,7 +128,8 @@ async fn json_events_match_the_contract() {
             ack.request_generation,
             ack.agents.is_none()
         ),
-        (99, "session", "instance", Some("main"), 0, true)
+        (99, "session", "instance", None, 0, true),
+        "a heartbeat names no agent and carries main's generation"
     );
     assert_eq!(ack.lease_expires_ms, r.now() + r.lease_ms());
     r.sequence = 99;

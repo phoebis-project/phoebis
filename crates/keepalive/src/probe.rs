@@ -108,7 +108,7 @@ impl ProbeOutcome {
 /// The word the probe counter files a probe under: a served probe landed when it read its prefix back and was cold
 /// otherwise, and every other outcome is one the upstream did not serve. Every outcome is named, so one added later
 /// fails to build here rather than counting as `failed` unread.
-pub fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'static str {
+pub(crate) fn probe_outcome_label(outcome: ProbeOutcome, cache_read: bool) -> &'static str {
     match outcome {
         ProbeOutcome::Migrated | ProbeOutcome::Ok if cache_read => "landed",
         ProbeOutcome::Migrated | ProbeOutcome::Ok => "cold",
@@ -159,10 +159,10 @@ pub(crate) enum Applied {
     Orphaned,
 }
 
-/// The unit and the cost a probe settles in: the unit `settlement_unit` decides, and the probe's own usage priced in
-/// it.
+/// The unit a probe settles in: the one `settlement_unit` decides, or dollars where the share it names cannot be priced.
+/// Only the unit is kept, since the credit reads its presence and the ledger the probe's dollars.
 #[allow(clippy::too_many_arguments)]
-fn settled_cost(
+fn settled_unit(
     default_unit: SavingsUnit,
     table: &PriceTable,
     tables: &PlanTables,
@@ -171,25 +171,22 @@ fn settled_cost(
     canonical_model: &str,
     usage: ProbeUsage,
     at: i64,
-) -> (SavingsUnit, f64) {
+) -> SavingsUnit {
     let unit = settlement_unit(default_unit, tables, tier, canonical_model);
-    if unit == SavingsUnit::WindowShare {
-        if let Some(share) = probe_cost(unit, table, tables, tier, canonical_model, usage, at) {
-            return (unit, share);
-        }
+    if unit == SavingsUnit::WindowShare
+        && probe_cost(unit, table, tables, tier, canonical_model, usage, at).is_none()
+    {
         // `settlement_unit` reads `priced`, which asks exactly what `share_at` needs (a weight on the window and a
-        // capacity for the tier), so this branch is unreachable; it stays as the defensive read of a `None`.
+        // capacity for the tier), so this branch is unreachable. It stays as the defensive read of a `None`.
         tracing::debug!(
             account,
             model = canonical_model,
             unpriced = unpriced_reason(tables, canonical_model),
             "a probe the cost model cannot price on the window share settles in dollars"
         );
+        return SavingsUnit::Usd;
     }
-    (
-        SavingsUnit::Usd,
-        probe_dollars(table, canonical_model, usage),
-    )
+    unit
 }
 
 /// The `Retry-After` seconds a pool-at-its-cap 429 or a `ledger_behind` 503 carries, `None` for a missing header or
@@ -314,19 +311,24 @@ pub(crate) async fn run_job(engine: Arc<Engine>, job: ProbeJob) {
         // The tier the store names now: a share is of the window the account has at this settlement.
         let tier = (default_unit == SavingsUnit::WindowShare)
             .then(|| match engine.parts.store.subscription(&record.account) {
-                Ok(row) => row,
+                Ok(row) => {
+                    inner.unreadable_tiers.remove(&record.account);
+                    row
+                }
                 Err(error) => {
-                    tracing::warn!(
-                        account = %record.account,
-                        %error,
-                        "the account's tier could not be read, so the settlement falls back to dollars"
-                    );
+                    if inner.unreadable_tiers.insert(record.account.clone()) {
+                        tracing::warn!(
+                            account = %record.account,
+                            %error,
+                            "the account's tier could not be read, so the settlement falls back to dollars"
+                        );
+                    }
                     None
                 }
             })
             .flatten()
             .and_then(|s| s.tier);
-        let (unit, _) = settled_cost(
+        let unit = settled_unit(
             default_unit,
             &table,
             &tables,
@@ -760,8 +762,8 @@ impl Inner {
             let wait_ms = retry_after_ms.unwrap_or(agent.timing.retry_ms);
             agent.retry_at = Some(now.saturating_add(wait_ms));
             // A hold costs no tick: `idle_ticks` counts served or failed probes, so the tick this probe's dispatch
-            // counted comes back, and a dispatch that counted none gives back nothing. The entry's lapse and
-            // `max_idle_seconds` bound the hold.
+            // counted comes back, and a dispatch that counted none gives back nothing. The entry's lapse and the
+            // ceilings bound the hold.
             if counted_idle_tick {
                 agent.idle_ticks = agent.idle_ticks.saturating_sub(1);
             }
@@ -781,7 +783,7 @@ impl Inner {
     }
 
     /// Exponential backoff from the timing's `retry_ms`, capped at its `retry_max_ms`, unless `override_delay_ms`
-    /// names this attempt's own wait (the `accounts_at_cap` header); the failure limit bounds consecutive retries
+    /// names this attempt's own wait (the `accounts_at_cap` header). The failure limit bounds consecutive retries
     /// either way. A retry that falls past the entry's expiry needs no check here: the due time is the later of the
     /// two, so the first tick at or after the expiry holds the recipe as lapsed before the retry could send.
     pub(crate) fn retry(
@@ -1149,8 +1151,8 @@ mod tests {
         );
     }
 
-    /// A table pricing a model the shipped cost model has no weight for, so `settled_cost` must fall all the way
-    /// back to dollars rather than mixing a dollar figure into a share-priced settlement.
+    /// A table pricing a model the shipped cost model has no weight for, so `settled_unit` must fall all the way
+    /// back to dollars rather than naming a share nothing can price.
     fn table_pricing_an_unlisted_model() -> PriceTable {
         PriceTable {
             version: "test".into(),
@@ -1196,7 +1198,7 @@ mod tests {
             five_minutes: 2_000,
             ..ProbeUsage::default()
         };
-        let (unit, cost) = settled_cost(
+        let unit = settled_unit(
             SavingsUnit::WindowShare,
             &table,
             &tables,
@@ -1211,18 +1213,6 @@ mod tests {
             SavingsUnit::Usd,
             "the cost model has no weight, so the unit falls back too"
         );
-        let expected = probe_cost(
-            SavingsUnit::Usd,
-            &table,
-            &tables,
-            MAX_20X,
-            "unlisted-model",
-            usage,
-            OFF_BAND,
-        )
-        .unwrap();
-        assert!(expected > 0.0, "{expected}");
-        assert_eq!(cost, expected);
     }
 
     // The test table: Opus 5.5 weighs 2 and an input token multiplies by 1, the Max 20x 5-hour window holds 100
@@ -1235,25 +1225,35 @@ mod tests {
             input: 1,
             ..ProbeUsage::default()
         };
-        let settle = |at: i64| {
-            settled_cost(
-                SavingsUnit::WindowShare,
+        let unit = settled_unit(
+            SavingsUnit::WindowShare,
+            &table,
+            &tables,
+            MAX_20X,
+            "o",
+            "claude-opus-5-5",
+            one_input,
+            OFF_BAND,
+        );
+        assert_eq!(unit, SavingsUnit::WindowShare);
+        let share = |at: i64| {
+            probe_cost(
+                unit,
                 &table,
                 &tables,
                 MAX_20X,
-                "o",
                 "claude-opus-5-5",
                 one_input,
                 at,
             )
+            .unwrap()
         };
-        let (unit, cost) = settle(OFF_BAND);
-        assert_eq!(unit, SavingsUnit::WindowShare);
+        let cost = share(OFF_BAND);
         assert!(
             (cost - 2.0 / 100.0).abs() < 1e-12,
             "one Opus 5.5 input token is its 2 units over the window's 100: {cost}"
         );
-        let (_, banded) = settle(IN_BAND);
+        let banded = share(IN_BAND);
         assert!(
             (banded - 2.0 / 100.0 / 0.5).abs() < 1e-12,
             "the band is inside the price at the settlement instant: {banded}"
@@ -1264,7 +1264,7 @@ mod tests {
     fn a_plan_funded_probe_on_an_account_without_a_tier_settles_in_dollars() {
         let table = PriceTable::shipped();
         let tables = PlanTables::shipped();
-        let (unit, cost) = settled_cost(
+        let unit = settled_unit(
             SavingsUnit::WindowShare,
             &table,
             &tables,
@@ -1274,22 +1274,11 @@ mod tests {
             million_input(),
             OFF_BAND,
         );
-        let dollars = probe_cost(
-            SavingsUnit::Usd,
-            &table,
-            &tables,
-            None,
-            "claude-opus-5",
-            million_input(),
-            OFF_BAND,
-        )
-        .unwrap();
         assert_eq!(
-            (unit, cost),
-            (SavingsUnit::Usd, dollars),
+            unit,
+            SavingsUnit::Usd,
             "no tier names the window the share would be of, so the probe settles in dollars"
         );
-        assert!(dollars > 0.0, "{dollars}");
     }
 
     #[test]
@@ -1297,7 +1286,7 @@ mod tests {
         // The test table leaves Opus 5 without a weight; the test price table lists it.
         let table = phoebis_ledger::test_tables::api_prices();
         let tables = phoebis_ledger::test_tables::subscription_costs();
-        let (unit, cost) = settled_cost(
+        let unit = settled_unit(
             SavingsUnit::WindowShare,
             &table,
             &tables,
@@ -1307,22 +1296,11 @@ mod tests {
             million_input(),
             OFF_BAND,
         );
-        let dollars = probe_cost(
-            SavingsUnit::Usd,
-            &table,
-            &tables,
-            None,
-            "claude-opus-5",
-            million_input(),
-            OFF_BAND,
-        )
-        .unwrap();
         assert_eq!(
-            (unit, cost),
-            (SavingsUnit::Usd, dollars),
+            unit,
+            SavingsUnit::Usd,
             "Opus 5 has no weight, so the share is unpriced and the dollar unit governs"
         );
-        assert!(dollars > 0.0);
     }
 
     #[test]
