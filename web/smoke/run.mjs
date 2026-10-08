@@ -6412,6 +6412,101 @@ await m.navigate(`/requests/${laptopRow.id}`);
   results.push({ name: tickCheck, ok: bodies !== undefined && drawn === 2 && after === 0, missing: [`${answered.length} answers`, `${drawn} bodies drawn`, `${after} serializations after the tick`] });
   frozen.unmount();
 }
+// A streamed capture draws as its events over indented data and both blocks carry token spans, "Open wide" opens
+// the block in a dialog with the same text, Escape with the dialog open leaves the drawer, a plain string draws
+// unquoted, and a large stream stays its stored text until Pretty-print splits it. The mock's captures are JSON
+// objects, so each stubbed answer lands on a captured row the drawer is not showing: a navigation to the shown path
+// reads no bodies, and the block keyed on the request keeps its Pretty-print state.
+{
+  const blockOf = (page, label) => [...page.container.querySelectorAll('.drawer .body-block')].find((b) => b.querySelector('.body-block__head')?.children[0]?.textContent?.trim() === label);
+  const pretty = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Pretty-print');
+  const shown = (block) => block?.querySelector(':scope > .body-block__pre')?.textContent ?? '';
+  const spans = (block, cls) => [...(block?.querySelector(':scope > .body-block__pre')?.querySelectorAll(`.${cls}`) ?? [])].map((s) => s.textContent);
+  const wide = (block) => [...(block?.querySelectorAll('button') ?? [])].find((b) => b.textContent?.trim() === 'Open wide');
+  const copy = (node) => [...(node?.querySelectorAll('button') ?? [])].find((b) => ['Copied', 'Copy'].includes(b.textContent?.trim() ?? ''));
+  const original = api.getCapturedBodies;
+  /** The next bodies read answers the row's own capture with `patch` over it, once. */
+  const stub = (patch) => {
+    api.getCapturedBodies = async (id) => {
+      api.getCapturedBodies = original;
+      const answer = await original.call(api, id);
+      return { ...answer, requestId: id, ...patch };
+    };
+  };
+  const shownPath = m.location().pathname;
+  const [streamRow, plainRow, largeRow] = requests.filter((r) => r.capturedBodies && !r.responseTruncated && shownPath !== `/requests/${r.id}`).slice(-3);
+  const streamCheck = '/requests a captured stream draws its events over indented data and both blocks carry key spans';
+  const wideCheck = "/requests Open wide opens a dialog titled with the block's label and the request id holding the same text";
+  const escapeCheck = '/requests Escape with the wide dialog open leaves the drawer open';
+  const plainCheck = '/requests a plain string capture draws unquoted with its newlines';
+  const largeCheck = '/requests a large stream capture stays its stored text until Pretty-print splits it';
+  if (!streamRow || !plainRow || !largeRow) {
+    for (const name of [streamCheck, wideCheck, escapeCheck, plainCheck, largeCheck]) results.push({ name, ok: false, missing: ['fixture: three captured rows'] });
+  } else {
+    const sse = 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\nevent: message_stop\ndata: {"type":"message_stop"}\n\n';
+    stub({ response: sse, responseBytesStored: sse.length });
+    await m.navigate(`/requests/${streamRow.id}`);
+    const request = blockOf(m, 'Request');
+    const response = blockOf(m, 'Response');
+    const text = shown(response);
+    const keys = spans(request, 'tok-key');
+    const events = spans(response, 'tok-event');
+    results.push({
+      name: streamCheck,
+      ok: text.includes('event: message_start\n{\n  "type"') && text.includes('event: message_stop') && keys.includes('"model"') && events.length === 2,
+      missing: [`response: ${JSON.stringify(text.slice(0, 60))}`, `request keys: ${keys.slice(0, 3).join(', ')}`, `${events.length} event spans`],
+    });
+
+    wide(request)?.click();
+    await m.settle(100);
+    const dialog = m.container.querySelector('dialog[open]');
+    const title = dialog?.querySelector('.dialog__title')?.textContent ?? '';
+    const expectedTitle = `Request of ${streamRow.id.length > 24 ? `${streamRow.id.slice(0, 24)}…` : streamRow.id}`;
+    const dialogText = dialog?.querySelector('.body-block__pre')?.textContent ?? '';
+    const footCopy = copy(dialog?.querySelector('.dialog__foot')) !== undefined;
+    results.push({
+      name: wideCheck,
+      ok: dialog !== null && title === expectedTitle && dialogText.length > 0 && dialogText === shown(request) && footCopy,
+      missing: [dialog ? `title "${title}", expected "${expectedTitle}"` : 'no open dialog', dialogText === shown(request) ? '' : 'the dialog text differs from the block', footCopy ? '' : 'no Copy in the footer'],
+    });
+
+    window.dispatchEvent(new window.KeyboardEvent('keydown', { key: 'Escape' }));
+    await m.settle(100);
+    const held = { dialog: m.container.querySelector('dialog[open]') !== null, drawer: m.container.querySelector('.drawer') !== null };
+    m.container.querySelector('dialog[open] .dialog__close')?.click();
+    await m.settle(100);
+    const closed = { dialog: m.container.querySelector('dialog[open]') !== null, drawer: m.container.querySelector('.drawer') !== null };
+    results.push({
+      name: escapeCheck,
+      ok: held.dialog && held.drawer && !closed.dialog && closed.drawer,
+      missing: [`after Escape: ${held.dialog ? 'dialog open' : 'dialog closed'}, ${held.drawer ? 'drawer open' : 'drawer closed'}`, `after the close button: ${closed.dialog ? 'dialog open' : 'dialog closed'}, ${closed.drawer ? 'drawer open' : 'drawer closed'}`],
+    });
+
+    stub({ request: 'line one\nline two', requestBytesStored: 17 });
+    await m.navigate(`/requests/${plainRow.id}`);
+    const plain = shown(blockOf(m, 'Request'));
+    results.push({ name: plainCheck, ok: plain === 'line one\nline two', missing: [JSON.stringify(plain.slice(0, 40))] });
+
+    // One frame a few KiB long reaches the threshold in about a hundred frames, so the split draws thousands of
+    // spans rather than tens of thousands.
+    const delta = `event: content_block_delta\ndata: {"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"${'x'.repeat(3_000)}"}}\n\n`;
+    let stored = 'event: message_start\ndata: {"type":"message_start","message":{"id":"msg_1"}}\n\n';
+    while (stored.length <= 256 * 1024) stored += delta;
+    stub({ response: stored, responseBytesStored: stored.length });
+    await m.navigate(`/requests/${largeRow.id}`);
+    const large = () => blockOf(m, 'Response');
+    const before = { button: pretty(large()) !== undefined, events: spans(large(), 'tok-event').length, text: shown(large()) };
+    pretty(large())?.click();
+    await m.settle();
+    const after = shown(large());
+    results.push({
+      name: largeCheck,
+      ok: before.button && before.text === stored && before.events === 0 && !/\n {2}/.test(before.text) && after.startsWith('event: message_start\n{\n  "type"'),
+      missing: [`before: ${before.button ? 'Pretty-print' : 'no Pretty-print'}, ${before.text === stored ? 'the stored text' : 'another text'}, ${before.events} event spans, ${/\n {2}/.test(before.text) ? 'indented' : 'compact'}`, `after: ${JSON.stringify(after.slice(0, 40))}`],
+    });
+  }
+  api.getCapturedBodies = original;
+}
 {
   const cut = requests.find((r) => r.keyId === 'laptop' && r.capturedBodies && r.responseTruncated);
   if (cut) {

@@ -2651,6 +2651,115 @@ async function requestDrawerCompact(theme) {
   for (const c of got.chips.filter((x) => got.reference !== null && x.box !== got.reference)) say(`the newest answered request's ${c.row} row's "${c.text}" chip measures ${c.box} against the status badge's ${got.reference}`);
 }
 
+/**
+ * "Open wide" on a captured body: the dialog is 1040 px wide at 1280 by 800 and at 1440 by 900 and takes the grouped
+ * dialogs' height (800 px, or the viewport less 48), its text fills the body past the drawer's 260 px cap and scrolls
+ * inside it while the body and the dialog do not, and Escape closes the dialog and leaves the drawer open. It runs
+ * after the drawer measure, so a drawer is open, and moves down the first page to the first row whose drawer draws a
+ * body when that one draws none. In the mock pass it then narrows the list to the laptop key, opens a row whose answer
+ * was cut and reads that the block's head, with the cut note and three actions in one row, overflows nowhere at the
+ * 400 px drawer.
+ */
+async function wideBodyDialog(theme) {
+  const say = (what) => failures.push(`${theme} /requests wide body: ${what}`);
+  const loaded = () => page.waitForFunction(() => document.querySelector('.drawer .skeleton') === null, null, { timeout: 5_000 }).catch(() => {});
+  const hasBlock = () => page.evaluate(() => document.querySelector('.drawer .body-block') !== null);
+  const rows = page.locator('.requests__table tbody tr');
+  for (let i = 0, n = await rows.count(); i < n && !(await hasBlock()); i += 1) {
+    await rows.nth(i).click();
+    await advance(LOAD_MS);
+    await loaded();
+  }
+  if (!(await hasBlock())) {
+    say('no drawer on the first page draws a captured body');
+    return;
+  }
+  const link = page.locator('.drawer .body-block__link', { hasText: 'Open wide' }).first();
+  if ((await link.count()) === 0) {
+    say('the body block has no Open wide link');
+    return;
+  }
+  await link.click();
+  try {
+    await page.waitForSelector('dialog[open].dialog--wide', { timeout: 5_000 });
+  } catch {
+    say('Open wide opened no dialog');
+    return;
+  }
+  const read = () =>
+    page.evaluate(() => {
+      const dialog = document.querySelector('dialog[open].dialog--wide');
+      const body = dialog?.querySelector('.dialog__body');
+      const pre = body?.querySelector('.body-block__pre');
+      if (!dialog || !body || !pre) return null;
+      const s = getComputedStyle(body);
+      return {
+        body: { client: body.clientHeight, inner: Math.round(body.clientHeight - parseFloat(s.paddingTop) - parseFloat(s.paddingBottom)), scroll: body.scrollHeight },
+        dialog: { client: dialog.clientHeight, height: Math.round(dialog.getBoundingClientRect().height), scroll: dialog.scrollHeight, width: Math.round(dialog.getBoundingClientRect().width) },
+        pre: { client: pre.clientHeight, outer: pre.offsetHeight, scroll: pre.scrollHeight },
+      };
+    });
+  for (const { height, width } of [
+    { height: 800, width: 1280 },
+    { height: 900, width: 1440 },
+  ]) {
+    const where = `the wide dialog at ${width} by ${height}`;
+    await page.setViewportSize({ height, width });
+    await settle();
+    const got = await read();
+    measurements.push(`${theme} /requests wide body dialog at ${width} by ${height} ${JSON.stringify(got)}`);
+    if (got === null) {
+      say(`${where} is not drawn`);
+      continue;
+    }
+    if (got.dialog.width !== 1040) say(`${where} is ${got.dialog.width}px wide, not 1040px`);
+    const tall = Math.min(800, height - 48);
+    if (got.dialog.height !== tall) say(`${where} is ${got.dialog.height}px tall, not ${tall}px`);
+    if (got.pre.client <= 260) say(`${where}: the text box is ${got.pre.client}px tall, within the drawer's 260px cap`);
+    if (Math.abs(got.pre.outer - got.body.inner) > 1) say(`${where}: the text box is ${got.pre.outer}px tall in a body of ${got.body.inner}px`);
+    if (got.pre.scroll <= got.pre.client) say(`${where}: the text does not scroll inside its box (${got.pre.scroll}px in ${got.pre.client}px)`);
+    if (got.body.scroll !== got.body.client) say(`${where}: the body scrolls (${got.body.scroll}px in ${got.body.client}px)`);
+    if (got.dialog.scroll !== got.dialog.client) say(`${where}: the dialog scrolls (${got.dialog.scroll}px in ${got.dialog.client}px)`);
+  }
+  await page.setViewportSize({ height: 800, width: 1280 });
+  await settle();
+  await page.keyboard.press('Escape');
+  await settle();
+  const after = await page.evaluate(() => ({ dialog: document.querySelector('dialog[open]') !== null, drawer: document.querySelector('.drawer') !== null }));
+  if (after.dialog) say('Escape left the dialog open');
+  if (!after.drawer) say('Escape closed the drawer with the dialog');
+  if (!mock) return;
+  // The story's cut answers sit on every seventh laptop row, so the list is narrowed to that key for the read.
+  await page.goto(`${base}/requests?keys=laptop`);
+  await booted();
+  await advance(LOAD_MS);
+  await page.waitForSelector('.requests__table tbody tr', { timeout: 15_000 }).catch(() => {});
+  const cutHead = () =>
+    page.evaluate(() => {
+      const head = [...document.querySelectorAll('.drawer .body-block__head')].find((h) => h.textContent?.includes('cut at'));
+      if (!head) return null;
+      const linesOf = (el) => {
+        const range = document.createRange();
+        range.selectNodeContents(el);
+        return new Set([...range.getClientRects()].map((r) => Math.round(r.top))).size;
+      };
+      const note = [...head.children].find((c) => c.textContent?.includes('cut at'));
+      const buttons = [...head.querySelectorAll('.body-block__actions button')];
+      const box = (b) => b.getBoundingClientRect();
+      return { actions: { buttons: buttons.length, stacked: buttons.some((b, i) => i > 0 && box(b).left < box(buttons[i - 1]).right) }, client: head.clientWidth, height: Math.round(head.getBoundingClientRect().height), note: note ? linesOf(note) : 0, scroll: head.scrollWidth };
+    });
+  let cut = await cutHead();
+  for (let i = 0, n = await rows.count(); i < n && cut === null; i += 1) {
+    await rows.nth(i).click();
+    await advance(LOAD_MS);
+    await loaded();
+    cut = await cutHead();
+  }
+  measurements.push(`${theme} /requests cut body head at the 400px drawer ${JSON.stringify(cut)}`);
+  if (cut === null) say('no row on the first page draws a cut answer');
+  else if (cut.scroll > cut.client) say(`the cut body's head needs ${cut.scroll}px of its ${cut.client}px`);
+}
+
 const DECISION_ROWS = '.routing-log__table tbody tr.routing-log__row:not([data-row^="event/"])';
 
 /** Opens `row` beneath itself and answers whether a card with its walk arrived. */
@@ -3708,6 +3817,7 @@ try {
       await advance(SHOT_MS);
       await page.screenshot({ fullPage: true, path: join(shots, theme, `${view.slug}.png`) });
       if (view.path === '/requests') await requestDrawerCompact(theme);
+      if (view.path === '/requests') await wideBodyDialog(theme);
       if (view.path === '/routing-log') await decisionCard(theme);
       if (view.path === '/sessions') await forkLink(theme);
     }

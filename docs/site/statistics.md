@@ -418,8 +418,9 @@ with the upstream request and message ids under it, its shape, the client hints 
 carries a "Routing log" link and each row a "Routing" link beside "Details", both opening the
 [routing log](#routing-log) on that request with a quarter hour either side. While the drawer is open the table shows a
 compact set of columns (time, model, status and attempts), and the chosen set returns when it closes. The drawer shows
-the captured request and response bodies, each with Copy, which copies the text as shown; a body past 256 KiB shows
-compact until Pretty-print is pressed.
+the captured request and response bodies highlighted, a streamed answer as its events with each `event:` line over its
+data, each with Copy, which copies the text as shown, and an "Open wide" link that opens the body in a wide dialog. A
+body past 256 KiB shows compact until Pretty-print is pressed.
 
 ![The Requests view: the filterable table with its client column](assets/requests-light.png#only-light)
 ![The Requests view: the filterable table with its client column](assets/requests-dark.png#only-dark)

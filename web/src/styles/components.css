@@ -1003,6 +1003,52 @@ textarea.input {
   max-height: none;
 }
 
+/* The wide body dialog takes the grouped dialogs' fixed height. Its body grows so the footer stays at the dialog's
+   foot, and the text fills the body and scrolls inside it rather than the dialog. */
+.dialog--wide {
+  height: min(800px, calc(100vh - 48px));
+}
+
+.dialog--wide > .dialog__inner {
+  height: 100%;
+  max-height: none;
+}
+
+.dialog--wide .dialog__body {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.dialog--wide .body-block__pre {
+  flex: 1;
+  max-height: none;
+}
+
+.tok-event {
+  font-weight: 600;
+  color: var(--tok-event);
+}
+
+.tok-key {
+  color: var(--tok-key);
+}
+
+.tok-literal {
+  color: var(--tok-literal);
+}
+
+.tok-number {
+  color: var(--tok-number);
+}
+
+.tok-punct {
+  color: var(--tok-punct);
+}
+
+.tok-string {
+  color: var(--tok-string);
+}
+
 /* The rail's 220 px, less its border, its 9 px sides and a row's 20 px left and 10 px right, leave a group label
    171 px. The longest, Overage and plan end, takes 161.7 px chosen at weight 600 in DejaVu Sans, the face system-ui
    falls back to on a stock Linux host; the refusal dot sits outside the label's flow and takes none of it. */

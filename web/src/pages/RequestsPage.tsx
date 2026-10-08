@@ -9,8 +9,9 @@ import { ColumnsControl } from '@/components/ui/ColumnsControl';
 import { MultiSelect } from '@/components/ui/MultiSelect';
 import { PatternInput } from '@/components/ui/PatternInput';
 import { IconChevronLeft, IconChevronRight, IconChevronsLeft, IconRefresh, IconX } from '@/components/ui/icons';
-import { Badge, Button, Card, CopyButton, Descriptions, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
+import { Badge, Button, Card, CopyButton, Descriptions, Dialog, EmptyState, ErrorState, KeyValue, SearchInput, Select, Skeleton, Toggle } from '@/components/ui/primitives';
 import { autoModeLabel } from '@/lib/autoMode';
+import { bodyText, highlightJson } from '@/lib/bodies';
 import { isDivergence, missLabel } from '@/lib/cache';
 import { AGENT_TYPES, TURN_ORIGINS } from '@/lib/client';
 import { clock } from '@/lib/clock';
@@ -499,7 +500,8 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
   // responses belong to the row they were read for and to no other, so that answer is never drawn here.
   const otherRequestsBodies = bodies.data !== null && bodies.data?.requestId !== r?.id;
   useEffect(() => {
-    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && onClose();
+    // A dialog opened from the drawer takes Escape for itself. The drawer closes on the next one.
+    const onKey = (e: KeyboardEvent) => e.key === 'Escape' && document.querySelector('dialog[open]') === null && onClose();
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, [onClose]);
@@ -682,8 +684,8 @@ function RequestDrawer({ request, requestId, now, onClose }: { now: number; onCl
             ) : bodies.data ? (
               <div className="bodies">
                 {/* Keyed on the request, so a large body of the next request starts compact again. */}
-                <BodyBlock key={`request ${r.id}`} label="Request" value={bodies.data.request} stored={bodies.data.requestBytesStored} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
-                <BodyBlock key={`response ${r.id}`} label="Response" value={bodies.data.response} stored={bodies.data.responseBytesStored} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
+                <BodyBlock key={`request ${r.id}`} label="Request" requestId={r.id} value={bodies.data.request} stored={bodies.data.requestBytesStored} dropped={bodies.data.requestTruncated ? bytesDropped(bodies.data.requestBytesSeen, bodies.data.requestBytesStored) : undefined} />
+                <BodyBlock key={`response ${r.id}`} label="Response" requestId={r.id} value={bodies.data.response} stored={bodies.data.responseBytesStored} dropped={bodies.data.responseTruncated ? bytesDropped(bodies.data.responseBytesSeen, bodies.data.responseBytesStored) : undefined} />
               </div>
             ) : (
               <p className="muted">Bodies for this request have aged out of retention.</p>
@@ -745,16 +747,22 @@ function CacheValue({ attempt, usage }: { attempt: Attempt; usage: Usage }) {
 /** Indenting a body past this many stored bytes is a long render and a far longer text, so it waits to be asked. */
 const PRETTY_LIMIT = 256 * 1024;
 
-function BodyBlock({ dropped, label, stored, value }: { dropped?: number; label: string; stored: number; value: unknown }) {
+function BodyBlock({ dropped, label, requestId, stored, value }: { dropped?: number; label: string; requestId: string; stored: number; value: unknown }) {
   // The stored byte count sizes the body, so the first draw serializes it once; the memo keeps the drawer's redraws on
   // every clock tick and list reload from serializing it again.
   const large = stored > PRETTY_LIMIT;
   const [pretty, setPretty] = useState(false);
-  const text = useMemo(() => (large && !pretty ? JSON.stringify(value) : JSON.stringify(value, null, 2)), [large, pretty, value]);
+  const [wide, setWide] = useState(false);
+  const text = useMemo(() => bodyText(value, large && !pretty), [large, pretty, value]);
+  // A compact large body stays plain, and a large stream shows its stored text until Pretty-print splits it.
+  const tokens = useMemo(() => (large && !pretty ? null : highlightJson(text)), [large, pretty, text]);
+  const drawn = useMemo(() => (tokens === null ? text : tokens.map((t, i) => (t.cls === null ? t.text : <span key={i} className={t.cls}>{t.text}</span>))), [text, tokens]);
   // Pretty-print leaves as it is pressed, so the focus moves to the text it indented rather than falling to the page.
+  // Under the open dialog the block's own text is inert, so the dialog's takes it.
   const pre = useRef<HTMLPreElement>(null);
+  const widePre = useRef<HTMLPreElement>(null);
   useEffect(() => {
-    if (pretty) pre.current?.focus();
+    if (pretty) (wide ? widePre : pre).current?.focus();
   }, [pretty]);
   return (
     <div className="body-block">
@@ -767,12 +775,39 @@ function BodyBlock({ dropped, label, stored, value }: { dropped?: number; label:
               Pretty-print
             </Button>
           )}
+          <button type="button" className="body-block__link" onClick={() => setWide(true)}>
+            Open wide
+          </button>
           <CopyButton text={text} />
         </span>
       </div>
       <pre ref={pre} className="body-block__pre" tabIndex={0}>
-        {text}
+        {drawn}
       </pre>
+      {/* Mounted only while open, so the drawer holds one text per block. */}
+      {wide && (
+        <Dialog
+          open={wide}
+          onClose={() => setWide(false)}
+          title={`${label} of ${shortId(requestId, HEAD_ID_CHARS)}`}
+          width={1040}
+          className="dialog--wide"
+          footer={
+            <>
+              {large && !pretty && (
+                <Button size="sm" variant="ghost" onClick={() => setPretty(true)}>
+                  Pretty-print
+                </Button>
+              )}
+              <CopyButton text={text} />
+            </>
+          }
+        >
+          <pre ref={widePre} className="body-block__pre" tabIndex={0}>
+            {drawn}
+          </pre>
+        </Dialog>
+      )}
     </div>
   );
 }

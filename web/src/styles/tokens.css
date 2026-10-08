@@ -38,6 +38,14 @@
   --critical-soft: #f9dede;
   --critical-track: #f3c9c9;
 
+  /* A captured body's runs: the palette's readable variants, each at 4.5:1 or better on the text's --surface-2. */
+  --tok-event: #1f2328;
+  --tok-key: #0550ae;
+  --tok-literal: #7a5200;
+  --tok-number: #9b3f19;
+  --tok-punct: #59636e;
+  --tok-string: #006300;
+
   --series-1: #2a78d6;
   --series-2: #eb6834;
   --series-3: #1baf7a;
@@ -106,6 +114,13 @@
   --critical-ink: #ef7b7b;
   --critical-soft: #3c1c1c;
   --critical-track: #4d2323;
+
+  --tok-event: #f0f6fc;
+  --tok-key: #79c0ff;
+  --tok-literal: #f8c65a;
+  --tok-number: #f3a17e;
+  --tok-punct: #9198a1;
+  --tok-string: #5ed35e;
 
   --series-1: #3987e5;
   --series-2: #d95926;
