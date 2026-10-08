@@ -850,10 +850,10 @@ expect('/quota', m.text(), [`${(await api.listAccounts()).filter((a) => a.kind =
   const subscriptions = (await api.listAccounts()).filter((a) => a.kind === 'oauth');
   const count = m.container.querySelector('.quota-meta span')?.textContent ?? 'no count';
   results.push({ name: '/quota counts the subscription accounts with the noun that number takes', ok: count === `${subscriptions.length} accounts`, missing: [count, `${subscriptions.length} subscription accounts listed`] });
-  // The route answers from the account's hold or its cache inside either, so the button says when it reads the
-  // endpoint.
+  // The route reads through the poll's path, so the button says it reads the endpoint unless the account's hold
+  // answers.
   const hints = [...m.container.querySelectorAll('.pill')].filter((b) => ['Refresh', 'Refresh all'].includes(b.textContent?.trim() ?? '')).map((b) => b.getAttribute('title') ?? '');
-  results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff or a young snapshot holds', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off or a snapshot younger than 60 seconds is cached'), missing: [...new Set(hints)] });
+  results.push({ name: '/quota Refresh says it reads the endpoint unless a backoff holds and records the reading', ok: hints.length > 1 && hints.every((t) => t === 'reads the endpoint now unless the account is backing off, and records the reading as the scheduled poll does'), missing: [...new Set(hints)] });
   // The story's legacy carries the provider's reason for its extra usage being off, drawn inside the Extra usage line
   // and whole in its title. Mounted again with the reason cleared, the same card draws none.
   const legacy = [...m.container.querySelectorAll('.qcard')].find((c) => c.querySelector('.qcard__name')?.textContent?.trim() === 'legacy');
@@ -11609,10 +11609,10 @@ m.unmount();
     missing: [JSON.stringify(atThree), JSON.stringify(atSix)],
   });
 
-  // The sidebar's version read and the page's own read the same route at mount, both first reads, so neither runs
-  // quiet.
+  // The sidebar's version read and the Dashboard's cost read reach the same route at mount, both first reads, so
+  // neither runs quiet.
   outage = failCalls({ getSettings: '/admin/settings' }, 'ledger locked');
-  page = await mount('/quota', { now: CLOCK_ORIGIN });
+  page = await mount('/', { now: CLOCK_ORIGIN });
   const once = toasts(page);
   tick(6_000);
   await page.settle();
@@ -11620,7 +11620,7 @@ m.unmount();
   outage.restore();
   page.unmount();
   results.push({
-    name: "/quota a repeat of one route's failure does not queue twice",
+    name: "/ a repeat of one route's failure does not queue twice",
     ok: once.length === 1 && once[0].startsWith('/admin/settings failed') && after.length === 0,
     missing: [JSON.stringify(once), JSON.stringify(after)],
   });

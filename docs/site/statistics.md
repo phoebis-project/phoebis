@@ -96,7 +96,8 @@ request after a restart; an account whose first answer is a 429 serves from the 
 last run, predicted forward, and its backoff starts at once, and one whose first answer is a transport failure or
 another error serves from them too and keeps the cadence. The poll counts that read as its own: it next reads each
 account five minutes after the startup step, on the account's phase, or when its hold ends after a 429, and its profile
-an hour after.
+an hour after. A pairing's confirm and the Quota view's Refresh read the endpoint at once, outside the cadence, and hand
+the reading to the router and the ledger as a scheduled read does, under the same hold and coalescing.
 
 An account the endpoint answers 429 backs off alone. Its hold grows through two, four and eight minutes to fifteen, a
 `Retry-After` honored up to the same fifteen, and the retry comes when the hold ends, sooner than the account's next
@@ -353,8 +354,8 @@ account on the Claude Code trial ends. The poll reading takes one or two lines: 
 and how it answered, a failed poll naming its reason cut to the line's width, and, while the account backs off, the next
 attempt in the serious tone. The line's title carries the rest: the attempt's instant, a failed poll's whole message,
 when the snapshot shown was read, since when the account backs off, and how many rate-limited answers it has had in a
-row. Refresh reads the endpoint now unless the account is backing off or a fresh snapshot is cached. The page counts a
-card that shows an error, whose last poll failed, or that is backing off as needing attention.
+row. Refresh reads the endpoint now unless the account is backing off, and records the reading as the poll does. The
+page counts a card that shows an error, whose last poll failed, or that is backing off as needing attention.
 
 Quota windows lays the same windows across a calendar, zoomable between a two-week weekly view and a three-day 5-hour
 view. An account marked cancelled with a saved end shows the end on its lane where it falls inside the drawn period: no

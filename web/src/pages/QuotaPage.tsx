@@ -21,7 +21,6 @@ type QuotaSectionId = (typeof QUOTA_SECTIONS)[number]['id'];
 
 export function QuotaPage() {
   const accounts = useAsync(() => api.listAccounts(), [], { refreshMs: 30_000 });
-  const settings = useAsync(() => api.getSettings(), [], { refreshMs: 30_000 });
   const now = useNow();
   const [sort, setSort] = useState<Sort>('default');
   const [refreshing, setRefreshing] = useState(false);
@@ -59,8 +58,8 @@ export function QuotaPage() {
   const attention = [...snapById.values()].filter((s) => s.status === 'error' || needsAttention(s.poll)).length;
 
   const reload = () => accounts.reload();
-  // The route answers from the account's hold or its cache while either lasts, which is why a refresh can change nothing.
-  const refreshHint = settings.data ? `reads the endpoint now unless the account is backing off or a snapshot younger than ${settings.data.usage.cacheTtlSeconds} seconds is cached` : undefined;
+  // The route reads through the poll's path, so a refresh inside the account's hold changes nothing.
+  const refreshHint = 'reads the endpoint now unless the account is backing off, and records the reading as the scheduled poll does';
   const refreshAll = async () => {
     setRefreshing(true);
     // A credential the route refuses still reports through its snapshot, so one failure does not hold up the rest.

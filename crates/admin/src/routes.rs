@@ -16,6 +16,7 @@ use axum::middleware::{from_fn_with_state, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::{any, delete, get, patch, post, put};
 use axum::{Extension, Json, Router};
+use phoebis_ledger::QuotaPoll;
 use phoebis_oauth::{
     authorization_url, control_request, ephemeral_port, exchange_body, loopback_redirect_uri,
     parse_profile, parse_token_response, CallbackInput, ControlKind, LoginKind, OauthError,
@@ -593,14 +594,17 @@ async fn usage_latest(State(state): State<Arc<AdminState>>, Path(id): Path<Strin
     .into_response()
 }
 
-/// `POST .../usage/refresh`: the one manual read of the endpoint. The usage service has no cache bypass and
-/// answers a held account from its hold, so a held-down refresh button cannot turn into a stream of requests
-/// against a per-account rate limit.
+/// `POST .../usage/refresh`: the one manual read of the endpoint, through the poll's own path, so the reading is
+/// recorded to the ledger and handed to the router as a scheduled read is, and the answer is that reading, its
+/// error set when the read failed or the account is backing off. The hold, the concurrency cap and the coalescing
+/// bound it, so a held-down refresh button cannot turn into a stream of requests against a per-account rate
+/// limit, and the cache TTL adds no read of its own.
 async fn usage_refresh(State(state): State<Arc<AdminState>>, Path(id): Path<String>) -> Response {
-    if let Err(refusal) = account(&state, &id) {
-        return refusal;
-    }
-    match state.usage.snapshot(&id).await {
+    let row = match account(&state, &id) {
+        Ok(row) => row,
+        Err(refusal) => return refusal,
+    };
+    match QuotaPoll::poll_account(&state.usage, &state.ledger, Some(&state.router), &row).await {
         Ok(snapshot) => {
             let poll = state.usage.poll_status(&id);
             Json(usage_json(&id, Ok(&snapshot), poll.as_ref())).into_response()
@@ -975,6 +979,30 @@ async fn pairing_confirm(
     if let Err(refusal) = reload_or_refuse(&state).await {
         return refusal;
     }
+    // The first reading is taken now rather than left to the scheduler's next pass, so the account's windows
+    // show as soon as the endpoint answers. The answer does not wait on it: the endpoint can be slow and the
+    // pairing is committed either way, so a failed read records nothing and the next pass reads the account.
+    let polled = Arc::clone(&state);
+    let account_id = row.id.clone();
+    tokio::spawn(async move {
+        match polled.store.account(&account_id) {
+            Ok(Some(committed)) => {
+                let _ = QuotaPoll::poll_account(
+                    &polled.usage,
+                    &polled.ledger,
+                    Some(&polled.router),
+                    &committed,
+                )
+                .await;
+            }
+            Ok(None) => {
+                tracing::debug!(account = %account_id, "the account was deleted before its first poll")
+            }
+            Err(error) => {
+                tracing::debug!(account = %account_id, %error, "the account could not be re-read for its first poll")
+            }
+        }
+    });
     Json(json!({ "account_id": row.id, "status": "confirmed" })).into_response()
 }
 

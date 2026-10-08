@@ -733,9 +733,9 @@ Defaults whole and is rarely set.
 
 ### usage
 
-Defaults whole. `cache_ttl_seconds` is how long a cached usage snapshot answers a manual refresh before the endpoint is
-read again; the poll reads every five minutes whatever the cache holds. `refresh_concurrency` is how many accounts'
-usage and profile fetches may run at once.
+Defaults whole. `cache_ttl_seconds` is how long the usage service keeps a reading as its cached snapshot. The poll and
+the refresh read the endpoint whatever the cache holds, under the account's hold, and answer the reading they made.
+`refresh_concurrency` is how many accounts' usage and profile fetches may run at once.
 
 | Key | Default | Accepts |
 | --- | --- | --- |
